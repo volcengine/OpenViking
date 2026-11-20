@@ -7,24 +7,18 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.dataclass import MemoryField, MemoryFile
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.experience_lineage import experience_source_tag
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.merge_op import MergeOp
-from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
-
-
-class TestMemoryFieldSchema:
-    def test_memory_field_no_longer_has_searchable(self):
-        field = MemoryField(name="test", field_type=FieldType.STRING, description="test")
-        assert not hasattr(field, "searchable")
 
 
 class TestEmbeddingTemplateYamlParsing:
@@ -80,7 +74,9 @@ class TestContentTemplateRendering:
 
         assert rendered.startswith("Road Trip | Body content | 2026")
 
-    def test_content_template_render_failure_is_logged_before_plain_content_fallback(self):
+    def test_content_template_render_failure_is_logged_before_plain_content_fallback(
+        self, caplog, request
+    ):
         memory_file = MemoryFile(
             content="Body content",
             extra_fields={"title": "Road Trip", "ranges": "0-1"},
@@ -89,19 +85,24 @@ class TestContentTemplateRendering:
             get_year=Mock(side_effect=RuntimeError("template render failed"))
         )
 
-        with patch(
-            "openviking.session.memory.utils.memory_file_utils.logger.exception"
-        ) as mock_logger_exception:
+        from openviking.session.memory.utils import memory_file_utils as log_module
+
+        log_module.logger.addHandler(caplog.handler)
+        request.addfinalizer(lambda: log_module.logger.removeHandler(caplog.handler))
+        with caplog.at_level("INFO", logger="openviking.session.memory.utils.memory_file_utils"):
             rendered = MemoryFileUtils.write(
                 memory_file,
                 content_template="{{ title }} | {{ content }} | {{ extract_context.get_year(ranges) }}",
                 extract_context=extract_context,
             )
-
         assert rendered.startswith("Body content")
-        mock_logger_exception.assert_called_once_with(
-            "Failed to render memory content template; using plain content fallback"
-        )
+        records = [
+            record
+            for record in caplog.records
+            if record.name == "openviking.session.memory.utils.memory_file_utils"
+        ]
+        assert len(records) == 1 and records[0].levelname == "INFO"
+        assert "Body content" not in records[0].getMessage()
 
 
 class TestEmbeddingTextConstruction:
@@ -217,9 +218,12 @@ class TestEmbeddingTextConstruction:
         logger = logging.getLogger("openviking.session.memory.memory_updater")
         logger.addHandler(caplog.handler)
         try:
-            with patch(
-                "openviking.session.memory.memory_type_registry.get_default_registry",
-                return_value=MemoryTypeRegistry(load_schemas=False),
+            with (
+                caplog.at_level(logging.DEBUG, logger=logger.name),
+                patch(
+                    "openviking.session.memory.memory_type_registry.get_default_registry",
+                    return_value=MemoryTypeRegistry(load_schemas=False),
+                ),
             ):
                 refreshed = await MemoryUpdater.refresh_file_embedding(
                     viking_fs=viking_fs,
@@ -233,10 +237,19 @@ class TestEmbeddingTextConstruction:
 
         assert refreshed is bool(content)
         assert vikingdb.enqueue_embedding_msg.await_count == int(bool(content))
-        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-        assert warnings == (
-            [] if content else [f"Skipping memory vectorization for {uri}: empty embedding input"]
+        records = [r for r in caplog.records if r.name == logger.name]
+        details = [r.getMessage() for r in records if "empty embedding input" in r.getMessage()]
+        assert details == (
+            []
+            if content
+            else [
+                f"memory vectorization skipped; empty embedding input uri={safe_uri_for_log(uri)}"
+            ]
         )
+        assert not any(r.levelno == logging.WARNING for r in records)
+        assert all(uri not in r.getMessage() for r in records)
+        if content:
+            assert all(content not in r.getMessage() for r in records)
 
     @pytest.mark.asyncio
     async def test_direct_refresh_does_not_infer_the_memory_type_from_a_peer_path(self):

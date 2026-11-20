@@ -1,0 +1,11 @@
+@import '../../theme.css';
+@import '../primitives/button/button.css';
+@import '../primitives/empty/empty.css';
+
+/*
+ * 渲染失败的默认兜底：紧凑空态加重试按钮。默认只占内容高度，工具栏这类矮区域不会被撑开；
+ * 整块面板的区域由各自样式让它占满并垂直居中。
+ */
+.ov-error-boundary {
+  justify-content: center;
+}

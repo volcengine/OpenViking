@@ -143,7 +143,7 @@ def create_low_res_preview(
         new_width = int(original_width * ratio)
         new_height = int(original_height * ratio)
         img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        logger.debug(f"Resized preview to {new_width}x{new_height}")
+        logger.debug("Preview resized width=%d height=%d", new_width, new_height)
 
     return save_image_to_bytes(img, format="JPEG", quality=PREVIEW_QUALITY_START)
 
@@ -460,12 +460,17 @@ def process_large_image(
                 original_format=format_str
             )
 
-        logger.info(f"Processing large image: {width}x{height}, {get_image_size_mb(file_path):.2f}MB")
+        logger.debug(
+            "Processing large image width=%d height=%d size_mb=%.2f",
+            width,
+            height,
+            get_image_size_mb(file_path),
+        )
 
         # Calculate grid dimensions
         rows, cols = calculate_grid_dimensions(width, height, config)
         label_prefix = f"{rows}_{cols}"
-        logger.info(f"Grid dimensions: {rows} rows x {cols} cols")
+        logger.debug("Image grid planned rows=%d columns=%d", rows, cols)
 
         # Determine tile format: preserve PNG, default to JPEG for others
         is_png = format_str.upper() == "PNG"

@@ -147,17 +147,15 @@ class OpenVikingOAuthProvider(
         # auth method was declared. To prevent confidential clients from
         # *thinking* they're getting secret-based auth (silent security
         # downgrade), we normalize whatever the registrar requested to
-        # "none" and log a warning. Real MCP clients use "none" anyway —
+        # "none" and log the normalization. Real MCP clients use "none" anyway —
         # RFC 8252 §8.4 says native apps MUST NOT use client_secret —
         # but the OAuth 2.0 default that some SDKs fill in is
         # "client_secret_basic", which would otherwise fail the gate.
         requested = client_info.token_endpoint_auth_method
         if requested and requested != "none":
-            logger.warning(
-                "DCR: client %s requested token_endpoint_auth_method=%s; "
-                "downgrading to 'none' (OpenViking only supports public PKCE clients).",
-                client_info.client_id,
-                requested,
+            logger.info(
+                "OAuth client authentication method normalized to none; "
+                "only public PKCE clients are supported"
             )
         auth_method = "none"
         try:
@@ -319,10 +317,11 @@ class OpenVikingOAuthProvider(
             # risk leaving sibling tokens live.
             if await self._store.is_refresh_known_but_consumed(refresh_token.token):
                 logger.warning(
-                    "OAuth refresh replay detected for client_id=%s account=%s user=%s",
-                    client.client_id,
-                    refresh_token.account_id,
-                    refresh_token.user_id,
+                    "OAuth refresh token replay detected",
+                    extra={
+                        "account_id": refresh_token.account_id,
+                        "user_id": refresh_token.user_id,
+                    },
                 )
                 await self._store.revoke_tokens(
                     account_id=refresh_token.account_id,

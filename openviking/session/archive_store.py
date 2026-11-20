@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
 from openviking.message import Message
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -253,6 +254,7 @@ class ArchiveStore:
     async def scan_states(self) -> List[ArchiveState]:
         """Derive every archive state exclusively from its directory markers."""
         states: List[ArchiveState] = []
+        degraded_archives = 0
         refs = sorted(await self.list_refs(), key=lambda item: item["index"])
         for archive in refs:
             done_uri = f"{archive['archive_uri']}/.done"
@@ -268,10 +270,14 @@ class ArchiveStore:
                     if isinstance(parsed_done, dict):
                         done = self.normalize_done(parsed_done)
                 except Exception as exc:
+                    degraded_archives += 1
                     # Marker existence still means completion, but unreadable
                     # contents cannot extend coverage to earlier archives.
-                    logger.warning(
-                        "Unreadable archive done marker %s: %s", archive["archive_uri"], exc
+                    logger.debug(
+                        "archive done marker unreadable uri=%s error_type=%s",
+                        safe_uri_for_log(archive["archive_uri"]),
+                        type(exc).__name__,
+                        extra={"error_type": type(exc).__name__},
                     )
 
             if done_exists:
@@ -282,13 +288,14 @@ class ArchiveStore:
                 if done.get("enable_working_memory") is True:
                     overview = await self.read_overview(archive["archive_uri"])
                     if not overview.strip():
+                        degraded_archives += 1
                         # New markers distinguish an intentionally overview-less
                         # working_memory=false commit from a missing/corrupt
                         # required overview. The latter remains logically live and
                         # can be rolled forward by a later successful archive.
-                        logger.warning(
-                            "Completed archive has no readable required overview: %s",
-                            archive["archive_uri"],
+                        logger.debug(
+                            "archive required overview unavailable uri=%s",
+                            safe_uri_for_log(archive["archive_uri"]),
                         )
                         states.append(
                             ArchiveState(
@@ -334,7 +341,13 @@ class ArchiveStore:
                     if isinstance(parsed_failed, dict):
                         failed = parsed_failed
                 except Exception as exc:
-                    logger.warning("Unreadable archive failed marker %s: %s", failed_uri, exc)
+                    degraded_archives += 1
+                    logger.debug(
+                        "archive failed marker unreadable uri=%s error_type=%s",
+                        safe_uri_for_log(failed_uri),
+                        type(exc).__name__,
+                        extra={"error_type": type(exc).__name__},
+                    )
             states.append(
                 ArchiveState(
                     archive_id=archive["archive_id"],
@@ -343,6 +356,13 @@ class ArchiveStore:
                     state="failed" if failed_exists else "pending",
                     failed=failed,
                 )
+            )
+        if degraded_archives:
+            logger.info(
+                "archive metadata scan degraded total=%d failed=%d",
+                len(refs),
+                degraded_archives,
+                extra={"degraded": True, "total": len(refs), "failed": degraded_archives},
             )
         return states
 
@@ -527,9 +547,9 @@ class ArchiveStore:
             except Exception as exc:
                 if not is_storage_not_found(exc):
                     raise
-                logger.warning(
-                    "Skipping pending archive %s because messages.jsonl is missing",
-                    state.archive_uri,
+                logger.info(
+                    "pending archive messages missing; skipping uri=%s",
+                    safe_uri_for_log(state.archive_uri),
                 )
         return self.stable_deduplicate_messages(messages)
 

@@ -49,14 +49,14 @@ function IssuesLink({ className }: { className?: string }) {
   )
 }
 
-/** Conversations whose saving to OpenViking is retrying or paused. */
+/** Conversations whose latest finished turn was not saved to OpenViking. */
 function SavingStatus({ issues }: { issues: Overview['capture_issues'] }) {
   const { t } = useTranslation('gateway')
-  const { retrying, paused } = issues
+  const { failed } = issues
   return (
     <div className="grid gap-2 border-t pt-4">
       <p className="text-sm font-medium">{t('overview.saving.title')}</p>
-      {retrying > 0 || paused > 0 ? (
+      {failed > 0 ? (
         <>
           <Notice
             tone="warning"
@@ -64,12 +64,7 @@ function SavingStatus({ issues }: { issues: Overview['capture_issues'] }) {
               <DocsLink section="notSaved">{t('docs.troubleshoot')}</DocsLink>
             }
           >
-            {retrying > 0 ? (
-              <p>{t('overview.saving.retrying', { count: retrying })}</p>
-            ) : null}
-            {paused > 0 ? (
-              <p>{t('overview.saving.paused', { count: paused })}</p>
-            ) : null}
+            <p>{t('overview.saving.failed', { count: failed })}</p>
           </Notice>
           <div>
             {/* Cancels the button padding so the label lines up with the text. */}

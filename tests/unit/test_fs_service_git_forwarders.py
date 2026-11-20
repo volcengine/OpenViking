@@ -4,6 +4,7 @@ These tests verify FSService.{commit, restore, show, diff, log} pass the right
 args to VikingFS. They don't exercise real git — that's covered by
 tests/agfs/test_viking_fs_git.py.
 """
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -101,7 +102,6 @@ async def test_restore_forwards_all_kwargs(svc, viking_fs_mock):
         author_name="me",
         author_email="me@x",
         ctx=ctx,
-        record_restore=None,
     )
     assert out["result"] == "applied"
 
@@ -119,9 +119,7 @@ async def test_show_with_path_validated(svc, viking_fs_mock):
     ctx = _ctx()
     viking_fs_mock.show = AsyncMock(return_value=b"hello")
     out = await svc.show("main", ctx=ctx, path="viking://resources/a.md")
-    viking_fs_mock.show.assert_awaited_once_with(
-        "main", path="viking://resources/a.md", ctx=ctx
-    )
+    viking_fs_mock.show.assert_awaited_once_with("main", path="viking://resources/a.md", ctx=ctx)
     assert out == b"hello"
 
 
@@ -138,45 +136,41 @@ async def test_diff_forwards_validated_path_and_refs(svc, viking_fs_mock):
         path="viking://resources/a.md",
         from_ref=None,
         to_ref="main",
+        raw=True,
         ctx=ctx,
     )
     assert out["change_type"] == "added"
 
 
 @pytest.mark.asyncio
-async def test_log_defaults(svc, viking_fs_mock):
+@pytest.mark.parametrize(
+    ("options", "branch", "limit", "offset", "paths"),
+    [
+        ({}, "main", 20, 0, None),
+        (
+            {
+                "branch": "dev",
+                "limit": 5,
+                "offset": 2,
+                "paths": ["viking://resources/a.md", "viking://resources/docs"],
+            },
+            "dev",
+            5,
+            2,
+            ["viking://resources/a.md", "viking://resources/docs"],
+        ),
+        ({"paths": []}, "main", 20, 0, []),
+    ],
+    ids=["defaults", "explicit-page", "empty-paths"],
+)
+async def test_log_forwards_pagination_and_scope(
+    svc, viking_fs_mock, options, branch, limit, offset, paths
+):
     ctx = _ctx()
-    out = await svc.log(ctx=ctx)
-    viking_fs_mock.log.assert_awaited_once_with(branch="main", limit=20, paths=None, ctx=ctx)
-    assert len(out) == 1
+    await svc.log(ctx=ctx, **options)
 
-
-@pytest.mark.asyncio
-async def test_log_with_overrides(svc, viking_fs_mock):
-    ctx = _ctx()
-    await svc.log(
-        ctx=ctx,
-        branch="dev",
-        limit=5,
-        paths=["viking://resources/a.md", "viking://resources/docs"],
-    )
     viking_fs_mock.log.assert_awaited_once_with(
-        branch="dev",
-        limit=5,
-        paths=["viking://resources/a.md", "viking://resources/docs"],
-        ctx=ctx,
-    )
-
-
-@pytest.mark.asyncio
-async def test_log_empty_paths_is_unfiltered(svc, viking_fs_mock):
-    ctx = _ctx()
-    await svc.log(ctx=ctx, branch="dev", limit=5, paths=[])
-    viking_fs_mock.log.assert_awaited_once_with(
-        branch="dev",
-        limit=5,
-        paths=None,
-        ctx=ctx,
+        branch=branch, limit=limit, offset=offset, paths=paths, ctx=ctx
     )
 
 
@@ -191,8 +185,6 @@ async def test_methods_raise_when_not_initialized():
     with pytest.raises(NotInitializedError):
         await svc.show("main", ctx=ctx)
     with pytest.raises(NotInitializedError):
-        await svc.diff(
-            path="viking://resources/a.md", from_ref=None, to_ref="main", ctx=ctx
-        )
+        await svc.diff(path="viking://resources/a.md", from_ref=None, to_ref="main", ctx=ctx)
     with pytest.raises(NotInitializedError):
         await svc.log(ctx=ctx)

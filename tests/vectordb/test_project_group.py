@@ -1,65 +1,42 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-import os
-import shutil
-import unittest
+import pytest
 
 from openviking.storage.vectordb.project.project_group import get_or_create_project_group
 
-TEST_PROJECT_ROOT = "./test_data/test_project_root"
 
-
-class TestProjectGroup(unittest.TestCase):
-    def setUp(self):
-        if os.path.exists(TEST_PROJECT_ROOT):
-            shutil.rmtree(TEST_PROJECT_ROOT)
-
-    def tearDown(self):
-        if os.path.exists(TEST_PROJECT_ROOT):
-            shutil.rmtree(TEST_PROJECT_ROOT)
-
-    def test_persistent_group_lifecycle(self):
-        # 1. Create and populate
-        group = get_or_create_project_group(TEST_PROJECT_ROOT)
-
-        # Default should be created automatically
-        self.assertTrue(group.has_project("default"))
-        self.assertTrue(os.path.exists(os.path.join(TEST_PROJECT_ROOT, "default")))
-
-        # Create persistent project
-        group.create_project("analytics")
-        self.assertTrue(os.path.exists(os.path.join(TEST_PROJECT_ROOT, "analytics")))
-
-        # Close to flush/release
+def test_persistent_group_lifecycle(tmp_path):
+    group = get_or_create_project_group(str(tmp_path))
+    try:
+        assert group.has_project("default")
+        project = group.create_project("analytics")
+        with pytest.raises(ValueError, match="analytics already exists"):
+            group.create_project("analytics")
+        collection = project.create_collection(
+            "events",
+            {"Fields": [{"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True}]},
+        )
+        collection.upsert_data([{"id": 42}])
+    finally:
         group.close()
 
-        # 2. Reload from disk
-        group2 = get_or_create_project_group(TEST_PROJECT_ROOT)
-        self.assertTrue(group2.has_project("default"))
-        self.assertTrue(group2.has_project("analytics"))
+    reopened = get_or_create_project_group(str(tmp_path))
+    try:
+        project = reopened.get_project("analytics")
+        assert project is not None
+        collection = project.get_collection("events")
+        assert collection is not None
+        assert [item.id for item in collection.fetch_data([42]).items] == [42]
 
-        # 3. Delete project
-        group2.delete_project("analytics")
-        self.assertFalse(group2.has_project("analytics"))
-        # Verify folder removed? Logic says it should drop collections, but maybe not the folder itself?
-        # Let's check implementation. ProjectGroup.delete_project removes from dict and drops collections.
-        # It calls `project.drop_collection` for all collections.
-        # It does NOT explicitly delete the project directory in the `ProjectGroup` code I read.
-        # Wait, let me check `LocalProject` code if `close()` or `drop()` handles it?
-        # The `ProjectGroup.delete_project` code:
-        # project.close()
-        # It does not seem to remove the project directory itself in `project_group.py`.
-        # However, for robustness, we at least ensure it's gone from memory.
+        reopened.delete_project("analytics")
+        assert not reopened.has_project("analytics")
+        assert reopened.has_project("default")
+    finally:
+        reopened.close()
 
-        group2.close()
-
-    def test_duplicate_create_error(self):
-        group = get_or_create_project_group("")
-        group.create_project("dup_test")
-        with self.assertRaises(ValueError):
-            group.create_project("dup_test")
-        group.close()
-
-
-if __name__ == "__main__":
-    unittest.main()
+    after_delete = get_or_create_project_group(str(tmp_path))
+    try:
+        project = after_delete.get_or_create_project("analytics")
+        assert project.get_collection("events") is None
+    finally:
+        after_delete.close()

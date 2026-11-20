@@ -17,6 +17,8 @@ from openviking.models.embedder.base import (
     embedder_supports_multimodal,
 )
 from openviking.models.rerank import RerankClient
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
@@ -91,13 +93,10 @@ class HierarchicalRetriever:
         # Initialize rerank client — all providers go through unified dispatch
         if rerank_config and rerank_config.is_available():
             self._rerank_client = RerankClient.from_config(rerank_config)
-            provider = rerank_config._effective_provider()
-            logger.info(
-                f"[HierarchicalRetriever] Rerank enabled (provider={provider}), threshold={self.rerank_threshold}"
-            )
+            logger.debug("retrieval rerank enabled threshold=%s", self.rerank_threshold)
         else:
             self._rerank_client = None
-            logger.info("[HierarchicalRetriever] Rerank not configured, using vector search only")
+            logger.debug("retrieval rerank not configured; using vector search only")
 
     async def retrieve(
         self,
@@ -113,6 +112,7 @@ class HierarchicalRetriever:
         request_now: Optional[datetime] = None,
         search_type: SearchType = "semantic",
         has_explicit_target: Optional[bool] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> QueryResult:
         """
         Run one global vector search, then optionally rerank its candidates.
@@ -127,6 +127,7 @@ class HierarchicalRetriever:
             scope_dsl: Additional scope constraints passed from public find/search filter
             level: Optional result level filter (0=L0, 1=L1, 2=L2)
             has_explicit_target: Whether target_uri was supplied before default expansion
+            keywords_args: Advanced keyword-search options forwarded to the engine
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
@@ -156,9 +157,10 @@ class HierarchicalRetriever:
             has_explicit_target = bool(target_dirs)
 
         if not await vector_proxy.collection_exists_bound():
-            logger.warning(
-                "[HierarchicalRetriever] Collection %s does not exist",
-                vector_proxy.collection_name,
+            logger.info(
+                "retrieval collection missing; returning empty results collection_hash=%s",
+                short_hash(vector_proxy.collection_name),
+                extra={"degraded": True},
             )
             return QueryResult(
                 query=query,
@@ -174,7 +176,10 @@ class HierarchicalRetriever:
             # cached embedder resource (no I/O, no model call, nothing borrowed).
             if image_query and not await embedder_supports_multimodal(self.embedder):
                 raise InvalidArgumentError("Image search requires a multimodal embedding model.")
-            with telemetry.measure("search.embed_query"):
+            with (
+                telemetry.measure("search.embed_query"),
+                bind_dashboard_token_source_type("semantic_search"),
+            ):
                 embedding_input = getattr(query, "embedding_input", None) or query.query
                 result: EmbedResult = await embed_compat(
                     self.embedder,
@@ -209,6 +214,7 @@ class HierarchicalRetriever:
                     extra_filter=scope_dsl,
                     level=level,
                     limit=search_limit,
+                    keywords_args=keywords_args,
                 )
             else:
                 vector_results = await vector_proxy.search_in_tenant(
@@ -316,6 +322,7 @@ class HierarchicalRetriever:
     ) -> List[MatchedContext]:
         """Convert candidates to contexts ordered by vector or rerank score."""
         results = []
+        failed_abstracts = 0
         for c in candidates:
             final_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
             level = c.get("level", 2)
@@ -330,7 +337,12 @@ class HierarchicalRetriever:
                 try:
                     abstract = body_for_preview(abstract)
                 except AbstractOverviewFormatError as exc:
-                    logger.warning("Malformed sidecar in retrieval result %s: %s", display_uri, exc)
+                    failed_abstracts += 1
+                    logger.debug(
+                        "retrieval sidecar malformed; using empty abstract uri=%s error_type=%s",
+                        safe_uri_for_log(display_uri),
+                        type(exc).__name__,
+                    )
                     abstract = ""
 
             results.append(
@@ -349,6 +361,13 @@ class HierarchicalRetriever:
                 )
             )
 
+        if failed_abstracts:
+            logger.info(
+                "retrieval previews degraded; using empty abstracts total=%d failed=%d",
+                len(candidates),
+                failed_abstracts,
+                extra={"degraded": True, "total": len(candidates), "failed": failed_abstracts},
+            )
         results.sort(key=lambda x: x.score, reverse=True)
         return results
 

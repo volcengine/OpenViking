@@ -14,8 +14,7 @@ from conftest import (
     redis_settings,
 )
 
-from openviking_gateway.capture import CaptureWorker
-from openviking_gateway.capture_store import Document, LeaseLost
+from openviking_gateway.capture_store import Document
 from openviking_gateway.kernel import MemoryKernel
 from openviking_gateway.models import Policy
 from openviking_gateway.records import RecordKind as K
@@ -27,15 +26,6 @@ from openviking_gateway.tool_protocols import ResponseCapture
 async def exercise_kernel_capture(ports, credential, protocol):
     viking = FakeViking()
     kernel = MemoryKernel(ports, viking)
-
-    class Management:
-        async def get(self, *_):
-            return credential
-
-        async def log(self, *_, **__):
-            pass
-
-    worker = CaptureWorker(ports, Management(), viking)
     policy = Policy(commit_tokens=1, keep_recent_messages=0, context_window=1024).model_dump()
     field = "input" if protocol == "responses" else "messages"
     messages = [
@@ -71,18 +61,14 @@ async def exercise_kernel_capture(ports, credential, protocol):
             summarize=summarize,
         )
 
-    p = await prepare()
-    assert await worker.once()  # append and commit
-    await kernel.completed(
-        p,
-        credential,
-        ResponseCapture(
-            protocol,
-            {"role": "assistant", "content": "Ok"},
-            usage={"input_tokens": 1000},
-            complete=True,
-        ),
-    )
+    def reply(**usage):
+        return ResponseCapture(
+            protocol, {"role": "assistant", "content": "Ok"}, usage=usage, complete=True
+        )
+
+    p, response = await prepare(), reply(input_tokens=1000)
+    await kernel.completed(p, credential, response)
+    assert await kernel.save(p, credential, response) == 4
     messages += [{"role": "assistant", "content": "Ok"}, {"role": "user", "content": "And then?"}]
     compacted = await prepare()
     assert compacted.metrics["compaction_tokens"] > 0
@@ -93,27 +79,10 @@ async def exercise_kernel_capture(ports, credential, protocol):
         '<openviking-context source="gateway-compaction">'
     )
     assert fork.body[field][1:] == compacted.body[field][1:]
-    assert fork.capture_target != p.capture_target
-    assert await worker.once() and await worker.once()
+    assert fork.capture.value["ov_session"] != p.capture.value["ov_session"]
+    assert await kernel.save(compacted, credential, reply())
+    assert await kernel.save(fork, credential, reply())
     assert len(set(viking.write_sessions)) == 2
-
-
-async def test_expired_lease_cannot_write_or_release_new_owner(kernel_store):
-    store = kernel_store
-    await store.capture.swap("scope", "session", Document(), {"work": 1}, 0)
-    expired = await store.capture.claim(lease_seconds=-1)
-    active = await store.capture.claim()
-    with pytest.raises(LeaseLost):
-        await store.capture.swap(
-            "scope", "session", expired["document"], {"work": "stale"}, None, owner=expired["owner"]
-        )
-    await store.capture.release(expired)
-    assert await store.capture.claim() is None
-    assert await store.capture.swap(
-        "scope", "session", active["document"], {"work": "done"}, None, owner=active["owner"]
-    )
-    await store.capture.release(active)
-    assert (await store.capture.get("scope", "session")).value == {"work": "done"}
 
 
 async def test_cache_coalesces_reads_and_reloads_after_invalidation():
@@ -447,6 +416,91 @@ async def test_redis_commands_beyond_pool_size_wait_for_a_connection(provider):
         await handle.close()
 
 
+def fake_redis_handle(monkeypatch, execute_command, **settings):
+    from types import SimpleNamespace
+
+    from openviking_gateway import redis_store
+
+    client = SimpleNamespace(execute_command=execute_command)
+    monkeypatch.setattr(
+        redis_store, "create_redis_client", lambda *a, **k: SimpleNamespace(client=client)
+    )
+    return redis_store.connect({"mode": "standalone", "pool_size": 1, **settings})
+
+
+async def test_waiting_for_a_connection_slot_times_out(monkeypatch):
+    pytest.importorskip("redis")
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    release = asyncio.Event()
+
+    async def execute_command(*args, **kwargs):
+        if args[1] == "held":
+            # A command stuck in the client that does not give way to its deadline either.
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+        return True
+
+    handle = fake_redis_handle(
+        monkeypatch, execute_command, connect_timeout_ms=1, command_timeout_ms=50
+    )
+    # The only slot is held by a command the store does not answer.
+    held = asyncio.create_task(handle.client.execute_command("GET", "held"))
+    await asyncio.sleep(0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RedisTimeoutError, match="store command timed out"):
+            await asyncio.wait_for(handle.client.execute_command("GET", "queued"), 2)
+        assert time.monotonic() - started < 1
+    finally:
+        release.set()
+    assert await held is True
+    # The slot was given back: the next command runs.
+    assert await handle.client.execute_command("GET", "next") is True
+
+
+async def test_one_deadline_covers_the_whole_store_command(monkeypatch):
+    pytest.importorskip("redis")
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    async def execute_command(*args, **kwargs):
+        if args[1] == "stuck":
+            await asyncio.Event().wait()
+        return True
+
+    handle = fake_redis_handle(
+        monkeypatch, execute_command, connect_timeout_ms=100, command_timeout_ms=100
+    )
+    started = time.monotonic()
+    with pytest.raises(RedisTimeoutError, match="store command timed out"):
+        await asyncio.wait_for(handle.client.execute_command("GET", "stuck"), 2)
+    assert 0.15 < time.monotonic() - started < 0.6
+    # The slot is free again.
+    assert await asyncio.wait_for(handle.client.execute_command("GET", "fast"), 1) is True
+
+
+async def test_no_command_timeout_sets_no_store_deadline(monkeypatch):
+    pytest.importorskip("redis")
+    from openviking_gateway import redis_store
+
+    limits = []
+    real = redis_store.async_timeout.timeout
+    monkeypatch.setattr(
+        redis_store.async_timeout, "timeout", lambda delay: limits.append(delay) or real(delay)
+    )
+
+    async def execute_command(*args, **kwargs):
+        return True
+
+    handle = fake_redis_handle(
+        monkeypatch, execute_command, connect_timeout_ms=100, command_timeout_ms=0
+    )
+    assert await handle.client.execute_command("GET", "key") is True
+    assert limits == [None]
+
+
 async def test_async_codec_reads_sqlite_ciphertext_and_plaintext(tmp_path):
     from conftest import local_encryptor
 
@@ -548,56 +602,88 @@ async def test_state_cas_versions_and_load_snapshot(kernel_store):
     assert await store.state.swap("scope", "session", first, {"updated": True})
     assert not await store.state.swap("scope", "session", first, {"stale": True})
     assert not await store.state.swap("scope", "session", Document(), {})
-    assert await store.capture.swap("scope", "session", Document(), {"pending": [1]}, None)
+    assert await store.capture.swap("scope", "session", Document(), {"delivered": ""})
     capture = await store.capture.get("scope", "session")
     assert capture.version == 1
-    assert await store.capture.swap("scope", "session", capture, {"pending": []}, None)
-    assert not await store.capture.swap("scope", "session", capture, {"stale": True}, 0)
-    assert not await store.capture.swap("scope", "session", Document(), {}, 0)
+    assert await store.capture.swap("scope", "session", capture, {"delivered": "a"})
+    assert not await store.capture.swap("scope", "session", capture, {"stale": True})
+    assert not await store.capture.swap("scope", "session", Document(), {})
     await store.replay.put("scope", "session", K.ROOT, "", {"root": True})
     replay, state, capture = await store.load("scope", "session", [""])
     assert replay == {(K.ROOT, ""): {"root": True}}
     assert state == {"session": Document({"updated": True}, 2)}
-    assert capture == Document({"pending": []}, 2)
+    assert capture == Document({"delivered": "a"}, 2)
     assert await store.state.read("other", ["session"]) == {}
     assert await store.state.read("scope", []) == {}
 
 
-async def test_capture_ready_zero_lease_and_release(kernel_store):
+@pytest.mark.parametrize(
+    "storage_encryptor", [False, True], ids=["plaintext", "encrypted"], indirect=True
+)
+async def test_capture_document_of_the_old_layout_is_read_and_swapped(kernel_store):
     store = kernel_store
-    for sid in ("one", "two"):
-        assert await store.capture.swap("scope", sid, Document(), {"sid": sid}, 0)
-    assert await store.capture.swap("scope", "idle", Document(), {}, None)
-    assert await store.capture.swap("scope", "future", Document(), {}, time.time() + 3600)
-    first, second = await asyncio.gather(store.capture.claim(), store.capture.claim())
-    assert {first["session"], second["session"]} == {"one", "two"}
-    assert first["owner"] != second["owner"]
-    assert first["document"].version == second["document"].version == 1
-    assert await store.capture.claim() is None
-    await store.capture.release(first)
-    again = await store.capture.claim()
-    assert again["session"] == first["session"]
-    assert again["owner"] != first["owner"]
-    await store.capture.release(first)
-    assert await store.capture.claim() is None
-    assert await store.capture.swap(
-        "scope", again["session"], again["document"], {"done": True}, None, owner=again["owner"]
-    )
-    await store.capture.release(again)
-    assert await store.capture.claim() is None
+    old = {"ov_session": "gateway-old", "delivered": "a1", "pending": [{"role": "user"}]}
+    if hasattr(store, "client"):
+        await store.client.hset(
+            store.capture_key("scope", "session"),
+            mapping={
+                "v": await store.codec.encode(old),
+                "ver": 3,
+                "ready": 0,
+                "lease": 0,
+                "owner": "worker",
+            },
+        )
+        await store.client.zadd(f"{store.prefix}k:{{cap}}:ready", {"scope\0session": 0})
+    else:
+
+        def write():
+            with store.connect() as c:
+                store.touch(c, "scope", "session")
+                c.execute(
+                    "INSERT INTO capture(scope,session,value,version,ready,lease,owner) "
+                    "VALUES (?,?,?,3,0,0,'worker')",
+                    ("scope", "session", store.encode(old)),
+                )
+
+        await store.run(write, write=True)
+    document = await store.capture.get("scope", "session")
+    assert document == Document(old, 3)
+    # The old layout queued it; now a document is listed once its idle_at is reached.
+    assert await store.capture.waiting(0) == [("scope", "session")]
+    due = {"delivered": "a2", "idle_at": 9.5}
+    assert await store.capture.swap("scope", "session", document, due)
+    assert not await store.capture.swap("scope", "session", document, {"stale": True})
+    document = await store.capture.get("scope", "session")
+    assert document == Document(due, 4)
+    assert await store.capture.waiting(9) == []
+    assert await store.capture.waiting(10) == [("scope", "session")]
+    assert await store.capture.swap("scope", "session", document, {"delivered": "a2"})
+    assert await store.capture.waiting(10) == []
+    # forget drops a listing, unless its document changed since the caller read it.
+    assert await store.capture.swap("scope", "other", Document(), {"idle_at": 1.0})
+    await store.capture.forget("scope", "other", 0)
+    assert await store.capture.waiting(10) == [("scope", "other")]
+    await store.capture.forget("scope", "other", 1)
+    assert await store.capture.waiting(10) == []
+    if hasattr(store, "client"):
+        # A document that expired left its listing behind.
+        await store.client.zadd(f"{store.prefix}k:{{cap}}:ready", {"scope\0gone": 0})
+        await store.capture.forget("scope", "gone", 0)
+        assert await store.capture.waiting(10) == []
 
 
 async def test_scope_delete_blocks_concurrent_writes(kernel_store):
     store = kernel_store
     await store.replay.put("scope", "session", K.REPLY, "reply", {})
-    await store.capture.swap("scope", "session", Document(), {"work": 1}, 0)
+    await store.capture.swap("scope", "session", Document(), {"delivered": "a"})
     await store.state.swap("scope", "session", Document(), {"state": 1})
     operations = [store.expire(0, "scope")]
     for i in range(20):
         operations.extend(
             (
                 store.replay.put("scope", f"s{i}", K.ROOT, "", {}),
-                store.capture.swap("scope", f"s{i}", Document(), {}, 0),
+                store.capture.swap("scope", f"s{i}", Document(), {}),
                 store.state.swap("scope", f"s{i}", Document(), {}),
             )
         )
@@ -612,7 +698,7 @@ async def test_scope_delete_blocks_concurrent_writes(kernel_store):
     for operation in (
         store.replay.put("scope", "late", K.ROOT, "", {}),
         store.state.swap("scope", "late", Document(), {}),
-        store.capture.swap("scope", "late", Document(), {}, 0),
+        store.capture.swap("scope", "late", Document(), {}),
         store.keep("scope", ["late"], ["late"]),
     ):
         with pytest.raises(RuntimeError, match="Gateway user data has been deleted"):
@@ -620,7 +706,7 @@ async def test_scope_delete_blocks_concurrent_writes(kernel_store):
     await store.allow_scope("scope")
     await store.replay.put("scope", "late", K.ROOT, "", {})
     assert await store.state.swap("scope", "late", Document(), {})
-    assert await store.capture.swap("scope", "late", Document(), {}, 0)
+    assert await store.capture.swap("scope", "late", Document(), {})
 
 
 @pytest.mark.parametrize(
@@ -648,7 +734,7 @@ async def test_large_kernel_value_and_load_failure_isolation(kernel_store, stora
     assert healthy[0][K.ROOT, ""] == large
 
 
-async def test_redis_eviction_prunes_replies_and_loses_leases(redis_kernel_store, monkeypatch):
+async def test_redis_eviction_prunes_replies_and_drops_documents(redis_kernel_store, monkeypatch):
     store = redis_kernel_store
     await store.replay.put("scope", "parent", K.REPLY, "anchor", {})
     await store.replay.put("scope", "parent", K.REPLACEMENT, "anchor", {"summary": "old"})
@@ -675,19 +761,12 @@ async def test_redis_eviction_prunes_replies_and_loses_leases(redis_kernel_store
     assert scripts == ["kernel_replies_read", "kernel_replies_prune"]
     assert await store.client.smembers(store.replay.index("scope", "anchor")) == set()
     assert await store.replay.read("scope", "child", ["anchor"], ["parent"]) == {}
-    assert await store.capture.swap("scope", "session", Document(), {"work": 1}, 0)
-    item = await store.capture.claim()
+    assert await store.capture.swap("scope", "session", Document(), {"delivered": "a"})
+    capture = await store.capture.get("scope", "session")
     await store.client.execute_command("DEL", store.capture_key("scope", "session"))
-    with pytest.raises(LeaseLost):
-        await store.capture.swap(
-            "scope", "session", item["document"], {}, None, owner=item["owner"]
-        )
-    await store.capture.release(item)
+    assert not await store.capture.swap("scope", "session", capture, {})
     assert await store.capture.get("scope", "session") == Document()
-    await store.client.zadd(store.capture.ready, {"scope\0session": 0})
-    assert await store.capture.claim() is None
-    assert await store.client.zcard(store.capture.ready) == 0
-    assert await store.capture.swap("scope", "session", Document(), {}, 0)
+    assert await store.capture.swap("scope", "session", Document(), {})
     assert (await store.capture.get("scope", "session")).version == 1
     assert await store.state.swap("scope", "state", Document(), {"old": True})
     old = (await store.state.read("scope", ["state"]))["state"]
@@ -699,7 +778,7 @@ async def test_redis_eviction_prunes_replies_and_loses_leases(redis_kernel_store
 
 async def test_redis_ttl_refresh_is_throttled_and_reads_do_not_refresh(redis_kernel_store):
     store = redis_kernel_store
-    await store.capture.swap("scope", "session", Document(), {}, None)
+    await store.capture.swap("scope", "session", Document(), {})
     await store.replay.put("scope", "session", K.REPLY, "anchor", {})
     await store.state.swap("scope", "session", Document(), {})
     rp, cap, state = (
@@ -723,7 +802,7 @@ async def test_redis_ttl_refresh_is_throttled_and_reads_do_not_refresh(redis_ker
     await store.client.pexpire(rp, 5000)
     store.touched[rp] = time.monotonic() - 61
     old = await store.capture.get("scope", "session")
-    assert await store.capture.swap("scope", "session", old, {}, None)
+    assert await store.capture.swap("scope", "session", old, {})
     assert await store.client.pttl(rp) > 5000
     await store.client.pexpire(cap, 5000)
     store.touched[cap] = time.monotonic() - 61
@@ -792,40 +871,10 @@ async def test_evicted_tool_receipt_returns_unknown_without_repeating(
     assert await read("scope", [receipt_key]) == {}
 
 
-async def test_redis_claim_uses_server_time_and_repairs_ready_score(
-    redis_kernel_store, monkeypatch
-):
-    from types import SimpleNamespace
-
-    from openviking_gateway import redis_store
-
-    store, now = redis_kernel_store, time.time()
-    monkeypatch.setattr(
-        redis_store, "time", SimpleNamespace(time=lambda: now + 3600, monotonic=time.monotonic)
-    )
-    await store.capture.swap("scope", "later", Document(), {}, now + 600)
-    await store.client.zadd(store.capture.ready, {"scope\0later": 0})
-    assert await store.capture.claim() is None
-    assert await store.client.zscore(store.capture.ready, "scope\0later") == pytest.approx(
-        (now + 600) * 1000
-    )
-    await store.capture.swap("scope", "now", Document(), {}, 0)
-    item = await store.capture.claim(lease_seconds=120)
-    assert item["session"] == "now"
-    seconds, micros = await store.client.time()
-    lease = float(await store.client.hget(store.capture_key("scope", "now"), "lease"))
-    assert 115_000 < lease - (seconds * 1000 + micros / 1000) <= 120_000
-    old = item["document"]
-    assert await store.capture.swap("scope", "now", old, {"pending": True}, 0, owner=item["owner"])
-    assert await store.client.zscore(store.capture.ready, "scope\0now") == lease
-    await store.capture.release(item)
-    assert await store.client.zscore(store.capture.ready, "scope\0now") == 0
-
-
 async def test_redis_scope_delete_unlinks_keys_and_keeps_tombstones(redis_kernel_store):
     store = redis_kernel_store
     await store.replay.put("scope", "session", K.ROOT, "", {})
-    await store.capture.swap("scope", "session", Document(), {}, 0)
+    await store.capture.swap("scope", "session", Document(), {})
     await store.expire(0, "scope")
     assert [key async for key in store.backend.scan(f"{store.prefix}k:{{scope}}:*")] == []
     assert [key async for key in store.backend.scan(f"{store.prefix}k:{{cap}}:scope:*")] == []
@@ -837,7 +886,7 @@ async def test_cluster_scope_delete_scans_only_own_primaries(tmp_path, monkeypat
     async with open_kernel_store("redis-cluster", tmp_path) as store:
         scope, sid = "scope", "{foreign}:*:?[]\\\0unicode-用户"
         await store.replay.put(scope, sid, K.ROOT, "", {})
-        await store.capture.swap(scope, sid, Document(), {}, 0)
+        await store.capture.swap(scope, sid, Document(), {})
         await store.state.swap(scope, sid, Document(), {})
         await store.replay.put("other", sid, K.ROOT, "", {"survives": True})
         scans, scan = [], store.client.scan
@@ -890,7 +939,7 @@ async def test_open_stores_shares_redis_and_reads_across_instances(provider, tmp
                 "redis": redis_settings(provider),
             },
         )
-        store, management, close = open_stores(config, None)
+        store, management, close, _ = open_stores(config, None)
         try:
             await store.initialize()
             await management.initialize()
@@ -900,16 +949,15 @@ async def test_open_stores_shares_redis_and_reads_across_instances(provider, tmp
             assert not list(tmp_path.glob("*.sqlite3"))
             await store.replay.put("scope", "session", K.ROOT, "", {"created": "first"})
             await store.state.swap("scope", "session", Document(), {"observed": True})
-            await store.capture.swap("scope", "session", Document(), {"pending": True}, 0)
+            await store.capture.swap("scope", "session", Document(), {"delivered": ""})
             peer = redis_store.RedisKernelStore(backend, ttl=2 * 86400)
-            assert await peer.load("scope", "session", [""]) == (
-                {(K.ROOT, ""): {"created": "first"}},
-                {"session": Document({"observed": True}, 1)},
-                Document({"pending": True}, 1),
-            )
-            claimed = await peer.capture.claim()
-            assert claimed["session"] == "session"
-            assert await store.capture.claim() is None
+            replay, state, capture = await peer.load("scope", "session", [""])
+            assert replay == {(K.ROOT, ""): {"created": "first"}}
+            assert state == {"session": Document({"observed": True}, 1)}
+            assert capture == Document({"delivered": ""}, 1)
+            assert await peer.capture.swap("scope", "session", capture, {"delivered": "a"})
+            assert not await store.capture.swap("scope", "session", capture, {})
+            assert await store.capture.get("scope", "session") == Document({"delivered": "a"}, 2)
         finally:
             await close()
     [handle] = handles

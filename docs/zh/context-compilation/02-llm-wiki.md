@@ -57,11 +57,12 @@ ov skills list
 ## 第三步：执行编译
 
 ```bash
-ov compile \
+ov compile create --compile-name research-wiki \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
   --instruction "面向团队检索整理成 Wiki，保留每条结论的出处"
+ov compile --compile-name research-wiki
 ```
 
 - `--from` 可以重复或用逗号分隔，一次传多个来源。

@@ -70,7 +70,7 @@ jobs:
             npm_pkg: cli-darwin-x64
             npm_os: darwin
             npm_cpu: x64
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact_name: ov-macos-aarch64
             npm_pkg: cli-darwin-arm64

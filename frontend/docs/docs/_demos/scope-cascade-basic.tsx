@@ -1,7 +1,5 @@
-import {
-  ScopeCascade,
-  useScopeCascade,
-} from '@openviking/react/modules/scope-cascade';
+import { useLang } from '@rspress/core/runtime';
+import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
 import '@openviking/react/modules/scope-cascade/style.css';
 
 // Mock interfaces only: replace these adapters with the three host APIs.
@@ -44,10 +42,10 @@ const api = {
 };
 
 export default function ScopeCascadeBasic() {
-  const controller = useScopeCascade(api);
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   return (
     <div style={{ minHeight: 320 }}>
-      <ScopeCascade controller={controller} />
+      <ScopeCascade locale={componentLocale} {...api} />
     </div>
   );
 }

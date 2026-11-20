@@ -10,11 +10,10 @@ from conftest import replay_records
 
 from openviking_gateway import protocols
 from openviking_gateway.blocks import RECALL_PROVENANCE_NOTE, gateway_note
-from openviking_gateway.capture import CaptureWorker, capture_messages
-from openviking_gateway.capture_store import Document
+from openviking_gateway.capture import capture_messages
 from openviking_gateway.client import VikingError
 from openviking_gateway.config import ClientRules
-from openviking_gateway.kernel import token_estimate
+from openviking_gateway.kernel import Budget, token_estimate
 from openviking_gateway.models import Policy
 from openviking_gateway.protocols import (
     AUXILIARY,
@@ -32,7 +31,7 @@ from openviking_gateway.protocols import (
     prefix_chain,
     text_content,
 )
-from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
+from openviking_gateway.storage import SQLiteKernelStore
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
@@ -279,6 +278,36 @@ async def test_profile_is_frozen_separately_from_recall(setup_kernel, credential
     assert len(viking.profile_requests) == requests and not viking.recalls
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_soul_opens_the_session_as_instructions(setup_kernel, credential, policy, enabled):
+    kernel, _, viking, _ = setup_kernel
+    viking.soul, viking.profile = "Answer in haiku.", "Alice maintains the gateway."
+    policy.update(recall=False, capture=False, soul=enabled, show_recall=True)
+    body = {"messages": [{"role": "user", "content": "Hello there"}]}
+    one = await prepare(kernel, body, credential, policy)
+    [opening] = context_blocks(one.body["messages"][0])
+    soul = (
+        '<agent-soul uri="viking://user/alice/memories/soul.md">\nAnswer in haiku.\n</agent-soul>'
+    )
+    note = "- The <agent-soul> section below is the soul.md file"
+    assert (soul in opening) == (note in opening) == enabled
+    assert opening.startswith(
+        '<openviking-context source="gateway-session-start">\n'
+        + ("The OpenViking Gateway, a proxy" if enabled else "<user-profile")
+    )
+    notice = one.records["injection", one.chain[0]]["notice"]
+    assert notice == f"> OpenViking context: {'soul, ' if enabled else ''}user profile\n\n"
+    if enabled:
+        assert opening.index(note) < opening.index(soul) < opening.index("<user-profile")
+    viking.soul = "Changed soul"
+    body["messages"] += [
+        {"role": "assistant", "content": "Hello"},
+        {"role": "user", "content": "Continue"},
+    ]
+    two = await prepare(kernel, body, credential, policy)
+    assert one.body["messages"][0] == two.body["messages"][0]
+
+
 @pytest.mark.parametrize("read", [False, True])
 async def test_recall_uses_server_rendered_and_uri_only_entries(
     setup_kernel, credential, policy, read
@@ -424,6 +453,14 @@ def test_plugin_detection_distinguishes_gateway_sources(source, plugin):
     )
 
 
+def test_plugin_detection_finds_hook_context_mid_line():
+    text = (
+        "<system-reminder>\nUserPromptSubmit hook additional context: <openviking-context>\n"
+        "Use `ov find`:\n```sh\nov find deploy\n```\n</openviking-context>\n</system-reminder>"
+    )
+    assert plugin_present({"messages": [{"role": "user", "content": text}]}, {})
+
+
 async def test_scope_fork_and_policy_snapshot(setup_kernel, credential, policy):
     kernel, _, viking, _ = setup_kernel
     body = {"messages": [{"role": "user", "content": "How do I deploy?"}]}
@@ -459,45 +496,20 @@ async def test_plugin_stop_is_sticky_but_replays_existing_prefix(setup_kernel, c
     assert three.disabled and len(viking.recalls) == 1
 
 
-async def test_capture_confirms_branch_and_isolates_forks(setup_kernel, credential, policy):
-    kernel, store, viking, key = setup_kernel
-    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", key)
-    await management.initialize()
-    await management.save("tenant", "keys", credential["id"], credential)
+async def test_capture_saves_the_client_history_and_isolates_forks(
+    setup_kernel, credential, policy
+):
+    kernel, _, viking, _ = setup_kernel
     body = {"messages": [{"role": "user", "content": "How do I deploy?"}]}
+    response = ResponseCapture("chat", {"role": "assistant", "content": "Answer"}, complete=True)
     one = await prepare(kernel, body, credential, policy)
-    response = ResponseCapture(
-        "chat", {"role": "assistant", "content": "Discarded answer"}, complete=True
-    )
-    await kernel.completed(one, credential, response)
-    assert await store.capture.claim() is None  # idle delay
-    body["messages"] += [
-        {"role": "assistant", "content": "Kept answer"},
-        {"role": "user", "content": "Next question"},
-    ]
-    await prepare(kernel, body, credential, policy)
-    worker = CaptureWorker(store, management, viking)
-    assert await worker.once()
-    assert "Kept answer" in str(viking.writes) and "Discarded answer" not in str(viking.writes)
+    assert "openviking-context" in str(one.body)
+    assert await kernel.save(one, credential, response) == 2
     assert "openviking-context" not in str(viking.writes)
-    await prepare(kernel, body, credential, policy, session="fork")
-    assert await worker.once()
+    fork = await prepare(kernel, body, credential, policy, session="fork")
+    assert await kernel.save(fork, credential, response) == 2
     assert len(viking.writes) == 2
     assert viking.write_sessions[0] != viking.write_sessions[1]
-
-
-async def test_lease_is_exclusive_and_old_owner_cannot_ack(setup_kernel):
-    _, store, _, _ = setup_kernel
-    await store.capture.swap("scope", "session", Document(), {"work": "pending"}, 0)
-    results = await asyncio.gather(*(store.capture.claim() for _ in range(8)))
-    claimed = [x for x in results if x]
-    assert len(claimed) == 1
-    await store.capture.release({**claimed[0], "owner": "old"})
-    assert await store.capture.claim() is None
-    old = await store.capture.get("scope", "session")
-    await store.capture.swap("scope", "session", old, {"work": "done"}, None)
-    await store.capture.release(claimed[0])
-    assert await store.capture.claim() is None
 
 
 async def test_cut_records_are_inherited_and_immutable(setup_kernel, credential, policy):
@@ -1409,3 +1421,81 @@ def test_tool_input_whitespace_is_significant():
     after = copy.deepcopy(before)
     after[0]["content"][0]["input"]["content"] = "a"
     assert prefix_chain(before) != prefix_chain(after)
+
+
+async def enhance(kernel, body, credential, policy, budget=None, summarize=None):
+    return await kernel.enhance(
+        body,
+        "chat",
+        {"x-openviking-session": "limited"},
+        credential,
+        {"id": "upstream"},
+        policy,
+        summarize=summarize,
+        budget=budget,
+    )
+
+
+async def test_preparation_past_its_limit_forwards_without_memory(
+    setup_kernel, credential, policy, monkeypatch
+):
+    kernel = setup_kernel[0]
+
+    async def slow_recall(*args):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(kernel, "recall", slow_recall)
+    body = {"model": "m", "messages": [{"role": "user", "content": "How do I deploy?"}]}
+    started = time.monotonic()
+    forwarded, prepared, metrics = await enhance(
+        kernel, body, credential, policy, budget=Budget(0.05)
+    )
+    assert time.monotonic() - started < 1
+    assert prepared is None and forwarded == body
+    assert metrics["degradation"] == "prepare_timeout"
+    assert metrics["degradations"] == ["prepare_timeout"]
+
+
+async def test_summary_time_does_not_count_against_the_limit(setup_kernel, credential, policy):
+    from test_compaction import Summarizer, answered
+
+    kernel = setup_kernel[0]
+    policy.update(context_window=1024, recall=False)
+    messages = [{"role": "user", "content": "How do I deploy?"}]
+    reply = {"role": "assistant", "content": "Use the blue cluster."}
+    first = await prepare(
+        kernel, {"model": "m", "messages": messages}, credential, policy, session="limited"
+    )
+    await answered(kernel, first, credential, reply)
+    summarizer = Summarizer("chat")
+
+    async def slow_summary(prepared, body):
+        await asyncio.sleep(0.3)
+        return await summarizer(prepared, body)
+
+    messages = [*messages, reply, {"role": "user", "content": "What next?"}]
+    _, prepared, metrics = await enhance(
+        kernel,
+        {"model": "m", "messages": messages},
+        credential,
+        policy,
+        budget=Budget(0.2),
+        summarize=slow_summary,
+    )
+    assert prepared is not None and "degradation" not in metrics
+    assert metrics["compaction_applied"] and len(summarizer.requests) == 1
+
+
+async def test_no_limit_by_default(setup_kernel, credential, policy, monkeypatch):
+    kernel = setup_kernel[0]
+    recall = kernel.recall
+
+    async def slow_recall(*args):
+        await asyncio.sleep(0.2)
+        await recall(*args)
+
+    monkeypatch.setattr(kernel, "recall", slow_recall)
+    assert Budget(0).deadline is None
+    body = {"model": "m", "messages": [{"role": "user", "content": "How do I deploy?"}]}
+    _, prepared, metrics = await enhance(kernel, body, credential, policy)
+    assert prepared is not None and "degradation" not in metrics

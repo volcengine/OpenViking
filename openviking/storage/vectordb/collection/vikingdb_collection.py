@@ -3,6 +3,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
@@ -16,7 +17,9 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VikingDBCollection(ICollection):
@@ -76,7 +79,7 @@ class VikingDBCollection(ICollection):
         path, method = VIKINGDB_APIS[action]
         response = self.client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
-            logger.error(f"Request to {action} failed: {response.text}")
+            logger.debug("Vector console request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -102,7 +105,7 @@ class VikingDBCollection(ICollection):
         if response.status_code != 200:
             if raise_on_error:
                 raise self._build_response_error(response, action)
-            logger.error(f"Request to {action} failed: {response.text}")
+            logger.debug("Vector console request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -119,8 +122,12 @@ class VikingDBCollection(ICollection):
         try:
             result = response.json()
             return result.get("result", {})
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON response from %s", path)
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "Invalid JSON response from %s error_type=%s",
+                safe_path_for_log(str(path)),
+                type(_log_error).__name__,
+            )
             return {}
 
     def _data_get(self, path: str, params: Dict[str, Any]):
@@ -130,8 +137,12 @@ class VikingDBCollection(ICollection):
         try:
             result = response.json()
             return result.get("result", {})
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON response from %s", path)
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "Invalid JSON response from %s error_type=%s",
+                safe_path_for_log(str(path)),
+                type(_log_error).__name__,
+            )
             return {}
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
@@ -389,6 +400,9 @@ class VikingDBCollection(ICollection):
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -405,6 +419,12 @@ class VikingDBCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
+        if bm25_k1 is not None:
+            data["bm25_k1"] = bm25_k1
+        if bm25_b is not None:
+            data["bm25_b"] = bm25_b
+        if advance is not None:
+            data["advance"] = advance
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

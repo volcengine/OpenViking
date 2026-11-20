@@ -7,8 +7,11 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service import fs_service as fs_module
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
+from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.queuefs import compile_target_tag_processor as tag_module
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
@@ -81,3 +84,66 @@ async def test_content_write_processor_recovers_checkpoint(monkeypatch, operatio
         assert processor._execute_refresh.await_count == 1
     finally:
         set_task_tracker(None)
+
+
+@pytest.mark.parametrize("pending", [False, OSError("index offline"), LockAcquisitionError("busy")])
+async def test_compile_tag_retry_preserves_work_and_progress(monkeypatch, pending):
+    """A restarted processor completes the same Work after lag or a transient failure."""
+    fs = SimpleNamespace(finalize_compile_directories=AsyncMock(side_effect=[pending, True]))
+    manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(tag_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(tag_module, "sleep", AsyncMock())
+    payload = {
+        "uri": "viking://resources/output",
+        "account_id": "account",
+        "user_id": "user",
+        "task_id": "tag-task",
+        "_task_work_id": "tag-work",
+        "last_index_enqueue": 42,
+    }
+    if isinstance(pending, LockAcquisitionError):
+        payload.update(retry_count=512, lock_retry_count=500)
+    result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(payload)
+    assert result.outcome is ProcessOutcome.REQUEUED
+    retry = manager.enqueue.await_args.args[1]
+    assert retry == {**payload, "retry_count": payload.get("retry_count", 0) + 1}
+    tag_module.sleep.assert_awaited_once_with(60.0 if "retry_count" in payload else 5.0)
+    result = await tag_module.CompileTargetTagProcessor(fs).on_dequeue(retry)
+    assert result.outcome is ProcessOutcome.SUCCESS
+    manager.enqueue.assert_awaited_once()
+
+
+async def test_compile_tag_requeues_and_reacquires_stale_lease(monkeypatch):
+    stale = ValueError("invalid lock request: owned lease capability does not match ref 'old'")
+    scope = [{"path": "/local/_system/compile_locks/account/output", "kind": "tree"}]
+    handoff = {"owner_id": "owner", "covered_paths": scope}
+    agfs = AsyncMock()
+    agfs.pathlock_adopt.side_effect = [{"lease_ref": "old"}, stale]
+    agfs.pathlock_to_handoff.side_effect = stale
+    agfs.pathlock_reacquire_batch.return_value = {"lease_ref": "fresh"}
+    vfs = SimpleNamespace(_async_agfs=agfs, stat=AsyncMock(return_value={"isDir": True}))
+    fs = SimpleNamespace(
+        _ensure_initialized=lambda: vfs,
+        _compile_target_lock_scope=lambda uri, ctx: (scope, "owner"),
+        finalize_compile_directories=AsyncMock(side_effect=[False, True]),
+    )
+    manager = SimpleNamespace(enqueue=AsyncMock())
+    monkeypatch.setattr(tag_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(tag_module, "sleep", AsyncMock(side_effect=[None, None]))
+    payload = {
+        "uri": "viking://resources/output",
+        "account_id": "account",
+        "user_id": "user",
+        "task_id": "tag-task",
+        "_task_work_id": "tag-work",
+        "target_lock": handoff,
+    }
+    worker = tag_module.CompileTargetTagProcessor(fs)
+    assert (await worker.on_dequeue(payload)).outcome is ProcessOutcome.REQUEUED
+    agfs.pathlock_to_handoff.assert_awaited_once_with({"lease_ref": "old"})
+    manager.enqueue.assert_awaited_once()
+    retry = manager.enqueue.await_args.args[1]
+    assert retry["target_lock"] == handoff
+    assert (await worker.on_dequeue(retry)).outcome is ProcessOutcome.SUCCESS
+    agfs.pathlock_reacquire_batch.assert_awaited_once_with(scope, "owner", timeout_secs=1.0)
+    agfs.pathlock_release.assert_awaited_once_with({"lease_ref": "fresh"})

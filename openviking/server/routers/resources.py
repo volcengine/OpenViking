@@ -3,12 +3,13 @@
 """Resource endpoints for OpenViking HTTP Server."""
 
 from typing import Any, Dict, Literal, Optional
+from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_content_target_uri
+from openviking.core.uri_validation import validate_content_target_uri, validate_request_viking_uri
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -18,6 +19,10 @@ from openviking.server.resource_ingest import (
     ingest_temp_upload,
 )
 from openviking.server.responses import response_from_result
+from openviking.server.routers.filesystem import CpRequest, MvRequest
+from openviking.server.routers.filesystem import cp as copy_filesystem_entry
+from openviking.server.routers.filesystem import mv as move_filesystem_entry
+from openviking.server.routers.filesystem import rm as remove_filesystem_entry
 from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
@@ -25,6 +30,75 @@ from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
+
+_SHARED_RESOURCES_ROOT = "viking://resources"
+
+
+def _validate_shared_resource_uri(
+    uri: str,
+    ctx: RequestContext,
+    *,
+    field_name: str = "uri",
+) -> str:
+    resolved = validate_request_viking_uri(
+        resolve_path_variables(uri), ctx, field_name=field_name
+    ).rstrip("/")
+    decoded_segments = unquote(resolved).replace("\\", "/").split("/")
+    if not resolved.startswith(f"{_SHARED_RESOURCES_ROOT}/") or any(
+        segment in {".", ".."} for segment in decoded_segments
+    ):
+        raise InvalidArgumentError(
+            "Only children of viking://resources/ are allowed for this operation"
+        )
+    return resolved
+
+
+@router.post("/resources/cp")
+async def copy_resource(
+    request: CpRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Copy a shared resource to another location in the shared subtree."""
+    from_uri = _validate_shared_resource_uri(request.from_uri, _ctx, field_name="from_uri")
+    to_uri = _validate_shared_resource_uri(request.to_uri, _ctx, field_name="to_uri")
+    return await copy_filesystem_entry(
+        CpRequest(from_uri=from_uri, to_uri=to_uri, recursive=request.recursive),
+        _ctx=_ctx,
+    )
+
+
+@router.post("/resources/mv")
+async def move_resource(
+    request: MvRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Rename or move a shared resource within the shared subtree."""
+    from_uri = _validate_shared_resource_uri(request.from_uri, _ctx, field_name="from_uri")
+    to_uri = _validate_shared_resource_uri(request.to_uri, _ctx, field_name="to_uri")
+    return await move_filesystem_entry(
+        MvRequest(from_uri=from_uri, to_uri=to_uri),
+        _ctx=_ctx,
+    )
+
+
+@router.delete("/resources")
+async def delete_resource(
+    uri: str = Query(..., description="URI below viking://resources/"),
+    recursive: bool = Query(False, description="Remove a directory recursively"),
+    wait: bool = Query(True, description="Wait for semantic index cleanup"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Delete one shared resource without exposing general filesystem deletion."""
+    resolved = _validate_shared_resource_uri(uri, _ctx)
+    # FSService enforces MANAGE ACL, removes vectors, refreshes parent semantic
+    # metadata and synchronizes watches. Its tracked fs_rm task keeps the same
+    # asynchronous semantics when wait=false.
+    return await remove_filesystem_entry(
+        uri=resolved,
+        recursive=recursive,
+        wait=wait,
+        _ctx=_ctx,
+    )
 
 
 class AddSkillRequest(BaseModel):
@@ -96,6 +170,7 @@ async def temp_upload(
                 names=signed.skill_names,
                 list_only=signed.list_only,
                 source_type="mcp",
+                request_id=getattr(request.state, "request_id", None),
             )
         return await ingest_temp_upload(
             store,
@@ -221,6 +296,7 @@ async def add_skill(
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
                 telemetry=request.telemetry,
+                request_id=getattr(http_request.state, "request_id", None),
             )
         finally:
             if resolved:

@@ -4,16 +4,19 @@
 
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
 from openviking.pyagfs import get_binding_client
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchTask
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.viking_fs import VikingFS
@@ -601,9 +604,21 @@ async def test_transfer_normalizes_uri_for_files_and_vectors(indexed_fs, operati
     source_arg = source.replace("resources/", "resources//") if alias_side == "source" else source
     target_arg = target.replace("resources/", "resources//") if alias_side == "target" else target
 
-    await getattr(fs, operation)(source_arg, target_arg, ctx=ctx)
+    result = await getattr(fs, operation)(source_arg, target_arg, ctx=ctx)
+
+    assert len(result["operation_id"]) == 32
+    assert result["operation"] == ("copy" if operation == "cp" else "move")
+    assert result["phase"] == "completed"
+    assert result["files_created"] == 1
+    assert result["vectors"]["scanned"] == result["vectors"]["written"] == 1
+    assert result["vectors"]["batches"] == 1
+    assert result["vectors"]["restored"] == 0
+    if operation == "mv":
+        assert result["files_deleted"] == 1
+        assert result["vectors"]["deleted"] >= 1
 
     assert await fs.read_file_bytes(target, ctx=ctx) == b"new"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
     records = await backend.get_context_by_uri(target, ctx=ctx)
     assert records
     records = await backend.get([record["id"] for record in records], ctx=ctx)
@@ -623,7 +638,9 @@ async def test_directory_transfer_allows_sibling_lock_and_releases_own_locks(
     ctx = root_ctx()
     source = "viking://resources/source"
     target = "viking://resources/target"
-    await fs.write_file_bytes(f"{source}/file.bin", b"new", ctx=ctx)
+    await fs.write_file_bytes(f"{source}/file.bin", b"\x00\xff", ctx=ctx)
+    await fs.write_file_bytes(f"{source}/.hidden", b"hidden", ctx=ctx)
+    await fs.mkdir(f"{source}/empty", ctx=ctx)
     if target_exists:
         await fs.write_file_bytes(f"{target}/file.bin", b"old", ctx=ctx)
         await fs.write_file_bytes(f"{target}/only.bin", b"keep", ctx=ctx)
@@ -632,7 +649,9 @@ async def test_directory_transfer_allows_sibling_lock_and_releases_own_locks(
     try:
         kwargs = {"recursive": True} if operation == "cp" else {}
         await getattr(fs, operation)(source, target, ctx=ctx, **kwargs)
-        assert await fs.read_file_bytes(f"{target}/file.bin", ctx=ctx) == b"new"
+        assert await fs.read_file_bytes(f"{target}/file.bin", ctx=ctx) == b"\x00\xff"
+        assert await fs.read_file_bytes(f"{target}/.hidden", ctx=ctx) == b"hidden"
+        assert (await fs.stat(f"{target}/empty", ctx=ctx))["isDir"]
         if target_exists:
             assert await fs.read_file_bytes(f"{target}/only.bin", ctx=ctx) == b"keep"
         assert await fs.exists(source, ctx=ctx) == (operation == "cp")
@@ -701,3 +720,133 @@ async def test_watch_persistence_overwrites_after_backup_removal_failure(binding
     backup = json.loads(await fs.read_file(store.STORAGE_BAK_URI, ctx=ctx))
     assert backup["tasks"][0]["reason"] == "before"
     assert not await fs.exists(store.STORAGE_TMP_URI, ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("semantic", [False, True], ids=["sync-tree", "semantic-sync"])
+@pytest.mark.parametrize(
+    "source_files,target_files,operation",
+    [
+        (["item.md"], [], "mv"),
+        (["item/file.md"], [], "mv"),
+        (["item.md"], ["item.md"], "mv"),
+        (["item.md"], ["item.md"], "rm"),
+        ([], ["item.md"], "rm"),
+        ([], ["item/file.md"], "rm"),
+        (["item"], ["item/file.md"], "rm"),
+        (["item/file.md"], ["item"], "rm"),
+    ],
+    ids=[
+        "add-file",
+        "add-dir",
+        "update-move",
+        "update-remove",
+        "delete-file",
+        "delete-dir",
+        "file-over-dir",
+        "dir-over-file",
+    ],
+)
+async def test_sync_failure_preserves_staged_content(
+    binding_fs, monkeypatch, semantic, source_files, target_files, operation
+):
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+    fs, ctx = binding_fs, root_ctx()
+    source, target = "viking://temp/import", "viking://resources/target"
+    await fs.mkdir(source, ctx=ctx)
+    await fs.mkdir(target, ctx=ctx)
+    for name in source_files:
+        await fs.write_file_bytes(f"{source}/{name}", b"new payload", ctx=ctx)
+    for name in target_files:
+        await fs.write_file_bytes(f"{target}/{name}", b"old", ctx=ctx)
+    sidecar = f"{source}/.image_mappings.json"
+    await fs.write_file_bytes(sidecar, b"{}", ctx=ctx)
+    error = OSError("injected storage failure")
+    monkeypatch.setattr(fs, operation, AsyncMock(side_effect=error))
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fs)
+
+    with pytest.raises(OSError) as caught:
+        if semantic:
+            await SemanticProcessor()._sync_topdown_recursive(source, target, ctx=ctx)
+        else:
+            await fs.sync_tree(source, target, ctx=ctx, delete_temp_after=True)
+
+    assert caught.value is error
+    assert await fs.read_file_bytes(sidecar, ctx=ctx) == b"{}"
+    for name in source_files:
+        assert await fs.read_file_bytes(f"{source}/{name}", ctx=ctx) == b"new payload"
+
+
+@pytest.mark.asyncio
+async def test_sync_requires_directory_before_applying_changes_and_cleaning_temp(binding_fs):
+    fs, ctx = binding_fs, root_ctx()
+    source, target = "viking://temp/import", "viking://resources/target"
+    for name in ("added.md", "updated.md", "newdir/file.md"):
+        await fs.write_file_bytes(f"{source}/{name}", b"new payload", ctx=ctx)
+    for name in ("updated.md", "removed.md", "olddir/file.md"):
+        await fs.write_file_bytes(f"{target}/{name}", b"old", ctx=ctx)
+
+    with pytest.raises(AGFSNotADirectoryError):
+        await fs.sync_tree(f"{source}/updated.md", target, ctx=ctx)
+    assert await fs.read_file_bytes(f"{target}/updated.md", ctx=ctx) == b"old"
+
+    diff = await fs.sync_tree(source, target, ctx=ctx, delete_temp_after=True)
+
+    assert diff.to_changes() == {
+        "added": [f"{target}/added.md", f"{target}/newdir"],
+        "modified": [f"{target}/updated.md"],
+        "deleted": [f"{target}/removed.md", f"{target}/olddir"],
+    }
+    assert not await fs.exists(source, ctx=ctx)
+    for name in ("added.md", "updated.md", "newdir/file.md"):
+        assert await fs.read_file_bytes(f"{target}/{name}", ctx=ctx) == b"new payload"
+    for name in ("removed.md", "olddir"):
+        assert not await fs.exists(f"{target}/{name}", ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_error", [False, True], ids=["storage-error", "lock-error"])
+async def test_partial_source_sync_fails_task_without_replaying_moves(
+    binding_fs, monkeypatch, lock_error
+):
+    from openviking.storage.errors import LockAcquisitionError
+    from openviking.storage.queuefs.semantic_msg import SemanticMsg
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+    fs, ctx = binding_fs, root_ctx()
+    source, target = "viking://temp/import", "viking://resources/target"
+    await fs.mkdir(target, ctx=ctx)
+    for name in ("a.md", "z.md"):
+        await fs.write_file_bytes(f"{source}/{name}", b"payload", ctx=ctx)
+    real_mv = fs.mv
+    error = (
+        LockAcquisitionError("injected lock failure") if lock_error else OSError("storage failed")
+    )
+
+    async def fail_second_move(src, dst, **kwargs):
+        if src == f"{source}/z.md":
+            raise error
+        return await real_mv(src, dst, **kwargs)
+
+    monkeypatch.setattr(fs, "mv", fail_second_move)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+    processor = SemanticProcessor(vlm_resolver=resolver)
+    reenqueue = AsyncMock()
+    monkeypatch.setattr(processor, "_reenqueue_semantic_msg", reenqueue)
+    msg = SemanticMsg(
+        uri=source, target_uri=target, context_type="resource", telemetry_id="sync-fail"
+    )
+
+    result = await processor.on_dequeue(msg.to_dict())
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == str(error)
+    reenqueue.assert_not_awaited()
+    assert await fs.read_file_bytes(f"{target}/a.md", ctx=ctx) == b"payload"
+    assert await fs.read_file_bytes(f"{source}/z.md", ctx=ctx) == b"payload"

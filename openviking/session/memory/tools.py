@@ -10,6 +10,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, _serialize_datetime
 from openviking.telemetry import tracer
@@ -221,6 +222,7 @@ class MemoryReadTool(MemoryTool):
         offset = kwargs.get("offset", 0)
         limit = kwargs.get("limit", -1)
         try:
+            uri = validate_request_viking_uri(uri, ctx.request_ctx)
             content = await ctx.viking_fs.read_file(
                 uri,
                 ctx=ctx.request_ctx,
@@ -375,7 +377,7 @@ class MemoryLsTool(MemoryTool):
         **kwargs: Any,
     ) -> Any:
         try:
-            uri = kwargs.get("uri", "")
+            uri = validate_request_viking_uri(kwargs.get("uri", ""), ctx.request_ctx)
             if kwargs.get("recursive"):
                 return await self._execute_recursive(ctx, uri)
             entries = await ctx.viking_fs.ls(

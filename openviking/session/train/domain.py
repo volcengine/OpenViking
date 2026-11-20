@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from openviking.message import Message
-from openviking.session.memory.dataclass import StoredLink
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 
 if TYPE_CHECKING:
     from openviking.session.train.gradients import PatchSemanticGradient
@@ -221,6 +221,8 @@ class PolicyPlanItem:
     confidence: float | None = None
     links: list[StoredLink] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    replacement_uri: str | None = None  # Delete replacement used to migrate stored links.
+    before_file: MemoryFile | None = None  # Full source snapshot for delete link locking.
 
 
 @dataclass(slots=True)

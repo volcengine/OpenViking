@@ -137,7 +137,7 @@ class FilesystemObserver(BaseObserver):
             stats_data = await observer_service.get_filesystem_stats(self.mount_path)
             return self._format_stats_table(stats_data)
         except Exception as e:
-            logger.error(f"Error getting filesystem stats: {e}")
+            logger.error("Error getting filesystem stats: %s", type(e).__name__)
             return f"Error retrieving filesystem statistics: {e}"
 
     async def get_status_json_async(self) -> dict:
@@ -146,7 +146,7 @@ class FilesystemObserver(BaseObserver):
             observer_service = self._get_collector()
             return await observer_service.get_filesystem_stats(self.mount_path)
         except Exception as e:
-            logger.error(f"Error getting filesystem stats: {e}")
+            logger.error("Error getting filesystem stats: %s", type(e).__name__)
             return {"error": str(e), "mounts": []}
 
     def get_status_table(self) -> str:

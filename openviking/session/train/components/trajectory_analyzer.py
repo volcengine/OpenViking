@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from openviking.config.vlm import VLMResolver
 from openviking.core.context import Context
 from openviking.message import Message, TextPart
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.agent_trajectory_context_provider import (
@@ -26,7 +28,11 @@ from openviking.session.memory.experience_lineage import (
     trajectory_outcome_tag,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
@@ -254,7 +260,6 @@ class TrajectoryRolloutAnalyzer:
             ctx=ctx,
             context_provider=provider,
             isolation_handler=isolation_handler,
-            thinking=True,
         )
 
         try:
@@ -285,6 +290,17 @@ class TrajectoryRolloutAnalyzer:
                 case_candidates=provider.case_candidates,
             )
             _apply_trajectory_source_archive_uri(traj_ops, source_archive_uri)
+            traj_ops.resolved_links.extend(
+                StoredLink(
+                    from_uri=case_uri,
+                    to_uri=uri,
+                    weight=1.0,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+                for op in traj_ops.upsert_operations
+                for uri in op.uris
+                for case_uri in op.memory_fields.get("case_uris", [])
+            )
 
             memory_result = MemoryUpdateResult()
             if include_trajectories:
@@ -303,6 +319,8 @@ class TrajectoryRolloutAnalyzer:
                 f"deleted={len(memory_result.deleted_uris)}, "
                 f"errors={len(memory_result.errors)}"
             )
+            if memory_result.errors:
+                raise MemoryUpdateError(memory_result)
             contexts = _contexts_from_memory_result(memory_result)
             return (
                 list(memory_result.written_uris),
@@ -311,8 +329,12 @@ class TrajectoryRolloutAnalyzer:
                 skill_gradients,
             )
         except Exception as exc:
-            logger.error("[trajectory] Failed to extract: %s", exc, exc_info=True)
-            if strict_extract_errors:
+            logger.debug(
+                "trajectory extraction failed error_type=%s",
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
+            )
+            if strict_extract_errors or isinstance(exc, MemoryUpdateError):
                 raise
             return None
 
@@ -332,16 +354,34 @@ class TrajectoryRolloutAnalyzer:
             transaction_handle=None,
         )
         updater._viking_fs = self.viking_fs or get_viking_fs()
-        return await updater.apply_operations(
-            operations,
-            ctx,
-            extract_context=extract_context,
-            isolation_handler=isolation_handler,
-            search_tags_by_uri=_trajectory_search_tags_by_uri(
+        viking_fs = updater._viking_fs
+        lease = None
+        if operations.resolved_links:
+            uris = {
+                uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri)
+            }
+            for op in operations.upsert_operations:
+                for uri in op.uris:
+                    uris.update((uri, uri.rpartition("/")[0] + "/.overview.md"))
+            lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                sorted(viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris),
+                timeout_secs=300.0,
+            )
+            updater._transaction_handle = lease
+        try:
+            return await updater.apply_operations(
                 operations,
-                consumed_experience_uris,
-            ),
-        )
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
+                search_tags_by_uri=_trajectory_search_tags_by_uri(
+                    operations,
+                    consumed_experience_uris,
+                ),
+            )
+        finally:
+            if lease is not None:
+                await viking_fs._async_agfs.pathlock_release(lease)
 
     @tracer(
         "train.rollout_analyzer.trajectory.read_trajectories", ignore_result=True, ignore_args=True
@@ -362,7 +402,12 @@ class TrajectoryRolloutAnalyzer:
                 raw = await viking_fs.read_file(uri, ctx=ctx) or ""
                 mf = MemoryFileUtils.read(raw, uri=uri)
             except Exception as exc:
-                logger.warning("Failed to read trajectory %s: %s", uri, exc)
+                logger.debug(
+                    "trajectory read failed uri=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
+                )
                 continue
             fields = dict(mf.extra_fields or {})
             name = str(
@@ -448,7 +493,11 @@ def _bind_trajectory_cases(
             fields.pop("case_name", None)
         unknown_ids = set(related_ids) - cases_by_id.keys()
         if unknown_ids:
-            logger.warning("Ignoring unknown trajectory case IDs: %s", sorted(unknown_ids))
+            logger.info(
+                "unknown trajectory case references ignored skipped=%d",
+                len(unknown_ids),
+                extra={"degraded": True},
+            )
         fields["case_uris"] = list(
             dict.fromkeys(
                 cases_by_id[case_id]["uri"]

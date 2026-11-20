@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+from openviking.observability.log_safety import safe_log_fields, safe_path_for_log
 from openviking.parse.parsers.code.ast.process_engine import (
     _configure_tree_sitter_cache_dir,
 )
@@ -37,15 +38,10 @@ def _load_tag_query(lang: str) -> Optional[str]:
     try:
         query_scm = query_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        logger.debug("No maintained tags query for language '%s'", lang)
+        logger.debug("No maintained tags query", extra=safe_log_fields({"file_type": lang}))
         return None
     except OSError as exc:
-        logger.warning(
-            "Failed to load tags query '%s' for language '%s': %s",
-            query_file,
-            lang,
-            exc,
-        )
+        logger.debug("Tags query load failed error_type=%s", type(exc).__name__)
         return None
     return query_scm.strip() or None
 
@@ -58,7 +54,11 @@ def has_tag_query(file_name: str) -> bool:
 
         lang = filename_to_lang(Path(file_name).name or "source.txt")
     except Exception as exc:
-        logger.debug("Unable to detect tags-query language for '%s': %s", file_name, exc)
+        logger.debug(
+            "Tags query language detection failed path=%s error_type=%s",
+            safe_path_for_log(file_name),
+            type(exc).__name__,
+        )
         return False
     return bool(lang and _load_tag_query(lang))
 
@@ -72,7 +72,10 @@ def _extract_with_grep_ast(
     try:
         from grep_ast import TreeContext
     except Exception as exc:
-        logger.warning("grep-ast RepoMap extractor unavailable: %s", exc)
+        logger.debug(
+            "RepoMap extractor unavailable error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
     try:
@@ -102,7 +105,11 @@ def _extract_with_grep_ast(
         mode = "verbose" if verbose else "compact"
         return f"# {file_name} [aider-repomap-lite, {mode}]\n\n{rendered}"
     except Exception as exc:
-        logger.warning("grep-ast RepoMap extraction failed for '%s': %s", file_name, exc)
+        logger.debug(
+            "RepoMap extraction failed path=%s error_type=%s",
+            safe_path_for_log(file_name),
+            type(exc).__name__,
+        )
         return None
 
 

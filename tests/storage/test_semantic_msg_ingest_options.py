@@ -61,6 +61,9 @@ def test_semantic_msg_reads_legacy_search_tag_fields():
         search_tag_mode="append",
     )
     assert msg.aggregate_directory is True
+    assert msg.file_md5s == {}
+    assert msg.file_vector_actions == {}
+    assert msg.failure_requeue_count == 0
 
 
 def test_semantic_msg_round_trips_deferred_aggregation_flag():
@@ -87,43 +90,6 @@ def test_semantic_msg_round_trips_hierarchical_aggregation_policy():
     assert restored.propagate_to_parent is False
 
 
-def test_semantic_msg_roundtrip_preserves_file_md5s():
-    msg = SemanticMsg(
-        uri="viking://resources/x",
-        context_type="resource",
-        file_md5s={"viking://resources/x/a.py": "md5a"},
-    )
-
-    assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {"viking://resources/x/a.py": "md5a"}
-
-
-def test_semantic_msg_defaults_file_md5s_to_empty():
-    msg = SemanticMsg(uri="viking://resources/x", context_type="resource")
-
-    assert msg.file_md5s == {}
-    assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {}
-
-
-def test_semantic_msg_roundtrip_preserves_file_vector_actions():
-    uri = "viking://resources/x/new.md"
-    msg = SemanticMsg(
-        uri="viking://resources/x",
-        context_type="resource",
-        file_vector_actions={uri: "upsert"},
-    )
-
-    restored = SemanticMsg.from_json(msg.to_json())
-
-    assert restored.file_vector_actions == {uri: "upsert"}
-
-
-def test_semantic_msg_defaults_file_vector_actions_to_empty():
-    msg = SemanticMsg(uri="viking://resources/x", context_type="resource")
-
-    assert msg.file_vector_actions == {}
-    assert SemanticMsg.from_dict(msg.to_dict()).file_vector_actions == {}
-
-
 def test_semantic_msg_rejects_invalid_file_vector_action():
     with pytest.raises(ValueError, match="unsupported file vector action"):
         SemanticMsg(
@@ -133,32 +99,8 @@ def test_semantic_msg_rejects_invalid_file_vector_action():
         )
 
 
-def test_semantic_msg_roundtrip_preserves_queue_enqueue_time():
-    msg = SemanticMsg(
-        uri="viking://resources/x",
-        context_type="resource",
-        queue_enqueued_at=123.456,
-    )
-
-    assert SemanticMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
-
-
-def test_semantic_msg_roundtrip_preserves_failure_requeue_count():
-    msg = SemanticMsg(
-        uri="viking://resources/x",
-        context_type="resource",
-        failure_requeue_count=1,
-    )
-
-    restored = SemanticMsg.from_dict(msg.to_dict())
-    legacy = msg.to_dict()
-    legacy.pop("failure_requeue_count")
-
-    assert restored.failure_requeue_count == 1
-    assert SemanticMsg.from_dict(legacy).failure_requeue_count == 0
-
-
-def test_semantic_msg_roundtrip_preserves_local_artifact_snapshot():
+def test_semantic_msg_roundtrip_preserves_pending_artifact_work():
+    file_uri = "viking://resources/x/a.py"
     msg = SemanticMsg(
         uri="viking://resources/x",
         context_type="resource",
@@ -169,15 +111,22 @@ def test_semantic_msg_roundtrip_preserves_local_artifact_snapshot():
             "root_type": "dir",
         },
         artifact_files=["a.py", "src/b.py"],
-        file_abstracts={"viking://resources/x/a.py": "summary a"},
+        file_abstracts={file_uri: "summary a"},
+        file_md5s={file_uri: "md5a"},
+        file_vector_actions={file_uri: "upsert"},
+        queue_enqueued_at=123.456,
+        failure_requeue_count=1,
     )
 
     restored = SemanticMsg.from_json(msg.to_json())
 
     assert restored.artifact_ref == msg.artifact_ref
-    assert restored.artifact_ref["resource_rel"] == "repository"
     assert restored.artifact_files == ["a.py", "src/b.py"]
-    assert restored.file_abstracts == {"viking://resources/x/a.py": "summary a"}
+    assert restored.file_abstracts == {file_uri: "summary a"}
+    assert restored.file_md5s == {file_uri: "md5a"}
+    assert restored.file_vector_actions == {file_uri: "upsert"}
+    assert restored.queue_enqueued_at == 123.456
+    assert restored.failure_requeue_count == 1
 
 
 def test_clear_ingest_options_survive_semantic_message_round_trip():

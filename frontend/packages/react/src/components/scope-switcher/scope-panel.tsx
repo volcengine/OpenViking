@@ -1,30 +1,36 @@
+import { Empty } from '../../shared/primitives/empty/empty.js';
+import { Input } from '../../shared/primitives/input/input.js';
 import { useCallback } from 'react';
+import { Highlight } from './highlight.js';
 import { moveScopeFocus } from './scope-keyboard.js';
-import check from '../../../../icons/svg/scope-switcher/check.svg?inline';
+import CheckIcon from '../../../../icons/svg/scope-switcher/check.svg?react';
+import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
 import { SCOPE_SWITCHER_SEARCH_THRESHOLD } from './types.js';
 import type {
+  ScopeSwitcherActions,
+  ScopeSwitcherData,
   ScopeSwitcherLabels,
-  ScopeSwitcherSelectableLevel,
+  ScopeSwitcherSlots,
+  ScopeSwitcherState,
 } from './types.js';
 
-function Highlight({ text, keyword }: { text: string; keyword: string }) {
-  const index = text.toLocaleLowerCase().indexOf(keyword.toLocaleLowerCase());
-  if (!keyword || index < 0) return <>{text}</>;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark>{text.slice(index, index + keyword.length)}</mark>
-      {text.slice(index + keyword.length)}
-    </>
-  );
-}
-
 export function ScopePanel({
-  level,
+  label,
+  data,
+  state,
+  slots,
+  actions,
+  onSelect,
   labels,
 }: {
-  level: ScopeSwitcherSelectableLevel;
-  labels?: ScopeSwitcherLabels;
+  /** Accessible name of the list and search box. */
+  label: string;
+  data: ScopeSwitcherData;
+  state?: ScopeSwitcherState;
+  slots?: ScopeSwitcherSlots;
+  actions?: ScopeSwitcherActions;
+  onSelect: NonNullable<ScopeSwitcherActions['onSelect']>;
+  labels: Required<ScopeSwitcherLabels>;
 }) {
   const focusPanel = useCallback((node: HTMLDivElement | null) => {
     const target =
@@ -37,44 +43,59 @@ export function ScopePanel({
       );
     (target ?? node)?.focus();
   }, []);
-  const keyword = level.searchKeyword ?? '';
+  // Render the visible subset; fall back to the authoritative set when the host
+  // does not filter. Validity of the selection is decided by the caller from
+  // `data.options`, so filtering here never changes the scope.
+  const options = data.visibleOptions ?? data.options;
+  const keyword = state?.searchKeyword ?? '';
+  const hasKeyword = keyword.trim().length > 0;
+  // Base the threshold on the authoritative set, not the rendered subset: a host
+  // that pages or filters passes a handful of `visibleOptions` while the whole
+  // set is well past the threshold, and searching is exactly what it needs.
   const searchVisible =
-    level.onSearchKeywordChange &&
-    (keyword.length > 0 ||
-      Math.max(level.options.length, level.total ?? 0) >
+    actions?.onSearchKeywordChange &&
+    (hasKeyword ||
+      Math.max(options.length, data.options.length, data.total ?? 0) >
         SCOPE_SWITCHER_SEARCH_THRESHOLD);
   const search = searchVisible ? (
-    <input
+    <Input
+      size="small"
+      prefix={<SearchIcon className="ov-scope-switcher__search-icon" />}
       type="search"
-      className="ov-scope-switcher__search"
+      className="ov-scope-switcher__search-field"
       value={keyword}
-      aria-label={labels?.searchPlaceholder ?? 'Search'}
-      placeholder={labels?.searchPlaceholder ?? 'Search'}
+      aria-label={labels.searchPlaceholder}
+      placeholder={labels.searchPlaceholder}
       onChange={(event) =>
-        level.onSearchKeywordChange?.(event.currentTarget.value)
+        actions?.onSearchKeywordChange?.(event.currentTarget.value)
       }
     />
   ) : null;
   let list;
-  if (level.loading) {
+  if (state?.loading) {
     list = (
       <div className="ov-scope-switcher__state" role="status">
-        {labels?.loading ?? 'Loading…'}
+        {labels.loading}
       </div>
     );
-  } else if (level.error) {
+  } else if (state?.error) {
     list = (
       <div className="ov-scope-switcher__state" role="alert">
-        {level.errorFallback ?? labels?.error ?? 'Unable to load options'}
+        {slots?.errorFallback ?? labels.error}
       </div>
     );
-  } else if (!level.options.length) {
+  } else if (!options.length) {
     list = (
-      <div className="ov-scope-switcher__state" role="status">
-        {level.emptyFallback ??
-          (keyword
-            ? (labels?.noMatch ?? labels?.empty ?? 'No matches')
-            : (labels?.empty ?? 'No options'))}
+      <div className="ov-scope-switcher__state">
+        {slots?.emptyFallback == null ? (
+          <Empty
+            size="compact"
+            illustration={hasKeyword ? 'search' : 'tray'}
+            title={hasKeyword ? labels.noMatch : labels.empty}
+          />
+        ) : (
+          <div role="status">{slots.emptyFallback}</div>
+        )}
       </div>
     );
   } else {
@@ -83,15 +104,15 @@ export function ScopePanel({
         key={keyword}
         className="ov-scope-switcher__list"
         role="listbox"
-        aria-label={level.ariaLabel ?? level.selectedLabel}
-        aria-busy={level.busy}
+        aria-label={label}
+        aria-busy={state?.busy}
         onScroll={(event) => {
           const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
-          level.onScroll?.({ scrollTop, scrollHeight, clientHeight });
+          actions?.onScroll?.({ scrollTop, scrollHeight, clientHeight });
         }}
       >
-        {level.options.map((option) => {
-          const selected = option.id === level.selectedId;
+        {options.map((option) => {
+          const selected = option.id === data.selectedId;
           const content = (
             <>
               {option.icon && (
@@ -107,7 +128,7 @@ export function ScopePanel({
               </span>
               {selected && (
                 <span className="ov-scope-switcher__check" aria-hidden="true">
-                  <img src={check} alt="" width={16} height={16} />
+                  <CheckIcon />
                 </span>
               )}
             </>
@@ -115,39 +136,39 @@ export function ScopePanel({
           return (
             <div
               key={option.id}
-              tabIndex={option.disabled || level.busy ? -1 : 0}
+              tabIndex={option.disabled || state?.busy ? -1 : 0}
               role="option"
               aria-selected={selected}
               className="ov-scope-switcher__option"
               title={option.label}
-              aria-disabled={option.disabled || level.busy || undefined}
+              aria-disabled={option.disabled || state?.busy || undefined}
               onClick={(event) => {
                 const target = event.target as HTMLElement;
                 if (
                   option.disabled ||
-                  level.busy ||
+                  state?.busy ||
                   target.closest(
                     'button, a, input, select, textarea, [role="button"]',
                   )
                 )
                   return;
-                level.onSelect?.(option);
+                onSelect(option);
               }}
               onKeyDown={(event) => {
                 if (
                   event.target !== event.currentTarget ||
                   option.disabled ||
-                  level.busy
+                  state?.busy
                 )
                   return;
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  level.onSelect?.(option);
+                  onSelect(option);
                 }
               }}
             >
-              {level.renderOption
-                ? level.renderOption(content, option)
+              {slots?.renderOption
+                ? slots?.renderOption(content, option)
                 : content}
             </div>
           );
@@ -160,15 +181,16 @@ export function ScopePanel({
       role="group"
       tabIndex={-1}
       ref={focusPanel}
+      className="ov-scope-switcher__panel-inner"
       onKeyDownCapture={moveScopeFocus}
     >
-      {level.renderPanel ? (
-        level.renderPanel({ search, list })
+      {slots?.renderPanel ? (
+        slots?.renderPanel({ search, list })
       ) : (
-        <>
+        <div className="ov-scope-switcher__panel-body">
           {search}
           {list}
-        </>
+        </div>
       )}
     </div>
   );

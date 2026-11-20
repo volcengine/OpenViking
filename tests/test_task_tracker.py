@@ -8,7 +8,7 @@ import json
 import threading
 import time
 from copy import deepcopy
-from unittest.mock import create_autospec
+from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 
@@ -226,6 +226,21 @@ async def test_wait_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
 
     assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
     assert delays == [0.05]
+
+
+async def test_wait_caps_backoff_at_one_second(monkeypatch, tracker: TaskTracker):
+    task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+        if len(delays) == 6:
+            await tracker.complete(task.task_id, {}, **_owner_kwargs())
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
+    assert delays == [0.05, 0.1, 0.2, 0.4, 0.8, 1.0]
 
 
 async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
@@ -476,7 +491,7 @@ async def test_fail_task(tracker: TaskTracker):
 async def test_mark_externally_cancelled_task_without_enabling_active_cancel(
     tracker: TaskTracker,
 ):
-    task = await tracker.create("content_write", **_owner_kwargs())
+    task = await tracker.create("external_only", **_owner_kwargs())
     await tracker.start(task.task_id)
 
     with pytest.raises(ValueError, match="does not support cancellation"):
@@ -1331,7 +1346,8 @@ async def test_persistent_store_writes_task_record_json():
     assert all(call["ctx"]["disable_auto_pathlock"] == "true" for call in agfs.write_calls)
 
 
-async def test_persistent_store_survives_tracker_reset():
+@pytest.mark.parametrize("external_outcome", [None, "poll", "recovery"])
+async def test_persistent_store_survives_tracker_reset(monkeypatch, external_outcome):
     agfs = _FakeAgfs()
     tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
     task = await tracker1.create(
@@ -1352,6 +1368,68 @@ async def test_persistent_store_survives_tracker_reset():
         "provider": "feishu",
         "access_token": "secret-token",
     }
+    if external_outcome is None:
+        return
+
+    from dataclasses import asdict, replace
+    from types import SimpleNamespace
+
+    import openviking.server.routers.tasks as tasks_router
+    import openviking.service.external_task_service as external_tasks
+    from openviking.service.compile_service import (
+        CompileErrorInfo,
+        CompileService,
+        CompileSessionStatus,
+    )
+
+    snapshot = CompileService._snapshot(
+        CompileSessionStatus(
+            status="failed",
+            stage="failed",
+            result={"coverage": {"completed": 1, "failed": 1}},
+            error=CompileErrorInfo(code="COMPILE_INCOMPLETE", message="Incomplete output"),
+        )
+    )
+    assert snapshot.result is not None
+    final_result = {**snapshot.result, "finalized": True}
+    provider = SimpleNamespace(
+        task_type="compile",
+        serialization_key=lambda payload: None,
+        poll_interval_seconds=0,
+        poll_max_attempts=1,
+        on_start=AsyncMock(return_value=None),
+        get=AsyncMock(return_value=snapshot),
+        on_finish=AsyncMock(return_value=replace(snapshot, result=final_result)),
+    )
+    service = external_tasks.ExternalTaskService()
+    service.register(provider)
+    monkeypatch.setattr(external_tasks, "get_task_tracker", lambda: tracker2)
+    task = await tracker2.create(
+        "compile",
+        meta={"request": {}},
+        auth={
+            "external_task_id": "runtime-task",
+            **(
+                {"external_terminal_snapshot": asdict(snapshot)}
+                if external_outcome == "recovery"
+                else {}
+            ),
+        },
+        **_owner_kwargs(),
+    )
+    assert await service.execute(task.task_id, **_owner_kwargs())
+    tracker3 = TaskTracker(store=PersistentTaskStore(agfs))
+    loaded = await tracker3.get(task.task_id, **_owner_kwargs())
+    assert loaded is not None
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.result == final_result
+    assert await tracker3.get_task_auth(task.task_id, **_owner_kwargs()) == {}
+    monkeypatch.setattr(tasks_router, "get_task_tracker", lambda: tracker3)
+    response = await tasks_router.get_task(task.task_id, include_events=False, _ctx=_make_ctx())
+    assert response.result["status"] == "failed"
+    assert response.result["error"] == "COMPILE_INCOMPLETE: Incomplete output"
+    assert response.result["result"] == final_result
+    assert provider.get.await_count == (external_outcome == "poll")
 
 
 async def test_persistent_store_ignores_existing_task_dirs():
@@ -1466,18 +1544,42 @@ async def test_execution_events_survive_restart_and_preserve_reported_facts():
 
 
 @pytest.mark.parametrize("outcome", ["complete", "fail"])
-async def test_terminal_event_waits_for_owned_work(tracker, outcome):
+async def test_terminal_event_waits_for_owned_work(tracker, outcome, monkeypatch):
+    from openviking.observability.events import get_event_bus
+    from openviking.observability.reporting import runtime
+
+    monkeypatch.setattr(runtime, "_reporter", object())
     owner = _owner_kwargs()
     task = await tracker.create("add_resource", **owner)
     await tracker.start(task.task_id, **owner)
     await tracker.register_work(task.task_id, "child-work", "Semantic", **owner)
-    await getattr(tracker, outcome)(
-        task.task_id, {"done": True} if outcome == "complete" else "error", **owner
-    )
-    snapshot = await tracker.get_with_events(task.task_id, **owner)
-    assert snapshot.status == TaskStatus.RUNNING
-    await tracker.mark_work_done(task.task_id, "child-work", **owner)
-    snapshot = await tracker.get_with_events(task.task_id, **owner)
+    events = []
+    bus = get_event_bus()
+    bus.register("terminal-reporting", events.append)
+    get_task = AsyncMock(wraps=tracker.get)
+    monkeypatch.setattr(tracker, "get", get_task)
+    try:
+        for index in range(20):
+            work_id = f"work-{index}"
+            await tracker.register_work(task.task_id, work_id, "Semantic", **owner)
+            await tracker.start_work(task.task_id, work_id, **owner)
+            await tracker.mark_work_done(task.task_id, work_id, **owner)
+        await getattr(tracker, outcome)(
+            task.task_id, {"done": True} if outcome == "complete" else "error", **owner
+        )
+        # Reporting must not reload growing Work details while the root remains open.
+        get_task.assert_not_awaited()
+        assert not events
+        snapshot = await tracker.get_with_events(task.task_id, **owner)
+        assert snapshot.status == TaskStatus.RUNNING
+        await tracker.mark_work_done(task.task_id, "child-work", **owner)
+        get_task.assert_awaited_once()
+        assert [(e.event_name, e.payload["task_id"], e.payload["status"]) for e in events] == [
+            ("task_terminal", task.task_id, "completed" if outcome == "complete" else "failed")
+        ]
+        snapshot = await tracker.get_with_events(task.task_id, **owner)
+    finally:
+        bus.unregister("terminal-reporting")
     last = snapshot.execution_events["items"][-1]
     assert last["kind"] == "status_changed"
     assert last["status"] == ("completed" if outcome == "complete" else "failed")

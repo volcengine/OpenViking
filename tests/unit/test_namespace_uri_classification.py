@@ -59,6 +59,29 @@ def test_system_namespace_detection_uses_scope_segment():
     assert not classify_uri("viking://resources/system").is_system
 
 
+@pytest.mark.parametrize("segment", ["example-skills", "global"])
+def test_system_compile_skill_namespaces(segment):
+    root = f"viking://system/compile/{segment}"
+    assert classify_uri(root).is_system
+    assert classify_uri(root).is_skill_namespace
+    assert not classify_uri(root).is_skill_root
+    assert classify_uri(f"{root}/demo").is_skill_root
+    assert classify_uri(f"{root}/demo/SKILL.md").is_skill
+    assert not classify_uri(f"{root}/demo/references").is_skill_root
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://system/global/demo",
+        "viking://system/compile/global-other/demo",
+        "viking://resources/system/compile/global/demo",
+    ],
+)
+def test_system_compile_skill_detection_requires_exact_path_segments(uri):
+    assert not classify_uri(uri).is_skill
+
+
 def test_peer_content_target_uri_rejects_invalid_peer_id():
     ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="support_bot"),

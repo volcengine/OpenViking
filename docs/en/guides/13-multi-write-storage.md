@@ -44,9 +44,13 @@ Each `items[]` entry needs `name`, `backend`, and backend-specific `params`.
 `encryption` is optional. Backup names must be unique and cannot be
 `primary`.
 
-When `provider` is `cache`, multi-write reuses the top-level CacheRuntime.
-The top-level `cache.provider` selects the implementation; multi-write has no
-separate Cache Provider connection.
+When `provider` is `cache`, multi-write reuses the named top-level CacheRuntime.
+`backups.instance` selects `cache.instances.<name>` and defaults to `default`;
+multi-write has no separate Cache Provider connection.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `instance` | `"default"` | Runtime selected when `provider` is `cache` |
 
 The Python configuration layer still accepts legacy V1 sync, acknowledgement,
 retry, operation, exclude, and redirect fields. It warns and removes them
@@ -84,6 +88,23 @@ already aligned with the primary or historical backfill is intentionally skipped
 Old multi-write protocols and old migration fields are rejected. Take a
 complete backup before enabling multi-write. Restore that backup before
 rolling back the binary.
+
+## Backup Configuration Changes
+
+When configured backup names differ from persisted `backend_states`, startup
+resets V2 multi-write metadata and runs a full import of current primary files.
+This path covers added, removed, and renamed backups.
+
+Changing backup configuration rescans current primary files and drives backup
+catch-up. This adds storage I/O, so foreground IOPS can increase. Run this in a
+maintenance window and avoid application writes during the change.
+
+Reset and full import enumerate only files that still exist on the primary.
+They do not preserve delete or move history from old segments. If a retained
+backup already contains old files that no longer exist on the primary, those
+files can remain on the backup after the change. If writes, deletes, or moves
+happen during the change, backups can also retain a small amount of dirty data,
+mostly old paths or old file versions.
 
 ## Verification
 
