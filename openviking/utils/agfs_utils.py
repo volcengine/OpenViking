@@ -364,27 +364,13 @@ def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     return dumped
 
 
-def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
+def build_runtime_ragfs_binding_config(
+    config: Any,
+    *,
+    account_store_cache_instance: str | None = None,
+) -> tuple[RagfsBindingConfig, Any | None]:
     """Build the runtime AGFS binding config from storage and encryption settings."""
     from openviking.crypto.config import bootstrap_encryption
-    from openviking.server.config import load_server_config
-    from openviking.server.dependencies import get_server_config
-    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-
-    account_store_cache_instance = None
-    config_file = OpenVikingConfigSingleton.get_config_file()
-    server_config = (
-        load_server_config(str(config_file)) if config_file is not None else get_server_config()
-    )
-    if (
-        server_config is not None
-        and server_config.account_store.provider == "redis_mysql"
-    ):
-        from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
-
-        account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(
-            server_config.account_store.params
-        )
 
     storage = _get_config_value(config, "storage")
     agfs_config = _get_config_value(storage, "agfs") if storage is not None else None

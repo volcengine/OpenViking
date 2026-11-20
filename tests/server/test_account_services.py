@@ -814,10 +814,15 @@ async def test_redis_batch_group_removal_invalidates_account_after_attempt(monke
         _engine_options={},
         remove_group_members=AsyncMock(return_value=True),
     )
+    cache_runtime = SimpleNamespace(
+        default_ttl_seconds=60,
+        register_script=lambda *_: None,
+    )
     store = RedisMySQLAccountStore(
         service_name="test-remove",
         mysql_store=cast(MySQLAccountStore, mysql),
-        params={"cache": {"provider": "redis", "params": {}}},
+        cache_runtime=cache_runtime,
+        params={"cache": {"instance": "default"}},
     )
 
     bump = AsyncMock()

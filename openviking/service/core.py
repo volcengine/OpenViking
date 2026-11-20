@@ -20,7 +20,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
-from openviking.server.config import UserConfigDefaults
+from openviking.server.config import UserConfigDefaults, load_server_config
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -71,7 +71,10 @@ from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionCon
 from openviking_cli.utils.config.config_utils import DEFAULT_SERVICE_NAME
 from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
-from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfigSingleton,
+    initialize_openviking_config,
+)
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 logger = get_logger(__name__)
@@ -79,6 +82,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry.runtime import ExpiryRuntime
+    from openviking.server.config import ServerConfig
     from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.ttl.adapter import TTLAdapter
 
@@ -94,12 +98,14 @@ class OpenVikingService:
         self,
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
+        server_config: Optional["ServerConfig"] = None,
     ):
         """Initialize OpenViking service.
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
             user: Username for session management.
+            server_config: Server configuration used for account store Runtime selection.
         """
         # Initialize config from ov.conf
         config = initialize_openviking_config(
@@ -107,6 +113,7 @@ class OpenVikingService:
             path=path,
         )
         self._config = config
+        self._server_config = server_config
         self._agent_evolution_base_config = config.agent_evolution.model_copy(deep=True)
         self._user = user or UserIdentifier(config.default_account, config.default_user)
 
@@ -241,7 +248,24 @@ class OpenVikingService:
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
-        binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
+        server_config = self._server_config
+        if server_config is None:
+            config_file = OpenVikingConfigSingleton.get_config_file()
+            if config_file is not None:
+                server_config = load_server_config(str(config_file))
+
+        account_store_cache_instance = None
+        if server_config is not None and server_config.account_store.provider == "redis_mysql":
+            from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
+
+            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(
+                server_config.account_store.params
+            )
+
+        binding_config, self._encryptor = build_runtime_ragfs_binding_config(
+            self._config,
+            account_store_cache_instance=account_store_cache_instance,
+        )
         return binding_config
 
     @property
