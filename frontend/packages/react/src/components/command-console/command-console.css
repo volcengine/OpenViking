@@ -1119,14 +1119,11 @@
   line-height: 22px;
   overflow-wrap: anywhere;
   cursor: pointer;
-  transition:
-    background-color 150ms ease,
-    transform 150ms ease;
+  transition: background-color 150ms ease;
 }
 
 .ov-command-console__quick-action:hover:not(:disabled) {
   background: var(--ov-ui-command-console-hover);
-  transform: translateY(-1px);
 }
 
 .ov-command-console__quick-action:focus-visible {
@@ -1138,6 +1135,18 @@
   cursor: not-allowed;
   opacity: 0.5;
   transform: none;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .ov-command-console__quick-action {
+    transition:
+      background-color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .ov-command-console__quick-action:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
 }
 
 @container (max-width: 440px) {

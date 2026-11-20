@@ -19,3 +19,10 @@ test('terminal quick actions keep a 28px minimum height and grow for wrapped lab
   assert.doesNotMatch(block, /(?:^|;)\s*block-size:\s*28px/);
   assert.match(block, /padding:\s*2px 8px/);
 });
+
+test('terminal quick actions only move when reduced motion is not requested', () => {
+  assert.match(
+    css,
+    /@media\s*\(hover:\s*hover\)\s*and\s*\(prefers-reduced-motion:\s*no-preference\)[\s\S]*?\.ov-command-console__quick-action:hover:not\(:disabled\)\s*\{[^}]*transform:\s*translateY\(-1px\)/,
+  );
+});
