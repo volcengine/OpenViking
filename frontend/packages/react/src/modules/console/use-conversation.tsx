@@ -17,6 +17,7 @@ import {
   useSessionSelection,
 } from './conversation-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
+import { withSessionDebugContext } from '../../components/viking-bot/message-debug.js';
 import type { ConsoleProps } from './types.js';
 
 /** Console owns chat requests and sessions. */
@@ -45,12 +46,13 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
-  const { references, clearReferences } = useConversationReferences({
-    enabled: enabled && !conversation?.references,
-    requestOptions: options.requestOptions,
-    scopeKey: options.scopeKey,
-    selection: chatOptions?.referenceSelection,
-  });
+  const { references, clearReferences, prepareReferenceClear } =
+    useConversationReferences({
+      enabled: enabled && !conversation?.references,
+      requestOptions: options.requestOptions,
+      scopeKey: options.scopeKey,
+      selection: chatOptions?.referenceSelection,
+    });
   const hitl = useHitl(
     chat,
     enabled && conversation?.interaction === undefined,
@@ -111,16 +113,19 @@ export function useConversation(
     locale: conversationLocale,
     options,
   });
+  const debugContext = withSessionDebugContext(
+    conversation?.debugContext,
+    enabled ? chat.sessionId : hostSessions?.currentId,
+  );
   if (!enabled) {
     const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
-    return scoped
-      ? { ...conversation, sessions: scoped }
-      : (conversation ?? {});
+    return { ...conversation, debugContext, sessions: scoped };
   }
   const isSending =
     switching || chat.status === 'streaming' || chat.status === 'loading';
   return {
     ...conversation,
+    debugContext,
     ...uploads.props,
     ...compileQuickInputProps({
       conversation,
@@ -150,9 +155,10 @@ export function useConversation(
       if (!validation.validate(draft)) return;
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
+      const clearSubmitted = prepareReferenceClear(draft.references ?? []);
       if (!followingUp) {
         if (uploads.props) uploads.removeSent(draft.attachments);
-        clearReferences(draft.references ?? []);
+        clearSubmitted();
       }
       setDraft((current) =>
         current.trim() === draft.text.trim() ? '' : current,
@@ -165,7 +171,7 @@ export function useConversation(
           return;
         }
         if (followingUp && uploads.props) uploads.removeSent(draft.attachments);
-        if (followingUp) clearReferences(draft.references ?? []);
+        if (followingUp) clearSubmitted();
         if (!followingUp) void sessions.refresh();
       });
     },

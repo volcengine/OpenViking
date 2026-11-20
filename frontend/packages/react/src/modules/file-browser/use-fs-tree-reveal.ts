@@ -86,6 +86,7 @@ export function useFsTreeReveal({
       if (target !== root && !target.startsWith(childPrefix(root)))
         return false;
       await initialLoad.current;
+      if (!valid()) return false;
       const expand = async (uri: string) => {
         if (!valid()) return false;
         expandForNavigation(uri);

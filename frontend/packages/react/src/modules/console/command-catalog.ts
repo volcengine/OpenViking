@@ -65,7 +65,6 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-memory',
   'find',
   'compile create',
-  'compile',
 ] as const;
 
 export function consoleQuickCommands(
@@ -75,6 +74,7 @@ export function consoleQuickCommands(
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
     value: guides[name].examples[0],
+    compactLabel: name === 'compile create' ? 'compile' : undefined,
   }));
 }
 
@@ -91,6 +91,10 @@ export function consoleCommands(
       (spec) => !spec.admin || options?.allowAdminCommands,
     ).map((spec) => {
       const guide = guides[spec.name];
+      const description =
+        spec.name === 'add-resource' && options?.onOpenLocalResourceImport
+          ? text.localResourceImportHelp
+          : (guide?.description ?? text.commands[spec.name]);
       const positional = (
         spec.preferredPositional ??
         spec.positional ??
@@ -104,7 +108,7 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          description: guide?.description ?? text.commands[spec.name],
+          description,
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
           quickStart: guide?.quickStart,

@@ -2,6 +2,7 @@ import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type VikingBotTask = TaskSnapshot;
 import type { ReactNode } from 'react';
 import type { VikingBotReference } from './capabilities.js';
+import type { VikingBotDebugLabels } from './message-debug.js';
 
 /**
  * 片段类型判别值。两种宿主风格共用这一层：宿主在接入层把各自的流事件
@@ -262,7 +263,7 @@ export interface VikingBotDraft {
 }
 
 /** 可替换文案，组件内置英文默认值。Replaceable copy; the component ships English defaults. */
-export interface VikingBotLabels {
+export interface VikingBotLabels extends VikingBotDebugLabels {
   activityRunning?: string;
   activityCompleted?: string;
   toolInput?: string;

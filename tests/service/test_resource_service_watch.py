@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 import pytest_asyncio
 
+from openviking.parse.accessors.feishu_accessor import FeishuSourcePreflight
 from openviking.parse.mode import ParseMode
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.resource.feishu_watch_auth import FeishuAppCredentials
@@ -469,7 +470,9 @@ class TestAddResourceArgs:
         async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
             assert feishu_access_token == expected_token
             assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
-            return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
+            return FeishuSourcePreflight(
+                doc_type="docx", token="doc_token", source_name=None, source_format="file"
+            )
 
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
@@ -636,7 +639,9 @@ class TestAddResourceArgs:
         ):
             seen["access_token"] = feishu_access_token
             seen["config_domain"] = feishu_config.domain
-            return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
+            return FeishuSourcePreflight(
+                doc_type="docx", token="doc_token", source_name=None, source_format="file"
+            )
 
         resource_service._runtime_config_manager = SimpleNamespace(resolve_account=resolve_account)
         monkeypatch.setattr(
@@ -701,8 +706,8 @@ class TestAddResourceArgs:
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
             AsyncMock(
-                return_value=SimpleNamespace(
-                    source_name=None, source_format="file", doc_type="docx"
+                return_value=FeishuSourcePreflight(
+                    doc_type="docx", token="doc_token", source_name=None, source_format="file"
                 )
             ),
         )
@@ -745,7 +750,9 @@ class TestAddResourceArgs:
         )
 
         async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
-            return SimpleNamespace(source_name="Feishu", source_format="file", doc_type="docx")
+            return FeishuSourcePreflight(
+                doc_type="docx", token="doc_token", source_name="Feishu", source_format="file"
+            )
 
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
@@ -1630,7 +1637,9 @@ async def test_external_feishu_auth_survives_queue_and_multiple_watches(
         assert feishu_access_token == fetched[-1]
         assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
         assert auth.current_feishu_token.get() is not None
-        return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
+        return FeishuSourcePreflight(
+            doc_type="docx", token="doc_token", source_name=None, source_format="file"
+        )
 
     monkeypatch.setattr(
         "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source", preflight

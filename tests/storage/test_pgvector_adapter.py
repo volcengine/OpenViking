@@ -391,9 +391,8 @@ def test_ttl_rejected_without_writes(adapter):
     assert adapter.count() == 0
 
 
+@pytest.mark.parametrize("adapter", ["hnsw"], indirect=True)
 def test_hnsw_physical_plan_and_missing_index(adapter):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Physical ANN index is specific to HNSW")
     seed(adapter)
     meta = adapter.get_collection().get_index_meta_data("default")
     name = meta["_pg_index_name"]
@@ -421,9 +420,8 @@ def test_hnsw_physical_plan_and_missing_index(adapter):
 
 
 @pytest.mark.parametrize("physical_index", ["missing", "wrong_operator_class"])
+@pytest.mark.parametrize("adapter", ["hnsw"], indirect=True)
 def test_drop_collection_with_unavailable_hnsw_after_reload(adapter, physical_index):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Physical ANN index is specific to HNSW")
     seed(adapter)
     collection = adapter.get_collection()._Collection__collection
     name = collection.get_index_meta_data("default")["_pg_index_name"]

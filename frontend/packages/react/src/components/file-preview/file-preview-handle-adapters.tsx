@@ -19,6 +19,7 @@ export interface FilePreviewAdapterOptions {
   /** Markdown 正文链接的点击回调；目录策略可限定接管范围。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   directoryLinks?: DirectoryLinkMode;
+  sessionMessages?: boolean;
   resolveImage?: (src: string) => Promise<string>;
 }
 
@@ -43,11 +44,13 @@ export function createFilePreviewAdapters({
   onLinkClick,
   resolveImage,
   directoryLinks,
+  sessionMessages,
 }: FilePreviewAdapterOptions): FileViewerCoreProps['adapters'] {
   return createFilePreviewAdapterList({
     onLinkClick,
     resolveImage,
     directoryLinks,
+    sessionMessages,
   }).map((adapter) => {
     const wrap: Adapter = (context) => {
       const descriptor = adapter(context);

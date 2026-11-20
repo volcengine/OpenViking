@@ -2,16 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type {
-  VikingBotReference,
-  VikingBotReferences,
-} from '../../components/viking-bot/index.js';
+import type { VikingBotReferences } from '../../components/viking-bot/index.js';
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import { mentionSearchRows, MENTION_ROOT } from './mention-search.js';
-import { searchConversationReferences } from './conversation-reference-search.js';
-
-const emptyReferences: readonly VikingBotReference[] = [];
+import {
+  referenceSearchInput,
+  searchReferenceMatches,
+} from './references/search.js';
+import { useReferenceSelection } from './references/use-reference-selection.js';
 
 export function useConversationReferences({
   enabled,
@@ -59,47 +58,14 @@ export function useConversationReferences({
       enabled,
     ],
   );
-  const [selected, setSelected] = useState<{
-    scope: typeof scope;
-    items: readonly VikingBotReference[];
-  }>();
-  const onChange = useCallback(
-    (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
-    [scope],
-  );
-  const onSelectionChange = enabled ? selection?.onChange : undefined;
-  const clearReferences = useCallback(
-    (sent?: readonly VikingBotReference[]) => {
-      if (onSelectionChange) {
-        if (!sent) onSelectionChange([]);
-        return;
-      }
-      setSelected((current) => {
-        if (current?.scope !== scope) return current;
-        if (!sent) return undefined;
-        const items = current.items.filter((item) => !sent.includes(item));
-        return items.length === current.items.length
-          ? current
-          : { scope, items };
-      });
-    },
-    [scope, onSelectionChange],
-  );
+  const { selected, onChange, clearReferences, prepareReferenceClear } =
+    useReferenceSelection(scope, enabled ? selection : undefined);
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const trimmedQuery = query.trim();
-  const keyword = trimmedQuery
-    .replace(/^viking:\/\//i, '')
-    .split('/')
-    .filter(Boolean)
-    .join('/');
-  const searchKey =
-    keyword && searchSkills && /^viking:\/\//i.test(trimmedQuery)
-      ? `${MENTION_ROOT}${keyword}`
-      : keyword;
+  const { keyword, searchKey } = referenceSearchInput(query, searchSkills);
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -118,9 +84,9 @@ export function useConversationReferences({
     result: typeof search;
     uris: Set<string>;
   }>();
-  // Sync native search results with the picker query and request scope, including
-  // changes from the host; rendering alone cannot fetch them. Cleanup cancels
-  // the debounce and request so closed pickers and stale scopes cannot update.
+  // Syncs the open picker and query with remote glob results after a debounce.
+  // Picker and scope changes can happen outside input events, so an Effect owns the request.
+  // Query/scope changes or unmount clear the timer and abort the old request.
   useEffect(() => {
     if (!opened || !searchKey) return;
     const controller = new AbortController();
@@ -128,12 +94,10 @@ export function useConversationReferences({
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      void searchConversationReferences(scope.client, searchKey, searchSkills, {
-        ...scope.options,
-        signal: requestSignal,
-      })
-        .then((matches) => {
+      void searchReferenceMatches(scope, searchKey, requestSignal, searchSkills)
+        .then((results) => {
           if (requestSignal.aborted) return;
+          const matches = results.flat();
           setSearch({
             scope,
             key: searchKey,
@@ -154,7 +118,8 @@ export function useConversationReferences({
       controller.abort();
     };
   }, [opened, searchKey, scope, signal, attempt, searchSkills]);
-  if (!enabled) return { references: undefined, clearReferences };
+  if (!enabled)
+    return { references: undefined, clearReferences, prepareReferenceClear };
 
   const result =
     search?.scope === scope && search.key === searchKey ? search : undefined;
@@ -184,10 +149,8 @@ export function useConversationReferences({
             expanded: row.hasChildren ? !hidden?.has(row.uri) : undefined,
           }))
       : tree.rows,
-    selected:
-      selection?.selected ??
-      (selected?.scope === scope ? selected.items : emptyReferences),
-    onChange: onSelectionChange ?? onChange,
+    selected,
+    onChange,
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => void expandDirectory(uri),
@@ -200,5 +163,10 @@ export function useConversationReferences({
     isLoading: keyword ? !result : !tree.isReady && tree.isInitializing,
     error: keyword ? result?.error : tree.error?.message,
   };
-  return { references, clearReferences, expandDirectory };
+  return {
+    references,
+    clearReferences,
+    prepareReferenceClear,
+    expandDirectory,
+  };
 }

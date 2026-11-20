@@ -24,6 +24,8 @@ export interface FileBrowserApi {
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
+  previewIsCompile: boolean;
+  previewHasDirectorySummary: boolean;
   dashboardError: Error | null;
   refreshWikiConflicts: () => void;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */

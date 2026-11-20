@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import struct
 import threading
 import time
 from array import array
@@ -17,11 +18,9 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSNativeRouteError,
     CuVSSearchTelemetry,
     CuVSUnavailableError,
-    UnsupportedCuVSFilterError,
     _CuVSRuntime,
     _PackedFP32Rows,
     estimate_cuvs_memory,
-    matches_filter,
 )
 from openviking.storage.vectordb.index.local_index import LocalIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
@@ -71,9 +70,11 @@ class FakeCuVSRuntime:
         results = [self.search(index, query, limit, mask) for query in queries]
         return [result[0] for result in results], [result[1] for result in results]
 
-    def prepare_filter(self, mask):
+    def prepare_filter_words(self, words):
         self.prepare_filter_count += 1
-        return tuple(mask)
+        if isinstance(words, bytes):
+            words = [word for (word,) in struct.iter_unpack("<I", words)]
+        return tuple(bool(word & (1 << bit)) for word in words for bit in range(32))
 
     def memory_info(self):
         return self.free_memory_bytes, self.total_memory_bytes
@@ -186,7 +187,6 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         float16 = "float16"
         float32 = "float32"
         uint32 = "uint32"
-        ndarray = FakeArray
         cuda = FakeCuda()
 
         @staticmethod
@@ -284,16 +284,13 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
         assert spy.current() == 9
         runtime_index = runtime.build([[1.0, 0.0]])
         assert spy.current() == 9
-        runtime.prepare_filter([True])
-        runtime.prepare_filter_words([1])
-        runtime._prefilter([True])
+        device_filter = runtime.prepare_filter_words([1])
         assert spy.current() == 9
         spy.track_temporaries = True
-        assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+        assert runtime.search(runtime_index, [1.0, 0.0], 1, device_filter) == ([0], [0.25])
         spy.track_temporaries = False
         assert {name for name, _device in spy.temporary_releases} == {
             "array-1",
-            "array-2",
             "distances",
             "neighbors",
         }
@@ -305,43 +302,42 @@ def test_cuvs_runtime_uses_captured_device_from_worker_thread():
             runtime.build([[0.0, 1.0]])
         spy.fail_build = False
         spy.track_temporaries = False
-        assert ("array-3", 3) in spy.temporary_releases
+        assert ("array-2", 3) in spy.temporary_releases
         assert spy.current() == 9
         spy.fail_search = True
         spy.track_temporaries = True
         with pytest.raises(RuntimeError, match="injected search failure"):
-            runtime.search(runtime_index, [0.0, 1.0], 1, [True])
+            runtime.search(runtime_index, [0.0, 1.0], 1, device_filter)
         spy.fail_search = False
         spy.track_temporaries = False
-        assert ("array-4", 3) in spy.temporary_releases
-        assert ("array-5", 3) in spy.temporary_releases
+        assert ("array-3", 3) in spy.temporary_releases
         assert spy.current() == 9
         assert spy.releases == [("resources-1", 3)]
         assert runtime.search_batch(
             runtime_index,
             [[1.0, 0.0], [0.0, 1.0]],
             1,
-            [True],
+            device_filter,
         ) == ([[0], [0]], [[0.25], [0.25]])
-        assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+        assert runtime.search(runtime_index, [1.0, 0.0], 1, device_filter) == ([0], [0.25])
         spy.fail_host_copy = True
         with pytest.raises(RuntimeError, match="injected host copy failure"):
-            runtime.search(runtime_index, [1.0, 0.0], 1, [True])
+            runtime.search(runtime_index, [1.0, 0.0], 1, device_filter)
         spy.fail_host_copy = False
         assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
         runtime.release_index()
         assert spy.current() == 9
-        return runtime_index
+        return runtime_index, device_filter
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        runtime_index = executor.submit(use_runtime_from_worker).result(timeout=5)
+        runtime_index, device_filter = executor.submit(use_runtime_from_worker).result(timeout=5)
 
     churn_errors = []
 
     def search_from_short_lived_thread():
         try:
             spy.set_current(9)
-            assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+            assert runtime.search(runtime_index, [1.0, 0.0], 1, device_filter) == ([0], [0.25])
             assert spy.current() == 9
         except BaseException as exc:
             churn_errors.append(exc)
@@ -424,8 +420,7 @@ def test_cuvs_host_shadow_is_immutable_compact_fp32():
     source = [0.1, -3.25]
     index.add_candidates([candidate(10, source), candidate(20, [2.0, 4.0])])
 
-    assert index.host_shadow_nbytes == 2 * 2 * 4
-    stored = index._records[10].vector
+    stored = index._records[10]
     assert isinstance(stored, bytes)
     assert len(stored) == 2 * 4
     assert list(memoryview(stored).cast("f")) == pytest.approx([0.1, -3.25])
@@ -456,7 +451,6 @@ def test_cuvs_host_shadow_is_immutable_compact_fp32():
 
     index.close()
     assert index.size == 0
-    assert index.host_shadow_nbytes == 0
     assert runtime.closed
 
 
@@ -517,7 +511,6 @@ def test_cuvs_runtime_uploads_packed_rows_in_bounded_batches(
 
     assert built.dataset.rows == [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
     assert built.dataset.upload_dtypes == [expected_upload_dtype] * 3
-    assert rows.nbytes == 3 * 2 * 4
     assert [end - start for start, end, _payload in rows.iter_packed_batches(8)] == [1, 1, 1]
 
 
@@ -881,6 +874,8 @@ def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild(micro_b
                 {"op": "must", "field": "uri", "conds": ["/docs"], "para": "-d=1"},
             ],
         },
+        lambda _filters: ([0b001], 1),
+        lambda _labels: None,
     )
     assert labels == [10]
     assert scores == [1.0]
@@ -930,12 +925,19 @@ def test_empty_filter_does_not_allocate_a_device_bitset():
         [1.0, 0.0],
         1,
         {"op": "must", "field": "tenant", "conds": ["missing"]},
+        lambda _filters: ([0], 0),
+        lambda _labels: None,
     ) == ([], [])
     assert runtime.prepare_filter_count == 0
     assert runtime.search_count == 0
 
 
-def test_cuvs_search_telemetry_records_build_filter_cache_and_search():
+@pytest.mark.parametrize(
+    ("words", "packed"),
+    [(struct.pack("<I", 0b01), True), ([0b01], False)],
+    ids=["packed", "legacy"],
+)
+def test_cuvs_search_telemetry_records_build_filter_cache_and_search(words, packed):
     runtime = FakeCuVSRuntime()
     index = CuVSDenseIndex(
         dimension=2,
@@ -952,12 +954,15 @@ def test_cuvs_search_telemetry_records_build_filter_cache_and_search():
         ]
     )
     filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver = Mock(return_value=(words, 1))
+    registrar = Mock()
 
     first = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
-    assert index.search([1.0, 0.0], 1, filter_a, telemetry=first)[0] == [1]
+    assert index.search([1.0, 0.0], 1, filter_a, resolver, registrar, telemetry=first)[0] == [1]
     assert first.build_performed is True
     assert first.filter_kind == "scalar"
     assert first.filter_cache_hit is False
+    assert first.as_dict()["filter_words_packed"] is packed
     assert first.eligible_count == 1
     assert first.index_size == 2
     assert first.build_ms >= 0
@@ -965,9 +970,10 @@ def test_cuvs_search_telemetry_records_build_filter_cache_and_search():
     assert first.gpu_search_ms >= 0
 
     second = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
-    assert index.search([1.0, 0.0], 1, filter_a, telemetry=second)[0] == [1]
+    assert index.search([1.0, 0.0], 1, filter_a, resolver, registrar, telemetry=second)[0] == [1]
     assert second.build_performed is False
     assert second.filter_cache_hit is True
+    assert second.filter_words_packed is packed
     assert second.eligible_count == 1
 
 
@@ -1643,12 +1649,16 @@ def test_cuvs_micro_batch_groups_same_filter_but_splits_incompatible_keys():
     index = make_micro_batch_index(runtime)
     filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
     filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+    registrar = Mock()
+
+    def resolve(filters):
+        return ([0b101], 2) if filters == filter_a else ([0b010], 1)
 
     same_filter = run_simultaneous_searches(
         index,
         [
-            ([1.0, 0.0], 1, filter_a),
-            ([0.0, 1.0], 1, filter_a),
+            ([1.0, 0.0], 1, filter_a, resolve, registrar),
+            ([0.0, 1.0], 1, filter_a, resolve, registrar),
         ],
     )
     assert [result[0] for result in same_filter] == [[1], [3]]
@@ -1658,8 +1668,8 @@ def test_cuvs_micro_batch_groups_same_filter_but_splits_incompatible_keys():
     split_filters = run_simultaneous_searches(
         index,
         [
-            ([1.0, 0.0], 1, filter_a),
-            ([0.0, 1.0], 1, filter_b),
+            ([1.0, 0.0], 1, filter_a, resolve, registrar),
+            ([0.0, 1.0], 1, filter_b, resolve, registrar),
         ],
     )
     assert [result[0] for result in split_filters] == [[1], [2]]
@@ -1846,16 +1856,7 @@ def test_cuvs_micro_batch_serializes_rebuild_with_search():
 
 
 def test_cuvs_micro_batch_device_lru_eviction_falls_back_once():
-    class WordPreparingRuntime(FakeCuVSRuntime):
-        def __init__(self):
-            super().__init__()
-            self.prepare_filter_words_count = 0
-
-        def prepare_filter_words(self, words):
-            self.prepare_filter_words_count += 1
-            return tuple(bool(words[0] & (1 << row)) for row in range(3))
-
-    runtime = WordPreparingRuntime()
+    runtime = FakeCuVSRuntime()
     index = make_micro_batch_index(runtime, filter_cache_size=1)
     filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
     filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
@@ -1864,7 +1865,8 @@ def test_cuvs_micro_batch_device_lru_eviction_falls_back_once():
     def resolve(filters):
         account_id = filters["conds"][0]
         resolver_calls[account_id] += 1
-        return ([0b101], 2) if account_id == "a" else ([0b010], 1)
+        mask, count = (0b101, 2) if account_id == "a" else (0b010, 1)
+        return struct.pack("<I", mask), count
 
     def registrar(_labels):
         return None
@@ -1901,10 +1903,11 @@ def test_cuvs_micro_batch_device_lru_eviction_falls_back_once():
         assert delayed_a.result(timeout=5)[0] == [1]
 
     assert resolver_calls == {"a": 2, "b": 1}
-    assert runtime.prepare_filter_words_count == 3
+    assert runtime.prepare_filter_count == 3
     assert telemetry.micro_batching_warm_fast_path is False
     assert telemetry.filter_cache_hit is False
     assert telemetry.filter_cache_eviction_fallback is True
+    assert telemetry.filter_words_packed is True
     assert index._active_searches == 0
     assert index._micro_batch_warm_lookahead == 0
     index.close()
@@ -2599,17 +2602,19 @@ def test_filter_cache_reuses_prepared_mask_and_invalidates_on_mutation():
         ]
     )
     filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver = Mock(side_effect=[([0b01], 1), ([0b11], 2), ([0b1], 1)])
+    registrar = Mock()
 
-    assert index.search([1.0, 0.0], 1, filter_a)[0] == [1]
-    assert index.search([1.0, 0.0], 1, filter_a)[0] == [1]
+    assert index.search([1.0, 0.0], 1, filter_a, resolver, registrar)[0] == [1]
+    assert index.search([1.0, 0.0], 1, filter_a, resolver, registrar)[0] == [1]
     assert runtime.prepare_filter_count == 1
 
     index.upsert([delta(2, [0.0, 1.0], account_id="a")])
-    assert index.search([0.0, 1.0], 1, filter_a)[0] == [2]
+    assert index.search([0.0, 1.0], 1, filter_a, resolver, registrar)[0] == [2]
     assert runtime.prepare_filter_count == 2
 
     index.delete([DeltaRecord(label=1)])
-    assert index.search([1.0, 0.0], 2, filter_a)[0] == [2]
+    assert index.search([1.0, 0.0], 2, filter_a, resolver, registrar)[0] == [2]
     assert runtime.prepare_filter_count == 3
 
 
@@ -2644,8 +2649,7 @@ def test_native_filter_resolver_projects_bitset_in_cuvs_row_order():
     assert index.search([1.0, 0.0], 3, filter_a, resolve, register)[0] == [10, 20]
     assert index.search([1.0, 0.0], 3, filter_a, resolve, register)[0] == [10, 20]
     assert calls == [("register", [30, 10, 20]), ("resolve", filter_a)]
-    # Native packed words bypass the Python predicate/mask packer.
-    assert runtime.prepare_filter_count == 0
+    assert runtime.prepare_filter_count == 1
 
 
 def test_auto_mode_caches_native_route_for_selective_filter():
@@ -3319,68 +3323,6 @@ def test_auto_mode_uses_lower_native_threshold_for_path_filters():
         "para": "-d=-1",
     }
     assert index.search([1.0, 0.0], 1, path_filter, resolve, lambda _labels: None)[0] == [10]
-
-
-def test_filter_cache_uses_lru_bound():
-    runtime = FakeCuVSRuntime()
-    index = CuVSDenseIndex(
-        dimension=2,
-        distance="ip",
-        normalize_vectors=False,
-        field_types={"account_id": "string"},
-        config={"filter_cache_size": 1},
-        runtime=runtime,
-    )
-    index.add_candidates(
-        [
-            candidate(1, [1.0, 0.0], account_id="a"),
-            candidate(2, [0.0, 1.0], account_id="b"),
-        ]
-    )
-    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
-    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
-
-    index.search([1.0, 0.0], 1, filter_a)
-    index.search([0.0, 1.0], 1, filter_b)
-    index.search([1.0, 0.0], 1, filter_a)
-
-    assert runtime.prepare_filter_count == 3
-
-
-def test_filter_evaluator_covers_lists_ranges_contains_and_path_depth():
-    fields = {
-        "tags": ["a", "b"],
-        "count": 7,
-        "title": "cuVS integration",
-        "uri": "docs/deep/item",
-    }
-    field_types = {
-        "tags": "list<string>",
-        "count": "int64",
-        "title": "string",
-        "uri": "path",
-    }
-    node = {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "tags", "conds": ["b"]},
-            {"op": "range", "field": "count", "gte": 5, "lt": 10},
-            {"op": "contains", "field": "title", "substring": "cuVS"},
-            {"op": "must", "field": "uri", "conds": ["/docs"], "para": "-d=2"},
-        ],
-    }
-    assert matches_filter(fields, node, field_types)
-    node["conds"][-1]["para"] = "-d=1"
-    assert not matches_filter(fields, node, field_types)
-
-
-def test_filter_evaluator_rejects_type_sensitive_filters_for_native_fallback():
-    with pytest.raises(UnsupportedCuVSFilterError):
-        matches_filter(
-            {"created_at": "2026-07-02T00:00:00Z"},
-            {"op": "range", "field": "created_at", "gte": "2026-07-01T00:00:00Z"},
-            {"created_at": "date_time"},
-        )
 
 
 def test_dimension_mismatch_is_reported_before_runtime_call():

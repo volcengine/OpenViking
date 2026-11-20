@@ -30,14 +30,16 @@ def test_storage_config_has_no_task_tracker_config():
 
 
 def test_storage_config_ignores_deprecated_task_tracker_config(monkeypatch):
-    warnings = []
-    monkeypatch.setattr(storage_config_module.logger, "warning", warnings.append)
+    messages = []
+    monkeypatch.setattr(
+        storage_config_module.logger, "info", lambda message, **kwargs: messages.append(message)
+    )
 
     config = StorageConfig(task_tracker={"backend": "memory"})
 
     assert not hasattr(config, "task_tracker")
-    assert any("task_tracker" in message for message in warnings)
-    assert any("deprecated and ignored" in message for message in warnings)
+    assert any("task_tracker" in message for message in messages)
+    assert any("deprecated and ignored" in message for message in messages)
 
 
 def test_storage_config_defaults_skip_process_lock_to_false():

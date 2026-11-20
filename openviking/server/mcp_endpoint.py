@@ -47,6 +47,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
+from openviking.core.search_args import validate_search_args
 from openviking.core.uri_validation import (
     validate_content_target_uri,
     validate_request_viking_uri,
@@ -634,6 +635,10 @@ _EXCLUDE_URIS_DESCRIPTION = (
 _REWRITE_MAX_BULLETS_DESCRIPTION = (
     "In mode='context' with rewrite='auto', maximum number of bullets in the digest."
 )
+_SEARCH_ARGS_DESCRIPTION = (
+    "Advanced engine options for search_type='keywords' in mode='list': "
+    '{"bm25_k1": >0, "bm25_b": 0..1, "post_process_input_limit": limit..2000000}.'
+)
 _DETAIL_BY_CATEGORY_DESCRIPTION = (
     "In mode='context', request abstract, overview, or full detail per category "
     "(events, entities, preferences, experiences, resources, skills, or memories); "
@@ -842,6 +847,10 @@ async def search(
         Optional[str],
         Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
     ] = None,
+    args: Annotated[
+        Optional[Dict[str, Any]],
+        Field(description=_SEARCH_ARGS_DESCRIPTION),
+    ] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
@@ -869,6 +878,8 @@ async def search(
         tags=tags,
     )
     if mode == "context":
+        if args is not None:
+            raise InvalidArgumentError("args are only supported in mode='list'")
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
         if target_uri:
@@ -953,6 +964,11 @@ async def search(
     if error:
         raise InvalidArgumentError(error)
 
+    try:
+        args = validate_search_args(args, search_type=search_type, limit=limit)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
@@ -972,6 +988,7 @@ async def search(
         context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,
+        args=args,
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
@@ -1503,10 +1520,10 @@ async def ls(
         Field(description=_INCLUDE_TAGS_DESCRIPTION),
     ] = False,
 ) -> str:
-    """List one sorted page under a viking:// directory URI.
+    """List one sorted directory page or return the requested file itself.
 
     Args:
-        uri: Directory URI to list; defaults to "viking://" like tree and glob.
+        uri: File or directory URI; defaults to "viking://" like tree and glob.
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -1602,10 +1619,10 @@ async def tree(
     offset: int = 0,
     limit: int | None = None,
 ) -> str:
-    """Show one visible page from a recursive directory tree.
+    """Show one directory-tree page or a file as a single-node tree.
 
     Args:
-        uri: Directory URI to traverse.
+        uri: File or directory URI to traverse.
         level_limit: Maximum traversal depth.
         node_limit: Existing default result limit.
         include_abstract: Whether to include directory summaries (a skill directory's
@@ -2545,7 +2562,13 @@ async def grep(
         Field(description=_INCLUDE_TAGS_DESCRIPTION),
     ] = False,
 ) -> str:
-    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval."""
+    """Search content in viking:// files using regex patterns (like grep).
+
+    Multiple patterns are searched concurrently, each with its own node_limit.
+    If a pattern reaches the limit, more matches may exist. Increase node_limit
+    or narrow the pattern or URI to check. Candidate search may also be capped
+    before regex matching. Use search for semantic retrieval.
+    """
     import asyncio
 
     tags = _strict_tag_filter(tags)
@@ -2556,7 +2579,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[str]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], bool, bool, Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -2568,7 +2591,12 @@ async def grep(
                     tags=tags,
                     include_tags=include_tags,
                 )
-                return (p, result.get("matches", []), None)
+                matches = result.get("matches", [])
+                limit_reached = bool(result.get("limit_reached")) or (
+                    node_limit > 0 and len(matches) >= node_limit
+                )
+                candidate_limit_reached = bool(result.get("candidate_limit_reached"))
+                return (p, matches, limit_reached, candidate_limit_reached, None)
             except Exception as exc:
                 # One bad pattern must not cost the others their matches -- that is what
                 # the fan-out is for -- but an empty list is indistinguishable from a real
@@ -2576,17 +2604,23 @@ async def grep(
                 # and re-raises these; reporting them is what keeps the two faces agreeing
                 # about whether a failure is a result.
                 code = exc.code if isinstance(exc, OpenVikingError) else type(exc).__name__
-                return (p, [], f"{code}: {exc}")
+                return (p, [], False, False, f"{code}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
     tags_by_uri: dict[str, List[str]] = {}
     total = 0
+    capped_patterns: list[str] = []
+    capped_candidate_patterns: list[str] = []
     failures: list[tuple[str, str]] = []
-    for p, matches, error in results:
+    for p, matches, limit_reached, candidate_limit_reached, error in results:
         if error is not None:
             failures.append((p, error))
+        if limit_reached:
+            capped_patterns.append(p)
+        if candidate_limit_reached:
+            capped_candidate_patterns.append(p)
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
@@ -2596,18 +2630,28 @@ async def grep(
 
     failure_lines = [f"  {p}: {error}" for p, error in failures]
 
-    if not merged:
-        if failures and len(failures) == len(results):
-            return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
-        if failures:
-            successful = [p for p, _, error in results if error is None]
-            return (
-                f"No matches found for successful pattern(s): {', '.join(successful)}\n"
-                "Patterns that could not be searched:\n" + "\n".join(failure_lines)
-            )
-        return f"No matches found for pattern(s): {', '.join(patterns)}"
+    if failures and len(failures) == len(results):
+        return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
 
-    lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
+    if merged:
+        lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
+    else:
+        successful = [p for p, _, _, _, error in results if error is None]
+        action = "returned" if capped_patterns or capped_candidate_patterns else "found"
+        label = "successful pattern(s)" if failures else "pattern(s)"
+        lines = [f"No matches {action} for {label}: {', '.join(successful)}"]
+    if capped_patterns:
+        lines.append(
+            f"Result limit reached ({node_limit} matches per pattern); more matches may exist. "
+            "Increase node_limit or narrow the scope/pattern."
+        )
+        lines.append(f"Capped patterns: {', '.join(capped_patterns)}")
+    if capped_candidate_patterns:
+        lines.append(
+            "Candidate search may have been capped for pattern(s): "
+            f"{', '.join(capped_candidate_patterns)}. "
+            "Narrow the URI or read a promising file directly."
+        )
     for m_uri, hits in merged.items():
         hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
         tag_suffix = _format_tags(tags_by_uri.get(m_uri)) if include_tags else ""
@@ -2615,7 +2659,8 @@ async def grep(
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
     if failures:
-        lines.append("\nPatterns that could not be searched:")
+        separator = "\n" if merged else ""
+        lines.append(f"{separator}Patterns that could not be searched:")
         lines.extend(failure_lines)
     return "\n".join(lines)
 

@@ -227,6 +227,7 @@ jobs:
       OV_TEST_POSTGRES: ${{ format('{{"host":"{0}","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'postgres' || '127.0.0.1') }}
       OV_TEST_MYSQL: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
       OPENVIKING_WATCH_MYSQL_PARAMS: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
+      OPENVIKING_WATCH_POSTGRES_PARAMS: ${{ format('{{"host":"{0}","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'postgres' || '127.0.0.1') }}
       OV_TEST_REDIS: ${{ needs.native-runtime.outputs.test_container != '' && 'redis://redis:6379' || 'redis://127.0.0.1:6379' }}
       OPENVIKING_CONFIG_FILE: ${{ github.workspace }}/.venv/database-test-ov.conf
     steps:
@@ -292,6 +293,7 @@ jobs:
             tests/service/test_task_work_contract.py \
             tests/service/test_task_store_postgres.py \
             tests/resource/test_watch_store.py \
+            tests/resource/test_watch_store_postgres.py \
             tests/resource/test_watch_main_integration.py \
             tests/resource/test_watch_process.py \
             --junitxml=database-integration.xml

@@ -25,12 +25,13 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   flush: vi.fn(),
   error: vi.fn(),
+  serverMode: 'api_key',
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: mocks.connection,
     profiles: mocks.profiles,
-    serverMode: 'api_key',
+    serverMode: mocks.serverMode,
     switchIdentity: mocks.switch,
   }),
 }))
@@ -69,6 +70,7 @@ beforeEach(() => {
   mocks.connection.apiKey = ''
   mocks.connection.userId = ''
   mocks.profiles = []
+  mocks.serverMode = 'api_key'
   mocks.switch.mockResolvedValue(undefined)
   mocks.flush.mockResolvedValue(undefined)
 })
@@ -175,6 +177,15 @@ it('aborts a pending identity restoration when the control unmounts', () => {
   expect(mocks.navigate).not.toHaveBeenCalled()
 })
 it('retains the Return to Management entry in the workbench', () => {
+  render(<StudioModeSwitch managementMode={false} />)
+  expect(
+    screen
+      .getByRole('link', { name: 'modes.returnManagement' })
+      .getAttribute('href'),
+  ).toBe('/admin')
+})
+it('keeps the Gateway management entry in development mode', () => {
+  mocks.serverMode = 'dev'
   render(<StudioModeSwitch managementMode={false} />)
   expect(
     screen

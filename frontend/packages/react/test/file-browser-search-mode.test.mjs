@@ -23,8 +23,10 @@ async function selectMode(mode) {
         ?.textContent === mode,
   );
   assert.ok(option);
+  assert.ok(option.textContent.includes(text.searchModeHints[mode]));
   await act(() => option.click());
   await settle();
+  assert.ok(summary().textContent.includes(text.searchModeHints[mode]));
   assert.equal(
     summary().querySelector('.ov-file-browser-search__mode-chip').textContent,
     mode,
