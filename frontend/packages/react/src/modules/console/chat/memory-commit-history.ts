@@ -60,7 +60,9 @@ export function useMemoryCommitHistory(
     submission?: Submission;
   }>();
   const historyState =
-    restored?.owner === owner && restored.historyKey === chat.historyKey
+    restored?.owner === owner &&
+    restored.historyKey === chat.historyKey &&
+    restored.messageId === messageId
       ? restored
       : undefined;
   // History loading supplies message data. Commit state needs a separate lookup
@@ -111,6 +113,6 @@ export function useMemoryCommitHistory(
     owner,
     track,
   ]);
-  const restoring = shouldRestore && historyState?.messageId !== messageId;
+  const restoring = shouldRestore && !historyState;
   return { restoring, submission: historyState?.submission };
 }

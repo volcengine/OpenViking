@@ -39,19 +39,22 @@ export async function readSessionCommitTask(
   // pending_tokens are zero. A commit task cannot cover those live messages.
   if (session?.message_count !== 0) return;
   const task = tasks?.[0];
-  if (task && task.status !== 'completed') {
-    if (!task.task_id || isTaskTerminal(task.status)) return;
+  if (task?.task_id && !isTaskTerminal(task.status)) {
     return { id: task.task_id, kind: 'memory', status: task.status };
   }
   if (!session.uri || !(session.commit_count > 0)) return;
   const archiveId = `archive_${String(session.commit_count).padStart(3, '0')}`;
   const latestArchive = `${session.uri.replace(/\/+$/, '')}/history/${archiveId}`;
-  if (task) {
-    if (!task.task_id || task.result?.archive_uri !== latestArchive) return;
+  if (
+    task?.task_id &&
+    task.status === 'completed' &&
+    task.result?.archive_uri === latestArchive
+  ) {
     return { id: task.task_id, kind: 'memory', status: 'completed' };
   }
 
-  // Completed tasks expire. The latest archive's status remains available.
+  // A completed task can expire before a retained failure from an older
+  // archive. The latest archive's own status can still confirm completion.
   const archive = await request<{ status: string }>(
     { method: 'GET', path: OV_PATH_BUILDERS.sessionArchive(id, archiveId) },
     signal,
