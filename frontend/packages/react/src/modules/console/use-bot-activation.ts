@@ -110,7 +110,15 @@ function createBotActivation({
       if (scopeSignal?.aborted) suspend();
       else {
         scopeSignal?.addEventListener('abort', suspend, { once: true });
-        if (!initialState) void run('load');
+        // A disconnected store retains its pending state even after cleanup
+        // aborts the request. Recheck the server without issuing another start.
+        if (
+          !initialState ||
+          state.status === 'starting' ||
+          state.status === 'checking'
+        ) {
+          void run('load');
+        }
       }
       return () => {
         active = false;
