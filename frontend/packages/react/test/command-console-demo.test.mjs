@@ -26,6 +26,12 @@ const builder = await createRslib({
                 import.meta.url,
               ),
             ),
+            transport: fileURLToPath(
+              new URL(
+                '../../../docs/docs/_demos/console-transport.ts',
+                import.meta.url,
+              ),
+            ),
             commands: fileURLToPath(
               new URL(
                 '../../../docs/docs/_demos/command-console-commands/index.ts',
@@ -113,4 +119,27 @@ test('demo execution recognizes documented aliases and whitespace-separated argu
     descriptor.params.map((param) => param.label),
     ['<session-id>', '<messages-json>'],
   );
+});
+
+test('the Console demo applies grep expressions and the case-insensitive flag', async () => {
+  const { consoleTransport } = await import(
+    pathToFileURL(join(output, 'transport.js'))
+  );
+  const fetch = consoleTransport();
+  const grep = (pattern, caseInsensitive = false) =>
+    fetch('/api/v1/search/grep', {
+      method: 'POST',
+      body: JSON.stringify({ pattern, case_insensitive: caseInsensitive }),
+    });
+
+  const [exact, insensitive, sensitive, invalid] = await Promise.all([
+    grep('^# OpenViking$'),
+    grep('openviking', true),
+    grep('openviking'),
+    grep('['),
+  ]);
+  assert.equal((await exact.json()).result.matches[0].content, '# OpenViking');
+  assert.equal((await insensitive.json()).result.matches.length, 1);
+  assert.deepEqual((await sensitive.json()).result.matches, []);
+  assert.equal(invalid.status, 400);
 });

@@ -45,10 +45,50 @@ export function consoleTransport(): typeof fetch {
         ? (JSON.parse(init.body) as { pattern: string }).pattern
         : undefined;
     const keyword = pattern?.slice(4, -1).replace(/\[([a-z])[A-Z]\]/g, '$1');
-    const grepPattern =
-      path === '/api/v1/search/grep' && typeof init?.body === 'string'
-        ? (JSON.parse(init.body) as { pattern: string }).pattern
-        : undefined;
+    if (path === '/api/v1/search/grep' && typeof init?.body === 'string') {
+      const { pattern, case_insensitive, include_tags } = JSON.parse(
+        init.body,
+      ) as {
+        pattern: string;
+        case_insensitive?: boolean;
+        include_tags?: boolean;
+      };
+      const content = '# OpenViking';
+      let expression: RegExp;
+      try {
+        expression = new RegExp(pattern, case_insensitive ? 'i' : '');
+      } catch {
+        return Response.json(
+          {
+            status: 'error',
+            error: {
+              code: 'INVALID_ARGUMENT',
+              message: 'Invalid regular expression',
+            },
+          },
+          { status: 400 },
+        );
+      }
+      const matches = expression.test(content)
+        ? [
+            {
+              uri: resource.uri,
+              line: 1,
+              content,
+              ...(include_tags
+                ? {
+                    tags: [
+                      'getting-started',
+                      'resource-search',
+                      'console-example',
+                    ],
+                  }
+                : {}),
+            },
+          ]
+        : [];
+      return Response.json({ status: 'ok', result: { matches } });
+    }
     const demoTask = {
       task_id: 'demo-compile',
       task_type: 'compile',
@@ -78,12 +118,6 @@ export function consoleTransport(): typeof fetch {
           memory_diff_uri:
             'viking://session/demo/history/archive_001/memory_diff.json',
         },
-      },
-      '/api/v1/search/grep': {
-        matches:
-          grepPattern && '# OpenViking'.includes(grepPattern)
-            ? [{ uri: resource.uri, line: 1, content: '# OpenViking' }]
-            : [],
       },
       '/api/v1/search/glob': {
         matches: resource.uri.includes(keyword ?? '') ? [resource.uri] : [],
