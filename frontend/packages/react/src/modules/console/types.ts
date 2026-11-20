@@ -29,7 +29,10 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
-  /** Confirm whether the current scope allows Bot access. Only true enables its tab. */
+  /**
+   * Confirm whether the current scope allows Bot use. The tab stays visible while
+   * checking or on failure; false hides it, while true proceeds to runtime readiness.
+   */
   isEligible(signal: AbortSignal): Promise<boolean>;
   /** Read runtime readiness after the library has allowed access. */
   getStatus(signal: AbortSignal): Promise<ConsoleBotActivationStatus>;
@@ -49,6 +52,8 @@ export interface ConsoleSlots {
   /** 渲染异常时替换失败区域。Replaces a section after a rendering failure. */
   errorFallback?: ErrorFallback;
   toolbar?: ReactNode;
+  /** 替换 Bot 启用页的媒体、标题和说明，不含按钮；undefined 使用默认内容，null 隐藏介绍。Replaces activation media and copy, excluding actions; undefined uses the default, null hides the introduction. */
+  activationIntro?: ReactNode;
   conversationContext?: ReactNode;
   commandHelp?: ReactNode;
 }
@@ -56,6 +61,10 @@ export interface ConsoleSlots {
 export interface ConsoleLabels {
   /** Conversation welcome description. */
   description?: string;
+  /** Bot 启用页的默认标题，空字符串隐藏。Default activation heading; an empty string hides it. */
+  activationTitle?: string;
+  /** Bot 启用页的默认说明，空字符串隐藏。Default activation description; an empty string hides it. */
+  activationDescription?: string;
   conversation?: string;
   command?: string;
   clear?: string;

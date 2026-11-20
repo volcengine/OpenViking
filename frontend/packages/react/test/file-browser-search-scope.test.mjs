@@ -118,14 +118,42 @@ test('choosing a subdirectory limits the search and clearing restores the root',
       modal().querySelector('.ov-file-browser-search__scope-trigger'),
     );
     const menu = () =>
-      modal().querySelector('.ov-file-browser-search__scope-menu');
-    await click(menu().querySelector(`[title="${rootUri}"]`));
+      document.querySelector('.ov-file-browser-search__scope-menu');
+    const root = () => menu().querySelector(`label[title="${rootUri}"]`);
+    await click(
+      root()
+        .closest('.ov-file-browser-search__scope-row')
+        .querySelector('button'),
+    );
+    await settle();
     assert.ok(menu().querySelector(`[title="${encodedSlashDisplay}"]`));
     assert.equal(menu().querySelector(`[title="${rootUri}/项目/归档"]`), null);
-    await click(menu().querySelector(`[title="${childDisplay}"]`));
+    const childInput = () =>
+      menu().querySelector(`[title="${childDisplay}"] input`);
+    await click(childInput());
+    assert.ok(root().classList.contains('ov-checkbox--indeterminate'));
+    assert.deepEqual(targets(), [rootUri], 'draft changes do not run a search');
+    const actions = () =>
+      menu().querySelectorAll('.ov-file-browser-search__scope-actions button');
+    await click(actions()[0]);
+    assert.equal(menu(), null, 'cancel closes the draft');
     await click(
-      menu().querySelector(`[title="${childDisplay}"][aria-pressed]`),
+      modal().querySelector('.ov-file-browser-search__scope-trigger'),
     );
+    await click(
+      root()
+        .closest('.ov-file-browser-search__scope-row')
+        .querySelector('button'),
+    );
+    await settle();
+    assert.equal(
+      childInput().checked,
+      false,
+      'cancel preserves the applied selection',
+    );
+    await click(childInput());
+    await click(actions()[1]);
+    await settle();
     const selectedScope = modal().querySelector(
       `.ov-file-browser-search__options [title="${childDisplay}"]`,
     );

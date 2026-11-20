@@ -57,7 +57,11 @@ export default function FileBrowserBasic() {
         gap: 8,
       }}
     >
-      <OpenVikingProvider fetch={preview.fetch}>
+      <OpenVikingProvider
+        fetch={preview.fetch}
+        userId="alice"
+        userRootMode="current"
+      >
         <FileBrowser
           ref={browserRef}
           locale={componentLocale}

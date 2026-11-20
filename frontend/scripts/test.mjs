@@ -41,6 +41,7 @@ try {
               'browser-search-results':
                 './src/modules/file-browser/file-browser-search-results.tsx',
               'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
+              'fs-page': './src/shared/directory-tree/fs-page.ts',
               'directory-rows': './src/shared/directory-tree/rows.ts',
               'browser-preview-model': './src/modules/file-browser/fs-model.ts',
               'scope-page':
@@ -84,6 +85,7 @@ try {
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
+              'bot-message-debug': './test/fixtures/viking-bot-debug.ts',
               'console-hitl-protocol': './src/modules/console/hitl/protocol.ts',
               'console-hitl-summary': './src/modules/console/hitl/summary.ts',
               'console-conversation':

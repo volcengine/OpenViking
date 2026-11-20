@@ -21,12 +21,15 @@ const messages: typeof enUS = {
       ConsoleLabels,
       | 'commandConsole'
       | 'vikingBot'
+      | 'activationTitle'
+      | 'activationDescription'
       | 'commandTitle'
       | 'commandDescription'
       | 'quickStart'
     >
   >,
   telemetryResult: (value: string) => `遥测：${value}`,
+  taskResult: '任务结果',
   memoryCommit: {
     idle: '提交会话',
     pending: '会话提交中',
@@ -38,12 +41,6 @@ const messages: typeof enUS = {
     completed: '记忆提取已完成',
     saved: '记忆已生成，并保存至目录文件',
     view: '查看记忆',
-  },
-  taskCompletion: {
-    title: '任务完成',
-    description: '异步任务已完成。',
-    resource: '资源添加任务已完成，可点击查看结果。',
-    viewResult: '查看结果',
   },
   compileQuickInputs: {
     createWiki: {

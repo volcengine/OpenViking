@@ -21,6 +21,7 @@ import type { RequestConcurrency } from './request-scheduler.js';
 import { createManagedClient } from './managed-client.js';
 import type { ReactNode } from 'react';
 import { LocaleProvider } from '../shared/locale-context.js';
+import { UserRootModeProvider } from '../shared/directory-tree/user-root-context.js';
 import type { Locale } from '../shared/locale.js';
 import { AnalyticsProvider } from '../shared/analytics/context.js';
 import type { OpenVikingAnalyticsOptions } from './analytics/types.js';
@@ -57,6 +58,11 @@ export interface OpenVikingProviderProps extends OvClientOptions {
   locale?: Locale;
   queryClient?: QueryClient | QueryClientInput;
   requestConcurrency?: RequestConcurrency;
+  /**
+   * 目录树的 user 根展示范围；省略时继承，根 Provider 默认 all。
+   * Directory-tree user root mode; inherits or defaults to all at the root.
+   */
+  userRootMode?: 'all' | 'current';
   children?: ReactNode;
 }
 
@@ -105,6 +111,7 @@ export function OpenVikingProvider({
   children,
   queryClient,
   requestConcurrency,
+  userRootMode,
 }: OpenVikingProviderProps) {
   const parent = useContext(OvClientContext);
   const inheritedQuery = useContext(OvQueryContext);
@@ -164,9 +171,13 @@ export function OpenVikingProvider({
       <OvClientContext.Provider value={value}>
         <MonitoringProvider monitoring={monitoring}>
           <AnalyticsProvider analytics={analytics}>
-            <LocaleProvider locale={locale}>
-              <NotificationScope isolateRequests>{children}</NotificationScope>
-            </LocaleProvider>
+            <UserRootModeProvider mode={userRootMode}>
+              <LocaleProvider locale={locale}>
+                <NotificationScope isolateRequests>
+                  {children}
+                </NotificationScope>
+              </LocaleProvider>
+            </UserRootModeProvider>
           </AnalyticsProvider>
         </MonitoringProvider>
       </OvClientContext.Provider>

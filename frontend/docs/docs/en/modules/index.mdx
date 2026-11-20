@@ -70,11 +70,27 @@ An omitted field inherits from the outer Provider; in the outermost Provider it 
 | monitoring         | Frontend quality and failure configuration; see [monitoring](../guide/monitoring)                                                                                              | `OpenVikingMonitoringOptions \| false`        | Inherited; disabled at root      |
 | queryClient        | Reuses a host TanStack Query v5 client; inherits or creates an internal client when omitted                                                                                    | `QueryClient`                                 | Stable for the Provider lifetime |
 | requestConcurrency | Positive integer limits per API path; merges with inherited settings                                                                                                           | `Partial<Record<OvPath, number>>`             | `{ [OV_PATHS.fsLs]: 3 }`         |
+| userRootMode       | User-root listing mode for directory trees; `current` shows the resolved user locally, while `all` uses native listings                                                        | `'all' \| 'current'`                          | Inherited, otherwise `'all'`     |
 | children           | The subtree that uses this request configuration                                                                                                                               | `ReactNode`                                   | -                                |
 
 - The identity fields `apiKey`, `accountId`, `userId` and `resourceId` also accept a function that is evaluated on every request, so it can read a rotated credential.
 - `fetch`, `signal` and function-valued identity fields are compared by reference. A change creates a new client and the blocks that use it reset, so keep them referentially stable.
 - Mounting the Provider sends no request and reads no credential stored in the browser.
+
+### Current-user directories
+
+For a personal workspace that shows only the current user, set `userRootMode="current"` and supply the identity through the Provider's `userId` or a block's `requestOptions.userId`:
+
+```tsx
+<OpenVikingProvider userId={userId} userRootMode="current">
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>
+```
+
+File trees, search-scope directory pickers and Console reference trees create the `viking://user/{userId}` row locally. They load that user's contents when the directory is expanded. Identity resolution still supports inheritance, block overrides and asynchronous functions; without a user ID, the tree requests the native directory listing.
+
+Nested Providers inherit the mode unless they explicitly set `all` to restore native listings. Each mode keeps a separate user-root cache. This setting applies only to directory trees; raw Client calls and Console commands still use the native API directly.
 
 ### Query cache and concurrency
 

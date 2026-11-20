@@ -90,6 +90,10 @@ export interface FileBrowserLabels {
   searchEmpty?: string;
   /** 搜索请求失败的结论，原因由服务端返回。Conclusion when the search request fails; the reason comes from the server. */
   searchFailed?: string;
+  /** Grep 正则无效时的语法说明。Syntax guidance when a Grep expression is invalid. */
+  searchInvalidPattern?: string;
+  /** 展开服务端原始错误的入口。Disclosure label for the original server error. */
+  searchErrorDetails?: string;
   /** 各检索方式的输入提示。Input placeholder of each retrieval mode. */
   searchModePlaceholders?: Record<SearchMode, string>;
   /** 各检索方式的说明。One-line description of each retrieval mode. */
@@ -102,6 +106,12 @@ export interface FileBrowserLabels {
   searchScopes?: string;
   /** 选择目录的入口。Entry that opens the directory picker. */
   searchPickScope?: string;
+  /** 选择所有支持目录。Selects every supported directory. */
+  searchAllScopes?: string;
+  /** 放弃目录选择草稿。Discards the directory selection draft. */
+  searchCancelScopes?: string;
+  /** 应用目录选择草稿。Applies the directory selection draft. */
+  searchConfirmScopes?: string;
   /** 目录筛选项为空时的说明。Shown when no scope can be filtered. */
   searchScopesUnsupported?: string;
   /** 内容层级的标题。Title of the content-level filter. */
@@ -124,7 +134,7 @@ export interface FileBrowserLabels {
   searchFilterUnsupported?: string;
   /** 检索结果数量，参数为条数。Result count; receives the number. */
   searchResultCount?: (count: number) => string;
-  /** 模式标签旁的说明。Description beside the mode chip. */
+  /** @deprecated 模式说明随 searchModeHints 更新。Mode descriptions now follow searchModeHints. */
   searchVia?: string;
   /** 切换检索方式的入口。Entry that switches the retrieval mode. */
   searchSwitchMode?: string;

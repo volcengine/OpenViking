@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
-import { isOvClientError } from '../../client/errors.js';
-import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
@@ -10,12 +8,11 @@ import type {
 } from '../../components/viking-bot/index.js';
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
+import { mentionSearchRows, MENTION_ROOT } from './mention-search.js';
 import {
-  compileSkillQueries,
-  mentionPattern,
-  mentionSearchRows,
-  MENTION_ROOT,
-} from './mention-search.js';
+  referenceSearchInput,
+  searchReferenceMatches,
+} from './references/search.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
 
@@ -96,16 +93,7 @@ export function useConversationReferences({
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const trimmedQuery = query.trim();
-  const keyword = trimmedQuery
-    .replace(/^viking:\/\//i, '')
-    .split('/')
-    .filter(Boolean)
-    .join('/');
-  const searchKey =
-    keyword && searchSkills && /^viking:\/\//i.test(trimmedQuery)
-      ? `${MENTION_ROOT}${keyword}`
-      : keyword;
+  const { keyword, searchKey } = referenceSearchInput(query, searchSkills);
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -124,7 +112,9 @@ export function useConversationReferences({
     result: typeof search;
     uris: Set<string>;
   }>();
-  // Picker and scope changes cancel the old request, including its debounce.
+  // Syncs the open picker and query with remote glob results after a debounce.
+  // Picker and scope changes can happen outside input events, so an Effect owns the request.
+  // Query/scope changes or unmount clear the timer and abort the old request.
   useEffect(() => {
     if (!opened || !searchKey) return;
     const controller = new AbortController();
@@ -132,40 +122,7 @@ export function useConversationReferences({
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      const queries = searchSkills
-        ? compileSkillQueries(searchKey)
-        : [
-            {
-              uri: MENTION_ROOT,
-              pattern: mentionPattern(searchKey),
-              node_limit: 100,
-            },
-          ];
-      void Promise.all(
-        queries.map(async (body) => {
-          try {
-            const { matches } = await scope.client.request<{
-              matches: unknown;
-            }>({
-              method: 'POST',
-              path: OV_PATHS.searchGlob,
-              body,
-              options: { ...scope.options, signal: requestSignal },
-            });
-            if (!Array.isArray(matches))
-              throw new Error('Invalid file search response');
-            return matches;
-          } catch (error) {
-            if (
-              searchSkills &&
-              isOvClientError(error) &&
-              (error.code === 'NOT_FOUND' || error.statusCode === 404)
-            )
-              return [];
-            throw error;
-          }
-        }),
-      )
+      void searchReferenceMatches(scope, searchKey, requestSignal, searchSkills)
         .then((results) => {
           if (requestSignal.aborted) return;
           const matches = results.flat();

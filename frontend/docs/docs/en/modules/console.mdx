@@ -69,15 +69,25 @@ Click the toolbar `@` or type `@` in the draft to browse, search and reference f
 
 ### Bot activation
 
-Use `chatOptions.activation` when the current library controls access to VikingBot and the host starts its runtime. The example simulates an eligible library, a library with Bot disabled, and a start error.
+Use `chatOptions.activation` when the current library controls access to VikingBot and the host starts its runtime. The example simulates an eligible library, a library with Bot disabled, and a start error. Switch the introduction to try custom text, a full ReactNode replacement or hidden content.
 
 ```tsx file="../../_demos/console-activation.tsx" preview
 
 ```
 
-Implement `isEligible` to confirm whether the current scope allows Bot access. Console shows the conversation tab and calls `getStatus` after it returns `true`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
+Implement `isEligible` to confirm whether the current scope allows Bot access. Every eligibility/status read, including post-start confirmation and retry prechecks, keeps the Bot tab visible with compact loading; the enabling indicator appears only while `start` is pending. Only `isEligible` returning `false` removes the Bot tab during activation. Error text appears once in a notification with Retry on the card, while a persistent live status announces lifecycle changes without repeating errors. Loading and readiness changes preserve the user's selected mode, including command mode.
+
+Switching between Bot and CLI preserves a failure notification's dismissed state; only a new failure can display it again. Enable and Retry move focus from their focused button to the stable Bot panel before the operation, leaving it there on failure. If eligibility removes the Bot controls, focus transfers only from the removed mode switch or Bot panel to the built-in CLI editor, with a panel fallback and no change to external focus. `CommandConsole`'s optional `inputRef` exposes its actual textarea, so focus targets Console's own editor even when a slot contains another complete Console.
+
+The live status region mounts empty and announces only while visible. When supported visibility signals reveal a host-hidden Console, it repeats its current state without a new request. These signals include ancestor attributes (including `data-state`), box-size changes when `ResizeObserver` is available, window or visual viewport resizing, and the start, end, or cancellation of ancestor CSS transitions and animations. For other CSS visibility changes without these signals, synchronize explicit visibility state such as `hidden` to ensure announcements resume.
+
+If the scope's request signal is already cancelled or becomes cancelled, Console keeps the Bot tab and displays a static cancellation message, without loading or a retry button that cannot restart the cancelled request. To check again, the host must replace the aborted signal with a fresh, non-aborted signal, or remove it. Changing only `scopeKey` while passing the same aborted signal leaves the panel cancelled.
+
+After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
 
 Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
+
+Use `labels.activationTitle` and `labels.activationDescription` to replace the default introduction text; an empty string hides that text. `slots.activationIntro` replaces the entire media, title and description area; `undefined` preserves the default introduction and `null` hides it. Enable, Retry and lifecycle status remain managed by Console. Changing these display options does not restart activation checks or clear the draft.
 
 ### Human input
 
@@ -205,15 +215,15 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 
 #### Built-in cards
 
-| card_type           | Default form fields                    | Protocol value                                                                      |
-| ------------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
-| compile_name        | `value`, text                          | `string`                                                                            |
-| compile_output_type | `value`, single choice                 | The option's `value`                                                                |
-| compile_source      | `value`, multiple folders              | A `string[]` with blank entries and duplicates removed                              |
-| compile_target      | `value`, suggested or custom directory | `string`                                                                            |
-| compile_skill       | `value`, suggested or custom Skill     | `string`                                                                            |
-| compile_instruction | `value`, multiline text                | `string`                                                                            |
-| compile_schedule    | `mode`, `time`, `weekday`              | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
+| card_type           | Default form fields                                    | Protocol value                                                                      |
+| ------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| compile_name        | `value`, text                                          | `string`                                                                            |
+| compile_output_type | `value`, single choice                                 | The option's `value`                                                                |
+| compile_source      | `value`, multiple folders                              | A `string[]` with blank entries and duplicates removed                              |
+| compile_target      | `value`, suggested or custom directory                 | `string`                                                                            |
+| compile_skill       | `value`, suggested or custom Skill                     | `string`                                                                            |
+| compile_instruction | `value`, optional multiline text; empty string allowed | `string`                                                                            |
+| compile_schedule    | `mode`, `time`, `weekday`                              | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
 
 Tool results may be direct JSON, MCP `structuredContent` or text `content`, with `schema_version: '1.0'`. Structured content takes precedence. If any card is invalid or unregistered, the entire group remains an ordinary tool result. The native service accepts the bare tool name and `mcp_openviking-mcp_request_user_input`. Custom adapters should preserve unique tool call IDs and normalize the server to `openviking-mcp` and the name to `request_user_input`.
 
@@ -287,9 +297,9 @@ Declare tasks started by a tool in `tool-result.tasks`, with a required `id` and
 | error      | Server task error                                             | `string`                                                                           | -        |
 | queryError | Scheduler query error; the last known task state is preserved | `{ code: 'request' \| 'invalid-response'; message?: string }`                      | -        |
 
-Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Resource import progress is shown in its result record. Other active tasks also show a loading notification. Terminal states show the result icon, and query failures display a warning while the task status stays the same.
+Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Terminal tracks task IDs returned by `add-resource`, `add-skill`, `add-memory`, `session commit` and `compile`. Tasks referenced only by Terminal show progress, completion and errors in their command records without separate notifications. Query failures keep the last known task status and display the query error in the record. Tasks also referenced by VikingBot retain their notifications.
 
-The task snapshot uses the completed result's resource URI when available and retains the submission URI as a fallback. A custom task service can provide the final resource directly in `uri`. When a terminal task completes with a resource URI, **View result** opens it through `command.onOpenUri` or `Console.onOpenUri`. The notification remains until the user opens the result or dismisses it.
+The task snapshot uses the completed result's resource URI when available and retains the submission URI as a fallback. A custom task service can provide the final resource directly in `uri`. When a task completes with a resource URI, its command record preserves the original output and adds a link to the final resource if that URI is not already shown. Resource links use `command.onOpenUri` first, then `Console.onOpenUri`; when neither callback is configured, they follow the native link.
 
 Changing modes or chat sessions, clearing terminal history and dismissing notifications do not cancel backend tasks. Dismissing a notification leaves its records updating. Identity changes and Console unmount abort queries and discard stale responses. Task state and notifications are not persisted across page reloads.
 
@@ -321,29 +331,32 @@ Provide both methods when supplying a custom `files` adapter.
 
 ### ConsoleSlots
 
-| Property            | Description                                                                                  | Type                                              | Default |
-| ------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------- |
-| errorFallback       | Replaces rendering-error content in this block and its nested regions                        | `ReactNode \| ((reset: () => void) => ReactNode)` | -       |
-| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode`                                       | -       |
-| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode`                                       | -       |
-| commandHelp         | Content above the command console in command mode                                            | `ReactNode`                                       | -       |
+| Property            | Description                                                                                                      | Type                                              | Default               |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------- |
+| errorFallback       | Replaces rendering-error content in this block and its nested regions                                            | `ReactNode \| ((reset: () => void) => ReactNode)` | -                     |
+| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes                       | `ReactNode`                                       | -                     |
+| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer`                     | `ReactNode`                                       | -                     |
+| commandHelp         | Content above the command console in command mode                                                                | `ReactNode`                                       | -                     |
+| activationIntro     | Replaces the activation introduction (media, title and description), keeping actions and status; `null` hides it | `ReactNode`                                       | Built-in introduction |
 
 ### ConsoleLabels
 
-| Property           | Description                                                                                          | Type                   | Default                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------- | -------------------------- |
-| conversation       | Label of the conversation mode button                                                                | `string`               | `'VikingBot'`              |
-| command            | Label of the command mode button                                                                     | `string`               | `'Terminal'`               |
-| mode               | Accessible name of the mode switch                                                                   | `string`               | `'Panel mode'`             |
-| description        | Description in the conversation welcome area; also the default of `vikingBot.welcomeDescription`     | `string`               | Built-in description       |
-| clear              | Label of the New session button in command mode                                                      | `string`               | `'New session'`            |
-| history            | Label of the Command history button in command mode                                                  | `string`               | `'Command history'`        |
-| emptyHistory       | Text shown when the command history is empty                                                         | `string`               | `'No command history yet'` |
-| commandTitle       | Heading of the command-mode empty state, same as `commandConsole.emptyTitle`                         | `string`               | CommandConsole default     |
-| commandDescription | Description of the command-mode empty state, same as `commandConsole.emptyDescription`               | `string`               | CommandConsole default     |
-| quickStart         | Label above the quick commands, same as `commandConsole.quickStart`                                  | `string`               | CommandConsole default     |
-| commandConsole     | Text for CommandConsole; takes precedence over `commandTitle`, `commandDescription` and `quickStart` | `CommandConsoleLabels` | -                          |
-| vikingBot          | Text for VikingBot; takes precedence over `description` and is overridden by `conversation.labels`   | `VikingBotLabels`      | -                          |
+| Property              | Description                                                                                          | Type                   | Default                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------ |
+| conversation          | Label of the conversation mode button                                                                | `string`               | `'VikingBot'`                  |
+| command               | Label of the command mode button                                                                     | `string`               | `'Terminal'`                   |
+| mode                  | Accessible name of the mode switch                                                                   | `string`               | `'Panel mode'`                 |
+| description           | Description in the conversation welcome area; also the default of `vikingBot.welcomeDescription`     | `string`               | Built-in description           |
+| activationTitle       | Activation introduction title; an empty string hides it                                              | `string`               | Built-in localized title       |
+| activationDescription | Activation introduction description; an empty string hides it                                        | `string`               | Built-in localized description |
+| clear                 | Label of the New session button in command mode                                                      | `string`               | `'New session'`                |
+| history               | Label of the Command history button in command mode                                                  | `string`               | `'Command history'`            |
+| emptyHistory          | Text shown when the command history is empty                                                         | `string`               | `'No command history yet'`     |
+| commandTitle          | Heading of the command-mode empty state, same as `commandConsole.emptyTitle`                         | `string`               | CommandConsole default         |
+| commandDescription    | Description of the command-mode empty state, same as `commandConsole.emptyDescription`               | `string`               | CommandConsole default         |
+| quickStart            | Label above the quick commands, same as `commandConsole.quickStart`                                  | `string`               | CommandConsole default         |
+| commandConsole        | Text for CommandConsole; takes precedence over `commandTitle`, `commandDescription` and `quickStart` | `CommandConsoleLabels` | -                              |
+| vikingBot             | Text for VikingBot; takes precedence over `description` and is overridden by `conversation.labels`   | `VikingBotLabels`      | -                              |
 
 ## Commands
 

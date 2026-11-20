@@ -35,6 +35,7 @@ export function CommandConsoleContent({
   locale: localeProp,
   commands = [],
   commandGroups = [],
+  inputRef,
   onValueChange,
   onSubmit,
   onOpenUri,
@@ -171,6 +172,7 @@ export function CommandConsoleContent({
           onPick={fillCommand}
         />
         <CommandConsoleComposer
+          inputRef={inputRef}
           onDismiss={dismissCompletion}
           onRequestPalette={() => {
             setDismissedValue(null);

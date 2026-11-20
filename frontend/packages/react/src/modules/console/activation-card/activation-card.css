@@ -35,6 +35,23 @@
   text-align: center;
 }
 
+.ov-console-activation__main--custom-intro {
+  max-inline-size: 100%;
+}
+
+.ov-console-activation__intro {
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ov-console-activation__intro > *,
+.ov-console-activation__intro :where(img, video, iframe) {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+}
+
 .ov-console-activation__cover {
   display: grid;
   inline-size: 100%;
@@ -203,8 +220,7 @@
 }
 
 .ov-console-activation__description,
-.ov-console-activation__checking,
-.ov-console-activation__error {
+.ov-console-activation__checking {
   margin: 0;
   color: var(--ov-ui-console-muted);
   font-size: 13px;
@@ -214,6 +230,7 @@
 
 .ov-console-activation__checking {
   display: flex;
+  margin-block: auto;
   align-items: center;
   gap: 8px;
 }
