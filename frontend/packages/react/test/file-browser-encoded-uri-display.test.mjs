@@ -25,38 +25,51 @@ const tabTitle = (view, uri = file) =>
     `[role="tab"][data-key="${uri}"] .ov-file-preview__tab-title`,
   )?.textContent;
 
-test('an unknown preview shows its icon as soon as stat resolves', async () => {
-  const stat = deferred();
-  const body = deferred();
-  const fetch = recordingFetch(({ path, uri }) => {
-    if (path === '/api/v1/fs/stat' && uri === file) return stat.promise;
-    if (path === '/api/v1/content/read') return body.promise;
-    return ok([]);
-  });
-  const view = await mount(
-    h(
-      OpenVikingProvider,
-      { fetch, baseURL: 'https://ov.test' },
-      h(FileBrowser, { rootUri: root, uri: file, dashboardKinds: [] }),
-    ),
-  );
-  const icon = () =>
-    view.container.querySelector(
-      `[role="tab"][data-key="${file}"] .ov-file-preview__tab-icon svg`,
+for (const status of [200, 503]) {
+  test(`an unknown preview uses the resolved type for stat status ${status}`, async () => {
+    const stat = deferred();
+    const body = deferred();
+    const fetch = recordingFetch(({ path, uri }) => {
+      if (path === '/api/v1/fs/stat' && uri === file) return stat.promise;
+      if (path === '/api/v1/content/read') return body.promise;
+      return ok([]);
+    });
+    const view = await mount(
+      h(
+        OpenVikingProvider,
+        { fetch, baseURL: 'https://ov.test' },
+        h(FileBrowser, { rootUri: root, uri: file, dashboardKinds: [] }),
+      ),
     );
-  try {
-    assert.equal(tabTitle(view), fileLabel);
-    assert.equal(icon(), null);
-    await act(async () => stat.resolve(await ok({ uri: file, isDir: false })));
-    await settle();
-    assert.equal(tabTitle(view), fileLabel);
-    assert.ok(icon());
-    assert.ok(fetch.calls.some(({ path }) => path === '/api/v1/content/read'));
-  } finally {
-    body.resolve(await ok(''));
-    await view.unmount();
-  }
-});
+    const icon = () =>
+      view.container.querySelector(
+        `[role="tab"][data-key="${file}"] .ov-file-preview__tab-icon svg`,
+      );
+    try {
+      assert.equal(tabTitle(view), fileLabel);
+      assert.equal(icon(), null);
+      await act(async () =>
+        stat.resolve(
+          status === 200
+            ? await ok({ uri: file, isDir: false })
+            : new Response(null, { status }),
+        ),
+      );
+      await settle();
+      assert.equal(tabTitle(view), fileLabel);
+      assert.equal(Boolean(icon()), status === 200);
+      assert.ok(
+        fetch.calls.some(({ path }) => path === '/api/v1/content/read'),
+      );
+      await act(async () => body.resolve(await ok('')));
+      await settle();
+      assert.ok(icon());
+    } finally {
+      body.resolve(await ok(''));
+      await view.unmount();
+    }
+  });
+}
 
 test('encoded FileBrowser paths display readable names while all operations retain raw URIs', async (t) => {
   const body = deferred();

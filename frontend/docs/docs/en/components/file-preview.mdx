@@ -212,7 +212,7 @@ When several of `content`, `file` and `url` are given, the first one with a valu
 | content   | Text content for Markdown, JSON, code and similar; only an empty string shows the empty-file state                                     | `string`       | -        |
 | file      | Binary file for PDF, Office documents, spreadsheets, images and similar                                                                | `File \| Blob` | -        |
 | url       | An accessible file URL; the component does no authentication                                                                           | `string`       | -        |
-| path      | Full path, shown as the breadcrumb and used as the text for copy path; without it the breadcrumb shows only the file name              | `string`       | -        |
+| path      | Full path for the breadcrumb. Copy path formats Viking URIs. An omitted path shows only the file name.                                 | `string`       | -        |
 | fileType  | Explicit format hint, taking precedence over extension and MIME type                                                                   | `string`       | -        |
 | truncated | Only part of the body was read; when `true`, file tabs show a notice below the body                                                    | `boolean`      | `false`  |
 

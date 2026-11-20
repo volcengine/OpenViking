@@ -167,7 +167,7 @@ export function useFsPreview({
           ? (await metadata)?.isDirectory
           : resourceType === 'directory';
       if (signal.aborted) throw abortError();
-      if (resourceType === 'unknown')
+      if (resourceType === 'unknown' && isDir !== undefined)
         setTabs([loadingTab(uri, isDir ? 'directory' : 'file')]);
       if (isDir)
         return isSystemUri(uri)

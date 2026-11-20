@@ -212,7 +212,7 @@ import '@openviking/react/components/file-preview/style.css';
 | content   | 文本内容，适用于 Markdown、JSON、代码等，只有空字符串显示「文件为空」                     | `string`       | -       |
 | file      | 二进制文件，适用于 PDF、Office 文档、表格和图片等                                         | `File \| Blob` | -       |
 | url       | 可访问的文件地址，组件不做鉴权                                                            | `string`       | -       |
-| path      | 完整路径，显示为面包屑并作为复制路径的内容，省略时面包屑只显示文件名                      | `string`       | -       |
+| path      | 用于面包屑的完整路径。复制时会格式化 Viking URI。省略时面包屑只显示文件名。               | `string`       | -       |
 | fileType  | 显式的格式提示，优先于扩展名与 MIME                                                       | `string`       | -       |
 | truncated | 正文只读取了一部分，为 `true` 时在文件页签的正文下方提示                                  | `boolean`      | `false` |
 

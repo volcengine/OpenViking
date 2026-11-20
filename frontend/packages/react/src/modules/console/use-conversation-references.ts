@@ -58,10 +58,8 @@ export function useConversationReferences({
       enabled,
     ],
   );
-  const { selected, onChange, clearReferences } = useReferenceSelection(
-    scope,
-    enabled ? selection : undefined,
-  );
+  const { selected, onChange, clearReferences, prepareReferenceClear } =
+    useReferenceSelection(scope, enabled ? selection : undefined);
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
@@ -120,7 +118,8 @@ export function useConversationReferences({
       controller.abort();
     };
   }, [opened, searchKey, scope, signal, attempt, searchSkills]);
-  if (!enabled) return { references: undefined, clearReferences };
+  if (!enabled)
+    return { references: undefined, clearReferences, prepareReferenceClear };
 
   const result =
     search?.scope === scope && search.key === searchKey ? search : undefined;
@@ -164,5 +163,10 @@ export function useConversationReferences({
     isLoading: keyword ? !result : !tree.isReady && tree.isInitializing,
     error: keyword ? result?.error : tree.error?.message,
   };
-  return { references, clearReferences, expandDirectory };
+  return {
+    references,
+    clearReferences,
+    prepareReferenceClear,
+    expandDirectory,
+  };
 }

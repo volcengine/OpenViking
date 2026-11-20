@@ -42,7 +42,7 @@ export async function readPreviewStat(
       options,
     });
     return {
-      isDirectory: result?.isDir === true || result?.is_dir === true,
+      isDirectory: result?.isDir ?? result?.is_dir,
       updatedAt:
         isoTimestamp(result?.modTime) ??
         isoTimestamp(result?.mtime) ??

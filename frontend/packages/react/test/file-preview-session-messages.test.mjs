@@ -180,4 +180,14 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
     assert.match(jsonPreview('ordinary').textContent, /1 \/ 4/);
     assert.equal(transcript('ordinary'), null);
     assert.equal(transcript('unsupported'), null);
+    const source = [...document.querySelectorAll('#unsupported button')].find(
+      (button) => button.textContent === 'Source',
+    );
+    assert.ok(source);
+    source.click();
+    await waitFor(() =>
+      document
+        .querySelector('#unsupported')
+        .textContent.includes('Unsupported future content'),
+    );
   }));

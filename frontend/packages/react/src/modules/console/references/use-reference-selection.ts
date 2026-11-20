@@ -16,40 +16,59 @@ export function useReferenceSelection(
     (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
     [scope],
   );
+  const items =
+    selection?.selected ??
+    (selected?.scope === scope ? selected.items : emptyReferences);
   const onSelectionChange = selection?.onChange;
-  const latestSelection = useRef({ scope, selection, onSelectionChange });
+  const latest = useRef({
+    scope,
+    items,
+    onSelectionChange,
+    identities: new Map<string, symbol>(),
+  });
+  // A URI keeps its identity until it leaves the committed selection.
   useLayoutEffect(() => {
-    latestSelection.current = { scope, selection, onSelectionChange };
-  }, [scope, selection, onSelectionChange]);
-  const clearReferences = useCallback(
-    (sent?: readonly VikingBotReference[]) => {
-      const current = latestSelection.current;
+    const previous = latest.current;
+    const identities = new Map(
+      items.map(({ uri }) => [
+        uri,
+        (previous.scope === scope ? previous.identities.get(uri) : undefined) ??
+          Symbol(uri),
+      ]),
+    );
+    latest.current = { scope, items, onSelectionChange, identities };
+  }, [scope, items, onSelectionChange]);
+
+  const clearReferences = useCallback(() => {
+    const current = latest.current;
+    if (current.scope !== scope) return;
+    if (current.onSelectionChange) current.onSelectionChange([]);
+    else setSelected(undefined);
+  }, [scope]);
+
+  const prepareReferenceClear = (sent: readonly VikingBotReference[]) => {
+    const submitted = new Map(
+      sent.map(({ uri }) => [uri, latest.current.identities.get(uri)]),
+    );
+    return () => {
+      const current = latest.current;
       if (current.scope !== scope) return;
-      if (current.onSelectionChange) {
-        const items = current.selection?.selected ?? emptyReferences;
-        const remaining = sent
-          ? items.filter((item) => !sent.includes(item))
-          : [];
-        if (!sent || remaining.length !== items.length)
-          current.onSelectionChange(remaining);
-        return;
-      }
-      setSelected((current) => {
-        if (current?.scope !== scope) return current;
-        if (!sent) return undefined;
-        const items = current.items.filter((item) => !sent.includes(item));
-        return items.length === current.items.length
-          ? current
-          : { scope, items };
+      const remaining = current.items.filter(({ uri }) => {
+        const identity = submitted.get(uri);
+        return (
+          identity === undefined || current.identities.get(uri) !== identity
+        );
       });
-    },
-    [scope],
-  );
+      if (remaining.length === current.items.length) return;
+      if (current.onSelectionChange) current.onSelectionChange(remaining);
+      else setSelected({ scope, items: remaining });
+    };
+  };
+
   return {
-    selected:
-      selection?.selected ??
-      (selected?.scope === scope ? selected.items : emptyReferences),
+    selected: items,
     onChange: onSelectionChange ?? onChange,
     clearReferences,
+    prepareReferenceClear,
   };
 }
