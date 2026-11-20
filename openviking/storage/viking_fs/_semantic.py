@@ -18,6 +18,8 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.expr import In
+from openviking.storage.scope_filter import merge_filters
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
     _ensure_non_empty_search_query,
@@ -391,6 +393,7 @@ class _SemanticMixin:
             session_info: Session information
             limit: Return count
             filter: Metadata filter
+            context_types: Allowed context types
             args: Advanced keyword-search options passed through to the engine
 
         Returns:
@@ -517,6 +520,13 @@ class _SemanticMixin:
                         tq.context_type = None
         telemetry.set("search.typed_queries_count", len(typed_queries))
 
+        # Caller-supplied types still apply when the plan has no usable type.
+        scope_dsl = (
+            merge_filters(filter, In("context_type", [kind.value for kind in context_types]))
+            if context_types
+            else filter
+        )
+
         # Concurrent execution
         storage = self._get_vector_store()
         embedder = self._get_embedder(real_ctx)
@@ -539,7 +549,7 @@ class _SemanticMixin:
                 limit=limit,
                 score_threshold=score_threshold,
                 has_explicit_target=bool(retrieval_targets.first_explicit_directory),
-                scope_dsl=filter,
+                scope_dsl=scope_dsl,
                 level=level,
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,

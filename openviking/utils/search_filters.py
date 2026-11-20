@@ -114,7 +114,8 @@ def extract_context_types(filter_node: object) -> Optional[set[ContextType]]:
         except ValueError:
             return None
 
-    if op == "and":
+    # The local index can skip any child of this AND when that child has no matches.
+    if op == "and" and filter_node.get("ignore_empty_condition") is not True:
         context_types = None
         for child in conds:
             child_types = extract_context_types(child)

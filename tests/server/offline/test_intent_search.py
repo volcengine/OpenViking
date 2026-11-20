@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Offline session-aware search through the real HTTP and retrieval stack."""
+"""Offline session-aware search through the real service and retrieval stack."""
 
 import asyncio
 import json
@@ -10,6 +10,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from openviking.core.directories import DirectoryInitializer
+from openviking.message import TextPart
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.retrieve import ContextType
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 SESSION_MESSAGE = "I am implementing OAuth authorization code authentication."
@@ -17,9 +22,34 @@ RAW_QUERY = "authentication"
 EXPANDED_QUERY = "OAuth authorization code authentication documentation"
 
 
+@pytest.fixture(autouse=True)
+def skip_preset_directory_vectors(monkeypatch):
+    # A preset skill would match the condition that the local index should skip.
+    monkeypatch.setattr(DirectoryInitializer, "_ensure_directory_l0_l1_vectors", AsyncMock())
+
+
 @pytest.fixture
-async def session_search(offline_resource_api, service, monkeypatch):
-    client, root = offline_resource_api
+async def indexed_resource(service):
+    # Seed the local index directly so these tests isolate retrieval from resource import.
+    root = "viking://resources/oauth"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    storage = service.viking_fs._get_vector_store()
+    assert await storage.upsert(
+        {
+            "id": "oauth",
+            "uri": f"{root}/oauth.md",
+            "account_id": ctx.account_id,
+            "context_type": "resource",
+            "level": 2,
+            "vector": [0.1] * service.viking_fs.query_embedder.get_dimension(),
+        },
+        ctx=ctx,
+    )
+    return root, ctx
+
+
+@pytest.fixture
+def intent_planner(service, monkeypatch):
     complete = AsyncMock()
     monkeypatch.setattr(
         service.viking_fs._vlm_resolver,
@@ -37,6 +67,13 @@ async def session_search(offline_resource_api, service, monkeypatch):
         return await original_embed(account_id, content, is_query=is_query)
 
     monkeypatch.setattr(provider, "embed", record_embed)
+    return complete, embedded
+
+
+@pytest.fixture
+async def session_search(client, indexed_resource, intent_planner):
+    root, _ = indexed_resource
+    complete, embedded = intent_planner
 
     response = await client.post("/api/v1/sessions", json={})
     assert response.status_code == 200, response.text
@@ -139,6 +176,54 @@ async def test_search_executes_conflicting_caller_constraints(session_search):
     assert embedded == [EXPANDED_QUERY]
     [query] = result["query_plan"]["queries"]
     assert query["context_type"] is None
+
+
+async def test_search_preserves_hits_with_skippable_type_filter(session_search):
+    search, complete, embedded, root = session_search
+    complete.return_value = json.dumps(
+        {"queries": [{"query": EXPANDED_QUERY, "context_type": "resource", "priority": 1}]}
+    )
+
+    result = await search(
+        filter={
+            "op": "and",
+            "ignore_empty_condition": True,
+            "conds": [
+                {"op": "must", "field": "context_type", "conds": ["skill"]},
+                {"op": "must", "field": "level", "conds": [2]},
+            ],
+        }
+    )
+
+    _assert_resource_hit(result, root)
+    assert "**Restricted Context Type**" not in complete.await_args.args[0]
+    assert embedded == [EXPANDED_QUERY]
+
+
+async def test_python_search_enforces_explicit_type_against_conflicting_target(
+    indexed_resource, intent_planner, service
+):
+    root, ctx = indexed_resource
+    complete, embedded = intent_planner
+    complete.return_value = json.dumps(
+        {"queries": [{"query": EXPANDED_QUERY, "context_type": "resource", "priority": 1}]}
+    )
+    session = service.sessions.session(ctx)
+    await session.ensure_exists()
+    await session.add_message_async("user", [TextPart(SESSION_MESSAGE)])
+
+    result = await service.search.search(
+        query=RAW_QUERY,
+        ctx=ctx,
+        target_uri=root,
+        session=session,
+        context_types=[ContextType.MEMORY],
+        level=[2],
+    )
+
+    assert result.total == 0
+    complete.assert_awaited_once()
+    assert embedded == [EXPANDED_QUERY]
 
 
 async def test_search_keeps_model_type_when_any_target_has_unknown_type(session_search):

@@ -38,6 +38,17 @@ UNKNOWN = {"op": "unknown", "conds": [RESOURCE]}
             {ContextType.MEMORY},
         ),
         ({"op": "and", "conds": [MEMORY, RESOURCE]}, set()),
+        ({"op": "and", "ignore_empty_condition": True, "conds": [RESOURCE]}, None),
+        (
+            {
+                "op": "and",
+                "conds": [
+                    MEMORY,
+                    {"op": "and", "ignore_empty_condition": True, "conds": [RESOURCE]},
+                ],
+            },
+            {ContextType.MEMORY},
+        ),
         ({"op": "must", "field": "context_type", "conds": ["resource", "Memory"]}, None),
         ({"op": "must", "field": "context_type", "conds": ["memory,resource"]}, None),
         ({"op": "must", "field": "context_type", "conds": [" resource "]}, None),
