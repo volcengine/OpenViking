@@ -1125,7 +1125,7 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         time_score = item["time_score"]
         if origin_score is not None or time_score is not None:
             line += f"\n    origin_score={origin_score}, time_score={time_score}"
-        if uri in contents:
+        if uri in contents and contents[uri] != abstract:
             line += f"\n\n    {contents[uri]}"
         lines.append(line)
 
