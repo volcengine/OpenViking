@@ -70,6 +70,8 @@ export interface FileBrowserLabels {
   formatPreviewUpdatedAt?: (time: string) => string;
   /** 资源预览的模型提示。空字符串可隐藏。Model notice for resources; pass an empty string to hide it. */
   previewModelNotice?: string;
+  /** AI 生成标识。AI-generated content label. */
+  previewAiGenerated?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */

@@ -548,6 +548,7 @@ html.dark .ov-file-browser__empty-art {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
 .ov-file-browser__preview-meta {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

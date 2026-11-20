@@ -58,11 +58,13 @@ test('preview footer shows real modification time, text count and a resource-onl
     assert.equal(time().dateTime, folderTime);
     assert.match(footer().textContent, /0 字符数/);
     assert.ok(model());
+    assert.match(footer().textContent, /AI 生成/);
 
     await view.render(page(memory));
     assert.equal(time(), null);
     assert.match(footer().textContent, /0 字符数/);
     assert.equal(model(), undefined);
+    assert.doesNotMatch(footer().textContent, /AI 生成/);
 
     await view.render(page(nextFile, { previewModelNotice: '' }));
     assert.equal(time().dateTime, fileTime);
@@ -70,6 +72,80 @@ test('preview footer shows real modification time, text count and a resource-onl
     assert.equal(model(), undefined);
     await act(async () => oldStat.resolve(await ok({ modTime: folderTime })));
     assert.equal(time().dateTime, fileTime);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('AI notice follows generated document scope and locale', async () => {
+  const fetch = recordingFetch(({ path, uri }) => {
+    if (path === '/api/v1/fs/ls') return ok([]);
+    if (path === '/api/v1/fs/attrs')
+      return ok({
+        uri,
+        attrs: {
+          tags: uri?.startsWith('viking://resources/wiki')
+            ? ['compile_target=true']
+            : [],
+        },
+      });
+    if (path === '/api/v1/fs/stat')
+      return ok({
+        modTime: fileTime,
+        tags: uri?.startsWith('viking://resources/wiki')
+          ? ['compile_target=true']
+          : [],
+      });
+    return ok('sample');
+  });
+  const page = (uri, locale = 'zh-CN') =>
+    h(
+      OpenVikingProvider,
+      { baseURL: 'https://ov.test', fetch },
+      h(FileBrowser, { uri, locale }),
+    );
+  const view = await mount(page(null));
+  const meta = () =>
+    view.container.querySelector('.ov-file-browser__preview-meta')?.textContent;
+  try {
+    for (const root of [
+      'viking://user/alice',
+      'viking://user/alice/peers/editor',
+      'viking://~',
+      'viking://~/peers/editor',
+    ]) {
+      for (const kind of [
+        'experiences',
+        'preferences',
+        'entities',
+        'cases',
+        'trajectory',
+        'events',
+      ]) {
+        await view.render(page(`${root}/memories/${kind}/nested/example.md`));
+        assert.match(meta(), /AI 生成/);
+      }
+      for (const name of ['identity.md', 'soul.md']) {
+        await view.render(page(`${root}/${name}`));
+        assert.match(meta(), /AI 生成/);
+      }
+    }
+    await view.render(page('viking://resources/wiki/chapter.md'));
+    assert.match(meta(), /AI 生成/);
+    await view.render(page('viking://system/compile/task/output.md', 'en-US'));
+    assert.match(meta(), /AI generated/);
+    for (const uri of [
+      'viking://resources/raw.md',
+      'viking://user/alice/resources/events/raw.md',
+      'viking://user/alice/sessions/run/messages.jsonl',
+    ]) {
+      await view.render(page(uri));
+      assert.doesNotMatch(meta(), /AI 生成/);
+    }
+    await view.render(page('viking://resources/raw/.abstract.md'));
+    assert.match(meta(), /AI 生成/);
+    await view.render(page('viking://resources/raw/.overview.md'));
+    assert.match(meta(), /AI 生成/);
   } finally {
     await view.unmount();
   }
