@@ -318,6 +318,56 @@ def test_unlink_resource_references_keeps_unrelated_escaped_json_uris():
     ] == [kept_uri]
 
 
+def test_unlink_resource_references_removes_markdown_link_in_json_string():
+    # A Markdown link inside a JSON string value records its decoded target, so
+    # unlinking has to remove the link the same way the prose path does. Removing
+    # only bare URIs left it in place, and the next sync recorded the resource
+    # again, which made unlink invisible to the caller.
+    resource_uri = "viking://resources/my file.md"
+    body = '{"ref": "[saved](viking://resources/my%20file.md)"}'
+
+    mf = MemoryFile(content=body, extra_fields={})
+    sync_memory_resource_refs(mf, source="content.write")
+    assert [ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]] == [resource_uri]
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {"ref": "saved"}
+    assert "resource_refs" not in mf.extra_fields
+
+    sync_memory_resource_refs(mf, source="content.write")
+    assert "resource_refs" not in mf.extra_fields
+
+
+def test_unlink_resource_references_keeps_unrelated_markdown_link_in_json_string():
+    target_uri = "viking://resources/my file.md"
+    kept_uri = "viking://resources/other%20file.md"
+    body = json.dumps(
+        {
+            "target": "[saved](viking://resources/my%20file.md)",
+            "keep": "[other](viking://resources/other%20file.md)",
+        }
+    )
+
+    mf = MemoryFile(content=body, extra_fields={})
+    sync_memory_resource_refs(mf, source="content.write")
+    assert sorted(ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]) == sorted(
+        [target_uri, kept_uri.replace("%20", " ")]
+    )
+
+    changed = unlink_resource_references_from_memory(mf, target_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {
+        "target": "saved",
+        "keep": "[other](viking://resources/other%20file.md)",
+    }
+    assert [ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]] == [
+        kept_uri.replace("%20", " ")
+    ]
+
+
 def test_content_references_resource_decodes_json_bodies():
     resource_uri = "viking://resources/café-lifecycle.md"
     body = json.dumps({"ref": resource_uri})

@@ -326,10 +326,17 @@ def _unlink_json_string(
     """Remove matching URIs from one decoded JSON string, keeping it JSON-safe."""
     if not content_references_resource(value, resource_uri, recursive=recursive):
         return value
-    updated, _refs = _linkify_bare_resource_uris(
+    # A JSON string value can carry the same Markdown link a prose body does, and
+    # `_json_resource_uris` records its decoded target. Removing only bare URIs
+    # left the link behind, so the next sync recorded the resource again.
+    updated = _unlink_matching_markdown_resource_links(
         value,
-        (),
-        resource_uri=resource_uri,
+        resource_uri,
+        recursive=recursive,
+    )
+    updated = _remove_matching_bare_resource_uris(
+        updated,
+        resource_uri,
         recursive=recursive,
     )
     return _normalize_unlinked_reference_text(updated)
