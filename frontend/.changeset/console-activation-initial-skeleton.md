@@ -4,8 +4,8 @@
 
 ## en-US
 
-Console can show a single skeleton while checking VikingBot eligibility and readiness, then render the appropriate panel without flashing a VikingBot tab.
+Console accepts a host-resolved VikingBot startup state, so hosts can finish their checks before showing the final tabs and panels.
 
 ## zh-CN
 
-Console 支持在检查 VikingBot 使用资格和运行状态期间显示同一个骨架屏，检查结束后直接展示对应面板，避免 VikingBot 标签页闪现。
+Console 支持接收宿主已解析的 VikingBot 初始状态，宿主完成检查后可直接展示对应的标签页和面板。

@@ -75,7 +75,7 @@ Use `chatOptions.activation` when the current library controls access to VikingB
 
 ```
 
-Implement `isEligible` to confirm whether the current scope allows Bot access. Set `initialLoading: 'skeleton'` to show a Console skeleton until the first check settles. By default, eligibility and status checks keep the Bot tab visible with compact loading. Checks after Enable or Retry also use compact loading, and the enabling indicator appears only while `start` is pending. Only `isEligible` returning `false` removes the Bot tab during activation. Error text appears once in a notification with Retry on the card, while a persistent live status announces lifecycle changes without repeating errors. Loading and readiness changes preserve the user's selected mode, including command mode.
+Implement `isEligible` to confirm whether the current scope allows Bot access. Every eligibility/status read, including post-start confirmation and retry prechecks, keeps the Bot tab visible with compact loading; the enabling indicator appears only while `start` is pending. Only `isEligible` returning `false` removes the Bot tab during activation. Error text appears once in a notification with Retry on the card, while a persistent live status announces lifecycle changes without repeating errors. Loading and readiness changes preserve the user's selected mode, including command mode.
 
 Switching between Bot and CLI preserves a failure notification's dismissed state; only a new failure can display it again. Enable and Retry move focus from their focused button to the stable Bot panel before the operation, leaving it there on failure. If eligibility removes the Bot controls, focus transfers only from the removed mode switch or Bot panel to the built-in CLI editor, with a panel fallback and no change to external focus. `CommandConsole`'s optional `inputRef` exposes its actual textarea, so focus targets Console's own editor even when a slot contains another complete Console.
 
@@ -183,13 +183,13 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 
 ### ConsoleBotActivation
 
-| Property       | Description                                                                           | Type                                                         | Default               |
-| -------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------- |
-| initialLoading | Show a Console skeleton during the initial eligibility and readiness checks           | `'skeleton'`                                                 | Optional              |
-| isEligible     | Confirm whether the current scope allows Bot access; false keeps the tab hidden       | `(signal: AbortSignal) => Promise<boolean>`                  | Required              |
-| getStatus      | Read the runtime state after eligibility is confirmed                                 | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>` | Required              |
-| start          | Start the runtime after the user selects Enable; Console rechecks its state afterward | `(signal: AbortSignal) => Promise<void>`                     | Required              |
-| media          | Introductory media shown in the activation card                                       | `ReactNode`                                                  | Built-in illustration |
+| Property     | Description                                                                           | Type                                                                          | Default               |
+| ------------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------- |
+| initialState | Use a startup result already resolved by the host and skip the initial lookup         | `{ status: 'ready' \| 'not-started' } \| { status: 'error'; error: unknown }` | Optional              |
+| isEligible   | Confirm whether the current scope allows Bot access; false keeps the tab hidden       | `(signal: AbortSignal) => Promise<boolean>`                                   | Required              |
+| getStatus    | Read the runtime state after eligibility is confirmed                                 | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>`                  | Required              |
+| start        | Start the runtime after the user selects Enable; Console rechecks its state afterward | `(signal: AbortSignal) => Promise<void>`                                      | Required              |
+| media        | Introductory media shown in the activation card                                       | `ReactNode`                                                                   | Built-in illustration |
 
 ### ConsoleHitlOptions
 

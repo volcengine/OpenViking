@@ -75,7 +75,7 @@ const panel = loading ? (
 
 ```
 
-通过 `isEligible` 确认当前作用域是否允许使用 Bot。设置 `initialLoading: 'skeleton'` 后，首次检查结束前会显示 Console 骨架屏。默认检查流程、启用后复查和重试前检查都保留 Bot 标签页并显示轻量加载提示；只有 `start` 等待返回时才显示启用中。启用流程中，只有 `isEligible` 返回 `false` 才移除 Bot 标签页。错误原文仅在通知中显示一次，卡片保留重试入口，常驻状态播报只报告流程状态变化，不重复播报错误。加载和就绪状态变化会保留用户选择的模式，包括命令模式。
+通过 `isEligible` 确认当前作用域是否允许使用 Bot。所有资格和状态读取，包括启用后复查和重试前检查，都保留 Bot 标签页并显示轻量加载提示；只有 `start` 等待返回时才显示启用中。启用流程中，只有 `isEligible` 返回 `false` 才移除 Bot 标签页。错误原文仅在通知中显示一次，卡片保留重试入口，常驻状态播报只报告流程状态变化，不重复播报错误。加载和就绪状态变化会保留用户选择的模式，包括命令模式。
 
 同一次失败的通知关闭后，切换 Bot/CLI 会保留关闭状态，只有新的失败才可重新展示。启用或重试时，若操作按钮持有焦点，先将焦点移到稳定的 Bot 面板，失败时留在 Bot。资格否定移除 Bot 控件时，仅当焦点位于被移除的模式切换组或 Bot 面板内才交给内置 CLI 编辑器，无法聚焦时回退面板，不抢占外部焦点。`CommandConsole` 的可选 `inputRef` 提供真实 textarea 引用，即使插槽嵌入完整 Console，焦点也会准确交给当前 Console 自己的编辑器。
 
@@ -183,13 +183,13 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### ConsoleBotActivation
 
-| 参数           | 说明                                                    | 类型                                                         | 默认值   |
-| -------------- | ------------------------------------------------------- | ------------------------------------------------------------ | -------- |
-| initialLoading | 首次检查库资格和 Bot 状态时显示 Console 骨架屏          | `'skeleton'`                                                 | 可选     |
-| isEligible     | 确认当前作用域是否允许使用 Bot，返回 false 时隐藏标签页 | `(signal: AbortSignal) => Promise<boolean>`                  | 必填     |
-| getStatus      | 资格确认后读取运行状态                                  | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>` | 必填     |
-| start          | 用户点击启用后启动 Bot，Console 随后再次确认状态        | `(signal: AbortSignal) => Promise<void>`                     | 必填     |
-| media          | 启用卡片中的介绍媒体                                    | `ReactNode`                                                  | 内置插画 |
+| 参数         | 说明                                                    | 类型                                                                          | 默认值   |
+| ------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------- | -------- |
+| initialState | 使用宿主已解析的初始状态，跳过首次检查                  | `{ status: 'ready' \| 'not-started' } \| { status: 'error'; error: unknown }` | 可选     |
+| isEligible   | 确认当前作用域是否允许使用 Bot，返回 false 时隐藏标签页 | `(signal: AbortSignal) => Promise<boolean>`                                   | 必填     |
+| getStatus    | 资格确认后读取运行状态                                  | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>`                  | 必填     |
+| start        | 用户点击启用后启动 Bot，Console 随后再次确认状态        | `(signal: AbortSignal) => Promise<void>`                                      | 必填     |
+| media        | 启用卡片中的介绍媒体                                    | `ReactNode`                                                                   | 内置插画 |
 
 ### ConsoleHitlOptions
 

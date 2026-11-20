@@ -9,7 +9,6 @@ export type BotActivationState =
       status:
         | ConsoleBotActivationStatus
         | 'disabled'
-        | 'initializing'
         | 'checking'
         | 'cancelled'
         | 'starting';
@@ -27,17 +26,14 @@ function createBotActivation({
   enabled: boolean;
   signal?: AbortSignal;
 }) {
-  let state: BotActivationState = {
-    status: !enabled
-      ? 'disabled'
-      : activation
-        ? scopeSignal?.aborted
-          ? 'cancelled'
-          : activation.initialLoading === 'skeleton'
-            ? 'initializing'
-            : 'checking'
-        : 'ready',
-  };
+  const initialState = activation?.initialState;
+  let state: BotActivationState;
+  if (!enabled) state = { status: 'disabled' };
+  else if (!activation) state = { status: 'ready' };
+  else if (scopeSignal?.aborted) state = { status: 'cancelled' };
+  else if (initialState?.status === 'error') {
+    state = { status: 'load-error', error: initialState.error };
+  } else state = { status: initialState?.status ?? 'checking' };
   let active = false;
   let request: AbortController | undefined;
   const listeners = new Set<() => void>();
@@ -58,7 +54,7 @@ function createBotActivation({
       'collection-error';
     const readStatus = async () => {
       failure = 'collection-error';
-      if (state.status !== 'initializing') update({ status: 'checking' });
+      update({ status: 'checking' });
       signal.throwIfAborted();
       const eligible = await activation.isEligible(signal);
       signal.throwIfAborted();
@@ -114,7 +110,7 @@ function createBotActivation({
       if (scopeSignal?.aborted) suspend();
       else {
         scopeSignal?.addEventListener('abort', suspend, { once: true });
-        void run('load');
+        if (!initialState) void run('load');
       }
       return () => {
         active = false;
