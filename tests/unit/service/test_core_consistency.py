@@ -67,6 +67,36 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_external_task"] == 6
 
 
+def test_service_loads_account_store_runtime_from_config_file(monkeypatch) -> None:
+    """Forward the configured Account Store Runtime instance to the AGFS binding builder."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    server_config = SimpleNamespace(
+        account_store=SimpleNamespace(
+            provider="redis_mysql",
+            params={"cache": {"instance": "accountstore"}},
+        )
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: "/tmp/ov.conf",
+    )
+    monkeypatch.setattr(
+        "openviking.service.core.load_server_config",
+        lambda path: server_config,
+    )
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
+
+
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
     service = OpenVikingService.__new__(OpenVikingService)
     service._initialized = True

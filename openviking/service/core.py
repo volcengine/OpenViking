@@ -82,7 +82,6 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry.runtime import ExpiryRuntime
-    from openviking.server.config import ServerConfig
     from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.ttl.adapter import TTLAdapter
 
@@ -98,14 +97,12 @@ class OpenVikingService:
         self,
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
-        server_config: Optional["ServerConfig"] = None,
     ):
         """Initialize OpenViking service.
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
             user: Username for session management.
-            server_config: Server configuration used for account store Runtime selection.
         """
         # Initialize config from ov.conf
         config = initialize_openviking_config(
@@ -113,7 +110,6 @@ class OpenVikingService:
             path=path,
         )
         self._config = config
-        self._server_config = server_config
         self._agent_evolution_base_config = config.agent_evolution.model_copy(deep=True)
         self._user = user or UserIdentifier(config.default_account, config.default_user)
 
@@ -248,11 +244,8 @@ class OpenVikingService:
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
-        server_config = self._server_config
-        if server_config is None:
-            config_file = OpenVikingConfigSingleton.get_config_file()
-            if config_file is not None:
-                server_config = load_server_config(str(config_file))
+        config_file = OpenVikingConfigSingleton.get_config_file()
+        server_config = load_server_config(str(config_file)) if config_file is not None else None
 
         account_store_cache_instance = None
         if server_config is not None and server_config.account_store.provider == "redis_mysql":

@@ -390,7 +390,7 @@ def create_app(
             install_executor_monitor()
         owns_service = service is None
         if owns_service:
-            service = OpenVikingService(server_config=config)
+            service = OpenVikingService()
 
         assert service is not None
         if config.with_bot:
