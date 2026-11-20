@@ -111,7 +111,7 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 点击最新一条完整回复下方的「提交会话」，可为当前对话发起记忆提取。Console 会显示提交状态，并在服务端返回任务 ID 时跟踪后台任务。如果任务返回记忆变更文件，且宿主提供了 `conversation.onOpenUri`，可从完成通知中打开结果。
 
-设为 `chatOptions.memoryCommit={false}` 可隐藏该操作。自定义对话服务可实现 `commitSession`；未实现时，由原生对话或已配置的 Provider 提供原生会话接口。
+设为 `chatOptions.memoryCommit={false}` 可隐藏该操作。自定义对话服务可实现 `commitSession`；未实现时，由原生对话或已配置的 Provider 提供原生会话接口。 打开会话历史时，Console 会从服务端恢复当前提交状态。自定义服务负责提交时，可实现 `getSessionCommitTask(id, signal)`，在最近的提交任务覆盖已加载消息时返回该任务。
 
 ### 后台任务
 

@@ -1,5 +1,5 @@
 import CommitIcon from '../../../../../icons/svg/viking-bot/session-commit.svg?react';
-import CheckIcon from '../../../../../icons/svg/viking-bot/check.svg?react';
+import CheckIcon from '../../../../../icons/svg/viking-bot/session-commit-success.svg?react';
 import type { VikingBotMessage } from '../../../components/viking-bot/model.js';
 
 type Action = NonNullable<VikingBotMessage['action']>;

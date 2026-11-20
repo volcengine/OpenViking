@@ -36,6 +36,7 @@ for (const persistsFlag of [true, false]) {
         stored.push(item);
         return ok({});
       }
+      if (pathname === '/api/v1/tasks') return ok([]);
       if (pathname === '/api/v1/content/read')
         return ok(stored.map((message) => JSON.stringify(message)).join('\n'));
       if (pathname === '/bot/v1/chat/stream') {
@@ -101,3 +102,74 @@ for (const persistsFlag of [true, false]) {
     }
   });
 }
+
+test('restores a submitted session on remount and allows submission after new messages', async () => {
+  let view;
+  let pendingTokens = 0;
+  let taskStatus = 'running';
+  let taskRequests = 0;
+  const service = {
+    listSessions: async () => [{ id: 'demo', title: 'Demo' }],
+    loadMessages: async () => [
+      {
+        id: pendingTokens ? 'new-answer' : 'saved-answer',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Saved answer.' }],
+      },
+    ],
+  };
+  const fetch = async (url, { method }) => {
+    const { pathname, searchParams } = new URL(url);
+    assert.equal(method, 'GET');
+    if (pathname === '/api/v1/sessions/demo') {
+      return ok({ pending_tokens: pendingTokens });
+    }
+    if (pathname === '/api/v1/tasks') {
+      assert.equal(searchParams.get('resource_id'), 'demo');
+      assert.equal(searchParams.get('task_type'), 'session_commit');
+      assert.equal(searchParams.get('limit'), '1');
+      return ok([{ task_id: 'memory-task', status: taskStatus }]);
+    }
+    if (pathname === '/api/v1/tasks/memory-task') {
+      taskRequests++;
+      return ok({ task_id: 'memory-task', status: taskStatus });
+    }
+    throw new Error(`Unexpected request: ${pathname}`);
+  };
+  function Host() {
+    view = useConversation({ chatOptions: { service } }, () => {});
+    return null;
+  }
+  const tree = createElement(
+    OpenVikingProvider,
+    { fetch, baseURL: 'https://ov.test' },
+    createElement(Host),
+  );
+  const select = async () => {
+    await act(async () => view.sessions.onSelect('demo'));
+    await settle();
+  };
+  const status = () => view.messages.at(-1)?.actions?.[0]?.action.status;
+  let host = await mount(tree);
+  try {
+    await select();
+    assert.equal(status(), 'submitted');
+    assert.equal(taskRequests, 1);
+    await host.unmount();
+
+    taskStatus = 'completed';
+    host = await mount(tree);
+    await select();
+    assert.equal(status(), 'success');
+    assert.equal(taskRequests, 1);
+    await host.unmount();
+
+    pendingTokens = 12;
+    host = await mount(tree);
+    await select();
+    assert.equal(view.messages.at(-1)?.id, 'new-answer');
+    assert.equal(status(), 'idle');
+  } finally {
+    await host.unmount();
+  }
+});

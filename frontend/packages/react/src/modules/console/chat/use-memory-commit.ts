@@ -6,7 +6,6 @@ import { useMonitoringBinding } from '../../../shared/monitoring/context.js';
 import { readData, tagData } from '../../../shared/monitoring/data.js';
 import { useNotification } from '../../../shared/primitives/notification/index.js';
 import { useTaskTracking } from '../../../shared/task-tracking/context.js';
-import { readTaskReferences } from '../../../shared/task-tracking/read-references.js';
 import { isTaskTerminal } from '../../../shared/task-tracking/types.js';
 import { resolveConsoleLocale } from '../labels.js';
 import type { UseVikingBotChatOptions, VikingBotChatResult } from './types.js';
@@ -15,38 +14,11 @@ import {
   memoryCommitActionKey,
 } from './memory-commit-action.js';
 
-type Submission = {
-  messageId: string;
-  status: 'pending' | 'submitted' | 'success';
-  taskKey?: string;
-};
-
-function latestCommitMessage(messages: readonly VikingBotMessage[]) {
-  let latest: string | undefined;
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index]!;
-    if (message.role === 'user') break;
-    if (!latest && message.role === 'assistant' && message.interrupted) return;
-    const alreadyCommitted = message.parts.some((part) => {
-      if (part.type !== 'tool' && part.type !== 'tool_result') return false;
-      if (part.type === 'tool' ? part.status === 'error' : part.isError)
-        return false;
-      return (part.tasks ?? readTaskReferences(part.name, part.output)).some(
-        (task) => task.kind === 'memory' && task.status === 'completed',
-      );
-    });
-    if (alreadyCommitted) return;
-    if (
-      latest === undefined &&
-      message.role === 'assistant' &&
-      !message.streaming &&
-      !message.clientError &&
-      message.parts.some((part) => part.type === 'text' && part.text.trim())
-    )
-      latest = message.id;
-  }
-  return latest;
-}
+import {
+  latestCommitMessage,
+  useMemoryCommitHistory,
+  type Submission,
+} from './memory-commit-history.js';
 
 export function useMemoryCommit({
   chat,
@@ -95,16 +67,6 @@ export function useMemoryCommit({
     submissions?.owner === owner && sessionId
       ? submissions.bySession.get(sessionId)
       : undefined;
-  const task = submission?.taskKey
-    ? tasks.find((item) => item.key === submission.taskKey)
-    : undefined;
-  const status: 'idle' | Submission['status'] =
-    task?.status === 'completed'
-      ? 'success'
-      : isTaskTerminal(task?.status)
-        ? 'idle'
-        : (submission?.status ?? 'idle');
-  const busy = status === 'pending' || status === 'submitted';
   const messageId =
     commit &&
     sessionId &&
@@ -114,8 +76,27 @@ export function useMemoryCommit({
     !chat.signal?.aborted
       ? latestCommitMessage(messages)
       : undefined;
+  const history = useMemoryCommitHistory(
+    chat,
+    owner,
+    messageId,
+    track,
+    Boolean(submission),
+  );
+  const { restoring } = history;
+  const currentSubmission = submission ?? history.submission;
+  const task = currentSubmission?.taskKey
+    ? tasks.find((item) => item.key === currentSubmission.taskKey)
+    : undefined;
+  const status: 'idle' | Submission['status'] =
+    task?.status === 'completed'
+      ? 'success'
+      : isTaskTerminal(task?.status)
+        ? 'idle'
+        : (currentSubmission?.status ?? 'idle');
+  const busy = status === 'pending' || status === 'submitted';
   const actionStatus =
-    busy || submission?.messageId === messageId ? status : 'idle';
+    busy || currentSubmission?.messageId === messageId ? status : 'idle';
 
   function run(message: string) {
     const submit = owner.commit;
@@ -123,6 +104,7 @@ export function useMemoryCommit({
       !submit ||
       !sessionId ||
       message !== messageId ||
+      restoring ||
       busy ||
       actionStatus === 'success'
     )
@@ -176,24 +158,25 @@ export function useMemoryCommit({
     })();
   }
 
-  const projected = messageId
-    ? messages.map((message) => {
-        if (message.id !== messageId) return message;
-        const actions =
-          message.actions ??
-          (message.action ? [{ messageId, action: message.action }] : []);
-        return {
-          ...message,
-          actions: [
-            ...actions,
-            {
-              messageId,
-              action: memoryCommitAction(copy[actionStatus], actionStatus),
-            },
-          ],
-        };
-      })
-    : messages;
+  const projected =
+    messageId && !restoring
+      ? messages.map((message) => {
+          if (message.id !== messageId) return message;
+          const actions =
+            message.actions ??
+            (message.action ? [{ messageId, action: message.action }] : []);
+          return {
+            ...message,
+            actions: [
+              ...actions,
+              {
+                messageId,
+                action: memoryCommitAction(copy[actionStatus], actionStatus),
+              },
+            ],
+          };
+        })
+      : messages;
   tagData(monitoring, projected, readData(monitoring, [messages]));
   return {
     messages: projected,

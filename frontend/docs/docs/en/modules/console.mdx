@@ -111,7 +111,7 @@ Configure cards through `chatOptions.hitl.cards[card_type]`. Use `configureCard(
 
 Use **Commit session** below the latest completed reply to request memory extraction for the current conversation. Console shows the submission state and follows the background task when the server returns a task ID. When the task returns a memory change file and `conversation.onOpenUri` is available, the result can be opened from the completion notification.
 
-Set `chatOptions.memoryCommit={false}` to hide the action. A custom chat service can implement `commitSession`. Otherwise, Console uses the native session endpoint when native chat or a configured provider supplies that endpoint.
+Set `chatOptions.memoryCommit={false}` to hide the action. A custom chat service can implement `commitSession`. Otherwise, Console uses the native session endpoint when native chat or a configured provider supplies that endpoint. Console restores the current submission from the server when it opens conversation history. If a custom service owns submission, implement `getSessionCommitTask(id, signal)` to return its latest task when that task covers the loaded messages.
 
 ### Background tasks
 
