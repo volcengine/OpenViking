@@ -23,13 +23,13 @@ import '@openviking/react/components/directory-tour/style.css';
 
 ### Basic usage
 
-Click "Explore OV directories" to start the six-step tour. To see the fallback at step 5, first check "Simulate missing experiences", then advance to that step and click "Next" to continue.
+Click "Explore OV directories" to start the six-step tour. To see step 5 anchored to the current user’s root when experiences are missing, first check "Simulate missing experiences", then advance to that step.
 
 ```tsx file="../../_demos/directory-tour-basic.tsx" preview
 
 ```
 
-The example locates rows with the `getRowElement` method of [FileTree](./file-tree). When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
+The example locates rows with the `getRowElement` method of [FileTree](./file-tree). The host resolves `userExperiences` to the current user’s root row when its loaded directory listing confirms that experiences are absent. When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
 
 ### Custom content
 

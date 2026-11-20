@@ -23,7 +23,7 @@ import '@openviking/react/components/directory-tour/style.css';
 
 ### 基础用法
 
-点击「了解 OV 目录树」开始六步引导。先勾选「模拟 experiences 不存在」，到第 5 步时可查看缺失提示，再点「下一步」继续。
+点击「了解 OV 目录树」开始六步引导。先勾选「模拟 experiences 不存在」，到第 5 步时会改为高亮当前用户根目录，再点「下一步」继续。
 
 ```tsx file="../../_demos/directory-tour-basic.tsx" preview
 
@@ -50,6 +50,8 @@ import '@openviking/react/components/directory-tour/style.css';
 ```
 
 `className` 和 `style` 里的尺寸约束保持 CSS 原有语义，卡片始终限制在可视视口内，长内容在卡片内滚动，百分比高度相对于布局视口计算。
+
+经验目录可能尚未生成。宿主确认目录列表加载完成且 experiences 不存在后，应为 `userExperiences` 返回当前用户根目录行；列表仍在加载时继续等待。
 
 ## API
 
