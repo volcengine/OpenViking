@@ -12,11 +12,12 @@ export async function metadataFixture({
   taggedTarget,
   fullRead,
   attrs,
+  canonicalUri,
 }) {
   let browser;
   let document = content;
   const history = [];
-  const canonical = uri.replace('viking://~', root);
+  const canonical = canonicalUri ?? uri.replace('viking://~', root);
   const fetch = recordingFetch(({ path, query }) => {
     if (path.endsWith('/configs'))
       return registry ?? ok({ targets: [{ to: wiki }] });

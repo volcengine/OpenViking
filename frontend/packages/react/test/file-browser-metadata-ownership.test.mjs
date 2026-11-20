@@ -137,3 +137,19 @@ test('a Compile namespace Wiki keeps its label when Dashboard attrs fail', async
     await f.view.unmount();
   }
 });
+
+test('Compile ownership recognizes the server-normalized home URI', async () => {
+  const f = await metadataFixture({
+    uri: 'viking://~//compile/chapter.md',
+    canonicalUri: 'viking://user/alice/compile/chapter.md',
+    content: body + footer,
+    registry: ok({ targets: [] }),
+  });
+  try {
+    assert.equal(f.tab.source.content, body);
+    assert.equal(f.browser.previewIsCompile, true);
+    assert.equal(f.fetch.countOf('/api/v1/compile/configs'), 0);
+  } finally {
+    await f.view.unmount();
+  }
+});
