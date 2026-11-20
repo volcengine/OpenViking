@@ -338,7 +338,7 @@ import '@openviking/react/components/file-preview/style.css';
 | closePreview           | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`                   |
 | showHiddenPath         | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'`         |
 | copyPath               | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`                   |
-| copied                 | 路径复制成功的反馈                                                     | `string` | `'已复制'`                     |
+| copied                 | 路径复制成功的反馈                                                     | `string` | `'节点路径已复制'`             |
 | copyFailed             | 路径复制失败的反馈                                                     | `string` | `'复制失败'`                   |
 | moreActions            | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`                   |
 | actionFailed           | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`                   |
@@ -437,12 +437,12 @@ import '@openviking/react/components/file-preview/style.css';
 ### 路径与面包屑
 
 - 层级：`source.path` 按 `/` 拆成层级，协议前缀（如 `viking://`）显示在首层，最后一级是当前文件名。
-- URI 名称：URI 路径的每一段仅解码一次用于显示，编码的斜杠不会拆出新层级，无效编码保持原样。导航和复制使用原始路径，普通文件路径及显式传入的标题、文件名按原文显示。
+- URI 名称：URI 路径的每一段仅解码一次用于显示，编码的斜杠不会拆出新层级，无效编码保持原样。导航使用原始路径，普通文件路径及显式传入的标题、文件名按原文显示。
 - 没有路径：省略 `source.path` 时面包屑只显示文件名，也没有复制路径按钮。
 - 导航：每个祖先层级都是按钮，点击时把该层级的完整 URI（如 `viking://a/b`）传给 `operations.openParent`，不限于直接父级；没有 `operations.openParent` 时按钮禁用。
 - 绝对路径：`/a/b/c.md` 的祖先保留开头的 `/`，相对路径保持原样。
 - 折叠：放不下时，先把首层之后的中间层级收进「…」菜单，仍放不下才连首层一起收起，菜单里的层级同样调用 `operations.openParent`。
-- 复制 Viking URI 路径时会解码可读文字，并保留保留字符的转义。复制使用 `navigator.clipboard`，需要安全上下文（HTTPS 或 localhost）；失败时显示 `labels.copyFailed`，不触发 `onCopyPath`。
+- 复制路径：Viking URI 会解码可读文字并保留影响路径含义的转义。成功后按钮变为勾号，并在按钮上方显示带绿色勾号的 `labels.copied` 气泡，1.5 秒后恢复，不在路径行追加文字。使用 `navigator.clipboard`，需要安全上下文（HTTPS 或 localhost）；失败时显示 `labels.copyFailed`，不触发 `onCopyPath`。
 
 ### 操作与编辑
 

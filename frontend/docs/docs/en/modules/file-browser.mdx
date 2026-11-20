@@ -397,6 +397,7 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | timezone           | Beijing time description                                              | `string`                     | `'Runs in Beijing time (UTC+8), to the minute.'`                                     |
 | historyView        | History display mode label                                            | `string`                     | `'Historical version content view'`                                                  |
 | copyPath           | Copy file path action                                                 | `string`                     | `'Copy file path'`                                                                   |
+| pathCopied         | Path-copy success feedback in the history preview                     | `string`                     | `'Node path copied'`                                                                 |
 | rollbackConfirm    | Restore confirmation action                                           | `string`                     | `'Confirm restore'`                                                                  |
 | target             | Target directory                                                      | `string`                     | `'Target directory'`                                                                 |
 | selectSources      | Select source directories                                             | `string`                     | `'Select source directories'`                                                        |
@@ -567,6 +568,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 ### Preview actions
 
 - While browsing, the right side of the header holds the Preview / Source switch, the edit button and the action menu. Copy path sits beside the breadcrumb, followed by the permission tag.
+- File, directory and history previews share path-copy feedback: after copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with the success message. The feedback resets after 1.5 seconds; failures show an error message.
 - Editing hides the Preview / Source switch. Save and Cancel stay visible, along with Version history, Copy content and Copy path when available for the current file.
 - The visibility flags only control whether a default button is shown, not the capability: `canDelete`, `deleteFile()` and the editing methods in the `previewSlots` context keep working.
 - Compilation settings display source directories, target directory, Skill and update schedule. Edit each field with its picker or schedule form; changes apply to future runs.

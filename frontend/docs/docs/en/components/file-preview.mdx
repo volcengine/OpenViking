@@ -338,7 +338,7 @@ Every field is an optional `string`; omitted fields use the default text of the 
 | closePreview           | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                                          |
 | showHiddenPath         | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                                |
 | copyPath               | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                              |
-| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                                 |
+| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Node path copied'`                                       |
 | copyFailed             | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                                         |
 | moreActions            | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                                           |
 | actionFailed           | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                                      |
@@ -437,12 +437,12 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 ### Path and breadcrumb
 
 - Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name.
-- URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation and copying use the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
+- URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation uses the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
 - No path: without `source.path` the breadcrumb shows only the file name and there is no copy-path button.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.
 - Absolute paths: the ancestors of `/a/b/c.md` keep the leading `/`, and relative paths stay as written.
 - Overflow: when the path does not fit, the levels after the first move into a "…" menu, and only if that is still too wide does the first level collapse too; the menu entries also call `operations.openParent`.
-- Copy path: Viking URI paths decode readable text while retaining escapes for reserved characters. Copy uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
+- Copy path: Viking URI paths decode readable text while retaining escapes for reserved characters. After copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with `labels.copied`. The feedback resets after 1.5 seconds without adding text to the path row. Copying uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
 
 ### Actions and editing
 

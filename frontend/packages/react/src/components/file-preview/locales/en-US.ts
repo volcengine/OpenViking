@@ -14,7 +14,7 @@ const messages = {
   moreActions: 'More actions',
   actionFailed: 'The action failed',
   copyPath: 'Copy path',
-  copied: 'Copied',
+  copied: 'Node path copied',
   copyFailed: 'Could not copy',
   previewMode: 'Preview',
   sourceMode: 'Source',

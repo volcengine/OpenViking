@@ -45,6 +45,7 @@ export default {
   addedLines: '新增内容',
   removedLines: '删除内容',
   copyPath: '复制文件路径',
+  pathCopied: '节点路径已复制',
   copyOriginal: '复制原文',
   copied: '已复制',
   historyView: '历史版本正文视图',
