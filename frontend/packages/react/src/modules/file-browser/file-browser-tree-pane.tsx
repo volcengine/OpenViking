@@ -158,13 +158,9 @@ function FileBrowserTreePaneContent({
               />
             ) : null;
           }}
+          onToggleExpand={(row) => void browser.actions.toggleExpand(row)}
           operations={{
             select: browser.actions.select,
-            // The row changes state synchronously. Keep its toggle available
-            // while the first listing is still loading.
-            toggleExpand: async (row) => {
-              void browser.actions.toggleExpand(row);
-            },
             loadMore: browser.actions.loadMore,
             retry: browser.actions.retry,
           }}
