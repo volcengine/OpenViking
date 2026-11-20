@@ -26,7 +26,9 @@ import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
-const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8');
+// The assembled policy is normalized to LF (conversation-policy.mjs), so the
+// expected text must be too: a Windows checkout gives these files CRLF.
+const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8').replace(/\r\n/g, '\n');
 const role = (name) => rolePresetText(name);
 
 describe('conversation policy assemble', () => {
@@ -47,6 +49,21 @@ describe('conversation policy assemble', () => {
     const weixin = assembleConversationPolicy({ connectors: ['weixin'] });
     assert.doesNotMatch(weixin, /## Lark|ca_|om_|image_key/);
     assert.match(assembleConversationPolicy({ connectors: ['lark'] }), /never pass `--profile`/);
+  });
+
+  it('normalizes CRLF prompt files, so a Windows checkout assembles the same policy', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-crlf-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.cpSync(DEFAULT_PROMPT_DIR, dir, { recursive: true });
+    for (const name of fs.readdirSync(dir, { recursive: true })) {
+      if (!name.endsWith('.md')) continue;
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n'));
+    }
+    const crlf = assembleConversationPolicy({ promptDir: dir, connectors: ['lark'], soulText: 'Role.\r\nMore.\r\n' });
+    const lf = assembleConversationPolicy({ promptDir: dir, connectors: ['lark'], soulText: 'Role.\nMore.\n' });
+    assert.equal(crlf, lf);
+    assert.equal(crlf.includes('\r'), false);
   });
 
   it('keeps QQ owner routing and reply limits in single and mixed sessions', () => {
@@ -238,7 +255,9 @@ describe('conversation policy assemble', () => {
     assert.ok(assembleWorkerPolicy({}).includes(never(cliCommandCode(packageDir))));
   });
 
-  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
+  // The fixture executes the rendered command through POSIX /bin/sh.
+  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset',
+    { skip: process.platform === 'win32' ? 'needs POSIX /bin/sh' : false }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'workspace');
@@ -477,7 +496,7 @@ describe('staged replies are opt-in per instance', () => {
 });
 
 describe('the inbox scheduler is opt-in per instance', () => {
-  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', soulText: role('colleague') };
   const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
   const codexHash = (config) => new CodexAgent(config, {
     getCognitionState: () => ({ runtime: 'codex', epoch: 1, authorityToken: 'token' }), getSetting: () => null,
@@ -511,7 +530,7 @@ describe('the inbox scheduler is opt-in per instance', () => {
 });
 
 describe('the workers scheduler', () => {
-  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague'), connectors: ['lark'] };
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', soulText: role('colleague'), connectors: ['lark'] };
 
   it('gives the router the inbox and then its workers section, and nothing else changes', () => {
     const inbox = assembleConversationPolicy({ ...base, scheduler: 'inbox' });
@@ -534,6 +553,14 @@ describe('the workers scheduler', () => {
     assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
     assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
+  });
+
+  it('keeps inbox behavior but hides worker delegation on runtimes without worker support', () => {
+    const config = { ...base, scheduler: 'workers' };
+    const durable = assembleConversationPolicy(config, { runtime: 'durable' });
+    assert.match(durable, /## Inbox/);
+    assert.doesNotMatch(durable, /## Workers|task_create|hand it to a worker/);
+    assert.match(assembleConversationPolicy(config, { runtime: 'dsh' }), /## Workers/);
   });
 
   it('gives a worker its own policy: the task, no deliveries, a report, and the instance Role', () => {

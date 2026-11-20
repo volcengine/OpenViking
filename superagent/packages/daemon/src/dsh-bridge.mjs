@@ -19,6 +19,7 @@ export async function loadDshBridgeDependencies({ loader, serverPath = '@deepsee
     modules = await Promise.all([
       loader.internal.import(serverPath, import.meta.url, {}),
       loader.internal.import('@deepseek-ai/dsh-llm', import.meta.url, {}),
+      loader.internal.import('@deepseek-ai/dsh-scope', import.meta.url, {}),
     ]);
   } else {
     // npm DSH 0.2.2 does not install the loader's optional internals package.
@@ -47,13 +48,14 @@ export async function loadDshBridgeDependencies({ loader, serverPath = '@deepsee
     modules = await Promise.all([
       import(importableModuleUrl(bundleRequire.resolve(serverPath))),
       import(importableModuleUrl(bundleRequire.resolve('@deepseek-ai/dsh-llm'))),
+      import(importableModuleUrl(bundleRequire.resolve('@deepseek-ai/dsh-scope'))),
     ]);
   }
-  const [stock, llm] = modules;
-  if (typeof stock?.apply !== 'function' || typeof llm?.createUserMessage !== 'function') {
+  const [stock, llm, scope] = modules;
+  if (typeof stock?.apply !== 'function' || typeof llm?.createUserMessage !== 'function' || typeof scope?.scopeParentOf !== 'function') {
     throw new Error(`${BRIDGE_ID} could not load the DSH SDK server and message API`);
   }
-  return { stock, createUserMessage: llm.createUserMessage };
+  return { stock, createUserMessage: llm.createUserMessage, scopeParentOf: scope.scopeParentOf };
 }
 
 // Load these before declaring the descriptor: DSH resolves the two package

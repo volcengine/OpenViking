@@ -11,11 +11,29 @@ import { PassThrough } from 'node:stream';
 import { FORK_MAX_BYTES, WorkerExecutor } from '../src/worker-executor.mjs';
 import { PI_MCP_EXTENSION } from '../src/pi-runtime.mjs';
 
+// Execute a real Node fixture on every platform. Windows cannot spawn a
+// shebang-only file, so its entry point is a small cmd launcher instead.
+function nodeFixture(dir, name, source) {
+  const script = path.join(dir, `${name}.cjs`);
+  fs.writeFileSync(script, `#!/usr/bin/env node\n${source}`, { mode: 0o755 });
+  if (process.platform !== 'win32') return script;
+  const launcher = path.join(dir, `${name}.cmd`);
+  // The product resolves only the Node invocation of an npm-style shim, so the
+  // fixture keeps npm's variable layout instead of a bare `%~dp0...` call.
+  fs.writeFileSync(launcher, [
+    '@echo off',
+    'set dp0=%~dp0',
+    `set _prog=${process.execPath}`,
+    `"%_prog%" "%dp0%\\${name}.cjs" %*`,
+    '',
+  ].join('\r\n'));
+  return launcher;
+}
+
 // A CLI stand-in: records its argv, cwd and the agent env, then prints the
 // JSON lines the test gives it and exits with the given code.
 function fakeCli(dir, name, lines, code = 0) {
-  const file = path.join(dir, name);
-  fs.writeFileSync(file, `#!/usr/bin/env node
+  return nodeFixture(dir, name, `
 const fs = require('node:fs');
 fs.appendFileSync(${JSON.stringify(path.join(dir, `${name}.calls`))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(),
   mcp: process.env.PERSONAL_AGENT_MCP_CONFIG ?? null, authority: process.env.PERSONAL_AGENT_AUTHORITY ?? null,
@@ -23,8 +41,7 @@ fs.appendFileSync(${JSON.stringify(path.join(dir, `${name}.calls`))}, JSON.strin
   shellMax: process.env.PERSONAL_AGENT_SHELL_MAX_S ?? null }) + '\\n');
 for (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');
 ${code ? `process.stderr.write('upstream said HTTP 429'); process.exit(${code});` : ''}
-`, { mode: 0o755 });
-  return file;
+`);
 }
 
 const calls = (dir, name) => fs.readFileSync(path.join(dir, `${name}.calls`), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
@@ -352,15 +369,42 @@ describe('WorkerExecutor', () => {
     assert.equal(call.argv.at(-1), 'replayed original');
   });
 
+  it('runs a DSH worker in the router profile with a stable task/turn request id', async (t) => {
+    const { config, task } = setup(t);
+    const requests = [];
+    const dshRequest = async (method, input) => {
+      requests.push({ method, input });
+      if (method === 'superagent/worker/ensure') return { sessionId: input.sessionId, preset: 'ov-superagent-worker' };
+      if (method === 'superagent/worker/submit') return { messageId: 'm1', reused: false };
+      if (method === 'superagent/worker/wait') {
+        return { text: 'DSH 完成', usage: { inputTokens: 12, cachedInputTokens: 4, outputTokens: 2 }, nativeSession: input.sessionId, error: null, transient: false };
+      }
+      throw new Error(method);
+    };
+    const executor = new WorkerExecutor({ config, settings: () => ({
+      runtime: 'dsh', model: 'deepseek/deepseek-chat', effort: 'high', dshRequest,
+    }) });
+    const result = await executor.start({ task: task({ runtime: 'dsh' }), prompt: 'work', authority: 'worker-token' }).done;
+    assert.equal(result.text, 'DSH 完成');
+    assert.equal(result.nativeSession, task().session_id);
+    assert.deepEqual(requests.map(request => request.method), [
+      'superagent/worker/ensure', 'superagent/worker/submit', 'superagent/worker/wait',
+    ]);
+    assert.equal(requests[0].input.authority, 'worker-token');
+    assert.equal(requests[0].input.provider, 'deepseek');
+    assert.equal(requests[0].input.model, 'deepseek-chat');
+    assert.equal(requests[0].input.effort, 'high');
+    assert.equal(requests[1].input.requestId, 't1:1');
+    assert.match(requests[0].input.policy, /^## Worker/);
+  });
+
   it('runs only on the runtimes it knows, and a stopped turn ends as stopped', async (t) => {
     const { dir, config, task } = setup(t);
     const executor = new WorkerExecutor({ config });
-    assert.deepEqual(['pi', 'codex', 'claude', 'durable', 'opencode', 'volc'].map((id) => executor.supports(id)),
-      [true, true, true, false, false, false]);
+    assert.deepEqual(['pi', 'codex', 'traex', 'claude', 'dsh', 'durable', 'opencode', 'volc'].map((id) => executor.supports(id)),
+      [true, true, true, true, true, false, false, false]);
     assert.throws(() => executor.start({ task: task({ runtime: 'durable' }), prompt: 'p', authority: 'x' }), /workers do not run on durable/);
-    const slow = path.join(dir, 'slow-pi');
-    fs.writeFileSync(slow, '#!/usr/bin/env node\nsetTimeout(() => {}, 60_000);\n', { mode: 0o755 });
-    config.piBin = slow;
+    config.piBin = nodeFixture(dir, 'slow-pi', 'setTimeout(() => {}, 60_000);');
     const handle = executor.start({ task: task(), prompt: 'p', authority: 'x' });
     setTimeout(() => handle.stop(), 300);
     assert.equal((await handle.done).error, 'stopped');

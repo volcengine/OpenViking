@@ -188,6 +188,8 @@ export class ActionService {
     // runtime exists; null under the legacy scheduler.
     this.inbox = null;
     this.tasks = null;
+    this.taskRuntime = () => null;
+    this.taskRuntimeSupported = () => false;
   }
 
   attachInbox(inbox) {
@@ -232,12 +234,17 @@ export class ActionService {
     return this.tasks;
   }
 
-  async taskCreate(input) {
-    const tasks = this.requireTasks();
+  requireWorkerRuntime() {
     const runtime = this.taskRuntime();
     if (!this.taskRuntimeSupported(runtime)) {
-      throw blocked('unsupported', `Workers run on pi, codex, traex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
+      throw blocked('unsupported', `Workers run on pi, codex, traex, claude or dsh; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
     }
+    return runtime;
+  }
+
+  async taskCreate(input) {
+    const tasks = this.requireTasks();
+    const runtime = this.requireWorkerRuntime();
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
     // One request, one task: a line a live task already holds as its request
     // or a follow-up is not started a second time.
@@ -259,6 +266,7 @@ export class ActionService {
 
   async taskRoute(input) {
     const tasks = this.requireTasks();
+    this.requireWorkerRuntime();
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
     const target = tasks.get(input.task_id);
     // A task's worker reports to the chat it was asked in: lines from another
@@ -414,7 +422,9 @@ export class ActionService {
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
     if (tool.inbox) return ['inbox', 'workers'].includes(this.config.scheduler);
-    if (tool.router) return this.config.scheduler === 'workers';
+    if (tool.router) {
+      return this.config.scheduler === 'workers' && this.taskRuntimeSupported(this.taskRuntime());
+    }
     if (tool.worker) return false;
     return true;
   }
