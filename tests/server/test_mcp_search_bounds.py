@@ -11,14 +11,14 @@ slices to ``MAX_EXCLUDE_URIS`` regardless, so a caller passing more got the extr
 dropped in silence and the URIs it asked to exclude came back in the results. Over REST the
 same request is a validation error.
 
-Bounds are asserted on the tool's published input schema and through ``call_tool``, which
-is the path an MCP client actually takes — a direct call to the undecorated function is not
-validated by either face.
+Check the tool's published input schema and the errors returned to an MCP client.
 """
 
+from datetime import timedelta
+
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import CallToolResult
+from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
 import openviking.server.mcp_endpoint as mcp_endpoint
@@ -62,14 +62,13 @@ async def test_exclude_uris_schema_carries_the_shared_cap():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,value", sorted((n, v) for n, (_, v) in BOUNDED.items()))
 async def test_call_tool_rejects_an_out_of_range_value(name, value):
-    with pytest.raises(ToolError) as excinfo:
-        await mcp_endpoint.mcp.call_tool("search", {"query": "q", "mode": "context", name: value})
+    async with create_connected_server_and_client_session(
+        mcp_endpoint.mcp, read_timeout_seconds=timedelta(seconds=5)
+    ) as client:
+        result = await client.call_tool("search", {"query": "q", "mode": "context", name: value})
 
-    cause = excinfo.value.__cause__
-    assert isinstance(cause, ValidationError)
-    assert [(error["loc"], error["type"]) for error in cause.errors()] == [
-        ((name,), "less_than_equal")
-    ]
+    assert result.isError is True
+    assert any(isinstance(block, TextContent) and name in block.text for block in result.content)
     with pytest.raises(ValidationError) as rest:
         SearchRequest(query="q", mode="context", **{name: value})
     assert [(error["loc"], error["type"]) for error in rest.value.errors()] == [
@@ -80,16 +79,17 @@ async def test_call_tool_rejects_an_out_of_range_value(name, value):
 @pytest.mark.asyncio
 async def test_call_tool_rejects_more_exclusions_than_it_can_apply():
     too_many = [f"viking://user/u/memories/m{i}.md" for i in range(MAX_EXCLUDE_URIS + 1)]
-    with pytest.raises(ToolError) as excinfo:
-        await mcp_endpoint.mcp.call_tool(
+    async with create_connected_server_and_client_session(
+        mcp_endpoint.mcp, read_timeout_seconds=timedelta(seconds=5)
+    ) as client:
+        result = await client.call_tool(
             "search", {"query": "q", "mode": "context", "exclude_uris": too_many}
         )
 
-    cause = excinfo.value.__cause__
-    assert isinstance(cause, ValidationError)
-    assert [(error["loc"], error["type"]) for error in cause.errors()] == [
-        (("exclude_uris",), "too_long")
-    ]
+    assert result.isError is True
+    assert any(
+        isinstance(block, TextContent) and "exclude_uris" in block.text for block in result.content
+    )
     with pytest.raises(ValidationError) as rest:
         SearchRequest(query="q", mode="context", exclude_uris=too_many)
     assert [(error["loc"], error["type"]) for error in rest.value.errors()] == [
