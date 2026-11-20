@@ -228,7 +228,7 @@ async def test_create_reject_if_active_stops_after_matching_durable_record(monke
     )
     with pytest.raises(TaskAlreadyActive):
         await store.create(duplicate, reject_if_active=True)
-    assert read_paths == ["/local/acme/alice/tasks/active.json"]
+    assert read_paths == [store._task_path("acme", "alice", active.task_id)]
 
 
 async def test_create_reject_if_active_matches_none_resource_exactly():
