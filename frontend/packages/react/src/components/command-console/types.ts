@@ -49,6 +49,11 @@ export interface CommandConsoleSearchResultItem {
    */
   metaLabel?: string;
   /**
+   * 结果标签，较长时换行显示。
+   * Result tags that wrap when needed.
+   */
+  tags?: readonly string[];
+  /**
    * 标题旁的内容层级标签。
    * Content level label next to the title.
    */

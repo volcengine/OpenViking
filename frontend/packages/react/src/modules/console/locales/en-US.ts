@@ -59,6 +59,8 @@ const messages = {
       | 'quickStart'
     >
   >,
+  noTasks: 'No tasks',
+  grepLimitReached: 'The search reached its limit. More matches may exist.',
   telemetryResult: (value: string) => `Telemetry: ${value}`,
   taskResult: 'Task result',
   memoryCommit: {
