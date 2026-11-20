@@ -68,9 +68,9 @@ export default function DirectoryTourBasic() {
   // the expanded path before resolving the DOM element. Never fetch inside Tour.
   const locateTarget = useCallback(
     (target: string, signal: AbortSignal) => {
-      const id = TARGETS[target];
-      if (signal.aborted || !id || (missing && target === 'userExperiences'))
-        return Promise.resolve(null);
+      const id =
+        missing && target === 'userExperiences' ? 'user' : TARGETS[target];
+      if (signal.aborted || !id) return Promise.resolve(null);
       flushSync(() =>
         setExpanded(
           (old) =>

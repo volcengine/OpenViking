@@ -174,8 +174,10 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
     assert.match(document.querySelector('#inline').textContent, /"parts"/);
     viewSwitch('Preview').click();
     await waitFor(() => transcript('inline'));
-    // JSDOM has no layout, so the generic JSON virtual list has no visible rows.
-    // Verify fallback routing, then inspect its Source view for preserved data.
+    const jsonPreview = (id) =>
+      document.querySelector(`#${id} [data-file-viewer-json]`);
+    await waitFor(() => jsonPreview('ordinary') && jsonPreview('unsupported'));
+    assert.match(jsonPreview('ordinary').textContent, /1 \/ 4/);
     for (const [id, expected] of [
       ['ordinary', 'msg-user'],
       ['unsupported', 'Keep generic JSON'],

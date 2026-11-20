@@ -92,7 +92,7 @@ export type ConsoleChatOptions = Omit<
   hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
   /** Set false to hide the built-in session commit action. */
   memoryCommit?: false;
-  /** Control selected references while Console loads the picker tree and search. The host clears sent references; Console clears selection when resetting the conversation. */
+  /** Control selected references while Console loads the picker tree and search. Console notifies the host to remove submitted references and clears selection when resetting the conversation. */
   referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
 };
 
@@ -120,6 +120,8 @@ export interface ConsoleCommandOptions {
   allowAdminCommands?: boolean;
   /** The default uses the browser's file picker and downloads. */
   files?: ConsoleCommandFiles;
+  /** Open the host's local upload page for add-resource without explicit flags. */
+  onOpenLocalResourceImport?: () => void;
   /** The host can reuse its OVPack import dialog to confirm the local file. */
   choosePackFile?: (
     targetUri: string,
@@ -160,14 +162,16 @@ export interface ConsoleProps
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
-   * 终端空态快捷入口，按 name 从命令目录复用说明，点击原样填入 value 并聚焦，不提交。
+   * 终端空态及有记录时输入框上方的快捷入口，按 name 从命令目录复用说明。
+   * 点击原样填入 value 并聚焦，不提交。
    * 未命中的名称跳过，
    * 重复名称只保留首次出现。
-   * 省略时使用包含 ov 命令前缀的默认集合；传空数组不展示内置空态。
-   * Terminal shortcuts resolve copy by name from the command catalogue;
+   * 省略时使用包含 ov 命令前缀的默认集合；传空数组隐藏快捷入口和内置空态。
+   * Terminal shortcuts appear in the empty state and above the input once a
+   * record exists. They resolve copy by name from the command catalogue;
    * selection fills value verbatim and focuses without submitting. Unknown
    * names are skipped. Omitted uses the default set with ov command prefixes;
-   * an empty array shows no built-in empty state.
+   * an empty array hides the shortcuts and the built-in empty state.
    */
   quickCommands?: readonly CommandConsoleQuickCommand[];
   /** Native chat by default. Supply a stable service to adapt a non-native backend. */

@@ -1,3 +1,4 @@
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 import { PreviewQueryState } from './preview-query-state.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { useState } from 'react';
@@ -109,7 +110,10 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
                   text={text}
                   onCopy={() => {
                     void copy.run(
-                      async () => navigator.clipboard.writeText(props.uri),
+                      async () =>
+                        navigator.clipboard.writeText(
+                          formatVikingUriLabel(props.uri),
+                        ),
                       () => {},
                       undefined,
                       copyFailure,
