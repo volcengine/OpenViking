@@ -6,8 +6,10 @@
 import pytest
 
 from openviking.core.mcp_converter import mcp_to_skill
+from openviking.models.rerank import RerankClient
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import RerankConfig
 
 
 def result(response):
@@ -137,25 +139,33 @@ async def test_resource_delete_removes_files_and_index(offline_resource_api):
     ), after
 
 
-@pytest.mark.parametrize("endpoint", ["find", "search"])
-@pytest.mark.parametrize("query", ["how to authenticate", "what is OpenViking"])
-async def test_basic_retrieval_contract(offline_resource_api, endpoint, query):
+async def test_basic_retrieval_contract(offline_resource_api, service, monkeypatch):
     client, root = offline_resource_api
-    found = result(
-        await client.post(
-            f"/api/v1/search/{endpoint}",
-            json={"query": query, "target_uri": root, "level": [2], "limit": 5},
-        )
-    )
-    for field in ("resources", "memories", "skills"):
-        assert isinstance(found[field], list)
-    assert isinstance(found["total"], int)
-    assert found["resources"], found
-    assert len(found["resources"]) <= 5
-    for hit in found["resources"]:
-        assert hit["uri"].startswith(root + "/"), hit
-        assert hit["level"] == 2
-        assert 0 <= hit["score"] <= 1
+    payload = {"query": "how to authenticate", "target_uri": root, "level": [2], "limit": 1}
+    baseline = result(await client.post("/api/v1/search/find", json=payload))
+    [hit] = baseline["resources"]
+    assert hit["uri"] == f"{root}/oauth.md"
+    assert hit["level"] == 2
+    assert hit["score"] > 0
+    assert baseline["total"] == 1
+    assert baseline["memories"] == baseline["skills"] == []
+
+    class Model:
+        def rerank_batch(self, query, documents):
+            assert query == payload["query"]
+            assert len(documents) == 1
+            return [0.6]
+
+    monkeypatch.setattr(service.viking_fs, "rerank_config", RerankConfig(ak="ak", sk="sk"))
+    monkeypatch.setattr(RerankClient, "from_config", lambda config: Model())
+
+    found = result(await client.post("/api/v1/search/find", json=payload))
+    assert found == baseline
+
+    searched = result(await client.post("/api/v1/search/search", json=payload))
+    assert searched["total"] == 1
+    assert searched["memories"] == searched["skills"] == []
+    assert searched["resources"] == [{**hit, "score": 0.6}]
 
 
 async def test_copy_file_preserves_source_content_and_index(client):
