@@ -98,7 +98,7 @@ class RetrievalStatsCollector:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._stats = RetrievalStats()
+        self._account_stats: Dict[str | None, RetrievalStats] = {}
 
     def record_query(
         self,
@@ -108,34 +108,24 @@ class RetrievalStatsCollector:
         latency_ms: float = 0.0,
         rerank_used: bool = False,
         rerank_fallback: bool = False,
+        account_id: str | None = None,
     ) -> None:
         """Record metrics from a single retrieval query."""
         with self._lock:
-            self._stats.total_queries += 1
-            self._stats.total_results += result_count
-
+            stats = self._account_stats.setdefault(account_id, RetrievalStats())
+            stats.total_queries += 1
+            stats.total_results += result_count
             if result_count == 0:
-                self._stats.zero_result_queries += 1
-
+                stats.zero_result_queries += 1
             for s in scores:
-                self._stats.total_score_sum += s
-                if s > self._stats.max_score:
-                    self._stats.max_score = s
-                if s < self._stats.min_score:
-                    self._stats.min_score = s
-
-            self._stats.queries_by_type[context_type] = (
-                self._stats.queries_by_type.get(context_type, 0) + 1
-            )
-
-            if rerank_used:
-                self._stats.rerank_used += 1
-            if rerank_fallback:
-                self._stats.rerank_fallback += 1
-
-            self._stats.total_latency_ms += latency_ms
-            if latency_ms > self._stats.max_latency_ms:
-                self._stats.max_latency_ms = latency_ms
+                stats.total_score_sum += s
+                stats.max_score = max(stats.max_score, s)
+                stats.min_score = min(stats.min_score, s)
+            stats.queries_by_type[context_type] = stats.queries_by_type.get(context_type, 0) + 1
+            stats.rerank_used += int(rerank_used)
+            stats.rerank_fallback += int(rerank_fallback)
+            stats.total_latency_ms += latency_ms
+            stats.max_latency_ms = max(stats.max_latency_ms, latency_ms)
 
         try:
             from openviking.metrics.datasources import RetrievalStatsDataSource
@@ -150,17 +140,35 @@ class RetrievalStatsCollector:
         except Exception:
             pass
 
-    def snapshot(self) -> RetrievalStats:
-        """Return a copy of the current stats."""
+    def snapshot(self, account_id: str | None = None) -> RetrievalStats:
+        """Return account stats, or aggregate all accounts and unattributed queries."""
         with self._lock:
             import copy
 
-            return copy.deepcopy(self._stats)
+            if account_id is not None:
+                return copy.deepcopy(self._account_stats.get(account_id, RetrievalStats()))
+            total = RetrievalStats()
+            for stats in self._account_stats.values():
+                total.total_queries += stats.total_queries
+                total.total_results += stats.total_results
+                total.zero_result_queries += stats.zero_result_queries
+                total.total_score_sum += stats.total_score_sum
+                total.max_score = max(total.max_score, stats.max_score)
+                total.min_score = min(total.min_score, stats.min_score)
+                for context_type, count in stats.queries_by_type.items():
+                    total.queries_by_type[context_type] = (
+                        total.queries_by_type.get(context_type, 0) + count
+                    )
+                total.rerank_used += stats.rerank_used
+                total.rerank_fallback += stats.rerank_fallback
+                total.total_latency_ms += stats.total_latency_ms
+                total.max_latency_ms = max(total.max_latency_ms, stats.max_latency_ms)
+            return total
 
     def reset(self) -> None:
         """Reset all counters (useful for testing)."""
         with self._lock:
-            self._stats = RetrievalStats()
+            self._account_stats.clear()
 
 
 # Module-level singleton.

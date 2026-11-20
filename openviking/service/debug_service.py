@@ -151,7 +151,9 @@ class ObserverService:
         """Check if both vikingdb and config dependencies are set."""
         return self._vikingdb is not None and self._config is not None
 
-    async def get_queue_status_async(self, *, format: str = "table") -> ComponentStatus:
+    async def get_queue_status_async(
+        self, *, format: str = "table", account_id: str | None = None
+    ) -> ComponentStatus:
         """Get queue status."""
         try:
             qm = get_queue_manager()
@@ -162,7 +164,9 @@ class ObserverService:
                 has_errors=True,
                 status=_queue_not_initialized_status(format),
             )
-        observer = QueueObserver(qm)
+        observer = QueueObserver(
+            qm, **({"account_id": account_id} if account_id is not None else {})
+        )
         try:
             status = (
                 await observer.get_status_json_async()
@@ -428,13 +432,17 @@ class ObserverService:
             )
 
     async def account_system(
-        self, ctx: RequestContext, *, format: str = "table"
+        self, ctx: RequestContext, *, format: str = "table", account_scope: bool = False
     ) -> SystemStatus:
         queue, vikingdb, models, lock, filesystem = await asyncio.gather(
-            self.get_queue_status_async(format=format),
+            self.get_queue_status_async(
+                format=format, **({"account_id": ctx.account_id} if account_scope else {})
+            ),
             self.account_vikingdb(ctx, format=format),
             self.account_models(ctx, format=format),
-            self.get_lock_status_async(format=format),
+            self.get_lock_status_async(
+                format=format, **({"account_id": ctx.account_id} if account_scope else {})
+            ),
             self.get_filesystem_status_async(format=format),
         )
         components = {
@@ -442,15 +450,22 @@ class ObserverService:
             "vikingdb": vikingdb,
             "models": models,
             "lock": lock,
-            "retrieval": self.get_retrieval_status(format=format),
+            "retrieval": self.get_retrieval_status(
+                format=format, **({"account_id": ctx.account_id} if account_scope else {})
+            ),
             "filesystem": filesystem,
         }
+        health_components = [
+            component
+            for name, component in components.items()
+            if not account_scope or name != "filesystem"
+        ]
         return SystemStatus(
-            is_healthy=all(component.is_healthy for component in components.values()),
+            is_healthy=all(component.is_healthy for component in health_components),
             components=components,
             errors=[
                 f"{component.name} has errors"
-                for component in components.values()
+                for component in health_components
                 if component.has_errors
             ],
         )
@@ -460,11 +475,17 @@ class ObserverService:
         """Get lock system status via pathlock_observe snapshot."""
         return self.get_lock_status()
 
-    async def get_lock_status_async(self, *, format: str = "table") -> ComponentStatus:
+    async def get_lock_status_async(
+        self, *, format: str = "table", account_id: str | None = None
+    ) -> ComponentStatus:
         """Get lock system status via pathlock_observe snapshot."""
         try:
             viking_fs = get_viking_fs()
-            snapshot = await viking_fs._async_agfs.pathlock_observe()
+            snapshot = (
+                await viking_fs._async_agfs.pathlock_observe()
+                if account_id is None
+                else await viking_fs._async_agfs.pathlock_observe(fs_ctx={"account_id": account_id})
+            )
         except Exception:
             return ComponentStatus(
                 name="lock",
@@ -514,9 +535,11 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
-    def get_retrieval_status(self, *, format: str = "table") -> ComponentStatus:
+    def get_retrieval_status(
+        self, *, format: str = "table", account_id: str | None = None
+    ) -> ComponentStatus:
         """Get retrieval quality status."""
-        observer = RetrievalObserver()
+        observer = RetrievalObserver(account_id=account_id)
         return ComponentStatus(
             name="retrieval",
             is_healthy=observer.is_healthy(),
