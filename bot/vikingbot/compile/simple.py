@@ -280,9 +280,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
                 stage="agent",
             )
         result.warnings.append(
-            f"Partial compilation: iteration limit reached after writing {count} target file(s). "
-            "Incremental compilation may skip unprocessed, unchanged sources. "
-            "Request full compilation to scan all sources again."
+            f"Partial compilation: iteration limit reached after writing {count} target file(s)."
         )
     elif not writer.outcomes and not (incremental and inspected_source):
         raise CompileFailure(
@@ -290,4 +288,6 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
+    if writer.unconfirmed or incomplete or final is None:
+        result.completion_status = "partial"
     return result

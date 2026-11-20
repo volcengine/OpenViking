@@ -1200,6 +1200,10 @@ class BotCompileService:
                 ]
             )
             await pipeline.write_coverage(published)
+            counts = (await pipeline.files.get("coverage") or {}).get("counts", {})
+            partial = bool(pipeline.failures or conflicts) or any(
+                counts.get(state, 0) for state in ("failed", "pending", "unreferenced", "prepared")
+            )
             summary = await pipeline.files.get("summary")
             summary["committed"] = True
             summary["warnings"] = pipeline.warnings
@@ -1223,6 +1227,7 @@ class BotCompileService:
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
+                completion_status="partial" if partial else None,
             )
 
             def complete(task):

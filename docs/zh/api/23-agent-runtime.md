@@ -217,6 +217,10 @@ state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`aut
 
 Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
+Runtime 返回 `result.completion_status: "partial"` 时，Compile 保留已发布产物和此前的来源基线，
+使下次增量执行仍可处理本次遗漏的输入。正常收尾和故障恢复都在运行结果中保留该标记。
+未返回此标记的结果沿用原有响应结构和基线行为。
+
 ### 检查 Compile 可用性
 
 ```http

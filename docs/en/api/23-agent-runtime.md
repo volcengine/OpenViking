@@ -217,6 +217,12 @@ State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_updat
 
 Successful Compile finalization publishes output snapshots and advances the incremental baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
 
+When the Runtime reports `result.completion_status: "partial"`, Compile publishes
+the retained output and keeps the previous source baseline. This lets the next
+incremental run include inputs missed by the partial run. The marker is retained
+in the run result during normal finalization and after recovery. A result without
+the marker follows the existing response and baseline behavior.
+
 ### Check Compile availability
 
 ```http

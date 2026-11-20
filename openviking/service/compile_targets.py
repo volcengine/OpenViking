@@ -1107,7 +1107,15 @@ class CompileLifecycle:
             snapshot = ExternalTaskSnapshot(status="cancelled")
         try:
             if snapshot.status == "completed" and meta["start_snapshot"]:
-                await self._save_checkpoint(task, {"phase": "committing"})
+                partial = self._checkpoint(task).get("partial_delivery") is True or (
+                    isinstance(snapshot.result, dict)
+                    and snapshot.result.get("completion_status") == "partial"
+                )
+                checkpoint: dict[str, Any] = {"phase": "committing"}
+                if partial:
+                    # Recovery may resume committing without the Runtime response.
+                    checkpoint["partial_delivery"] = True
+                await self._save_checkpoint(task, checkpoint)
                 run["status"] = "committing"
                 await self._save_run(task, run)
                 if meta["finish_snapshot"] is None:
@@ -1141,6 +1149,8 @@ class CompileLifecycle:
                         ctx=ctx,
                     )
                     run["result"] = dict.fromkeys(_RESULT_KEYS.values(), 0)
+                    if partial:
+                        run["result"]["completion_status"] = "partial"
                     for change in changes:
                         if is_versioned(change["uri"]):
                             run["result"][_RESULT_KEYS[change["change_type"]]] += 1
@@ -1199,6 +1209,8 @@ class CompileLifecycle:
         """Advance only the matching configuration's unchanged successful predecessor."""
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
+            return
+        if (run.get("result") or {}).get("completion_status") == "partial":
             return
         from openviking.service.task_tracker import get_task_tracker
 
