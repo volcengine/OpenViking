@@ -1,6 +1,7 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
+  previewAiGenerated: 'AI generated',
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
   formatPreviewUpdatedAt: (time) => `Updated on ${time}`,
