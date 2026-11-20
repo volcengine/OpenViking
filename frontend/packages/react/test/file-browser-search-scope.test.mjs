@@ -189,13 +189,24 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     assert.deepEqual(targets().at(-1), [child]);
     await click(filterToggle());
     await click(
+      modal().querySelector('.ov-file-browser-search__options input'),
+    );
+    await settle();
+    assert.equal(
+      modal().querySelector(
+        `.ov-file-browser-search__options [title="${childDisplay}"]`,
+      ),
+      null,
+    );
+    assert.deepEqual(targets().at(-1), [rootUri]);
+    await click(
       modal().querySelector('.ov-file-browser-search__advanced-clear'),
     );
     assert.equal(filterCount(), null);
     assert.equal(filterToggle().getAttribute('aria-label'), 'Advanced filters');
     assert.deepEqual(
       targets(),
-      [rootUri, [child]],
+      [rootUri, [child], [rootUri]],
       'restoring the root reuses its fresh cached search',
     );
   } finally {
