@@ -20,6 +20,7 @@ from loguru import logger
 
 from openviking.core.namespace import classify_uri, relative_uri_path, uri_parts
 from openviking.core.skill_loader import validate_skill_format
+from openviking.utils.compile_publication import PublicationReceipts
 from openviking.utils.path_safety import (
     sanitize_relative_viking_path,
 )
@@ -834,6 +835,9 @@ class BotCompileService:
                     def record(task):
                         task.meta["outputs"] = dict(writer.outcomes)
                         task.meta["unconfirmed"] = sorted(writer.unconfirmed)
+                        task.meta["publication"] = writer.publication.snapshot(
+                            uncertain=bool(writer.unconfirmed)
+                        )
 
                     await self.store.update(task_id, record)
 
@@ -1024,8 +1028,11 @@ class BotCompileService:
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
-            result = CompileResult(
-                **{
+            legacy_receipts = PublicationReceipts()
+            if rendered.operations:
+                legacy_receipts.add(batch_result.get("task_id"), request.to, "content_batch_write")
+            result = CompileResult.model_validate(
+                {
                     "from": request.from_,
                     "to": request.to,
                     "skill": request.skill,
@@ -1035,6 +1042,7 @@ class BotCompileService:
                     "page_count": page_count,
                     "link_count": rendered.link_count,
                     "warnings": warnings,
+                    "publication": legacy_receipts.snapshot(),
                 }
             )
 
@@ -1184,6 +1192,10 @@ class BotCompileService:
                     wait=False,
                     skip_conflicts=True,
                 )
+            receipts = PublicationReceipts()
+            if not skill_target and rendered.operations:
+                receipts.add(result.get("task_id"), request.to, "content_batch_write")
+            publication = receipts.snapshot(synchronous=bool(skill_target and not pipeline.noop))
             conflicts = result.get("conflicts", [])
             for conflict in conflicts:
                 pipeline.warnings.append(
@@ -1204,6 +1216,7 @@ class BotCompileService:
             summary["committed"] = True
             summary["warnings"] = pipeline.warnings
             summary["conflicts"] = conflicts
+            summary["publication"] = publication
             await pipeline.files.put("summary", summary)
             compiled = CompileResult(
                 from_=request.from_,
@@ -1223,6 +1236,7 @@ class BotCompileService:
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
+                publication=publication,
             )
 
             def complete(task):

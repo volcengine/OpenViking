@@ -91,7 +91,7 @@ POST /api/v1/compile
 
 传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标开始/结束快照、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
-两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台索引或 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。受理成功不代表 tag 已可查询，补标期间由上述虚拟树锁保护目标。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
+两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台目标 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。实际 Compile 写入触发的内容处理使用下述独立收据边界。受理成功不代表 tag 已可查询，补标期间由上述虚拟树锁保护目标。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
 
 执行接口拒绝调度控制。`args.mode`、`last_compile_time`、`changes` 和 `operation_id` 不是公开执行参数；执行计划由 OpenViking 生成。
 
@@ -199,6 +199,7 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 | `start_snapshot` | 执行开始时冻结的来源及目标状态 |
 | `finish_snapshot` | 发布或回滚完成后保留的目标快照；尚未提交时为 null |
 | `skill_snapshot_id` | Skill 快照；系统 Skill 为 null |
+| `publication` | 升级后收尾记录的内容处理收据与服务端结论；旧字段缺失表示 unknown |
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
 
@@ -215,7 +216,26 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 成功收尾时发布产物快照，并在满足下述处理证据边界后推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+
+#### 内容处理收据
+
+Runtime 在模型输出之外保留内容 API 收据。`publication.protocol="content_task_receipts_v1"` 的 `receipts` 是有界的 `{task_id, uri, kind}` 列表，精确引用异步写入，`kind` 为 `content_write` 或 `content_batch_write`。同一 URI 的多次写入分别保留各自 Task。收据溢出、缺失或写入未确认时显式设置 `incomplete`，截断子集不能证明全部成功。同步等待处理的 Skill 包发布使用 `mode="synchronous"`；无变化产物使用 `mode="no_writes"`，不制造处理 Task。
+
+OV 仅在已受理的 account/user 范围查询这些精确的持久化 Task，并验证类型与规范化输出 URI。任一依赖仍 pending、running 或 cancelling 时，Compile 保持 `running`、stage 为 `indexing`，复用现有收尾重试 owner，不增加全局队列空闲判断或第二套轮询。产物锁释放与字节写入确认均不能单独证明处理成功。
+
+服务端在 run `meta.publication` 保留结论；受支持协议还会写入 `result.publication`：
+
+| 状态 | 含义与基线影响 |
+|------|---------------|
+| `complete` | 全部精确异步依赖完成且无内容处理错误，或命名空间 API 已同步等待处理 |
+| `failed` | 精确依赖失败、取消或含处理错误；保留有用正文与此前成功来源基线 |
+| `unknown` | 已知协议的收据集合不完整、不可用或不匹配；保留此前成功来源基线 |
+| `not_requested` | 没有请求新处理，不证明既有索引状态；发现意外版本化产物变更会使该声明失效 |
+
+`reason_codes` 仅含有界通用代码，不复制原始 Task 错误。收据集合与终态结论可跨重启、重复收尾保持。服务端在产物快照或锁重试前，将非 pending 处理结论与 `meta.publication_settled` 一并持久化；依赖 Task 后续过期或相矛盾的迟到回调不能改变已保存结论，Runtime 无权提供该标记。failed/unknown 仍保留有用正文和变更计数，不新增 Task 终态。调用方需分别检查处理证据和来源质量诊断；处理成功不证明来源完整或所有应交付事实均已交付。
+
+旧 Runtime 缺少受支持协议时保持可读，处理证据为 unknown，沿用原有结果形状和默认基线行为。升级后收尾显式保存 `meta.publication.state="unknown"`，更早保存的 run 缺少字段同样表示 unknown，不冒充已证明成功。独立目录补标与回滚索引重建仍由各自 owner 负责，不成为 Compile 正文依赖。
 
 ### 检查 Compile 可用性
 

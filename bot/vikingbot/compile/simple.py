@@ -6,6 +6,7 @@ import json
 
 from openviking.core.namespace import classify_uri
 from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+from openviking.utils.compile_publication import PublicationReceipts
 from openviking.utils.path_safety import (
     normalize_storage_target_uri,
     safe_join_viking_uri,
@@ -66,6 +67,7 @@ class CompileWriteTool(Tool):
         # Includes requests still in flight and requests without an authoritative receipt.
         self.unconfirmed: set[str] = set()
         self._active: set[str] = set()
+        self.publication = PublicationReceipts()
 
     async def execute(self, tool_context, path: str, content: str, mode: str = "replace"):
         """Return the file outcome after OV acknowledges the write. In-flight paths survive cancellation."""
@@ -100,6 +102,7 @@ class CompileWriteTool(Tool):
                     raise
                 if receipt.get("uri") != uri or receipt.get("content_updated") is not True:
                     raise ValueError(f"Unconfirmed write receipt for {uri}")
+                self.publication.add(receipt.get("task_id"), uri, "content_write")
                 outcome = "created" if old is None else "updated"
             if outcome != "unchanged" and self.outcomes.get(uri) != "created":
                 self.outcomes[uri] = outcome
@@ -290,4 +293,5 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
+    result.publication = writer.publication.snapshot(uncertain=bool(writer.unconfirmed))
     return result
