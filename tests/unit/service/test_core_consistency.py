@@ -96,6 +96,33 @@ def test_service_loads_account_store_runtime_from_config_file(monkeypatch) -> No
     assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
 
 
+def test_service_uses_registered_account_store_runtime_without_config_file(monkeypatch) -> None:
+    """Use the registered ServerConfig when no startup configuration file exists."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    server_config = SimpleNamespace(
+        account_store=SimpleNamespace(
+            provider="redis_mysql",
+            params={"cache": {"instance": "accountstore"}},
+        )
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: None,
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
+
+
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
     service = OpenVikingService.__new__(OpenVikingService)
     service._initialized = True

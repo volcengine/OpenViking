@@ -247,14 +247,28 @@ class OpenVikingService:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
         config_file = OpenVikingConfigSingleton.get_config_file()
         account_store_cache_instance = None
-        server = load_json_config(config_file).get("server") if config_file is not None else None
-        account_store = server.get("account_store") if isinstance(server, dict) else None
-        if isinstance(account_store, dict) and account_store.get("provider") == "redis_mysql":
+        if config_file is not None:
+            server = load_json_config(config_file).get("server")
+            account_store = server.get("account_store") if isinstance(server, dict) else None
+        else:
+            from openviking.server.dependencies import get_server_config
+
+            server_config = get_server_config()
+            account_store = server_config.account_store if server_config is not None else None
+        provider = (
+            account_store.get("provider")
+            if isinstance(account_store, dict)
+            else getattr(account_store, "provider", None)
+        )
+        params = (
+            account_store.get("params")
+            if isinstance(account_store, dict)
+            else getattr(account_store, "params", None)
+        )
+        if provider == "redis_mysql":
             from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 
-            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(
-                account_store.get("params")
-            )
+            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(params)
 
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(
             self._config,
