@@ -77,6 +77,7 @@ export function Popover({
   open: controlledOpen,
   role,
   ariaHidden,
+  portalWithinModal = false,
   disabled = false,
   className,
   style,
@@ -269,7 +270,8 @@ export function Popover({
           {content}
         </div>,
         // Use the owning Modal's layer, outside its clipping, transformed panel.
-        triggerRef.current?.closest('.ov-modal') ?? document.body,
+        (portalWithinModal && triggerRef.current?.closest('.ov-modal')) ||
+          document.body,
       )
     : null;
 

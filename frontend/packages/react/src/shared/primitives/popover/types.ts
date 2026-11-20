@@ -60,6 +60,8 @@ export interface PopoverProps {
   role?: AriaRole;
   /** Hides a purely visual surface from assistive technology. */
   ariaHidden?: boolean;
+  /** Render a visual surface in its owning Modal layer. */
+  portalWithinModal?: boolean;
   /** 为真时不展示浮层。 Suppresses the surface; the trigger still renders. */
   disabled?: boolean;
   /** 浮层容器的额外类名。 Extra class names for the surface. */

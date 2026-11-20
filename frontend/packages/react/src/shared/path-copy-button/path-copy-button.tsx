@@ -91,6 +91,7 @@ export function PathCopyButton({
         placement="top"
         role={copied ? undefined : 'tooltip'}
         ariaHidden={copied}
+        portalWithinModal
         open={dismissed ? false : copied || keyboardFocus ? true : undefined}
         disabled={disabled}
         className={copied ? 'ov-path-copy-feedback' : 'ov-path-copy-hint'}
