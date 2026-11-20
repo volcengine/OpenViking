@@ -95,6 +95,37 @@ def resolve_context_types(context_type: Optional[SearchContextTypeInput]) -> Lis
     return normalized_values
 
 
+def extract_context_types(filter_node: object) -> Optional[set[ContextType]]:
+    """Infer types from positive DSL predicates without changing the filter.
+
+    None indicates an unknown constraint. An empty set indicates a contradiction.
+    """
+    if not isinstance(filter_node, dict):
+        return None
+
+    op = filter_node.get("op")
+    conds = filter_node.get("conds")
+    if not isinstance(conds, list) or not conds:
+        return None
+
+    if op == "must" and filter_node.get("field") == "context_type":
+        try:
+            return {ContextType(value) for value in conds}
+        except ValueError:
+            return None
+
+    if op == "and":
+        context_types = None
+        for child in conds:
+            child_types = extract_context_types(child)
+            if child_types is not None:
+                context_types = (
+                    child_types if context_types is None else context_types & child_types
+                )
+        return context_types
+    return None
+
+
 def merge_time_filter(
     existing_filter: Optional[Dict[str, Any]],
     since: Optional[str] = None,

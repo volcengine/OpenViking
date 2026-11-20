@@ -8,6 +8,7 @@ from typing import List, Optional, Union
 from openviking.core.namespace import (
     AGENT_SKILLS_ROOT,
     canonical_user_root,
+    classify_uri,
     is_hidden_by_actor_peer_view,
     uri_parts,
 )
@@ -23,6 +24,20 @@ class ResolvedRetrievalTargets:
 
     target_directories: List[str]
     first_explicit_directory: str = ""
+
+    @property
+    def explicit_context_types(self) -> Optional[set[ContextType]]:
+        """Return the union of types when all explicit targets have a known type."""
+        if not self.first_explicit_directory:
+            return None
+
+        context_types: set[ContextType] = set()
+        for directory in self.target_directories:
+            classification = classify_uri(directory)
+            if classification.scope != "resources" and classification.content_index is None:
+                return None
+            context_types.add(ContextType(classification.context_type))
+        return context_types
 
 
 def resolve_retrieval_targets(
