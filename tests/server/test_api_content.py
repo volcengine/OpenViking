@@ -325,18 +325,27 @@ async def test_overview_content(client_with_resource, service):
     assert body["result"] == f"# {uri}\n\n[Directory overview is not ready]"
 
 
-async def test_ls_file_uri_returns_invalid_argument(client, service):
+async def test_listing_a_file_returns_one_entry(client, service):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     file_uri = "viking://resources/directory-type-check/file.md"
     await service.viking_fs.mkdir("viking://resources/directory-type-check", ctx=ctx)
     await service.viking_fs.write_file(file_uri, "file content", ctx=ctx)
 
-    resp = await client.get("/api/v1/fs/ls", params={"uri": file_uri})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "not a directory" in body["error"]["message"]
+    for endpoint, output in (("ls", "original"), ("tree", "agent")):
+        response = await client.get(
+            f"/api/v1/fs/{endpoint}", params={"uri": file_uri, "output": output}
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        (entry,) = body["result"]
+        assert entry["uri"] == file_uri
+        assert entry["isDir"] is False
+        assert entry["name" if endpoint == "ls" else "rel_path"] == "file.md"
+        assert body["has_more"] is False
+
+    next_page = await client.get("/api/v1/fs/tree", params={"uri": file_uri, "offset": 1})
+    assert next_page.status_code == 200, next_page.text
+    assert next_page.json()["result"] == []
 
 
 async def test_overview_missing_uri_returns_not_found(client):
