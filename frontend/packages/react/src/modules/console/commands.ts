@@ -9,7 +9,14 @@ import type { CommandConsoleRecordContent } from '../../components/command-conso
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS } from './command-specs.js';
 import { parseArguments, tokenize } from './command-parser.js';
-import { ConsoleCommandError } from './command-messages.js';
+import {
+  ConsoleCommandError,
+  formatConsoleMessage,
+} from './command-messages.js';
+import {
+  isRemoteResourceSource,
+  RESOURCE_COMMAND_SPEC,
+} from './resource-command-spec.js';
 import { consoleCommands, createCommandHelp } from './command-catalog.js';
 import { formatResult } from './results.js';
 import { browserCommandFiles, type CommandExecution } from './command-files.js';
@@ -58,6 +65,27 @@ export async function executeCommand(
   }
   if (!spec.request && !spec.execute)
     return { content: createCommandHelp(locale, commandOptions) };
+  if (
+    spec === RESOURCE_COMMAND_SPEC &&
+    commandOptions?.onOpenLocalResourceImport
+  ) {
+    const { path, temp_file_id, ...flags } = values;
+    if (!temp_file_id && !isRemoteResourceSource(path, flags.add_type)) {
+      if (Object.keys(flags).length)
+        throw new ConsoleCommandError('localResourceImportFlags');
+      options.signal?.throwIfAborted();
+      commandOptions.onOpenLocalResourceImport();
+      return {
+        content: {
+          variant: 'text',
+          text: formatConsoleMessage(
+            { code: 'localResourceImportOpened' },
+            locale,
+          ),
+        },
+      };
+    }
+  }
   const execution: CommandExecution = {
     signal: options.signal,
     files: commandOptions?.files ?? browserCommandFiles,

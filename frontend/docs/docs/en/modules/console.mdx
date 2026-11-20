@@ -313,12 +313,13 @@ Adapt other backends through a stable `taskService`; `chatOptions.taskService` c
 
 ### ConsoleCommandOptions
 
-| Property             | Description                                                                                                            | Type                                                                      | Default                                    |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------ |
-| `allowAdminCommands` | Show `ov backup` and `ov restore` in the command list and enable their execution. The server still checks permissions. | `boolean`                                                                 | `false`                                    |
-| `files`              | Choose local files and save downloads.                                                                                 | [ConsoleCommandFiles](#consolecommandfiles)                               | Browser file picker and downloads          |
-| `choosePackFile`     | Choose a local archive for `ov import` given the target URI. Return `undefined` to cancel.                             | `(targetUri: string, signal?: AbortSignal) => Promise<File \| undefined>` | `files.pickFile` with the `.ovpack` filter |
-| `onPackImported`     | Called with the URI returned by a successful `ov import`.                                                              | `(uri: string) => void`                                                   | -                                          |
+| Property                    | Description                                                                                                                                                              | Type                                                                      | Default                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------ |
+| `allowAdminCommands`        | Show `ov backup` and `ov restore` in the command list and enable their execution. The server still checks permissions.                                                   | `boolean`                                                                 | `false`                                    |
+| `files`                     | Choose local files and save downloads.                                                                                                                                   | [ConsoleCommandFiles](#consolecommandfiles)                               | Browser file picker and downloads          |
+| `onOpenLocalResourceImport` | Open the host’s local upload page for `ov add-resource` without flags, with or without a local path. The user selects the source and configures the import on that page. | `() => void`                                                              | -                                          |
+| `choosePackFile`            | Choose a local archive for `ov import` given the target URI. Return `undefined` to cancel.                                                                               | `(targetUri: string, signal?: AbortSignal) => Promise<File \| undefined>` | `files.pickFile` with the `.ovpack` filter |
+| `onPackImported`            | Called with the URI returned by a successful `ov import`.                                                                                                                | `(uri: string) => void`                                                   | -                                          |
 
 ### ConsoleCommandFiles
 
@@ -394,7 +395,7 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - `session` supports creation, listing, details, context, archives, message writes, commits, and configuration. Use `ov session add-messages <session-id> '<messages-json>'` for batches.
 - `ov get <uri> <local-path>` and `ov export <uri> <output.ovpack>` use browser downloads. The last segment of the output path becomes the filename. `export` and `backup` accept `--include-vectors`.
 - `ov import <file.ovpack> <target-uri>` opens a file picker and accepts `--on-conflict` and `--vector-mode`. Hosts can reuse their file browser's import dialog through `commandOptions.choosePackFile`. The dialog accepts valid `.ovpack` archives.
-- Local `add-resource` sources and `write --from-file` use browser file selection. The host owns local configuration and sign-in. Authorized hosts can opt in to `backup` and `restore` with `commandOptions.allowAdminCommands`.
+- Local `add-resource` sources use browser file selection by default. With `onOpenLocalResourceImport`, users select sources and set import options on the host’s upload page. To apply command flags to an uploaded file, use `--temp-file-id`. `write --from-file` uses browser file selection. The host owns local configuration and sign-in. Authorized hosts can opt in to `backup` and `restore` with `commandOptions.allowAdminCommands`.
 
 ## Notes
 
