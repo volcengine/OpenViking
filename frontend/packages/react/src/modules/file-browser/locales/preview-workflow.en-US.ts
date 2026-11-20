@@ -50,6 +50,7 @@ export default {
   addedLines: 'Added content',
   removedLines: 'Removed content',
   copyPath: 'Copy file path',
+  pathCopied: 'Node path copied',
   copyOriginal: 'Copy source',
   copied: 'Copied',
   historyView: 'Historical version content view',

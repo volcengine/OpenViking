@@ -14,7 +14,7 @@ const messages = {
   moreActions: '更多操作',
   actionFailed: '操作失败',
   copyPath: '复制路径',
-  copied: '已复制',
+  copied: '节点路径已复制',
   copyFailed: '复制失败',
   previewMode: '预览',
   sourceMode: '源码',

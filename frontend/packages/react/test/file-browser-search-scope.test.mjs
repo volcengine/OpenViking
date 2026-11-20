@@ -114,11 +114,25 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     await click(
       modal().querySelector('.ov-file-browser-search__advanced-toggle'),
     );
-    await click(
-      modal().querySelector('.ov-file-browser-search__scope-trigger'),
-    );
     const menu = () =>
       document.querySelector('.ov-file-browser-search__scope-menu');
+    const searchModal = modal();
+    const scopeTrigger = searchModal.querySelector(
+      '.ov-file-browser-search__scope-trigger',
+    );
+    await click(scopeTrigger);
+    const scopeButton = menu().querySelector('button');
+    await act(async () => {
+      scopeButton.focus();
+      assert.equal(document.activeElement, scopeButton);
+      scopeButton.dispatchEvent(
+        new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+    assert.equal(menu(), null, 'Escape closes the scope picker');
+    assert.equal(searchModal.querySelector('.ov-modal--exit'), null);
+    await click(scopeTrigger);
+
     const root = () => menu().querySelector(`label[title="${rootUri}"]`);
     await click(
       root()
@@ -137,9 +151,7 @@ test('choosing a subdirectory limits the search and clearing restores the root',
       menu().querySelectorAll('.ov-file-browser-search__scope-actions button');
     await click(actions()[0]);
     assert.equal(menu(), null, 'cancel closes the draft');
-    await click(
-      modal().querySelector('.ov-file-browser-search__scope-trigger'),
-    );
+    await click(scopeTrigger);
     await click(
       root()
         .closest('.ov-file-browser-search__scope-row')
