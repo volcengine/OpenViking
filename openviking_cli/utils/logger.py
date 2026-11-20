@@ -863,6 +863,9 @@ def get_logger(
 ) -> logging.Logger:
     """Get a configured logger instance.
 
+    Before adding or changing logs, follow the logging policy:
+    https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
+
     Args:
         name: Logger name, defaults to "openviking".
         format_string: Custom log format string, optional.

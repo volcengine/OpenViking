@@ -9,10 +9,12 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.privacy.service import UserPrivacyConfigService
@@ -22,6 +24,7 @@ MIN_PROTECTED_VALUE_CHARS = 6
 DEFAULT_MATCHER_CACHE_TTL_SECONDS = 3600.0
 DEFAULT_SANITIZER_MAX_CONTENT_BYTES = 16 * 1024 * 1024
 DEFAULT_SANITIZER_MAX_REPLACEMENTS = 10000
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,14 @@ class PrivacySanitizer:
             PrivacyReplacement(start=start, end=end, reference=reference)
             for start, end, reference in raw_replacements
         )
+        if raw_ambiguous:
+            target_id = safe_uri_for_log(uri)
+            logger.info(
+                "privacy ambiguous matches total=%d target_id=%s",
+                len(raw_ambiguous),
+                target_id,
+                extra={"degraded": True, "total": len(raw_ambiguous), "target_id": target_id},
+            )
         return PrivacySanitizationResult(
             content=rewritten,
             replacements=replacements,

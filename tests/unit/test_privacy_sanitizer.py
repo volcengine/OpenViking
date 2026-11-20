@@ -3,6 +3,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -116,7 +117,9 @@ async def test_sanitizer_protects_registered_strings_at_least_six_chars_without_
     assert "numeric=42" in result.content
 
 
-async def test_sanitizer_prefers_longest_overlap_and_does_not_replace_ambiguous_values():
+async def test_sanitizer_prefers_longest_overlap_and_does_not_replace_ambiguous_values(monkeypatch):
+    info = Mock()
+    monkeypatch.setattr("openviking.privacy.sanitizer.logger.info", info)
     catalog = _PrivacyCatalog(
         {
             "credential": {
@@ -129,7 +132,8 @@ async def test_sanitizer_prefers_longest_overlap_and_does_not_replace_ambiguous_
     )
     sanitizer = PrivacySanitizer(catalog)
 
-    result = await sanitizer.sanitize("abcdef same-secret", ctx=_ctx())
+    uri = "viking://user/alice/memories/private-path.md"
+    result = await sanitizer.sanitize("abcdef same-secret", ctx=_ctx(), uri=uri)
 
     assert result.content.startswith(
         "{{ov_privacy:alice:viking://~/privacy/credential/long#/values/value}}"
@@ -138,6 +142,9 @@ async def test_sanitizer_prefers_longest_overlap_and_does_not_replace_ambiguous_
     assert len(result.replacements) == 2
     assert len(result.ambiguous_references) == 1
     assert len(result.ambiguous_references[0]) == 2
+    assert info.call_args.kwargs["extra"]["total"] == 1
+    assert "same-secret" not in str(info.call_args)
+    assert "private-path.md" not in str(info.call_args)
 
 
 async def test_sanitizer_bounds_dense_match_metadata_for_scans():
