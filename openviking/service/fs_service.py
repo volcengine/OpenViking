@@ -382,9 +382,9 @@ class FSService:
             retry_directory = True
         if entries or node_limit == 0:
             return entries
-        if not retry_directory and offset > 0 and ctx.role != Role.GLOBAL:
-            # Ordinary successful empty pages are exhausted. Restricted views
-            # still need stat to distinguish traversable directories from files.
+        if not retry_directory and (offset > 0 or directories_only) and ctx.role != Role.GLOBAL:
+            # A file could not appear in this page. Restricted views still need
+            # stat to distinguish traversable directories from files.
             return entries
 
         # Object stores can return an empty list for a file target. Probe only
@@ -1508,17 +1508,21 @@ class FSService:
             include_abstract = False
             include_overview = False
 
+        listing_format = {
+            "output": "original" if tags else output,
+            "abs_limit": abs_limit,
+            "extra_fields": None if tags else extra_fields,
+            "include_abstract": None if tags else include_abstract,
+            "include_overview": False if tags else include_overview is True,
+            "overview_limit": overview_limit,
+        }
+
         async def format_file_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             return await viking_fs._finalize_listing_entries(
                 entries,
-                "original" if tags else output,
-                abs_limit,
-                None if tags else extra_fields,
-                True,
+                recursive=True,
                 ctx=ctx,
-                include_abstract=None if tags else include_abstract,
-                include_overview=False if tags else include_overview is True,
-                overview_limit=overview_limit,
+                **listing_format,
             )
 
         async def fetch_directory_page(
@@ -1528,17 +1532,12 @@ class FSService:
             return await viking_fs.tree(
                 uri,
                 ctx=ctx,
-                output="original" if tags else output,
-                abs_limit=abs_limit,
-                include_abstract=None if tags else include_abstract,
-                include_overview=False if tags else include_overview is True,
-                overview_limit=overview_limit,
                 show_all_hidden=show_all_hidden,
                 directories_only=directories_only,
                 node_limit=page_limit,
                 level_limit=level_limit,
-                extra_fields=None if tags else extra_fields,
                 offset=page_offset,
+                **listing_format,
             )
 
         async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
