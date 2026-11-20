@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """Transactional Watch operations shared by relational store providers.
 
@@ -1245,4 +1245,3 @@ class SQLWatchStore(WatchStore):
             )
             rows = await self._rows(session, select(*self._tasks.c).where(*where))
             return [self._task(row) for row in rows]
-
