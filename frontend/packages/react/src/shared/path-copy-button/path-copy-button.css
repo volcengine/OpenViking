@@ -31,6 +31,15 @@
   outline-offset: 2px;
 }
 
+.ov-path-copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .ov-popover.ov-path-copy-hint {
   padding: 6px 8px;
   border-color: transparent;

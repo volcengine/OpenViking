@@ -58,6 +58,8 @@ export interface PopoverProps {
   open?: boolean;
   /** Surface semantics; defaults to dialog for click and note for hover. */
   role?: AriaRole;
+  /** Hides a purely visual surface from assistive technology. */
+  ariaHidden?: boolean;
   /** 为真时不展示浮层。 Suppresses the surface; the trigger still renders. */
   disabled?: boolean;
   /** 浮层容器的额外类名。 Extra class names for the surface. */

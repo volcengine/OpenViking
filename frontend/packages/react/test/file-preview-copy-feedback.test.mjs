@@ -6,6 +6,8 @@ import { mount } from './helpers/module-dom.mjs';
 
 const uri = 'viking://resources/中文目录/guide.md';
 const button = () => document.querySelector('.ov-path-copy-button');
+const status = () =>
+  document.querySelector('.ov-path-copy-status[role="status"]');
 const feedback = () => document.querySelector('.ov-path-copy-feedback');
 const copy = () => act(async () => button().click());
 const wait = (delay) =>
@@ -41,20 +43,22 @@ for (const kind of ['file', 'directory']) {
     });
     const view = await mount(preview(kind));
     try {
+      const liveRegion = status();
+      assert.equal(liveRegion.textContent, '');
       await copy();
       assert.equal(feedback(), null);
       assert.equal(button().hasAttribute('data-copied'), false);
       await act(async () => complete());
       assert.equal(copied, uri);
       assert.equal(feedback()?.textContent.trim(), 'Node path copied');
-      assert.equal(
-        view.container
-          .querySelector('.ov-file-preview__path-row')
-          .textContent.includes('Node path copied'),
-        false,
-      );
+      assert.equal(status(), liveRegion);
+      assert.equal(liveRegion.textContent.trim(), 'Node path copied');
+      assert.equal(feedback().getAttribute('aria-hidden'), 'true');
       assert.equal(document.querySelector('.ov-path-copy-hint'), null);
       await copy();
+      assert.equal(feedback(), null);
+      assert.equal(button().hasAttribute('data-copied'), false);
+      assert.equal(liveRegion.textContent, '');
       await view.render(preview(kind, 'viking://resources/next.md'));
       assert.equal(feedback(), null);
       await act(async () => complete());

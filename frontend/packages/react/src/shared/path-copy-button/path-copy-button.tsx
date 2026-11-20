@@ -63,6 +63,7 @@ export function PathCopyButton({
     current.pending = true;
     const request = ++current.request;
     clearTimeout(timer.current);
+    setCopyCount(0);
     let copied = false;
     try {
       copied = await onClick();
@@ -73,20 +74,23 @@ export function PathCopyButton({
     }
     if (!current.mounted || request !== current.request) return;
     if (!copied) {
-      setCopyCount(0);
       toast.error({ id: 'copy-path', content: failureLabel });
       return;
     }
     toast.clear();
-    setCopyCount((count) => count + 1);
+    setCopyCount(request);
     timer.current = setTimeout(() => setCopyCount(0), 1500);
   };
   return (
     <>
       {toastHolder}
+      <span className="ov-path-copy-status" role="status">
+        {copied ? message : ''}
+      </span>
       <Popover
         placement="top"
-        role={copied ? 'status' : 'tooltip'}
+        role={copied ? undefined : 'tooltip'}
+        ariaHidden={copied}
         open={dismissed ? false : copied || keyboardFocus ? true : undefined}
         disabled={disabled}
         className={copied ? 'ov-path-copy-feedback' : 'ov-path-copy-hint'}

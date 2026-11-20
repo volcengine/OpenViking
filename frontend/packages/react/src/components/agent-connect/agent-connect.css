@@ -170,7 +170,7 @@
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  max-height: 100dvh;
+  max-height: min(100dvh, var(--ov-ui-agent-connect-scroll-height, 100dvh));
   margin: 0;
   padding: 24px 0;
   overflow-y: auto;
