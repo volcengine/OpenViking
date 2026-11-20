@@ -31,6 +31,8 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"pending", "running", "cancelling"})
+# Local stage for a Compile submission that exhausted retries.
+SUBMIT_EXHAUSTED = "submit_exhausted"
 # Persisted on a task when submission fails before the queue accepts it.
 ENQUEUE_FAILURE = "Failed to enqueue external task"
 _CREDENTIAL_PROVIDER = "encrypted_external_task"
@@ -39,7 +41,7 @@ _instance: ExternalTaskService | None = None
 
 
 class ExternalTaskResultSaveError(RuntimeError):
-    """Remote execution finished, but its local outcome could not be saved."""
+    """A terminal task outcome could not be settled locally."""
 
 
 def set_external_task_service(service: ExternalTaskService | None) -> None:
@@ -594,27 +596,40 @@ class ExternalTaskService:
             user_id=user_id,
             stage="polling" if external_task_id else "submitting",
         )
-        if external_task_id is None:
-            external_task_id = await self._retry(
-                lambda: provider.submit(task_id, payload, private_payload, connection),
-                task_id=task_id,
-                operation_name="submit",
-                poll_interval=provider.poll_interval_seconds,
-                max_attempts=provider.poll_max_attempts,
-            )
-            await tracker.patch_task(
-                task_id,
-                TaskPatch(
-                    auth={"external_task_id": external_task_id},
-                    meta=provider.submission_meta(external_task_id),
-                ),
-                account_id=account_id,
-                user_id=user_id,
-            )
-            auth["external_task_id"] = external_task_id
         snapshot = None
+        if external_task_id is None:
+            try:
+                external_task_id = await self._retry(
+                    lambda: provider.submit(task_id, payload, private_payload, connection),
+                    task_id=task_id,
+                    operation_name="submit",
+                    poll_interval=provider.poll_interval_seconds,
+                    max_attempts=provider.poll_max_attempts,
+                )
+            except ExternalTaskRetryExhaustedError as exc:
+                if task.task_type != "compile":
+                    raise
+                # Runtime may have accepted a timed-out submission.
+                snapshot = ExternalTaskSnapshot(
+                    status="failed",
+                    stage=SUBMIT_EXHAUSTED,
+                    error_code=exc.code,
+                    error_message=str(exc),
+                )
+            else:
+                await tracker.patch_task(
+                    task_id,
+                    TaskPatch(
+                        auth={"external_task_id": external_task_id},
+                        meta=provider.submission_meta(external_task_id),
+                    ),
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+                auth["external_task_id"] = external_task_id
         while True:
             if snapshot is None or snapshot.status in _ACTIVE_STATUSES:
+                assert external_task_id is not None
                 snapshot = await self._retry(
                     lambda: provider.get(
                         external_task_id,
@@ -627,13 +642,22 @@ class ExternalTaskService:
                     poll_interval=provider.poll_interval_seconds,
                     max_attempts=provider.poll_max_attempts,
                 )
-            if await self._apply_snapshot(
-                snapshot,
-                task_id=task_id,
-                account_id=account_id,
-                user_id=user_id,
-                auth=auth,
-            ):
+            try:
+                finished = await self._apply_snapshot(
+                    snapshot,
+                    task_id=task_id,
+                    account_id=account_id,
+                    user_id=user_id,
+                    auth=auth,
+                )
+            except Exception as exc:
+                if external_task_id is None:
+                    # Keep the delivery open for local recovery.
+                    raise ExternalTaskResultSaveError(
+                        "Could not settle the failed Compile submission"
+                    ) from exc
+                raise
+            if finished:
                 return
             await asyncio.sleep(provider.poll_interval_seconds)
 
@@ -804,10 +828,16 @@ class ExternalTaskService:
             return
         provider = self._provider(task.task_type)
         request = self._session_request(task, auth)
-        if task.has_compile_dependency_failure():
+        terminal = auth.get("external_terminal_snapshot")
+        if task.has_compile_dependency_failure() or (
+            task.task_type == "compile"
+            and not auth.get("external_task_id")
+            and terminal
+            and terminal.get("status") == "failed"
+        ):
             cancellation = ExternalTaskCancellation(
                 auth.get("external_task_id"),
-                ExternalTaskSnapshot(**auth["external_terminal_snapshot"]),
+                ExternalTaskSnapshot(**terminal),
             )
         else:
             cancellation = await provider.on_cancel(

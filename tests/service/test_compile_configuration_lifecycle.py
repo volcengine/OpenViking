@@ -20,6 +20,7 @@ from openviking.service.compile_targets import (
     split_control_args,
 )
 from openviking.service.external_task_service import (
+    SUBMIT_EXHAUSTED,
     ExternalTaskError,
     ExternalTaskResultSaveError,
     ExternalTaskService,
@@ -28,7 +29,7 @@ from openviking.service.external_task_service import (
 from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
-from openviking.storage.errors import ResourceBusyError
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
 from tests.test_task_tracker import _FakeAgfs
 
@@ -904,6 +905,35 @@ async def test_progress_publication_recovers_after_state_write_failure(
         "source_commit"
     ] == run["meta"]["start_snapshot"]
     setup.find.assert_not_awaited()
+
+
+@pytest.mark.parametrize("lock_failures", [0, 1, 2, 3])
+async def test_submit_exhaustion_skips_rollback(setup, registered, monkeypatch, lock_failures):
+    _, name, task = registered
+    await setup.lifecycle.on_start(task)
+    setup.files.pathlock_acquire_tree = AsyncMock()
+    scope = ("acme", "alice", name, task.task_id)
+    lock_error = LockAcquisitionError("Compile run record is locked")
+    lock_run = Mock(side_effect=[lock_error] * lock_failures + [setup.store.lock_run(*scope)])
+    monkeypatch.setattr(setup.store, "lock_run", lock_run)
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    snapshot = ExternalTaskSnapshot(
+        status="failed", stage=SUBMIT_EXHAUSTED, error_message="ConnectTimeout"
+    )
+    result = await setup.lifecycle.on_finish(task, snapshot)
+    run = await setup.store.get_run(*scope)
+    assert result.status == "failed"
+    assert lock_run.call_count == min(lock_failures + 1, 3)
+    assert [call.args[0] for call in sleep.await_args_list] == [1, 3][:lock_failures]
+    if lock_failures == 3:
+        assert result == snapshot
+        assert run["status"] == "running" and run["finished_at"] is None
+    else:
+        assert run["status"] == "failed"
+        assert run["error"] == "ConnectTimeout" and run["finished_at"] is not None
+    setup.files.pathlock_acquire_tree.assert_not_awaited()
+    setup.fs.restore.assert_not_awaited()
 
 
 @pytest.mark.parametrize("status", ["failed", "cancelled"])
