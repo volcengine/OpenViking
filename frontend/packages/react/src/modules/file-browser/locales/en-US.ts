@@ -1,6 +1,7 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
+  previewAiGenerated: 'AI generated',
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
   formatPreviewUpdatedAt: (time) => `Updated on ${time}`,
@@ -39,6 +40,9 @@ const messages = {
   searchClear: 'Clear',
   searchScopes: 'Directory',
   searchPickScope: 'Choose a directory',
+  searchAllScopes: 'All directories',
+  searchCancelScopes: 'Cancel',
+  searchConfirmScopes: 'Confirm',
   searchScopesUnsupported: 'The current scope cannot be filtered by directory',
   searchLevels: 'Content',
   searchLevelLabels: ['L0 Summary', 'L1 Overview', 'L2 Full text'],

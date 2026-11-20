@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.pyagfs import get_binding_client
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchTask
 from openviking.server.identity import RequestContext, Role
@@ -778,13 +779,17 @@ async def test_sync_failure_preserves_staged_content(
 
 
 @pytest.mark.asyncio
-async def test_successful_sync_reports_applied_changes_and_cleans_temp(binding_fs):
+async def test_sync_requires_directory_before_applying_changes_and_cleaning_temp(binding_fs):
     fs, ctx = binding_fs, root_ctx()
     source, target = "viking://temp/import", "viking://resources/target"
     for name in ("added.md", "updated.md", "newdir/file.md"):
         await fs.write_file_bytes(f"{source}/{name}", b"new payload", ctx=ctx)
     for name in ("updated.md", "removed.md", "olddir/file.md"):
         await fs.write_file_bytes(f"{target}/{name}", b"old", ctx=ctx)
+
+    with pytest.raises(AGFSNotADirectoryError):
+        await fs.sync_tree(f"{source}/updated.md", target, ctx=ctx)
+    assert await fs.read_file_bytes(f"{target}/updated.md", ctx=ctx) == b"old"
 
     diff = await fs.sync_tree(source, target, ctx=ctx, delete_temp_after=True)
 

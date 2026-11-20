@@ -128,6 +128,7 @@ export function isSearchScopeAllowed(
  */
 export function buildScopeOptions(rootUri: string): ScopeOption[] {
   if (!rootUri || rootUri === 'viking://') return [...ALL_SCOPES];
+  rootUri = rootUri.replace(/\/+$/, '');
   if (ALL_SCOPES.some((option) => covers(option.uri, rootUri))) {
     return [{ uri: rootUri }];
   }

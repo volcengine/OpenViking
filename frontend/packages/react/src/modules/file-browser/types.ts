@@ -70,6 +70,8 @@ export interface FileBrowserLabels {
   formatPreviewUpdatedAt?: (time: string) => string;
   /** 资源预览的模型提示。空字符串可隐藏。Model notice for resources; pass an empty string to hide it. */
   previewModelNotice?: string;
+  /** AI 生成标识。AI-generated content label. */
+  previewAiGenerated?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -106,6 +108,12 @@ export interface FileBrowserLabels {
   searchScopes?: string;
   /** 选择目录的入口。Entry that opens the directory picker. */
   searchPickScope?: string;
+  /** 选择所有支持目录。Selects every supported directory. */
+  searchAllScopes?: string;
+  /** 放弃目录选择草稿。Discards the directory selection draft. */
+  searchCancelScopes?: string;
+  /** 应用目录选择草稿。Applies the directory selection draft. */
+  searchConfirmScopes?: string;
   /** 目录筛选项为空时的说明。Shown when no scope can be filtered. */
   searchScopesUnsupported?: string;
   /** 内容层级的标题。Title of the content-level filter. */
@@ -128,7 +136,7 @@ export interface FileBrowserLabels {
   searchFilterUnsupported?: string;
   /** 检索结果数量，参数为条数。Result count; receives the number. */
   searchResultCount?: (count: number) => string;
-  /** 模式标签旁的说明。Description beside the mode chip. */
+  /** @deprecated 模式说明随 searchModeHints 更新。Mode descriptions now follow searchModeHints. */
   searchVia?: string;
   /** 切换检索方式的入口。Entry that switches the retrieval mode. */
   searchSwitchMode?: string;

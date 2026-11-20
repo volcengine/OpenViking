@@ -65,9 +65,7 @@ test('structured resource targets reject executable schemes and retain safe nati
 test('JSON indentation preserves exact numeric tokens, negative zero, exponents, escapes and duplicate keys', () => {
   const text = String.raw`{"big":9007199254740993,"negative":-0,"huge":1e400,"precise":0.10000000000000001,"same":1,"same":2,"nested":[{},[],"a\"b"]}`;
   const document = render({ variant: 'text', text });
-  const output = document.querySelector(
-    '.ov-command-console__code-content',
-  );
+  const output = document.querySelector('.ov-command-console__code-content');
   assert.equal(output.getAttribute('tabindex'), '0');
   assert.equal(output.getAttribute('role'), 'region');
   assert.equal(output.getAttribute('aria-label'), 'Command output');

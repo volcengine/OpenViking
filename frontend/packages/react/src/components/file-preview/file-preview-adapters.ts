@@ -3,7 +3,6 @@ import { code } from '@ark-design/ui/file-viewer/adapters/code';
 import { diff } from '@ark-design/ui/file-viewer/adapters/diff';
 import { html } from '@ark-design/ui/file-viewer/adapters/html';
 import { image } from '@ark-design/ui/file-viewer/adapters/image';
-import { json } from '@ark-design/ui/file-viewer/adapters/json';
 import { markdown } from '@ark-design/ui/file-viewer/adapters/markdown';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import { media } from '@ark-design/ui/file-viewer/adapters/media';
@@ -14,6 +13,7 @@ import { text } from '@ark-design/ui/file-viewer/adapters/text';
 import { word } from '@ark-design/ui/file-viewer/adapters/word';
 import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
 import { DirectoryHeading } from './directory-heading.js';
+import { sessionJsonAdapter } from './session-json-adapter.js';
 
 import {
   originalImageTarget,
@@ -47,6 +47,7 @@ export function createFilePreviewAdapterList({
   onLinkClick,
   resolveImage,
   directoryLinks,
+  sessionMessages = false,
 }: {
   /**
    * 接管 Markdown 正文里的链接；目录正文通过内部模式保留外链原生导航。
@@ -56,11 +57,12 @@ export function createFilePreviewAdapterList({
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   resolveImage?: (src: string) => Promise<string>;
   directoryLinks?: DirectoryLinkMode;
+  sessionMessages?: boolean;
 } = {}): FileViewerCoreProps['adapters'] {
   return [
     code({ showLineNumbers: true }),
     text({ showLineNumbers: true }),
-    json({ defaultExpandDepth: 4 }),
+    sessionJsonAdapter(sessionMessages),
     markdown({
       onLinkClick: directoryLinks ? undefined : onLinkClick,
       allowedLinkProtocols:

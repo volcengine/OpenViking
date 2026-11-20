@@ -13,11 +13,9 @@ type OpenUri = (uri: string) => void;
 
 export function ConsoleTaskNotifications({
   locale,
-  onOpenUri,
   onOpenMemoryUri,
 }: {
   locale: Locale;
-  onOpenUri?: OpenUri;
   onOpenMemoryUri?: OpenUri;
 }) {
   const { tracker } = useTaskTrackerContext()!;
@@ -36,9 +34,10 @@ export function ConsoleTaskNotifications({
         .getSnapshot()
         .filter(
           (task) =>
-            (task.kind !== 'resource' && task.origin !== 'memory-commit') ||
-            isTaskTerminal(task.status) ||
-            task.queryError,
+            task.origins.some((origin) => origin !== 'command') &&
+            ((task.kind !== 'resource' && task.origins.includes('tool')) ||
+              isTaskTerminal(task.status) ||
+              task.queryError),
         );
       const current = new Set(tasks.map((task) => task.key));
       for (const key of versions.current.keys()) {
@@ -48,31 +47,19 @@ export function ConsoleTaskNotifications({
         }
       }
       const labels = taskLabels(locale);
-      const { taskCompletion: completion, memoryCommit } =
-        resolveConsoleLocale(locale);
+      const { memoryCommit } = resolveConsoleLocale(locale);
       for (const task of tasks) {
         if (hidden.current.has(task.key)) continue;
-        const commandCompleted =
-          task.status === 'completed' && task.origin === 'command';
         const memoryCompleted =
-          task.status === 'completed' && task.origin === 'memory-commit';
-        const memoryUri =
+          task.status === 'completed' && task.origins.includes('memory-commit');
+        const target =
           memoryCompleted &&
           task.result &&
           typeof task.result === 'object' &&
           'memory_diff_uri' in task.result
             ? normalizeTaskUri(task.result.memory_diff_uri)
             : undefined;
-        const target = memoryCompleted
-          ? memoryUri
-          : commandCompleted
-            ? task.uri
-            : undefined;
-        const open = target
-          ? memoryCompleted
-            ? onOpenMemoryUri
-            : onOpenUri
-          : undefined;
+        const open = target ? onOpenMemoryUri : undefined;
         const version = JSON.stringify([
           locale,
           task.status,
@@ -80,7 +67,6 @@ export function ConsoleTaskNotifications({
           task.error,
           task.queryError,
           task.uri,
-          commandCompleted,
           memoryCompleted,
           target,
         ]);
@@ -88,21 +74,13 @@ export function ConsoleTaskNotifications({
         if (previous?.version === version && previous.open === open) continue;
         versions.current.set(task.key, { version, open });
         const dismiss = () => hidden.current.add(task.key);
-        if (memoryCompleted || commandCompleted) {
-          const title = memoryCompleted
-            ? memoryCommit.success
-            : completion.title;
-          const content = memoryCompleted
-            ? (target ?? memoryCommit.completed)
-            : task.kind === 'resource' && target
-              ? completion.resource
-              : completion.description;
+        if (memoryCompleted) {
           api.success({
             id: task.key,
             className: 'ov-console__task-completion',
-            title: memoryCompleted && target ? memoryCommit.saved : title,
-            content,
-            duration: memoryCompleted ? 5000 : target ? 0 : 3000,
+            title: target ? memoryCommit.saved : memoryCommit.success,
+            content: target ?? memoryCommit.completed,
+            duration: 5000,
             onDismiss: dismiss,
             btn: target ? (
               <Button
@@ -115,7 +93,7 @@ export function ConsoleTaskNotifications({
                   else window.location.assign(target);
                 }}
               >
-                {memoryCompleted ? memoryCommit.view : completion.viewResult}
+                {memoryCommit.view}
               </Button>
             ) : undefined,
           });
@@ -146,6 +124,6 @@ export function ConsoleTaskNotifications({
     };
     update();
     return tracker.subscribe(update);
-  }, [tracker, locale, api, onOpenUri, onOpenMemoryUri]);
+  }, [tracker, locale, api, onOpenMemoryUri]);
   return holder;
 }

@@ -47,6 +47,15 @@ test('a root outside every retrievable scope offers nothing', () => {
   assert.deepEqual(buildScopeOptions('viking://unknown'), []);
 });
 
+test('a directory root with trailing slashes keeps child selections within that root', () => {
+  const root = 'viking://resources/project';
+  const scopes = buildScopeOptions(`${root}///`);
+  assert.deepEqual(scopes, [{ uri: root }]);
+  assert.equal(isSearchScopeAllowed(scopes, `${root}/docs`), true);
+  assert.equal(isSearchScopeAllowed(scopes, `${root}-sibling/docs`), false);
+  assert.equal(isSearchScopeAllowed(scopes, 'viking://resources'), false);
+});
+
 test('a directory picked within the current root cannot carry over to a sibling root', () => {
   const selected = 'viking://resources/project-a/docs';
   assert.equal(

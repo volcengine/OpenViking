@@ -2,6 +2,7 @@ import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
+  previewAiGenerated: 'AI 生成',
   formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 字符数`,
   formatPreviewUpdatedAt: (time) => `更新于 ${time}`,
   previewModelNotice: '内容解析由 内容理解大模型 提供',
@@ -37,6 +38,9 @@ const messages = {
   searchClear: '清空',
   searchScopes: '目录',
   searchPickScope: '选择目录',
+  searchAllScopes: '全部目录',
+  searchCancelScopes: '取消',
+  searchConfirmScopes: '确认',
   searchScopesUnsupported: '当前范围不支持按目录筛选',
   searchLevels: '内容',
   searchLevelLabels: ['L0 摘要', 'L1 总览', 'L2 全文'],

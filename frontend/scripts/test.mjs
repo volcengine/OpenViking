@@ -85,6 +85,7 @@ try {
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
+              'bot-message-debug': './test/fixtures/viking-bot-debug.ts',
               'console-hitl-protocol': './src/modules/console/hitl/protocol.ts',
               'console-hitl-summary': './src/modules/console/hitl/summary.ts',
               'console-conversation':

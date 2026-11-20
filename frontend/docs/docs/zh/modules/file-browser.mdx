@@ -281,11 +281,14 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchInvalidPattern         | Grep 正则无效时的语法说明                                                                     | `string`                                   | `'正则表达式无效。请使用 ^test.* 匹配行首为 test 的内容；查找星号本身请用 \*。'` |
 | searchErrorDetails           | 展开服务端原始错误的入口                                                                      | `string`                                   | `'错误详情'`                                                                     |
 | searchModePlaceholders       | 各检索方式的输入提示，按 `find` / `search` / `grep` / `glob` 逐项覆盖                         | `Record<SearchMode, string>`               | 见内置文案                                                                       |
-| searchModeHints              | 各检索方式下拉里的说明                                                                        | `Record<SearchMode, string>`               | 见内置文案                                                                       |
+| searchModeHints              | 各检索方式在下拉菜单和结果区顶部的说明                                                        | `Record<SearchMode, string>`               | 见内置文案                                                                       |
 | searchAdvanced               | 高级筛选面板的标题                                                                            | `string`                                   | `'高级选项'`                                                                     |
 | searchClear                  | 清空筛选                                                                                      | `string`                                   | `'清空'`                                                                         |
 | searchScopes                 | 目录筛选的标题                                                                                | `string`                                   | `'目录'`                                                                         |
 | searchPickScope              | 选择目录的入口                                                                                | `string`                                   | `'选择目录'`                                                                     |
+| searchAllScopes              | 选择所有支持的目录                                                                            | `string`                                   | `'全部目录'`                                                                     |
+| searchCancelScopes           | 放弃目录选择草稿                                                                              | `string`                                   | `'取消'`                                                                         |
+| searchConfirmScopes          | 应用目录选择草稿                                                                              | `string`                                   | `'确认'`                                                                         |
 | searchScopesUnsupported      | 当前根不支持按目录筛选时的说明                                                                | `string`                                   | `'当前范围不支持按目录筛选'`                                                     |
 | searchLevels                 | 内容层级筛选的标题                                                                            | `string`                                   | `'内容'`                                                                         |
 | searchLevelLabels            | 三级内容的名称                                                                                | `[string, string, string]`                 | `['L0 摘要', 'L1 总览', 'L2 全文']`                                              |
@@ -297,7 +300,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchIgnoreCase             | 忽略大小写                                                                                    | `string`                                   | `'忽略大小写'`                                                                   |
 | searchFilterUnsupported      | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                                   | `'当前检索方式不支持此筛选'`                                                     |
 | searchResultCount            | 检索结果数量，参数为条数                                                                      | `(count: number) => string`                | `'检索到 N 条结果'`                                                              |
-| searchVia                    | 模式 chip 之后的检索方式说明                                                                  | `string`                                   | `'检索方式'`                                                                     |
+| searchVia                    | 已弃用；当前方式的说明使用 searchModeHints                                                    | `string`                                   | `'检索方式'`                                                                     |
 | searchSwitchMode             | 切换检索方式的入口                                                                            | `string`                                   | `'切换'`                                                                         |
 | searchAdvancedLabel          | 高级筛选按钮的无障碍名称                                                                      | `string`                                   | `'高级筛选'`                                                                     |
 | searchAdvancedLabelWithCount | 带生效筛选数量的无障碍名称，接收按钮名称和已格式化的数字                                      | `(label: string, count: string) => string` | `label + "（" + count + "）"`                                                    |
@@ -324,6 +327,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | emptyL1Overview              | L1 总览暂无内容时的提示                                                                       | `string`                                   | `'暂无 L1 总览'`                                                                 |
 | formatCharacterCount         | 预览底部字符数的文案                                                                          | `(count: number) => string`                | 按 `locale` 格式化，如 `'1,234 字符数'`                                          |
 | formatPreviewUpdatedAt       | 预览底部更新时间的文案                                                                        | `(time: string) => string`                 | `'更新于 {time}'`                                                                |
+| previewAiGenerated           | 摘要、带文件元数据的 Wiki 编译产物、记忆文档及 identity.md、soul.md 的 AI 生成标识            | `string`                                   | `'AI 生成'`                                                                      |
 | previewModelNotice           | 资源预览右侧的模型解析提示，传空字符串可隐藏                                                  | `string`                                   | `'内容解析由 内容理解大模型 提供'`                                               |
 | actionBar                    | 传给 [FileBrowserActionBar](../components/file-browser-action-bar) 操作栏的文案，包括接入抽屉 | `FileBrowserActionBarLabels`               | -                                                                                |
 | tree                         | 传给 [FileTree](../components/file-tree) 文件树的文案                                         | `FileTreeLabels`                           | -                                                                                |
@@ -544,7 +548,7 @@ await browserRef.current?.openResource(directoryUri);
 
 - 左栏顶部的搜索框打开模块内置的搜索弹窗；`⌘K` 是真实快捷键，同一页面挂多个实例时只有最近交互过的那个响应。
 - 输入停顿 400ms 后自动请求，没有提交按钮。关闭弹窗会取消在途请求并清空输入与筛选。
-- 四种检索方式共用一套输入与结果列表。可随时在结果区顶部点「切换」。检索成功后会显示结果条数，包括 0 条。切换时保留输入词和新模式支持的筛选：
+- 四种检索方式共用一套输入与结果列表。可随时在结果区顶部点「切换」。检索成功后会显示结果条数，包括 0 条。模式标签旁的说明与切换菜单同步。切换时保留输入词和新模式支持的筛选：
 
 | 方式     | 接口                    | 输入解释   | 可用筛选                     |
 | -------- | ----------------------- | ---------- | ---------------------------- |
@@ -556,7 +560,8 @@ await browserRef.current?.openResource(directoryUri);
 - 结果按 URI 去重；`grep` 例外——同一文件的多行命中是不同结果，各带自己的行号。
 - `glob` 的模式不含 `/` 时自动补 `**/` 前缀；目录命中去掉尾斜杠后再参与导航，目录这一事实记在 `isDir` 上。
 - 高级面板的筛选项按当前方式启用或禁用，禁用的分区保留可见并置灰，标题旁说明原因。目录候选从 `rootUri` 派生，用户根用 `~` 别名；切换根时失效的已选目录会被丢弃。
-- 高级选项可勾选常用目录，或通过「选择目录」继续浏览子目录。选择创建时间或更新时间后显示日期范围。开始日期最晚可选结束日期当天。忽略大小写只在 `grep` 中显示。
+- 高级选项可直接勾选常用目录，或通过「选择目录」展开目录树。树内选择先保存在草稿中，点击「确认」生效；取消或关闭选择器会放弃草稿。语义检索可多选，`grep` 和 `glob` 只可单选。选中父目录会包含全部后代，后代保持勾选并禁用；仅选中部分子目录时父目录显示半选。如需只选部分子目录，先取消父目录。「全部目录」选择所有支持的根目录。
+- 目录选择遵守 `rootUri` 和支持的资源、Skill 目录范围。选择创建时间或更新时间后显示日期范围。开始日期最晚可选结束日期当天。忽略大小写只在 `grep` 中显示。
 - 按 **↑ / ↓** 切换当前结果，点击或按 **Enter** 关闭弹窗、打开资源并在树中定位。
 
 ### 预览操作区

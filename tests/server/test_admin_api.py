@@ -3660,6 +3660,69 @@ async def test_user_list_hides_other_prefixes_and_mismatched_keys():
     assert page["users"] == [{"user_id": "alice"}, {"user_id": "hashed"}]
 
 
+@pytest.mark.parametrize("scope", ["account", "user"])
+async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
+    admin_client, admin_service, admin_app, monkeypatch, tmp_path, scope
+):
+    from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+    from openviking.service.task_tracker import TaskTracker, set_task_tracker
+    from tests.service.test_task_store_sql_deletion import _LimitedConnection, _seed, _snapshot
+
+    original_tracker = get_task_tracker()
+    store = SQLiteTaskWorkStore(params={"path": str(tmp_path / "tasks.db"), "maxsize": 1})
+    store._engine_options["connect_args"]["factory"] = _LimitedConnection
+    await store.load()
+    set_task_tracker(TaskTracker(store))
+    try:
+        await admin_app.state.deletion_service.initialize()
+        acct = _uid()
+        response = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": acct, "admin_user_id": "alice"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        response = await admin_client.post(
+            f"/api/v1/admin/accounts/{acct}/users",
+            json={"user_id": "bob", "role": "user"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        await _seed(store, [f"task-{i:03}" for i in range(80)], account=acct, user="bob")
+        await _seed(store, ["alice-task"], account=acct, user="alice")
+        ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+        uri = "viking://user/bob/memories/private.md"
+        await admin_service.viking_fs.write_file(uri, "private", ctx=ctx)
+        await _agfs_write(admin_service, "/local/other/resources/keep.md", "keep")
+
+        vectors = admin_service.viking_fs.vector_store
+        method = "delete_account_data" if scope == "account" else "delete_user_data"
+        delete_vectors = AsyncMock(wraps=getattr(vectors, method))
+        monkeypatch.setattr(vectors, method, delete_vectors)
+        endpoint = f"/api/v1/admin/accounts/{acct}"
+        if scope == "user":
+            endpoint += "/users/bob"
+        response = await admin_client.delete(endpoint, headers=root_headers())
+        assert response.status_code == 202, response.text
+        task = await _wait_for_task(admin_client, response.json()["result"]["task_id"])
+        assert task["status"] == "completed", task
+        assert task["result"] == {"deleted": True}
+        assert delete_vectors.await_count == 1
+        assert not await admin_service.viking_fs.exists(uri, ctx=ctx)
+        assert await _agfs_exists(admin_service, "/local/other/resources/keep.md")
+        manager = admin_app.state.api_key_manager
+        assert not await manager.has_user(acct, "bob")
+        assert await manager.get_deletion(acct, None if scope == "account" else "bob") is None
+        snapshot = await _snapshot(store)
+        for rows in snapshot.values():
+            assert not any(row["task_id"].startswith("task-") for row in rows)
+        alice = await store.get_task("alice-task", account_id=acct, user_id="alice")
+        assert (alice is None) == (scope == "account")
+    finally:
+        set_task_tracker(original_tracker)
+        await store.close()
+
+
 async def test_remove_user(
     admin_client: httpx.AsyncClient,
     admin_service: OpenVikingService,
