@@ -10,7 +10,6 @@ import type {
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { isAbort } from '../../shared/request/fs-errors.js';
 import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
@@ -18,11 +17,12 @@ import { isSystemUri } from '../../shared/resource-uri.js';
 import { readDirectory } from './fs-read-directory.js';
 import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
-import { createPreviewImageResolver } from './fs-preview-images.js';
+import { createPreviewImageResolver as previewImages } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
-import { abortError, readPreviewStat } from './fs-stat.js';
+import { abortError, readPreviewStat, toPreviewError } from './fs-stat.js';
 import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
+import type { ReadDashboardHint } from './dashboard-resource.js';
 
 export interface UseFsPreviewOptions {
   client: OvClient | null;
@@ -42,6 +42,7 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
+  readDashboardHint?: ReadDashboardHint;
   contentKind?: 'plain' | 'wiki' | 'pending';
   activeLevelKey?: string;
   onActiveLevelChange?: (key: string) => void;
@@ -83,6 +84,7 @@ export function useFsPreview({
   uri,
   resourceType = 'file',
   contentKind = 'plain',
+  readDashboardHint,
   activeLevelKey = 'l0',
   onActiveLevelChange,
   labels = resolveSummaryLabels('en-US'),
@@ -98,7 +100,9 @@ export function useFsPreview({
     summary: DirectorySummary;
     resolveImage: FilePreviewDirectoryTab['resolveImage'];
   } | null>(null);
-  const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
+  const [tabs, setTabs] = useState<
+    (FilePreviewTab & { compileOutput?: boolean })[] | null
+  >(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
@@ -169,19 +173,18 @@ export function useFsPreview({
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
           : { summary: await readDirectory(api, uri, options) };
-      return {
-        tab: await readFile(
-          api,
-          uri,
-          options,
-          openParent,
-          () => {
-            if (!signal.aborted) setSaveGeneration((value) => value + 1);
-          },
-          contentKind === 'wiki',
-          onStatus,
-        ),
-      };
+      return readFile(
+        api,
+        uri,
+        options,
+        openParent,
+        () => {
+          if (!signal.aborted) setSaveGeneration((value) => value + 1);
+        },
+        contentKind === 'wiki',
+        onStatus,
+        readDashboardHint,
+      );
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -198,24 +201,25 @@ export function useFsPreview({
     void read.then(
       (result) => {
         if (signal.aborted) return;
-        if (result.summary) {
+        if ('summary' in result && result.summary) {
           setDirectory({
             uri,
             summary: result.summary,
-            resolveImage: createPreviewImageResolver(
-              client,
-              uri,
-              true,
-              options,
-            ),
+            resolveImage: previewImages(client, uri, true, options),
           });
-          setActiveKey(uri);
           return;
         }
         const tab = result.tab;
         setTabs([tab]);
-        setActiveKey(tab.key);
-        // Supplemental content can fail independently of the playable video.
+        if ('resolveWikiTab' in result)
+          void result.resolveWikiTab?.().then(
+            (updatedTab) => {
+              if (!signal.aborted && updatedTab) setTabs([updatedTab]);
+            },
+            (cause: unknown) => {
+              if (!signal.aborted) setError(toPreviewError(cause));
+            },
+          );
         void loadVideoDetails(client, tab, options, (updatedTab) =>
           setTabs([updatedTab]),
         ).catch(() => undefined);
@@ -224,7 +228,7 @@ export function useFsPreview({
         if (isAbort(cause) || signal.aborted) return;
         operation?.fail(cause, 'protocol', signal);
         setTabs([]);
-        setError(cause instanceof Error ? cause : new Error(String(cause)));
+        setError(toPreviewError(cause));
       },
     );
 
@@ -234,6 +238,7 @@ export function useFsPreview({
     uri,
     resourceType,
     contentKind,
+    readDashboardHint,
     openParent,
     generation,
     saveGeneration,
@@ -242,25 +247,18 @@ export function useFsPreview({
 
   const directoryTab =
     directory?.uri === uri
-      ? {
-          ...toDirectoryTab(
-            directory.uri,
-            directory.summary,
-            labels,
-            openParent,
-            directoryIcon(),
-          ),
+      ? toDirectoryTab(directory.uri, directory.summary, labels, openParent, {
           resolveImage: directory.resolveImage,
           activeLevelKey,
           onActiveLevelChange,
-        }
+        })
       : undefined;
   const current = tabs?.[0];
+  const level = directoryTab?.levels.find(
+    (item) => item.key === activeLevelKey,
+  );
   const count = directoryTab
-    ? (
-        directoryTab.levels.find((level) => level.key === activeLevelKey)
-          ?.source.content ?? ''
-      ).length
+    ? (level?.source.content ?? '').length
     : current?.key === uri && current.kind === 'file' && !current.loading
       ? current.source.content?.length
       : undefined;
@@ -270,6 +268,8 @@ export function useFsPreview({
     activeKey,
     error,
     wikiSaveFeedback,
+    hasDirectorySummary: Boolean(level?.hasSummary),
+    isCompileOutput: current?.key === uri && Boolean(current.compileOutput),
     footer: count === undefined ? undefined : formatCharacterCount(count),
     updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
     setActiveKey,
