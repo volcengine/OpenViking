@@ -493,3 +493,43 @@ test("a genuine connection failure still maps to -32001", async () => {
   assert.equal(res.error.code, -32001);
   assert.match(res.error.message, /reachable/);
 });
+
+test("forwards the caller's W3C trace context as a traceparent header", async () => {
+  const traceparent = "00-11111111111111111111111111111111-2222222222222222-01";
+  await withServer((_req, res, entry) => {
+    // SEP-414 clients put the W3C trace context in params._meta.traceparent.
+    // The server extracts trace context from HTTP headers only, so a proxy
+    // that forwards the body without the header starts a new trace. See #8062.
+    assert.equal(entry.headers.traceparent, traceparent);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, {})));
+  }, async ({ url }) => {
+    const { proxy } = makeProxy({ url });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "recall",
+        arguments: {},
+        _meta: { traceparent },
+      },
+    });
+  });
+});
+
+test("does not invent a traceparent header when the caller sends none", async () => {
+  await withServer((_req, res, entry) => {
+    assert.equal(entry.headers.traceparent, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, {})));
+  }, async ({ url }) => {
+    const { proxy } = makeProxy({ url });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "recall", arguments: {} },
+    });
+  });
+});

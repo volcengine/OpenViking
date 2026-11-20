@@ -240,7 +240,16 @@ export function createOpenVikingMcpProxy({
     return true;
   }
 
-  function headersForRequest(includeSession = true) {
+  // SEP-414 clients put the W3C trace context in params._meta.traceparent of
+  // each tools/call, while the server reads it from HTTP headers only. Without
+  // this the server starts a new trace per call instead of joining the caller's.
+  // See #8062.
+  function traceparentFromMessage(message) {
+    const value = message?.params?._meta?.traceparent;
+    return typeof value === "string" && value ? value : "";
+  }
+
+  function headersForRequest(includeSession = true, traceparent = "") {
     const built = buildOvHeaders(proxyConfig, {
       actorPeerId: proxyConfig.peerId,
       extraHeaders: {
@@ -250,6 +259,7 @@ export function createOpenVikingMcpProxy({
         // with HTTP 400 before initialize negotiation can run.
         "MCP-Protocol-Version": protocolVersion,
         ...(includeSession && sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+        ...(traceparent ? { "traceparent": traceparent } : {}),
       },
     });
     // Operator-supplied extras (OPENVIKING_EXTRA_HEADERS) merged with the
@@ -326,7 +336,7 @@ export function createOpenVikingMcpProxy({
     try {
       const res = await fetchImpl(proxyConfig.mcpUrl, {
         method: "POST",
-        headers: headersForRequest(includeSession),
+        headers: headersForRequest(includeSession, traceparentFromMessage(message)),
         body: JSON.stringify(message),
         signal: controller.signal,
       });
