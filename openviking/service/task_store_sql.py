@@ -681,7 +681,9 @@ class SQLTaskWorkStore(TaskWorkStore):
                 predicates.append(Task.user_id == user_id)
             if task_type is not None:
                 predicates.append(Task.task_type == task_type)
-            if status is not None:
+            if status == "active":
+                predicates.append(Task.status.in_([item.value for item in ACTIVE_TASK_STATUSES]))
+            elif status is not None:
                 predicates.append(Task.status == status)
             if resource_id is not None:
                 predicates.append(Task.resource_id_hash == _resource_id_hash(resource_id))

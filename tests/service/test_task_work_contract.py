@@ -14,7 +14,13 @@ from uuid import uuid4
 
 import pytest
 
-from openviking.service.task_domain import TaskPatch, TaskRetentionPolicy, TaskStatus, WorkState
+from openviking.service.task_domain import (
+    TaskPatch,
+    TaskRecord,
+    TaskRetentionPolicy,
+    TaskStatus,
+    WorkState,
+)
 from openviking.service.task_store import PersistentTaskStore, WorkRegistration
 from openviking.service.task_tracker import TaskTracker
 from openviking_cli.exceptions import FailedPreconditionError
@@ -121,6 +127,39 @@ async def task_stores(request, tmp_path):
         async with admin.begin() as connection:
             await connection.run_sync(first._models.Base.metadata.drop_all)
         await admin.dispose()
+
+
+@pytest.mark.asyncio
+async def test_list_active_tasks_across_pages(task_stores):
+    writer, reader = task_stores
+    statuses = (
+        TaskStatus.PENDING,
+        TaskStatus.RUNNING,
+        TaskStatus.CANCELLING,
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    )
+    for created_at, status in enumerate(statuses, start=1):
+        await writer.create(
+            TaskRecord(
+                task_id=status.value,
+                task_type="session_commit",
+                status=status,
+                created_at=float(created_at),
+                **OWNER,
+            )
+        )
+
+    tracker = TaskTracker(reader)
+    page = await tracker.list_tasks(status="active", limit=2, **OWNER)
+    assert [task.status for task in page] == [TaskStatus.CANCELLING, TaskStatus.RUNNING]
+
+    last = page[-1]
+    page = await tracker.list_tasks(
+        status="active", limit=2, before=(last.created_at, last.task_id), **OWNER
+    )
+    assert [task.status for task in page] == [TaskStatus.PENDING]
 
 
 @pytest.mark.asyncio
