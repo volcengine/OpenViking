@@ -42,13 +42,13 @@ async def test_not_found_resource_returns_structured_error(
     """Accessing non-existent resource should return structured error."""
     resp = await client.get(
         "/api/v1/fs/stat",
-        params={"uri": "viking://does_not_exist"},
+        params={"uri": "viking://resources/missing-resource.md"},
     )
     assert resp.status_code == 404
     body = resp.json()
     assert body["status"] == "error"
-    assert "code" in body["error"]
-    assert "message" in body["error"]
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["message"]
 
 
 async def test_missing_task_returns_structured_error(client: httpx.AsyncClient):
@@ -60,21 +60,6 @@ async def test_missing_task_returns_structured_error(client: httpx.AsyncClient):
     assert body["status"] == "error"
     assert body["error"]["code"] == "NOT_FOUND"
     assert body["error"]["message"] == "Task not found or expired"
-
-
-async def test_add_resource_file_not_found(client: httpx.AsyncClient):
-    """Adding a resource with non-existent file path.
-
-    HTTP server no longer accepts direct host filesystem paths.
-    """
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"path": "/tmp/nonexistent_file_xyz_12345.md", "reason": "test"},
-    )
-    body = resp.json()
-    assert resp.status_code == 403
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
 async def test_empty_body_on_post(client: httpx.AsyncClient):

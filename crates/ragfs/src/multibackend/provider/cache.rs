@@ -9,7 +9,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::cache_runtime::{
-    CacheError, CacheOperation, CacheRuntime, ScriptDefinition, ScriptRequest, ScriptValue,
+    CacheError, CacheOperation, CacheRuntime, ScriptRequest, ScriptValue,
 };
 use crate::core::errors::{Error, Result};
 use crate::core::internal_names::is_multiwrite_internal_path;
@@ -281,19 +281,10 @@ redis.call("HSET", KEYS[1], "backend_states", cjson.encode(states))
 return { "ok" }
 "#;
 
-const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
-    ScriptDefinition {
-        id: FLUSH_SCRIPT_ID,
-        redis_lua: FLUSH_SCRIPT,
-    },
-    ScriptDefinition {
-        id: SEAL_SCRIPT_ID,
-        redis_lua: SEAL_SCRIPT,
-    },
-    ScriptDefinition {
-        id: ADVANCE_SCRIPT_ID,
-        redis_lua: ADVANCE_SCRIPT,
-    },
+const SCRIPT_DEFINITIONS: &[(&str, &str)] = &[
+    (FLUSH_SCRIPT_ID, FLUSH_SCRIPT),
+    (SEAL_SCRIPT_ID, SEAL_SCRIPT),
+    (ADVANCE_SCRIPT_ID, ADVANCE_SCRIPT),
 ];
 
 /// Cache keys owned by one account partition.
@@ -362,12 +353,14 @@ impl CacheProvider {
                     "Cache-backed multi-write provider is incompatible: {error}"
                 ))
             })?;
-        for definition in SCRIPT_DEFINITIONS {
-            runtime.register_script(*definition).map_err(|error| {
-                Error::config(format!(
-                    "Cache-backed multi-write script registration failed: {error}"
-                ))
-            })?;
+        for &(script_id, redis_lua) in SCRIPT_DEFINITIONS {
+            runtime
+                .register_script(script_id.to_string(), redis_lua.to_string())
+                .map_err(|error| {
+                    Error::config(format!(
+                        "Cache-backed multi-write script registration failed: {error}"
+                    ))
+                })?;
         }
         Ok(Self {
             router: AccountRouter::new(store.clone()),

@@ -11,15 +11,22 @@ export default {
   comparisonVersion: 'Compare with',
   latest: 'Latest',
   rollback: 'Restore this version',
+  rollbackBadge: 'Restored',
+  deletedBadge: 'Deleted',
+  deletedVersion: 'The file was deleted in this version.',
   rollbackTitle: 'Restore this document to this version?',
   rollbackConfirm: 'Confirm restore',
   rollbackHint:
     'Replace this file with the selected version. Other files stay unchanged. Identical content does not create a new version.',
-  rollbackUnchanged: 'The content is identical; no new version was created.',
-  rollbackSaved: 'File restored.',
+  rollbackUnchanged:
+    'The selected version matches the current file. No new version was created.',
+  rollbackSaved: 'Restore completed.',
   importChoose: 'Choose file',
   importDrop: 'Click to choose or drop a file',
   importFormat: '.ovpack files supported',
+  importInvalidFormat: 'Select a valid .ovpack file.',
+  importWriteRequired:
+    'OVPack import requires write access to the target directory.',
   configure: 'Compile configuration',
   configuration: 'Compilation configuration',
   configurationEmpty:

@@ -17,6 +17,7 @@ from openviking_gateway.config import EmbeddedGatewayConfig
 def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
+        service_name="openviking",
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
@@ -113,6 +114,31 @@ def test_embedded_gateway_falls_back_to_server_public_url(monkeypatch):
     assert public_url(EmbeddedGatewayConfig(enabled=True)) == "https://edge.example.com"
     own = EmbeddedGatewayConfig(enabled=True, public_url="https://gw.example.com")
     assert public_url(own) == "https://gw.example.com"
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_embedded_file_sink_requires_one_worker(tmp_path, monkeypatch, workers):
+    monkeypatch.setattr(
+        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
+    )
+    gateway = EmbeddedGatewayConfig(
+        enabled=True,
+        storage_path=str(tmp_path / "gateway"),
+        request_log_sink="file",
+        request_log_path=str(tmp_path / "requests.jsonl"),
+    )
+    server = SimpleNamespace(host="127.0.0.1", port=1933, public_base_url=None, workers=workers)
+
+    def create():
+        return gateway_host.create_embedded_gateway(
+            openviking_config(gateway), server, lambda: None
+        )
+
+    if workers == 1:
+        assert create()["config"].request_log_sink == "file"
+    else:
+        with pytest.raises(ValueError, match="requires server workers: 1"):
+            create()
 
 
 @pytest.fixture

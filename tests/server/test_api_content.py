@@ -234,8 +234,8 @@ async def test_read_content(client, service, monkeypatch):
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
 
-    reader = AsyncMock(side_effect=[PermissionDeniedError("denied"), b"legacy content"])
-    monkeypatch.setattr(service.viking_fs, "read_file_bytes", reader)
+    reader = AsyncMock(side_effect=[PermissionDeniedError("denied"), "legacy content"])
+    monkeypatch.setattr(service.viking_fs, "read_file", reader)
     resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "PERMISSION_DENIED"

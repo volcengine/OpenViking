@@ -429,6 +429,9 @@ async def test_search_tools_expose_only_context_type_parameter():
     for tool_name in ("find", "search"):
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
+        assert properties["context_type"]["description"] == (
+            "Filter results to one or more context types: memory, resource, or skill."
+        )
         assert properties["tags"]["type"] == "array"
         assert "include_tags" not in properties
         assert "filter" not in properties
@@ -440,12 +443,41 @@ async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
     for tool_name in ("find", "search", "list", "tree", "grep"):
         properties = tools[tool_name].inputSchema["properties"]
         assert properties["tags"]["type"] == "array"
+        assert properties["tags"]["description"] == (
+            "Filter results by tags; every supplied tag must match and use k=v format "
+            "(for example, team=search)."
+        )
         assert "tags" not in tools[tool_name].inputSchema.get("required", [])
 
     for tool_name in ("list", "tree", "grep"):
         properties = tools[tool_name].inputSchema["properties"]
         assert properties["include_tags"]["type"] == "boolean"
         assert properties["include_tags"]["default"] is False
+        assert properties["include_tags"]["description"] == (
+            "Include each result's tags in the output; this does not filter results."
+        )
+
+    for tool_name in ("find", "search", "list", "tree", "grep"):
+        assert "k=v" not in tools[tool_name].description
+    for tool_name in ("list", "tree", "grep"):
+        assert "include_tags" not in tools[tool_name].description
+
+
+async def test_search_marks_every_context_only_parameter_in_its_description():
+    from openviking.server.routers.search import CONTEXT_ONLY_FIELDS
+
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    properties = tools["search"].inputSchema["properties"]
+    context_only = {*CONTEXT_ONLY_FIELDS, *mcp_endpoint._MCP_CONTEXT_ONLY_ALIASES}
+
+    # List mode rejects these, and the parameter description is the only place a
+    # caller reading the schema can learn that before spending a failed call.
+    unmarked = sorted(
+        name
+        for name in context_only
+        if "mode='context'" not in properties[name].get("description", "")
+    )
+    assert unmarked == []
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():
@@ -485,6 +517,8 @@ async def test_tool_schemas_are_portable():
         assert "$defs" not in node, f"{path}: $defs not portable"
         assert "type" in node, f"{path}: missing explicit type"
         assert node.get("default", "") is not None, f"{path}: null default"
+        if "items" in node:
+            assert node["type"] == "array", f"{path}: items on a non-array schema"
         for key, sub in node.get("properties", {}).items():
             assert_portable(sub, f"{path}.{key}")
         for key in ("items", "additionalProperties"):
@@ -828,7 +862,7 @@ async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, mon
 
     result = await mcp_endpoint.find(query="review", context_type="skill")
 
-    assert f"- [skill 40%] {hit_uri}\n" in result
+    assert f"- [skill 40%] {hit_uri} tags=[]\n" in result
     assert "SKILL.md/SKILL.md" not in result
 
 
@@ -1071,7 +1105,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
             {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
         ],
     }
-    assert params.rewrite is True
+    assert params.rewrite == "auto"
     assert params.rewrite_max_bullets == 4
 
 
@@ -1122,6 +1156,122 @@ async def test_search_context_schema_uses_portable_scalar_types():
     assert properties["other_peer_penalties"]["type"] == "object"
     assert properties["rewrite"]["type"] == "string"
     assert properties["rewrite"]["enum"] == ["off", "auto"]
+
+
+async def test_retrieval_tools_describe_advanced_parameters_without_changing_contracts():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    find_schema = tools["find"].inputSchema
+    search_schema = tools["search"].inputSchema
+    find_properties = find_schema["properties"]
+    search_properties = search_schema["properties"]
+
+    assert find_properties["level"]["description"] == (
+        "Filter indexed representation levels: 0=abstract, 1=overview, 2=detail/content."
+    )
+    assert search_properties["level"]["description"] == (
+        "In mode='list', filter indexed representation levels: "
+        "0=abstract, 1=overview, 2=detail/content; ignored in mode='context'."
+    )
+    assert search_properties["quotas"]["description"] == (
+        "In mode='context', set first-pass result ceilings for explicitly listed "
+        "categories: events, entities, preferences, experiences, resources, or skills; "
+        "unused slots may be filled by other listed categories. Explicit quotas replace "
+        "the purpose preset (unlisted categories are not retrieved), and their sum caps "
+        "the results instead of limit."
+    )
+    assert search_properties["detail_by_category"]["description"] == (
+        "In mode='context', request abstract, overview, or full detail per category "
+        "(events, entities, preferences, experiences, resources, skills, or memories); "
+        "do not combine with a non-auto detail value."
+    )
+    assert search_properties["dedup_turns"]["description"] == (
+        "In mode='context' with session_id, suppress URIs served with content within "
+        "this many recent turns; 0 disables cross-turn deduplication."
+    )
+    assert search_properties["peer_scope"]["description"] == (
+        "In mode='context', use 'actor' for the user's own and current peer's memories, "
+        "or 'all' to also consider memories from other peers."
+    )
+    assert search_properties["other_peer_penalty"]["description"] == (
+        "In mode='context', subtract one score penalty from every category of results "
+        "owned by peers other than the current peer; values are clamped to 0..1, and this "
+        "cannot be combined with other_peer_penalties."
+    )
+    assert search_properties["other_peer_penalties"]["description"] == (
+        "In mode='context', override default other-peer score penalties by category; "
+        "allowed categories are events, entities, preferences, experiences, resources, "
+        "skills, and memories, values are clamped to 0..1, and omitted categories keep "
+        "their defaults; do not combine with other_peer_penalty."
+    )
+    assert search_properties["rewrite"]["description"] == (
+        "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+        "planner model; without one configured, or on failure, the assembled context is "
+        "returned unchanged, while 'off' skips rewriting."
+    )
+
+    decay_description = (
+        "Apply updated_at-based recency decay after an unpenalized protection window; "
+        "use '0' or a non-negative integer plus m, h, or d (for example, 2d), and "
+        "provide a non-empty query."
+    )
+    assert find_properties["events_time_decay_protection"]["description"] == decay_description
+    assert search_properties["events_time_decay_protection"]["description"] == decay_description
+
+    assert find_properties["level"]["type"] == "array"
+    assert find_properties["context_type"]["type"] == "array"
+    assert find_properties["events_time_decay_protection"]["type"] == "string"
+    assert search_properties["level"]["type"] == "array"
+    assert search_properties["context_type"]["type"] == "array"
+    assert search_properties["quotas"]["type"] == "object"
+    assert search_properties["detail_by_category"]["type"] == "object"
+    assert search_properties["dedup_turns"]["type"] == "integer"
+    assert search_properties["peer_scope"]["type"] == "string"
+    assert search_properties["other_peer_penalty"]["type"] == "number"
+    assert search_properties["other_peer_penalties"]["type"] == "object"
+    assert search_properties["rewrite"]["type"] == "string"
+    assert search_properties["events_time_decay_protection"]["type"] == "string"
+    assert search_properties["dedup_turns"]["default"] == 0
+    assert search_properties["peer_scope"]["default"] == "all"
+    assert search_properties["rewrite"]["default"] == "off"
+    for properties, parameters in (
+        (
+            find_properties,
+            ("level", "context_type", "events_time_decay_protection"),
+        ),
+        (
+            search_properties,
+            (
+                "level",
+                "context_type",
+                "quotas",
+                "detail_by_category",
+                "other_peer_penalty",
+                "other_peer_penalties",
+                "events_time_decay_protection",
+            ),
+        ),
+    ):
+        for parameter in parameters:
+            assert "default" not in properties[parameter]
+    for parameter in (
+        "level",
+        "context_type",
+        "events_time_decay_protection",
+    ):
+        assert parameter not in find_schema.get("required", [])
+    for parameter in (
+        "level",
+        "context_type",
+        "quotas",
+        "detail_by_category",
+        "dedup_turns",
+        "peer_scope",
+        "other_peer_penalty",
+        "other_peer_penalties",
+        "rewrite",
+        "events_time_decay_protection",
+    ):
+        assert parameter not in search_schema.get("required", [])
 
 
 async def test_mcp_middleware_sets_actor_peer_context():
@@ -1345,6 +1495,7 @@ async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
 def test_read_schema_offers_uri_and_uris():
     schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
     assert schema["properties"]["uri"]["type"] == "string"
+    assert "items" not in schema["properties"]["uri"]
     assert schema["properties"]["uris"]["type"] == "array"
     assert schema["properties"]["uris"]["items"]["type"] == "string"
     assert schema.get("required", []) == []
@@ -1692,6 +1843,31 @@ async def test_list_forwards_and_renders_tags(service, monkeypatch):
     assert captured["tags"] == ["team=search"]
     assert captured["include_tags"] is True
     assert result == '[file] guide.md tags=["team=search"]\n[file] untagged.md tags=[]'
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "fs_method"),
+    [
+        ("list", {"uri": "viking://resources"}, "ls"),
+        ("tree", {"uri": "viking://resources"}, "tree"),
+        ("grep", {"uri": "viking://resources", "pattern": "text"}, "grep"),
+    ],
+)
+async def test_filesystem_tools_reject_a_malformed_tag_filter(
+    service, monkeypatch, tool_name, arguments, fs_method
+):
+    # The service drops a malformed tag, and a filter left empty returns every entry.
+    fs_call = AsyncMock()
+    monkeypatch.setattr(service.fs, fs_method, fs_call)
+
+    result = await mcp_endpoint.mcp.call_tool(tool_name, {**arguments, "tags": ["team:search"]})
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.content[0].text == (
+        "INVALID_ARGUMENT: invalid search tag 'team:search': expected strict k=v format"
+    )
+    fs_call.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -2202,6 +2378,7 @@ async def test_add_resource_neither_path_nor_temp_file_id(service):
     assert "path" in result.lower() or "temp_file_id" in result.lower()
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_url_is_ingested(service, monkeypatch):
     captured = {}
 
@@ -2299,6 +2476,7 @@ async def test_add_resource_declared_add_type_rejects_parent(service):
     assert result == "Error: add_type cannot be combined with parent."
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_tags_are_forwarded(service, monkeypatch):
     captured = {}
 
@@ -2371,6 +2549,7 @@ async def test_add_resource_temp_file_id_ingest_error_is_surfaced(
     assert "Resource added" not in result
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
     """watch_interval > 0 may omit `to`; the service binds to the created root_uri."""
     captured = {}
@@ -3195,3 +3374,21 @@ async def test_tree_forwards_and_renders_tags(service, monkeypatch):
     assert captured["tags"] == ["team=search"]
     assert captured["include_tags"] is True
     assert '\nguide.md (12 B) tags=["team=search"]' in result
+
+
+async def test_tree_with_tag_filter_prints_each_match_as_a_path(service, monkeypatch):
+    # Only the tagged entries survive the filter; the directories above them do not.
+    async def fake_tree(uri, **kwargs):
+        return ListingPage(
+            entries=[
+                {"rel_path": "events/2026/launch.md", "isDir": False, "size": 12},
+                {"rel_path": "entities/people", "isDir": True},
+            ],
+            has_more=False,
+        )
+
+    monkeypatch.setattr(service.fs, "tree", fake_tree)
+
+    result = await tree(uri="viking://user/test_user/memories", tags=["Team=Search"])
+
+    assert result.splitlines()[1:] == ["events/2026/launch.md (12 B)", "entities/people/"]

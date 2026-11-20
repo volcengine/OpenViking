@@ -125,8 +125,10 @@ async def test_semantic_file_recovery_preserves_exact_or_uses_conservative_tree(
         "openviking.storage.queuefs.semantic_lock.get_viking_fs",
         lambda: _FakeVikingFS(pathlock),
     )
+    from openviking.observability.log_safety import safe_path_for_log
+
     warning = Mock()
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_lock.logger.warning", warning)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_lock.logger.info", warning)
     handoff = {"lock_paths": ["/local/default/resources/.exact.ovlock.file.md.123"]}
     if not historic:
         handoff["covered_paths"] = [{"path": path, "kind": "exact"}]
@@ -139,7 +141,8 @@ async def test_semantic_file_recovery_preserves_exact_or_uses_conservative_tree(
     )
     if historic:
         warning.assert_called_once_with(
-            "Recovering historic semantic handoff with conservative Tree coverage path=%s", path
+            "Recovering historic semantic handoff with conservative Tree coverage path=%s",
+            safe_path_for_log(path),
         )
     else:
         warning.assert_not_called()

@@ -6,7 +6,7 @@ import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
 import type { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { OV_PATHS, type OvPath } from '../../client/paths.js';
 import { queryKeys } from '../../client/query-keys.js';
-import type { QueryRequest } from './use-query-scope.js';
+import type { QueryRequest } from '../../shared/request/use-query-scope.js';
 import type { SearchMode, SearchResult } from './search-types.js';
 import {
   normalizeFindResult,

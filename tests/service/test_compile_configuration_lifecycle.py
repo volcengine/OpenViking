@@ -233,8 +233,10 @@ def make_task(
 @pytest.fixture
 async def registered(setup):
     """Create a saved configuration and its unstarted task for lifecycle scenarios."""
-    record = new_record(PARAMS)
-    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
+    compile_name = await setup.store.create(
+        "acme", "alice", new_record(PARAMS), compile_name="wiki"
+    )
+    record = await setup.store.get("acme", "alice", compile_name)
     return record, compile_name, make_task(setup, compile_name=compile_name, record=record)
 
 
@@ -307,7 +309,7 @@ async def test_output_metrics_preserve_identity_and_commit_time_on_recovery(
 
 
 @pytest.mark.parametrize(
-    "name", ["", " wiki", "wiki ", "wiki\n", "../wiki", "a/b", "a\\b", "文档", "a" * 65, None, 1]
+    "name", ["", " wiki", "wiki ", "wiki\n", "../wiki", "a/b", "a\\b", "文。", "a" * 65, None, 1]
 )
 async def test_invalid_names_are_rejected_without_storage_side_effects(setup, name):
     with pytest.raises(InvalidArgumentError):
@@ -328,7 +330,7 @@ async def test_valid_name_boundaries_are_preserved(setup, name):
 async def test_case_insensitive_storage_preserves_names_and_run_histories():
     files = CaseInsensitiveFiles()
     store = make_store(files)
-    names = ["Research", "Wiki", "research"]
+    names = ["Research", "Wiki", "research", "研发-A", "研发-a", "𠀀" * 32]
     for index, name in enumerate(names):
         record = new_record({**PARAMS, "instruction": name})
         await store.create("acme", "alice", record, compile_name=name)
@@ -352,6 +354,7 @@ async def test_case_insensitive_storage_preserves_names_and_run_histories():
         "2F",
         "61 62",
         "name_77696b69",
+        "u-00000000",
     ],
 )
 async def test_configuration_discovery_ignores_noncanonical_directories(setup, segment):
@@ -423,7 +426,7 @@ async def test_acceptance_times_are_idempotent_and_never_move_backwards(setup, r
     )
     await setup.lifecycle.record_queued(first)
     current = await setup.store.get("acme", "alice", compile_name)
-    assert current["task_first_create_time"] == 100
+    assert current["task_first_create_time"] == record["task_first_create_time"]
     assert current["last_run_time"] == 300
     runs = await setup.store.list_runs("acme", "alice", compile_name)
     assert [run["meta"]["trigger"] for run in runs] == ["scheduled", "manual", "initial"]
@@ -465,6 +468,7 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
     setup, registered
 ):
     record, compile_name, first = registered
+    setup.files.write = AsyncMock(wraps=setup.files.write)
     await setup.lifecycle.record_queued(first)
     assert await setup.lifecycle.on_start(first) == "proceed"
     first_plan = await setup.lifecycle.runtime_changes(
@@ -472,6 +476,8 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
     )
     assert first_plan["execution"]["mode"] == "full"
     await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
+    paths = [call.args[0] for call in setup.files.write.await_args_list]
+    assert sum(path.endswith("/state.json") for path in paths) == 2
     state = await setup.store.get("acme", "alice", compile_name)
     assert state["progress"]["source_commit"] == first_plan["head"]
     second = make_task(
@@ -780,7 +786,7 @@ async def test_initial_run_uses_config_state_without_listing_tasks(setup, regist
     assert initial["meta"]["trigger"] == "initial"
     assert scheduled["meta"]["trigger"] == "scheduled"
     state = await setup.store.get("acme", "alice", compile_name)
-    assert state["task_first_create_time"] == first.created_at
+    assert state["task_first_create_time"] == record["task_first_create_time"]
     list_tasks.assert_not_awaited()
 
 
@@ -828,6 +834,42 @@ async def test_finalization_does_not_search_conflicts(setup, registered, status)
     assert checkpoint["phase"] == "finished"
     setup.find.assert_not_awaited()
     setup.finalize.assert_not_awaited()
+
+
+@pytest.mark.parametrize("run_exists", [False, True])
+async def test_cancel_before_start_repairs_registration(setup, registered, run_exists):
+    """Cancellation without a start repairs missing runs and unpersisted acceptance times."""
+    record, compile_name, task = registered
+    if run_exists:
+        await setup.store.put_run("acme", "alice", compile_name, new_run(task))
+
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="cancelled"))
+
+    assert result.status == "cancelled"
+    state = await setup.store.get("acme", "alice", compile_name)
+    assert state["task_first_create_time"] == record["task_first_create_time"]
+    assert state["last_run_time"] == task.created_at
+    assert state["progress"] == {}
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
+    assert run["status"] == "cancelled"
+    assert run["started_at"] is None
+    assert run["finished_at"] is not None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+async def test_prepared_finalization_reads_state_only_for_progress(setup, registered, status):
+    """A durable preparation checkpoint avoids acceptance reads even with stale worker auth."""
+    _, _, task = registered
+    await setup.lifecycle.on_start(task)
+    task.auth = {}
+    reads = setup.files.read = AsyncMock(wraps=setup.files.read)
+
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
+
+    assert result.status == status
+    paths = [call.args[0] for call in reads.await_args_list]
+    assert sum(path.endswith("/state.json") for path in paths) == (status == "completed")
+    assert sum("/runs/" in path for path in paths) == 1
 
 
 async def test_progress_publication_recovers_after_state_write_failure(

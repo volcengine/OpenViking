@@ -46,6 +46,8 @@ use registry::LeaseInvalidation;
 pub struct PathLockConfig {
     /// Built-in provider name: `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`.
     pub provider: String,
+    /// Named Runtime selected when the provider is cache.
+    pub instance: String,
     /// OpenViking instance name used by SQLite, PostgreSQL, and cache providers.
     pub service_name: Option<String>,
     /// Absolute local database file shared by SQLite lock participants.
@@ -62,6 +64,7 @@ impl Default for PathLockConfig {
     fn default() -> Self {
         Self {
             provider: "filesystem".to_string(),
+            instance: "default".to_string(),
             service_name: None,
             sqlite_path: None,
             postgres_dsn_env: None,

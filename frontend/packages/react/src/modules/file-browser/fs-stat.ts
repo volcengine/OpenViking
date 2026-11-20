@@ -60,3 +60,7 @@ export function abortError(): Error {
   error.name = 'AbortError';
   return error;
 }
+
+export function toPreviewError(cause: unknown) {
+  return cause instanceof Error ? cause : new Error(String(cause));
+}

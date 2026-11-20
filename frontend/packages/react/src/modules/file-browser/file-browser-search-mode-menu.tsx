@@ -1,4 +1,3 @@
-import type { RefObject } from 'react';
 import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import { SEARCH_MODES } from './search-types.js';
 import type { SearchMode } from './search-types.js';
@@ -9,23 +8,18 @@ export function FileBrowserSearchModeMenu({
   value,
   text,
   onSelect,
-  fallbackFocusRef,
 }: {
   value: SearchMode;
   text: ResolvedLabels;
-  fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelect: (mode: SearchMode) => void;
 }) {
   return (
     <Select<SearchMode>
       variant="simple"
       value={[value]}
-      aria-label={text.searchSwitchMode}
+      aria-label={`${text.searchSwitchMode} (${value})`}
       onChange={([mode]) => {
-        if (mode) {
-          fallbackFocusRef?.current?.focus();
-          onSelect(mode);
-        }
+        if (mode) onSelect(mode);
       }}
       popupClassName="ov-file-browser-search__menu"
       renderValue={() => text.searchSwitchMode}

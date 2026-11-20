@@ -10,6 +10,7 @@ The external task queue groups Compile runs by account and output target for ser
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import heapq
 import json
@@ -35,7 +36,7 @@ from typing import (
 )
 from urllib.parse import quote
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema, with_config
 from typing_extensions import NotRequired, TypedDict
 
 from openviking.core.identifiers import validate_user_id
@@ -71,7 +72,32 @@ logger = get_logger(__name__)
 LOCK_TIMEOUT_SECONDS = 30.0
 ROLLBACK_LOCK_MAX_RETRIES = 60
 _ROLLBACK_LOCK_EXHAUSTED = "COMPILE_ROLLBACK_LOCK_EXHAUSTED"
-COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
+# Pin the supported Unified_Ideograph ranges and 〇 so schema consumers need no Unicode property tables.
+_HAN = (
+    "〇\u3400-\u4dbf\u4e00-\u9fff\ufa0e-\ufa0f\ufa11\ufa13-\ufa14\ufa1f\ufa21\ufa23-\ufa24\ufa27-\ufa29"
+    "\U00020000-\U0002a6df\U0002a700-\U0002b739\U0002b740-\U0002b81d\U0002b820-\U0002cea1"
+    "\U0002ceb0-\U0002ebe0\U0002ebf0-\U0002ee5d\U00030000-\U0003134a\U00031350-\U000323af"
+)
+_NAME_PATTERN = (
+    r"^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|"
+    rf"[A-Za-z0-9_{_HAN}][A-Za-z0-9_{_HAN}-]{{0,31}})$"
+)
+# Swagger UI applies top-level query patterns without Unicode mode. Some schema validators
+# also let $ match before a final newline, which is invalid in a configuration name.
+CompileName = Annotated[
+    str,
+    Field(strict=True, pattern=_NAME_PATTERN),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "allOf": [{"pattern": _NAME_PATTERN}],
+            "not": {"pattern": r"\n"},
+        }
+    ),
+]
+_COMPILE_NAME = TypeAdapter(CompileName)
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0
@@ -96,10 +122,11 @@ STATE_FIELDS = frozenset(
 
 
 def validate_compile_name(compile_name: str) -> str:
-    """Return an unchanged safe name, rejecting invalid account-scoped path segments."""
-    if not isinstance(compile_name, str) or not re.fullmatch(COMPILE_NAME_PATTERN, compile_name):
-        raise InvalidArgumentError("Invalid compile_name")
-    return compile_name
+    """Return the name unchanged or raise InvalidArgumentError."""
+    try:
+        return _COMPILE_NAME.validate_python(compile_name)
+    except ValidationError as exc:
+        raise InvalidArgumentError("Invalid compile_name") from exc
 
 
 def validate_task_id(task_id: str) -> str:
@@ -112,7 +139,7 @@ def validate_task_id(task_id: str) -> str:
 
 
 def new_record(payload: Mapping[str, Any], execution_context: Optional[dict] = None) -> dict:
-    """Build a configuration; run times and successful progress are initially absent."""
+    """Build configuration inputs and empty lifecycle fields for persistence."""
     return {
         "from": list(payload["from"]),
         "to": payload["to"],
@@ -201,11 +228,17 @@ class CompileStore(Protocol):
     async def get(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> Optional[dict]: ...
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None: ...
     async def list_users(self, account_id: str) -> list[str]: ...
     def edit(self, account_id: str, owner_user_id: str, compile_name: str) -> Any: ...
     async def get_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Optional[dict]: ...
+    async def list_runs(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> list[dict]: ...
     async def put_run(
         self, account_id: str, owner_user_id: str, compile_name: str, run: dict
     ) -> None: ...
@@ -237,13 +270,21 @@ class CompileStateStore:
     def _name_segment(compile_name: str) -> str:
         """Encode case-sensitive names as lowercase filesystem path segments."""
         validate_compile_name(compile_name)
-        return compile_name.encode("ascii").hex()
+        if compile_name.isascii():
+            return compile_name.encode("ascii").hex()
+        encoded = base64.b32encode(compile_name.encode("utf-8")).decode("ascii")
+        return "u-" + encoded.rstrip("=").lower()
 
     @staticmethod
     def _segment_name(segment: str) -> Optional[str]:
         """Return the name of a canonical storage directory, or None for unrelated entries."""
         try:
-            name = bytes.fromhex(segment).decode("ascii")
+            if segment.startswith("u-"):
+                encoded = segment[2:]
+                padded = encoded + "=" * (-len(encoded) % 8)
+                name = base64.b32decode(padded, casefold=True).decode("utf-8")
+            else:
+                name = bytes.fromhex(segment).decode("ascii")
             return name if CompileStateStore._name_segment(name) == segment else None
         except (ValueError, InvalidArgumentError):
             return None
@@ -308,6 +349,7 @@ class CompileStateStore:
     ) -> str:
         """Publish a named configuration, atomically rejecting duplicates for the same creator.
 
+        The creation timestamp records publication time in Unix seconds.
         ``before_publish`` registers scheduling under the same state lock; its failure
         leaves the configuration unpublished. This method does not execute Compile.
         """
@@ -322,22 +364,37 @@ class CompileStateStore:
                 raise ConflictError("Compile configuration already exists")
             if before_publish is not None:
                 await before_publish()
+            record["task_first_create_time"] = time.time()
             await self.write_json(path, record, lease)
         return compile_name
 
     async def get(self, account_id: str, owner_user_id: str, compile_name: str) -> Optional[dict]:
         return await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
 
+    async def require_config_exists(
+        self, account_id: str, owner_user_id: str, compile_name: str
+    ) -> None:
+        """Raise NotFoundError before a filesystem lock can create a missing config directory.
+
+        A fresh stat observes configurations published by other workers after a cached miss.
+        """
+        path = self._record_path(account_id, owner_user_id, compile_name)
+        try:
+            await self._agfs.stat(path, bypass_cache=True)
+        except (AGFSNotFoundError, FileNotFoundError) as exc:
+            raise NotFoundError(compile_name, "compile name") from exc
+
     @asynccontextmanager
     async def edit(
         self, account_id: str, owner_user_id: str, compile_name: str
     ) -> AsyncIterator[dict]:
-        """Mutate an existing configuration atomically; failed bodies leave it unchanged."""
+        """Persist only changed JSON under the configuration lock; failed bodies leave it unchanged."""
         path = self._record_path(account_id, owner_user_id, compile_name)
         async with self.locked(path) as lease:
             record = await self.read_json(path)
             if record is None:
                 raise NotFoundError(compile_name, "compile configuration")
+            original_json = json.dumps(record, ensure_ascii=False, sort_keys=True)
             yield record
             if set(record) != STATE_FIELDS:
                 raise InvalidArgumentError(
@@ -345,7 +402,8 @@ class CompileStateStore:
                 )
             if record["execution_context"].get("owner_user_id") != owner_user_id:
                 raise InvalidArgumentError("Compile configuration owner cannot change")
-            await self.write_json(path, record, lease)
+            if json.dumps(record, ensure_ascii=False, sort_keys=True) != original_json:
+                await self.write_json(path, record, lease)
 
     async def iter_records(
         self,
@@ -707,22 +765,35 @@ class CompileLifecycle:
             async with self._store.edit(
                 task.account_id, self._owner_user_id(task), compile_name
             ) as record:
-                await self.record_queued(task, locked_record=record)
+                await self._ensure_queued_run(task, compile_name, record)
             return
+        await self._ensure_queued_run(task, compile_name, locked_record)
+
+    async def _ensure_queued_run(self, task: Any, compile_name: str, locked_record: dict) -> dict:
+        """Return the persisted run, repairing missing registration under the caller's config lock."""
         run = await self._store.get_run(
             task.account_id, self._owner_user_id(task), compile_name, task.task_id
         )
-        is_first = locked_record["task_first_create_time"] is None
+        if locked_record["last_run_time"] is None:
+            # A persisted initial run survives a failed state.json acceptance write.
+            history = await self._store.list_runs(
+                task.account_id, self._owner_user_id(task), compile_name
+            )
+            initial = next(
+                (item for item in reversed(history) if item["meta"]["trigger"] == "initial"),
+                None,
+            )
+            if initial is not None:
+                locked_record["last_run_time"] = initial["created_at"]
         if run is None:
             run = new_run(task)
-            if is_first:
+            if locked_record["last_run_time"] is None:
                 run["meta"]["trigger"] = "initial"
             await self._store.put_run(task.account_id, self._owner_user_id(task), compile_name, run)
-        if is_first:
-            locked_record["task_first_create_time"] = task.created_at
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )
+        return run
 
     @asynccontextmanager
     async def _admission(self, task: Any) -> AsyncIterator[None]:
@@ -766,14 +837,20 @@ class CompileLifecycle:
 
     async def on_start(self, task: Any) -> Any:
         """Resume a fixed plan; target admission also serializes duplicate task deliveries."""
-        if self._compile_name(task):
-            await self.record_queued(task)
+        compile_name = self._compile_name(task)
         try:
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
                 if not self._checkpoint(task).get("phase"):
                     await self._save_checkpoint(task, {"phase": "planning"})
-                run = await self._read_run(task)
+                record = None
+                if compile_name:
+                    async with self._store.edit(
+                        task.account_id, self._owner_user_id(task), compile_name
+                    ) as record:
+                        run = await self._ensure_queued_run(task, compile_name, record)
+                else:
+                    run = await self._read_run(task)
                 if run["status"] in TERMINAL and run["finished_at"] is not None:
                     return self._finished_snapshot(run)
                 checkpoint = self._checkpoint(task)
@@ -784,7 +861,7 @@ class CompileLifecycle:
                         status=checkpoint["terminal_status"], error_message=run.get("error")
                     )
                 if not checkpoint.get("plan"):
-                    await self._begin_run(task, run)
+                    await self._begin_run(task, run, record)
                 if self._checkpoint(task).get("noop"):
                     return ExternalTaskSnapshot(
                         status="completed", result=dict.fromkeys(_RESULT_KEYS.values(), 0)
@@ -793,8 +870,8 @@ class CompileLifecycle:
         except LockAcquisitionError:
             return "busy"
 
-    async def _begin_run(self, task: Any, run: dict) -> None:
-        """Freeze source and Skill snapshots plus a replayable Runtime plan before submission."""
+    async def _begin_run(self, task: Any, run: dict, record: Optional[dict]) -> None:
+        """Freeze a replayable plan using the config read at start, or no config for one-off runs."""
         request = task.meta["request"]
         compile_name = self._compile_name(task)
         ctx = await self.task_ctx(task)
@@ -802,14 +879,11 @@ class CompileLifecycle:
         checkpoint = self._checkpoint(task)
         if "baseline" not in checkpoint:
             progress = {}
-            if compile_name:
-                record = await self._store.get(
-                    task.account_id, self._owner_user_id(task), compile_name
-                )
-                if record is None:
-                    raise NotFoundError(compile_name, "compile configuration")
-                if execution_signature(record) == request["compile"]["input_signature"]:
-                    progress = deepcopy(record["progress"])
+            if (
+                record is not None
+                and execution_signature(record) == request["compile"]["input_signature"]
+            ):
+                progress = deepcopy(record["progress"])
             await self._save_checkpoint(
                 task, {"baseline": progress, "progress_before": progress.get("source_commit")}
             )
@@ -929,9 +1003,11 @@ class CompileLifecycle:
             if self._checkpoint(task).get("phase") == "rollback_exhausted":
                 return await self._fail_blocked_rollback(task, snapshot, scope)
         try:
-            await self.record_queued(task)
             async with self._admission(task):
                 await self._refresh_checkpoint(task)
+                # A baseline key proves registration completed; early cancellation can bypass start.
+                if "baseline" not in self._checkpoint(task):
+                    await self.record_queued(task)
                 async with self._store.lock_run(*scope) if scope else nullcontext():
                     return await self._finish(task, snapshot)
         except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
@@ -1203,7 +1279,7 @@ class CompileLifecycle:
                         written_paths=restored, deleted_paths=deleted, project_dir=to, real_ctx=ctx
                     )
                 except Exception:
-                    logger.exception("Compile rollback reindex scheduling failed")
+                    logger.error("compile rollback reindex scheduling failed")
                     self._fs._schedule_vector_rebuild(written=restored, deleted=deleted, ctx=ctx)
 
     async def _commit(

@@ -88,7 +88,10 @@ const requests = {
     window: '第 {{number}} 个窗口，由模型管理',
     windowReset: '模型开启了新窗口',
     saving: '保存到 OpenViking',
-    nextRetry: '下次重试时间：{{time}}',
+    savedMessages_one: '写入了 {{count}} 条消息',
+    savedMessages_other: '写入了 {{count}} 条消息',
+    openvikingSession: 'OpenViking 会话',
+    copyOpenvikingSession: '复制 OpenViking 会话 ID',
     tools: 'OpenViking 工具',
     toolsSkipped: '未提供：{{reason}}',
     toolRounds:
@@ -102,13 +105,13 @@ const requests = {
   },
   resync: {
     action: '重新同步对话…',
-    hint: '在新的 OpenViking 会话中重新保存这段对话。保存一直处于暂停状态时可以使用。',
+    hint: '为这段对话开启新的 OpenViking 会话，下一轮结束时把完整历史写入新会话。需要一份干净的对话副本时使用。',
     keyRevoked: '这段对话使用的网关密钥已被吊销，无法重新同步。',
     title: '为这段对话开启新的 OpenViking 会话？',
     description:
-      '用户下次在这段对话中发消息时，网关会把完整历史写入新会话。已保存的内容仍留在旧会话中，因此 OpenViking 可能会重复提取部分记忆。',
+      '这段对话的下一轮结束时，网关会把完整历史写入新会话。已保存的内容仍留在旧会话中，因此 OpenViking 可能会重复提取部分记忆。',
     confirm: '重新同步',
-    done: '这段对话会在下一条消息时重新保存。',
+    done: '这段对话会在下一轮结束时重新保存。',
   },
 }
 

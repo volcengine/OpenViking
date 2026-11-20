@@ -619,7 +619,12 @@ async def _rerank_groups(
     try:
         result = await reranker.score(query, [c.abstract for c in unique], fallback)
     except Exception as exc:
-        logger.warning("Context rerank failed, keeping vector scores: %s", exc)
+        logger.info(
+            "context rerank failed; keeping vector scores total=%d error_type=%s",
+            len(unique),
+            type(exc).__name__,
+            extra={"degraded": True, "total": len(unique), "error_type": type(exc).__name__},
+        )
         result = RerankScores(fallback, [False] * len(unique))
 
     kept: Dict[str, Candidate] = {}

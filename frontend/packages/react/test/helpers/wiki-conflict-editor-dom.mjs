@@ -34,7 +34,23 @@ const fixed = {
 const documentBody = `${body}\n${fixedSentence}`;
 const fileContent = `${documentBody}\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)},\n${JSON.stringify(fixed)}\n-->`;
 
-async function mountWikiFile(props, pendingPreview) {
+function wikiSaveNotice(type = 'loading') {
+  const card = document.querySelector(`.ov-notification--${type}`);
+  return (
+    card && {
+      title: card.querySelector('.ov-notification__title')?.textContent,
+      content: card.querySelector('.ov-notification__content')?.textContent,
+      closable: Boolean(card.querySelector('.ov-notification__close')),
+    }
+  );
+}
+
+async function mountWikiFile(
+  props,
+  pendingPreview,
+  pendingWrite,
+  content = fileContent,
+) {
   const fetch = fixture(
     file,
     false,
@@ -57,10 +73,11 @@ async function mountWikiFile(props, pendingPreview) {
       }
       if (path.endsWith('/search/find'))
         return ok({ resources: [{ uri: file, level: 2 }] });
+      if (path.endsWith('/content/write')) return pendingWrite;
       if (path.endsWith('/content/read') && uri === file)
         return pendingPreview && query.limit !== '-1'
-          ? pendingPreview.then(() => ok(fileContent))
-          : ok(fileContent);
+          ? pendingPreview.then(() => ok(content))
+          : ok(content);
     },
     [{ to: target }],
   );
@@ -98,4 +115,5 @@ export {
   otherBody,
   otherFile,
   pending,
+  wikiSaveNotice,
 };

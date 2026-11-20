@@ -1,3 +1,4 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import { createDashboardTab } from './dashboard-tab.js';
 import type { FileBrowserDashboardLabels } from './types.js';
@@ -11,6 +12,7 @@ import { useWikiConflictIndicators } from './wiki-conflict-indicators.js';
 import {
   useWikiConflictIndex,
   useDashboardHint,
+  previewDashboardOptions,
 } from './use-dashboard-metadata.js';
 import {
   type FileBrowserDashboard,
@@ -20,6 +22,7 @@ import {
 export function useBrowserDashboards({
   rows,
   metadataRows,
+  resourceType,
   uri,
   rootUri,
   identifyUri,
@@ -29,11 +32,13 @@ export function useBrowserDashboards({
   onOpenUri,
   dashboardKinds,
   experienceDataSource,
+  experienceDashboardSlots,
   renderDashboard,
   dashboardLabels,
 }: {
   rows: readonly FileTreeRow[];
   metadataRows: readonly FileTreeRow[];
+  resourceType: 'directory' | 'file' | 'unknown';
   uri: string | null;
   rootUri: string;
   identifyUri: (uri: string) => string;
@@ -41,6 +46,7 @@ export function useBrowserDashboards({
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   locale?: 'en-US' | 'zh-CN';
   requestOptions?: OvRequestOptions;
@@ -166,6 +172,7 @@ export function useBrowserDashboards({
         conflictRevision,
         isFile,
         experienceDataSource,
+        experienceDashboardSlots,
         renderDashboard,
         onOpenUri: (target) => {
           close();
@@ -175,9 +182,11 @@ export function useBrowserDashboards({
       })
     : undefined;
   return {
-    isWiki: resolved?.kind === 'wiki',
-    contentPending: Boolean(
-      uri && /\.md$/i.test(uri) && !resolved && hint.loading,
+    previewOptions: previewDashboardOptions(
+      uri,
+      resourceType,
+      resolved?.kind,
+      hint,
     ),
     dashboards,
     current,

@@ -21,13 +21,15 @@ export function formatResult(
   data: unknown,
   values: ArgumentValues,
 ): CommandConsoleRecordContent {
-  if (['read', 'abstract', 'overview'].includes(name))
+  if (['read', 'abstract', 'overview'].includes(name)) {
+    const uri = values.uri as string;
     return {
       variant: 'resource-preview',
-      title: String(values.uri).split('/').pop() || String(values.uri),
-      uri: String(values.uri),
+      title: uri.split('/').pop() || uri,
+      uri,
       content: text(data),
     };
+  }
   if (['ls', 'tree'].includes(name) && Array.isArray(data))
     return {
       variant: 'resource-tree',
@@ -59,6 +61,11 @@ export function formatResult(
       'mv',
       'rm',
       'write',
+      'session new',
+      'session delete',
+      'session add-message',
+      'session add-messages',
+      'session commit',
     ].includes(name)
   ) {
     const hidden =
@@ -80,13 +87,29 @@ export function formatResult(
                 ? 'submission_status'
                 : key
             ).replaceAll('_', ' ');
-            return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
+            const title = `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}`;
+            if (
+              /(?:^|_)uri$/i.test(key) &&
+              typeof value === 'string' &&
+              /^viking:\/\//i.test(value)
+            ) {
+              return { label: title, uri: value };
+            }
+            return `${title}: ${text(value)}`;
           })
         : data === null || data === undefined
           ? []
           : [text(data)],
     };
   }
+  if (name === 'search' && values.mode === 'context')
+    return {
+      variant: 'text',
+      text:
+        typeof result.rendered === 'string' && result.rendered.trim()
+          ? result.rendered
+          : text(data),
+    };
   if (['find', 'search'].includes(name)) {
     const items: CommandConsoleSearchResultItem[] = [];
     for (const key of ['memories', 'resources', 'skills']) {
@@ -108,13 +131,26 @@ export function formatResult(
             typeof item.score === 'number' ? item.score.toFixed(3) : undefined,
           preview:
             typeof item.abstract === 'string' ? item.abstract : undefined,
+          content:
+            values.read_content === true && typeof item.content === 'string'
+              ? item.content
+              : undefined,
         });
       }
     }
     return { variant: 'search-list', items };
   }
   if (
-    ['stat', 'status', 'health', 'task status', 'task cancel'].includes(name) &&
+    [
+      'stat',
+      'status',
+      'health',
+      'task status',
+      'task cancel',
+      'session get',
+      'session get-session-context',
+      'session get-session-archive',
+    ].includes(name) &&
     Object.keys(result).length
   )
     return {

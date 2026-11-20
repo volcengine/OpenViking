@@ -295,7 +295,11 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
+| `cache.instances` | object | 启用 cache consumer 时必填 | 命名 CacheRuntime Provider，必须包含 `default` |
+| `agfs.cachefs.instance` | 实例名 | `"default"` | `cachefs.backend="cache"` 时使用的 Runtime |
+| `agfs.queuefs.instance` | 实例名 | `"default"` | `queuefs.backend="cache"` 时使用的 Runtime |
 | `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`postgres`、`cache` | `filesystem` | 路径锁存储；`postgres` 直连 PostgreSQL，`cache` 使用 Redis |
+| `agfs.pathlock.instance` | 实例名 | `"default"` | `pathlock.provider="cache"` 时使用的 Runtime，必须是 Redis |
 | `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
 | `agfs.pathlock.postgres_dsn_env` | 环境变量名 / `null` | `null` | `postgres` 必填；指定服务进程中保存 PostgreSQL DSN 的环境变量名 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb`、`opengauss`、`pgvector` | `local` | 向量数据库后端；参见 [pgvector 配置](../guides/25-pgvector.md) |
@@ -303,6 +307,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+| `watch_store.provider` | `file`、`mysql`、`postgres` | `file` | Watch 元数据和运行占用；关系型 provider 共享持久化记录 |
+
+PostgreSQL Watch 存储需要安装 `openviking[postgres]`，并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql` 建表。在
+`storage.watch_store.params` 中配置连接字段和所有节点共用的
+`credential_encryption_key`（base64 编码的 32 字节密钥）。
+它独立于 Task/Work、Account、PathLock 和向量存储。
+完整示例、TLS 参数与部署要求见[Watch 存储配置](../guides/01-configuration.md#watch-store)。
 
 同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
 `{"provider":"sqlite"}`。数据库默认位于
@@ -417,7 +429,8 @@ PathLock 不提供租约失效后的存储侧 fencing，也不改变 CachedFileS
 #### Redis PathLock
 
 使用 Redis 协调时，
-设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
+设置 `storage.agfs.pathlock.provider="cache"`，并通过
+`storage.agfs.pathlock.instance` 选择 `cache.instances` 中的 Redis 实例。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 参见[共享 Redis 配置示例](../guides/01-configuration.md)。
 无论选择哪种 PathLock，共享 QueueFS 都需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；

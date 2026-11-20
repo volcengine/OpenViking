@@ -150,6 +150,13 @@
   flex-shrink: 0;
   object-fit: cover;
 }
+.ov-directory-tour__artwork--dark,
+html.dark .ov-directory-tour__artwork--light {
+  display: none;
+}
+html.dark .ov-directory-tour__artwork--dark {
+  display: block;
+}
 .ov-directory-tour__actions {
   display: flex;
   align-items: center;

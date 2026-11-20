@@ -184,6 +184,45 @@
   gap: 12px;
   padding: 12px;
 }
+.ov-viking-bot__list--loading {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.ov-viking-bot__loading-diamond {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  grid-template: repeat(5, 1fr) / repeat(5, 1fr);
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__loading-diamond > span {
+  background: currentColor;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ov-viking-bot__loading-diamond > span {
+    opacity: 0.15;
+    animation: ov-viking-bot-diamond-pulse 800ms ease-out infinite;
+  }
+}
+
+@keyframes ov-viking-bot-diamond-pulse {
+  0% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.15;
+  }
+}
 
 .ov-viking-bot__message {
   display: flex;

@@ -305,6 +305,7 @@ async fn late_adopt_rollback_keeps_producer_authorized_and_contender_blocked() {
     };
     let config = PathLockConfig {
         provider: "cache".into(),
+        instance: "default".to_string(),
         service_name: Some(provider.service_name.clone()),
         sqlite_path: None,
         postgres_dsn_env: None,

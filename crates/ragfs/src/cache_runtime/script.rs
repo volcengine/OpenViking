@@ -5,67 +5,69 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-/// One stable script identifier and its Redis implementation.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ScriptDefinition {
-    pub(crate) id: &'static str,
-    pub(crate) redis_lua: &'static str,
-}
-
 /// Scripts registered by business modules during Runtime initialization.
 #[derive(Default)]
 pub(crate) struct ScriptRegistry {
-    definitions: RwLock<HashMap<&'static str, &'static str>>,
+    definitions: RwLock<HashMap<String, String>>,
 }
 
 impl ScriptRegistry {
-    pub(crate) fn register(&self, definition: ScriptDefinition) -> CacheResult<()> {
+    /// Register one script with owned identifier and source.
+    pub(crate) fn register(&self, script_id: String, redis_lua: String) -> CacheResult<()> {
         let mut definitions = self
             .definitions
             .write()
             .map_err(|_| CacheError::Internal("script registry lock poisoned".into()))?;
-        if let Some(existing) = definitions.get(definition.id) {
-            if *existing != definition.redis_lua {
+        if let Some(existing) = definitions.get(&script_id) {
+            if existing != &redis_lua {
                 return Err(CacheError::InvalidArgument(format!(
                     "script {} is already registered with different content",
-                    definition.id
+                    script_id
                 )));
             }
             return Ok(());
         }
-        definitions.insert(definition.id, definition.redis_lua);
+        definitions.insert(script_id, redis_lua);
         Ok(())
     }
 
-    pub(crate) fn resolve(&self, script_id: &str) -> CacheResult<&'static str> {
+    /// Resolve one registered script source.
+    pub(crate) fn resolve(&self, script_id: &str) -> CacheResult<String> {
         self.definitions
             .read()
             .map_err(|_| CacheError::Internal("script registry lock poisoned".into()))?
             .get(script_id)
-            .copied()
+            .cloned()
             .ok_or_else(|| CacheError::UnsupportedScript(script_id.to_string()))
     }
 }
 
 /// Provider-neutral representation of an atomic script result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum ScriptValue {
+pub enum ScriptValue {
+    /// Redis null result.
     Null,
+    /// Redis integer result.
     Integer(i64),
+    /// Redis byte string result.
     Bytes(Vec<u8>),
+    /// Redis nested array result.
     Array(Vec<ScriptValue>),
+    /// Redis boolean result.
     Boolean(bool),
 }
 
 impl ScriptResult {
-    pub(crate) fn encode(value: &ScriptValue) -> CacheResult<Self> {
+    /// Encode one provider-neutral script value.
+    pub fn encode(value: &ScriptValue) -> CacheResult<Self> {
         serde_json::to_vec(value)
             .map(bytes::Bytes::from)
             .map(|payload| Self { payload })
             .map_err(|error| CacheError::InvalidData(error.to_string()))
     }
 
-    pub(crate) fn decode(&self) -> CacheResult<ScriptValue> {
+    /// Decode one provider-neutral script value.
+    pub fn decode(&self) -> CacheResult<ScriptValue> {
         serde_json::from_slice(&self.payload)
             .map_err(|error| CacheError::InvalidData(error.to_string()))
     }

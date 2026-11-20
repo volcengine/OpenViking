@@ -409,6 +409,7 @@ Semantic retrieval with optional session-aware query planning.
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
+| args | Dict | No | null | Advanced engine options for `search_type="keywords"` in `mode="list"`. Supported keys: `bm25_k1` (float > 0), `bm25_b` (float in `[0, 1]`), `post_process_input_limit` (int from the effective `limit`/`node_limit` up to `2000000`). Unknown keys are rejected |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | limit | int | No | 10 | Maximum results per planned query; list mode concatenates the results, so its total may exceed this value |
@@ -423,7 +424,7 @@ Semantic retrieval with optional session-aware query planning.
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index.
+`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index. `args` is accepted only with `search_type="keywords"` in `mode="list"`; it keeps engine tuning options in one map instead of adding a top-level parameter per knob.
 
 Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode assembles its candidates with vector scores, or with the model score when `retrieval.apply_rerank_to_context` is on. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
 
@@ -478,7 +479,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
         "query": "hnsw",
         "search_type": "keywords",
         "target_uri": "viking://resources/docs",
-        "limit": 10
+        "limit": 10,
+        "args": {
+            "bm25_k1": 1.2,
+            "bm25_b": 0.75,
+            "post_process_input_limit": 100
+        }
     }'
 ```
 
@@ -600,6 +606,10 @@ ov search "how to implement OAuth 2.0 authorization code flow"
 
 # BM25 keyword retrieval
 ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
+
+# BM25 keyword retrieval with engine tuning
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs" \
+  --args '{"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":100}'
 
 # Limit to specific level(s) (L0 only)
 ov search "best practices" --level 0
@@ -728,7 +738,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 - **Floor**: every result carries at least its `uri`. When a memory abstract is unavailable or busts the per-entry cap, the entry falls back to overview: the memory writer stores the whole body in that scalar, so for memory categories overview sits *below* abstract on the content ladder and the substitute discloses less. A `resources` or `skills` abstract is the short generated summary instead, so the same substitution would read a body the caller never asked for — those two degrade to a bare `uri` rather than deepen
 - **Explicit `detail`**: sets that tier as both the requested start and ceiling; entries that do not fit still step down a tier rather than being truncated. The memory overview substitute above is the one case where the served `detail` can outrank the pin, and only because it carries less content than the pinned tier would
 - **Overview by source type**: memory files use the leading `# Summary` section, code files use class and function signatures (reusing `code_outline`), long documents use the heading tree plus first paragraph
-- **Per-entry cap**: `max_tokens ÷ candidate_count × 2`, applied to every tier except the bare `uri`; a tier exceeding it falls back to the previous tier rather than being truncated. If budget is still left over, one final deepening pass ignores the cap and is bounded only by `max_tokens`
+- **Per-entry cap**: `max_tokens ÷ candidate_count × 2`, applied to every tier except the bare `uri`; a tier exceeding it falls back to the previous tier rather than being truncated. If budget is still left over, the final full-tier pass ignores the cap and is bounded only by `max_tokens`; whole abstracts and overviews can then use any remaining budget within each category's ceiling
 
 #### 3. Examples
 
@@ -875,6 +885,10 @@ The `grep()` method performs regex pattern matching search in the file system, u
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 
 Entries in `matches` include `tags` when `tags` filtering is used or `include_tags=true` is requested; files without retrieval tags then return an empty array (`[]`). Plain grep omits `tags` to avoid an unnecessary VectorDB read.
+
+Native filesystem grep applies `node_limit` before ACL filtering and returns a boolean `limit_reached`. When true, results may be incomplete even if `matches` contains fewer than `node_limit` entries or is empty. This flag does not confirm that more visible matches exist; increase `node_limit` or narrow the scope/pattern to check. Returned matches and their counts remain permission-filtered. Other grep implementations and older servers may omit this field; its absence does not guarantee completeness.
+
+When BM25 returns as many candidate files as grep requested, grep sets `candidate_limit_reached: true`. Other files may have been left out even when `matches` is empty. Narrow the URI or read a promising candidate directly to check the evidence.
 
 #### 3. Usage Examples
 

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { act, button, click, settle } from './helpers/preview-native-dom.mjs';
+import {
+  act,
+  button,
+  click,
+  ok,
+  settle,
+} from './helpers/preview-native-dom.mjs';
 import { deferred } from './helpers/module-dom.mjs';
 import { setEditor, waitForEditor } from './helpers/preview-editor-dom.mjs';
 import {
@@ -13,6 +19,7 @@ import {
   otherBody,
   otherFile,
   pending,
+  wikiSaveNotice,
 } from './helpers/wiki-conflict-editor-dom.mjs';
 
 const editableBody = (editor) =>
@@ -20,8 +27,9 @@ const editableBody = (editor) =>
     .map((line) => line.textContent)
     .join('\n');
 
-test('the FileBrowser editor shows Wiki metadata as a read-only suffix outside the draft', async () => {
-  const { view, fetch } = await mountWikiFile();
+test('the FileBrowser editor keeps Wiki metadata outside the draft and confirms a successful save', async () => {
+  const writing = deferred();
+  const { view, fetch } = await mountWikiFile({}, undefined, writing.promise);
   const dashboard = () =>
     view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
   try {
@@ -66,6 +74,16 @@ test('the FileBrowser editor shows Wiki metadata as a read-only suffix outside t
     assert.equal(editableBody(editor), 'The process requires three approvals.');
     assert.equal(editor.lastElementChild, suffix);
     await click(button('Save', view.container));
+    assert.deepEqual(wikiSaveNotice(), {
+      title: 'Processing Wiki changes',
+      content: 'Saving. Please wait.',
+      closable: false,
+    });
+    await act(async () => writing.resolve(await ok({})));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 240)));
+    await settle();
+    assert.equal(wikiSaveNotice(), null);
+    assert.equal(wikiSaveNotice('success')?.content, 'Saved successfully.');
     const write = fetch.calls.find(({ path }) =>
       path.endsWith('/content/write'),
     );

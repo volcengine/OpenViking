@@ -1,15 +1,16 @@
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { flattenResult } from '../src/modules/file-browser/search-hit-order.ts';
 
 import { normalizeFindResult } from '../src/modules/file-browser/search-model.ts';
-import {
-  flattenTree,
-  nameFromUri,
-  toDirectoryTab,
-  toEntryRow,
-  toFileTab,
-} from '../src/modules/file-browser/fs-model.ts';
+const { flattenTree, nameFromUri, toEntryRow } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'directory-rows.js'))
+);
+const { toDirectoryTab, toFileTab } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'browser-preview-model.js'))
+);
 
 test('a name comes from the last URI segment', () => {
   assert.equal(

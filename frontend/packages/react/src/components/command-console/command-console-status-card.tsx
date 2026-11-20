@@ -35,6 +35,7 @@ export function CommandConsoleStatusCard({
                 <CommandConsoleUriText
                   text={row.value}
                   mode="literal"
+                  wholeUri={/(?:^|_)uri$/i.test(row.label)}
                   onOpenUri={onOpenUri}
                 />
               ) : (

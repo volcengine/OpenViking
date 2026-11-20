@@ -3,12 +3,21 @@ import test from 'node:test';
 import { act } from './helpers/command-console-dom.mjs';
 import { ok, mount } from './helpers/console-dom.mjs';
 
+const service = {
+  createSession: async () => ({ id: 'demo', title: 'Demo' }),
+  listSessions: async () => [],
+  loadMessages: async () => [],
+  async removeSession() {},
+  async *stream() {},
+};
+const tick = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
 for (const [status, type] of [
   ['completed', 'success'],
   ['failed', 'error'],
   ['cancelled', 'warning'],
 ]) {
-  test(`task notification changes from loading to ${type} for ${status}`, async () => {
+  test(`Bot tool task notification changes from loading to ${type} for ${status}`, async () => {
     let finish;
     const taskService = {
       getTask: () =>
@@ -17,16 +26,34 @@ for (const [status, type] of [
         }),
     };
     const host = await mount(async () => ok({ task_id: 'task' }), {
+      defaultMode: 'conversation',
+      conversation: { composer: false },
+      chatOptions: {
+        service,
+        initialMessages: [
+          {
+            id: 'tool-answer',
+            role: 'assistant',
+            parts: [
+              {
+                type: 'tool',
+                id: 'skill-call',
+                name: 'add-skill',
+                status: 'completed',
+                tasks: [{ id: 'task', kind: 'skill' }],
+              },
+            ],
+          },
+        ],
+      },
       taskService,
     });
     try {
-      await host.execute('ov add-resource https://example.com/resource');
-      await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+      await tick();
       const card = document.querySelector('.ov-notification--loading');
       assert.ok(card);
       assert.equal(card.querySelectorAll('.ov-loading-icon').length, 1);
       assert.equal(card.getAttribute('aria-busy'), 'true');
-      assert.equal(host.input.disabled, false);
       await act(() => finish({ id: 'task', status }));
       assert.equal(card.classList.contains(`ov-notification--${type}`), true);
       assert.equal(document.querySelectorAll('.ov-notification').length, 1);

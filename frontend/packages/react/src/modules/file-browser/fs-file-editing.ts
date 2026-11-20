@@ -2,11 +2,15 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
 import { isExperienceFile } from './experience-data.js';
-import { isSummaryUri, isSystemUri } from './preview-policy.js';
+import { isSystemUri } from '../../shared/resource-uri.js';
+import { isSummaryUri } from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
+
+export type WikiSaveStatus = 'saving' | 'success';
+
 /** Load the full file before editing; the preview can contain only its first page. */
 export function createFileEditing(
   client: OvClient,
@@ -15,6 +19,7 @@ export function createFileEditing(
   options: OvRequestOptions,
   onSave?: () => void,
   isWiki = false,
+  onWikiSaveStatus?: (status?: WikiSaveStatus) => void,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
@@ -52,18 +57,28 @@ export function createFileEditing(
       };
     },
     save: async (content) => {
-      await client.request({
-        method: 'POST',
-        path: OV_PATHS.contentWrite,
-        body: {
-          uri,
-          content,
-          mode: 'replace',
-          // The native write contract preserves and updates Wiki conflict history.
-          ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
-        },
-        options,
-      });
+      options.signal?.throwIfAborted();
+      const notify = wiki ? onWikiSaveStatus : undefined;
+      notify?.('saving');
+      try {
+        await client.request({
+          method: 'POST',
+          path: OV_PATHS.contentWrite,
+          body: {
+            uri,
+            content,
+            mode: 'replace',
+            // The native write contract preserves and updates Wiki conflict history.
+            ...(wiki ? { resolve_conflicts: true, use_snapshot: true } : {}),
+          },
+          options,
+        });
+        options.signal?.throwIfAborted();
+      } catch (error) {
+        notify?.();
+        throw error;
+      }
+      notify?.('success');
     },
     onSave,
   };

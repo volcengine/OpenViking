@@ -5,8 +5,6 @@ import time
 import orjson
 import pytest
 from aiohttp import web
-from conftest import make_due
-from test_review_regressions import worker_for
 
 from openviking_gateway.records import RecordKind as K
 from openviking_gateway.state_store import get_state
@@ -115,7 +113,7 @@ def tool_call_stream(protocol):
 async def test_anonymous_client_tool_handoff_keeps_the_session_and_captures_the_turn(
     setup_kernel, credential, policy, protocol
 ):
-    kernel, store, viking, encryption = setup_kernel
+    kernel, _, viking, _ = setup_kernel
     policy.update(recall=False)
     question = {"role": "user", "content": "Weather in Paris?"}
     first = await prepare(kernel, credential, policy, [question], protocol=protocol)
@@ -124,6 +122,7 @@ async def test_anonymous_client_tool_handoff_keeps_the_session_and_captures_the_
         capture.event(event)
     assert capture.finished and not capture.complete
     await kernel.completed(first, credential, capture)
+    assert await kernel.save(first, credential, capture) == 0
     if protocol == "chat":
         arguments = orjson.dumps({"city": "Paris"}).decode()
         function = {"name": "weather", "arguments": arguments}
@@ -155,12 +154,9 @@ async def test_anonymous_client_tool_handoff_keeps_the_session_and_captures_the_
     answer = ResponseCapture(protocol)
     answer.nonstream(final)
     await kernel.completed(continued, credential, answer)
-    await make_due(store)
-    worker = await worker_for(store, encryption, credential, viking)
-    while await worker.once():
-        pass
-    assert "It is sunny." in str(viking.writes) and "Weather in Paris?" in str(viking.writes)
-    assert len(set(viking.write_sessions)) == 1
+    assert await kernel.save(continued, credential, answer) == 3
+    (batch,) = viking.writes
+    assert "It is sunny." in str(batch) and "Weather in Paris?" in str(batch)
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
@@ -262,8 +258,8 @@ def client_call_reply(protocol):
 async def test_client_tool_call_reply_hands_off_without_capture_in_every_protocol(
     setup_kernel, credential, policy, protocol, streamed
 ):
-    """The turn goes on after client tools run, so only the continuation's answer is staged."""
-    kernel, store, _, _ = setup_kernel
+    """The turn goes on after client tools run, so only the continuation that ends it saves."""
+    kernel, store, viking, _ = setup_kernel
     policy.update(recall=False)
     field = "input" if protocol == "responses" else "messages"
     body = {"model": "model", field: [{"role": "user", "content": "Weather in Paris?"}]}
@@ -284,8 +280,8 @@ async def test_client_tool_call_reply_hands_off_without_capture_in_every_protoco
     # The client resends the reply with its tool results; that request continues this session.
     owners = await store.replay.replies(request.scope, [request.reply_anchor])
     assert owners == {request.reply_anchor: {request.session}}
-    staged = (await store.capture.get(request.scope, request.session)).value
-    assert not [turn for turn in staged["pending"] if not turn["confirmed"]]
+    assert await kernel.save(request, credential, capture) == 0
+    assert not viking.writes and not viking.sessions
 
 
 @pytest.mark.parametrize("streamed", [False, True])

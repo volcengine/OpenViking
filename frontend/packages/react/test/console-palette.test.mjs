@@ -17,13 +17,12 @@ test('slash palette uses the built-in group order and keeps cross-group commands
         '.ov-command-console__suggestion-group',
       ),
     ];
-    assert.deepEqual(
-      groups.map(
-        (group) =>
-          group.querySelector('.ov-command-console__suggestion-label')
-            .textContent,
-      ),
-      ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
+    const labels = host.container.querySelectorAll(
+      '.ov-command-console__suggestion-label',
+    );
+    assert.equal(
+      Array.from(labels, (label) => label.textContent).join(' / '),
+      '核心流程 / 文件系统 / 搜索与上下文 / 文件传输 / 会话 / 配置与状态',
     );
     const names = (group) =>
       [...group.querySelectorAll('.ov-command-console__suggestion-name')].map(
@@ -32,8 +31,8 @@ test('slash palette uses the built-in group order and keeps cross-group commands
     assert.deepEqual(names(groups[0]), [
       'add-resource',
       'add-skill',
-      'compile',
       'compile create',
+      'compile',
       'find',
       'read',
       'write',
@@ -75,11 +74,7 @@ test('slash palette uses the built-in group order and keeps cross-group commands
     ];
     assert.deepEqual(
       commands.map((button) => button.textContent),
-      [
-        'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
-        'ov compile --compile-name <name>',
-        'ov task status <task_id>',
-      ],
+      ['ov compile --compile-name <name>', 'ov task status <task_id>'],
     );
     await click(commands[0]);
     assert.equal(host.input.value, commands[0].textContent);
@@ -96,7 +91,14 @@ test('slash palette uses the built-in group order and keeps cross-group commands
           '.ov-command-console__help-section-label',
         ),
       ].map((label) => label.textContent),
-      ['核心流程', '文件系统', '搜索与上下文', '配置与状态'],
+      [
+        '核心流程',
+        '文件系统',
+        '搜索与上下文',
+        '文件传输',
+        '会话',
+        '配置与状态',
+      ],
     );
   } finally {
     await host.dispose();
@@ -115,7 +117,7 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       'add-skill',
       'add-memory',
       'find',
-      'compile',
+      'compile create',
     ]);
     assert.equal(
       host.container.querySelector('.ov-command-console__empty-title')
@@ -137,8 +139,11 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       );
     await pick('add-resource');
     assert.match(host.input.value, /^ov add-resource https:\/\//);
-    await pick('compile');
-    assert.equal(host.input.value, 'ov compile ');
+    await pick('compile create');
+    assert.equal(
+      host.input.value,
+      'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
+    );
     assert.equal(host.records.length, 0);
 
     await host.render({
@@ -163,37 +168,31 @@ test('Console exposes the terminal empty state and lets the host replace its qui
   }
 });
 
-test('Console uses the selected locale for quick examples and command help', async () => {
-  for (const [locale, example, help] of [
-    [
-      'en-US',
-      'ov find "What is the value of OpenViking?"',
-      /Save sources, destination, and Skill without starting compilation/,
-    ],
-    [
-      'zh-CN',
-      'ov find "OpenViking 有什么价值？"',
-      /保存来源、目标和 Skill 的编译配置，不立即启动编译/,
-    ],
-  ]) {
-    const host = await mount(
-      async () => assert.fail('Examples and help are local to the Console'),
-      { locale },
+test('Console keeps quick commands above the input after execution', async () => {
+  const host = await mount(async () => ok({ state: 'ready' }));
+  try {
+    const bar = () =>
+      host.container.querySelector('.ov-command-console__quick-actions');
+    assert.equal(bar(), null);
+
+    await host.execute('ov help');
+    const buttons = [...bar().querySelectorAll('button')];
+    assert.deepEqual(
+      buttons.map((button) => button.textContent),
+      ['add-resource', 'add-skill', 'add-memory', 'find', 'compile'],
     );
-    try {
-      const find = [
-        ...host.container.querySelectorAll('.ov-command-console__empty-action'),
-      ].find(
-        (button) =>
-          button.querySelector('.ov-command-console__empty-name')
-            ?.textContent === 'find',
-      );
-      await click(find);
-      assert.equal(host.input.value, example);
-      await host.execute('ov help');
-      assert.match(host.records.at(-1).textContent, help);
-    } finally {
-      await host.dispose();
-    }
+    assert.equal(
+      bar().nextElementSibling,
+      host.input.closest('.ov-command-console__input-row'),
+    );
+    await click(buttons[4]);
+    assert.match(host.input.value, /^ov compile create /);
+    assert.equal(document.activeElement, host.input);
+    assert.equal(host.records.length, 1);
+
+    await host.render({ quickCommands: [] });
+    assert.equal(bar(), null);
+  } finally {
+    await host.dispose();
   }
 });

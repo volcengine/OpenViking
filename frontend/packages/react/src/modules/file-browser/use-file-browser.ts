@@ -3,7 +3,6 @@ import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
 import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
-import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
@@ -31,17 +30,18 @@ export function useFileBrowser({
   locale: localeProp,
   dashboardKinds,
   experienceDataSource,
+  experienceDashboardSlots,
   renderDashboard,
   dashboardLabels,
   controlled = false,
   summaryLabels,
   accessLabels,
   formatCharacterCount,
-  defaultExpandedUri,
   currentUri,
   requestOptions,
   onUriChange,
   onSelect,
+  ...expansionOptions
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
@@ -50,8 +50,8 @@ export function useFileBrowser({
   const tree = useFsTree({
     client,
     rootUri,
-    defaultExpandedUri,
     requestOptions,
+    ...expansionOptions,
   });
   const {
     actions: treeActions,
@@ -148,9 +148,11 @@ export function useFileBrowser({
     [cancelReveal, openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
+  const resourceType = tree.resourceTypeOf(activeUri);
   const boards = useBrowserDashboards({
     rows,
     metadataRows: tree.metadataRows,
+    resourceType,
     uri: blocked ? null : activeUri,
     rootUri,
     identifyUri,
@@ -160,6 +162,7 @@ export function useFileBrowser({
     onOpenUri: openResource,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     dashboardLabels,
   });
@@ -173,18 +176,14 @@ export function useFileBrowser({
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
     uri: blocked ? null : activeUri,
-    resourceType: tree.resourceTypeOf(activeUri),
+    resourceType,
     ...previewLevel,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
     generation: refreshGeneration,
     requestOptions,
-    contentKind: boards.contentPending
-      ? 'pending'
-      : boards.isWiki
-        ? 'wiki'
-        : 'plain',
+    ...boards.previewOptions,
   });
 
   const { open: openDashboard, close: closeDashboard } = boards;
@@ -216,7 +215,7 @@ export function useFileBrowser({
       // and reporting only after it returns would let this late callback overwrite a
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
-      select: (row: FileTreeEntryRow) => {
+      select: (row) => {
         if (row.disabled || row.selectable === false) return Promise.resolve();
         cancelReveal();
         closeDashboard();
@@ -284,12 +283,15 @@ export function useFileBrowser({
     currentUri: activeUri,
     treeMonitoring: tree.monitoring,
     previewMonitoring: preview.monitoring,
+    wikiSaveFeedback: preview.wikiSaveFeedback,
     isReady: tree.isReady,
     error: tree.error ?? previewError,
     treeError: tree.error,
     previewError,
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
+    previewIsCompile: preview.isCompileOutput,
+    previewHasDirectorySummary: preview.hasDirectorySummary,
     dashboardError: boards.error,
     refreshWikiConflicts: boards.refreshConflicts,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),

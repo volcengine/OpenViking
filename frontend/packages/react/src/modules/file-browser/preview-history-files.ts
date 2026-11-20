@@ -1,5 +1,5 @@
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { loadPage } from './fs-page.js';
+import { loadPage } from '../../shared/directory-tree/fs-page.js';
 import { isBinaryFile } from './fs-file-kind.js';
 import { supportsFileHistory } from './preview-policy.js';
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.pathlock_recovery import adopt_or_reacquire
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import get_viking_fs
@@ -53,9 +54,9 @@ class SemanticLockScope:
                     "tree",
                 )
                 if not lock_handoff.get("covered_paths"):
-                    logger.warning(
+                    logger.info(
                         "Recovering historic semantic handoff with conservative Tree coverage path=%s",
-                        path,
+                        safe_path_for_log(str(path)),
                     )
                 return [{"path": path, "kind": kind}]
 

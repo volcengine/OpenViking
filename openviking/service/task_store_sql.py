@@ -135,6 +135,12 @@ class SQLTaskWorkStore(TaskWorkStore):
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return WorkRecoveryMode.DURABLE_STORE
 
+    def _configure_engine(self, engine: AsyncEngine) -> None:
+        """Apply provider-specific connection settings."""
+
+    async def _initialize_schema(self, engine: AsyncEngine) -> None:
+        """Initialize provider-managed schemas before checking their mappings."""
+
     async def load(self) -> None:
         """Connect and verify that the manually provisioned schema is usable."""
         if self._engine is not None:
@@ -152,6 +158,8 @@ class SQLTaskWorkStore(TaskWorkStore):
 
         try:
             engine = create_async_engine(self._url, **self._engine_options)
+            self._configure_engine(engine)
+            await self._initialize_schema(engine)
             sessions: async_sessionmaker[AsyncSession] = async_sessionmaker(
                 engine, class_=SQLAsyncSession, expire_on_commit=False
             )
@@ -806,16 +814,16 @@ class SQLTaskWorkStore(TaskWorkStore):
                 )
             ).all()
             allowed = set(allow_active_types)
-            task_ids = [row.task_id for row in rows]
+            scoped_task_ids = select(Task.task_id).where(*predicates)
             open_task_ids = set()
-            if task_ids:
+            if rows:
                 Work = self._models.Work
                 open_task_ids = set(
                     await session.scalars(
                         select(Work.task_id)
                         .where(
                             Work.service_name == self._service_name,
-                            Work.task_id.in_(task_ids),
+                            Work.task_id.in_(scoped_task_ids),
                             Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
                         )
                         .distinct()
@@ -864,7 +872,20 @@ class SQLTaskWorkStore(TaskWorkStore):
                 DeletedTask(row.task_id, row.account_id, row.user_id)
                 for row in sorted(rows, key=lambda row: (row.account_id, row.user_id, row.task_id))
             )
-            await self._delete_task_records(session, task_ids)
+            if rows:
+                # Delete dependents before Tasks so the scope subquery remains usable.
+                for model in (self._models.Work, self._models.Event):
+                    await session.execute(
+                        delete(model)
+                        .where(
+                            model.service_name == self._service_name,
+                            model.task_id.in_(scoped_task_ids),
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                await session.execute(
+                    delete(Task).where(*predicates).execution_options(synchronize_session=False)
+                )
             return DeleteTasksResult(deleted)
 
     async def delete_expired(

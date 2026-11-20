@@ -18,6 +18,11 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
+from openviking.observability.reporting.token_sources import (
+    bind_dashboard_token_source_type,
+    get_dashboard_token_source_type,
+)
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
     rewrite_image_uris,
@@ -144,7 +149,7 @@ class SemanticProcessor(DequeueHandlerBase):
             store = store_for_artifact_ref(artifact_ref)
             await store.cleanup(artifact_ref)
         except Exception as exc:
-            logger.warning("Failed to clean local parse artifact: %s", exc)
+            logger.info("Failed to clean local parse artifact: %s", type(exc).__name__)
 
     _tree_stats_by_telemetry_id: Dict[str, SemanticTreeStats] = {}
     _tree_stats_by_uri: Dict[str, SemanticTreeStats] = {}
@@ -321,9 +326,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 await semantic_queue.enqueue(msg)
             else:
                 await enqueue(semantic_queue, msg)
-            logger.info(f"Re-enqueued semantic message: {msg.uri}")
+            logger.info("Re-enqueued semantic message: %s", safe_uri_for_log(str(msg.uri)))
         else:
-            logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
+            logger.error(
+                "No queue manager available, cannot re-enqueue: %s", safe_uri_for_log(str(msg.uri))
+            )
 
     async def _enqueue_semantic_retry(
         self, queue, msg: SemanticMsg, scope: SemanticLockScope
@@ -384,7 +391,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 # No replacement is durable: propagate so the original delivery
                 # remains recoverable rather than being ACKed as failed.
                 raise
-            logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
+            logger.error("Failed to re-enqueue semantic message: %s", type(requeue_err).__name__)
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             await self._cleanup_local_artifact(msg)
             return ProcessResult.failed(str(error))
@@ -434,10 +441,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
                 lock_timeout_secs=1.0,
             )
-        except LockAcquisitionError:
+        except LockAcquisitionError as _log_error:
             logger.info(
-                "Skipping best-effort parent freshness update because sidecars are busy: %s",
-                parent_uri,
+                "Skipping best-effort parent freshness update because sidecars are busy: %s error_type=%s",
+                safe_uri_for_log(str(parent_uri)),
+                type(_log_error).__name__,
             )
             return
 
@@ -445,7 +453,7 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.debug(
                 "Parent semantic refresh %s for %s (pending=%d, total=%d)",
                 decision.action.value,
-                parent_uri,
+                safe_uri_for_log(str(parent_uri)),
                 decision.pending_after,
                 decision.total_entries,
             )
@@ -472,6 +480,11 @@ class SemanticProcessor(DequeueHandlerBase):
             skip_vectorization=msg.skip_vectorization,
             changes=changes,
             generation_trigger="parent_refresh",
+            dashboard_source_type=(
+                msg.dashboard_source_type
+                or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
+                or ""
+            ),
             # Directory refreshes must not supersede pending file indexing.
             coalesce_key=(
                 "directory|"
@@ -486,7 +499,7 @@ class SemanticProcessor(DequeueHandlerBase):
         )
         with detach_task_context():
             await semantic_queue.enqueue(parent_msg)
-        logger.info("Enqueued parent semantic refresh: %s", parent_uri)
+        logger.debug("Enqueued parent semantic refresh: %s", safe_uri_for_log(str(parent_uri)))
 
     def _message_work(
         self, msg: SemanticMsg, lock: Optional[Dict[str, Any]] = None
@@ -509,7 +522,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 data = json.loads(data["data"])
             msg = SemanticMsg.from_dict(data)
         except Exception as exc:
-            logger.error("Invalid semantic message: %s", exc, exc_info=True)
+            logger.error("Invalid semantic message: %s", type(exc).__name__)
             return ProcessResult.failed(str(exc))
 
         if msg.context_type != "skill" or get_task_context() is not None:
@@ -564,7 +577,9 @@ class SemanticProcessor(DequeueHandlerBase):
             if msg.queue_enqueued_at > 0:
                 queue_wait_ms = max((time.time() - msg.queue_enqueued_at) * 1000.0, 0.0)
             if VikingURI(msg.uri).parent is None:
-                logger.warning("Skipping semantic generation for root URI: %s", msg.uri)
+                logger.info(
+                    "Skipping semantic generation for root URI: %s", safe_uri_for_log(str(msg.uri))
+                )
                 await self._cleanup_local_artifact(msg)
                 return ProcessResult.success()
             if msg.coalesce_key and await is_semantic_msg_stale(
@@ -581,7 +596,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     # one still summarizes/vectorizes its changed files.
                     logger.info(
                         "Downgrading stale semantic message to file-only work: uri=%s version=%s",
-                        msg.uri,
+                        safe_uri_for_log(str(msg.uri)),
                         msg.coalesce_version,
                     )
                     msg.aggregate_directory = False
@@ -591,7 +606,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 else:
                     logger.info(
                         "Skipping stale semantic message: uri=%s version=%s",
-                        msg.uri,
+                        safe_uri_for_log(str(msg.uri)),
                         msg.coalesce_version,
                     )
                     await work.skip()
@@ -600,16 +615,24 @@ class SemanticProcessor(DequeueHandlerBase):
             # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
                 breaker.check()
-            except CircuitBreakerOpen:
-                logger.warning(
-                    f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
+            except CircuitBreakerOpen as _log_error:
+                logger.info(
+                    "Circuit breaker is open, re-enqueueing semantic message: %s error_type=%s",
+                    safe_uri_for_log(str(msg.uri)),
+                    type(_log_error).__name__,
                 )
                 await work.reenqueue()
                 self._merge_request_stats(msg.telemetry_id, requeue_count=1)
                 return ProcessResult.requeued()
             collector = work.resolve_telemetry()
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
-            with telemetry_ctx:
+            with (
+                telemetry_ctx,
+                bind_dashboard_token_source_type(
+                    msg.dashboard_source_type
+                    or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
+                ),
+            ):
                 root_attrs = create_root_span_attributes(
                     http_method="QUEUE",
                     http_route=msg.context_type or "/queuefs/semantic",
@@ -621,16 +644,25 @@ class SemanticProcessor(DequeueHandlerBase):
                 root_context_token = bind_root_observability_context(root_attrs)
                 try:
                     current_ctx = self._ctx_from_semantic_msg(msg)
-                    logger.info(
-                        f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
+                    logger.debug(
+                        "Processing semantic generation for: %s (recursive=%s)",
+                        safe_uri_for_log(str(msg.uri)),
+                        msg.recursive,
                     )
 
-                    logger.debug("Processing semantic message id=%s uri=%s", msg.id, msg.uri)
+                    logger.debug(
+                        "Processing semantic message id=%s uri=%s",
+                        type(msg.id).__name__,
+                        safe_uri_for_log(str(msg.uri)),
+                    )
 
                     # Resolving a deleted root can recreate it for lock metadata.
                     # Settle queued ownership before acknowledging skipped work.
                     if not await get_viking_fs().exists(msg.uri, ctx=current_ctx):
-                        logger.info("Skipping semantic message for missing root: uri=%s", msg.uri)
+                        logger.info(
+                            "Skipping semantic message for missing root: uri=%s",
+                            safe_uri_for_log(str(msg.uri)),
+                        )
                         await work.skip()
                         return ProcessResult.success()
 
@@ -693,13 +725,12 @@ class SemanticProcessor(DequeueHandlerBase):
                                 for slot in entry.index_slots
                             )
                             logger.debug(
-                                "[SemanticPlanExecution] root=%s execution_roots=%d "
-                                "semantic_entries=%d actions=%s planned_vector_upserts=%d",
-                                msg.plan.root_uri,
+                                "root=%s execution_roots=%d semantic_entries=%d actions=%s planned_vector_upserts=%s",
+                                safe_uri_for_log(str(msg.plan.root_uri)),
                                 len(msg.plan.execution_root_uris()),
                                 len(entries),
                                 dict(action_counts),
-                                vector_slots,
+                                type(vector_slots).__name__,
                             )
                         # Regular memory writes keep their specialized update path.
                         # Callers must explicitly opt into directory aggregation; the
@@ -721,9 +752,10 @@ class SemanticProcessor(DequeueHandlerBase):
                                     msg.target_uri, ctx=current_ctx
                                 )
                                 if msg.uri != msg.target_uri:
-                                    logger.info(
-                                        "Syncing semantic source into target before processing: "
-                                        f"{msg.uri} -> {msg.target_uri}"
+                                    logger.debug(
+                                        "Syncing semantic source into target before processing: %s -> %s",
+                                        safe_uri_for_log(str(msg.uri)),
+                                        safe_uri_for_log(str(msg.target_uri)),
                                     )
                                     syncing_source = True
                                     diff = await work.run_write(
@@ -735,13 +767,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                         )
                                     )
                                     syncing_source = False
-                                    logger.info(
-                                        "[SyncDiff] Diff computed: "
-                                        f"added_files={len(diff.added_files)}, "
-                                        f"deleted_files={len(diff.deleted_files)}, "
-                                        f"updated_files={len(diff.updated_files)}, "
-                                        f"added_dirs={len(diff.added_dirs)}, "
-                                        f"deleted_dirs={len(diff.deleted_dirs)}"
+                                    logger.debug(
+                                        "Diff computed: added_files=%s, deleted_files=%s, updated_files=%s, added_dirs=%s, deleted_dirs=%s",
+                                        len(diff.added_files),
+                                        len(diff.deleted_files),
+                                        len(diff.updated_files),
+                                        len(diff.added_dirs),
+                                        len(diff.deleted_dirs),
                                     )
                                     changes = diff.to_changes()
                                     is_incremental = True
@@ -753,14 +785,16 @@ class SemanticProcessor(DequeueHandlerBase):
                                     and msg.uri == msg.target_uri
                                 ):
                                     is_incremental = True
-                                    logger.info(
-                                        f"Using direct incremental semantic update for: {msg.uri}"
+                                    logger.debug(
+                                        "Using direct incremental semantic update for: %s",
+                                        safe_uri_for_log(str(msg.uri)),
                                     )
                             elif msg.changes is not None:
                                 is_incremental = True
                                 target_uri = msg.uri
-                                logger.info(
-                                    f"Using direct incremental semantic update for: {msg.uri}"
+                                logger.debug(
+                                    "Using direct incremental semantic update for: %s",
+                                    safe_uri_for_log(str(msg.uri)),
                                 )
 
                             defer_directory_refresh = (
@@ -831,7 +865,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     if failure is not None:
                         return failure
                     self._merge_request_stats(msg.telemetry_id, processed=1)
-                    logger.info(f"Completed semantic generation for: {msg.uri}")
+                    logger.debug(
+                        "Completed semantic generation for: %s", safe_uri_for_log(str(msg.uri))
+                    )
                     breaker.record_success()
                     await self._cleanup_local_artifact(msg)
                     return ProcessResult.success()
@@ -846,11 +882,9 @@ class SemanticProcessor(DequeueHandlerBase):
             # A move-based sync may already have consumed part of its source.
             if isinstance(e, LockAcquisitionError) and not syncing_source:
                 execute_status = "requeued"
-                logger.warning(
-                    "Lock error processing semantic message, re-enqueueing without "
-                    "tripping API circuit breaker: %s",
-                    e,
-                    exc_info=True,
+                logger.info(
+                    "Lock error processing semantic message, re-enqueueing without tripping API circuit breaker: %s",
+                    type(e).__name__,
                 )
                 if msg is not None and work is not None:
                     result = await self._requeue_semantic_msg_after_error(
@@ -866,9 +900,8 @@ class SemanticProcessor(DequeueHandlerBase):
             kind = model_error_kind(e)
             if kind is ModelErrorKind.INPUT_TOO_LARGE:
                 execute_status = "error"
-                logger.error(
-                    f"Input too large processing semantic message, dropping: {e}",
-                    exc_info=True,
+                logger.info(
+                    "Semantic input too large; dropping work error_type=%s", type(e).__name__
                 )
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
@@ -882,9 +915,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 ModelErrorKind.CONTENT_SAFETY,
             }:
                 execute_status = "error"
-                logger.critical(
-                    f"Permanent error processing semantic message, dropping: {e}",
-                    exc_info=True,
+                (
+                    logger.info
+                    if kind in {ModelErrorKind.INVALID_REQUEST, ModelErrorKind.CONTENT_SAFETY}
+                    else logger.error
+                )(
+                    "Semantic work permanently failed; dropping work error_type=%s",
+                    type(e).__name__,
                 )
                 if breaker is not None and kind is not None:
                     breaker.record_failure(e)
@@ -898,8 +935,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 if breaker is not None and kind is not None:
                     breaker.record_failure(e)
                 logger.error(
-                    f"Error processing semantic message, not re-enqueueing: {e}",
-                    exc_info=True,
+                    "Error processing semantic message, not re-enqueueing: %s", type(e).__name__
                 )
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
@@ -946,7 +982,7 @@ class SemanticProcessor(DequeueHandlerBase):
             try:
                 await lock_guard.adopt(msg.lock_handoff)
             except Exception as exc:
-                logger.warning("Failed to release cancelled semantic lock: %s", exc)
+                logger.info("Failed to release cancelled semantic lock: %s", type(exc).__name__)
             finally:
                 await lock_guard.close()
 
@@ -1023,7 +1059,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_paths.sort()
 
         if not file_paths:
-            logger.info(f"No memory files found in {dir_uri}")
+            logger.debug("No memory files found in %s", safe_uri_for_log(str(dir_uri)))
             return
 
         existing_summaries: Dict[str, str] = {}
@@ -1032,21 +1068,26 @@ class SemanticProcessor(DequeueHandlerBase):
                 old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
                 if old_overview:
                     existing_summaries = self._parse_overview_md(body_for_preview(old_overview))
-                    logger.info(
-                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
+                    logger.debug(
+                        "Parsed %s existing summaries from overview.md", len(existing_summaries)
                     )
             except Exception as e:
-                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+                logger.debug(
+                    "No existing overview.md found for %s: %s",
+                    safe_uri_for_log(str(dir_uri)),
+                    type(e).__name__,
+                )
 
         changed_files: Set[str] = set()
         if msg.changes:
             changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
             deleted_files = set(msg.changes.get("deleted", []))
-            logger.info(
-                f"Processing memory directory {dir_uri} with changes: "
-                f"added={len(msg.changes.get('added', []))}, "
-                f"modified={len(msg.changes.get('modified', []))}, "
-                f"deleted={len(deleted_files)}"
+            logger.debug(
+                "Processing memory directory %s with changes: added=%s, modified=%s, deleted=%s",
+                safe_uri_for_log(str(dir_uri)),
+                len(msg.changes.get("added", [])),
+                len(msg.changes.get("modified", [])),
+                len(deleted_files),
             )
 
         pending_indices: List[Tuple[int, str]] = []
@@ -1060,7 +1101,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     "name": file_name,
                     "summary": existing_summaries[file_name],
                 }
-                logger.debug(f"Reused existing summary for {file_name}")
+                logger.debug("Reused existing summary for %s", safe_path_for_log(str(file_name)))
             else:
                 pending_indices.append((idx, file_path))
 
@@ -1082,9 +1123,10 @@ class SemanticProcessor(DequeueHandlerBase):
                 pass
 
         if pending_indices:
-            logger.info(
-                f"Generating summaries for {len(pending_indices)} changed files "
-                f"(reused {len(file_paths) - len(pending_indices)} cached)"
+            logger.debug(
+                "Generating summaries for %s changed files (reused %s cached)",
+                len(pending_indices),
+                len(file_paths) - len(pending_indices),
             )
 
             async def _gen(idx: int, file_path: str) -> None:
@@ -1093,9 +1135,13 @@ class SemanticProcessor(DequeueHandlerBase):
                     summary_dict = await self._generate_single_file_summary(
                         file_path, llm_sem=llm_sem, ctx=ctx
                     )
-                    logger.debug(f"Generated summary for {file_name}")
+                    logger.debug("Generated summary for %s", safe_path_for_log(str(file_name)))
                 except Exception as e:
-                    logger.warning(f"Failed to generate summary for {file_path}: {e}")
+                    logger.info(
+                        "Failed to generate summary for %s: %s",
+                        safe_path_for_log(str(file_path)),
+                        type(e).__name__,
+                    )
                     summary_dict = {"name": file_name, "summary": ""}
 
                 if file_path in paths_to_vectorize and not msg.skip_vectorization:
@@ -1116,10 +1162,11 @@ class SemanticProcessor(DequeueHandlerBase):
             batch_size = max(1, min(self.max_concurrent_llm, 10))
             for batch_start in range(0, len(pending_indices), batch_size):
                 batch = pending_indices[batch_start : batch_start + batch_size]
-                logger.info(
-                    f"[MemorySemantic] Processing batch {batch_start // batch_size + 1}/"
-                    f"{(len(pending_indices) + batch_size - 1) // batch_size} "
-                    f"({len(batch)} files)"
+                logger.debug(
+                    "Processing batch %s/%s (%s files)",
+                    batch_start // batch_size + 1,
+                    (len(pending_indices) + batch_size - 1) // batch_size,
+                    len(batch),
                 )
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
@@ -1155,15 +1202,18 @@ class SemanticProcessor(DequeueHandlerBase):
             raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
         if not wrote_semantics.wrote:
             return
-        logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+        logger.debug("Generated abstract.md and overview.md for %s", safe_uri_for_log(str(dir_uri)))
 
         if msg.skip_vectorization:
-            logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
+            logger.debug(
+                "Skipping vectorization for %s (requested via SemanticMsg)",
+                safe_uri_for_log(str(dir_uri)),
+            )
             return
         if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
-            logger.info(
+            logger.debug(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
-                dir_uri,
+                safe_uri_for_log(str(dir_uri)),
             )
             return
         await self._vectorize_directory(
@@ -1174,7 +1224,9 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=ctx,
             telemetry_id=msg.telemetry_id,
         )
-        logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+        logger.debug(
+            "Vectorized abstract.md and overview.md for %s", safe_uri_for_log(str(dir_uri))
+        )
 
     async def _write_memory_directory_semantics(
         self,
@@ -1254,7 +1306,11 @@ class SemanticProcessor(DequeueHandlerBase):
         try:
             await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
-            logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
+            logger.error(
+                "Failed to delete root directory %s: %s",
+                safe_uri_for_log(str(root_uri)),
+                type(e).__name__,
+            )
         return diff
 
     async def _rewrite_target_image_uris(
@@ -1334,7 +1390,11 @@ class SemanticProcessor(DequeueHandlerBase):
         try:
             await rewrite_image_uris(target_uri, ctx=ctx, lease_ref=lock)
         except Exception as e:
-            logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
+            logger.info(
+                "Failed to rewrite image URIs for %s: %s",
+                safe_uri_for_log(str(target_uri)),
+                type(e).__name__,
+            )
 
     async def _generate_text_summary(
         self,
@@ -1394,9 +1454,12 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm = await self._get_vlm_config(active_ctx)
         if not vlm.is_available():
             if file_type == FILE_TYPE_CODE:
-                logger.warning("VLM not available for code summary fallback: %s", file_path)
+                logger.info(
+                    "Code summary model unavailable; using empty summary target=%s degraded=true",
+                    safe_uri_for_log(file_path),
+                )
             else:
-                logger.warning("VLM not available, using empty summary")
+                logger.info("Summary model unavailable; using empty summary degraded=true")
             return result("")
 
         from openviking.config.generation import get_output_language_override
@@ -1431,6 +1494,11 @@ class SemanticProcessor(DequeueHandlerBase):
 
         async with llm_sem:
             with bind_telemetry_stage("semantic_execute"):
+                if prompt_id == "semantic.code_summary":
+                    logger.info(
+                        "Code skeleton unavailable; using LLM fallback target=%s",
+                        safe_uri_for_log(file_path),
+                    )
                 summary = await vlm.get_completion_async(prompt)
         return result(summary.strip())
 
@@ -1673,7 +1741,7 @@ class SemanticProcessor(DequeueHandlerBase):
         semantic = config.semantic
 
         if not vlm.is_available():
-            logger.warning("VLM not available, using default overview")
+            logger.info("VLM not available, using default overview")
             return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
 
         from openviking.session.memory.utils.language import resolve_output_language
@@ -1749,10 +1817,12 @@ class SemanticProcessor(DequeueHandlerBase):
         if over_budget and many_entries:
             # Many entries, oversized prompt → batch and merge
             logger.info(
-                f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars, {len(file_summaries)} files, "
-                f"{len(children_abstracts)} subdirectories). "
-                f"Splitting into batches of {semantic.overview_batch_size}."
+                "Overview prompt for %s exceeds budget (%s chars, %s files, %s subdirectories). Splitting into batches of %s.",
+                safe_uri_for_log(str(dir_uri)),
+                estimated_size,
+                len(file_summaries),
+                len(children_abstracts),
+                semantic.overview_batch_size,
             )
             overview = await self._batched_generate_overview(
                 dir_uri,
@@ -1767,9 +1837,10 @@ class SemanticProcessor(DequeueHandlerBase):
         elif over_budget:
             # Few files but long summaries → truncate summaries to fit budget
             logger.info(
-                f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars) with {len(file_summaries)} files. "
-                f"Truncating summaries to fit."
+                "Overview prompt for %s exceeds budget (%s chars) with %s files. Truncating summaries to fit.",
+                safe_uri_for_log(str(dir_uri)),
+                estimated_size,
+                len(file_summaries),
             )
             budget = semantic.max_overview_prompt_chars
             budget -= len(children_abstracts_str)
@@ -1836,9 +1907,10 @@ class SemanticProcessor(DequeueHandlerBase):
             return overview.strip()
 
         except Exception as e:
-            logger.error(
-                f"Failed to generate overview for {dir_uri}: {e}",
-                exc_info=True,
+            logger.info(
+                "Directory overview generation failed; using default overview target=%s error_type=%s degraded=true",
+                safe_uri_for_log(dir_uri),
+                type(e).__name__,
             )
             return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
 
@@ -1868,7 +1940,9 @@ class SemanticProcessor(DequeueHandlerBase):
             ("child", index, item) for index, item in enumerate(children_abstracts, 1)
         ]
         batches = [work_items[i : i + batch_size] for i in range(0, len(work_items), batch_size)]
-        logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
+        logger.info(
+            "Generating overview for %s in %s batches", safe_uri_for_log(str(dir_uri)), len(batches)
+        )
 
         # Generate partial overviews concurrently using global link placeholders.
         if llm_sem is None:
@@ -1913,12 +1987,22 @@ class SemanticProcessor(DequeueHandlerBase):
                 partial = self._replace_link_references(partial, batch_link_map)
                 partial_overviews[batch_idx] = partial.strip()
             except Exception as e:
-                logger.warning(
-                    f"Failed to generate partial overview batch "
-                    f"{batch_idx + 1}/{len(batches)} for {dir_uri}: {e}"
+                logger.debug(
+                    "Failed to generate partial overview batch %s/%s for %s: %s",
+                    batch_idx + 1,
+                    len(batches),
+                    safe_uri_for_log(str(dir_uri)),
+                    type(e).__name__,
                 )
 
         await asyncio.gather(*[_run_batch(*bp) for bp in batch_prompts])
+        failed_batches = sum(partial is None for partial in partial_overviews)
+        if failed_batches:
+            logger.info(
+                "Overview batch generation incomplete total=%d failed=%d degraded=true",
+                len(batches),
+                failed_batches,
+            )
         partial_overviews = [p for p in partial_overviews if p is not None]
 
         if not partial_overviews:
@@ -1949,9 +2033,10 @@ class SemanticProcessor(DequeueHandlerBase):
             overview = self._replace_link_references(overview, link_map)
             return overview.strip()
         except Exception as e:
-            logger.error(
-                f"Failed to merge partial overviews for {dir_uri}: {e}",
-                exc_info=True,
+            logger.info(
+                "Overview merge failed; using first partial overview target=%s error_type=%s degraded=true",
+                safe_uri_for_log(dir_uri),
+                type(e).__name__,
             )
             return partial_overviews[0]
 

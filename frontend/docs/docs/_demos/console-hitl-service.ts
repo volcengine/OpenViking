@@ -9,6 +9,7 @@ export function createHitlDemo(
   fails: () => boolean,
 ): VikingBotChatService & VikingBotSessionService {
   const history = new Map<string, VikingBotMessage[]>();
+  const titles = new Map<string, string>();
   let sequence = 0;
   const pause = (signal: AbortSignal) =>
     new Promise<void>((resolve, reject) => {
@@ -26,19 +27,24 @@ export function createHitlDemo(
   return {
     createSession() {
       const id = `demo-${++sequence}`;
+      const title = locale() === 'zh-CN' ? '整理 Wiki' : 'Organize a Wiki';
       history.set(id, []);
-      return Promise.resolve({ id, title: 'HITL demo' });
+      titles.set(id, title);
+      return Promise.resolve({ id, title });
     },
     loadMessages(id) {
       return Promise.resolve(history.get(id) ?? []);
     },
     listSessions() {
-      return Promise.resolve(
-        [...history.keys()].map((id) => ({ id, title: 'HITL demo' })),
-      );
+      return Promise.resolve([...titles].map(([id, title]) => ({ id, title })));
     },
     removeSession(id) {
       history.delete(id);
+      titles.delete(id);
+      return Promise.resolve();
+    },
+    renameSession(id, title) {
+      titles.set(id, title);
       return Promise.resolve();
     },
     saveMessage(id, message) {
@@ -54,12 +60,15 @@ export function createHitlDemo(
         yield {
           type: 'complete',
           text: zh
-            ? '已收到配置，将继续生成 Wiki。（模拟结果）'
-            : 'Configuration received. Continuing the Wiki task. (Simulated result)',
+            ? '已收到配置，将继续编译。（模拟结果）'
+            : 'Configuration received. Continuing the compile task. (Simulated result)',
         };
         return;
       }
       const id = `demo-input-${++sequence}`;
+      const report = /日报|daily report/i.test(input.text);
+      const name = report ? 'demo-daily-report' : 'demo-wiki';
+      const outputUri = `viking://resources/${name}`;
       const card = (
         card_type: string,
         title: string,
@@ -83,25 +92,42 @@ export function createHitlDemo(
           structuredContent: {
             schema_version: '1.0',
             cards: [
+              card(
+                'compile_source',
+                zh ? '选择来源目录' : 'Choose source folders',
+                {
+                  suggested_values: [],
+                },
+              ),
               card('compile_name', zh ? '配置名称' : 'Configuration name', {
-                suggested_value: 'demo-wiki',
+                suggested_value: name,
               }),
               card('compile_output_type', zh ? '产物类型' : 'Output type', {
                 options: [
                   {
-                    value: 'wiki',
-                    label: zh
-                      ? 'Wiki（结构化知识库）'
-                      : 'Wiki (structured knowledge base)',
+                    value: report ? 'markdown' : 'wiki',
+                    label: report
+                      ? 'Markdown'
+                      : zh
+                        ? 'Wiki（结构化知识库）'
+                        : 'Wiki (structured knowledge base)',
                   },
                 ],
               }),
               card('compile_target', zh ? '输出目录' : 'Output directory', {
-                suggested_value: 'viking://resources/wiki',
+                suggested_value: outputUri,
               }),
               card('compile_skill', zh ? '编译 Skill' : 'Compile Skill', {
                 candidates: [
-                  { uri: 'viking://skills/wiki', label: 'Wiki Skill' },
+                  report
+                    ? {
+                        uri: 'viking://agent/skills/daily-report',
+                        label: 'Daily report',
+                      }
+                    : {
+                        uri: 'viking://agent/skills/wiki',
+                        label: 'Wiki Skill',
+                      },
                 ],
               }),
               card(
@@ -113,9 +139,8 @@ export function createHitlDemo(
               ),
               card('compile_schedule', zh ? '自动更新' : 'Automatic updates', {
                 initial_value: {
-                  frequency: 'weekly',
-                  weekday: 'wednesday',
-                  time: '12:27',
+                  frequency: report ? 'daily' : 'disabled',
+                  time: '09:00',
                   timezone: 'Asia/Shanghai',
                 },
               }),
