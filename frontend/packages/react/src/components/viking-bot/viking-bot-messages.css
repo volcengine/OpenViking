@@ -179,6 +179,15 @@
 .ov-viking-bot__message-action--pill.ov-button:disabled {
   opacity: 1;
 }
+.ov-viking-bot__message-action--pill.ov-viking-bot__message-action--success.ov-button:disabled {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  cursor: default;
+}
+.ov-viking-bot__message-action--pill.ov-viking-bot__message-action--success
+  .ov-button__icon {
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
 .ov-viking-bot__message-action--pill.ov-button--loading {
   cursor: wait;
 }

@@ -113,6 +113,8 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 设为 `chatOptions.memoryCommit={false}` 可隐藏该操作。自定义对话服务可实现 `commitSession`；未实现时，由原生对话或已配置的 Provider 提供原生会话接口。
 
+打开会话历史时，Console 会从服务端恢复当前提交状态。自定义服务负责提交时，可实现 `getSessionCommitTask(id, signal)`，在最近的提交任务覆盖已加载消息时返回该任务。
+
 ### 后台任务
 
 终端提交 `ov add-resource https://example.com/demo`，再切换对话模式发送任意文字，两条记录会跟踪同一个模拟任务。点击「模拟完成」或「模拟失败」后查看状态更新。
@@ -240,16 +242,17 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### VikingBotChatService
 
-| 参数             | 说明                                                                     | 类型                                                                                                                             | 默认值 |
-| ---------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| stream           | 流式请求；必须发出 complete 或 interrupted 终止事件                      | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>`                                          | 必填   |
-| createSession    | 新建会话                                                                 | `(signal: AbortSignal) => Promise<VikingBotSession>`                                                                             | 必填   |
-| loadMessages     | 读取完整会话历史                                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`                                                      | 必填   |
-| attachmentUpload | 启用添加资源按钮；发送时将 `upload` 返回的标识传给 `attachment.uploadId` | `VikingBotAttachmentUpload`                                                                                                      | 可选   |
-| saveMessage      | 逐条保存；后端自动持久化时省略，避免重复                                 | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`                                                  | 可选   |
-| commitSession    | 提交当前会话以提取记忆                                                   | `(id: string, signal: AbortSignal) => Promise<{ status: 'accepted'; taskId: string } \| { status: 'skipped'; reason?: string }>` | 可选   |
-| interrupt        | 实际中断后端生成；与本地断开连接不同                                     | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                                                         | 可选   |
-| steer            | 向当前流追加输入；accepted 仅表示接受，不表示回复完成                    | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`                                             | 可选   |
+| 参数                 | 说明                                                                     | 类型                                                                                                                             | 默认值 |
+| -------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| stream               | 流式请求；必须发出 complete 或 interrupted 终止事件                      | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>`                                          | 必填   |
+| createSession        | 新建会话                                                                 | `(signal: AbortSignal) => Promise<VikingBotSession>`                                                                             | 必填   |
+| loadMessages         | 读取完整会话历史                                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`                                                      | 必填   |
+| attachmentUpload     | 启用添加资源按钮；发送时将 `upload` 返回的标识传给 `attachment.uploadId` | `VikingBotAttachmentUpload`                                                                                                      | 可选   |
+| saveMessage          | 逐条保存；后端自动持久化时省略，避免重复                                 | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`                                                  | 可选   |
+| getSessionCommitTask | 查询覆盖最近已加载消息的会话提交任务                                     | `(id: string, signal: AbortSignal) => Promise<TaskReference \| undefined>`                                                       | 可选   |
+| commitSession        | 提交当前会话以提取记忆                                                   | `(id: string, signal: AbortSignal) => Promise<{ status: 'accepted'; taskId: string } \| { status: 'skipped'; reason?: string }>` | 可选   |
+| interrupt            | 实际中断后端生成；与本地断开连接不同                                     | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                                                         | 可选   |
+| steer                | 向当前流追加输入；accepted 仅表示接受，不表示回复完成                    | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`                                             | 可选   |
 
 `VikingBotAttachmentUpload` 接收可选的文件选择器过滤器 `accept`，以及必填的 `upload(file, signal)`，它返回已上传文件的标识。文件选择器不会过滤拖入的文件，适配器仍需验证文件。附件上传完成后才可发送。移除附件会取消该文件的上传；切换账号、请求身份或会话，或取消请求信号时，会取消待完成的上传并清空托管附件。通过 `conversation.sessions.currentId` 回写新建会话 ID 时，会保留该会话的正常上传。如果宿主提供草稿附件或文件选择回调，则使用宿主的配置。
 
