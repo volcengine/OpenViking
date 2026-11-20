@@ -26,6 +26,8 @@ export function tokenizeArguments(input: string): CommandToken[] {
     }
     if (start === -1) start = index;
     if (escaped) {
+      // Double quotes preserve backslashes before ordinary characters, such as \d.
+      if (quote === '"' && !/["\\$`\n]/.test(character)) value += '\\';
       value += character;
       escaped = false;
     } else if (character === '\\' && quote !== "'") {
