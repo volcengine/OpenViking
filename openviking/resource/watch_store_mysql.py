@@ -1,25 +1,32 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""MySQL provider for the shared transactional Watch store."""
+"""MySQL connection and JSON projection for the shared Watch store."""
 
-from typing import Any
+from typing import Any, Sequence
 
+from sqlalchemy import JSON, func
 from sqlalchemy.exc import IntegrityError
 
-from openviking.resource.watch_store_sql import (
-    SQLWatchStore,
-    watch_tables,  # noqa: F401 - preserve the schema helper import
-)
-from openviking.service.task_store_mysql import MySQLTaskWorkStore
+from openviking.resource.watch_store_sql import SQLWatchStore
+from openviking.storage.mysql_config import mysql_connection_options
 
 
 class MySQLWatchStore(SQLWatchStore):
-    dialect_name = "mysql"
+    @staticmethod
+    def _is_duplicate_error(exc: IntegrityError) -> bool:
+        args = getattr(getattr(exc, "orig", None), "args", ())
+        return bool(args and args[0] == 1062)
+
+    @property
+    def provider(self) -> str:
+        return "mysql"
 
     @staticmethod
     def _connection_options(values: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-        return MySQLTaskWorkStore._connection_options(values)
+        return mysql_connection_options(values)
 
-    @staticmethod
-    def _is_duplicate_error(exc: IntegrityError) -> bool:
-        return MySQLTaskWorkStore._is_duplicate_error(exc)
+    def _public_payload(self, names: Sequence[str]) -> Any:
+        args: list[Any] = []
+        for name in names:
+            args.extend([name, func.json_extract(self._tasks.c.payload, f"$.{name}")])
+        return func.json_object(*args, type_=JSON)

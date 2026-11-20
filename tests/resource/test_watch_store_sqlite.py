@@ -7,10 +7,11 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from sqlalchemy import CheckConstraint
 from sqlalchemy.exc import IntegrityError
 
 from openviking.resource.watch_store_sqlite import SQLiteWatchStore
-from openviking.resource.watch_types import WatchPatch, WatchRunResult
+from openviking.resource.watch_types import WatchPatch, WatchRunResult, WatchTask
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.storage_config import StorageConfig, WatchStoreConfig
 from tests.resource.test_watch_process import probe
@@ -186,6 +187,29 @@ def test_duplicate_detection_does_not_mask_other_constraint_errors():
     not_null = IntegrityError("", {}, sqlite3.IntegrityError("NOT NULL constraint failed: x.id"))
     assert SQLiteWatchStore._is_duplicate_error(duplicate)
     assert not SQLiteWatchStore._is_duplicate_error(not_null)
+
+
+@pytest.mark.asyncio
+async def test_check_violation_propagates_and_releases_transaction(tmp_path):
+    store = make_store(tmp_path / "watch.db")
+    store._tasks.append_constraint(CheckConstraint("original_role <> 'invalid'"))
+    await store.initialize()
+    try:
+        task = WatchTask(
+            task_id="invalid-id",
+            path="https://example.org/doc",
+            to_uri="viking://resources/invalid",
+            account_id=OWNER.account_id,
+            user_id=OWNER.user_id,
+            original_role="user",
+        ).model_copy(update={"original_role": "invalid"})
+        with pytest.raises(IntegrityError, match="CHECK constraint failed"):
+            await store.create_task(task)
+        assert await store.get_task(task.task_id) is None
+        await create(store, task.to_uri, task_id=task.task_id)
+        assert await store.get_task(task.task_id) is not None
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio

@@ -1472,7 +1472,7 @@ def _mysql_watch_store_config(watch_params):
 
 def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
     assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
-    with pytest.raises(ValueError, match="'file', 'mysql' or 'sqlite'"):
+    with pytest.raises(ValueError, match="'file', 'mysql', 'postgres' or 'sqlite'"):
         OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "unknown"}}})
 
 
@@ -1514,13 +1514,18 @@ def test_coordination_cache_activates_shared_runtime_without_cachefs():
     assert not binding["cache"]["enabled"]
 
 
+@pytest.mark.parametrize("store_provider", ["mysql", "postgres"])
 @pytest.mark.parametrize("leader_provider", ["cache", "auto", None])
-def test_legacy_watch_cache_selects_coordination_and_activates_shared_runtime(leader_provider):
+def test_legacy_watch_cache_selects_coordination_and_activates_shared_runtime(
+    leader_provider, store_provider
+):
     data = (
         _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
         if leader_provider != "cache"
         else {}
     )
+    if leader_provider != "cache":
+        data["storage"]["watch_store"]["provider"] = store_provider
     if leader_provider is not None:
         data["watch_leader_provider"] = leader_provider
     with pytest.raises(ValueError, match="top-level cache"):

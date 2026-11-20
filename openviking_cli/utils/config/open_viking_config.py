@@ -457,7 +457,8 @@ class OpenVikingConfig(BaseModel):
             )
         coordination = self.storage.agfs.coordination
         uses_cache = self.watch_leader_provider == "cache" or (
-            self.watch_leader_provider == "auto" and self.storage.watch_store.provider == "mysql"
+            self.watch_leader_provider == "auto"
+            and self.storage.watch_store.provider in {"mysql", "postgres"}
         )
         if uses_cache and "provider" not in coordination.model_fields_set:
             self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})

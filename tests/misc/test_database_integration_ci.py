@@ -27,8 +27,10 @@ def report(tmp_path, *, skipped=None, omitted=None):
         ("tests.service.test_task_work_contract", "test_history[mysql-stage]"),
         ("tests.service.test_task_work_contract", "test_history[postgres-stage]"),
         ("tests.resource.test_watch_store", "test_watch[mysql]"),
+        ("tests.resource.test_watch_store", "test_watch[postgres]"),
         ("tests.resource.test_watch_main_integration", "test_refresh[mysql]"),
         ("tests.resource.test_watch_process", "test_claim[mysql]"),
+        ("tests.resource.test_watch_process", "test_claim[postgres]"),
     ]
     for module, name in cases:
         if name == omitted:
@@ -56,8 +58,10 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
         "task_work_mysql": 1,
         "task_work_postgres": 1,
         "watch_mysql": 1,
+        "watch_postgres": 1,
         "watch_runtime_mysql": 1,
         "watch_process_mysql": 1,
+        "watch_process_postgres": 1,
     }
 
 
@@ -69,8 +73,10 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
         "test_history[mysql-stage]",
         "test_history[postgres-stage]",
         "test_watch[mysql]",
+        "test_watch[postgres]",
         "test_refresh[mysql]",
         "test_claim[mysql]",
+        "test_claim[postgres]",
     ],
 )
 @pytest.mark.parametrize("status", ["skipped", "omitted"])

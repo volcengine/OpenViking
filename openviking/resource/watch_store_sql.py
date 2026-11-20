@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Shared transactional SQL Watch store.
+"""Transactional Watch operations shared by relational store providers.
 
-Each occupancy transition uses compare-and-set guards and every node
-compares times against the provider's clock. Private ``auth_state`` and
+Each occupancy transition is a single compare-and-set statement and every node
+compares times against the database clock. Private ``auth_state`` and
 ``connector_states`` are stored AES-GCM encrypted under
-``credential_encryption_key``. MySQL tables are provisioned from
-``openviking/service/sql/001_watch_tasks.sql``; SQLite creates its local schema.
+``credential_encryption_key``. Each provider supplies its connection settings,
+public JSON projection and deployment schema.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -38,8 +40,10 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    literal_column,
     or_,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.exc import IntegrityError
@@ -56,6 +60,7 @@ from openviking.resource.watch_store import (
     parent_uri,
     target_conflict_message,
 )
+from openviking.resource.watch_store_postgres_schema import POSTGRES_WATCH_INDEX_KEYS
 from openviking.resource.watch_types import (
     PAYLOAD_FIELDS,
     PRIVATE_PATCH_FIELDS,
@@ -76,6 +81,8 @@ from openviking.storage.sql_runtime import (
 )
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.config.config_utils import normalize_service_name
+
+logger = logging.getLogger(__name__)
 
 _COLUMN_FIELDS = frozenset(
     {
@@ -99,7 +106,7 @@ _COLUMN_FIELDS = frozenset(
 
 
 class db_now(FunctionElement):
-    """Database clock in epoch seconds; every node compares against one clock."""
+    """Statement-stable database time in epoch seconds, shared by every node."""
 
     type = Float()
     inherit_cache = True
@@ -108,6 +115,12 @@ class db_now(FunctionElement):
 @compiles(db_now, "mysql")
 def _mysql_now(element: Any, compiler: Any, **kw: Any) -> str:
     return "UNIX_TIMESTAMP(NOW(6))"
+
+
+@compiles(db_now, "postgresql")
+def _postgres_now(element: Any, compiler: Any, **kw: Any) -> str:
+    # A stable clock can be an index scan key and is identical across rows/expressions.
+    return "CAST(EXTRACT(EPOCH FROM statement_timestamp()) AS DOUBLE PRECISION)"
 
 
 def _hash(value: Optional[str]) -> str:
@@ -192,10 +205,29 @@ class _SecretCipher:
         return value if isinstance(value, dict) else None
 
 
-def watch_tables(table: str, metadata: Optional[MetaData] = None) -> Table:
-    """Build the Watch task table. MySQL DDL lives in service/sql."""
+def _pg_index_element(tasks: Table, key: str) -> Any:
+    """Resolve only declared columns and supported, column-checked expressions."""
+    if key in tasks.c:
+        return tasks.c[key]
+    md5 = re.fullmatch(r"md5\(([a-z_][a-z0-9_]*)::text\)", key)
+    if md5 and md5[1] in tasks.c:
+        return func.md5(tasks.c[md5[1]])
+    prefix = re.fullmatch(r"substr\(([a-z_][a-z0-9_]*)::text, 1, ([1-9][0-9]*)\)", key)
+    if prefix and prefix[1] in tasks.c:
+        return func.substr(tasks.c[prefix[1]], literal_column("1"), literal_column(prefix[2]))
+    raise ValueError(f"unknown PostgreSQL Watch index key: {key}")
+
+
+def watch_tables(
+    table: str, metadata: Optional[MetaData] = None, *, dialect: str = "mysql"
+) -> Table:
+    """Build the Watch table with provider-specific path and pagination indexes."""
     metadata = metadata or MetaData()
-    key = String(255).with_variant(String(255, collation="utf8mb4_bin"), "mysql")
+    key = (
+        String(255)
+        .with_variant(String(255, collation="utf8mb4_bin"), "mysql")
+        .with_variant(String(255, collation="C"), "postgresql")
+    )
     tasks = Table(
         table,
         metadata,
@@ -207,12 +239,12 @@ def watch_tables(table: str, metadata: Optional[MetaData] = None) -> Table:
         Column("target_uri_hash", String(64), nullable=False),
         Column(
             "target_uri_key",
-            String(_TARGET_URI_KEY_CHARS).with_variant(
-                String(_TARGET_URI_KEY_CHARS, collation="utf8mb4_bin"), "mysql"
-            ),
+            String(_TARGET_URI_KEY_CHARS)
+            .with_variant(String(_TARGET_URI_KEY_CHARS, collation="utf8mb4_bin"), "mysql")
+            .with_variant(String(_TARGET_URI_KEY_CHARS, collation="C"), "postgresql"),
             nullable=False,
         ),
-        Column("target_uri", Text, nullable=True),
+        Column("target_uri", Text().with_variant(Text(collation="C"), "postgresql"), nullable=True),
         Column("enabled", Boolean, nullable=False),
         Column("deleted", Boolean, nullable=False, default=False),
         Column("watch_interval", Float, nullable=False),
@@ -229,47 +261,72 @@ def watch_tables(table: str, metadata: Optional[MetaData] = None) -> Table:
         Column("connector_states", Text, nullable=True),
         Column("created_at", Float, nullable=False),
         Column("updated_at", Float, nullable=False),
-        Index(f"ix_{table}_due", "service_name", "enabled", "next_run_at"),
-        Index(f"ix_{table}_run", "service_name", "run_started_at"),
-        Index(f"ix_{table}_target", "service_name", "account_id", "target_uri_hash"),
+    )
+    if dialect == "postgresql":
+        for suffix, keys in POSTGRES_WATCH_INDEX_KEYS.items():
+            Index(
+                f"ix_{table}_{suffix}",
+                *(_pg_index_element(tasks, key) for key in keys),
+            )
+    else:
+        Index(f"ix_{table}_due", tasks.c.service_name, tasks.c.enabled, tasks.c.next_run_at)
+        Index(f"ix_{table}_run", tasks.c.service_name, tasks.c.run_started_at)
+        Index(
+            f"ix_{table}_target",
+            tasks.c.service_name,
+            tasks.c.account_id,
+            tasks.c.target_uri_hash,
+        )
+        Index(
+            f"ix_{table}_list_all",
+            tasks.c.service_name,
+            tasks.c.deleted,
+            tasks.c.created_at,
+            tasks.c.task_id,
+        )
         Index(
             f"ix_{table}_target_prefix",
-            "service_name",
-            "account_id",
-            "deleted",
-            "target_uri_key",
+            tasks.c.service_name,
+            tasks.c.account_id,
+            tasks.c.deleted,
+            tasks.c.target_uri_key,
             mysql_length={
                 "service_name": 128,
                 "account_id": 128,
                 "target_uri_key": _TARGET_URI_KEY_INDEX_CHARS,
             },
-        ),
+        )
         Index(
             f"ix_{table}_list",
-            "service_name",
-            "account_id",
-            "user_id",
-            "deleted",
-            "created_at",
-            "task_id",
+            tasks.c.service_name,
+            tasks.c.account_id,
+            tasks.c.user_id,
+            tasks.c.deleted,
+            tasks.c.created_at,
+            tasks.c.task_id,
             mysql_length={"service_name": 128, "account_id": 128, "user_id": 128},
-        ),
-        Index(f"ix_{table}_list_all", "service_name", "deleted", "created_at", "task_id"),
-    )
+        )
     return tasks
 
 
 @sql_runtime_store
 class SQLWatchStore(WatchStore):
-    dialect_name: str
+    dialect_name = "mysql"
+    target_prefix_index_chars = _TARGET_URI_KEY_INDEX_CHARS
 
     def __init__(self, *, service_name: str, params: Optional[dict[str, Any]] = None) -> None:
         from openviking.service.task_store_mysql_schema import validate_table_prefix
 
         values = dict(params or {})
         self._service_name = normalize_service_name(service_name)
-        self._table_name = validate_table_prefix(values.pop("table", "ov_watch_tasks"))
-        self._tasks = watch_tables(self._table_name)
+        try:
+            self._table_name = validate_table_prefix(values.pop("table", "ov_watch_tasks"))
+        except ValueError as exc:
+            raise ValueError(
+                "storage.watch_store.params.table must be a valid short SQL identifier "
+                "(letters, digits and underscores, starting with a letter)"
+            ) from exc
+        self._tasks = watch_tables(self._table_name, dialect=self.dialect_name)
         self._cipher = _SecretCipher(values.pop("credential_encryption_key", None))
         self._url, self._engine_options = self._connection_options(values)
         self._sql_runtime: Any = get_shared_sql_runtime()
@@ -277,20 +334,26 @@ class SQLWatchStore(WatchStore):
         self._sessions: Any = None
         self._runtime_lease = False
 
-    @property
-    def provider(self) -> str:
-        return self.dialect_name
-
     @staticmethod
     def _connection_options(values: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        raise NotImplementedError
+
+    def _public_payload(self, names: Sequence[str]) -> Any:
         raise NotImplementedError
 
     @staticmethod
     def _is_duplicate_error(exc: IntegrityError) -> bool:
         raise NotImplementedError
 
+    @property
+    def _target_key_expression(self) -> Any:
+        return self._tasks.c.target_uri_key
+
+    async def _validate_schema(self, session: Any) -> None:
+        await session.execute(select(*self._tasks.c).limit(1))
+
     async def _prepare_engine(self, engine: Any) -> None:
-        """Provider-specific database preparation before validating the schema."""
+        """Configure provider-specific connections and local schema before validation."""
 
     async def initialize(self) -> None:
         if self._engine is not None:
@@ -307,27 +370,34 @@ class SQLWatchStore(WatchStore):
             await self._prepare_engine(engine)
             sessions = async_sessionmaker(engine, class_=SQLAsyncSession, expire_on_commit=False)
             async with sessions() as session:
-                await session.execute(select(*self._tasks.c).limit(1))
+                await self._validate_schema(session)
         except BaseException:
 
             async def cleanup() -> None:
-                if engine is not None:
-                    await engine.dispose()
-                self._runtime_lease = False
-                await self._sql_runtime.release()
+                try:
+                    if engine is not None:
+                        await engine.dispose()
+                finally:
+                    self._runtime_lease = False
+                    await self._sql_runtime.release()
 
-            await wait_sql_cleanup(cleanup())
+            try:
+                await wait_sql_cleanup(cleanup())
+            except BaseException:
+                logger.exception("Failed to clean up Watch store initialization")
             raise
         self._engine, self._sessions = engine, sessions
 
     async def close(self) -> None:
         async def cleanup() -> None:
-            if self._engine is not None:
-                await self._engine.dispose()
-            self._engine = self._sessions = None
-            if self._runtime_lease:
-                self._runtime_lease = False
-                await self._sql_runtime.release()
+            try:
+                if self._engine is not None:
+                    await self._engine.dispose()
+            finally:
+                self._engine = self._sessions = None
+                if self._runtime_lease:
+                    self._runtime_lease = False
+                    await self._sql_runtime.release()
 
         await wait_sql_cleanup(cleanup())
 
@@ -361,13 +431,14 @@ class SQLWatchStore(WatchStore):
         c = self._tasks.c
         descendant_prefix = f"{prefix}/"
         descendant = func.substr(c.target_uri, 1, len(descendant_prefix)) == descendant_prefix
-        if len(descendant_prefix) <= _TARGET_URI_KEY_INDEX_CHARS:
-            upper = _prefix_upper_bound(descendant_prefix)
-            key_range = c.target_uri_key >= descendant_prefix
-            if upper is not None:
-                key_range = and_(key_range, c.target_uri_key < upper)
-            descendant = and_(key_range, descendant)
-        return descendant
+        # Long paths still have an index-covered prefix. Narrow candidates with
+        # that prefix, then check the full URI to exclude siblings sharing it.
+        indexed_prefix = descendant_prefix[: self.target_prefix_index_chars]
+        upper = _prefix_upper_bound(indexed_prefix)
+        key_range = self._target_key_expression >= indexed_prefix
+        if upper is not None:
+            key_range = and_(key_range, self._target_key_expression < upper)
+        return and_(key_range, descendant)
 
     def _prefix(self, uri: str) -> Any:
         """Equality or a descendant on a path boundary, without LIKE escaping."""
@@ -492,23 +563,30 @@ class SQLWatchStore(WatchStore):
         )
         c = self._tasks.c
         clauses = [self._scope, c.deleted.is_(False), self._authority(authority)]
+        if self.dialect_name == "postgresql" and not authority.root:
+            # Retain full identity predicates above: hashes only narrow the index scan.
+            clauses.extend(
+                [
+                    func.md5(c.account_id) == func.md5(authority.account_id),
+                    func.md5(c.user_id) == func.md5(authority.user_id),
+                ]
+            )
         if active_only:
             clauses.append(c.enabled.is_(True))
         # Extract only public JSON fields, excluding potentially large checkpoints.
-        payload_args: list[Any] = []
-        for name in (
-            "path",
-            "source_type",
-            "parent_uri",
-            "reason",
-            "instruction",
-            "build_index",
-            "summarize",
-            "processing_mode",
-            "processor_kwargs",
-        ):
-            payload_args.extend([name, func.json_extract(c.payload, f"$.{name}")])
-        public_payload = func.json_object(*payload_args, type_=JSON).label("payload")
+        public_payload = self._public_payload(
+            (
+                "path",
+                "source_type",
+                "parent_uri",
+                "reason",
+                "instruction",
+                "build_index",
+                "summarize",
+                "processing_mode",
+                "processor_kwargs",
+            )
+        ).label("payload")
         statement = select(
             c.task_id,
             c.account_id,
@@ -527,12 +605,17 @@ class SQLWatchStore(WatchStore):
         ).where(*clauses)
         if query.after is not None:
             timestamp, task_id = query.after
-            statement = statement.where(
-                or_(
-                    c.created_at < timestamp,
-                    and_(c.created_at == timestamp, c.task_id < task_id),
+            if self.dialect_name == "postgresql":
+                statement = statement.where(
+                    tuple_(c.created_at, c.task_id) < tuple_(timestamp, task_id)
                 )
-            )
+            else:
+                statement = statement.where(
+                    or_(
+                        c.created_at < timestamp,
+                        and_(c.created_at == timestamp, c.task_id < task_id),
+                    )
+                )
         async with self._transaction() as session:
             total = int(
                 (
@@ -625,6 +708,7 @@ class SQLWatchStore(WatchStore):
         run_id: Optional[str] = None,
     ) -> Optional[WatchTask]:
         """Apply explicit fields. With *run_id*, only the occupying run may write."""
+        # Validate even when the row is missing; resolve against the locked row below.
         patch.normalized()
         c = self._tasks.c
         where = [self._scope, c.task_id == task_id, self._authority(authority)]

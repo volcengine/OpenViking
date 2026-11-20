@@ -3,9 +3,9 @@
 """SQLite Watch persistence for processes sharing a database on one host."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
-from sqlalchemy import event
+from sqlalchemy import JSON, event, func
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.compiler import compiles
@@ -22,6 +22,16 @@ def _sqlite_now(element: Any, compiler: Any, **kw: Any) -> str:
 
 class SQLiteWatchStore(SQLWatchStore):
     dialect_name = "sqlite"
+
+    @property
+    def provider(self) -> str:
+        return "sqlite"
+
+    def _public_payload(self, names: Sequence[str]) -> Any:
+        args: list[Any] = []
+        for name in names:
+            args.extend([name, func.json_extract(self._tasks.c.payload, f"$.{name}")])
+        return func.json_object(*args, type_=JSON)
 
     @staticmethod
     def _connection_options(values: dict[str, Any]) -> tuple[URL, dict[str, Any]]:

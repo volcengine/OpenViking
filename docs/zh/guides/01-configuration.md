@@ -1405,7 +1405,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
-| `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql`（多节点共享） | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1556,11 +1556,11 @@ task ID 绑定。所有节点必须使用同一密钥，更换密钥会导致已
 `running()` 只读取归属和运行 ID、开始时间、Connector 标记、
 instruction 及数据库时间，不搬运或解密鉴权、Connector 状态和 checkpoint。
 
-MySQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
+MySQL 和 PostgreSQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
 保存在 payload 中，结算不会用旧 checkpoint 覆盖新配置。缺失 Task
 沿用现有宽限期及重试语义，创建 Task 后、关联 Watch 前崩溃的窗口仍可能造成重复导入。
 
-Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 Watch 表，
+MySQL Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 MySQL Watch 表，
 需执行一次索引更新；自定义表名时同步替换表名及索引名：
 
 ```sql
@@ -1591,14 +1591,76 @@ ALTER TABLE ov_watch_tasks
 }
 ```
 
+使用 PostgreSQL 时，安装 `openviking[postgres]` 并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql`（PostgreSQL 14+）。
+初始化会检查必需列的类型、可空性、排序规则和复合主键，在缺表、缺列或表结构不匹配时
+给出建表/迁移提示，并在索引缺失、无效或定义不匹配时发出警告，
+不会自动创建或迁移表及索引；自定义 `params.table` 时同步替换脚本中的表名和索引名。
+
+已有 PostgreSQL Watch 表若缺少账号/用户分页索引，需要由管理员执行以下迁移（不能放在事务中）：
+
+```sql
+CREATE INDEX CONCURRENTLY ix_ov_watch_tasks_list
+    ON ov_watch_tasks (service_name, md5(account_id), md5(user_id), deleted, created_at, task_id);
+```
+
+请使用配置中的表名和对应索引名。哈希用于限制 B-tree 索引键宽度；查询仍保留完整账号/用户等值校验，
+并按 `(created_at, task_id)` 扫描游标范围。分页继续返回精确的 `total`。
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "maxsize": 10,
+        "connect_timeout": 10,
+        "sslmode": "verify-full",
+        "sslrootcert": "/etc/openviking/postgres-ca.pem",
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL 必须配置 `user`、`database`，以及所有节点一致的 32 字节
+`credential_encryption_key`。数据库鉴权允许时可以省略 `password`。
+连接默认值为 host `127.0.0.1`、端口 `5432`、连接池大小 `10`、连接超时 `10` 秒、
+`sslmode=prefer`。TLS 参数为 `sslmode`、`sslrootcert`、`sslcert`、`sslkey`；
+需要验证 TLS 时使用 `verify-full` 并指定 CA。应用角色需要已有表的
+SELECT/INSERT/UPDATE/DELETE 权限，以及 schema 的 USAGE 权限。
+可以执行一次
+`python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`
+生成密钥，再通过部署的密钥配置注入。
+
+事务采用 READ COMMITTED；调度使用 PostgreSQL 的语句级稳定时钟 `statement_timestamp()`，
+同一语句内各行及表达式共享时间值，且该时钟可作为索引范围条件。URI 精确匹配和路径范围使用
+`"C"` 排序规则；前缀索引只覆盖前 128 个字符，实际匹配始终检查完整 URI 和 `/` 边界。
+更长前缀仍正确过滤，但不使用该前缀范围优化。非 root 分页使用 `list` 索引，
+通过账号/用户哈希等值条件及 `(created_at, task_id)` 游标范围扫描，并保留完整账号/用户校验。
+root 的全局分页使用 `list_all` 索引。公开列表在 SQL 层排除鉴权、Connector 状态和大型 checkpoint。
+File、MySQL 和 PostgreSQL 使用相同的鉴权、运行结算与 checkpoint 版本规则。
+
+此配置只切换 Watch 元数据，不切换 Task/Work、Account、PathLock、调度选主、文件或向量存储。
+PostgreSQL Watch 存储不依赖 Redis 或 pgvector；多节点部署仍需配置可共享的 Task/Work 状态、
+文件/索引后端和适合该部署的协调机制。切换 provider 不会迁移已有 Watch；
+同一部署不要同时使用不同 provider 作为写入端。
+
 所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
 调度器，通过 [AGFS coordination](#coordination-配置) 选主。
-leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
+leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File、MySQL 和 PostgreSQL 共用 Runtime
 的轮询与有限并发派发流程。后台派发在 leader 内存中维护
 未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
-恢复占用（File 为本进程状态，MySQL 为持久化行），后续派发不额外查询占用。
+恢复占用（File 为本进程状态，MySQL/PostgreSQL 为持久化行），后续派发不额外查询占用。
 手动触发和首次导入独立受理，扫描发现后计入
-后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 仍保留该事务限制。
+后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 和 PostgreSQL 仍保留该事务限制。
 一次运行就是
 对应的 ingestion Task：运行占用目标期间，Watch 行记录该 Task ID，且只有在持有
 目标 Tree PathLock 时才能开始运行。提交在创建 Task 前停止（服务停机、身份删除、

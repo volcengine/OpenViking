@@ -24,16 +24,16 @@ class TaskStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql", "postgres"}:
+        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
             raise ValueError(
-                "storage.task_store.provider must be 'file', 'mysql' or 'postgres', "
+                "storage.task_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
                 f"got {self.provider!r}"
             )
         return self
 
 
 class WatchStoreConfig(BaseModel):
-    """Watch persistence in a VikingFS file, local SQLite, or shared MySQL."""
+    """Watch store: a single-process control file or shared relational metadata."""
 
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -41,9 +41,9 @@ class WatchStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql", "sqlite"}:
+        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
             raise ValueError(
-                "storage.watch_store.provider must be 'file', 'mysql' or 'sqlite', "
+                "storage.watch_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
                 f"got {self.provider!r}"
             )
         if self.provider == "sqlite":
@@ -194,6 +194,12 @@ class StorageConfig(BaseModel):
             from openviking.service.task_store_postgres import PostgresTaskWorkStore
 
             store = PostgresTaskWorkStore(params=self.task_store.params, service_name=service_name)
+        elif self.task_store.provider == "sqlite":
+            from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+            params = dict(self.task_store.params)
+            params.setdefault("path", str(Path(self.workspace) / "task_store" / "tasks.db"))
+            store = SQLiteTaskWorkStore(params=params, service_name=service_name)
         else:
             from openviking.service.task_store import PersistentTaskStore
 
@@ -202,6 +208,10 @@ class StorageConfig(BaseModel):
 
     def build_watch_store(self, *, service_name: str, viking_fs: Any):
         """Build the configured Watch store."""
+        if self.watch_store.provider == "postgres":
+            from openviking.resource.watch_store_postgres import PostgresWatchStore
+
+            return PostgresWatchStore(service_name=service_name, params=self.watch_store.params)
         if self.watch_store.provider == "mysql":
             from openviking.resource.watch_store_mysql import MySQLWatchStore
 

@@ -17,8 +17,10 @@ GROUPS = (
     "task_work_mysql",
     "task_work_postgres",
     "watch_mysql",
+    "watch_postgres",
     "watch_runtime_mysql",
     "watch_process_mysql",
+    "watch_process_postgres",
 )
 
 
@@ -48,6 +50,10 @@ def prepare():
     ) as connection:
         assert connection.execute("SELECT 1").fetchone() == (1,)
     watch_params = json.loads(os.environ["OPENVIKING_WATCH_MYSQL_PARAMS"])
+    postgres_params = json.loads(os.environ["OPENVIKING_WATCH_POSTGRES_PARAMS"])
+    postgres_params["dbname"] = postgres_params.pop("database")
+    with psycopg.connect(**postgres_params, connect_timeout=10) as connection:
+        assert connection.execute("SELECT 1").fetchone() == (1,)
     for values in (params, watch_params):
         with pymysql.connect(**values, connect_timeout=10) as connection:
             with connection.cursor() as cursor:
@@ -104,6 +110,14 @@ def database_group(case):
             "tests.resource.test_watch_main_integration": "watch_runtime_mysql",
             "tests.resource.test_watch_process": "watch_process_mysql",
         }.get(module)
+    if "postgres" in parameters:
+        if module in {
+            "tests.resource.test_watch_store",
+            "tests.resource.test_watch_store_postgres",
+        }:
+            return "watch_postgres"
+        if module == "tests.resource.test_watch_process":
+            return "watch_process_postgres"
     return None
 
 

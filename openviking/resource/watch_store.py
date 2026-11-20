@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""The Watch store contract shared by file, MySQL and SQLite implementations.
+"""The Watch store contract shared by file and relational implementations.
 
 ``run_started_at`` makes a submission visible to target transfers before the
 resource layer creates its Task. ``current_run_id`` then associates that real
@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
-from openviking.connector.watch_auth import is_connector_watch_auth_state
+from openviking.connector.watch_auth import is_watch_auth_state
 from openviking.resource.watch_types import (
     WatchAuthority,
     WatchCandidate,
@@ -35,7 +35,7 @@ def parent_uri(uri: str) -> Optional[str]:
 
 
 def is_connector(auth_state: Optional[dict[str, Any]]) -> bool:
-    return is_connector_watch_auth_state(auth_state)
+    return is_watch_auth_state(auth_state)
 
 
 def target_conflict_message(uri: Optional[str]) -> str:
@@ -98,7 +98,7 @@ class WatchStore(ABC):
         scope_account_id: Optional[str] = None,
         target_uri: Optional[str] = None,
     ) -> list[WatchTask]:
-        """Visible Watches; the file store keeps file order, MySQL lists newest first."""
+        """Visible Watches; File keeps file order, SQL lists newest first."""
 
     @abstractmethod
     async def list_tasks_page(

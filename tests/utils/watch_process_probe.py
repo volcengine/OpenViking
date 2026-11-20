@@ -13,6 +13,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_store_mysql import MySQLWatchStore
+from openviking.resource.watch_store_postgres import PostgresWatchStore
 from openviking.resource.watch_store_sqlite import SQLiteWatchStore
 from openviking.resource.watch_types import WatchTask
 from openviking.service.task_store import PersistentTaskStore
@@ -25,10 +26,14 @@ OWNER = {"account_id": "default", "user_id": "default"}
 
 async def main():
     mode, material = sys.argv[1:3]
-    if mode in {"mysql", "sqlite"}:
+    if mode in {"mysql", "postgres", "sqlite"}:
         config = json.loads(material)
-        store_class = SQLiteWatchStore if mode == "sqlite" else MySQLWatchStore
-        store = store_class(service_name=config["service_name"], params=config["params"])
+        cls = {
+            "mysql": MySQLWatchStore,
+            "postgres": PostgresWatchStore,
+            "sqlite": SQLiteWatchStore,
+        }[mode]
+        store = cls(service_name=config["service_name"], params=config["params"])
         await store.initialize()
         try:
             candidate = await store.get_candidate(config["watch_id"])
