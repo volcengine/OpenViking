@@ -29,11 +29,10 @@ export function useFsTree(options: UseDirectoryTreeOptions): FsTreeState {
       const opening = !inputs.isExpanded(row.uri);
       const firstPage = toggleTree(row);
       if (!opening) {
+        const collapsed = identifyUri(row.uri);
         for (const chain of activeChains.current) {
-          if (
-            chain.parent === row.uri ||
-            chain.parent.startsWith(row.uri + '/')
-          )
+          const parent = identifyUri(chain.parent);
+          if (parent === collapsed || parent.startsWith(`${collapsed}/`))
             activeChains.current.delete(chain);
         }
         return firstPage;
@@ -69,7 +68,7 @@ export function useFsTree(options: UseDirectoryTreeOptions): FsTreeState {
       void expandChildren().finally(() => activeChains.current.delete(chain));
       return firstPage;
     },
-    [cancelReveal, inputs, toggleTree],
+    [cancelReveal, identifyUri, inputs, toggleTree],
   );
   return {
     ...tree,

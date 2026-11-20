@@ -80,17 +80,26 @@ for (const [name, entries] of [
     }
   });
 
-for (const action of ['fold', 'account'])
+for (const action of ['fold', 'trailing-slash fold', 'account'])
   test(`a delayed child cannot continue after ${action}`, async () => {
     const pending = deferred();
-    const fetch = fixture({ [folder]: [dir(child)] }, (call) =>
-      call.uri === child ? pending.promise : undefined,
+    const parent = action === 'trailing-slash fold' ? folder + '/' : folder;
+    const fetch = fixture(
+      { [parent]: [dir(child)], [folder]: [dir(child)] },
+      (call) => {
+        if (call.uri === root) return ok([dir(parent)]);
+        if (call.uri === child) return pending.promise;
+      },
     );
     const view = await mount(element(fetch));
     try {
-      await toggle(view, folder);
-      if (action === 'fold') await toggle(view, folder);
-      else await view.render(element(fetch, 'B'));
+      await toggle(view, parent);
+      assert.equal(row(view, child).getAttribute('aria-expanded'), 'true');
+      if (action === 'account') await view.render(element(fetch, 'B'));
+      else {
+        await toggle(view, parent);
+        assert.equal(row(view, parent).getAttribute('aria-expanded'), 'false');
+      }
       await act(async () => pending.resolve(await ok([dir(leaf)])));
       await settle();
       assert.equal(
