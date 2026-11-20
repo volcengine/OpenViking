@@ -3182,24 +3182,6 @@ class VikingVectorIndexBackend:
             ]
             source_records = await self._fetch_transfer_records(ctx, selected_inventory)
             view_changed = self._inventory_view_changed(selected_inventory, source_records)
-            unselected = [
-                record for record in inventory if record["uri"] not in selected_source_uris
-            ]
-            if unselected and not view_changed:
-                # Orphans also shift offset pages; verify only their metadata.
-                unselected_uris = sorted({record["uri"] for record in unselected})
-                current_unselected: List[Dict[str, Any]] = []
-                for start in range(0, len(unselected_uris), 100 // 3):
-                    chunk = unselected_uris[start : start + 100 // 3]
-                    current_unselected.extend(
-                        await self._read_transfer_inventory(
-                            ctx,
-                            And([source_scope, Or([Eq("uri", uri) for uri in chunk])]),
-                            what=f"Vector transfer orphan check under {source_uri}",
-                            entry_uris=chunk,
-                        )
-                    )
-                view_changed = self._inventory_view_changed(unselected, current_unselected)
             if view_changed:
                 # A changed read view can hide extra IDs even at known URIs.
                 refreshed = await self._read_transfer_inventory(
@@ -3221,6 +3203,27 @@ class VikingVectorIndexBackend:
                         ],
                     )
                 )
+                inventory = refreshed
+            if source_expected_levels is not None:
+                # Only filesystem callers provide a complete manifest; chunks of real files stay.
+                orphan_ids = [
+                    str(record["id"])
+                    for record in inventory
+                    if self._vector_entry_uri(record["uri"], selected_source_uris)
+                    not in selected_source_uris
+                ]
+                for start in range(0, len(orphan_ids), 100):
+                    chunk = orphan_ids[start : start + 100]
+                    try:
+                        await self._strict_transfer_delete(ctx, chunk)
+                    except Exception as exc:
+                        # Optional cleanup must not trigger filesystem target rollback.
+                        logger.info(
+                            "Vector transfer orphan cleanup failed records=%d error_type=%s",
+                            len(chunk),
+                            type(exc).__name__,
+                            extra={"degraded": True},
+                        )
             # Keep the filesystem API's existing per-entry diagnostic count.
             batches = len(selected_source_uris)
         elif not use_entry_queries:

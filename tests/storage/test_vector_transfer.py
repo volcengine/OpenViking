@@ -2355,7 +2355,7 @@ async def test_changed_source_timestamp_recovers_hidden_id_without_repeated_fetc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_unselected_orphan_deletion_recovers_hidden_source_id(monkeypatch, operation):
+async def test_orphan_cleanup_runs_after_pagination_without_rechecking(monkeypatch, operation):
     source, target = "viking://resources/source", "viking://resources/target"
     records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
     backend = _MemoryTransferBackend(
@@ -2367,21 +2367,22 @@ async def test_unselected_orphan_deletion_recovers_hidden_source_id(monkeypatch,
         ]
     )
     query, get = backend._query, backend._strict_transfer_get
-    calls = 0
     fetched = []
 
-    async def delete_before_second_page(**kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            backend.records.pop("unselected")
+    async def query_without_orphan_recheck(**kwargs):
+        def checks_orphan(expr):
+            if isinstance(expr, Eq):
+                return expr.field == "uri" and expr.value == source + "/orphan.md"
+            return any(checks_orphan(cond) for cond in getattr(expr, "conds", []))
+
+        assert not checks_orphan(kwargs["filter"])
         return await query(**kwargs)
 
     async def track_get(ctx, ids):
         fetched.extend(ids)
         return await get(ctx, ids)
 
-    monkeypatch.setattr(backend, "_query", delete_before_second_page)
+    monkeypatch.setattr(backend, "_query", query_without_orphan_recheck)
     monkeypatch.setattr(backend, "_strict_transfer_get", track_get)
     result = await getattr(backend, operation)(
         _ctx(),
@@ -2394,6 +2395,7 @@ async def test_unselected_orphan_deletion_recovers_hidden_source_id(monkeypatch,
     assert result.written == 101
     assert fetched.count("unobserved") == 1
     assert "unselected" not in fetched
+    assert "unselected" not in backend.records
     if operation == "update_uri_mapping":
         assert "unobserved" not in backend.records
 

@@ -83,6 +83,63 @@ async def seed_vector(backend, uri, content):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("orphan_count", [1, 205])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_target(
+    indexed_fs, monkeypatch, operation, orphan_count, cleanup_fails
+):
+    from openviking.storage.expr import Eq
+
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/archive"
+    source_file, target_file = source + "/a.md", target + "/a.md"
+    keep = target + "/keep.md"
+    orphans = [f"{source}/gone-{i:03d}.md" for i in range(orphan_count)]
+    await fs.write_file_bytes(source_file, b"new", ctx=ctx)
+    await fs.write_file_bytes(keep, b"keep original", ctx=ctx)
+    for uri in [source_file, keep, *orphans]:
+        await seed_vector(backend, uri, uri)
+    account_backend = await backend._get_backend_for_context(ctx)
+    query, delete = account_backend.strict_query, backend._strict_transfer_delete
+    cleanup_batches = []
+
+    def is_orphan_query(expr):
+        if isinstance(expr, Eq):
+            return expr.field == "uri" and expr.value in orphans
+        return any(is_orphan_query(cond) for cond in getattr(expr, "conds", []))
+
+    async def query_without_orphan_recheck(*args, **kwargs):
+        if is_orphan_query(kwargs.get("filter")):
+            raise TimeoutError("orphan recheck must not run")
+        return await query(*args, **kwargs)
+
+    async def delete_orphans(ctx, ids):
+        if set(ids).intersection(orphans):
+            cleanup_batches.append(ids)
+            if cleanup_fails:
+                raise TimeoutError("orphan cleanup unavailable")
+        return await delete(ctx, ids)
+
+    monkeypatch.setattr(account_backend, "strict_query", query_without_orphan_recheck)
+    monkeypatch.setattr(backend, "_strict_transfer_delete", delete_orphans)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+
+    assert result["vectors"]["written"] == 1
+    assert cleanup_batches and all(len(batch) <= 100 for batch in cleanup_batches)
+    remaining = await backend.get(orphans, ctx=ctx)
+    assert len(remaining) == (orphan_count if cleanup_fails else 0)
+    assert await fs.read_file_bytes(keep, ctx=ctx) == b"keep original"
+    assert await backend.get_context_by_uri(keep, ctx=ctx)
+    assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
+    assert await backend.get_context_by_uri(target_file, ctx=ctx)
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("directory", [False, True])
 async def test_transfer_uses_complete_directory_scan_and_legacy_file_reads(
     indexed_fs, monkeypatch, operation, directory
@@ -340,7 +397,10 @@ async def test_directory_transfer_reads_all_exact_entries_with_native_storage(
     target_ids = [vector_record_id(ctx.account_id, uri, 2) for uri in old_targets]
     assert {record["uri"] for record in await backend.get(target_ids, ctx=ctx)} == set(old_targets)
     assert not await backend.get(old_targets, ctx=ctx)
-    assert {record["uri"] for record in await backend.get(untouched, ctx=ctx)} == set(untouched)
+    assert not await backend.get([untouched[0]], ctx=ctx)
+    assert {record["uri"] for record in await backend.get(untouched[1:], ctx=ctx)} == set(
+        untouched[1:]
+    )
     assert len(await backend.get(source_uris, ctx=ctx)) == (len(names) if operation == "cp" else 0)
     assert await fs.read_file_bytes(f"{target}/keep.md", ctx=ctx) == b"keep"
     assert await fs.read_file_bytes(f"{target}/literal.md#chunk_0001", ctx=ctx) == b"new"
