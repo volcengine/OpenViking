@@ -106,22 +106,6 @@ export function buildRecallEndpointBody(cfg = {}) {
   return body;
 }
 
-const RECENT_EVENTS_QUERY = /最近(?:一次|一条|一轮|几次|几天|的|发生|处理)|最新|近期|\b(?:latest|most recent|recent)\b/i;
-const HISTORICAL_EVENTS_QUERY = /去年|前年|上个?(?:月|季度)|(?:旧|历史)(?:的)?(?:工单|事件|复盘)|\b(?:historical|archived|(?:last|previous) (?:month|quarter|year))\b/i;
-const EVENT_DATE_QUERY = /\b(?:19|20)\d{2}\b|\d{1,2}\s*月\s*\d{1,2}\s*[日号]/;
-const SPECIFIC_RECORD_QUERY = /\b[A-Z][A-Z0-9]{1,15}-\d+\b|#\d+\b|\b(?:ticket|issue)\s+\d+\b|(?:工单|单号)\s*[：:#]?\s*\d+\b/i;
-
-function eventDecayProtection(cfg, query) {
-  const configured = String(cfg.recallEventsDecayProtection ?? "").trim();
-  if (configured === "off") return "";
-  if (configured !== "auto") return configured;
-  // A specific record or historical date takes precedence over recency.
-  if (HISTORICAL_EVENTS_QUERY.test(query) || EVENT_DATE_QUERY.test(query) || SPECIFIC_RECORD_QUERY.test(query)) {
-    return "";
-  }
-  return RECENT_EVENTS_QUERY.test(query) ? "7d" : "";
-}
-
 /**
  * Body for the server-side context face. The plugin declares intent (coding
  * purpose, budget, session) and leaves the mechanics — quota ratios, tier
@@ -135,7 +119,7 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
     Math.floor(Number(cfg.recallMaxTokens || DEFAULT_CONTEXT_MAX_TOKENS)),
   );
   const body = {
-    query: options.query ?? "",
+    query: "",
     mode: "context",
     purpose: "coding",
     score_threshold: Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35,
@@ -145,8 +129,8 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   if (limitConfigured) body.quotas = codingQuotas(limit);
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
-  const decayProtection = eventDecayProtection(cfg, body.query);
-  if (decayProtection) body.events_time_decay_protection = decayProtection;
+  const decayProtection = String(cfg.recallEventsDecayProtection ?? "").trim();
+  if (decayProtection && decayProtection !== "off") body.events_time_decay_protection = decayProtection;
 
   const sessionId = String(options.sessionId || "").trim();
   if (sessionId) {
@@ -534,7 +518,8 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
   const log = options.log || (() => {});
   if (await isContextFaceLegacy(options.legacyCachePath)) return null;
 
-  const body = buildContextSearchBody(cfg, { ...options, query });
+  const body = buildContextSearchBody(cfg, options);
+  body.query = query;
   const search = () => fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
