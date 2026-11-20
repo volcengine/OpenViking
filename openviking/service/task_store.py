@@ -452,15 +452,8 @@ class PersistentTaskStore(TaskWorkStore):
             raise ValueError("PersistentTaskStore requires account_id and user_id")
         business_key = (task.account_id, task.user_id, task.task_type, task.resource_id)
         async with self._business_locks.acquire(business_key):
-            if reject_if_active:
-                candidates = await self.list(task.account_id, user_id=task.user_id)
-                if any(
-                    item.task_type == task.task_type
-                    and item.resource_id == task.resource_id
-                    and item.status in ACTIVE_TASK_STATUSES
-                    for item in candidates
-                ):
-                    raise TaskAlreadyActive(task.task_type, task.resource_id)
+            if reject_if_active and await self._has_active_task(task):
+                raise TaskAlreadyActive(task.task_type, task.resource_id)
             owner = (task.account_id, task.user_id, task.task_id)
             async with self._record_locks.acquire(owner):
                 existing = await self._load_task(task.task_id, task.account_id, task.user_id)
@@ -475,6 +468,38 @@ class PersistentTaskStore(TaskWorkStore):
                     self._task_cache[owner] = stored
                     self._work_sets[owner] = _WorkSet({})
                 return TaskCreationResult(deepcopy(stored), created=True)
+
+    async def _has_active_task(self, task: TaskRecord) -> bool:
+        """Check durable records until a matching active task is found.
+
+        This admission check avoids ``list`` so it does not load the owner's
+        entire task history into the process cache. A miss still scans the
+        owner's files because the file store has no secondary index.
+        """
+        assert task.account_id and task.user_id
+        directory = self._task_dir(task.account_id, task.user_id)
+        try:
+            entries = await self._ls(directory)
+        except (AGFSNotFoundError, FileNotFoundError):
+            return False
+        for item in entries:
+            path = item.get("path") or f"{directory}/{item.get('name', '')}"
+            if not path.endswith(".json"):
+                continue
+            try:
+                payload = json.loads(_decode_bytes(await self._read(path)))
+                record = _task_from_payload(
+                    payload, account_id=task.account_id, user_id=task.user_id
+                )
+            except (AGFSNotFoundError, FileNotFoundError, ValueError, TypeError, KeyError):
+                continue
+            if (
+                record.task_type == task.task_type
+                and record.resource_id == task.resource_id
+                and record.status in ACTIVE_TASK_STATUSES
+            ):
+                return True
+        return False
 
     async def withdraw_unaccepted(
         self, task_id: str, *, account_id: str, user_id: str

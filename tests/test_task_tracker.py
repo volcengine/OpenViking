@@ -15,10 +15,11 @@ import pytest
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, TaskRecord
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     PersistentTaskStore,
+    TaskAlreadyActive,
     _task_from_payload,
     _task_to_payload,
 )
@@ -177,6 +178,79 @@ async def test_create_task(tracker: TaskTracker):
     assert task.task_type == "session_commit"
     assert task.resource_id == "sess-123"
     assert task.status == TaskStatus.PENDING
+
+
+async def test_create_reject_if_active_stops_after_matching_durable_record(monkeypatch):
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
+    active = TaskRecord(
+        task_id="active",
+        task_type="reindex",
+        resource_id=None,
+        account_id="acme",
+        user_id="alice",
+    )
+    await store.create(active)
+    for index in range(4):
+        terminal = TaskRecord(
+            task_id=f"terminal-{index}",
+            task_type="other",
+            resource_id=f"resource-{index}",
+            account_id="acme",
+            user_id="alice",
+        )
+        await store.create(terminal)
+        await store.start_task(terminal.task_id, stage=None, account_id="acme", user_id="alice")
+        await store.record_outcome(
+            terminal.task_id,
+            result={},
+            error=None,
+            resource_id=None,
+            cancelled=False,
+            account_id="acme",
+            user_id="alice",
+        )
+
+    read_paths = []
+    original_read = store._read
+
+    async def counted_read(path):
+        read_paths.append(path)
+        return await original_read(path)
+
+    monkeypatch.setattr(store, "_read", counted_read)
+    duplicate = TaskRecord(
+        task_id="duplicate",
+        task_type="reindex",
+        resource_id=None,
+        account_id="acme",
+        user_id="alice",
+    )
+    with pytest.raises(TaskAlreadyActive):
+        await store.create(duplicate, reject_if_active=True)
+    assert read_paths == ["/local/acme/alice/tasks/active.json"]
+
+
+async def test_create_reject_if_active_matches_none_resource_exactly():
+    store = PersistentTaskStore(_FakeAgfs())
+    await store.create(
+        TaskRecord(
+            task_id="non-null",
+            task_type="reindex",
+            resource_id="viking://resources/item",
+            account_id="acme",
+            user_id="alice",
+        )
+    )
+
+    candidate = TaskRecord(
+        task_id="none-resource",
+        task_type="reindex",
+        resource_id=None,
+        account_id="acme",
+        user_id="alice",
+    )
+    assert (await store.create(candidate, reject_if_active=True)).created
 
 
 async def test_deletion_guard_refuses_new_tasks_for_deleting_identities(tracker: TaskTracker):
