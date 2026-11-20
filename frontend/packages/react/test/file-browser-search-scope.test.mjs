@@ -136,12 +136,10 @@ test('choosing a subdirectory limits the search and clearing restores the root',
       modal().querySelector('.ov-file-browser-search__options input'),
     );
     await settle();
-    assert.equal(
-      modal().querySelector(
-        `.ov-file-browser-search__options [title="${childDisplay}"]`,
-      ),
-      null,
+    const childOption = modal().querySelector(
+      `.ov-file-browser-search__options [title="${childDisplay}"]`,
     );
+    assert.equal(childOption === null, true);
     assert.deepEqual(targets().at(-1), [rootUri]);
     await click(
       modal().querySelector('.ov-file-browser-search__advanced-clear'),
