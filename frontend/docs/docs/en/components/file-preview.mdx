@@ -116,7 +116,7 @@ Fields shared by all three tabs. Content tabs have no header row, so `toolbar`, 
 | disabled     | Disables the tab so it cannot be selected                                                                                      | `boolean`                    | `false`                                                   |
 | toolbar      | Hides built-in controls for this tab; it cannot turn on a control the top-level `toolbar` switched off                         | `FilePreviewToolbarOptions`  | -                                                         |
 | onOpenParent | File tabs: called after `operations.openParent` resolves, with the full URI of the clicked level; directory tabs never call it | `(uri: string) => void`      | -                                                         |
-| onCopyPath   | Called after the path is copied, with the copied path                                                                          | `(path: string) => void`     | -                                                         |
+| onCopyPath   | Called after the path is copied, with the same formatted path written to the clipboard                                         | `(path: string) => void`     | -                                                         |
 | labels       | Overrides text for this tab, taking precedence over the top-level `labels`                                                     | `Partial<FilePreviewLabels>` | -                                                         |
 
 ### FilePreviewFileTab
@@ -212,7 +212,7 @@ When several of `content`, `file` and `url` are given, the first one with a valu
 | content   | Text content for Markdown, JSON, code and similar; only an empty string shows the empty-file state                                     | `string`       | -        |
 | file      | Binary file for PDF, Office documents, spreadsheets, images and similar                                                                | `File \| Blob` | -        |
 | url       | An accessible file URL; the component does no authentication                                                                           | `string`       | -        |
-| path      | Full path, shown as the breadcrumb and used as the text for copy path; without it the breadcrumb shows only the file name              | `string`       | -        |
+| path      | Full path for the breadcrumb. Copy path formats Viking URIs. An omitted path shows only the file name.                                 | `string`       | -        |
 | fileType  | Explicit format hint, taking precedence over extension and MIME type                                                                   | `string`       | -        |
 | truncated | Only part of the body was read; when `true`, file tabs show a notice below the body                                                    | `boolean`      | `false`  |
 
@@ -437,12 +437,12 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 ### Path and breadcrumb
 
 - Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name.
-- URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation and copying use the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
+- URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation uses the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
 - No path: without `source.path` the breadcrumb shows only the file name and there is no copy-path button.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.
 - Absolute paths: the ancestors of `/a/b/c.md` keep the leading `/`, and relative paths stay as written.
 - Overflow: when the path does not fit, the levels after the first move into a "…" menu, and only if that is still too wide does the first level collapse too; the menu entries also call `operations.openParent`.
-- Copy path: after copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with `labels.copied`. The feedback resets after 1.5 seconds without adding text to the path row. Copying uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
+- Copy path: Viking URI paths decode readable text while retaining escapes for reserved characters. After copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with `labels.copied`. The feedback resets after 1.5 seconds without adding text to the path row. Copying uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
 
 ### Actions and editing
 

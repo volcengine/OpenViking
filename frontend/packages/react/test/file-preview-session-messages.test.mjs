@@ -174,14 +174,20 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
     assert.match(document.querySelector('#inline').textContent, /"parts"/);
     viewSwitch('Preview').click();
     await waitFor(() => transcript('inline'));
-    await waitFor(() =>
-      document.querySelector('#ordinary').textContent.includes('msg-user'),
+    const jsonPreview = (id) =>
+      document.querySelector(`#${id} [data-file-viewer-json]`);
+    await waitFor(() => jsonPreview('ordinary') && jsonPreview('unsupported'));
+    assert.match(jsonPreview('ordinary').textContent, /1 \/ 4/);
+    assert.equal(transcript('ordinary'), null);
+    assert.equal(transcript('unsupported'), null);
+    const source = [...document.querySelectorAll('#unsupported button')].find(
+      (button) => button.textContent === 'Source',
     );
+    assert.ok(source);
+    source.click();
     await waitFor(() =>
       document
         .querySelector('#unsupported')
-        .textContent.includes('Keep generic JSON'),
+        .textContent.includes('Unsupported future content'),
     );
-    assert.equal(transcript('ordinary'), null);
-    assert.equal(transcript('unsupported'), null);
   }));

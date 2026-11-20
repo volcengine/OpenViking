@@ -23,13 +23,13 @@ import '@openviking/react/components/directory-tour/style.css';
 
 ### Basic usage
 
-Click "Explore OV directories" to start the six-step tour. To see the fallback at step 5, first check "Simulate missing experiences", then advance to that step and click "Next" to continue.
+Click "Explore OV directories" to start the six-step tour. To see step 5 anchored to the current user’s root when experiences are missing, first check "Simulate missing experiences", then advance to that step.
 
 ```tsx file="../../_demos/directory-tour-basic.tsx" preview
 
 ```
 
-The example locates rows with the `getRowElement` method of [FileTree](./file-tree). When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
+The example locates rows with the `getRowElement` method of [FileTree](./file-tree). The host resolves `userExperiences` to the current user’s root row when its loaded directory listing confirms that experiences are absent. When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
 
 ### Custom content
 
@@ -71,6 +71,8 @@ Size constraints in `className` and `style` keep their CSS semantics. The card a
 | labels           | Overrides interface text                                                                                                                                                                                                                                                           | `DirectoryTourLabels`                                                           | -                              |
 | locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                                                                      | `'zh-CN' \| 'en-US'`                                                            | Inherited, otherwise `'en-US'` |
 | className, style | Class name and style of the card root, for sizing and theme variables                                                                                                                                                                                                              | `string`, `CSSProperties`                                                       | -                              |
+
+For `userExperiences`, wait for the parent listing to finish. If it confirms the directory is missing and the current user’s root is known, return that root row. If the target exists but is unavailable, return `null`.
 
 ### DirectoryTourStep
 

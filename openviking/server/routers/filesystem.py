@@ -43,7 +43,7 @@ def _reject_managed_tools_uri(
 
 @router.get("/ls")
 async def ls(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="File or directory Viking URI"),
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
     output: str = Query("agent", description="Output format: original or agent"),
@@ -69,7 +69,7 @@ async def ls(
     include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List directory contents."""
+    """List a directory's children or return the file itself."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
@@ -107,7 +107,7 @@ async def ls(
 
 @router.get("/tree")
 async def tree(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="File or directory Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Maximum returned abstract length"),
     include_abstract: Optional[bool] = Query(
@@ -128,7 +128,7 @@ async def tree(
     include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get directory tree."""
+    """List directory descendants or return a file as a single-node tree."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables

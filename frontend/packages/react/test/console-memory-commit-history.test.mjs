@@ -36,6 +36,7 @@ for (const persistsFlag of [true, false]) {
         stored.push(item);
         return ok({});
       }
+      if (pathname === '/api/v1/tasks') return ok([]);
       if (pathname === '/api/v1/content/read')
         return ok(stored.map((message) => JSON.stringify(message)).join('\n'));
       if (pathname === '/bot/v1/chat/stream') {

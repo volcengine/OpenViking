@@ -12,7 +12,7 @@ import {
   ok,
 } from './helpers/preview-native-dom.mjs';
 
-const uri = 'viking://user/alice/skills/guide.md';
+const uri = 'viking://user/alice/skills/%E4%B8%AD%E6%96%87/guide.md';
 const oid = 'a'.repeat(40);
 const feedback = () => document.querySelector('.ov-path-copy-feedback');
 
@@ -48,7 +48,7 @@ test('historical path copy waits for its clipboard result and uses path-specific
     await click(copyPath());
     assert.equal(feedback(), null);
     await act(async () => complete());
-    assert.equal(writes[0], uri);
+    assert.equal(writes[0], 'viking://user/alice/skills/中文/guide.md');
     assert.equal(feedback()?.textContent.trim(), 'Node path copied');
     assert.equal(workflow().textContent.includes('Node path copied'), false);
     fail = true;
