@@ -31,7 +31,12 @@ export async function readFile(
   isWiki = false,
   onWikiSaveStatus?: (status?: WikiSaveStatus) => void,
   hint?: Awaited<ReturnType<typeof readDashboardHint>>,
-): Promise<FilePreviewFileTab & { compileOutput?: boolean }> {
+): Promise<{
+  tab: FilePreviewFileTab & { compileOutput?: boolean };
+  resolveWikiTab?: () => Promise<
+    (FilePreviewFileTab & { compileOutput?: boolean }) | undefined
+  >;
+}> {
   const name = nameFromUri(uri);
   const icon = fileTypeIcon(name);
 
@@ -47,21 +52,28 @@ export async function readFile(
     // The endpoint answers octet-stream; the real type is restored from the
     // extension, which is what the base uses to pick an adapter.
     const typed = new Blob([blob], { type: mimeTypeOf(name) });
-    return toBinaryTab(uri, name, typed, icon, openParent);
+    return { tab: toBinaryTab(uri, name, typed, icon, openParent) };
   }
 
-  const { content, truncated, wiki, compileOutput } = await readFileContent(
+  const result = await readFileContent(
     client,
     uri,
     options,
     MAX_LINES,
     isWiki,
     hint,
+    true,
   );
-  return {
+  const resolveImage = createPreviewImageResolver(client, uri, false, options);
+  const toTab = ({
+    content,
+    truncated,
+    wiki,
+    compileOutput,
+  }: typeof result) => ({
     ...toFileTab({ uri }, content, MAX_LINES, icon, openParent, truncated),
     compileOutput,
-    resolveImage: createPreviewImageResolver(client, uri, false, options),
+    resolveImage,
     editing: createFileEditing(
       client,
       uri,
@@ -71,5 +83,15 @@ export async function readFile(
       wiki,
       onWikiSaveStatus,
     ),
+  });
+  const resolveWiki = result.resolveWiki;
+  return {
+    tab: toTab(result),
+    resolveWikiTab:
+      resolveWiki &&
+      (async () => {
+        const wiki = await resolveWiki();
+        if (wiki) return toTab({ ...wiki, resolveWiki: undefined });
+      }),
   };
 }

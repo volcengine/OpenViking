@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement as h } from 'react';
+import { act, createElement as h } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
-import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
+import {
+  deferred,
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+} from './helpers/module-dom.mjs';
 
 const fileTime = '2026-11-11T22:10:00.123Z';
 
@@ -74,3 +80,127 @@ for (const dashboardKinds of [undefined, []]) {
     }
   });
 }
+
+test('long Wiki preview renders before legacy ownership and finds a trailer beyond the line cap', async () => {
+  const target = 'viking://resources/legacy';
+  const uri = `${target}/long.md`;
+  const registry = deferred();
+  const first = Array.from({ length: 2000 }, () => 'body').join('\n');
+  const fetch = recordingFetch(({ path, query }) => {
+    if (path.endsWith('/fs/ls')) return ok([]);
+    if (path.endsWith('/fs/stat')) return ok({ isDir: false });
+    if (path.endsWith('/fs/attrs')) return ok({ attrs: { tags: [] } });
+    if (path.endsWith('/compile/configs')) return registry.promise;
+    return ok(
+      query.limit === '-1'
+        ? `${first}\nMore\n<!-- CONFLICTS_CONTENT\n-->`
+        : first,
+    );
+  });
+  const view = await mount(
+    h(
+      OpenVikingProvider,
+      { baseURL: 'https://ov.test', fetch },
+      h(FileBrowser, { uri, dashboardKinds: [] }),
+    ),
+  );
+  const meta = () =>
+    view.container.querySelector('.ov-file-browser__preview-meta')?.textContent;
+  try {
+    assert.match(meta(), /characters/);
+    assert.doesNotMatch(meta(), /AI generated/);
+    assert.equal(
+      fetch.calls.filter((call) => call.query.limit === '-1').length,
+      0,
+    );
+    await act(async () =>
+      registry.resolve(await ok({ targets: [{ to: target }] })),
+    );
+    await settle();
+    assert.match(meta(), /AI generated/);
+    assert.equal(
+      fetch.calls.filter((call) => call.path.endsWith('/content/read')).length,
+      2,
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('failed Compile ownership lookup leaves a short Markdown preview visible', async () => {
+  const attrs = deferred();
+  const uri = 'viking://resources/chapter.md';
+  const fetch = recordingFetch(({ path }) => {
+    if (path.endsWith('/fs/ls')) return ok([]);
+    if (path.endsWith('/fs/stat')) return ok({ isDir: false });
+    if (path.endsWith('/fs/attrs')) return attrs.promise;
+    return ok('Chapter text\n<!-- CONFLICTS_CONTENT\n-->');
+  });
+  const view = await mount(
+    h(
+      OpenVikingProvider,
+      { baseURL: 'https://ov.test', fetch },
+      h(FileBrowser, { uri, dashboardKinds: [] }),
+    ),
+  );
+  const meta = () =>
+    view.container.querySelector('.ov-file-browser__preview-meta')?.textContent;
+  try {
+    assert.match(meta(), /characters/);
+    await act(async () => attrs.resolve(new Response(null, { status: 500 })));
+    await settle();
+    assert.match(meta(), /characters/);
+    assert.doesNotMatch(meta(), /AI generated/);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('late Dashboard attrs do not reload directory summaries or non-Markdown files', async () => {
+  for (const isDir of [true, false]) {
+    const attrs = deferred();
+    const uri = isDir
+      ? 'viking://resources/dir'
+      : 'viking://resources/notes.txt';
+    const fetch = recordingFetch(({ path }) => {
+      if (path.endsWith('/fs/ls')) return ok([]);
+      if (path.endsWith('/fs/stat')) return ok({ isDir });
+      if (path.endsWith('/fs/attrs')) return attrs.promise;
+      return ok('Visible content');
+    });
+    const view = await mount(
+      h(
+        OpenVikingProvider,
+        { baseURL: 'https://ov.test', fetch },
+        h(FileBrowser, { uri }),
+      ),
+    );
+    const reads = () =>
+      fetch.calls.filter(
+        (call) =>
+          call.uri === uri &&
+          (call.path.includes('/content/') || call.path.endsWith('/fs/stat')),
+      ).length;
+    try {
+      assert.match(
+        view.container.querySelector('.ov-file-browser__preview-meta')
+          ?.textContent,
+        /15 characters/,
+      );
+      const initialReads = reads();
+      assert.equal(initialReads, isDir ? 3 : 2);
+      await act(async () =>
+        attrs.resolve(await ok({ uri, attrs: { tags: [] } })),
+      );
+      await settle();
+      assert.equal(reads(), initialReads);
+      assert.match(
+        view.container.querySelector('.ov-file-browser__preview-meta')
+          ?.textContent,
+        /15 characters/,
+      );
+    } finally {
+      await view.unmount();
+    }
+  }
+});

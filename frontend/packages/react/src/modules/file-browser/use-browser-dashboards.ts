@@ -12,6 +12,7 @@ import { useWikiConflictIndicators } from './wiki-conflict-indicators.js';
 import {
   useWikiConflictIndex,
   useDashboardHint,
+  previewDashboardOptions,
 } from './use-dashboard-metadata.js';
 import {
   type FileBrowserDashboard,
@@ -21,6 +22,7 @@ import {
 export function useBrowserDashboards({
   rows,
   metadataRows,
+  resourceType,
   uri,
   rootUri,
   identifyUri,
@@ -36,6 +38,7 @@ export function useBrowserDashboards({
 }: {
   rows: readonly FileTreeRow[];
   metadataRows: readonly FileTreeRow[];
+  resourceType: 'directory' | 'file' | 'unknown';
   uri: string | null;
   rootUri: string;
   identifyUri: (uri: string) => string;
@@ -178,14 +181,13 @@ export function useBrowserDashboards({
         onOpenDashboard: open,
       })
     : undefined;
-  const contentKind: 'pending' | 'wiki' | 'plain' =
-    uri && /\.md$/i.test(uri) && !resolved && hint.loading
-      ? 'pending'
-      : resolved?.kind === 'wiki'
-        ? 'wiki'
-        : 'plain';
   return {
-    previewOptions: { dashboardHint: hint.data, contentKind },
+    previewOptions: previewDashboardOptions(
+      uri,
+      resourceType,
+      resolved?.kind,
+      hint,
+    ),
     dashboards,
     current,
     tab,

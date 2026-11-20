@@ -43,9 +43,10 @@ export function FileBrowserPreviewFooter({
       time = formatter.format(date);
     }
   }
+  const aiLabel = aiGenerated && text.previewAiGenerated;
   return (
     <>
-      {count || time || aiGenerated ? (
+      {count || time || aiLabel ? (
         <span className="ov-file-browser__preview-meta">
           {count ? <span>{count}</span> : null}
           {count && time ? <span aria-hidden="true">·</span> : null}
@@ -54,10 +55,10 @@ export function FileBrowserPreviewFooter({
               {text.formatPreviewUpdatedAt(time)}
             </time>
           ) : null}
-          {aiGenerated && (count || time) ? (
+          {aiLabel && (count || time) ? (
             <span aria-hidden="true">·</span>
           ) : null}
-          {aiGenerated ? <span>{text.previewAiGenerated}</span> : null}
+          {aiLabel ? <span>{aiLabel}</span> : null}
         </span>
       ) : null}
       {modelNotice ? (
@@ -85,9 +86,6 @@ function isAiGeneratedPreview(uri: string | null, isCompile: boolean) {
     ) ||
     /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/(?:experiences|preferences|entities|cases|trajectories|events)\/.+/i.test(
       uri,
-    ) ||
-    /^viking:\/\/(?:system|user\/[^/]+|~)(?:\/peers\/[^/]+)?\/compile\/.+/i.test(
-      uri,
     )
   );
 }
@@ -111,7 +109,7 @@ export function renderPreviewFooter(
     (browser.previewFooter ||
       browser.previewUpdatedAt ||
       modelNotice ||
-      aiGenerated) ? (
+      (aiGenerated && text.previewAiGenerated)) ? (
     <FileBrowserPreviewFooter
       count={browser.previewFooter}
       updatedAt={browser.previewUpdatedAt}

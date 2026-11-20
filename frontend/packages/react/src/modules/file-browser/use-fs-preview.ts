@@ -173,20 +173,18 @@ export function useFsPreview({
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
           : { summary: await readDirectory(api, uri, options) };
-      return {
-        tab: await readFile(
-          api,
-          uri,
-          options,
-          openParent,
-          () => {
-            if (!signal.aborted) setSaveGeneration((value) => value + 1);
-          },
-          contentKind === 'wiki',
-          onStatus,
-          dashboardHint,
-        ),
-      };
+      return readFile(
+        api,
+        uri,
+        options,
+        openParent,
+        () => {
+          if (!signal.aborted) setSaveGeneration((value) => value + 1);
+        },
+        contentKind === 'wiki',
+        onStatus,
+        dashboardHint,
+      );
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -203,7 +201,7 @@ export function useFsPreview({
     void read.then(
       (result) => {
         if (signal.aborted) return;
-        if (result.summary) {
+        if ('summary' in result && result.summary) {
           setDirectory({
             uri,
             summary: result.summary,
@@ -214,13 +212,15 @@ export function useFsPreview({
               options,
             ),
           });
-          setActiveKey(uri);
           return;
         }
         const tab = result.tab;
         setTabs([tab]);
-        setActiveKey(tab.key);
-        // Supplemental content can fail independently of the playable video.
+        if ('resolveWikiTab' in result && result.resolveWikiTab) {
+          void result.resolveWikiTab().then((updatedTab) => {
+            if (!signal.aborted && updatedTab) setTabs([updatedTab]);
+          });
+        }
         void loadVideoDetails(client, tab, options, (updatedTab) =>
           setTabs([updatedTab]),
         ).catch(() => undefined);

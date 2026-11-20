@@ -107,7 +107,8 @@ test('AI notice follows generated document scope and locale', async () => {
         tags: uri === 'viking://resources/wiki' ? ['compile_target=true'] : [],
       });
     return ok(
-      uri === 'viking://resources/wiki/chapter.md'
+      uri === 'viking://resources/wiki/chapter.md' ||
+        uri === 'viking://system/compile/task/output.md'
         ? 'sample\n<!-- CONFLICTS_CONTENT\n-->'
         : 'sample',
     );
@@ -150,8 +151,20 @@ test('AI notice follows generated document scope and locale', async () => {
     assert.match(meta(), /AI 生成/);
     await view.render(page('viking://system/compile/task/output.md', 'en-US'));
     assert.match(meta(), /AI generated/);
+    await view.render(
+      h(
+        OpenVikingProvider,
+        { baseURL: 'https://ov.test', fetch },
+        h(FileBrowser, {
+          uri: 'viking://system/compile/task/output.md',
+          labels: { previewAiGenerated: '' },
+        }),
+      ),
+    );
+    assert.doesNotMatch(meta(), /AI generated|·\s*$/);
     for (const uri of [
       'viking://system/compile/example-skills/llm-wiki/SKILL.md',
+      'viking://system/compile/global/manual.md',
       'viking://user/alice/soul.md',
       'viking://resources/raw.md',
       'viking://user/alice/resources/events/raw.md',

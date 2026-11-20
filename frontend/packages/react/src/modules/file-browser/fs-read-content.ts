@@ -3,13 +3,8 @@ import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
 import { joinLines, splitLines } from './fs-lines.js';
 import { splitWikiMetadata } from './wiki-metadata.js';
-import { readCompileCatalog } from './dashboard-data.js';
-import { within } from './dashboard-model.js';
-import {
-  findCompileTarget,
-  resolveDashboardUri,
-  type readDashboardHint,
-} from './dashboard-resource.js';
+import { isCompileOwnedFile } from './dashboard-data.js';
+import type { readDashboardHint } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
 
 /** Read and project text once for preview, editing and Wiki business data. */
@@ -20,6 +15,7 @@ export async function readFileContent(
   limit = -1,
   isWiki = false,
   hint?: Awaited<ReturnType<typeof readDashboardHint>>,
+  deferWiki = false,
 ) {
   const read = async (lineLimit: number) => {
     const value = await client.request<string>({
@@ -33,51 +29,59 @@ export async function readFileContent(
   };
   const memory = isMemoryUri(uri);
   const markdown = /\.md$/i.test(uri);
-  let wiki = isWiki && markdown;
   const first = await read(limit);
-  // A page end is not a file end. Read the complete trailer before filtering,
-  // including a trailer whose closing delimiter lies beyond the preview cap.
   const reachedCap = limit >= 0 && splitLines(first).length >= limit;
   const candidate =
     !memory && markdown && splitWikiMetadata(first).payloads.length > 0;
-  const full =
-    reachedCap && (memory || wiki || candidate) ? await read(-1) : first;
   const format = markdown
     ? 'markdown'
     : /\.ya?ml$/i.test(uri)
       ? 'yaml'
       : 'text';
-  const body = memory ? stripMemoryFieldsTrailer(full, format) : full;
-  const projection = candidate || wiki ? splitWikiMetadata(body) : undefined;
-  if (!wiki && projection?.payloads.length) {
+
+  const project = (full: string, wiki: boolean) => {
+    const body = memory ? stripMemoryFieldsTrailer(full, format) : full;
+    const projection = wiki ? splitWikiMetadata(body) : undefined;
+    const visible = projection?.document ?? body;
+    const lines = splitLines(visible);
+    const truncated =
+      limit >= 0 && (memory || wiki ? lines.length > limit : reachedCap);
+    return {
+      content: truncated ? joinLines(lines.slice(0, limit)) : visible,
+      truncated,
+      wikiSource: wiki ? body : undefined,
+      wiki,
+      compileOutput: Boolean(
+        projection?.complete && projection.payloads.length,
+      ),
+    };
+  };
+  const readWiki = async () =>
+    project(reachedCap ? await read(-1) : first, true);
+  if (isWiki && markdown && (!deferWiki || !reachedCap))
+    return { ...(await readWiki()), resolveWiki: undefined };
+  const resolveWiki = async () => {
     try {
-      const scope =
-        hint?.uri ?? (await resolveDashboardUri(client, uri, options));
-      wiki = Boolean(await findCompileTarget(client, scope, options, hint));
-      if (!wiki) {
-        const catalog = await readCompileCatalog(client, scope, options);
-        wiki =
-          !catalog.named &&
-          catalog.targets.some((target) => within(scope, target.to));
-      }
+      if (isWiki || (await isCompileOwnedFile(client, uri, options, hint)))
+        return await readWiki();
     } catch (error) {
-      // An old server without Compile cannot establish Wiki ownership.
-      // Other failures must not expose unclassified metadata as trusted body text.
-      if (!isOvClientError(error) || error.statusCode !== 404) throw error;
+      if (!deferWiki && (!isOvClientError(error) || error.statusCode !== 404))
+        throw error;
     }
+  };
+  const discoverWiki =
+    !memory && markdown && (candidate || (deferWiki && reachedCap));
+  if (discoverWiki && !deferWiki) {
+    const result = await resolveWiki();
+    if (result) return { ...result, resolveWiki: undefined };
   }
-  const visible = wiki ? (projection?.document ?? body) : body;
-  const lines = splitLines(visible);
-  const truncated =
-    limit >= 0 && (memory || wiki ? lines.length > limit : reachedCap);
   return {
-    content: truncated ? joinLines(lines.slice(0, limit)) : visible,
-    truncated,
-    // Keep full Wiki data separate from the projected preview and draft content.
-    wikiSource: wiki ? body : undefined,
-    wiki,
-    // A Compile destination can contain uploads. The Wiki trailer identifies the output file.
-    compileOutput:
-      wiki && Boolean(projection?.complete && projection.payloads.length),
+    ...project(
+      memory && reachedCap ? await read(-1) : first,
+      isWiki && markdown,
+    ),
+    // A capped page can only establish provenance after checking the complete tail.
+    ...(reachedCap ? { compileOutput: false } : {}),
+    resolveWiki: discoverWiki && deferWiki ? resolveWiki : undefined,
   };
 }

@@ -148,9 +148,11 @@ export function useFileBrowser({
     [cancelReveal, openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
+  const resourceType = tree.resourceTypeOf(activeUri);
   const boards = useBrowserDashboards({
     rows,
     metadataRows: tree.metadataRows,
+    resourceType,
     uri: blocked ? null : activeUri,
     rootUri,
     identifyUri,
@@ -174,7 +176,7 @@ export function useFileBrowser({
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
     uri: blocked ? null : activeUri,
-    resourceType: tree.resourceTypeOf(activeUri),
+    resourceType,
     ...previewLevel,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,

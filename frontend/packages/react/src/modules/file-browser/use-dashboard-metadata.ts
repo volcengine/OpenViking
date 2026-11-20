@@ -4,9 +4,12 @@ import type {
   FileTreeEntryRow,
   FileTreeRow,
 } from '../../components/file-tree/types.js';
-import { within } from './dashboard-model.js';
+import { within, type FileBrowserDashboard } from './dashboard-model.js';
 import { normalizeResourceUri } from '../../shared/resource-uri.js';
-import { useDashboardQuery } from './use-dashboard-query.js';
+import {
+  useDashboardQuery,
+  type DashboardQuery,
+} from './use-dashboard-query.js';
 import { readWikiConflictIndex } from './wiki-conflict-index.js';
 import { readDashboardHint } from './dashboard-resource.js';
 
@@ -55,6 +58,28 @@ export function useDashboardHint({
       row.kind === 'entry' && row.uri === canonicalUri && row.type === 'file',
   );
   return { hint, canonicalUri, knownRows, isFile };
+}
+
+export function previewDashboardOptions(
+  uri: string | null,
+  resourceType: 'directory' | 'file' | 'unknown',
+  kind: FileBrowserDashboard['kind'] | undefined,
+  hint: Pick<
+    DashboardQuery<Awaited<ReturnType<typeof readDashboardHint>> | undefined>,
+    'loading' | 'data'
+  >,
+) {
+  const markdown = resourceType !== 'directory' && /\.md$/i.test(uri ?? '');
+  const contentKind: 'pending' | 'wiki' | 'plain' =
+    markdown && kind === 'wiki'
+      ? 'wiki'
+      : markdown && !kind && hint.loading
+        ? 'pending'
+        : 'plain';
+  return {
+    dashboardHint: markdown && contentKind === 'plain' ? hint.data : undefined,
+    contentKind,
+  };
 }
 
 export function useWikiConflictIndex({
