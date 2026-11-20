@@ -60,6 +60,7 @@ import '@openviking/react/components/command-console/style.css';
 | quickCommands    | 内置空态里的快捷入口，没有可用入口时内置空态不显示内容                                     | `readonly CommandConsoleQuickCommand[]`                               | -                        |
 | commands         | 命令目录，用于补全、参数帮助和执行中记录的骨架；省略时仍可输入和提交，但没有候选和参数帮助 | `readonly CommandConsoleCommandDefinition[]`                          | `[]`                     |
 | commandGroups    | 候选列表的分组名称和顺序，没有声明的分组按出现顺序排在后面                                 | `readonly CommandConsoleCommandGroup[]`                               | `[]`                     |
+| inputRef         | 命令输入框的 ref，用于程序聚焦或访问 textarea，支持对象和回调 ref                          | `Ref<HTMLTextAreaElement>`                                            | -                        |
 | onValueChange    | 输入变化时触发，包括接受补全和示例；省略时输入区只读                                       | `(value: string) => void`                                             | -                        |
 | onSubmit         | 按 Enter 提交时触发，参数是去掉首尾空白的命令文本；省略时不能提交                          | `(command: string) => void`                                           | -                        |
 | onOpenUri        | 点击资源链接时触发，参数是链接地址；省略时链接按 `href` 原生跳转                           | `(uri: string) => void`                                               | -                        |

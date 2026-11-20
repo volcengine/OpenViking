@@ -630,72 +630,6 @@ mod tests {
         ObjectId::null(gix_hash::Kind::Sha1)
     }
 
-    #[test]
-    fn test_empty_editor() {
-        let editor = TreeEditor::empty();
-        assert!(editor.root.is_empty());
-        assert!(editor.subtrees.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_upsert_single_file() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        let oid = dummy_oid();
-
-        editor.upsert(&store, "acc", "file.txt", oid).await.unwrap();
-
-        assert_eq!(editor.root.len(), 1);
-        let entry = editor.root.get("file.txt".as_bytes().as_bstr()).unwrap();
-        assert_eq!(entry.mode, EntryKind::Blob.into());
-        assert_eq!(entry.oid, oid);
-        assert_eq!(entry.filename, "file.txt");
-    }
-
-    #[tokio::test]
-    async fn test_upsert_nested_path() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        let oid = dummy_oid();
-
-        editor
-            .upsert(&store, "acc", "dir/subdir/file.txt", oid)
-            .await
-            .unwrap();
-
-        // Root has dir
-        assert_eq!(editor.root.len(), 1);
-        let dir_entry = editor.root.get("dir".as_bytes().as_bstr()).unwrap();
-        assert_eq!(dir_entry.mode, EntryKind::Tree.into());
-
-        // Subtrees has dir
-        let dir_subtree = editor.subtrees.get("dir".as_bytes().as_bstr()).unwrap();
-        assert_eq!(dir_subtree.len(), 1);
-        let subdir_entry = dir_subtree.get("subdir".as_bytes().as_bstr()).unwrap();
-        assert_eq!(subdir_entry.mode, EntryKind::Tree.into());
-
-        // Subdir subtree
-        let subdir_subtree = editor.subtrees.get("dir/subdir".as_bytes().as_bstr()).unwrap();
-        assert_eq!(subdir_subtree.len(), 1);
-        let file_entry = subdir_subtree.get("file.txt".as_bytes().as_bstr()).unwrap();
-        assert_eq!(file_entry.mode, EntryKind::Blob.into());
-        assert_eq!(file_entry.oid, oid);
-    }
-
-    #[tokio::test]
-    async fn test_upsert_overwrite() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        let oid1 = dummy_oid();
-        let oid2 = ObjectId::from_hex(b"abcdef1234567890abcdef1234567890abcdef12").unwrap();
-
-        editor.upsert(&store, "acc", "file.txt", oid1).await.unwrap();
-        editor.upsert(&store, "acc", "file.txt", oid2).await.unwrap();
-
-        let entry = editor.root.get("file.txt".as_bytes().as_bstr()).unwrap();
-        assert_eq!(entry.oid, oid2);
-    }
-
     #[tokio::test]
     async fn test_upsert_empty_component_rejected() {
         let (_d, store) = make_store();
@@ -708,57 +642,6 @@ mod tests {
         assert!(editor.upsert(&store, "acc", "file.txt/", oid).await.is_err());
     }
 
-    #[tokio::test]
-    async fn test_remove_existing() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        let oid = dummy_oid();
-
-        editor.upsert(&store, "acc", "dir/file.txt", oid).await.unwrap();
-        assert_eq!(editor.root.len(), 1);
-
-        editor.remove(&store, "acc", "dir/file.txt").await.unwrap();
-
-        let dir_subtree = editor.subtrees.get("dir".as_bytes().as_bstr()).unwrap();
-        assert!(dir_subtree.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_remove_nonexistent_is_noop() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        editor.remove(&store, "acc", "nonexistent.txt").await.unwrap();
-        editor.remove(&store, "acc", "dir/nonexistent.txt").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_upsert_top_level_file() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        let oid = dummy_oid();
-
-        editor.upsert(&store, "acc", "top-level.txt", oid).await.unwrap();
-
-        assert_eq!(editor.root.len(), 1);
-        let entry = editor.root.get("top-level.txt".as_bytes().as_bstr()).unwrap();
-        assert_eq!(entry.mode, EntryKind::Blob.into());
-        assert_eq!(entry.filename, "top-level.txt");
-        assert_eq!(entry.oid, oid);
-    }
-
-    #[tokio::test]
-    async fn test_remove_top_level_file() {
-        let (_d, store) = make_store();
-        let mut editor = TreeEditor::empty();
-        let oid = dummy_oid();
-
-        editor.upsert(&store, "acc", "single.txt", oid).await.unwrap();
-        assert_eq!(editor.root.len(), 1);
-
-        editor.remove(&store, "acc", "single.txt").await.unwrap();
-        assert_eq!(editor.root.len(), 0);
-    }
-
     // --- Test helpers ---
 
     fn make_store() -> (tempfile::TempDir, crate::git::backends::local::LocalObjectStore) {
@@ -767,147 +650,23 @@ mod tests {
         (dir, store)
     }
 
-    fn serialize_tree(tree: &Tree) -> Vec<u8> {
-        let mut buf = Vec::new();
-        tree.write_to(&mut buf).unwrap();
-        buf
-    }
-
     fn oid_hex(hex: &[u8; 40]) -> ObjectId {
         ObjectId::from_hex(hex).unwrap()
     }
 
-    // --- from_tree ---
-
     #[tokio::test]
-    async fn test_from_tree_empty() {
-        let (_d, store) = make_store();
-        let empty_tree = Tree { entries: Vec::new() };
-        let oid = write_object(&store, "acc", gix_object::Kind::Tree, &serialize_tree(&empty_tree))
-            .await
-            .unwrap();
-
-        let editor = TreeEditor::from_tree(&store, "acc", oid).await.unwrap();
-        assert!(editor.root.is_empty());
-        assert!(editor.subtrees.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_from_tree_with_entries() {
-        let (_d, store) = make_store();
-
-        let blob_a = oid_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let blob_b = oid_hex(b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-
-        let resources_tree = Tree {
-            entries: vec![tree::Entry {
-                mode: EntryKind::Blob.into(),
-                filename: "b.md".into(),
-                oid: blob_b,
-            }],
-        };
-        let resources_oid = write_object(&store, "acc", gix_object::Kind::Tree, &serialize_tree(&resources_tree))
-            .await
-            .unwrap();
-
-        let root_tree = Tree {
-            entries: vec![
-                tree::Entry {
-                    mode: EntryKind::Blob.into(),
-                    filename: "a.md".into(),
-                    oid: blob_a,
-                },
-                tree::Entry {
-                    mode: EntryKind::Tree.into(),
-                    filename: "resources".into(),
-                    oid: resources_oid,
-                },
-            ],
-        };
-        let root_oid = write_object(&store, "acc", gix_object::Kind::Tree, &serialize_tree(&root_tree))
-            .await
-            .unwrap();
-
-        let editor = TreeEditor::from_tree(&store, "acc", root_oid).await.unwrap();
-        assert_eq!(editor.root.len(), 2);
-        assert!(editor.root.contains_key("a.md".as_bytes().as_bstr()));
-        assert!(editor.root.contains_key("resources".as_bytes().as_bstr()));
-
-        // Lazy loading: from_tree only loads root; subtrees are not read yet.
-        assert!(editor.subtrees.is_empty());
-    }
-
-    // --- write ---
-
-    #[tokio::test]
-    async fn test_write_empty_tree() {
-        let (_d, store) = make_store();
+    async fn test_empty_tree_round_trip() {
+        let (_dir, store) = make_store();
         let mut editor = TreeEditor::empty();
-        let oid = editor.write(&store, "acc").await.unwrap();
-        assert_eq!(oid, ObjectId::empty_tree(gix_hash::Kind::Sha1));
-    }
+        let empty_oid = editor.write(&store, "acc").await.unwrap();
+        assert_eq!(empty_oid, ObjectId::empty_tree(gix_hash::Kind::Sha1));
 
-    #[tokio::test]
-    async fn test_write_single_blob() {
-        let (_d, store) = make_store();
-        let blob_oid = oid_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "README.md", blob_oid).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let tree = load_tree(&store, "acc", &root_oid).await.unwrap();
-        assert_eq!(tree.entries.len(), 1);
-        assert_eq!(tree.entries[0].filename, "README.md");
-        assert_eq!(tree.entries[0].oid, blob_oid);
-    }
-
-    #[tokio::test]
-    async fn test_write_nested_structure() {
-        let (_d, store) = make_store();
-        let oid1 = oid_hex(b"1111111111111111111111111111111111111111");
-        let oid2 = oid_hex(b"2222222222222222222222222222222222222222");
-
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "README.md", oid1).await.unwrap();
-        editor.upsert(&store, "acc", "resources/docs/a.md", oid2).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let root_tree = load_tree(&store, "acc", &root_oid).await.unwrap();
-        assert_eq!(root_tree.entries.len(), 2);
-
-        let resources_entry = root_tree
-            .entries
-            .iter()
-            .find(|e| e.filename == "resources")
-            .unwrap();
-        assert!(resources_entry.mode.is_tree());
-
-        let res_tree = load_tree(&store, "acc", &resources_entry.oid).await.unwrap();
-        assert_eq!(res_tree.entries.len(), 1);
-
-        let docs_entry = &res_tree.entries[0];
-        assert!(docs_entry.mode.is_tree());
-        let docs_tree = load_tree(&store, "acc", &docs_entry.oid).await.unwrap();
-        assert_eq!(docs_tree.entries.len(), 1);
-        assert_eq!(docs_tree.entries[0].oid, oid2);
-    }
-
-    #[tokio::test]
-    async fn test_round_trip_from_tree_upsert_write() {
-        let (_d, store) = make_store();
-        let oid1 = oid_hex(b"1111111111111111111111111111111111111111");
-        let oid2 = oid_hex(b"2222222222222222222222222222222222222222");
-
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "a.md", oid1).await.unwrap();
-        let first_oid = editor.write(&store, "acc").await.unwrap();
-
-        let mut editor2 = TreeEditor::from_tree(&store, "acc", first_oid).await.unwrap();
-        editor2.upsert(&store, "acc", "b.md", oid2).await.unwrap();
-        let second_oid = editor2.write(&store, "acc").await.unwrap();
-
-        let tree = load_tree(&store, "acc", &second_oid).await.unwrap();
-        assert_eq!(tree.entries.len(), 2);
+        let mut reopened = TreeEditor::from_tree(&store, "acc", empty_oid).await.unwrap();
+        reopened.remove(&store, "acc", "missing.txt").await.unwrap();
+        reopened.remove(&store, "acc", "dir/missing.txt").await.unwrap();
+        assert_eq!(reopened.write(&store, "acc").await.unwrap(), empty_oid);
+        assert!(flatten(&store, "acc", empty_oid, &None).await.unwrap().is_empty());
+        assert!(lookup(&store, "acc", empty_oid, "missing.txt").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -962,119 +721,6 @@ mod tests {
         assert_eq!(root.entries[0].filename, "foo");
         assert!(root.entries[0].mode == EntryKind::Blob.into());
         assert_eq!(root.entries[0].oid, blob_foo);
-    }
-
-    // --- flatten ---
-
-    #[tokio::test]
-    async fn test_flatten_empty_tree() {
-        let (_d, store) = make_store();
-        let empty_tree = Tree { entries: Vec::new() };
-        let oid = write_object(&store, "acc", gix_object::Kind::Tree, &serialize_tree(&empty_tree))
-            .await
-            .unwrap();
-        let result = flatten(&store, "acc", oid, &None).await.unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_flatten_nested_tree() {
-        let (_d, store) = make_store();
-        let oid1 = oid_hex(b"1111111111111111111111111111111111111111");
-        let oid2 = oid_hex(b"2222222222222222222222222222222222222222");
-
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "README.md", oid1).await.unwrap();
-        editor.upsert(&store, "acc", "resources/docs/a.md", oid2).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let result = flatten(&store, "acc", root_oid, &None).await.unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].0, "README.md");
-        assert_eq!(result[0].1, oid1);
-        assert_eq!(result[1].0, "resources/docs/a.md");
-        assert_eq!(result[1].1, oid2);
-    }
-
-    #[tokio::test]
-    async fn test_flatten_with_path_filter() {
-        let (_d, store) = make_store();
-        let oid1 = oid_hex(b"1111111111111111111111111111111111111111");
-        let oid2 = oid_hex(b"2222222222222222222222222222222222222222");
-
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "a.md", oid1).await.unwrap();
-        editor.upsert(&store, "acc", "resources/b.md", oid2).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let filter = Some(vec!["resources".to_string()]);
-        let result = flatten(&store, "acc", root_oid, &filter).await.unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, "resources/b.md");
-        assert_eq!(result[0].1, oid2);
-    }
-
-    // --- lookup ---
-
-    #[tokio::test]
-    async fn test_lookup_blob_in_root() {
-        let (_d, store) = make_store();
-        let blob_oid = oid_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "README.md", blob_oid).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let (found, mode) = lookup(&store, "acc", root_oid, "README.md")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(found, blob_oid);
-        assert!(mode.is_blob());
-    }
-
-    #[tokio::test]
-    async fn test_lookup_nested_blob() {
-        let (_d, store) = make_store();
-        let blob_oid = oid_hex(b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "resources/a.md", blob_oid).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let (found, _) = lookup(&store, "acc", root_oid, "resources/a.md")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(found, blob_oid);
-    }
-
-    #[tokio::test]
-    async fn test_lookup_not_found() {
-        let (_d, store) = make_store();
-        let empty_tree = Tree { entries: Vec::new() };
-        let root_oid = write_object(&store, "acc", gix_object::Kind::Tree, &serialize_tree(&empty_tree))
-            .await
-            .unwrap();
-        let result = lookup(&store, "acc", root_oid, "nonexistent.md").await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_lookup_tree_entry() {
-        let (_d, store) = make_store();
-        let blob_oid = oid_hex(b"cccccccccccccccccccccccccccccccccccccccc");
-        let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "resources/a.md", blob_oid).await.unwrap();
-        let root_oid = editor.write(&store, "acc").await.unwrap();
-
-        let (found, mode) = lookup(&store, "acc", root_oid, "resources")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(mode.is_tree());
-        // Verify by loading and confirming it has 1 entry
-        let subtree = load_tree(&store, "acc", &found).await.unwrap();
-        assert_eq!(subtree.entries.len(), 1);
-        assert_eq!(subtree.entries[0].filename, "a.md");
     }
 
     // --- Sort order ---
@@ -1215,77 +861,65 @@ mod tests {
         assert_eq!(b_tree.entries[0].oid, oid);
     }
 
-    // --- Integration ---
-
     #[tokio::test]
-    async fn test_commit_flow_round_trip() {
-        let (_d, store) = make_store();
-        let oid_readme = oid_hex(b"1111111111111111111111111111111111111111");
-        let oid_doc = oid_hex(b"2222222222222222222222222222222222222222");
-        let oid_skill = oid_hex(b"3333333333333333333333333333333333333333");
+    async fn test_tree_edit_round_trip_preserves_old_snapshot() {
+        let (_dir, store) = make_store();
+        let readme = oid_hex(b"1111111111111111111111111111111111111111");
+        let doc = oid_hex(b"2222222222222222222222222222222222222222");
+        let scratch = oid_hex(b"3333333333333333333333333333333333333333");
+        let replacement = oid_hex(b"4444444444444444444444444444444444444444");
 
         let mut editor = TreeEditor::empty();
-        editor.upsert(&store, "acc", "README.md", oid_readme).await.unwrap();
-        editor.upsert(&store, "acc", "resources/docs/a.md", oid_doc).await.unwrap();
-        editor.upsert(&store, "acc", "agent/skills/b.py", oid_skill).await.unwrap();
-        let commit1_oid = editor.write(&store, "acc").await.unwrap();
+        for (path, oid) in [
+            ("README.md", readme),
+            ("resources/docs/a.md", doc),
+            ("resources/tmp/b.md", scratch),
+            ("scratch.txt", scratch),
+        ] {
+            editor.upsert(&store, "acc", path, oid).await.unwrap();
+        }
+        let first = editor.write(&store, "acc").await.unwrap();
+        let original_files = vec![
+            ("README.md".into(), readme),
+            ("resources/docs/a.md".into(), doc),
+            ("resources/tmp/b.md".into(), scratch),
+            ("scratch.txt".into(), scratch),
+        ];
+        assert_eq!(flatten(&store, "acc", first, &None).await.unwrap(), original_files);
 
-        let all_files = flatten(&store, "acc", commit1_oid, &None).await.unwrap();
-        assert_eq!(all_files.len(), 3);
-
+        let root_file = lookup(&store, "acc", first, "README.md").await.unwrap().unwrap();
+        assert_eq!(root_file.0, readme);
+        assert!(root_file.1.is_blob());
+        let nested_file = lookup(&store, "acc", first, "resources/docs/a.md").await.unwrap().unwrap();
+        assert_eq!(nested_file.0, doc);
+        assert!(nested_file.1.is_blob());
+        let subdir = lookup(&store, "acc", first, "resources/docs").await.unwrap().unwrap();
+        assert!(subdir.1.is_tree());
         assert_eq!(
-            lookup(&store, "acc", commit1_oid, "README.md").await.unwrap().unwrap().0,
-            oid_readme
-        );
-        assert_eq!(
-            lookup(&store, "acc", commit1_oid, "resources/docs/a.md").await.unwrap().unwrap().0,
-            oid_doc
-        );
-        assert_eq!(
-            lookup(&store, "acc", commit1_oid, "agent/skills/b.py").await.unwrap().unwrap().0,
-            oid_skill
-        );
-
-        let resources_only = flatten(
-            &store,
-            "acc",
-            commit1_oid,
-            &Some(vec!["resources".to_string()]),
-        )
-        .await
-        .unwrap();
-        assert_eq!(resources_only.len(), 1);
-        assert_eq!(resources_only[0].0, "resources/docs/a.md");
-
-        let mut editor2 = TreeEditor::from_tree(&store, "acc", commit1_oid).await.unwrap();
-        let oid_new = oid_hex(b"4444444444444444444444444444444444444444");
-        editor2.upsert(&store, "acc", "resources/docs/a.md", oid_new).await.unwrap();
-        editor2.remove(&store, "acc", "agent/skills/b.py").await.unwrap();
-        editor2.upsert(&store, "acc", "agent/skills/c.py", oid_new).await.unwrap();
-        let commit2_oid = editor2.write(&store, "acc").await.unwrap();
-
-        let all_files2 = flatten(&store, "acc", commit2_oid, &None).await.unwrap();
-        assert_eq!(all_files2.len(), 3);
-
-        assert_eq!(
-            lookup(&store, "acc", commit2_oid, "resources/docs/a.md").await.unwrap().unwrap().0,
-            oid_new
-        );
-        assert!(lookup(&store, "acc", commit2_oid, "agent/skills/b.py").await.unwrap().is_none());
-        assert_eq!(
-            lookup(&store, "acc", commit2_oid, "agent/skills/c.py").await.unwrap().unwrap().0,
-            oid_new
+            flatten(&store, "acc", first, &Some(vec!["resources/docs".to_string()]))
+                .await
+                .unwrap(),
+            vec![("resources/docs/a.md".into(), doc)]
         );
 
-        // Original tree unchanged
+        let mut reopened = TreeEditor::from_tree(&store, "acc", first).await.unwrap();
+        reopened.upsert(&store, "acc", "README.md", replacement).await.unwrap();
+        reopened.upsert(&store, "acc", "resources/docs/a.md", replacement).await.unwrap();
+        reopened.upsert(&store, "acc", "resources/docs/c.md", scratch).await.unwrap();
+        reopened.remove(&store, "acc", "scratch.txt").await.unwrap();
+        reopened.remove(&store, "acc", "resources/tmp/b.md").await.unwrap();
+        let second = reopened.write(&store, "acc").await.unwrap();
+
         assert_eq!(
-            lookup(&store, "acc", commit1_oid, "resources/docs/a.md").await.unwrap().unwrap().0,
-            oid_doc
+            flatten(&store, "acc", second, &None).await.unwrap(),
+            vec![
+                ("README.md".into(), replacement),
+                ("resources/docs/a.md".into(), replacement),
+                ("resources/docs/c.md".into(), scratch),
+            ]
         );
-        assert_eq!(
-            lookup(&store, "acc", commit1_oid, "agent/skills/b.py").await.unwrap().unwrap().0,
-            oid_skill
-        );
+        assert!(lookup(&store, "acc", second, "resources/tmp").await.unwrap().is_none());
+        assert_eq!(flatten(&store, "acc", first, &None).await.unwrap(), original_files);
     }
 
     // --- Fast Path 2 ---

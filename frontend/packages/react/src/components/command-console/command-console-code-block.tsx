@@ -25,13 +25,20 @@ export function CommandConsoleCodeBlock({
         copiedLabel={labels.copied}
         onCopy={onCopy}
       />
-      <pre className="ov-command-console__code-content">
+      {/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Labelled code output must support keyboard horizontal scrolling. */}
+      <pre
+        className="ov-command-console__code-content"
+        role="region"
+        aria-label={labels.codeOutput}
+        tabIndex={0}
+      >
         <CommandConsoleUriText
           text={formatCommandConsoleJson(text)}
           mode={isCommandConsoleJson(text) ? 'json' : 'literal'}
           onOpenUri={onOpenUri}
         />
       </pre>
+      {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
     </div>
   );
 }

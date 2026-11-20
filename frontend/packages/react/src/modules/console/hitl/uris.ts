@@ -1,7 +1,4 @@
-import {
-  decodePathLabel,
-  formatVikingUriLabel,
-} from '../../../shared/path-label.js';
+import { formatVikingUriLabel } from '../../../shared/path-label.js';
 
 const scheme = 'viking://';
 

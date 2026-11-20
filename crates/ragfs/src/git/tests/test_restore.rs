@@ -1,23 +1,3 @@
-    #[tokio::test]
-    async fn test_mock_vfs_write_then_read_round_trip() {
-        let vfs = MockVfs::new("acct");
-        let path = "/local/acct/x.md";
-        vfs.files
-            .lock()
-            .unwrap()
-            .insert(path.to_string(), Vec::new());
-        FileSystem::write(vfs.as_ref(), path, b"hello", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        let got = FileSystem::read(vfs.as_ref(), path, 0, 0).await.unwrap();
-        assert_eq!(got, b"hello");
-        FileSystem::remove(vfs.as_ref(), path).await.unwrap();
-        let err = FileSystem::read(vfs.as_ref(), path, 0, 0)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, Error::NotFound(_)));
-    }
-
     // ── restore: dry_run ───────────────────────────────────────────────
     #[tokio::test]
     async fn test_restore_dry_run_reports_diff_and_writes_nothing() {

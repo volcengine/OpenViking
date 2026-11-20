@@ -65,7 +65,6 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-memory',
   'find',
   'compile create',
-  'compile',
 ] as const;
 
 export function consoleQuickCommands(

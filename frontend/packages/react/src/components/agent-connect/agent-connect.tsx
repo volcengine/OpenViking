@@ -128,7 +128,7 @@ function AgentConnectView({
         </header>
         <div
           id={`${id}-panel`}
-          className="ov-agent-connect__layout"
+          className={`ov-agent-connect__layout${activeTabId === 'custom' ? ' ov-agent-connect__layout--custom' : ''}`}
           role="tabpanel"
           aria-labelledby={`${id}-tab-${activeIndex}`}
         >
