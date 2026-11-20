@@ -347,6 +347,33 @@ Use a vision-capable GLM model such as `glm-4.6v` or `glm-5v-turbo` when OpenVik
 
 </details>
 
+<details>
+<summary><b>Volcengine Embedding + LLMTR VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "openai",
+    "model"    : "llmtr/gemma-4",
+    "api_key"  : "your-llmtr-api-key",
+    "api_base" : "https://llmtr.com/v1"
+  }
+}
+```
+
+[LLMTR](https://llmtr.com/) is an OpenAI-compatible gateway, so it uses `provider: "openai"` with its own `api_base`. Model IDs that start with `llmtr/` are hosted in Turkey; `llmtr/gemma-4` accepts images. Other IDs, such as `anthropic/claude-sonnet-5`, are routed to their vendors.
+
+</details>
+
 ## Configuration Sections
 
 ### embedding
