@@ -514,12 +514,19 @@ class SemanticProcessor(DequeueHandlerBase):
             return ProcessResult.failed(str(exc))
 
         if SEMANTIC_QUEUE_DISABLED:
-            logger.warning(
-                "[TemporaryVectorsOnly] dropping persisted semantic message "
-                "uri=%s context_type=%s generation_trigger=%s",
+            logger.info(
+                "[TemporaryVectorsOnly] semantic message consumed "
+                "action=drop_persisted uri=%s context_type=%s generation_trigger=%s "
+                "message_id=%s telemetry_id=%s account_id=%s user_id=%s "
+                "queue_enqueued_at=%s outcome=ack_skipped",
                 msg.uri,
                 msg.context_type,
                 msg.generation_trigger,
+                msg.id,
+                msg.telemetry_id,
+                msg.account_id,
+                msg.user_id,
+                msg.queue_enqueued_at,
             )
             await self._cleanup_local_artifact(msg)
             return ProcessResult.success()

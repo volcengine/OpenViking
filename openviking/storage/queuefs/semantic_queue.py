@@ -58,12 +58,18 @@ class SemanticQueue(NamedQueue):
     async def enqueue(self, msg: SemanticMsg, *, deduplicate_memory: bool = True) -> str:
         """Serialize SemanticMsg object and store in queue."""
         if SEMANTIC_QUEUE_DISABLED:
-            logger.warning(
-                "[TemporaryVectorsOnly] dropping semantic enqueue uri=%s "
-                "context_type=%s generation_trigger=%s",
+            logger.info(
+                "[TemporaryVectorsOnly] semantic enqueue skipped "
+                "action=drop_enqueue uri=%s context_type=%s generation_trigger=%s "
+                "message_id=%s telemetry_id=%s account_id=%s user_id=%s coalesce_key=%s",
                 getattr(msg, "uri", "-"),
                 getattr(msg, "context_type", "-"),
                 getattr(msg, "generation_trigger", "-"),
+                getattr(msg, "id", "-"),
+                getattr(msg, "telemetry_id", "-"),
+                getattr(msg, "account_id", "-"),
+                getattr(msg, "user_id", "-"),
+                getattr(msg, "coalesce_key", "-"),
             )
             return "vectors_only_disabled"
         if deduplicate_memory and msg.context_type == "memory" and not msg.coalesce_key:
