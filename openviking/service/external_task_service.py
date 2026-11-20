@@ -645,6 +645,10 @@ class ExternalTaskService:
         try:
             # Repeated cancellation must not interrupt cleanup of the open Work.
             await tracker.unregister_running_task(task_id)
+            task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
+            if task and task.task_type == "compile" and task.status == TaskStatus.CANCELLED:
+                self._release(task)
+                return
             auth = await self._task_auth(task_id, account_id, user_id)
             saved_failure = auth.get("external_cleanup_failure")
             if isinstance(failure, CompileDependencyFailure):
