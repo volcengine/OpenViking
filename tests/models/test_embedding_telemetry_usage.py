@@ -21,7 +21,12 @@ def test_openai_dense_embedder_reports_embedding_telemetry_usage(monkeypatch):
         usage=_usage(prompt_tokens=9, total_tokens=9),
     )
 
-    fake_client = SimpleNamespace(embeddings=SimpleNamespace(create=lambda **kwargs: response))
+    responses = iter(
+        [response, SimpleNamespace(data=[SimpleNamespace(embedding=[0.4, 0.5, 0.6])], usage=None)]
+    )
+    fake_client = SimpleNamespace(
+        embeddings=SimpleNamespace(create=lambda **kwargs: next(responses))
+    )
     monkeypatch.setattr("openai.OpenAI", lambda **kwargs: fake_client)
 
     telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
@@ -31,10 +36,11 @@ def test_openai_dense_embedder_reports_embedding_telemetry_usage(monkeypatch):
             api_key="test",
             dimension=3,
         )
-        result = embedder.embed("hello")
-
-    assert result.dense_vector == [0.1, 0.2, 0.3]
-    summary = telemetry.finish().summary
+        assert embedder.embed("hello").dense_vector == [0.1, 0.2, 0.3]
+        assert embedder.embed("second result without usage").dense_vector == [0.4, 0.5, 0.6]
+    snapshot = telemetry.finish()
+    assert snapshot is not None
+    summary = snapshot.summary
     assert summary["tokens"]["embedding"] == {"total": 9}
     assert summary["tokens"]["total"] == 9
 
@@ -64,7 +70,9 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage(monkeypatch
         result = embedder.embed("hello")
 
     assert result.dense_vector == [0.4, 0.5, 0.6]
-    summary = telemetry.finish().summary
+    snapshot = telemetry.finish()
+    assert snapshot is not None
+    summary = snapshot.summary
     assert summary["tokens"]["embedding"] == {"total": 16}
     assert summary["tokens"]["total"] == 16
 
@@ -100,5 +108,7 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage_from_dict_u
         result = embedder.embed("hello")
 
     assert result.dense_vector == [0.4, 0.5, 0.6]
-    summary = telemetry.finish().summary
+    snapshot = telemetry.finish()
+    assert snapshot is not None
+    summary = snapshot.summary
     assert summary["tokens"]["embedding"] == {"total": 16}

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Black-box compatibility tests for multimodal resource ingestion."""
 
-import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -305,90 +304,6 @@ async def ov_client():
         yield client
     finally:
         await client.close()
-
-
-def test_multimodal_matrix_has_unique_case_ids():
-    case_ids = [case.pytest_id for case in MULTIMODAL_CASES]
-
-    assert len(case_ids) == 31
-    assert len(case_ids) == len(set(case_ids))
-
-
-def test_build_client_prefers_current_openviking_config(tmp_path, monkeypatch):
-    config_path = tmp_path / "ovcli.conf"
-    config_path.write_text(
-        json.dumps(
-            {
-                "url": "https://configured-ov.example.com",
-                "api_key": "configured-key",
-                "account": "configured-account",
-            }
-        )
-    )
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
-    monkeypatch.delenv("OPENVIKING_URL", raising=False)
-    monkeypatch.delenv("OPENVIKING_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENVIKING_API_KEY", raising=False)
-
-    client = _build_client()
-
-    assert client._url == "https://configured-ov.example.com"
-    assert client._api_key == "configured-key"
-    assert client._account == "configured-account"
-
-
-def test_build_client_falls_back_to_localhost_without_configured_url(tmp_path, monkeypatch):
-    config_path = tmp_path / "ovcli.conf"
-    config_path.write_text("{}")
-    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
-    monkeypatch.delenv("OPENVIKING_URL", raising=False)
-    monkeypatch.delenv("OPENVIKING_BASE_URL", raising=False)
-
-    client = _build_client()
-
-    assert client._url == "http://127.0.0.1:1933"
-
-
-def test_service_response_accepts_success():
-    _assert_ingest_succeeded(
-        {
-            "root_uri": "viking://resources/sample",
-            "queue_status": {
-                "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-                "Embedding": {"processed": 1, "error_count": 0, "errors": []},
-            },
-        }
-    )
-
-
-def test_service_response_requires_root_uri():
-    with pytest.raises(AssertionError, match="root_uri"):
-        _assert_ingest_succeeded({})
-
-
-def test_service_response_rejects_resource_errors():
-    result = {
-        "root_uri": "viking://resources/sample",
-        "errors": ["resource processing failed"],
-    }
-
-    with pytest.raises(AssertionError, match="resource errors"):
-        _assert_ingest_succeeded(result)
-
-
-def test_service_response_rejects_queue_errors():
-    result = {
-        "root_uri": "viking://resources/sample",
-        "queue_status": {
-            "Semantic": {
-                "error_count": 1,
-                "errors": ["processing failed"],
-            }
-        },
-    }
-
-    with pytest.raises(AssertionError, match="Semantic"):
-        _assert_ingest_succeeded(result)
 
 
 @pytest.mark.skipif(

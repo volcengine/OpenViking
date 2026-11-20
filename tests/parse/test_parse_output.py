@@ -66,6 +66,9 @@ class _FakeVikingFS:
 
     async def delete_temp(self, uri: str, ctx=None) -> None:
         self.deleted.append(uri)
+        self.files = {
+            path: content for path, content in self.files.items() if not path.startswith(f"{uri}/")
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -110,45 +113,6 @@ def _make_store(backend: str, tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["agfs", "local"])
 class TestParseOutputStoreContract:
-    async def test_create_artifact_reports_backend(self, backend, tmp_path) -> None:
-        store = _make_store(backend, tmp_path)
-        ref = await store.create_artifact(root_type="dir")
-        assert ref.backend == backend
-        assert ref.root_type == "dir"
-        assert ref.root
-
-    async def test_write_and_read_bytes_roundtrip(self, backend, tmp_path) -> None:
-        store = _make_store(backend, tmp_path)
-        ref = await store.create_artifact(root_type="dir")
-
-        await store.mkdir(ref, "repo")
-        await store.write_bytes(ref, "repo/main.py", b"print(1)")
-
-        assert await store.read_bytes(ref, "repo/main.py") == b"print(1)"
-
-    async def test_write_and_read_text(self, backend, tmp_path) -> None:
-        store = _make_store(backend, tmp_path)
-        ref = await store.create_artifact(root_type="dir")
-        await store.write_text(ref, "note.md", "# hi")
-        assert await store.read_text(ref, "note.md") == "# hi"
-
-    async def test_list_returns_relative_entries(self, backend, tmp_path) -> None:
-        store = _make_store(backend, tmp_path)
-        ref = await store.create_artifact(root_type="dir")
-        await store.write_bytes(ref, "a.py", b"a")
-        await store.write_bytes(ref, "b.py", b"b")
-
-        names = {entry.name for entry in await store.list(ref, "")}
-        assert names == {"a.py", "b.py"}
-
-    async def test_cleanup_is_idempotent(self, backend, tmp_path) -> None:
-        store = _make_store(backend, tmp_path)
-        ref = await store.create_artifact(root_type="dir")
-        await store.write_bytes(ref, "a.py", b"a")
-
-        await store.cleanup(ref)
-        await store.cleanup(ref)  # must not raise
-
     async def test_rejects_unsafe_relative_path(self, backend, tmp_path) -> None:
         store = _make_store(backend, tmp_path)
         ref = await store.create_artifact(root_type="dir")
@@ -158,11 +122,31 @@ class TestParseOutputStoreContract:
     async def test_ref_roundtrip_reopens_same_artifact(self, backend, tmp_path) -> None:
         store = _make_store(backend, tmp_path)
         ref = await store.create_artifact(root_type="dir")
-        await store.write_bytes(ref, "a.py", b"a")
+        assert ref.backend == backend
+        assert ref.root_type == "dir"
+        await store.mkdir(ref, "repo")
+        await store.write_bytes(ref, "repo/main.py", b"print(1)")
+        await store.write_text(ref, "repo/notes.md", "部署说明")
 
-        # A serialized ref must reopen the same artifact bytes.
         reopened = ParseArtifactRef.from_dict(ref.to_dict())
-        assert await store.read_bytes(reopened, "a.py") == b"a"
+        assert await store.read_bytes(reopened, "repo/main.py") == b"print(1)"
+        assert await store.read_text(reopened, "repo/notes.md") == "部署说明"
+        root_names = {
+            (entry.name, entry.rel_path, entry.is_dir) for entry in await store.list(reopened)
+        }
+        assert root_names == {("repo", "repo", True)}
+        names = {
+            (entry.name, entry.rel_path, entry.is_dir)
+            for entry in await store.list(reopened, "repo")
+        }
+        assert names == {
+            ("main.py", "repo/main.py", False),
+            ("notes.md", "repo/notes.md", False),
+        }
+
+        await store.cleanup(reopened)
+        assert await store.list(reopened) == []
+        await store.cleanup(reopened)
 
 
 # ---------------------------------------------------------------------------
@@ -287,13 +271,19 @@ class TestLocalParseOutputStore:
 
         assert outside.exists()
 
-    async def test_case_only_names_can_coexist(self, tmp_path) -> None:
+    async def test_case_only_names_follow_the_host_filesystem(self, tmp_path) -> None:
+        (tmp_path / "case-probe").touch()
+        case_sensitive = not (tmp_path / "CASE-PROBE").exists()
         store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
         ref = await store.create_artifact(root_type="dir")
-        await store.write_bytes(ref, "Readme.md", b"a")
-        await store.write_bytes(ref, "README.MD", b"b")
-        assert await store.read_bytes(ref, "Readme.md") == b"a"
-        assert await store.read_bytes(ref, "README.MD") == b"b"
+
+        await store.write_bytes(ref, "Readme.md", b"first")
+        await store.write_bytes(ref, "README.MD", b"second")
+
+        assert await store.read_bytes(ref, "Readme.md") == (
+            b"first" if case_sensitive else b"second"
+        )
+        assert await store.read_bytes(ref, "README.MD") == b"second"
 
     async def test_missing_artifact_read_raises(self, tmp_path) -> None:
         store = LocalParseOutputStore(local_root=str(tmp_path / "out"))

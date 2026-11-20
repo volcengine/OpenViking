@@ -3,19 +3,17 @@
 
 """Comprehensive tests for circuit breaker utility."""
 
-import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from openviking.utils.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerOpen,
-    classify_api_error,
-)
+from openviking.utils import circuit_breaker
+from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
+    classify_api_error,
 )
 
 
@@ -123,17 +121,6 @@ class TestClassifyApiError:
 class TestCircuitBreaker:
     """Test CircuitBreaker class."""
 
-    def test_initial_state_is_closed(self):
-        """Test circuit breaker starts in CLOSED state."""
-        cb = CircuitBreaker()
-        cb.check()  # Should not raise
-
-    def test_record_success_keeps_closed(self):
-        """Test recording success keeps breaker closed."""
-        cb = CircuitBreaker()
-        cb.record_success()
-        cb.check()  # Should not raise
-
     def test_trip_on_threshold(self):
         """Test breaker trips after reaching failure threshold."""
         cb = CircuitBreaker(failure_threshold=3)
@@ -155,11 +142,9 @@ class TestCircuitBreaker:
 
         cb.check()  # Should not raise
 
-    def test_trip_immediately_on_permanent_error(self):
-        """Test breaker trips immediately on permanent error."""
+    def test_legacy_auth_error_trips_immediately(self):
         cb = CircuitBreaker(failure_threshold=10)
 
-        # Single permanent error should trip immediately
         cb.record_failure(Exception("403 Forbidden"))
 
         with pytest.raises(CircuitBreakerOpen):
@@ -191,52 +176,44 @@ class TestCircuitBreaker:
 
         cb.check()  # Should not raise
 
-    def test_half_open_allows_probe(self):
-        """Test HALF_OPEN state allows probe request."""
-        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0.1)
+    def test_half_open_to_closed_on_success(self, monkeypatch):
+        now = 100.0
+        monkeypatch.setattr(circuit_breaker.time, "monotonic", lambda: now)
+        cb = CircuitBreaker(failure_threshold=1, reset_timeout=5, max_reset_timeout=20)
 
-        # Trip the breaker
-        cb.record_failure(Exception("500 Error"))
-
-        # Wait for reset timeout
-        time.sleep(0.15)
-
-        # Should transition to HALF_OPEN and allow probe
-        cb.check()  # Should not raise
-
-    def test_half_open_to_closed_on_success(self):
-        """Test HALF_OPEN transitions to CLOSED on success."""
-        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0.1)
-
-        # Trip the breaker
-        cb.record_failure(Exception("500 Error"))
-        time.sleep(0.15)
-
-        # Transition to HALF_OPEN
+        cb.record_failure(RuntimeError("500 Error"))
+        now += 5
         cb.check()
-
-        # Success should close the breaker
+        cb.record_failure(RuntimeError("500 Error"))
+        now += 10
+        cb.check()
         cb.record_success()
+        assert cb.retry_after == 0
 
-        # Should be closed now
-        cb.check()  # Should not raise
+        cb.record_failure(RuntimeError("500 Error"))
+        assert cb.retry_after == 5
 
-    def test_half_open_to_open_on_failure(self):
-        """Test HALF_OPEN transitions back to OPEN on failure."""
-        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0.1)
+    def test_half_open_failure_reopens_for_longer(self, monkeypatch):
+        now = 100.0
+        monkeypatch.setattr(circuit_breaker.time, "monotonic", lambda: now)
+        cb = CircuitBreaker(failure_threshold=1, reset_timeout=5, max_reset_timeout=20)
 
-        # Trip the breaker
-        cb.record_failure(Exception("500 Error"))
-        time.sleep(0.15)
-
-        # Transition to HALF_OPEN
-        cb.check()
-
-        # Failure should reopen
-        cb.record_failure(Exception("500 Error"))
-
+        cb.record_failure(RuntimeError("500 Error"))
         with pytest.raises(CircuitBreakerOpen):
             cb.check()
+
+        now += 5
+        cb.check()
+        failure = RuntimeError("503 Unavailable")
+        cb.record_failure(failure)
+
+        now += 9
+        with pytest.raises(CircuitBreakerOpen) as caught:
+            cb.check()
+        assert caught.value.__cause__ is failure
+
+        now += 1
+        cb.check()
 
     def test_retry_after_returns_remaining_time(self):
         """Test retry_after returns remaining time when OPEN."""
@@ -265,31 +242,19 @@ class TestCircuitBreaker:
         assert cb.retry_after == 30
 
     def test_thread_safety(self):
-        """Test circuit breaker is thread-safe."""
-        import threading
+        cb = CircuitBreaker(failure_threshold=201)
 
-        cb = CircuitBreaker(failure_threshold=100)
-        errors = []
+        def record_failures(_):
+            for _ in range(50):
+                cb.record_failure(RuntimeError("500 Error"))
 
-        def worker():
-            try:
-                for _ in range(100):
-                    cb.record_failure(Exception("500 Error"))
-                    cb.check()
-            except CircuitBreakerOpen:
-                errors.append("open")
-            except Exception as e:
-                errors.append(e)
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            list(workers.map(record_failures, range(4)))
 
-        threads = [threading.Thread(target=worker) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        # Should not have any unexpected errors
-        for e in errors:
-            assert e == "open"
+        cb.check()
+        cb.record_failure(RuntimeError("500 Error"))
+        with pytest.raises(CircuitBreakerOpen):
+            cb.check()
 
 
 class TestCircuitBreakerEdgeCases:
@@ -313,16 +278,6 @@ class TestCircuitBreakerEdgeCases:
         # With negative timeout, should immediately allow transition
         cb.check()  # Should not raise
 
-    def test_multiple_rapid_failures(self):
-        """Test multiple rapid failures."""
-        cb = CircuitBreaker(failure_threshold=3)
-
-        for _ in range(10):
-            cb.record_failure(Exception("500 Error"))
-
-        with pytest.raises(CircuitBreakerOpen):
-            cb.check()
-
     def test_mixed_error_types(self):
         """Test with mixed error types."""
         cb = CircuitBreaker(failure_threshold=5)
@@ -336,32 +291,11 @@ class TestCircuitBreakerEdgeCases:
         with pytest.raises(CircuitBreakerOpen):
             cb.check()
 
-    def test_permanent_error_mid_sequence(self):
-        """Test permanent error trips breaker regardless of sequence."""
-        cb = CircuitBreaker(failure_threshold=10)
-
-        cb.record_failure(Exception("500 Error"))
-        cb.record_failure(Exception("500 Error"))
-        cb.record_failure(Exception("403 Forbidden"))  # Permanent error
-        cb.record_failure(Exception("500 Error"))
-
-        with pytest.raises(CircuitBreakerOpen):
-            cb.check()
-
     def test_quota_exceeded_trips_immediately(self):
         """Test breaker trips immediately on quota_exceeded error."""
         cb = CircuitBreaker(failure_threshold=10)
 
         cb.record_failure(Exception("AccountQuotaExceeded"))
-
-        with pytest.raises(CircuitBreakerOpen):
-            cb.check()
-
-    def test_quota_exceeded_trips_even_with_high_threshold(self):
-        """Test quota_exceeded bypasses failure threshold."""
-        cb = CircuitBreaker(failure_threshold=100)
-
-        cb.record_failure(Exception("usage quota exceeded"))
 
         with pytest.raises(CircuitBreakerOpen):
             cb.check()

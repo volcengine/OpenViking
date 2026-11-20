@@ -1281,163 +1281,44 @@ def test_vectordb_index_name_defaults_and_overrides():
 
 
 def test_embedding_validation():
-    """Test Embedding config validation"""
-    print("\n" + "=" * 60)
-    print("Test Embedding config validation")
-    print("=" * 60)
+    default = EmbeddingConfig()
+    assert default.dense is not None
+    assert default.dense.provider == "local"
+    assert default.dense.model == "bge-small-zh-v1.5-f16"
 
-    # Test 1: no embedder config -> default local dense
-    print("\n1. Test no embedder config...")
-    try:
-        config = EmbeddingConfig()
-        assert config.dense is not None
-        print(
-            f"   Pass (default provider={config.dense.provider}, model={config.dense.model}, dim={config.dimension})"
-        )
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    with pytest.raises(ValueError, match="api_key"):
+        EmbeddingModelConfig(provider="openai", model="text-embedding-3-small")
 
-    # Test 2: OpenAI provider missing api_key
-    print("\n2. Test OpenAI provider missing api_key...")
-    try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(provider="openai", model="text-embedding-3-small")
-        )
-        print("   Should fail but passed")
-    except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
-
-    # Test 3: OpenAI provider complete config
-    print("\n3. Test OpenAI provider complete config...")
-    try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="openai",
-                model="text-embedding-3-small",
-                api_key="fake-api-key-for-testing",
-                dimension=1536,
-            )
-        )
-        print("   Pass")
-    except ValueError as e:
-        print(f"   Fail: {e}")
-
-    # Test 4: Embedding Provider/Backend sync
-    print("\n4. Test Embedding Provider/Backend sync...")
-    # Case A: Only backend provided -> provider should be synced
-    config_a = EmbeddingModelConfig(
-        backend="openai", model="text-embedding-3-small", api_key="test-key", dimension=1536
+    legacy = EmbeddingModelConfig(
+        backend="openai",
+        model="text-embedding-3-small",
+        api_base="http://localhost:8080/v1",
     )
-    if config_a.provider == "openai":
-        print("   Pass (backend='openai' -> provider='openai')")
-    else:
-        print(f"   Fail (backend='openai' -> provider='{config_a.provider}')")
-
-    # Case B: Both provided -> provider takes precedence
-    config_b = EmbeddingModelConfig(
+    assert legacy.provider == "openai"
+    explicit = EmbeddingModelConfig(
         provider="volcengine",
-        backend="openai",  # Conflicting backend
-        model="doubao",
+        backend="openai",
+        model="doubao-embedding",
         api_key="test-key",
         dimension=1024,
     )
-    if config_b.provider == "volcengine":
-        print("   Pass (provider='volcengine' priority over backend='openai')")
-    else:
-        print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
-
-    # Test 5: Ollama provider (no API key required)
-    print("\n5. Test Ollama provider (no API key required)...")
-    try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="ollama",
-                model="nomic-embed-text",
-                dimension=768,
-            )
-        )
-        print("   Pass (Ollama does not require API key)")
-    except ValueError as e:
-        print(f"   Fail: {e}")
-
-    # Test 6: Ollama provider with custom api_base
-    print("\n6. Test Ollama provider with custom api_base...")
-    try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="ollama",
-                model="nomic-embed-text",
-                api_base="http://localhost:11434/v1",
-                dimension=768,
-            )
-        )
-        print("   Pass")
-    except ValueError as e:
-        print(f"   Fail: {e}")
-
-    # Test 7: OpenAI provider with api_base but no api_key (local OpenAI-compatible server)
-    print("\n7. Test OpenAI provider with api_base but no api_key...")
-    try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="openai",
-                model="text-embedding-3-small",
-                api_base="http://localhost:8080/v1",
-                dimension=1536,
-            )
-        )
-        print("   Pass (OpenAI provider allows missing api_key when api_base is set)")
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    assert explicit.provider == "volcengine"
 
 
 def test_vlm_validation():
-    """Test VLM config validation"""
-    print("\n" + "=" * 60)
-    print("Test VLM config validation")
-    print("=" * 60)
+    assert not VLMConfig().is_available()
 
-    # Test 1: VLM not configured (optional)
-    print("\n1. Test VLM not configured (optional)...")
-    try:
-        _ = VLMConfig()
-        print("   Pass (VLM is optional)")
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    with pytest.raises(ValueError, match="api_key"):
+        VLMConfig(provider="openai", model="gpt-4o")
 
-    # Test 2: VLM partial config (has model but no api_key)
-    print("\n2. Test VLM partial config...")
-    try:
-        _ = VLMConfig(model="gpt-4")
-        print("   Should fail but passed")
-    except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
+    legacy = VLMConfig(backend="openai", model="gpt-4o", api_key="test-key")
+    assert legacy.is_available()
+    assert legacy.credentials[0].provider == "openai"
 
-    # Test 3: VLM complete config
-    print("\n3. Test VLM complete config...")
-    try:
-        _ = VLMConfig(model="gpt-4", api_key="fake-api-key-for-testing", provider="openai")
-        print("   Pass")
-    except ValueError as e:
-        print(f"   Fail: {e}")
-
-    # Test 4: VLM Provider/Backend sync
-    print("\n4. Test VLM Provider/Backend sync...")
-    # Case A: Only backend provided -> provider should be synced
-    config_a = VLMConfig(backend="openai", model="gpt-4", api_key="test-key")
-    if config_a.provider == "openai":
-        print("   Pass (backend='openai' -> provider='openai')")
-    else:
-        print(f"   Fail (backend='openai' -> provider='{config_a.provider}')")
-
-    # Case B: Both provided -> provider takes precedence
-    config_b = VLMConfig(
+    explicit = VLMConfig(
         provider="volcengine", backend="openai", model="doubao", api_key="test-key"
     )
-    if config_b.provider == "volcengine":
-        print("   Pass (provider='volcengine' priority over backend='openai')")
-    else:
-        print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
+    assert explicit.credentials[0].provider == "volcengine"
 
 
 if __name__ == "__main__":

@@ -2,9 +2,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import logging
+
 import pytest
 
-from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+from openviking_cli.utils.config.embedding_config import (
+    EmbeddingConfig,
+    EmbeddingModelConfig,
+    logger,
+)
 
 
 def _cfg(**kwargs):
@@ -26,7 +32,13 @@ def test_embedding_text_source_validation_accepts_supported_values():
 
 
 def test_embedding_legacy_summary_only_normalizes_and_round_trips(caplog):
-    cfg = _cfg(text_source="summary_only")
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger=logger.name):
+            cfg = _cfg(text_source="summary_only")
+    finally:
+        logger.removeHandler(caplog.handler)
+
     assert cfg.text_source == "summary_first"
     assert "summary_only is deprecated" in caplog.text
     assert EmbeddingConfig.model_validate_json(cfg.model_dump_json()).text_source == "summary_first"

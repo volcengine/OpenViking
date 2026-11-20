@@ -404,8 +404,8 @@ class LocalParseOutputStore(ParseOutputStore):
     bytes to the formal AGFS tree. They are not handed to asynchronous semantic
     workers on the SemanticPlan path.
 
-    Case-only name collisions are detected explicitly rather than relying on the
-    host filesystem's case sensitivity, so behaviour matches across platforms.
+    The host filesystem determines whether names differing only in case refer
+    to distinct files.
     """
 
     backend = "local"
