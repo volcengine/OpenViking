@@ -895,7 +895,7 @@
 .ov-command-console__help {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .ov-command-console__help-lead {
@@ -913,19 +913,21 @@
 .ov-command-console__help-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .ov-command-console__help-section-label {
-  padding: 0 4px;
+  padding: 0 8px;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
 }
 
 .ov-command-console__help-items {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
 .ov-command-console__help-item {
@@ -956,14 +958,21 @@
 }
 
 .ov-command-console__help-name {
+  min-inline-size: 0;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .ov-command-console__help-desc {
+  min-inline-size: 0;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  line-height: 22px;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* 顶层候选面板保留主题继承，不占据命令记录区。 */
