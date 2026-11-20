@@ -70,7 +70,6 @@ export function useBrowserDashboards({
   const { hint, canonicalUri, knownRows, isFile } = useDashboardHint({
     uri,
     rows: metadataRows.filter((row) => row.kind !== 'entry' || !row.disabled),
-    enabled: wikiEnabled,
     generation,
     requestOptions,
   });

@@ -547,8 +547,12 @@ html.dark .ov-file-browser__empty-art {
 .ov-dropdown__item.ov-file-browser__preview-action--danger:not(:disabled) {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
+.ov-file-browser__preview-pane .ov-file-preview__footer {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
 .ov-file-browser__preview-meta {
-  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -560,7 +564,4 @@ html.dark .ov-file-browser__empty-art {
   margin-inline-start: auto;
   text-align: end;
   line-height: 20px;
-}
-.ov-file-browser__preview-model-name {
-  white-space: nowrap;
 }

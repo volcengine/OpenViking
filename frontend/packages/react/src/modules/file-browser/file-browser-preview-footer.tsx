@@ -1,5 +1,6 @@
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import type { FileBrowserApi } from './file-browser-state-types.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 import { isSummaryUri } from './preview-policy.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
@@ -60,13 +61,7 @@ export function FileBrowserPreviewFooter({
         </span>
       ) : null}
       {modelNotice ? (
-        <span className="ov-file-browser__preview-model">
-          {modelNotice.split(/(\s+)/).map((part, index) => (
-            <span key={index} className="ov-file-browser__preview-model-name">
-              {part}
-            </span>
-          ))}
-        </span>
+        <span className="ov-file-browser__preview-model">{modelNotice}</span>
       ) : null}
     </>
   );
@@ -77,20 +72,18 @@ export function previewModelNotice(uri: string | null, label: string) {
 }
 
 /** Match only generated document namespaces; raw uploads stay unlabelled. */
-export function isAiGeneratedPreview(
-  uri: string | null,
-  isDirectory: boolean,
-  isCompile: boolean,
-) {
+function isAiGeneratedPreview(uri: string | null, isCompile: boolean) {
   if (!uri) return false;
+  uri = normalizeResourceUri(uri);
+  if (/^viking:\/\/system\/compile\/example-skills(?:\/|$)/i.test(uri))
+    return false;
   return (
-    isDirectory ||
     isCompile ||
     isSummaryUri(uri) ||
-    /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/(?:identity|soul)\.md$/i.test(
+    /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/(?:identity|soul)\.md$/i.test(
       uri,
     ) ||
-    /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/(?:experiences|preferences|entities|cases|trajectory|events)\/.+/i.test(
+    /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/(?:experiences|preferences|entities|cases|trajectories|events)\/.+/i.test(
       uri,
     ) ||
     /^viking:\/\/(?:system|user\/[^/]+|~)(?:\/peers\/[^/]+)?\/compile\/.+/i.test(
@@ -107,11 +100,15 @@ export function renderPreviewFooter(
 ) {
   const uri = browser.currentUri;
   const modelNotice = previewModelNotice(uri, text.previewModelNotice);
-  const aiGenerated = isAiGeneratedPreview(
-    uri,
-    tab?.kind === 'directory',
-    browser.previewDashboard?.kind === 'wiki',
-  );
+  const summary = browser.previewDirectorySummary;
+  const hasDirectorySummary =
+    tab?.kind === 'directory' && tab.activeLevelKey === 'l1'
+      ? Boolean(summary?.overview && summary.overviewError === undefined)
+      : Boolean(summary?.abstract && summary.abstractError === undefined);
+  const aiGenerated =
+    tab?.kind === 'directory'
+      ? hasDirectorySummary
+      : isAiGeneratedPreview(uri, browser.previewIsWiki);
   return tab &&
     tab.kind !== 'content' &&
     !tab.loading &&

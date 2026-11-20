@@ -13,13 +13,11 @@ import { readDashboardHint } from './dashboard-resource.js';
 export function useDashboardHint({
   uri,
   rows,
-  enabled,
   generation,
   requestOptions,
 }: {
   uri: string | null;
   rows: readonly FileTreeRow[];
-  enabled: boolean;
   generation: number;
   requestOptions?: OvRequestOptions;
 }) {
@@ -31,7 +29,7 @@ export function useDashboardHint({
   const hint = useDashboardQuery(
     load,
     requestOptions,
-    enabled && Boolean(uri),
+    Boolean(uri),
     generation,
   );
   const canonicalUri = hint.data?.uri ?? uri;

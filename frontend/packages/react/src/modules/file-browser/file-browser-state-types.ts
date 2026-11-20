@@ -14,6 +14,7 @@ import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
 import type { FileBrowserDashboardLabels, FileBrowserLabels } from './types.js';
+import type { DirectorySummary } from './fs-model.js';
 import type { WikiSaveFeedback } from './use-wiki-save-feedback.js';
 
 /** View data and operations for the composed FileBrowser. */
@@ -24,6 +25,8 @@ export interface FileBrowserApi {
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
+  previewIsWiki: boolean;
+  previewDirectorySummary?: DirectorySummary;
   dashboardError: Error | null;
   refreshWikiConflicts: () => void;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */

@@ -7,6 +7,7 @@ import { deferred, mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 
 const resource = 'viking://user/default/resources/readme.txt';
 const directory = 'viking://resources';
+const emptyDirectory = 'viking://resources/empty';
 const memory = 'viking://user/default/memories/profile.txt';
 const nextFile = 'viking://resources/next.txt';
 const fileTime = '2026-11-11T22:10:00.123Z';
@@ -20,6 +21,7 @@ test('preview footer shows real modification time, text count and a resource-onl
       return ok([
         { uri: resource, isDir: false },
         { uri: directory, isDir: true },
+        { uri: emptyDirectory, isDir: true },
         { uri: memory, isDir: false },
       ]);
     }
@@ -27,12 +29,14 @@ test('preview footer shows real modification time, text count and a resource-onl
       if (uri === resource) {
         return ok({ modTime: '2026-11-11T22:10:00.123456789Z' });
       }
-      if (uri === directory) {
+      if (uri === directory || uri === emptyDirectory) {
         return ok({ isDir: true, updateTime: Date.parse(folderTime) / 1000 });
       }
       if (uri === memory) return oldStat.promise;
       return ok({ mtime: Date.parse(fileTime) / 1000 });
     }
+    if (uri === directory && path.endsWith('/content/abstract'))
+      return ok('Generated summary');
     return ok('');
   });
   const page = (uri, labels) =>
@@ -56,9 +60,18 @@ test('preview footer shows real modification time, text count and a resource-onl
 
     await view.render(page(directory));
     assert.equal(time().dateTime, folderTime);
-    assert.match(footer().textContent, /0 字符数/);
+    assert.match(footer().textContent, /17 字符数/);
     assert.ok(model());
     assert.match(footer().textContent, /AI 生成/);
+
+    const [, overview] = view.container.querySelectorAll(
+      '.ov-file-preview__level',
+    );
+    await act(async () => overview.click());
+    assert.doesNotMatch(footer().textContent, /AI 生成/);
+
+    await view.render(page(emptyDirectory));
+    assert.doesNotMatch(footer().textContent, /AI 生成/);
 
     await view.render(page(memory));
     assert.equal(time(), null);
@@ -98,11 +111,11 @@ test('AI notice follows generated document scope and locale', async () => {
       });
     return ok('sample');
   });
-  const page = (uri, locale = 'zh-CN') =>
+  const page = (uri, locale = 'zh-CN', dashboardKinds) =>
     h(
       OpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },
-      h(FileBrowser, { uri, locale }),
+      h(FileBrowser, { uri, locale, dashboardKinds }),
     );
   const view = await mount(page(null));
   const meta = () =>
@@ -119,22 +132,26 @@ test('AI notice follows generated document scope and locale', async () => {
         'preferences',
         'entities',
         'cases',
-        'trajectory',
+        'trajectories',
         'events',
       ]) {
         await view.render(page(`${root}/memories/${kind}/nested/example.md`));
         assert.match(meta(), /AI 生成/);
       }
       for (const name of ['identity.md', 'soul.md']) {
-        await view.render(page(`${root}/${name}`));
+        await view.render(page(`${root}/memories/${name}`));
         assert.match(meta(), /AI 生成/);
       }
     }
     await view.render(page('viking://resources/wiki/chapter.md'));
     assert.match(meta(), /AI 生成/);
+    await view.render(page('viking://resources/wiki/chapter.md', 'zh-CN', []));
+    assert.match(meta(), /AI 生成/);
     await view.render(page('viking://system/compile/task/output.md', 'en-US'));
     assert.match(meta(), /AI generated/);
     for (const uri of [
+      'viking://system/compile/example-skills/llm-wiki/SKILL.md',
+      'viking://user/alice/soul.md',
       'viking://resources/raw.md',
       'viking://user/alice/resources/events/raw.md',
       'viking://user/alice/sessions/run/messages.jsonl',

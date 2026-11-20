@@ -270,6 +270,7 @@ export function useFsPreview({
     activeKey,
     error,
     wikiSaveFeedback,
+    directorySummary: directoryTab && directory?.summary,
     footer: count === undefined ? undefined : formatCharacterCount(count),
     updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
     setActiveKey,
