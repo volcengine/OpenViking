@@ -698,6 +698,98 @@ def _plan_nodes(plan):
         yield from _plan_nodes(child)
 
 
+@pytest.mark.parametrize("name", ["_ov_filter_probe", "_ov_filter_size", "_ov_exact_vectors"])
+@pytest.mark.parametrize("metric", ["cosine", "l2", "ip", "l1"])
+@pytest.mark.parametrize("matched", [1, 6])
+def test_adaptive_cte_collection_names(name, metric, matched, monkeypatch):
+    if not os.environ.get("OV_PGVECTOR_TEST_DSN"):
+        pytest.skip("Set OV_PGVECTOR_TEST_DSN for real PostgreSQL tests")
+    other = create_collection_adapter(
+        VectorDBBackendConfig(
+            backend="pgvector",
+            name=name,
+            dimension=3,
+            distance_metric=metric,
+            pgvector={"dsn_env": "OV_PGVECTOR_TEST_DSN", "index_type": "hnsw"},
+        )
+    )
+    try:
+        other.create_collection(
+            name,
+            {
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                    {"FieldName": "vector", "FieldType": "vector", "Dim": 3},
+                    {"FieldName": "account_id", "FieldType": "string"},
+                    {"FieldName": "updated_at", "FieldType": "date_time"},
+                ],
+                "ScalarIndex": ["account_id"],
+            },
+            distance=metric,
+            sparse_weight=0,
+            index_name="default",
+        )
+        other.upsert(
+            [
+                {"id": f"row_{i}", "vector": [1, i / 10, 0], "account_id": "one"}
+                for i in range(matched)
+            ]
+        )
+        collection = other.get_collection()._Collection__collection
+        collection._retrieval_config["filter_exact_threshold"] = 5
+        # Admission policy has its own real-plan test. Force both count branches
+        # here so even the unexecuted ANN branch must parse with a colliding name.
+        monkeypatch.setattr(collection, "_admit_filter_probe", lambda *args: True)
+        for advance in [None, {"time_decay": {"protection": "1d"}}]:
+            rows = other.query(
+                query_vector=[1, 0, 0],
+                filter=Eq("account_id", "one"),
+                limit=10,
+                advance=advance,
+            )
+            assert {row["id"] for row in rows} == {f"row_{i}" for i in range(matched)}
+    finally:
+        other.drop_collection()
+        other.close()
+
+
+def test_cold_probe_does_not_block_cached_filter(adapter, monkeypatch):
+    if adapter._config.index_type != "hnsw":
+        pytest.skip("Adaptive routing is specific to HNSW")
+    seed(adapter)
+    collection = adapter.get_collection()._Collection__collection
+    query_rows = collection._query_rows
+    # Warm the decision cache using the same public query as the worker.
+    expected = adapter.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"))
+    planning = threading.Event()
+    release = threading.Event()
+    hot_sql = threading.Event()
+
+    def query(sql, params, index_name=None):
+        if sql.startswith("EXPLAIN") and "cold" in params:
+            planning.set()
+            assert release.wait(10), "cold planning was not released"
+        elif not sql.startswith("EXPLAIN") and "one" in params:
+            hot_sql.set()
+        return query_rows(sql, params, index_name)
+
+    monkeypatch.setattr(collection, "_query_rows", query)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cold = executor.submit(
+            adapter.query, query_vector=[1, 0, 0], filter=Eq("account_id", "cold")
+        )
+        try:
+            assert planning.wait(5), "cold query did not reach planning"
+            hot = executor.submit(
+                adapter.query, query_vector=[1, 0, 0], filter=Eq("account_id", "one")
+            )
+            assert hot_sql.wait(3), "cached filter waited for unrelated EXPLAIN"
+            assert hot.result(timeout=3) == expected
+        finally:
+            release.set()
+        assert cold.result(timeout=5) == []
+
+
 def test_real_plan_admission_and_exact_execution(adapter):
     if adapter._config.index_type != "hnsw":
         pytest.skip("Adaptive routing is specific to HNSW")

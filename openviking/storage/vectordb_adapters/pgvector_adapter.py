@@ -211,8 +211,12 @@ class PgvectorCollection(OpenGaussCollection):
         self, index_name, where, filter_params, vector_text, op, budget
     ):
         if op != "<=>":
-            return super()._dense_candidate_query(
-                index_name, where, filter_params, vector_text, op, budget
+            predicate, params = self._dense_filter_clause(op, where, filter_params)
+            return (
+                f'SELECT "id" AS _ov_candidate_id FROM public.{_quote_identifier(self._name)} '
+                f"WHERE {predicate} "
+                f'ORDER BY "vector" {op} %s::vector LIMIT %s',
+                [*params, vector_text, budget],
             )
         # PostgreSQL sorts NaN after finite distances in ascending order. Cosine
         # zero vectors therefore cannot displace any eligible top-budget row.
@@ -249,35 +253,40 @@ class PgvectorCollection(OpenGaussCollection):
             if cached and now - cached[0] < 30:
                 self._filter_probe_admission.move_to_end(key)
                 return cached[1]
-            table = f"public.{_quote_identifier(self._name)}"
+        # Planning can wait on database resources. Keep it outside the cache
+        # lock so unrelated filters, including cache hits, can query independently.
+        table = f"public.{_quote_identifier(self._name)}"
+        _, rows = self._query_rows(
+            f'EXPLAIN (FORMAT JSON) SELECT "id" FROM {table} WHERE {where} LIMIT %s',
+            [*filter_params, threshold + 1],
+            index_name,
+        )
+        probe = rows[0][0][0]["Plan"]
+        nodes = list(self._plan_nodes(probe))
+        scans = [n for n in nodes if n.get("Index Name")]
+        admitted = (
+            bool(scans)
+            and not any(n["Node Type"] in {"Seq Scan", "Parallel Seq Scan"} for n in nodes)
+            and all(n.get("Index Cond") for n in scans)
+            and sum(n.get("Plan Rows", threshold + 1) for n in scans) <= threshold + 1
+        )
+        if admitted:
+            native_sql, native_params = self._native_dense_candidate_query(
+                index_name, where, filter_params, vector_text, op, budget
+            )
             _, rows = self._query_rows(
-                f'EXPLAIN (FORMAT JSON) SELECT "id" FROM {table} WHERE {where} LIMIT %s',
-                [*filter_params, threshold + 1],
-                index_name,
+                "EXPLAIN (FORMAT JSON) " + native_sql, native_params, index_name
             )
-            probe = rows[0][0][0]["Plan"]
-            nodes = list(self._plan_nodes(probe))
-            scans = [n for n in nodes if n.get("Index Name")]
+            native = rows[0][0][0]["Plan"]
+            ann_name = self._indexes[index_name]["_pg_index_name"]
             admitted = (
-                bool(scans)
-                and not any(n["Node Type"] in {"Seq Scan", "Parallel Seq Scan"} for n in nodes)
-                and all(n.get("Index Cond") for n in scans)
-                and sum(n.get("Plan Rows", threshold + 1) for n in scans) <= threshold + 1
+                any(n.get("Index Name") == ann_name for n in self._plan_nodes(native))
+                and probe["Total Cost"] <= native["Total Cost"] * 0.25
             )
-            if admitted:
-                native_sql, native_params = self._native_dense_candidate_query(
-                    index_name, where, filter_params, vector_text, op, budget
-                )
-                _, rows = self._query_rows(
-                    "EXPLAIN (FORMAT JSON) " + native_sql, native_params, index_name
-                )
-                native = rows[0][0][0]["Plan"]
-                ann_name = self._indexes[index_name]["_pg_index_name"]
-                admitted = (
-                    any(n.get("Index Name") == ann_name for n in self._plan_nodes(native))
-                    and probe["Total Cost"] <= native["Total Cost"] * 0.25
-                )
-            self._filter_probe_admission[key] = (now, admitted)
+        with self._filter_probe_admission_lock:
+            # Start the TTL after planning finishes, rather than charging its
+            # wait time against the usable lifetime of this decision.
+            self._filter_probe_admission[key] = (time.monotonic(), admitted)
             self._filter_probe_admission.move_to_end(key)
             while len(self._filter_probe_admission) > 128:
                 self._filter_probe_admission.popitem(last=False)
