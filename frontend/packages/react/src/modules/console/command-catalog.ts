@@ -74,7 +74,6 @@ export function consoleQuickCommands(
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
     value: guides[name].examples[0],
-    compactLabel: name === 'compile create' ? 'compile' : undefined,
   }));
 }
 
