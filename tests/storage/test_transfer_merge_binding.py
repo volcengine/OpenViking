@@ -763,13 +763,17 @@ async def test_sync_failure_preserves_staged_content(
 
 
 @pytest.mark.asyncio
-async def test_successful_sync_reports_applied_changes_and_cleans_temp(binding_fs):
+async def test_sync_requires_directory_before_applying_changes_and_cleaning_temp(binding_fs):
     fs, ctx = binding_fs, root_ctx()
     source, target = "viking://temp/import", "viking://resources/target"
     for name in ("added.md", "updated.md", "newdir/file.md"):
         await fs.write_file_bytes(f"{source}/{name}", b"new payload", ctx=ctx)
     for name in ("updated.md", "removed.md", "olddir/file.md"):
         await fs.write_file_bytes(f"{target}/{name}", b"old", ctx=ctx)
+
+    with pytest.raises(AGFSNotADirectoryError):
+        await fs.sync_tree(f"{source}/updated.md", target, ctx=ctx)
+    assert await fs.read_file_bytes(f"{target}/updated.md", ctx=ctx) == b"old"
 
     diff = await fs.sync_tree(source, target, ctx=ctx, delete_temp_after=True)
 
@@ -783,23 +787,6 @@ async def test_successful_sync_reports_applied_changes_and_cleans_temp(binding_f
         assert await fs.read_file_bytes(f"{target}/{name}", ctx=ctx) == b"new payload"
     for name in ("removed.md", "olddir"):
         assert not await fs.exists(f"{target}/{name}", ctx=ctx)
-
-
-@pytest.mark.asyncio
-async def test_sync_file_source_preserves_existing_target(binding_fs):
-    fs, ctx = binding_fs, root_ctx()
-    source = "viking://resources/source/z.txt"
-    target = "viking://resources/target"
-    victim = f"{target}/a.txt"
-    await fs.write_file_bytes(source, b"source", ctx=ctx)
-    await fs.write_file_bytes(victim, b"keep me", ctx=ctx)
-
-    with pytest.raises((AGFSNotADirectoryError, FileNotFoundError)) as caught:
-        await fs.sync_tree(source, target, ctx=ctx)
-
-    assert await fs.exists(victim, ctx=ctx)
-    assert await fs.read_file_bytes(victim, ctx=ctx) == b"keep me"
-    assert isinstance(caught.value, AGFSNotADirectoryError)
 
 
 @pytest.mark.asyncio

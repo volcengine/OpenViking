@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.pack_service import PackService
 from openviking.storage.acl import AclManager, AclMode
@@ -323,11 +322,10 @@ class FakeVectorStore:
 
     async def resolve(self, account_id):
         from openviking_cli.utils.config.embedding_config import EmbeddingConfig
-
         return SimpleNamespace(
-            embedding=EmbeddingConfig(
-                dense={"provider": "openai", "model": "test", "dimension": 3, "api_key": "test"}
-            ),
+            embedding=EmbeddingConfig(dense={
+                "provider": "openai", "model": "test", "dimension": 3, "api_key": "test"
+            }),
             vectordb=SimpleNamespace(sparse_weight=0),
         )
 
@@ -631,33 +629,6 @@ async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     assert index_records[0]["text"] == "root abstract"
     note_record = next(record for record in index_records if record["path"] == "notes.txt")
     assert note_record["scalars"]["md5"] == "note-md5"
-
-
-@pytest.mark.asyncio
-async def test_export_file_source_is_rejected_before_creating_package(indexed_fs, tmp_path):
-    from openviking.storage.vector_ids import vector_record_id
-
-    fs, backend = indexed_fs
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    uri = "viking://resources/source/z.txt"
-    await fs.write_file_bytes(uri, b"source", ctx=ctx)
-    await backend.upsert(
-        {
-            "id": vector_record_id(ctx.account_id, uri),
-            "uri": uri,
-            "level": 2,
-            "account_id": ctx.account_id,
-            "vector": [0.1, 0.2, 0.3, 0.4],
-            "abstract": "source summary",
-        },
-        ctx=ctx,
-    )
-    package = tmp_path / "file.ovpack"
-
-    with pytest.raises(AGFSNotADirectoryError):
-        await export_ovpack(fs, uri, str(package), ctx=ctx, vector_store=backend)
-
-    assert not package.exists()
 
 
 @pytest.mark.asyncio

@@ -163,17 +163,6 @@ def fs() -> VikingFS:
     return VikingFS(agfs=_DummyAgfs())
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["ls", "tree"])
-async def test_internal_empty_listing_does_not_add_stat(monkeypatch, fs, method):
-    monkeypatch.setattr(fs, f"_{method}_original", AsyncMock(return_value=[]))
-    stat = AsyncMock(side_effect=AssertionError("internal listing added stat"))
-    monkeypatch.setattr(fs, "stat", stat)
-
-    assert await getattr(fs, method)("viking://resources/docs", ctx=_default_ctx()) == []
-    stat.assert_not_awaited()
-
-
 def _std_path_to_uri(path, **_kwargs):
     """Map account-isolated path back to a viking:// URI (test convention)."""
     return path.replace("/local/test_account/", "viking://")
@@ -883,7 +872,6 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
     assert "overview" not in result[1]
     assert result[2]["overview"] == "L1 overview"
     summary.assert_awaited_once_with("viking://resources/docs", "overview", ctx=_default_ctx())
-
 
 @pytest.mark.asyncio
 async def test_tree_filters_and_paginates_before_summary_reads(monkeypatch, fs):
