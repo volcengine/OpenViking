@@ -77,6 +77,10 @@ for (const [path, expected] of [
     'viking://resources/%E4%B8%AD%2F%23%3F%25%5C.md',
     'viking://resources/中%2F%23%3F%25%5C.md',
   ],
+  [
+    'viking://resources/%E4%B8%AD%3A%5B%5d%40%21%24%26%27%28%29%2A%2B%2C%3B%3D.md',
+    'viking://resources/中%3A%5B%5d%40%21%24%26%27%28%29%2A%2B%2C%3B%3D.md',
+  ],
   ['viking://resources/bad%E4%xx.md', 'viking://resources/bad%E4%xx.md'],
   ['/tmp/report%20name.md', '/tmp/report%20name.md'],
 ]) {

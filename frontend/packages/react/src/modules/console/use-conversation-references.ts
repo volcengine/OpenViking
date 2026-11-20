@@ -2,10 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type {
-  VikingBotReference,
-  VikingBotReferences,
-} from '../../components/viking-bot/index.js';
+import type { VikingBotReferences } from '../../components/viking-bot/index.js';
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
 import { mentionSearchRows, MENTION_ROOT } from './mention-search.js';
@@ -13,8 +10,7 @@ import {
   referenceSearchInput,
   searchReferenceMatches,
 } from './references/search.js';
-
-const emptyReferences: readonly VikingBotReference[] = [];
+import { useReferenceSelection } from './references/use-reference-selection.js';
 
 export function useConversationReferences({
   enabled,
@@ -62,36 +58,9 @@ export function useConversationReferences({
       enabled,
     ],
   );
-  const [selected, setSelected] = useState<{
-    scope: typeof scope;
-    items: readonly VikingBotReference[];
-  }>();
-  const onChange = useCallback(
-    (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
-    [scope],
-  );
-  const onSelectionChange = enabled ? selection?.onChange : undefined;
-  const clearReferences = useCallback(
-    (sent?: readonly VikingBotReference[]) => {
-      if (onSelectionChange) {
-        const items = selection?.selected ?? emptyReferences;
-        const remaining = sent
-          ? items.filter((item) => !sent.includes(item))
-          : [];
-        if (!sent || remaining.length !== items.length)
-          onSelectionChange(remaining);
-        return;
-      }
-      setSelected((current) => {
-        if (current?.scope !== scope) return current;
-        if (!sent) return undefined;
-        const items = current.items.filter((item) => !sent.includes(item));
-        return items.length === current.items.length
-          ? current
-          : { scope, items };
-      });
-    },
-    [scope, onSelectionChange, selection?.selected],
+  const { selected, onChange, clearReferences } = useReferenceSelection(
+    scope,
+    enabled ? selection : undefined,
   );
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {
@@ -181,10 +150,8 @@ export function useConversationReferences({
             expanded: row.hasChildren ? !hidden?.has(row.uri) : undefined,
           }))
       : tree.rows,
-    selected:
-      selection?.selected ??
-      (selected?.scope === scope ? selected.items : emptyReferences),
-    onChange: onSelectionChange ?? onChange,
+    selected,
+    onChange,
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => void expandDirectory(uri),

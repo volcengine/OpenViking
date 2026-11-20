@@ -72,6 +72,8 @@ Size constraints in `className` and `style` keep their CSS semantics. The card a
 | locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                                                                      | `'zh-CN' \| 'en-US'`                                                            | Inherited, otherwise `'en-US'` |
 | className, style | Class name and style of the card root, for sizing and theme variables                                                                                                                                                                                                              | `string`, `CSSProperties`                                                       | -                              |
 
+For `userExperiences`, wait for the parent listing to finish. If it confirms the directory is missing and the current user’s root is known, return that root row. If the target exists but is unavailable, return `null`.
+
 ### DirectoryTourStep
 
 | Property     | Description                                                                                            | Type        | Default                                          |

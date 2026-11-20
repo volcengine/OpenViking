@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from './helpers/command-console-dom.mjs';
 const { useConversation } = await import(
@@ -111,6 +111,9 @@ test('native Console accepts follow-ups while streaming and preserves newer draf
     accept = resolve;
   });
   let reject = true;
+  let selectReferences;
+  const original = { uri: 'viking://resources/original.md', type: 'file' };
+  const added = { uri: 'viking://resources/added.md', type: 'file' };
   const service = {
     createSession: async () => ({ id: 's', title: 's' }),
     loadMessages: async () => [],
@@ -125,9 +128,14 @@ test('native Console accepts follow-ups while streaming and preserves newer draf
     },
   };
   function Host() {
-    view = useConversation({ chatOptions: { service } }, (next) => {
-      draft = typeof next === 'function' ? next(draft) : next;
-    });
+    const [selected, onChange] = useState([]);
+    selectReferences = onChange;
+    view = useConversation(
+      { chatOptions: { service, referenceSelection: { selected, onChange } } },
+      (next) => {
+        draft = typeof next === 'function' ? next(draft) : next;
+      },
+    );
     return null;
   }
   const root = createRoot(document.createElement('div'));
@@ -139,27 +147,39 @@ test('native Console accepts follow-ups while streaming and preserves newer draf
     });
     assert.equal(draft, '');
     assert.equal(view.canSendWhileStreaming, true);
+    await act(() => selectReferences([original]));
     draft = 'follow';
     await act(async () => {
-      view.onSend({ text: 'follow', attachments: [] });
+      view.onSend({
+        text: 'follow',
+        attachments: [],
+        references: view.references.selected,
+      });
       await tick();
     });
     assert.equal(draft, 'follow');
+    assert.deepEqual(view.references.selected, [original]);
     assert.equal(
       view.messages.filter((item) => item.role === 'user').length,
       1,
     );
     reject = false;
     await act(() => {
-      view.onSend({ text: 'follow', attachments: [] });
+      view.onSend({
+        text: 'follow',
+        attachments: [],
+        references: view.references.selected,
+      });
     });
     assert.equal(view.isSubmitting, true);
+    await act(() => selectReferences([original, added]));
     draft = 'new draft';
     await act(async () => {
       accept({ accepted: true });
       await tick();
     });
     assert.equal(view.isSubmitting, false);
+    assert.deepEqual(view.references.selected, [added]);
     assert.equal(draft, 'new draft');
     await act(async () => {
       advance();

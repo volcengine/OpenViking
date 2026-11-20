@@ -10,7 +10,11 @@ import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
  * A placeholder tab while loading: it carries the key and file name, and `loading`
  * makes the component render its loading state rather than "empty file".
  */
-export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
+export function loadingTab(
+  uri: string,
+  resourceType: 'directory' | 'file' | 'unknown',
+): FilePreviewTab {
+  const isDirectory = resourceType === 'directory';
   if (isDirectory && isSystemUri(uri))
     return {
       ...toSystemDirectoryTab(uri),
@@ -50,7 +54,7 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
   }
   return {
     kind: 'file',
-    icon: fileTypeIcon(name),
+    icon: resourceType === 'file' ? fileTypeIcon(name) : undefined,
     key: uri,
     loading: true,
     title: decodePathLabel(name),

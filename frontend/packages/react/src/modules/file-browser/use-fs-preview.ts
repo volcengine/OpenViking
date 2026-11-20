@@ -120,10 +120,10 @@ export function useFsPreview({
     setDirectory(null);
     setStat(undefined);
     wikiSave.reset();
+    setActiveKey(client ? uri : null);
+    setError(null);
     if (!client || !uri) {
       setTabs(null);
-      setActiveKey(null);
-      setError(null);
       return;
     }
     const controller = new AbortController();
@@ -133,9 +133,7 @@ export function useFsPreview({
     // A tab is present even while loading, so the shell — tab row and path row —
     // stays put and only the body shows the loading state. Setting null would make
     // the whole preview area disappear and reappear, flashing on every switch.
-    setTabs([loadingTab(uri, resourceType !== 'file')]);
-    setActiveKey(uri);
-    setError(null);
+    setTabs([loadingTab(uri, resourceType)]);
     const { options, onStatus } = wikiSave.bind(controller.signal);
     const { signal } = options;
     if (contentKind === 'pending') return () => controller.abort();
@@ -169,6 +167,8 @@ export function useFsPreview({
           ? (await metadata)?.isDirectory
           : resourceType === 'directory';
       if (signal.aborted) throw abortError();
+      if (resourceType === 'unknown')
+        setTabs([loadingTab(uri, isDir ? 'directory' : 'file')]);
       if (isDir)
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
