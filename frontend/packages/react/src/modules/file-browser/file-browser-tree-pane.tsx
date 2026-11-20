@@ -158,9 +158,9 @@ function FileBrowserTreePaneContent({
               />
             ) : null;
           }}
+          onToggleExpand={(row) => void browser.actions.toggleExpand(row)}
           operations={{
             select: browser.actions.select,
-            toggleExpand: browser.actions.toggleExpand,
             loadMore: browser.actions.loadMore,
             retry: browser.actions.retry,
           }}
