@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.agent.tools import image as image_module
 from vikingbot.agent.tools.image import ImageGenerationTool
+from vikingbot.utils import helpers
 
 
 class _FakeSandbox:
@@ -85,7 +86,7 @@ async def test_edit_mode_reads_base_image_and_mask_from_sandbox(monkeypatch, tmp
         }
     )
     context = SimpleNamespace(session_key="session", sandbox_manager=_SandboxManager(sandbox))
-    monkeypatch.setattr(image_module, "get_data_path", lambda: tmp_path)
+    monkeypatch.setattr(helpers, "_bot_data_path", tmp_path)
     captured_kwargs = {}
 
     async def fake_image_edit(**kwargs):
@@ -118,7 +119,7 @@ async def test_edit_mode_reads_base_image_and_mask_from_sandbox(monkeypatch, tmp
 
 @pytest.mark.asyncio
 async def test_image_tool_saves_generated_jpeg_with_jpg_extension(monkeypatch, tmp_path):
-    monkeypatch.setattr(image_module, "get_data_path", lambda: tmp_path)
+    monkeypatch.setattr(helpers, "_bot_data_path", tmp_path)
     jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01fake-jpeg"
 
     async def fake_image_generation(**kwargs):
