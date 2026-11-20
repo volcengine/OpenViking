@@ -29,6 +29,8 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
+  /** Keep Console on a skeleton until the initial eligibility and readiness checks settle. */
+  initialLoading?: 'skeleton';
   /**
    * Confirm whether the current scope allows Bot use. The tab stays visible while
    * checking or on failure; false hides it, while true proceeds to runtime readiness.

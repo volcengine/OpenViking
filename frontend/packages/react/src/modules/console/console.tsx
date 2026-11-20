@@ -1,12 +1,27 @@
 import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { NotificationScope } from '../../shared/feedback/notification-scope.js';
-import { useRenderErrors } from './labels.js';
+import { resolveConsoleLocale, useRenderErrors } from './labels.js';
+import { useLocale } from '../../shared/locale-context.js';
+import { ConsoleSkeleton } from './console-skeleton.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
 import type { ConsoleProps } from './types.js';
-import { ConsoleView } from './console-view.js';
+import { ConsoleView, defaultModes } from './console-view.js';
+import { useOvSignal } from '../../client/provider.js';
+import { useBotActivation } from './use-bot-activation.js';
 
 function ConsoleMonitoredView(props: ConsoleProps) {
+  const { modes = defaultModes, chatOptions, scopeKey, requestOptions } = props;
+  const inheritedSignal = useOvSignal();
+  const activation = useBotActivation({
+    activation: chatOptions?.activation,
+    enabled: modes.includes('conversation'),
+    scopeKey: chatOptions?.scopeKey ?? scopeKey,
+    signal:
+      (chatOptions?.requestOptions ?? requestOptions)?.signal ??
+      inheritedSignal,
+  });
+  const locale = useLocale(props.locale);
   return (
     <ErrorBoundary
       fallback={props.slots?.errorFallback}
@@ -16,7 +31,22 @@ function ConsoleMonitoredView(props: ConsoleProps) {
     >
       <TaskTrackingProvider service={props.taskService}>
         <NotificationScope locale={props.locale} isolateRequests>
-          <ConsoleView {...props} />
+          {activation.state.status === 'initializing' ? (
+            <div
+              id={props.id}
+              className={['ov-console', props.className]
+                .filter(Boolean)
+                .join(' ')}
+              style={props.style}
+              hidden={props.hidden}
+            >
+              <ConsoleSkeleton
+                aria-label={resolveConsoleLocale(locale).initialLoading}
+              />
+            </div>
+          ) : (
+            <ConsoleView {...props} activation={activation} />
+          )}
         </NotificationScope>
       </TaskTrackingProvider>
     </ErrorBoundary>

@@ -9,6 +9,7 @@ export type BotActivationState =
       status:
         | ConsoleBotActivationStatus
         | 'disabled'
+        | 'initializing'
         | 'checking'
         | 'cancelled'
         | 'starting';
@@ -32,7 +33,9 @@ function createBotActivation({
       : activation
         ? scopeSignal?.aborted
           ? 'cancelled'
-          : 'checking'
+          : activation.initialLoading === 'skeleton'
+            ? 'initializing'
+            : 'checking'
         : 'ready',
   };
   let active = false;
@@ -55,7 +58,7 @@ function createBotActivation({
       'collection-error';
     const readStatus = async () => {
       failure = 'collection-error';
-      update({ status: 'checking' });
+      if (state.status !== 'initializing') update({ status: 'checking' });
       signal.throwIfAborted();
       const eligible = await activation.isEligible(signal);
       signal.throwIfAborted();

@@ -38,6 +38,7 @@ const commands = {
 };
 
 const messages = {
+  initialLoading: 'Loading Console…',
   labels: {
     conversation: 'VikingBot',
     command: 'Terminal',

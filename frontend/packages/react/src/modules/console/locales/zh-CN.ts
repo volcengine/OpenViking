@@ -8,6 +8,7 @@ import type { ConsoleLabels } from '../types.js';
 import type enUS from './en-US.js';
 
 const messages: typeof enUS = {
+  initialLoading: '正在加载 Console…',
   labels: {
     conversation: 'VikingBot',
     command: '终端',
