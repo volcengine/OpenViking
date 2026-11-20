@@ -517,12 +517,14 @@ export interface CommandConsoleLabels {
   formatHoursAgo?: (hours: number) => string;
 }
 
-/** 空态快捷入口。One empty-state shortcut. */
+/** 命令快捷入口。One command shortcut. */
 export interface CommandConsoleQuickCommand {
   /** 匹配 commands 的名称，复用其说明。Name matched in commands to reuse its copy. */
   name: string;
   /** 原样填入的完整命令；空字符串清空输入，不回退到命令前缀。Full input text; an empty string clears the input without a prefix fallback. */
   value: string;
+  /** 输入框上方的按钮文案，默认使用 name。Label above the input, defaults to name. */
+  compactLabel?: string;
 }
 
 /**
@@ -575,10 +577,11 @@ export interface CommandConsoleProps extends Omit<
    */
   emptyState?: ReactNode;
   /**
-   * 内置空态快捷入口；name 按顺序匹配 commands 并复用 summary/description，
+   * 内置空态和有记录时输入框上方的快捷入口；name 按顺序匹配 commands，
    * 未命中的名称跳过，重复名称只保留首次出现。
    * 点击后原样填入 value 并聚焦，不添加前缀、不提交；空字符串清空输入。
-   * Built-in empty-state shortcuts. Names resolve copy from commands in order;
+   * Shortcuts in the built-in empty state and above the input when records
+   * are present. Names resolve copy from commands in order;
    * unknown names are skipped and repeats keep their first occurrence.
    * Selection fills value verbatim and focuses without adding a prefix or
    * submitting. An empty value clears the input.

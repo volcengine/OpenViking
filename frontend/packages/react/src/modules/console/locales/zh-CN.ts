@@ -54,7 +54,7 @@ const messages: typeof enUS = {
   },
   commands: {
     ...transferSession,
-    'add-resource': '添加路径或 URL 到资源',
+    'add-resource': '导入网页链接、仓库或本地文件',
     'add-skill': '添加 Skill 到技能目录',
     'add-memory': '直接添加记忆',
     compile: '执行编译',
@@ -83,10 +83,12 @@ const messages: typeof enUS = {
     'task status': '查看后台任务',
     'task cancel': '请求取消后台任务',
   },
+  localResourceImportHelp:
+    '传入网页链接或仓库地址可直接导入。直接执行命令或仅传入本地路径，会打开「本地上传」页面，可选择文件或文件夹。',
   commandGuides: {
     'add-resource': {
       description:
-        '把网页 URL 或仓库地址导入 Resources，供后续检索、阅读和引用。浏览器终端不接收本地文件路径。',
+        '传入网页链接或仓库地址可直接导入。导入本地文件时，请在浏览器中选择文件。',
       examples: [
         'ov add-resource https://github.com/volcengine/OpenViking/blob/main/docs/repository/README_CN.md',
       ],
@@ -151,6 +153,9 @@ const messages: typeof enUS = {
     status: '配置与状态',
   },
   messages: {
+    localResourceImportOpened: () => '请在本地上传页面选择文件或文件夹。',
+    localResourceImportFlags: () =>
+      '请在本地上传页面配置导入，或使用 --temp-file-id 按命令选项导入。',
     cancelled: () => '请求已取消；服务端可能仍在处理已接收的操作。',
     unavailableCommand: (value?: string) => `当前工作台不支持命令：${value}`,
     invalidOvpack: () => '请选择有效的 .ovpack 文件。',
