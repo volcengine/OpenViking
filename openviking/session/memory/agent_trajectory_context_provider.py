@@ -31,7 +31,6 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
     """Phase 1 provider: extract trajectories and optional session skills."""
 
     include_tool_parts_in_conversation = True
-    _tool_output_max_chars = None
     split_long_text_messages_for_extraction = False
 
     _SHARED_SKILL_STATE = {

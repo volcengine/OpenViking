@@ -53,7 +53,7 @@ def execution_messages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("include_session_skills", [False, True])
-async def test_trajectory_prefetch_preserves_complete_ordered_tool_evidence(
+async def test_trajectory_prefetch_preserves_ordered_tool_evidence(
     execution_messages, include_session_skills
 ):
     fs = AsyncMock()
@@ -76,7 +76,7 @@ async def test_trajectory_prefetch_preserves_complete_ordered_tool_evidence(
 
     history = prefetched[0]["content"]
     read_output = execution_messages[1].parts[1].tool_output
-    assert read_output in history
+    read_preview = read_output[:500]
     assert "input={'reservation_id': 'ABC123'}" in history
     assert "input={'reservation_id': 'ABC123', 'amount': 209}" in history
     assert "tool_name=get_reservation_details; status=completed" in history
@@ -85,7 +85,7 @@ async def test_trajectory_prefetch_preserves_complete_ordered_tool_evidence(
         "Update reservation ABC123.",
         "Checking the reservation.",
         "tool_name=get_reservation_details",
-        read_output,
+        read_preview,
         "I confirm the $209 change.",
         "tool_name=update_reservation",
         "Payment declined; reservation unchanged.",
@@ -95,7 +95,9 @@ async def test_trajectory_prefetch_preserves_complete_ordered_tool_evidence(
     assert positions == sorted(positions)
     all_content = "\n".join(message.get("content", "") for message in prefetched)
     assert all_content.count("## Conversation History") == 1
-    assert all_content.count(read_output) == 1
+    assert all_content.count(read_preview) == 1
+    assert read_output[:501] not in all_content
+    assert "fare_difference=209" not in all_content
     assert "PRIVATE_REASONING_NOT_FOR_EXTRACTION" not in all_content
     if include_session_skills:
         assert fs.ls.await_count == 2
