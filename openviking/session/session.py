@@ -2924,6 +2924,16 @@ class Session:
                                 )
 
                             async def _run_long_term_memory_extraction() -> Any:
+                                if not extraction_batch_limits.enabled:
+                                    return await _run_recorded_memory_step(
+                                        "long_term_memory_extraction",
+                                        "long_term",
+                                        long_term_messages,
+                                        lambda: _extract_batch(
+                                            long_term_messages, long_term_memory_types
+                                        ),
+                                    )
+
                                 batches = self._session_compressor.plan_long_term_extraction(
                                     long_term_messages,
                                     extraction_batch_limits,

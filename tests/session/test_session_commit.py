@@ -381,7 +381,12 @@ class TestCommit:
     async def test_commit_task_reports_intentionally_skipped_memory_operations(
         self,
         wm_session_with_messages: Session,
+        monkeypatch,
     ):
+        fs = wm_session_with_messages._viking_fs
+        write_file = AsyncMock(wraps=fs.write_file)
+        monkeypatch.setattr(fs, "write_file", write_file)
+
         async def extract_long_term_memories(**kwargs):
             archive_uri = kwargs["archive_uri"]
             await wm_session_with_messages._viking_fs.write_file(
@@ -419,6 +424,10 @@ class TestCommit:
 
         assert commit_result["status"] == "accepted"
         assert task_result["status"] == "completed"
+        written_uris = [
+            call.args[0] if call.args else call.kwargs["uri"] for call in write_file.await_args_list
+        ]
+        assert written_uris.count(f"{commit_result['archive_uri']}/memory_diff.json") == 1
         assert task_result["result"]["memory_extraction"] == {
             "skipped": 1,
             "skipped_operations": [
