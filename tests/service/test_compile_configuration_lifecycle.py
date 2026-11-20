@@ -509,6 +509,57 @@ async def test_scheduled_run_without_output_changes_preserves_manual_baseline(
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == state["progress"]
 
 
+@pytest.mark.parametrize("interruption", [None, "output_snapshot", "finished_checkpoint"])
+async def test_partial_delivery_retains_baseline_after_restart(
+    setup, registered, monkeypatch, interruption
+):
+    _, name, first = registered
+    await setup.lifecycle.on_start(first)
+    setup.fs.output_changes = [{"uri": TARGET + "/baseline.md", "change_type": "added"}]
+    await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
+    previous = await setup.store.get("acme", "alice", name)
+    task = make_task(setup, compile_name=name, record=previous, created_at=200)
+    setup.fs.source_changes = [{"uri": SOURCE + "/missed.md", "change_type": "modified"}]
+    assert await setup.lifecycle.on_start(task) == "proceed"
+    setup.fs.output_changes = [{"uri": TARGET + "/good.md", "change_type": "added"}]
+    terminal = ExternalTaskSnapshot(status="completed", result={"completion_status": "partial"})
+    with monkeypatch.context() as patch:
+        if interruption == "output_snapshot":
+            patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
+        elif interruption == "finished_checkpoint":
+            save = setup.lifecycle._save_checkpoint
+
+            async def interrupt(record, changes):
+                if changes.get("phase") == "finished":
+                    raise OSError("Interrupted")
+                await save(record, changes)
+
+            patch.setattr(setup.lifecycle, "_save_checkpoint", interrupt)
+        if interruption:
+            with pytest.raises(OSError, match="Interrupted"):
+                await setup.lifecycle.on_finish(task, terminal)
+        else:
+            await setup.lifecycle.on_finish(task, terminal)
+    restored = deepcopy(setup.tracker.tasks[task.task_id])
+    restarted = CompileLifecycle(setup.store, setup.fs)
+    outcome = await restarted.on_finish(restored, ExternalTaskSnapshot(status="completed"))
+    assert outcome.result == {
+        "created": 1,
+        "updated": 0,
+        "deleted": 0,
+        "completion_status": "partial",
+    }
+    assert await restarted.on_finish(restored, ExternalTaskSnapshot(status="completed")) == outcome
+    retained = await setup.store.get("acme", "alice", name)
+    assert retained["progress"] == previous["progress"]
+    setup.fs.restore.assert_not_awaited()
+    retry = make_task(setup, compile_name=name, record=retained, created_at=300)
+    assert await restarted.on_start(retry) == "proceed"
+    plan = await restarted.runtime_changes(retry.meta["request"], "acme", retry.task_id, "alice")
+    assert plan["base"] == previous["progress"]["source_commit"]
+    assert plan["diff_dirs"] == [SOURCE]
+
+
 async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen_inputs(setup):
     record = new_record(PARAMS)
     record["progress"] = {
