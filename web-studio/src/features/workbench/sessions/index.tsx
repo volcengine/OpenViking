@@ -1,6 +1,6 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
 import { ArrowLeftIcon, CompassIcon } from 'lucide-react'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
@@ -8,10 +8,8 @@ import { useStudioService } from '#/features/connection/hooks/use-studio-service
 import { Thread } from '#/features/workbench/sessions/components/thread'
 import { ThreadList } from '#/features/workbench/sessions/components/thread-list'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
-import {
-  useCreateSession,
-  useSessionListByRecency,
-} from '#/features/workbench/sessions/lib/use-sessions'
+import { useCreateSession } from '#/features/workbench/sessions/lib/use-sessions'
+import { createVikingBotWebSessionId } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 
@@ -27,15 +25,16 @@ export function SessionsPage() {
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const createSession = useCreateSession()
+  const [draft, setDraft] = useState<{
+    id: string
+    from: string
+    scope: string
+  }>()
+  const draftId =
+    draft?.from === activeSessionId && draft?.scope === identityScopeKey
+      ? draft.id
+      : undefined
   const { setTitle } = useSessionTitles(identityScopeKey)
-  const sessionList = useSessionListByRecency(provider === 'opensource')
-  const { data: sessions } = sessionList
-  const linkedBotSessionIds = activeSessionId
-    ? sessions
-        .filter((session) => session.studio_session_id === activeSessionId)
-        .map((session) => session.session_id)
-        .sort()
-    : []
 
   const handleNewSession = useCallback(async () => {
     const result = await createSession.mutateAsync(undefined)
@@ -61,7 +60,6 @@ export function SessionsPage() {
     <div className="@container/sessions -mx-4 -my-6 flex h-[calc(100svh-3rem)] min-w-0 overflow-hidden md:-mx-6">
       <ThreadList
         activeSessionId={activeSessionId}
-        sessionList={sessionList}
         className={
           activeSessionId
             ? 'hidden @min-[40rem]/sessions:flex'
@@ -89,9 +87,20 @@ export function SessionsPage() {
             </div>
             <div className="min-h-0 flex-1">
               <Thread
-                sessionId={activeSessionId}
-                linkedBotSessionIds={linkedBotSessionIds}
-                onExchangeSettled={sessionList.refetch}
+                sessionId={draftId ?? activeSessionId}
+                draft={Boolean(draftId)}
+                onNewConversation={() =>
+                  setDraft({
+                    id: createVikingBotWebSessionId(true),
+                    from: activeSessionId,
+                    scope: identityScopeKey,
+                  })
+                }
+                onPersisted={() => {
+                  if (!draftId) return
+                  void navigate({ to: '/sessions', search: { s: draftId } })
+                  setDraft(undefined)
+                }}
               />
             </div>
           </>

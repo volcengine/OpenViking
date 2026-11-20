@@ -64,7 +64,10 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
     .filter((row) => row.title.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => (Date.parse(b.time) || 0) - (Date.parse(a.time) || 0))
   function create() {
-    setSelected({ id: createVikingBotWebSessionId(), draft: true })
+    setSelected({
+      id: createVikingBotWebSessionId(health.data?.studio_session_persistence),
+      draft: true,
+    })
   }
   function select(id: string) {
     setSelected({ id })
@@ -157,13 +160,14 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                 key={selected.id}
                 sessionId={selected.id}
                 draft={selected.draft}
-                onPersisted={() =>
+                onNewConversation={create}
+                onPersisted={() => {
                   setSelected((current) =>
                     current?.id === selected.id
                       ? { ...current, draft: false }
                       : current,
                   )
-                }
+                }}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">

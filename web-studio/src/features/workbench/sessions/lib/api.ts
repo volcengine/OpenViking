@@ -45,16 +45,8 @@ import type { BotChatRequest, BotChatResponse } from '@ov-server/bot/v1/chat'
 // Session CRUD
 // ---------------------------------------------------------------------------
 
-export async function fetchSessions(
-  includeBotSessionLinks = false,
-): Promise<SessionListItem[]> {
-  const result = await getOvResult<SessionListItem[]>(
-    getSessions(
-      includeBotSessionLinks
-        ? { query: { include_bot_session_links: true } }
-        : undefined,
-    ),
-  )
+export async function fetchSessions(): Promise<SessionListItem[]> {
+  const result = await getOvResult<SessionListItem[]>(getSessions())
   return Array.isArray(result) ? result : []
 }
 
@@ -152,7 +144,7 @@ function deduplicateMessages(messages: Message[]): Message[] {
 const SESSION_ARCHIVE_CONCURRENCY = 4
 
 async function mapWithConcurrency<T, TResult>(
-  items: readonly T[],
+  items: T[],
   concurrency: number,
   mapper: (item: T, index: number) => Promise<TResult>,
 ): Promise<TResult[]> {
@@ -173,7 +165,7 @@ async function mapWithConcurrency<T, TResult>(
   return results
 }
 
-function isNotFound(error: unknown): boolean {
+function isMissingArchive(error: unknown): boolean {
   const normalized = normalizeOvClientError(error)
   return normalized.statusCode === 404 || normalized.code === 'NOT_FOUND'
 }
@@ -222,7 +214,7 @@ export async function fetchSessionMessages(
               (await fetchSessionArchive(sessionId, archiveId)).messages,
             )
       } catch (error) {
-        if (isNotFound(error)) return null
+        if (isMissingArchive(error)) return null
         throw error
       }
     },
@@ -259,7 +251,7 @@ export async function fetchSessionFirstTitle(
         const title = firstUserTitle(archive.messages)
         if (title) return title
       } catch (error) {
-        if (!isNotFound(error)) throw error
+        if (!isMissingArchive(error)) throw error
       }
     }
     return firstUserTitle((await fetchSessionContext(sessionId)).messages)
@@ -287,35 +279,22 @@ function firstUserTitle(value: unknown): string {
 }
 
 export async function fetchSessionMemoryDiffs(
-  session: SessionMeta | undefined,
-  linkedSessionIds: readonly string[],
+  session: SessionMeta,
 ): Promise<SessionMemoryDiff[]> {
-  const linkedSessions = await mapWithConcurrency(
-    linkedSessionIds,
-    SESSION_ARCHIVE_CONCURRENCY,
-    async (id) => {
-      try {
-        return await fetchSession(id)
-      } catch (error) {
-        if (isNotFound(error)) return null
-        throw error
-      }
-    },
+  const commitCount = Math.max(0, Math.floor(session.commit_count || 0))
+  if (commitCount === 0) return []
+
+  const sessionUri =
+    session.uri?.replace(/\/+$/, '') ||
+    `viking://user/${session.user.user_id}/sessions/${session.session_id}`
+  const archiveIds = Array.from(
+    { length: commitCount },
+    (_, index) => `archive_${String(index + 1).padStart(3, '0')}`,
   )
-  const archives = [session, ...linkedSessions].flatMap((meta) => {
-    if (!meta || (meta.commit_count || 0) < 1) return []
-    const sessionUri =
-      meta.uri?.replace(/\/+$/, '') ||
-      `viking://user/${meta.user.user_id}/sessions/${meta.session_id}`
-    return Array.from({ length: meta.commit_count }, (_, index) => {
-      const archiveId = `archive_${String(index + 1).padStart(3, '0')}`
-      return { archiveId, archiveUri: `${sessionUri}/history/${archiveId}` }
-    })
-  })
   const results = await mapWithConcurrency(
-    archives,
+    archiveIds,
     SESSION_ARCHIVE_CONCURRENCY,
-    async ({ archiveId, archiveUri }) => {
+    async (archiveId) => {
       try {
         const result = await getOvResult<unknown>(
           getContentRead({
@@ -323,25 +302,23 @@ export async function fetchSessionMemoryDiffs(
               limit: -1,
               offset: 0,
               raw: true,
-              uri: `${archiveUri}/memory_diff.json`,
+              uri: `${sessionUri}/history/${archiveId}/memory_diff.json`,
             } as Parameters<typeof getContentRead>[0]['query'] & {
               raw?: boolean
             },
           }),
         )
-        const diff = parseSessionMemoryDiff(result, archiveId)
-        return diff && { ...diff, archiveUri: diff.archiveUri || archiveUri }
+        return parseSessionMemoryDiff(result, archiveId)
       } catch (error) {
-        if (isNotFound(error)) return null
+        if (isMissingArchive(error)) return null
         throw error
       }
     },
   )
 
-  const sortField = linkedSessionIds.length > 0 ? 'extractedAt' : 'archiveId'
   return results
-    .filter((diff) => diff !== null)
-    .sort((left, right) => right[sortField].localeCompare(left[sortField]))
+    .flatMap((result) => (result ? [result] : []))
+    .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
 }
 
 export async function addMessage(
@@ -471,7 +448,9 @@ function buildFetchHeaders(): Record<string, string> {
   return headers
 }
 
-export async function fetchBotHealth(): Promise<unknown> {
+export async function fetchBotHealth(): Promise<{
+  studio_session_persistence?: boolean
+}> {
   const baseUrl = ovClient.getOptions().baseUrl
   const response = await fetch(`${baseUrl}/bot/v1/health`, {
     method: 'GET',

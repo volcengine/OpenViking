@@ -4,16 +4,16 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.message.part import Part, TextPart, part_from_dict
-from openviking.server.auth import _auth_mode, get_session_request_context
+from openviking.server.auth import get_session_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
@@ -344,28 +344,11 @@ async def create_session(
 
 @router.get("")
 async def list_sessions(
-    request: Request,
-    include_bot_session_links: bool = Query(
-        False, description="Include Studio session IDs for paired VikingBot histories."
-    ),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
     """List all sessions."""
     service = get_service()
     result = await service.sessions.sessions(_ctx)
-    if include_bot_session_links:
-        from vikingbot.utils.session_paths import openapi_principal_scope, studio_session_links
-
-        principal = (
-            "dev" if _auth_mode(request) == AuthMode.DEV else (_ctx.account_id, _ctx.user.user_id)
-        )
-        links = studio_session_links(
-            {session["session_id"] for session in result if session["is_dir"]},
-            openapi_principal_scope(principal),
-        )
-        for session in result:
-            if session["session_id"] in links:
-                session["studio_session_id"] = links[session["session_id"]]
     return Response(status="ok", result=result)
 
 

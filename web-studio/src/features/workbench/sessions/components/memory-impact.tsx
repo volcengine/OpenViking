@@ -27,7 +27,6 @@ import type { SessionMeta } from '@ov-server/api/v1/sessions'
 
 interface MemoryImpactProps {
   session?: SessionMeta
-  linkedSessionIds?: readonly string[]
 }
 
 const ALL_MEMORY_TYPES = 'all'
@@ -50,17 +49,11 @@ const KIND_STYLES: Record<
   },
 }
 
-export function MemoryImpact({ session, linkedSessionIds }: MemoryImpactProps) {
+export function MemoryImpact({ session }: MemoryImpactProps) {
   const { i18n, t } = useTranslation('sessions')
   const [open, setOpen] = useState(false)
   const [memoryType, setMemoryType] = useState(ALL_MEMORY_TYPES)
-  const hasMemoryImpact =
-    Boolean(linkedSessionIds?.length) || (session?.commit_count ?? 0) > 0
-  const diffsQuery = useSessionMemoryDiffs(
-    session,
-    open && hasMemoryImpact,
-    linkedSessionIds,
-  )
+  const diffsQuery = useSessionMemoryDiffs(session, open)
   const diffs = diffsQuery.data ?? []
   const totals = useMemo(
     () =>
@@ -111,7 +104,7 @@ export function MemoryImpact({ session, linkedSessionIds }: MemoryImpactProps) {
     [activeMemoryType, diffs],
   )
 
-  if (!hasMemoryImpact) return null
+  if (!session || session.commit_count <= 0) return null
 
   return (
     <>
@@ -209,7 +202,7 @@ export function MemoryImpact({ session, linkedSessionIds }: MemoryImpactProps) {
               <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                 <div className="space-y-6">
                   {visibleDiffs.map((diff) => (
-                    <section key={diff.archiveUri} className="space-y-2.5">
+                    <section key={diff.archiveId} className="space-y-2.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2">
                           <code className="text-xs font-medium text-foreground">

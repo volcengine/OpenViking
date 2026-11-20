@@ -16,7 +16,9 @@ vi.mock(
   }),
 )
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => (key === 'agent.empty.prompts' ? [] : key),
+  }),
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
@@ -25,7 +27,7 @@ vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
   useSessionTitles: () => ({ getTitle: () => '', setTitle: vi.fn() }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
-  useBotHealth: () => ({ isLoading: true }),
+  useBotHealth: () => ({ isLoading: false }),
   useCreateSession: () => ({ mutateAsync: mocks.create }),
   useSessionListByRecency: () => ({ data: [], isLoading: false }),
   useSessionMessages: mocks.history,

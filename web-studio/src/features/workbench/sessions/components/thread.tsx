@@ -14,6 +14,7 @@ import {
   useSession,
   useSessionMessages,
 } from '#/features/workbench/sessions/lib/use-sessions'
+import { isBotOwnedWebSession } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 
 const PixelBlast = lazy(() => import('#/shared/ui/pixel-blast'))
 const PRODUCT_NAME = 'OpenViking'
@@ -22,8 +23,7 @@ interface ThreadProps {
   sessionId: string
   draft?: boolean
   onPersisted?: () => void
-  linkedBotSessionIds?: readonly string[]
-  onExchangeSettled?: () => void
+  onNewConversation?: () => void
 }
 
 export function Thread(props: ThreadProps) {
@@ -37,8 +37,7 @@ function SessionThread({
   sessionId,
   draft = false,
   onPersisted,
-  linkedBotSessionIds,
-  onExchangeSettled,
+  onNewConversation,
 }: ThreadProps) {
   const { t } = useTranslation('sessions')
   const service = useStudioService()
@@ -46,6 +45,7 @@ function SessionThread({
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
+  const botOwned = isBotOwnedWebSession(sessionId)
 
   const [historyId] = useState(draft ? undefined : sessionId)
   const persisted = useRef(!draft)
@@ -70,7 +70,14 @@ function SessionThread({
     identityScopeKey,
     sessionId,
     initialMessages: historyMessages,
-    persistMessages: true,
+    persistMessages: !botOwned,
+    onBotSessionAvailable:
+      botOwned && !persisted.current
+        ? () => {
+            persisted.current = true
+            onPersisted?.()
+          }
+        : undefined,
   })
 
   const isStreaming = chat.status === 'streaming'
@@ -78,7 +85,11 @@ function SessionThread({
   const handleSend = useCallback(
     async (message: string) => {
       if (!canChat || !message.trim() || creating.current) return false
-      if (!persisted.current) {
+      if (botOwned && message.toLowerCase() === '/new' && onNewConversation) {
+        onNewConversation()
+        return true
+      }
+      if (!persisted.current && !botOwned) {
         creating.current = true
         setCreationError(undefined)
         try {
@@ -99,15 +110,18 @@ function SessionThread({
       const sending = chat.send(message)
       if (chat.status === 'streaming') {
         await sending
-      } else if (onExchangeSettled) {
-        const refresh = () => {
-          if (mounted.current) onExchangeSettled()
-        }
-        void sending.then(refresh, refresh)
       }
       return true
     },
-    [canChat, chat, createSession, sessionId, onPersisted, onExchangeSettled],
+    [
+      botOwned,
+      canChat,
+      chat,
+      createSession,
+      sessionId,
+      onPersisted,
+      onNewConversation,
+    ],
   )
 
   // ---- Auto-scroll ----
@@ -171,10 +185,7 @@ function SessionThread({
             : title || sessionId}
         </h2>
         {service.provider === 'opensource' ? (
-          <MemoryImpact
-            session={session}
-            linkedSessionIds={linkedBotSessionIds}
-          />
+          <MemoryImpact session={session} />
         ) : null}
       </div>
 

@@ -11,7 +11,6 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
-from vikingbot.utils.session_paths import openapi_principal_scope, portable_path_component
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
@@ -166,26 +165,13 @@ async def test_create_session(client: httpx.AsyncClient, service):
 
 
 async def test_list_sessions(client: httpx.AsyncClient):
-    studio_id = "vikingbot-web-2a19b5d9-f8c3-4397-83fb-a7c20f06b714"
-    prefix = f"cli__default__{openapi_principal_scope('dev')}:"
-    original = portable_path_component(prefix + studio_id)
-    after_new = portable_path_component(prefix + studio_id + "-01234567")
-    orphan = portable_path_component(prefix + "vikingbot-web-00000000-0000-4000-8000-000000000001")
-    session_ids = {studio_id, original, after_new, orphan}
-    for session_id in session_ids:
-        assert (await client.post("/api/v1/sessions", json={"session_id": session_id})).is_success
-
+    # Create a session first
+    await client.post("/api/v1/sessions", json={})
     resp = await client.get("/api/v1/sessions")
     assert resp.status_code == 200
-    assert {
-        row["session_id"]: row.get("studio_session_id") for row in resp.json()["result"]
-    } == dict.fromkeys(session_ids)
-
-    resp = await client.get("/api/v1/sessions", params={"include_bot_session_links": True})
-    assert resp.status_code == 200
-    assert {
-        row["session_id"]: row.get("studio_session_id") for row in resp.json()["result"]
-    } == {studio_id: None, orphan: None, original: studio_id, after_new: studio_id}
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert isinstance(body["result"], list)
 
 
 async def test_get_session(client: httpx.AsyncClient):
@@ -1129,9 +1115,9 @@ async def test_add_message_rejects_openai_style_image_content(client: httpx.Asyn
     assert resp.status_code == 400
 
 
-async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, service):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
+async def test_first_batch_add_creates_session_with_mixed_parts(client: httpx.AsyncClient, service):
+    session_id = "first-batch-session"
+    assert (await client.get(f"/api/v1/sessions/{session_id}/context")).status_code == 404
 
     resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages/batch",

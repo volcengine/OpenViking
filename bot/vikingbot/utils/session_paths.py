@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import unquote
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import SessionKey
@@ -27,15 +25,6 @@ _WINDOWS_RESERVED_STEMS = frozenset(
 # Leave room for file extensions and atomic-write suffixes below NAME_MAX=255.
 _MAX_COMPONENT_BYTES = 180
 _LONG_NAME_HASH_LENGTH = 16
-DEFAULT_OPENAPI_CHANNEL_ID = "default"
-# Scoped OpenAPI generations use a colon. The Bot's /new command rotates the
-# OpenViking history by appending a hyphen and a short nonce.
-_STUDIO_OPENAPI_CHAT_ID = re.compile(
-    r"(vikingbot-web-(?:[0-9a-f]{8}-)?"
-    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"
-    r"(?::[0-9a-f]{32})?(?:-[0-9a-f]{8})?",
-    re.IGNORECASE,
-)
 
 
 def _percent_encode(character: str) -> str:
@@ -97,35 +86,6 @@ def portable_path_component(value: str) -> str:
     """
     candidate, chunks = _escaped_path_component(value)
     return _hashed_path_component(value, candidate, chunks)
-
-
-def openapi_principal_scope(principal: Literal["dev", "standalone"] | tuple[str, str]) -> str:
-    if isinstance(principal, tuple):
-        account_id, user_id = principal
-        identity = f"openviking:{account_id}:{user_id}"
-    else:
-        identity = principal
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
-
-
-def studio_session_links(session_ids: set[str], principal_scope: str) -> dict[str, str]:
-    """Associate stored OpenAPI histories with the Studio sessions in the same listing."""
-    prefix = f"cli__{DEFAULT_OPENAPI_CHANNEL_ID}__{principal_scope}"
-    links = {}
-    for storage_id in session_ids:
-        if not storage_id.startswith(prefix):
-            continue
-        encoded_key, digest_separator, _ = storage_id.rpartition("~")
-        # Older sessions and the compact hook without Working Memory use the logical key directly.
-        logical_key = unquote(encoded_key) if digest_separator else storage_id
-        chat_key = logical_key.removeprefix(f"{prefix}:")
-        match = _STUDIO_OPENAPI_CHAT_ID.fullmatch(chat_key)
-        if match is None or match[1] not in session_ids:
-            continue
-        if digest_separator and portable_path_component(logical_key) != storage_id:
-            continue
-        links[storage_id] = match[1]
-    return links
 
 
 def is_windows_safe_path_component(value: str) -> bool:

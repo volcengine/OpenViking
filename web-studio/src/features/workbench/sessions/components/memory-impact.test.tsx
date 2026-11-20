@@ -1,24 +1,21 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { MemoryImpact } from '#/features/workbench/sessions/components/memory-impact'
+import type { SessionMemoryDiff } from '#/features/workbench/sessions/lib/memory-diff'
 import type { SessionMeta } from '@ov-server/api/v1/sessions'
 
-const { getSessionBySessionId, getContentRead } = vi.hoisted(() => ({
-  getSessionBySessionId: vi.fn(),
-  getContentRead: vi.fn(),
+const { useSessionMemoryDiffsMock } = vi.hoisted(() => ({
+  useSessionMemoryDiffsMock: vi.fn(),
 }))
 
-vi.mock('#/gen/ov-client/sdk.gen', () => ({
-  getSessionBySessionId,
-  getContentRead,
+vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
+  useSessionMemoryDiffs: useSessionMemoryDiffsMock,
 }))
 
 vi.mock('react-i18next', () => ({
-  initReactI18next: { init: vi.fn() },
   useTranslation: () => ({
     i18n: { resolvedLanguage: 'en' },
     t: (key: string) => key,
@@ -27,44 +24,62 @@ vi.mock('react-i18next', () => ({
 
 afterEach(cleanup)
 
-function response(result: unknown) {
-  return Promise.resolve({
-    data: { status: 'ok', result },
-    headers: {},
-    status: 200,
-  })
-}
-
-it('shows and filters memory changes across Bot session resets', async () => {
-  getSessionBySessionId.mockImplementation(({ path }) =>
-    response({
-      commit_count: 1,
-      uri: `viking://user/default/sessions/${path.session_id}`,
-    }),
-  )
-  getContentRead.mockImplementation(({ query }) => {
-    const kind = query.uri.includes('/bot-original/')
-      ? 'profile'
-      : 'preferences'
-    return response({
-      operations: {
-        adds: [{ memory_type: kind, uri: `viking://user/${kind}` }],
+const diffs: SessionMemoryDiff[] = [
+  {
+    archiveId: 'archive-1',
+    archiveUri: 'viking://user/default/sessions/archive-1',
+    extractedAt: '2026-07-26T00:00:00Z',
+    operations: [
+      {
+        after: 'profile',
+        kind: 'add',
+        memoryType: 'profile',
+        uri: 'viking://user/profile',
       },
+      {
+        after: 'preference',
+        kind: 'delete',
+        memoryType: 'preferences',
+        uri: 'viking://user/preferences',
+      },
+    ],
+    summary: { adds: 1, deletes: 1, updates: 0 },
+  },
+  {
+    archiveId: 'archive-2',
+    archiveUri: 'viking://user/default/sessions/archive-2',
+    extractedAt: '2026-07-26T01:00:00Z',
+    operations: [
+      {
+        after: 'preference',
+        kind: 'update',
+        memoryType: 'preferences',
+        uri: 'viking://user/preferences/second',
+      },
+    ],
+    summary: { adds: 0, deletes: 0, updates: 1 },
+  },
+]
+
+describe('MemoryImpact', () => {
+  it('filters archives and recomputes per-archive counts by memory type', () => {
+    useSessionMemoryDiffsMock.mockReturnValue({
+      data: diffs,
+      isError: false,
+      isLoading: false,
+      refetch: vi.fn(),
     })
+
+    render(
+      <MemoryImpact session={{ commit_count: 2 } as unknown as SessionMeta} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'impact.open' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'profile' }))
+
+    const visibleArchive = screen.getByText('archive-1').closest('section')
+    expect(visibleArchive?.textContent).toContain('+1')
+    expect(visibleArchive?.textContent).not.toContain('−1')
+    expect(screen.queryByText('archive-2')).toBeNull()
   })
-
-  render(
-    <QueryClientProvider client={new QueryClient()}>
-      <MemoryImpact
-        session={{ session_id: 'web', commit_count: 0 } as SessionMeta}
-        linkedSessionIds={['bot-original', 'bot-after-new']}
-      />
-    </QueryClientProvider>,
-  )
-  fireEvent.click(screen.getByRole('button', { name: 'impact.open' }))
-  expect(await screen.findAllByText('archive_001')).toHaveLength(2)
-
-  fireEvent.click(screen.getByRole('tab', { name: 'profile' }))
-  expect(screen.getByText('viking://user/profile')).toBeTruthy()
-  expect(screen.queryByText('viking://user/preferences')).toBeNull()
 })

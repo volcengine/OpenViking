@@ -3017,13 +3017,7 @@ export type GetSessionsData = {
         'X-OpenViking-User'?: string | null;
     };
     path?: never;
-    query?: {
-        /**
-         * Include Bot Session Links
-         * Include Studio session IDs for paired VikingBot histories.
-         */
-        include_bot_session_links?: boolean;
-    };
+    query?: never;
     url: '/api/v1/sessions';
 };
 

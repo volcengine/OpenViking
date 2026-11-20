@@ -5,6 +5,7 @@ import type {
 } from '@ov-server/bot/v1/chat'
 
 const VALID_EVENT_TYPES = new Set<string>([
+  'error',
   'response',
   'interrupt',
   'tool_call',

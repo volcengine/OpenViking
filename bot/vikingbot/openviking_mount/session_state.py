@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -10,6 +11,20 @@ from vikingbot.utils.session_paths import (
 )
 
 OPENVIKING_SESSION_ID_FORMAT = "portable-v1"
+_STUDIO_SESSION_ID = re.compile(
+    r"vikingbot-web-v2-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+)
+
+
+def is_studio_session_id(session_id: str) -> bool:
+    return _STUDIO_SESSION_ID.fullmatch(session_id) is not None
+
+
+def studio_session_id(logical_id: str) -> str | None:
+    scope, separator, public_id = logical_id.partition(":")
+    if separator and re.fullmatch("cli__default__[0-9a-f]{24}", scope) and is_studio_session_id(public_id):
+        return public_id
+    return None
 
 
 def get_openviking_state(session: Session) -> dict[str, Any]:
@@ -76,6 +91,9 @@ def get_openviking_session_id(
         base_session_id = default_session_id
     else:
         base_session_id = session.key.safe_name()
+
+    if shared_id := studio_session_id(base_session_id):
+        return shared_id
 
     logical_session_id = f"{base_session_id}-{uuid.uuid4().hex[:8]}" if rotate else base_session_id
     session_id = make_openviking_storage_session_id(logical_session_id)

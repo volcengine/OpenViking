@@ -5,7 +5,6 @@ from vikingbot.agent.loop import AgentLoop
 from vikingbot.config.schema import AgentsConfig, SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
-from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.session.manager import Session
 
 
@@ -14,8 +13,11 @@ def test_session_context_defaults_to_working_memory():
 
 
 @pytest.mark.asyncio
-async def test_session_context_commit_uses_turn_budget_retention():
-    session_key = SessionKey(type="test", channel_id="channel", chat_id="chat")
+async def test_studio_messages_and_turn_budget_commit_share_a_session():
+    studio_id = "vikingbot-web-v2-9b4cd043-4afd-487a-9f32-7dc64004029f"
+    session_key = SessionKey(
+        type="cli", channel_id="default", chat_id=f"4ab668637bdb513f9384c8a8:{studio_id}"
+    )
     session = Session(key=session_key)
     session.add_message("user", "question")
     session.add_message("assistant", "answer")
@@ -28,6 +30,8 @@ async def test_session_context_commit_uses_turn_budget_retention():
 
         @staticmethod
         async def append_messages(**kwargs):
+            assert kwargs["session_id"] == studio_id
+            assert [message["content"] for message in kwargs["messages"]] == ["question", "answer"]
             return {"added": len(kwargs["messages"])}
 
         @staticmethod
@@ -54,7 +58,7 @@ async def test_session_context_commit_uses_turn_budget_retention():
     assert result["success"] is True
     assert commit_calls == [
         {
-            "session_id": make_openviking_storage_session_id(session_key.safe_name()),
+            "session_id": studio_id,
             "keep_recent_count": 0,
             "enable_working_memory": True,
             "retention_mode": "turn_budget",

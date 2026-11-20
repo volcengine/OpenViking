@@ -15,7 +15,7 @@ import type { SessionMemoryDiff } from '#/features/workbench/sessions/lib/memory
 import type { Message } from '#/features/workbench/sessions/lib/types/message'
 import type { SessionMeta } from '@ov-server/api/v1/sessions'
 
-const SESSIONS_KEY = ['sessions'] as const
+export const SESSIONS_KEY = ['sessions'] as const
 const BOT_HEALTH_KEY = ['bot', 'health'] as const
 
 export function useBotHealth() {
@@ -27,6 +27,14 @@ export function useBotHealth() {
   })
 }
 
+export function useSessionList() {
+  return useQuery({
+    queryKey: SESSIONS_KEY,
+    queryFn: fetchSessions,
+    staleTime: 30_000,
+  })
+}
+
 /**
  * Session list ordered by recency (newest first).
  *
@@ -34,14 +42,8 @@ export function useBotHealth() {
  * We keep a client-side sort for deterministic display and put sessions
  * without a timestamp at the bottom.
  */
-export function useSessionListByRecency(includeBotSessionLinks = false) {
-  const query = useQuery({
-    queryKey: includeBotSessionLinks
-      ? [...SESSIONS_KEY, 'list-with-bot-links']
-      : SESSIONS_KEY,
-    queryFn: () => fetchSessions(includeBotSessionLinks),
-    staleTime: includeBotSessionLinks ? 0 : 30_000,
-  })
+export function useSessionListByRecency() {
+  const query = useSessionList()
 
   const data = [...(query.data ?? [])].sort((a, b) => {
     const aTime = a.mod_time || ''
@@ -89,8 +91,7 @@ export function useSessionMessages(sessionId: string | undefined) {
 
 export function useSessionMemoryDiffs(
   session: SessionMeta | undefined,
-  enabled: boolean,
-  linkedSessionIds: readonly string[] = [],
+  enabled = true,
 ) {
   return useQuery<SessionMemoryDiff[]>({
     queryKey: [
@@ -99,11 +100,10 @@ export function useSessionMemoryDiffs(
       'memory-diffs',
       session?.commit_count,
       session?.last_commit_at,
-      linkedSessionIds,
     ],
-    queryFn: () => fetchSessionMemoryDiffs(session, linkedSessionIds),
-    enabled,
-    staleTime: linkedSessionIds.length > 0 ? 0 : 30_000,
+    queryFn: () => fetchSessionMemoryDiffs(session!),
+    enabled: Boolean(enabled && session && session.commit_count > 0),
+    staleTime: 30_000,
   })
 }
 
