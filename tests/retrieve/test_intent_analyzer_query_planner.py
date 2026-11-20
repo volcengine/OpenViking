@@ -1,5 +1,6 @@
 import pytest
 
+from openviking.message import ContextPart, Message, TextPart
 from openviking.retrieve import intent_analyzer as intent_module
 from openviking.retrieve.intent_analyzer import IntentAnalyzer
 from openviking_cli.retrieve.types import ContextType
@@ -151,6 +152,53 @@ async def test_intent_analyzer_uses_the_bundled_prompt_for_the_resolved_model(
     monkeypatch, model, prompt_id
 ):
     planner = RecordingModel(_query_plan_response("planned query"), model=model)
+    overview = "正在调查数据库连接问题"
+    current_message = "查一下刚才那个错误对应的文档"
+    checkpoint_abstract = "数据库报告 SQLSTATE 53300，连接池大小为 12。"
+    checkpoint_uri = "viking://session/test/checkpoints/in-window"
+    messages = [
+        Message(id="1", role="user", parts=[TextPart("old conversation text")]),
+        Message(
+            id="2",
+            role="assistant",
+            parts=[ContextPart(abstract="out-of-window checkpoint abstract")],
+            message_kind="checkpoint",
+        ),
+        Message(
+            id="3",
+            role="user",
+            parts=[
+                TextPart("刚才的连接失败了。"),
+                ContextPart(abstract="ordinary context abstract"),
+            ],
+        ),
+        Message(
+            id="4",
+            role="assistant",
+            parts=[
+                ContextPart(abstract=" \t\n"),
+                ContextPart(uri=checkpoint_uri, abstract=checkpoint_abstract),
+                ContextPart(abstract="later checkpoint abstract"),
+            ],
+            message_kind="checkpoint",
+        ),
+        Message(
+            id="5",
+            role="assistant",
+            parts=[ContextPart(abstract=" \t\n")],
+            message_kind="checkpoint",
+        ),
+        Message(id="6", role="assistant", parts=[], message_kind="checkpoint"),
+        Message(
+            id="7",
+            role="assistant",
+            parts=[
+                TextPart("我已经记录了错误。"),
+                ContextPart(abstract="unused checkpoint abstract"),
+            ],
+            message_kind="checkpoint",
+        ),
+    ]
     rendered = []
     render_prompt = intent_module.render_prompt
 
@@ -160,14 +208,31 @@ async def test_intent_analyzer_uses_the_bundled_prompt_for_the_resolved_model(
 
     monkeypatch.setattr(intent_module, "render_prompt", record_prompt)
     result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="The user prefers explicit rollback procedures.",
-        messages=[],
-        current_message="where is my preference?",
+        compression_summary=overview,
+        messages=messages,
+        current_message=current_message,
     )
 
     assert rendered == [prompt_id]
     [prompt] = planner.prompts
-    assert "where is my preference?" in prompt
+    assert prompt.count(checkpoint_abstract) == 1
+    assert (
+        f"### Session Summary\n{overview}\n\n"
+        "### Recent Conversation\n"
+        "[user]: 刚才的连接失败了。\n"
+        f"[assistant]: {checkpoint_abstract}\n"
+        "[assistant]: 我已经记录了错误。\n\n"
+        f"### Current Message\n{current_message}"
+    ) in prompt
+    for excluded in (
+        "old conversation text",
+        "out-of-window checkpoint abstract",
+        "ordinary context abstract",
+        checkpoint_uri,
+        "later checkpoint abstract",
+        "unused checkpoint abstract",
+    ):
+        assert excluded not in prompt
     [query] = result.queries
     assert query.query == "planned query"
     assert query.context_type == ContextType.MEMORY

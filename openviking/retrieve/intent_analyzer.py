@@ -9,7 +9,7 @@ Analyzes session context to generate query plans.
 from typing import List, Optional
 
 from openviking.config.vlm import VLMHandle
-from openviking.message import Message
+from openviking.message import ContextPart, Message
 from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.prompts import render_prompt
 from openviking_cli.retrieve.types import ContextType, QueryPlan, TypedQuery
@@ -155,9 +155,21 @@ class IntentAnalyzer:
 
         # Format recent messages
         recent = messages[-self.max_recent_messages :] if messages else []
-        recent_messages = (
-            "\n".join(f"[{m.role}]: {m.content}" for m in recent if m.content) if recent else "None"
-        )
+        recent_lines = []
+        for message in recent:
+            content = message.content
+            if not content and message.message_kind == "checkpoint":
+                content = next(
+                    (
+                        part.abstract
+                        for part in message.parts
+                        if isinstance(part, ContextPart) and part.abstract.strip()
+                    ),
+                    "",
+                )
+            if content:
+                recent_lines.append(f"[{message.role}]: {content}")
+        recent_messages = "\n".join(recent_lines) if recent else "None"
 
         # Current message
         current = current_message if current_message else "None"
