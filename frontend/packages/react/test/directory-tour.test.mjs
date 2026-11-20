@@ -9,10 +9,13 @@ import {
 } from '@openviking/react/components/directory-tour';
 
 test('unsupported runtime locales fall back to the English preset', () => {
-  assert.equal(
-    getOpenVikingDirectoryTourSteps('en-GB'),
-    openVikingDirectoryTourSteps,
-  );
+  for (const locale of ['en-GB', 'toString', 'constructor', '__proto__']) {
+    assert.equal(
+      getOpenVikingDirectoryTourSteps(locale),
+      openVikingDirectoryTourSteps,
+      locale,
+    );
+  }
 });
 
 test('preset preserves six semantic targets and separates private/shared resources', () => {
