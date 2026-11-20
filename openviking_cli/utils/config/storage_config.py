@@ -24,9 +24,9 @@ class TaskStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql", "postgres"}:
+        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
             raise ValueError(
-                "storage.task_store.provider must be 'file', 'mysql' or 'postgres', "
+                "storage.task_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
                 f"got {self.provider!r}"
             )
         return self
@@ -172,6 +172,12 @@ class StorageConfig(BaseModel):
             from openviking.service.task_store_postgres import PostgresTaskWorkStore
 
             store = PostgresTaskWorkStore(params=self.task_store.params, service_name=service_name)
+        elif self.task_store.provider == "sqlite":
+            from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+            params = dict(self.task_store.params)
+            params.setdefault("path", str(Path(self.workspace) / "task_store" / "tasks.db"))
+            store = SQLiteTaskWorkStore(params=params, service_name=service_name)
         else:
             from openviking.service.task_store import PersistentTaskStore
 

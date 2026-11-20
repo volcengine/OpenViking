@@ -45,8 +45,13 @@ def test_mysql_duplicate_detection_uses_driver_error_code(original, expected):
     assert MySQLTaskWorkStore._is_duplicate_error(error) is expected
 
 
-def _relational_backend(provider):
+def _relational_backend(provider, tmp_path=None):
     sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
+    if provider == "sqlite":
+        pytest.importorskip("aiosqlite")
+        from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+        return sqlalchemy, SQLiteTaskWorkStore, {"path": str(tmp_path / "tasks.db")}, []
     if provider == "postgres":
         pytest.importorskip("psycopg")
         from openviking.service.task_store_postgres import PostgresTaskWorkStore
@@ -81,11 +86,25 @@ async def _provision_task_schema(admin, params, schema_names):
                     await connection.exec_driver_sql(statement)
 
 
-@pytest.fixture(params=["file", "mysql", "postgres"])
-async def task_stores(request):
+@pytest.fixture(params=["file", "mysql", "postgres", "sqlite"])
+async def task_stores(request, tmp_path):
     if request.param == "file":
         store = PersistentTaskStore(_FakeAgfs())
         yield store, store
+        return
+    if request.param == "sqlite":
+        pytest.importorskip("aiosqlite")
+        from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+        params = {"path": str(tmp_path / "tasks.db")}
+        first, second = SQLiteTaskWorkStore(params=params), SQLiteTaskWorkStore(params=params)
+        try:
+            await first.load()
+            await second.load()
+            yield first, second
+        finally:
+            await first.close()
+            await second.close()
         return
     sqlalchemy, store_class, params, schema_names = _relational_backend(request.param)
     first = store_class(params=params)
@@ -188,6 +207,8 @@ async def test_duplicate_task_id_deleted_before_recovery_is_retried(task_stores,
     first, second = task_stores
     if not isinstance(first, SQLTaskWorkStore):
         pytest.skip("Duplicate-key recovery is a relational store contract")
+    if first.dialect_name == "sqlite":
+        pytest.skip("BEGIN IMMEDIATE prevents another writer inserting after the missing read")
     record = TaskRecord(task_id="same-id", task_type="content_write", **OWNER)
     load = first._load_task
     transaction = first._transaction
@@ -416,13 +437,25 @@ async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, 
         attempted.set()
         return await lock_task(*args, **kwargs)
 
+    transaction = first._transaction
+
+    @asynccontextmanager
+    async def observe_transaction():
+        attempted.set()
+        async with transaction() as session:
+            yield session
+
     async def hold_task():
         async with second._transaction() as session:
             assert await second._lock_task(session, "task", **OWNER)
             locked.set()
             assert await asyncio.to_thread(release.wait, 5)
 
-    monkeypatch.setattr(first, "_lock_task", observe_task_lock)
+    if first.dialect_name == "sqlite":
+        # SQLite waits before reading any state, rather than at the Task SELECT.
+        monkeypatch.setattr(first, "_transaction", observe_transaction)
+    else:
+        monkeypatch.setattr(first, "_lock_task", observe_task_lock)
     holder = asyncio.create_task(second._sql_runtime.run(hold_task))
     error_writer = None
     try:
@@ -851,9 +884,11 @@ def test_mysql_task_store_schema_uses_service_name_partition():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deletion", ["manual", "expired"])
-@pytest.mark.parametrize("provider", ["mysql", "postgres"])
-async def test_relational_requeue_and_concurrent_completion_are_durable(deletion, provider):
-    sqlalchemy, store_class, params, schema_names = _relational_backend(provider)
+@pytest.mark.parametrize("provider", ["mysql", "postgres", "sqlite"])
+async def test_relational_requeue_and_concurrent_completion_are_durable(
+    deletion, provider, tmp_path
+):
+    sqlalchemy, store_class, params, schema_names = _relational_backend(provider, tmp_path)
     first = store_class(params=params)
     second = store_class(params=params)
     isolated_store = store_class(
