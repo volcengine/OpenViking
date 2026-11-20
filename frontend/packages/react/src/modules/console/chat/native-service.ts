@@ -7,6 +7,10 @@ import type {
 } from '../../../client/types.js';
 import type { VikingBotSession } from '../../../components/viking-bot/capabilities.js';
 import { isOvClientError } from '../../../client/errors.js';
+import {
+  readSessionCommitTask,
+  submitSessionCommit,
+} from './native-memory-commit.js';
 import { nativeChatEvents } from './native-events.js';
 import { readNativeMessages, writeNativeParts } from './native-messages.js';
 import { nativeChatInput } from './native-input.js';
@@ -153,33 +157,9 @@ export function createNativeBotService(
           signal,
         );
       },
-      async commitSession(id, signal) {
-        const result = await request<{
-          status?: unknown;
-          reason?: unknown;
-          task_id?: unknown;
-        }>(
-          {
-            method: 'POST',
-            path: OV_PATH_BUILDERS.sessionCommit(id),
-            body: { keep_recent_count: 0 },
-          },
-          signal,
-        );
-        if (
-          result?.status === 'accepted' &&
-          typeof result.task_id === 'string' &&
-          result.task_id.trim()
-        )
-          return { status: 'accepted', taskId: result.task_id };
-        if (result?.status === 'skipped')
-          return {
-            status: 'skipped',
-            reason:
-              typeof result.reason === 'string' ? result.reason : undefined,
-          };
-        throw new Error('Invalid session commit response');
-      },
+      getSessionCommitTask: (id, signal) =>
+        readSessionCommitTask(request, id, signal),
+      commitSession: (id, signal) => submitSessionCommit(request, id, signal),
       interrupt: (id, signal) =>
         request(
           {
