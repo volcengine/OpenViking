@@ -90,6 +90,8 @@ const messages = {
   commands,
   localResourceImportHelp:
     'Enter a web or repository URL to import it directly. Run the command by itself or with only a local path to open the Local upload page and choose files or folders.',
+  localResourceImportSummary:
+    'Import a web URL or repository, or open Local upload for files and folders',
   commandGuides: {
     'add-resource': {
       description:

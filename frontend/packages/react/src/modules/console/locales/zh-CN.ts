@@ -87,6 +87,8 @@ const messages: typeof enUS = {
   },
   localResourceImportHelp:
     '传入网页链接或仓库地址可直接导入。直接执行命令或仅传入本地路径，会打开「本地上传」页面，可选择文件或文件夹。',
+  localResourceImportSummary:
+    '导入网页链接或仓库，也可打开「本地上传」选择文件或文件夹',
   commandGuides: {
     'add-resource': {
       description:

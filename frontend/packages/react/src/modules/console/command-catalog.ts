@@ -179,6 +179,7 @@ export function createCommandHelp(
   locale: Locale,
   options?: ConsoleCommandOptions,
 ): CommandConsoleRecordContent {
+  const text = resolveConsoleLocale(locale);
   const commands = consoleCommands(locale, options);
   return {
     variant: 'command-help',
@@ -191,8 +192,11 @@ export function createCommandHelp(
           .filter((command) => command.group === key)
           .map((item) => ({
             key: item.name,
-            name: item.usage,
-            description: item.description,
+            name: item.inputText ?? `ov ${item.name}`,
+            description:
+              item.name === 'add-resource' && options?.onOpenLocalResourceImport
+                ? text.localResourceImportSummary
+                : (item.summary ?? item.description),
           })),
       })),
   };
