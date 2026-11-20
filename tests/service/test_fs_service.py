@@ -9,12 +9,13 @@ from unittest.mock import ANY, AsyncMock, call
 
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
+from openviking.core.global_policy import PolicyPathScope, PolicyScopePlan
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.resource.watch_manager import WatchManager, WatchPathLocks
 from openviking.resource.watch_store import WatchMoveResult
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import DataAccessScope, RequestContext, Role
 from openviking.service import fs_service as fs_module
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
@@ -622,7 +623,9 @@ async def test_grep_projects_tags_when_include_tags_is_requested(request_context
 
 
 @pytest.mark.asyncio
-async def test_plain_listing_reads_only_requested_page_summaries(request_context, monkeypatch):
+async def test_plain_listing_preserves_visibility_and_limits_storage_reads(
+    request_context, monkeypatch
+):
     selected = {"uri": "viking://resources/docs", "isDir": True}
     entries = [selected, {"uri": "viking://resources/probe", "isDir": True}]
     viking_fs = VikingFS(agfs=SimpleNamespace())
@@ -663,6 +666,33 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
         any_order=True,
     )
     assert summary.await_count == 2
+
+    monkeypatch.setattr(viking_fs, "_ls_original", AsyncMock(return_value=[]))
+    monkeypatch.setattr(viking_fs, "_tree_original", AsyncMock(return_value=[]))
+    metadata = AsyncMock(side_effect=AGFSNotFoundError("missing"))
+    monkeypatch.setattr(viking_fs._async_agfs, "stat", metadata)
+    missing_uri = "viking://resources/missing"
+    empty_page = ListingPage(entries=[], has_more=False)
+    assert await service.ls(missing_uri, ctx=request_context) == empty_page
+    metadata.reset_mock()
+    assert await service.tree(missing_uri, ctx=request_context, directories_only=True) == empty_page
+    metadata.assert_not_awaited()
+
+    container_uri = "viking://user/owner/container"
+    scope = DataAccessScope(
+        owner_user_id="owner",
+        operation=AclAction.READ,
+        plan=PolicyScopePlan("allowed", (PolicyPathScope("container/child.md", False),), ()),
+        policy_hash=None,
+        request_root=container_uri,
+        requested_targets=(container_uri,),
+        effective_targets=(f"{container_uri}/child.md",),
+    )
+    ctx = replace(request_context, role=Role.GLOBAL, data_access=scope)
+    metadata.side_effect = None
+    metadata.return_value = {"isDir": False}
+    with pytest.raises(PermissionDeniedError, match="only directories are traversable"):
+        await service.tree(container_uri, ctx=ctx, directories_only=True)
 
 
 @pytest.mark.asyncio
