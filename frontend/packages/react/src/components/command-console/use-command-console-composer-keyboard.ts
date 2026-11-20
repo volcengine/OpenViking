@@ -126,6 +126,7 @@ export function useCommandConsoleComposerKeyboard({
           const picked =
             spaceCommand ??
             options[activeIndex] ??
+            matchCommandConsoleCommandInput(value, options)?.command ??
             (completion.query.keyword ? options[0] : undefined);
           if (picked) {
             accept(`${getCommandConsoleCommandInputText(picked)} `);

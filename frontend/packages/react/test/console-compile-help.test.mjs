@@ -95,6 +95,9 @@ test('Console shows the Compile guide and extended parameters in the selected lo
       await type(host.input, '/help');
       await key(host.input, 'Tab');
       assert.equal(host.input.value, 'ov help ');
+      await type(host.input, '/compile');
+      await key(host.input, 'Tab');
+      assert.equal(host.input.value, 'ov compile ');
       assert.equal(host.records.length, 1);
     } finally {
       await host.dispose();
