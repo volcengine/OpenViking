@@ -1105,14 +1105,14 @@
 
 .ov-command-console__quick-action {
   display: inline-flex;
-  block-size: 28px;
+  min-block-size: 28px;
   align-items: center;
   justify-content: center;
   max-inline-size: 100%;
   border: 0.6px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
   border-radius: 6px;
   background: var(--ov-ui-command-console-neutral-bg);
-  padding: 4px 8px;
+  padding: 2px 8px;
   color: inherit;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 12px;
