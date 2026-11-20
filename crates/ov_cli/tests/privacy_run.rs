@@ -23,6 +23,7 @@ fn privacy(dir: &Path, url: &str) -> Command {
         .env("USERPROFILE", dir)
         .env("OPENVIKING_CLI_CONFIG_FILE", config)
         .env("OPENVIKING_LANG", "en")
+        .env_remove("OPENVIKING_PRIVACY_RUN_STRICT")
         .arg("privacy")
         .kill_on_drop(true);
     cmd
@@ -150,6 +151,43 @@ async fn a_failed_resolve_never_starts_the_child() {
     assert!(!output.status.success());
     assert!(!dir.path().join("started").exists());
     assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn strict_env_blocks_arg_references_and_allows_env_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = privacy(dir.path(), "http://127.0.0.1:1")
+        .env("OPENVIKING_PRIVACY_RUN_STRICT", "1")
+        .args(["run", "--"])
+        .args(create_marker_command())
+        .arg("Bearer {{ov_privacy:private-example}}")
+        .output()
+        .await
+        .unwrap();
+    let err = String::from_utf8_lossy(&blocked.stderr);
+    assert!(!blocked.status.success() && err.contains("--env or --env-file"));
+    assert!(!err.contains("private-example"));
+    assert!(!dir.path().join("started").exists());
+
+    let (url, server) = resolver([(TOKEN, Some("secret-token".into()))]).await;
+    let allowed = privacy(dir.path(), &url)
+        .env("OPENVIKING_PRIVACY_RUN_STRICT", "1")
+        .args([
+            "run",
+            "--env",
+            &format!("TOKEN={TOKEN}"),
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"printf '%s' "$TOKEN""#,
+        ])
+        .output()
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert!(allowed.status.success(), "{allowed:?}");
+    assert_eq!(allowed.stdout, TOKEN.as_bytes());
 }
 
 #[tokio::test]

@@ -64,7 +64,7 @@ pub(crate) enum PrivacyCommands {
         /// Load NAME={{ov_privacy:...}} entries from a file into child env (repeatable)
         #[arg(long = "env-file", value_name = "path")]
         env_file: Vec<PathBuf>,
-        /// External program and arguments to run; {{ov_privacy:...}} references in args are resolved
+        /// External program and arguments to run; {{ov_privacy:...}} references in args are resolved unless OPENVIKING_PRIVACY_RUN_STRICT=1
         #[arg(value_name = "command", required = true, trailing_var_arg = true)]
         command: Vec<OsString>,
     },

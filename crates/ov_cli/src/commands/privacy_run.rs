@@ -55,10 +55,25 @@ pub async fn run(
         ));
     }
     // Keep spans in the original arguments so inserted values are never parsed again.
-    let arg_references = command[1..]
-        .iter()
-        .map(|arg| collect_arg_references(arg, &mut references))
-        .collect::<Result<Vec<_>>>()?;
+    let arg_references = if std::env::var_os("OPENVIKING_PRIVACY_RUN_STRICT")
+        .is_some_and(|v| v == "1")
+    {
+        if command[1..]
+            .iter()
+            .any(|arg| reference_start(&arg.to_string_lossy()).is_some())
+        {
+            return Err(Error::Client(
+                    "Privacy references in command arguments are disabled when OPENVIKING_PRIVACY_RUN_STRICT=1; pass them via --env or --env-file"
+                        .into(),
+                ));
+        }
+        Vec::new()
+    } else {
+        command[1..]
+            .iter()
+            .map(|arg| collect_arg_references(arg, &mut references))
+            .collect::<Result<Vec<_>>>()?
+    };
 
     // Resolve every reference before starting the child. The same snapshot masks its output.
     let values = if references.is_empty() {
@@ -68,8 +83,12 @@ pub async fn run(
     };
 
     let mut child_command = Command::new(program);
-    for (arg, spans) in command[1..].iter().zip(arg_references) {
-        child_command.arg(replace_arg_references(arg, &spans, &values));
+    if arg_references.is_empty() {
+        child_command.args(&command[1..]);
+    } else {
+        for (arg, spans) in command[1..].iter().zip(arg_references) {
+            child_command.arg(replace_arg_references(arg, &spans, &values));
+        }
     }
     for (name, index) in env_fields {
         child_command.env(name, &values[index]);
