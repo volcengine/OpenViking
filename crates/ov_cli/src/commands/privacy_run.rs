@@ -436,17 +436,22 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 }
 
 #[cfg(unix)]
-fn fd_metadata(fd: impl std::os::fd::AsFd) -> Option<std::fs::Metadata> {
-    // Duplicate before wrapping in File so dropping it does not close the caller's descriptor.
-    let duplicated = fd.as_fd().try_clone_to_owned().ok()?;
-    std::fs::File::from(duplicated).metadata().ok()
+fn with_borrowed_file<T>(
+    fd: impl std::os::fd::AsRawFd,
+    f: impl FnOnce(&mut std::fs::File) -> std::io::Result<T>,
+) -> Option<T> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: ManuallyDrop borrows the open descriptor for `f` without closing it on return.
+    let mut file =
+        std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd.as_raw_fd()) });
+    f(&mut file).ok()
 }
 
 #[cfg(unix)]
-fn is_pipe_or_socket(fd: impl std::os::fd::AsFd) -> bool {
+fn is_pipe_or_socket(fd: impl std::os::fd::AsRawFd) -> bool {
     use std::os::unix::fs::FileTypeExt;
 
-    fd_metadata(fd).is_some_and(|meta| {
+    with_borrowed_file(fd, |f| f.metadata()).is_some_and(|meta| {
         let kind = meta.file_type();
         kind.is_fifo() || kind.is_socket()
     })
@@ -461,10 +466,10 @@ fn shared_non_tty_outputs() -> bool {
     if std::io::stdout().is_terminal() {
         return false;
     }
-    let Some(out) = fd_metadata(std::io::stdout()) else {
+    let Some(out) = with_borrowed_file(std::io::stdout(), |f| f.metadata()) else {
         return false;
     };
-    let Some(err) = fd_metadata(std::io::stderr()) else {
+    let Some(err) = with_borrowed_file(std::io::stderr(), |f| f.metadata()) else {
         return false;
     };
     if out.ino() == 0 || out.dev() != err.dev() || out.ino() != err.ino() {
@@ -483,6 +488,8 @@ fn shared_non_tty_outputs() -> bool {
 
 #[cfg(unix)]
 fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
+    use std::io::Seek;
+
     unsafe extern "C" {
         fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     }
@@ -523,38 +530,22 @@ fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
             }
         }
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        #[cfg(target_os = "linux")]
-        let (get_cmd, set_cmd, alt) = (9, 8, std::process::id() as i32); // F_GETOWN / F_SETOWN
-        #[cfg(target_os = "macos")]
-        let (get_cmd, set_cmd, alt) = (74, 73, 1); // F_GETNOSIGPIPE / F_SETNOSIGPIPE
-
-        // SAFETY: F_GETFL (3) and get_cmd read descriptor state; set_cmd toggles and restores a
-        // per-open-file-description attribute without touching file offsets or regular-file I/O.
-        unsafe {
-            let flags = fcntl(out_fd, 3);
-            if flags < 0 || flags != fcntl(err_fd, 3) {
-                return false;
-            }
-            let orig = fcntl(out_fd, get_cmd);
-            if orig != fcntl(err_fd, get_cmd) {
-                return false;
-            }
-            let probe = if orig == alt { 0 } else { alt };
-            if fcntl(out_fd, set_cmd, probe) < 0 {
-                return false;
-            }
-            let shared = fcntl(err_fd, get_cmd) == probe;
-            fcntl(out_fd, set_cmd, orig);
-            shared
-        }
+    // SAFETY: F_GETFL (3) reads file status flags without modifying descriptor state.
+    let flags = unsafe { fcntl(out_fd, 3) };
+    if flags < 0 || flags != unsafe { fcntl(err_fd, 3) } {
+        return false;
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = fcntl as unsafe extern "C" fn(i32, i32, ...) -> i32;
-        false
-    }
+    // Reading out_fd before and after err_fd tolerates monotonic concurrent writes to a shared file.
+    let Some(p1) = with_borrowed_file(out_fd, |f| f.stream_position()) else {
+        return false;
+    };
+    let Some(p2) = with_borrowed_file(err_fd, |f| f.stream_position()) else {
+        return false;
+    };
+    let Some(p3) = with_borrowed_file(out_fd, |f| f.stream_position()) else {
+        return false;
+    };
+    p1 <= p2 && p2 <= p3
 }
 
 #[cfg(any(target_os = "linux", test))]
