@@ -79,7 +79,11 @@ class ExternalTaskSnapshot:
 
 
 class CompileDependencyFailure(ExternalTaskError):
-    """A Compile Runtime HTTP 424 ends remote polling and requires local rollback."""
+    """A Compile Runtime failure that ends remote polling and requires local rollback."""
+
+    def __init__(self, code: str, message: str, *, http_status: int) -> None:
+        super().__init__(code, message, transient=False)
+        self.http_status = http_status
 
 
 @dataclass(frozen=True)
@@ -646,7 +650,7 @@ class ExternalTaskService:
             if isinstance(failure, CompileDependencyFailure):
                 await self._record_dependency_failure(task_id, account_id, user_id, failure)
                 session_id = auth.get("external_task_id")
-                if session_id:
+                if session_id and failure.http_status != 404:
                     task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
                     if task is not None:
                         try:
@@ -657,6 +661,10 @@ class ExternalTaskService:
                                 **self._session_request(task, auth),
                             )
                         except ExternalTaskError as exc:
+                            if isinstance(exc, CompileDependencyFailure) and exc.http_status == 404:
+                                await self._record_dependency_failure(
+                                    task_id, account_id, user_id, exc
+                                )
                             logger.info(
                                 "Compile session cancellation failed; continuing recovered cleanup",
                                 extra={"task_id": task_id, "error_type": type(exc).__name__},
@@ -731,14 +739,14 @@ class ExternalTaskService:
     async def _record_dependency_failure(
         task_id: str, account_id: str, user_id: str, failure: CompileDependencyFailure
     ) -> None:
-        """Checkpoint the redacted failure before remote cleanup; only active tasks accept it."""
+        """Persist the redacted failure so recovery can resume local rollback."""
         snapshot = ExternalTaskSnapshot(
             status="failed",
             error_code=sanitize_error(failure.code),
             error_message=sanitize_error(str(failure)),
         )
         patch = TaskPatch(
-            meta={"compile_runtime_http_status": 424},
+            meta={"compile_runtime_http_status": failure.http_status},
             auth={"external_terminal_snapshot": asdict(snapshot)},
         )
         saved = await run_to_completion(
