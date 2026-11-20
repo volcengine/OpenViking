@@ -29,6 +29,10 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
+  /** Resolved startup result for the current scope. Console skips its initial lookup when supplied. */
+  initialState?:
+    | { status: ConsoleBotActivationStatus }
+    | { status: 'error'; error: unknown };
   /**
    * Confirm whether the current scope allows Bot use. The tab stays visible while
    * checking or on failure; false hides it, while true proceeds to runtime readiness.

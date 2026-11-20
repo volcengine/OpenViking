@@ -183,12 +183,13 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 
 ### ConsoleBotActivation
 
-| Property   | Description                                                                           | Type                                                         | Default               |
-| ---------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------- |
-| isEligible | Confirm whether the current scope allows Bot access; false keeps the tab hidden       | `(signal: AbortSignal) => Promise<boolean>`                  | Required              |
-| getStatus  | Read the runtime state after eligibility is confirmed                                 | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>` | Required              |
-| start      | Start the runtime after the user selects Enable; Console rechecks its state afterward | `(signal: AbortSignal) => Promise<void>`                     | Required              |
-| media      | Introductory media shown in the activation card                                       | `ReactNode`                                                  | Built-in illustration |
+| Property     | Description                                                                           | Type                                                                          | Default               |
+| ------------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------- |
+| initialState | Use a startup result already resolved by the host and skip the initial lookup         | `{ status: 'ready' \| 'not-started' } \| { status: 'error'; error: unknown }` | Optional              |
+| isEligible   | Confirm whether the current scope allows Bot access; false keeps the tab hidden       | `(signal: AbortSignal) => Promise<boolean>`                                   | Required              |
+| getStatus    | Read the runtime state after eligibility is confirmed                                 | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>`                  | Required              |
+| start        | Start the runtime after the user selects Enable; Console rechecks its state afterward | `(signal: AbortSignal) => Promise<void>`                                      | Required              |
+| media        | Introductory media shown in the activation card                                       | `ReactNode`                                                                   | Built-in illustration |
 
 ### ConsoleHitlOptions
 
