@@ -244,10 +244,25 @@ export function createOpenVikingMcpProxy({
   // SEP-414 clients put the W3C trace context in params._meta.traceparent of
   // each tools/call, while the server reads it from HTTP headers only. Without
   // this the server starts a new trace per call instead of joining the caller's.
+  // The scope stays on tools/call: #8062 asks for that method only, and a
+  // request the caller did not trace must not acquire a header by accident.
+  // The value is validated as W3C traceparent (version 00, 32 hex trace-id,
+  // 16 hex parent-id, 2 hex flags) because a malformed one would be forwarded
+  // to the server as-is. An all-zero trace-id or parent-id is invalid by spec.
   // See #8062.
+  const TRACEPARENT_RE = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/i;
+  const ZERO_TRACE_ID = "0".repeat(32);
+  const ZERO_PARENT_ID = "0".repeat(16);
+
   function traceparentFromMessage(message) {
+    if (message?.method !== "tools/call") return "";
     const value = message?.params?._meta?.traceparent;
-    return typeof value === "string" && value ? value : "";
+    if (typeof value !== "string") return "";
+    const match = TRACEPARENT_RE.exec(value);
+    if (!match) return "";
+    if (match[1].toLowerCase() === ZERO_TRACE_ID) return "";
+    if (match[2].toLowerCase() === ZERO_PARENT_ID) return "";
+    return value;
   }
 
   function headersForRequest(includeSession = true, traceparent = "") {

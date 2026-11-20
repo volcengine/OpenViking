@@ -533,3 +533,46 @@ test("does not invent a traceparent header when the caller sends none", async ()
     });
   });
 });
+
+test("does not forward a traceparent from methods outside the tools/call scope", async () => {
+  const traceparent = "00-11111111111111111111111111111111-2222222222222222-01";
+  await withServer((_req, res, entry) => {
+    // #8062 scopes this to tools/call. A tools/list call the caller traced
+    // must keep its behaviour, so the header stays absent.
+    assert.equal(entry.headers.traceparent, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, {})));
+  }, async ({ url }) => {
+    const { proxy } = makeProxy({ url });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/list",
+      params: { _meta: { traceparent } },
+    });
+  });
+});
+
+test("rejects traceparent values that are not valid W3C trace context", async () => {
+  const invalid = [
+    "00-00000000000000000000000000000000-2222222222222222-01", // all-zero trace-id
+    "00-11111111111111111111111111111111-0000000000000000-01", // all-zero parent-id
+    "00-nothex-2222222222222222-01",                          // malformed
+    "01-11111111111111111111111111111111-2222222222222222-01", // unsupported version
+  ];
+  for (const value of invalid) {
+    await withServer((_req, res, entry) => {
+      assert.equal(entry.headers.traceparent, undefined, `forwarded ${value}`);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(jsonRpc(entry.body.id, {})));
+    }, async ({ url }) => {
+      const { proxy } = makeProxy({ url });
+      await proxy.handleMessage({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: { name: "recall", arguments: {}, _meta: { traceparent: value } },
+      });
+    });
+  }
+});
