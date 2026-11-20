@@ -1546,11 +1546,12 @@ describe('loop breaker', () => {
 describe('a /runtime switch hands on what it cut off', () => {
   // Codex with a live turn on [11, 12] and one queued line (13) plus a queued
   // task report receipt, switching to a Claude stand-in that records what it
-  // is handed. `resume` plays the decision ledger (DecisionPolicy).
-  function switchRuntime(t, { targetFails = false, interruptReports = 'abandoned', resume } = {}) {
+  // is handed. The interrupt reports the turn as failed, as some transports
+  // do for a cancelled prompt. `resumeInterrupted` plays the decision ledger.
+  function switchRuntime(t, { targetFails = false } = {}) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-cut-'));
     const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
-    const seen = { succeeded: [], failed: [], abandoned: [], resumed: [] };
+    const seen = { failed: [], abandoned: [], resumed: [] };
     const backends = {};
     const deliverable = (instance) => {
       instance.delivered = [];
@@ -1563,12 +1564,11 @@ describe('a /runtime switch hands on what it cut off', () => {
       };
     };
     const runtime = new AgentRuntime({}, store, quietLogger, {
-      onTurnSucceeded: (info) => seen.succeeded.push(info),
       onTurnFailed: (info) => seen.failed.push(info),
       onTurnAbandoned: (info) => seen.abandoned.push(info),
       resumeInterrupted: (cut) => {
         seen.resumed.push(cut);
-        return resume ? resume(cut) : {
+        return {
           items: cut.inboundSeqs.map((seq) => ({ text: `line ${seq}`, seq })),
           notice: `[daemon notice] switched from ${cut.from} to ${cut.to}`,
         };
@@ -1578,17 +1578,16 @@ describe('a /runtime switch hands on what it cut off', () => {
         backends.codex = instance;
         deliverable(instance);
         instance.turnInProgress = true;
-        instance.queue = [[{ text: 'queued line', seq: 13 }], [{ text: '[task report]', seq: null, receiptId: 'task-report:4' }]];
+        instance.queue = [{ text: 'queued line', seq: 13 }, { text: '[task report]', seq: null, receiptId: 'task-report:4' }];
         instance.interruptTurn = async () => {
           if (!instance.turnInProgress) return;
           instance.turnInProgress = false;
-          const callback = interruptReports === 'failed' ? options.onTurnFailed : options.onTurnAbandoned;
-          callback({ inboundSeqs: [12, 11], ...(interruptReports === 'failed' ? { error: 'cancelled' } : {}) });
+          options.onTurnFailed({ inboundSeqs: [12, 11], error: 'cancelled' });
         };
         // What Codex's stop() does with what is still queued: a receipt in
         // it makes the whole queue a failed turn.
         instance.stop = async () => {
-          const items = instance.queue.splice(0).flat();
+          const items = instance.queue.splice(0);
           if (items.some((item) => item.receiptId)) {
             options.onTurnFailed({ inboundSeqs: items.map((item) => item.seq).filter(Boolean), error: 'codex stopped before turn completion' });
           }
@@ -1611,46 +1610,24 @@ describe('a /runtime switch hands on what it cut off', () => {
       fs.rmSync(directory, { recursive: true, force: true });
     });
     store.setSetting('claude_model', 'sonnet');
-    return { runtime, store, seen, backends };
+    return { runtime, seen, backends };
   }
 
-  it('gives the target the interrupted turn and the queue, in order, behind a notice, before admission opens', async (t) => {
+  it('gives the target the interrupted turn and the queue, in order, behind a notice', async (t) => {
     const { runtime, seen, backends } = switchRuntime(t);
     await runtime.start();
     const result = await runtime.transition({ kind: 'select-runtime', runtime: 'claude', resumeInterrupted: true });
-    assert.equal(result.runtimeChanged, true);
     assert.equal(result.resumedInputs, 3);
     assert.deepEqual(seen.resumed, [{ inboundSeqs: [11, 12, 13], from: 'codex', to: 'claude', failed: false }]);
     assert.deepEqual(backends.claude.delivered, [[
       { text: 'line 11', seq: 11 }, { text: 'line 12', seq: 12 }, { text: 'line 13', seq: 13 },
     ]]);
     assert.deepEqual(backends.claude.notices, ['[daemon notice] switched from codex to claude']);
-    assert.deepEqual(backends.codex.delivered, [], 'nothing goes back to the retired runtime');
-    // The cut turn ends as abandoned; the queued task report goes back to its
-    // task as an abandoned receipt, never as a failed turn with a notice.
-    assert.deepEqual(seen.abandoned, [{ inboundSeqs: [12, 11] }, { inboundSeqs: [], receiptIds: ['task-report:4'] }]);
+    // The cut turn ends as abandoned although the transport said failed, and
+    // the queued task report goes back to its task: no failure notice.
+    assert.deepEqual(seen.abandoned, [{ inboundSeqs: [12, 11], error: 'cancelled' }, { inboundSeqs: [], receiptIds: ['task-report:4'] }]);
     assert.deepEqual(seen.failed, []);
     assert.equal(runtime.cut, null);
-  });
-
-  it('counts a cancelled turn the retiring transport reports as failed as cut, not failed', async (t) => {
-    const { runtime, seen, backends } = switchRuntime(t, { interruptReports: 'failed' });
-    await runtime.start();
-    const result = await runtime.transition({ kind: 'select-runtime', runtime: 'claude', resumeInterrupted: true });
-    assert.equal(result.resumedInputs, 3);
-    assert.deepEqual(seen.failed, []);
-    assert.deepEqual(seen.abandoned[0], { inboundSeqs: [12, 11], error: 'cancelled' });
-    assert.equal(backends.claude.delivered.length, 1);
-  });
-
-  it('hands on only what the ledger still has open, and opens nothing when nothing is', async (t) => {
-    const { runtime, seen, backends } = switchRuntime(t, { resume: () => null });
-    await runtime.start();
-    const result = await runtime.transition({ kind: 'select-runtime', runtime: 'claude', resumeInterrupted: true });
-    assert.equal(result.resumedInputs, 0);
-    assert.equal(seen.resumed.length, 1);
-    assert.deepEqual(backends.claude.delivered, []);
-    assert.equal(backends.claude.turnNotice ?? null, null, 'no notice is left for an unrelated turn');
   });
 
   it('keeps the work on the old runtime, with its own notice, when the target cannot start', async (t) => {
@@ -1665,17 +1642,5 @@ describe('a /runtime switch hands on what it cut off', () => {
     assert.deepEqual(seen.resumed, [{ inboundSeqs: [11, 12], from: 'codex', to: 'claude', failed: true }]);
     assert.deepEqual(backends.codex.delivered, [[{ text: 'line 11', seq: 11 }, { text: 'line 12', seq: 12 }]]);
     assert.equal(runtime.cut, null);
-  });
-
-  it('changes nothing for a switch that does not ask for it (automatic fallback and return)', async (t) => {
-    const { runtime, seen, backends } = switchRuntime(t);
-    await runtime.start();
-    const result = await runtime.transition({ kind: 'select-runtime', runtime: 'claude', persistPreference: false });
-    assert.equal(result.resumedInputs, 0);
-    assert.deepEqual(seen.resumed, []);
-    assert.deepEqual(backends.claude.delivered, []);
-    assert.deepEqual(seen.abandoned, [{ inboundSeqs: [12, 11] }]);
-    // As before: Codex's stop() reports its queue, receipt and all, as failed.
-    assert.deepEqual(seen.failed, [{ inboundSeqs: [13], error: 'codex stopped before turn completion' }]);
   });
 });

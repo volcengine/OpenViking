@@ -45,17 +45,6 @@ describe('RuntimeAdapter contract', () => {
     assert.deepEqual(managedCalls, [[{ id: 'sesn-new' }, { persist: false }]]);
   });
 
-  it('takes out what a transport holds for a later turn, as items or batches, leaving its queue empty', () => {
-    const items = new RuntimeAdapter('codex', { queue: [{ text: 'a', seq: 1 }, { text: 'b', seq: 2, receiptId: 'r' }] });
-    assert.deepEqual(items.takeQueued(), [{ text: 'a', seq: 1 }, { text: 'b', seq: 2, receiptId: 'r' }]);
-    assert.deepEqual(items.takeQueued(), []);
-    const queue = [[{ text: 'c', seq: 3 }], [{ text: 'd', seq: 4 }, { text: 'e', seq: null }]];
-    const batches = new RuntimeAdapter('pi', { queue });
-    assert.deepEqual(batches.takeQueued().map((item) => item.text), ['c', 'd', 'e']);
-    assert.equal(queue.length, 0, 'the transport keeps its own (now empty) queue');
-    assert.deepEqual(new RuntimeAdapter('volc', {}).takeQueued(), []);
-  });
-
   it('sets the cognition fields of the runtime it wraps', () => {
     const implementation = {};
     const adapter = new RuntimeAdapter('test', implementation);

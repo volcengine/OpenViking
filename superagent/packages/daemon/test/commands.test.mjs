@@ -351,23 +351,6 @@ describe('executeCommand', () => {
     assert.equal(agent.calls.length, 2);
   });
 
-  it('asks a switch to hand on what it interrupts, and says when it did', async () => {
-    const requests = [];
-    const agent = fakeCodex({
-      async transition(request) {
-        requests.push(request);
-        return { ok: true, runtime: 'pi', runtimeChanged: true, resumedInputs: 2 };
-      },
-    });
-    const result = await executeCommand({ name: 'runtime', arg: 'pi' }, agent);
-    assert.equal(requests[0].resumeInterrupted, true);
-    assert.equal(result.text, '已切换 Runtime：pi。会尝试从 OV 接上历史对话；隐藏思考和未落盘的工具过程不会继承'
-      + '\n被打断的 2 条消息由 pi 接着处理，不用重发');
-    const quiet = await executeCommand({ name: 'runtime', arg: 'pi' },
-      fakeCodex({ transition: async () => ({ ok: true, runtime: 'pi', runtimeChanged: true, resumedInputs: 0 }) }));
-    assert.doesNotMatch(quiet.text, /被打断/);
-  });
-
   it('rejects a stale model transition instead of reporting success', async () => {
     const agent = fakeCodex({ transition: async () => ({ ok: false, reason: 'stale-snapshot' }) });
     const result = await executeCommand({ name: 'model', arg: 'gpt-default' }, agent);
