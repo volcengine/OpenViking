@@ -138,24 +138,34 @@ async def test_resource_delete_removes_files_and_index(offline_resource_api):
 
 
 @pytest.mark.parametrize("endpoint", ["find", "search"])
-@pytest.mark.parametrize("query", ["how to authenticate", "what is OpenViking"])
-async def test_basic_retrieval_contract(offline_resource_api, endpoint, query):
+async def test_basic_retrieval_contract(offline_resource_api, endpoint):
     client, root = offline_resource_api
-    found = result(
-        await client.post(
-            f"/api/v1/search/{endpoint}",
-            json={"query": query, "target_uri": root, "level": [2], "limit": 5},
+    await write(client, "viking://resources/outside.md", "# OAuth outside the target directory")
+    payload = {"query": "OAuth", "target_uri": root, "limit": 10}
+    abstract = (f"{root}/.abstract.md", 0)
+    overview = (f"{root}/.overview.md", 1)
+    body = (f"{root}/oauth.md", 2)
+
+    # An unfiltered query may choose either directory tier for the same URI.
+    response = await client.post(f"/api/v1/search/{endpoint}", json=payload)
+    unfiltered = result(response)
+    assert "usage" not in response.json() and "telemetry" not in response.json()
+    hits = {(hit["uri"], hit["level"]) for hit in unfiltered["resources"]}
+    assert hits in ({abstract, body}, {overview, body}), unfiltered
+
+    for level, expected in ((2, {body}), ("0,2", {abstract, body}), ([1], {overview})):
+        found = result(
+            await client.post(f"/api/v1/search/{endpoint}", json={**payload, "level": level})
         )
-    )
-    for field in ("resources", "memories", "skills"):
-        assert isinstance(found[field], list)
-    assert isinstance(found["total"], int)
-    assert found["resources"], found
-    assert len(found["resources"]) <= 5
-    for hit in found["resources"]:
-        assert hit["uri"].startswith(root + "/"), hit
-        assert hit["level"] == 2
-        assert 0 <= hit["score"] <= 1
+        hits = {(hit["uri"], hit["level"]) for hit in found["resources"]}
+        assert hits == expected, found
+        assert found["memories"] == found["skills"] == []
+        assert found["total"] == len(found["resources"]) == len(expected)
+
+    limited = result(await client.post(f"/api/v1/search/{endpoint}", json={**payload, "limit": 1}))
+    assert limited["total"] == len(limited["resources"]) == 1
+    top = limited["resources"][0]
+    assert (top["uri"], top["level"]) in {abstract, overview, body}
 
 
 async def test_copy_file_preserves_source_content_and_index(client):

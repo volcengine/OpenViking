@@ -1,9 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 import re
 from collections import Counter
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -174,48 +176,72 @@ async def test_assembly_returns_readable_entries_within_budget():
     assert result.rendered.count("<memory ") == 3
 
 
-async def test_query_expansion_fans_out_planned_queries(monkeypatch):
+async def test_query_expansion_serves_hits_from_distinct_bounded_queries(monkeypatch):
+    raw_query = "Where is it?"
+    summary = "We are migrating the OAuth gateway."
+    expanded = ["OAuth migration runbook", "gateway rollback guide"]
+    matches = {
+        query: f"{USER_ROOT}/memories/events/{name}.md"
+        for query, name in zip(
+            [raw_query, *expanded], ("original", "runbook", "rollback"), strict=True
+        )
+    }
     queries_seen = []
-    auto_create_flags = []
 
-    async def fake_expand(*, query, session, mode, **kwargs):
-        del session, mode, kwargs
-        return [query, "expanded query"], "used"
+    async def complete(prompt):
+        assert raw_query in prompt and summary in prompt
+        return json.dumps(
+            {"queries": [{"query": text} for text in (raw_query, *expanded, "excess query")]}
+        )
 
-    async def fake_find(**kwargs):
-        queries_seen.append(kwargs["query"])
-        assert kwargs["events_time_decay_protection"] == "2d"
-        return _FakeFindResult()
+    async def get_planner(account_id):
+        assert account_id == _ctx().account_id
+        return SimpleNamespace(get_completion_async=complete)
+
+    async def get_context(query):
+        assert query == raw_query
+        return {"latest_archive_overview": summary}
 
     async def fake_get(session_id, ctx, *, auto_create=False):
-        del ctx
         assert session_id == "s1"
-        auto_create_flags.append(auto_create)
-        return _fake_session()
+        assert not auto_create
+        session = _fake_session()
+        session.get_context_for_search = get_context
+        return session
 
-    monkeypatch.setattr(pipeline_module, "expand_queries", fake_expand)
+    async def fake_find(**kwargs):
+        query = kwargs["query"]
+        queries_seen.append(query)
+        assert kwargs["events_time_decay_protection"] == "2d"
+        uri = matches[query]
+        return _FakeFindResult(memories=[{"uri": uri, "score": 0.8, "abstract": query}])
+
+    monkeypatch.setattr(
+        "openviking.retrieve.context_assembler.expansion.get_openviking_config",
+        lambda: SimpleNamespace(retrieval=SimpleNamespace(recall_intent_timeout_s=2)),
+    )
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
         fs=SimpleNamespace(read=None),
         sessions=SimpleNamespace(get=fake_get),
         viking_fs=None,
-        vlm_resolver=_DEFAULT_VLM_RESOLVER,
+        vlm_resolver=SimpleNamespace(get_query_planner=get_planner),
     )
-
     result = await assemble_context(
         service=service,
         ctx=_ctx(),
         params=AssembleParams(
-            query="short",
+            query=raw_query,
             events_time_decay_protection="2d",
             session_id="s1",
             query_expansion="auto",
             peer_scope="actor",
+            detail="abstract",
         ),
     )
 
-    assert auto_create_flags == [False]
-    assert queries_seen == ["short", "expanded query"]
+    assert Counter(queries_seen) == Counter(matches.keys())
+    assert {entry.uri for entry in result.entries} == set(matches.values())
     assert result.stats["query_expansion"] == "used"
 
 
@@ -384,100 +410,59 @@ async def test_purpose_quotas_are_not_truncated_by_global_limit():
     }
 
 
-async def test_rewrite_failure_keeps_rendered_context(monkeypatch):
-    hits = [{"uri": f"{USER_ROOT}/memories/events/a.md", "score": 0.6, "abstract": "abs"}]
-    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
+@pytest.mark.parametrize(
+    ("response", "expected_status"),
+    [
+        pytest.param(TimeoutError(), "timeout", id="provider-timeout"),
+        pytest.param("NO_RELEVANT_MEMORY", "no_relevant", id="explicitly-irrelevant"),
+        pytest.param("", "failed", id="empty-output"),
+        pytest.param("I could not produce a cited digest.", "failed", id="uncited-output"),
+        pytest.param("citations", "ok", id="filters-unserved-citations"),
+    ],
+)
+async def test_rewrite_serves_only_cited_digest_or_preserves_context(
+    monkeypatch, response, expected_status
+):
+    served = f"{USER_ROOT}/memories/events/a.md"
+    excluded = f"{USER_ROOT}/memories/events/b.md"
+    hits = [
+        {"uri": served, "score": 0.6, "abstract": "Migration finished"},
+        {"uri": excluded, "score": 0.9, "abstract": "Unserved facts"},
+    ]
 
-    async def failing_rewrite(**kwargs):
-        del kwargs
-        return "", "timeout", None
+    async def complete(prompt):
+        assert "Migration finished" in prompt
+        assert "Unserved facts" not in prompt
+        if isinstance(response, TimeoutError):
+            raise response
+        if response == "citations":
+            return f"- Kept fact 来源：{served}\n- Unserved fact 来源：{excluded}"
+        return response
 
-    monkeypatch.setattr(pipeline_module, "rewrite_context", failing_rewrite)
-    result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
-        ctx=_ctx(),
-        params=AssembleParams(query="rewrite me", rewrite=True),
-    )
+    class Resolver(_FakeVLMResolver):
+        async def get_query_planner(self, account_id):
+            assert account_id == _ctx().account_id
+            return SimpleNamespace(get_completion_async=complete)
 
-    assert result.digest == ""
-    assert result.rendered.count("<memory ") == 1
-    assert result.stats["rewrite"] == "timeout"
-
-
-async def test_rewrite_sentinel_marks_a_successful_empty_digest(monkeypatch):
-    hits = [{"uri": f"{USER_ROOT}/memories/events/a.md", "score": 0.6, "abstract": "abs"}]
-    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
-
-    async def empty_rewrite(**kwargs):
-        del kwargs
-        return "", "no_relevant", None
-
-    monkeypatch.setattr(pipeline_module, "rewrite_context", empty_rewrite)
-    result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
-        ctx=_ctx(),
-        params=AssembleParams(query="unrelated", rewrite=True),
-    )
-
-    assert result.digest == ""
-    assert result.rendered == ""
-    assert len(result.entries) == 1
-    assert result.stats["rewrite"] == "no_relevant"
-
-
-async def test_rewrite_kernel_distinguishes_no_relevant_from_invalid_output(monkeypatch):
-    responses = iter(
-        [
-            "NO_RELEVANT_MEMORY",
-            "",
-            "I could not produce a cited digest.",
-        ]
-    )
-
-    class _Planner:
-        async def get_completion_async(self, prompt):
-            assert prompt == "rewrite prompt"
-            return next(responses)
-
-    config = SimpleNamespace(
-        retrieval=SimpleNamespace(recall_rewrite_timeout_s=1),
-    )
+    config = SimpleNamespace(retrieval=SimpleNamespace(recall_rewrite_timeout_s=2))
     monkeypatch.setattr(rewrite_module, "get_openviking_config", lambda: config)
-    monkeypatch.setattr(rewrite_module, "render_prompt", lambda *args, **kwargs: "rewrite prompt")
-
-    statuses = []
-    planner = _Planner()
-    for _ in range(3):
-        digest, status, _ = await rewrite_module.rewrite_context(
-            query="q",
-            rendered='<memory uri="viking://a">body</memory>',
-            valid_uris=["viking://a"],
-            planner=planner,
-        )
-        assert digest == ""
-        statuses.append(status)
-
-    assert statuses == ["no_relevant", "failed", "failed"]
-
-
-async def test_rewrite_receives_only_served_uris(monkeypatch):
-    served_uri = f"{USER_ROOT}/memories/events/a.md"
-    hits = [{"uri": served_uri, "score": 0.6, "abstract": "abs"}]
-    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
-
-    async def ok_rewrite(**kwargs):
-        assert kwargs["valid_uris"] == [served_uri]
-        return f"OpenViking memory digest:\n- fact 来源：{served_uri}", "ok", None
-
-    monkeypatch.setattr(pipeline_module, "rewrite_context", ok_rewrite)
     result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
+        service=_service(hits=hits, bodies={}, vlm_resolver=Resolver()),
         ctx=_ctx(),
-        params=AssembleParams(query="rewrite me", rewrite="auto"),
+        params=AssembleParams(query="What changed?", rewrite="auto", exclude_uris=[excluded]),
     )
 
-    assert result.digest.startswith("OpenViking memory digest:")
-    assert result.stats["rewrite"] == "ok"
+    assert [entry.uri for entry in result.entries] == [served]
+    assert result.stats["rewrite"] == expected_status
+    if expected_status == "ok":
+        assert result.digest == f"OpenViking memory digest:\n- Kept fact 来源：{served}"
+    else:
+        assert result.digest == ""
+    if expected_status == "no_relevant":
+        assert result.rendered == ""
+    else:
+        assert "Migration finished" in result.rendered
+        assert excluded not in result.rendered
 
 
 async def test_only_candidates_that_can_deepen_are_read():
@@ -591,7 +576,12 @@ def test_memory_keeps_overview_as_the_cheaper_abstract_substitute():
 def test_spare_budget_restores_complete_content_above_the_per_entry_cap(category, directory):
     candidates, contents, originals = [], {}, {}
     for i in range(10):
-        uri = f"viking://resources/{i}.md"
+        if directory:
+            uri = f"viking://resources/project-{i}"
+        elif category == "skills":
+            uri = f"{SKILLS_ROOT}/skill-{i}/SKILL.md"
+        else:
+            uri = f"viking://resources/{i}.md"
         text = str(i) + "摘" * 255
         candidate = _resource_candidate("" if directory else text, category=category, uri=uri)
         candidate.is_directory = directory
@@ -661,43 +651,6 @@ def test_built_in_memory_types_report_one_declared_category():
         normalize_detail({OTHER_MEMORY_CATEGORY: "overview"}).for_category(OTHER_MEMORY_CATEGORY)
         == "overview"
     )
-
-
-async def test_no_relevant_digest_keeps_uris_out_of_the_dedup_ledger(monkeypatch):
-    """Nothing was injected, so nothing may enter the cooldown window."""
-    recorded = []
-    hits = [{"uri": f"{USER_ROOT}/memories/events/a.md", "score": 0.6, "abstract": "abs"}]
-    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
-
-    async def empty_rewrite(**kwargs):
-        del kwargs
-        return "", "no_relevant", None
-
-    class _Ledger:
-        status = "on"
-        turn = 3
-
-        def cooled_uris(self):
-            return set()
-
-        async def record(self, entries):
-            recorded.extend(entry.uri for entry in entries)
-
-    async def fake_load(**kwargs):
-        del kwargs
-        return _Ledger()
-
-    monkeypatch.setattr(pipeline_module, "rewrite_context", empty_rewrite)
-    monkeypatch.setattr(pipeline_module.RecallLedger, "load", staticmethod(fake_load))
-    result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
-        ctx=_ctx(),
-        params=AssembleParams(query="unrelated", rewrite=True, session_id="s", dedup_turns=5),
-    )
-
-    assert result.rendered == ""
-    assert len(result.entries) == 1
-    assert recorded == []
 
 
 def _skill_hit(uri, score, abstract="hit abstract", level=2):
@@ -840,37 +793,32 @@ async def test_exclude_uris_directory_prefix_excludes_subtree():
     assert f"{USER_ROOT}/memories/preferences/lang.md" in uris
 
 
-async def test_a_cooled_directory_does_not_hide_files_added_under_it(monkeypatch):
-    """The ledger cools served entries only; caller exclude_uris keep subtree semantics."""
+async def test_a_cooled_directory_does_not_hide_files_added_under_it():
     folder = f"{USER_ROOT}/memories/preferences"
+    new_file = f"{folder}/region.md"
     hits = [
         {"uri": f"{folder}/.overview.md", "score": 0.9, "abstract": "prefs", "level": 1},
-        {"uri": f"{folder}/region.md", "score": 0.8, "abstract": "region pref"},
+        {"uri": new_file, "score": 0.8, "abstract": "region pref"},
     ]
-
-    class _Ledger:
-        status = "on"
-        turn = 2
-
-        def cooled_uris(self):
-            return {folder}
-
-        async def record(self, entries):
-            del entries
-
-    async def fake_load(**kwargs):
-        del kwargs
-        return _Ledger()
-
-    monkeypatch.setattr(pipeline_module.RecallLedger, "load", staticmethod(fake_load))
-    result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
-        ctx=_ctx(),
-        params=AssembleParams(query="region", session_id="s", dedup_turns=5),
+    session = _fake_session()
+    session.uri = f"{USER_ROOT}/sessions/s"
+    session.meta = SimpleNamespace(total_message_count=2)
+    service = _service(hits=hits, bodies={}, session=session)
+    service.viking_fs = SimpleNamespace(
+        read_file=AsyncMock(
+            return_value=json.dumps({"entries": {folder: {"turn": 1, "detail": "overview"}}})
+        ),
+        write_file=AsyncMock(),
     )
 
-    assert [e.uri for e in result.entries] == [f"{folder}/region.md"]
-    assert result.stats["excluded"] == 1
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="region", session_id="s", dedup_turns=5, query_expansion="off"),
+    )
+
+    assert [entry.uri for entry in result.entries] == [new_file]
+    assert result.stats["dedup"]["cooled"] == 1
 
 
 async def test_a_pinned_detail_reads_the_package_skill_md():
@@ -890,25 +838,17 @@ async def test_a_pinned_detail_reads_the_package_skill_md():
     ]
 
 
-async def test_skills_bucket_searches_both_roots_once_per_query():
-    """One package search spans both roots and stops at `limit` distinct packages."""
+async def test_skills_bucket_searches_both_roots_with_the_caller_filter():
     finds = []
     service = _skill_service([], finds=finds)
+    filter_dsl = {"op": "must", "field": "search_tags", "conds": ["team=ops"]}
 
-    await _assemble_skills(service)
+    await _assemble_skills(service, filter=filter_dsl)
 
-    assert len(finds) == 1
-    assert finds[0]["target_uri"] == [SKILLS_ROOT, "viking://agent/skills"]
-    assert finds[0]["limit"] == 2
-
-
-async def test_skills_bucket_forwards_the_caller_filter():
-    finds = []
-    service = _skill_service([], finds=finds)
-
-    await _assemble_skills(service, filter={"op": "must", "field": "tags", "conds": ["ops"]})
-
-    assert {"op": "must", "field": "tags", "conds": ["ops"]} in finds[0]["filter"]["conds"]
+    (search,) = finds
+    assert search["target_uri"] == [SKILLS_ROOT, "viking://agent/skills"]
+    assert search["limit"] == 2
+    assert filter_dsl in search["filter"]["conds"]
 
 
 async def test_a_filter_only_query_stays_on_the_generic_path():
@@ -945,21 +885,28 @@ async def test_a_filter_only_query_stays_on_the_generic_path():
     ]
 
 
-async def test_a_failed_skills_search_leaves_the_request_standing():
+async def test_a_failed_skills_search_preserves_other_buckets():
+    event = f"{USER_ROOT}/memories/events/migration.md"
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"] == f"{USER_ROOT}/memories/events":
+            return _FakeFindResult(
+                memories=[{"uri": event, "score": 0.8, "abstract": "Migration finished"}]
+            )
+        return _FakeFindResult()
+
     async def fake_find_skills(**kwargs):
-        del kwargs
         raise RuntimeError("embedder unavailable")
 
     service = SimpleNamespace(
-        search=SimpleNamespace(find_skills=fake_find_skills),
+        search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
         fs=SimpleNamespace(read=None, abstract=None),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
+    result = await _assemble_skills(service, quotas={"skills": 1, "events": 1}, detail="abstract")
 
-    result = await _assemble_skills(service)
-
-    assert result.entries == []
+    assert [(entry.uri, entry.text) for entry in result.entries] == [(event, "Migration finished")]
     assert result.stats["retrieval_errors"] == ["RuntimeError: embedder unavailable"]
 
 
@@ -976,15 +923,17 @@ async def test_an_image_only_query_skips_the_skills_bucket():
     assert result.entries == []
 
 
-async def test_skills_and_memories_share_one_score_threshold():
-    calls = []
+async def test_context_applies_the_request_threshold_at_both_recall_boundaries():
+    events = f"{USER_ROOT}/memories/events"
+    thresholds = {}
 
     async def fake_find(**kwargs):
-        calls.append(("find", kwargs))
+        if kwargs["target_uri"] == events:
+            thresholds["memory"] = kwargs["score_threshold"]
         return _FakeFindResult()
 
     async def fake_find_skills(**kwargs):
-        calls.append(("find_skills", kwargs))
+        thresholds["skill"] = kwargs["score_threshold"]
         return _FakeFindResult()
 
     service = SimpleNamespace(
@@ -993,18 +942,10 @@ async def test_skills_and_memories_share_one_score_threshold():
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
-    await assemble_context(
-        service=service,
-        ctx=_ctx(),
-        params=AssembleParams(
-            query="how do I deploy",
-            quotas={"skills": 1, "events": 1},
-            peer_scope="actor",
-        ),
-    )
+    await _assemble_skills(service, quotas={"skills": 2, "events": 2}, score_threshold=0.5)
 
-    thresholds = {name: kwargs["score_threshold"] for name, kwargs in calls}
-    assert thresholds == {"find": None, "find_skills": None}
+    # With reranking off, recall must reject weak hits before they take quota slots.
+    assert thresholds == {"memory": 0.5, "skill": 0.5}
 
 
 async def test_flat_retrieval_collapses_skills_and_leaves_other_hits_alone():
@@ -1132,29 +1073,6 @@ async def test_flat_retrieval_skips_preset_directories():
     assert [entry.uri for entry in result.entries] == [memory]
 
 
-async def test_unused_bucket_slots_backfill_with_the_best_remaining_hits():
-    preferences = f"{USER_ROOT}/memories/preferences"
-    service = _bucket_service(
-        {
-            preferences: [
-                _hit(f"{preferences}/nickname.md", 0.75, "call me Z"),
-                _hit(f"{preferences}/style.md", 0.67, "terse answers"),
-            ]
-        }
-    )
-
-    result = await assemble_context(
-        service=service,
-        ctx=_ctx(),
-        params=AssembleParams(query="my preferences", purpose="coding", peer_scope="actor"),
-    )
-
-    assert [entry.uri for entry in result.entries] == [
-        f"{preferences}/nickname.md",
-        f"{preferences}/style.md",
-    ]
-
-
 async def test_backfill_never_exceeds_the_quota_total_or_reaches_zero_quota_buckets():
     finds = []
     preferences = f"{USER_ROOT}/memories/preferences"
@@ -1203,7 +1121,13 @@ async def test_full_buckets_keep_their_quotas_when_one_bucket_scores_highest():
         params=AssembleParams(query="q", quotas=quotas, max_tokens=8000, peer_scope="actor"),
     )
 
-    assert Counter(entry.category for entry in result.entries) == quotas
+    assert {
+        bucket: [entry.uri for entry in result.entries if entry.category == bucket]
+        for bucket in quotas
+    } == {
+        bucket: [f"{category_targets(bucket, _ctx())[0]}/{i}.md" for i in range(count)]
+        for bucket, count in quotas.items()
+    }
 
 
 class _FakeRerankClient:
@@ -1428,30 +1352,24 @@ async def test_context_rerank_scores_skills_on_their_package_abstract():
     assert sorted(reads) == [DEPLOY, REVIEW]
 
 
-async def test_image_query_skips_context_rerank():
-    finds = []
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"image_url": "https://example.com/shot.png"}, id="image"),
+        pytest.param(
+            {"query": "", "filter": {"op": "must", "field": "search_tags", "conds": ["team=ops"]}},
+            id="filter-only",
+        ),
+    ],
+)
+async def test_non_text_recall_keeps_vector_results_without_reranking(options):
     client = _FakeRerankClient({"text d": 0.95})
-    service = _rerank_service(_flat_service(FLAT_HITS, finds), client)
+    service = _rerank_service(_flat_service(FLAT_HITS), client)
 
-    result = await _assemble_flat(service, image_url="https://example.com/shot.png")
+    result = await _assemble_flat(service, **options)
 
     assert client.calls == []
-    assert [call["limit"] for call in finds] == [2]
     assert _scored(result) == [("a.md", 0.9), ("b.md", 0.8)]
-    assert "rerank" not in result.stats
-
-
-async def test_filter_only_query_skips_context_rerank():
-    finds = []
-    client = _FakeRerankClient({"text d": 0.95})
-    service = _rerank_service(_flat_service(FLAT_HITS, finds), client)
-
-    result = await _assemble_flat(
-        service, query="", filter={"op": "must", "field": "tags", "conds": ["ops"]}
-    )
-
-    assert client.calls == []
-    assert [call["limit"] for call in finds] == [2]
     assert "rerank" not in result.stats
 
 

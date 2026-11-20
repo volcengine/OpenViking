@@ -416,39 +416,27 @@ async def test_sdk_commit_not_blocked_after_failed_archive(http_client):
 # ===================================================================
 
 
-async def test_sdk_find(http_client):
+async def test_sdk_find_and_search_apply_tag_options(http_client):
     client, _ = http_client
-    # Add a resource first
-    f = TEST_TMP_DIR / "sdk_search.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="search test", wait=True)
+    matched = "viking://resources/sdk-tagged.md"
+    unmatched = "viking://resources/sdk-untagged.md"
+    for uri, tags in ((matched, ["team=search"]), (unmatched, ["team=other"])):
+        written = await client.write(
+            uri, "# Search runbook", mode="create", wait=True, options={"tags": tags}
+        )
+        assert written["vector_status"] == "complete"
 
-    result = await client.find(query="sample document", limit=5)
-    assert hasattr(result, "resources")
-    assert hasattr(result, "total")
+    targets = [matched, unmatched]
+    baseline = await client.find(query="runbook", target_uri=targets, options={"level": 2})
+    assert {hit["uri"] for hit in baseline["resources"]} == set(targets)
 
-
-async def test_sdk_find_accepts_tags(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_find_tags.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="find tags test", wait=True)
-
-    result = await client.find(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
-
-
-async def test_sdk_search_accepts_tags(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_search_tags.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="search tags test", wait=True)
-
-    result = await client.search(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
+    for search in (client.find, client.search):
+        result = await search(
+            query="runbook", target_uri=targets, options={"tags": ["team=search"], "level": 2}
+        )
+        (hit,) = result["resources"]
+        assert hit["uri"] == matched
+        assert hit["tags"] == ["team=search"]
 
 
 async def test_sdk_set_tags_accepts_tags(http_client):
@@ -465,36 +453,18 @@ async def test_sdk_set_tags_accepts_tags(http_client):
     assert isinstance(result, dict)
 
 
-async def test_sdk_find_telemetry(http_client):
+async def test_sdk_find_returns_hits_when_telemetry_is_requested(http_client):
     client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_search_telemetry.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(
-        path=str(f), reason="telemetry search test", wait=True, telemetry=True
-    )
+    uri = "viking://resources/sdk-find-trace.md"
+    written = await client.write(uri, "# Search tracing", mode="create", wait=True)
+    assert written["vector_status"] == "complete"
 
-    result = await client.find(query="sample document", limit=5, telemetry=True)
-    assert not hasattr(result, "telemetry")
-
-
-async def test_sdk_find_summary_only_telemetry(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_search_summary_only.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(
-        path=str(f),
-        reason="summary only telemetry search test",
-        wait=True,
-    )
-
-    result = await client.find(
-        query="sample document",
-        limit=5,
-        telemetry={"summary": True},
-    )
-    assert not hasattr(result, "telemetry")
+    for telemetry in (True, {"summary": True}):
+        result = await client.find(
+            query="search tracing", target_uri=uri, options={"telemetry": telemetry, "level": 2}
+        )
+        assert [hit["uri"] for hit in result["resources"]] == [uri]
+        assert "telemetry" not in result
 
 
 # ===================================================================
@@ -502,20 +472,19 @@ async def test_sdk_find_summary_only_telemetry(http_client):
 # ===================================================================
 
 
-async def test_sdk_full_workflow(http_client):
+async def test_sdk_full_workflow(http_client, tmp_path):
     """End-to-end: add resource → wait → find → session → ls → rm."""
     client, _ = http_client
 
     # Add resource
-    f = TEST_TMP_DIR / "sdk_e2e.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_e2e.md"
     f.write_text(SAMPLE_MD_CONTENT)
-    result = await client.add_resource(path=str(f), reason="e2e test", wait=True)
+    result = await client.add_resource(path=str(f), wait=True, options={"reason": "e2e test"})
     uri = result["root_uri"]
 
     # Search
-    find_result = await client.find(query="sample", limit=3)
-    assert find_result.total >= 0
+    found = await client.find(query="sample", target_uri=uri, options={"level": 2})
+    assert [hit["uri"] for hit in found["resources"]] == [f"{uri}/{f.name}"]
 
     # List contents (the URI is a directory)
     children = await client.ls(uri, simple=True)

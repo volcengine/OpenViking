@@ -179,14 +179,17 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert "overview" in level_one_with_content
     assert "content" in level_one_with_content
 
-    find_response = await client.post(
-        "/api/v1/skills/find",
-        json={"query": "list and show", "limit": 5},
-    )
+    find_scope = added["uri"].rsplit("/", 1)[0]
+    payload = {"query": "list and show", "target_uri": find_scope, "level": [2], "limit": 5}
+    find_response = await client.post("/api/v1/skills/find", json=payload)
     assert find_response.status_code == 200, find_response.text
     found = find_response.json()["result"]
-    assert "skills" in found
-    assert "total" in found
+    assert found["total"] == len(found["skills"]) == 1
+    (hit,) = found["skills"]
+    assert hit["root_uri"] == added["uri"]
+    assert hit["uri"] == shown["skill_md_uri"]
+    assert hit["name"] == shown["name"]
+    assert hit["level"] == 2
 
     delete_response = await client.delete("/api/v1/skills/api-skill")
     assert delete_response.status_code == 200, delete_response.text
@@ -196,6 +199,10 @@ async def test_skills_api_list_show_find_and_delete(client):
 
     missing_response = await client.get("/api/v1/skills/api-skill")
     assert missing_response.status_code == 404
+
+    after_delete = await client.post("/api/v1/skills/find", json=payload)
+    assert after_delete.status_code == 200, after_delete.text
+    assert after_delete.json()["result"]["skills"] == []
 
     missing_privacy_response = await client.get("/api/v1/privacy-configs/skill/api-skill")
     assert missing_privacy_response.status_code == 404

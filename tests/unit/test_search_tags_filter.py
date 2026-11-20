@@ -5,7 +5,6 @@ import logging
 
 import pytest
 
-from openviking.server.routers.search import resolve_search_filter
 from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
@@ -134,44 +133,3 @@ def test_preserve_memory_type_tag_does_not_reapply_tag_operations():
         ["memory_type=profile", "c++=cpp", "used_count=3"],
         ["memory_type=other", "c++=cpp", "used_count=4"],
     ) == ["memory_type=profile", "c++=cpp", "used_count=4"]
-
-
-def test_find_tags_filter_requires_all_tags():
-    result = resolve_search_filter(
-        request_filter=None,
-        context_type=None,
-        since=None,
-        until=None,
-        time_field=None,
-        tags=["Env=Prod", "team=Search"],
-    )
-
-    assert result == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
-            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
-        ],
-    }
-
-
-def test_find_tags_filter_ands_all_tags_with_existing_filter():
-    existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
-
-    result = resolve_search_filter(
-        request_filter=existing_filter,
-        context_type=None,
-        since=None,
-        until=None,
-        time_field=None,
-        tags=["env=prod", "team=search"],
-    )
-
-    assert result == {
-        "op": "and",
-        "conds": [
-            existing_filter,
-            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
-            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
-        ],
-    }

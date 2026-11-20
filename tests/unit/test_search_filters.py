@@ -1,12 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from openviking.utils.search_filters import merge_time_filter
-from openviking.utils.time_utils import parse_iso_datetime
 
 
 def test_merge_time_filter_builds_relative_range():
@@ -48,7 +47,7 @@ def test_merge_time_filter_merges_with_existing_filter():
 
 
 def test_merge_time_filter_accepts_absolute_timestamp():
-    result = merge_time_filter(None, until="2026-03-11T15:18:00Z")
+    result = merge_time_filter(None, until="2026-03-11T23:18:00+08:00")
 
     assert result == {
         "op": "time_range",
@@ -102,20 +101,15 @@ def test_merge_time_filter_rejects_invalid_time_field():
         merge_time_filter(None, since="2h", time_field="published_at")
 
 
-def test_merge_time_filter_output_preserves_timezone_semantics():
-    now = datetime(2026, 3, 11, 18, 0, tzinfo=timezone.utc)
-
-    result = merge_time_filter(None, since="30m", until="2026-03-11", now=now)
-
-    assert parse_iso_datetime(result["gte"]).tzinfo is not None
-    assert parse_iso_datetime(result["lte"]).tzinfo is not None
-
-
-def test_merge_time_filter_date_only_uses_now_timezone():
-    local_tz = timezone.utc
+def test_merge_time_filter_date_only_starts_and_ends_in_the_clock_timezone():
+    local_tz = timezone(timedelta(hours=8))
     now = datetime(2026, 3, 11, 18, 0, tzinfo=local_tz)
 
     result = merge_time_filter(None, since="2026-03-11", until="2026-03-12", now=now)
 
-    assert result["gte"].endswith("Z")
-    assert result["lte"].endswith("Z")
+    assert result == {
+        "op": "time_range",
+        "field": "updated_at",
+        "gte": "2026-03-10T16:00:00.000Z",
+        "lte": "2026-03-12T15:59:59.999Z",
+    }

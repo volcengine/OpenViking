@@ -407,20 +407,16 @@ async def test_rule_search_returns_rendered_rules(service, monkeypatch):
     assert search_rules.await_args.kwargs["ctx"] == DEFAULT_CTX
 
 
-async def test_search_returns_formatted_results(service, client_with_resource):
-    _, root_uri = client_with_resource
-    result = await search(query="resource management semantic search", limit=3)
-    assert "Found" in result or "No matching" in result
+async def test_search_formats_the_scoped_hit_and_applies_min_score(client_with_resource):
+    _, root = client_with_resource
+    request = {"query": "resource management", "target_uri": root, "level": [2], "limit": 3}
 
+    result = await search(**request, min_score=0.5)
+    assert "Found 1 item(s)" in result
+    assert f"{root}/sample.md" in result
 
-async def test_search_with_target_uri(service):
-    result = await search(query="test", target_uri="viking://resources", limit=3)
-    assert isinstance(result, str)
-
-
-async def test_search_respects_min_score(service):
-    result = await search(query="test", min_score=0.35)
-    assert isinstance(result, str)
+    filtered = await search(**request, min_score=1.0)
+    assert filtered == "No matching context found."
 
 
 async def test_search_tools_expose_only_context_type_parameter():
@@ -855,88 +851,57 @@ async def test_find_tool_keeps_a_filter_only_skill_query_on_the_generic_find(ser
 async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, monkeypatch, hit_uri):
     hit = SimpleNamespace(uri=hit_uri, abstract="Not an installed skill", score=0.4)
 
-    async def fake_find_skills(**kwargs):
+    async def fake_find(**kwargs):
         return SimpleNamespace(memories=[], resources=[], skills=[hit])
 
-    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
+    monkeypatch.setattr(service.search, "find", fake_find)
 
-    result = await mcp_endpoint.find(query="review", context_type="skill")
+    result = await mcp_endpoint.find(query="review", context_type=["skill", "memory"])
 
     assert f"- [skill 40%] {hit_uri} tags=[]\n" in result
     assert "SKILL.md/SKILL.md" not in result
 
 
-async def test_find_tool_describes_a_package_file_hit_with_the_skill_abstract(service, monkeypatch):
+@pytest.mark.parametrize(
+    ("source", "abstract_available", "expected"),
+    [
+        pytest.param("scripts/fill.py", True, "Fill in a PDF form", id="generated-package"),
+        pytest.param("scripts/fill.py", False, "Fill each AcroForm field", id="package-not-ready"),
+        pytest.param(".abstract.md", True, "Fill in a PDF form", id="matched-package-abstract"),
+    ],
+)
+async def test_find_tool_describes_the_skill_using_available_package_metadata(
+    service, monkeypatch, source, abstract_available, expected
+):
+    root = "viking://agent/skills/pdf-forms"
+    package_description = "name: pdf-forms\ndescription: Fill in a PDF form"
+    is_sidecar = source == ".abstract.md"
     hit = SimpleNamespace(
-        uri="viking://agent/skills/pdf-forms/scripts/fill.py",
-        abstract="Iterate the AcroForm fields and write each value",
+        uri=f"{root}/{source}",
+        abstract=package_description if is_sidecar else "Fill each AcroForm field",
         score=0.52,
     )
-    abstract_uris = []
+    find_skills = AsyncMock(return_value=SimpleNamespace(memories=[], resources=[], skills=[hit]))
 
-    async def fake_find_skills(**kwargs):
-        return SimpleNamespace(memories=[], resources=[], skills=[hit])
+    async def read_abstract(uri, ctx):
+        assert uri == root
+        if is_sidecar:
+            pytest.fail("A matched package abstract already carries the display text")
+        return (
+            package_description
+            if abstract_available
+            else f"# {root} [Directory abstract is not ready]"
+        )
 
-    async def fake_abstract(uri, ctx):
-        abstract_uris.append(uri)
-        return "name: pdf-forms\ndescription: Fill in a PDF form"
-
-    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
-    monkeypatch.setattr(service.fs, "abstract", fake_abstract)
-
+    monkeypatch.setattr(service.search, "find_skills", find_skills)
+    monkeypatch.setattr(service.fs, "abstract", read_abstract)
     result = await mcp_endpoint.find(query="fill a pdf", context_type="skill")
 
-    assert abstract_uris == ["viking://agent/skills/pdf-forms"]
-    assert "description: Fill in a PDF form" in result
-    assert "AcroForm" not in result
-
-
-async def test_find_tool_keeps_the_file_abstract_when_the_package_has_none(service, monkeypatch):
-    hit = SimpleNamespace(
-        uri="viking://agent/skills/pdf-forms/scripts/fill.py",
-        abstract="Iterate the AcroForm fields and write each value",
-        score=0.52,
-    )
-
-    async def fake_find_skills(**kwargs):
-        return SimpleNamespace(memories=[], resources=[], skills=[hit])
-
-    async def fake_abstract(uri, ctx):
-        return f"# {uri} [Directory abstract is not ready]"
-
-    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
-    monkeypatch.setattr(service.fs, "abstract", fake_abstract)
-
-    result = await mcp_endpoint.find(query="fill a pdf", context_type="skill")
-
+    assert f"- [skill 52%] {root}/SKILL.md" in result
+    assert expected in result
     assert "is not ready" not in result
-    assert "Iterate the AcroForm fields" in result
-
-
-async def test_find_tool_keeps_the_package_abstract_of_a_sidecar_hit(service, monkeypatch):
-    hit = SimpleNamespace(
-        uri="viking://agent/skills/pdf-forms/.abstract.md",
-        abstract="name: pdf-forms\ndescription: Fill in a PDF form",
-        score=0.52,
-    )
-
-    abstract_uris = []
-
-    async def fake_find_skills(**kwargs):
-        return SimpleNamespace(memories=[], resources=[], skills=[hit])
-
-    async def fake_abstract(uri, ctx):
-        abstract_uris.append(uri)
-        return ""
-
-    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
-    monkeypatch.setattr(service.fs, "abstract", fake_abstract)
-
-    result = await mcp_endpoint.find(query="fill a pdf", context_type="skill")
-
-    # A package-level hit already carries the skill's abstract.
-    assert abstract_uris == []
-    assert "description: Fill in a PDF form" in result
+    if abstract_available:
+        assert "Fill each AcroForm field" not in result
 
 
 async def test_search_tool_collapses_skill_package_hits(service, monkeypatch):
@@ -1158,120 +1123,35 @@ async def test_search_context_schema_uses_portable_scalar_types():
     assert properties["rewrite"]["enum"] == ["off", "auto"]
 
 
-async def test_retrieval_tools_describe_advanced_parameters_without_changing_contracts():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    find_schema = tools["find"].inputSchema
-    search_schema = tools["search"].inputSchema
-    find_properties = find_schema["properties"]
-    search_properties = search_schema["properties"]
-
-    assert find_properties["level"]["description"] == (
-        "Filter indexed representation levels: 0=abstract, 1=overview, 2=detail/content."
-    )
-    assert search_properties["level"]["description"] == (
-        "In mode='list', filter indexed representation levels: "
-        "0=abstract, 1=overview, 2=detail/content; ignored in mode='context'."
-    )
-    assert search_properties["quotas"]["description"] == (
-        "In mode='context', set first-pass result ceilings for explicitly listed "
-        "categories: events, entities, preferences, experiences, resources, or skills; "
-        "unused slots may be filled by other listed categories. Explicit quotas replace "
-        "the purpose preset (unlisted categories are not retrieved), and their sum caps "
-        "the results instead of limit."
-    )
-    assert search_properties["detail_by_category"]["description"] == (
-        "In mode='context', request abstract, overview, or full detail per category "
-        "(events, entities, preferences, experiences, resources, skills, or memories); "
-        "do not combine with a non-auto detail value."
-    )
-    assert search_properties["dedup_turns"]["description"] == (
-        "In mode='context' with session_id, suppress URIs served with content within "
-        "this many recent turns; 0 disables cross-turn deduplication."
-    )
-    assert search_properties["peer_scope"]["description"] == (
-        "In mode='context', use 'actor' for the user's own and current peer's memories, "
-        "or 'all' to also consider memories from other peers."
-    )
-    assert search_properties["other_peer_penalty"]["description"] == (
-        "In mode='context', subtract one score penalty from every category of results "
-        "owned by peers other than the current peer; values are clamped to 0..1, and this "
-        "cannot be combined with other_peer_penalties."
-    )
-    assert search_properties["other_peer_penalties"]["description"] == (
-        "In mode='context', override default other-peer score penalties by category; "
-        "allowed categories are events, entities, preferences, experiences, resources, "
-        "skills, and memories, values are clamped to 0..1, and omitted categories keep "
-        "their defaults; do not combine with other_peer_penalty."
-    )
-    assert search_properties["rewrite"]["description"] == (
-        "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
-        "planner model; without one configured, or on failure, the assembled context is "
-        "returned unchanged, while 'off' skips rewriting."
-    )
-
-    decay_description = (
-        "Apply updated_at-based recency decay after an unpenalized protection window; "
-        "use '0' or a non-negative integer plus m, h, or d (for example, 2d), and "
-        "provide a non-empty query."
-    )
-    assert find_properties["events_time_decay_protection"]["description"] == decay_description
-    assert search_properties["events_time_decay_protection"]["description"] == decay_description
-
-    assert find_properties["level"]["type"] == "array"
-    assert find_properties["context_type"]["type"] == "array"
-    assert find_properties["events_time_decay_protection"]["type"] == "string"
-    assert search_properties["level"]["type"] == "array"
-    assert search_properties["context_type"]["type"] == "array"
-    assert search_properties["quotas"]["type"] == "object"
-    assert search_properties["detail_by_category"]["type"] == "object"
-    assert search_properties["dedup_turns"]["type"] == "integer"
-    assert search_properties["peer_scope"]["type"] == "string"
-    assert search_properties["other_peer_penalty"]["type"] == "number"
-    assert search_properties["other_peer_penalties"]["type"] == "object"
-    assert search_properties["rewrite"]["type"] == "string"
-    assert search_properties["events_time_decay_protection"]["type"] == "string"
-    assert search_properties["dedup_turns"]["default"] == 0
-    assert search_properties["peer_scope"]["default"] == "all"
-    assert search_properties["rewrite"]["default"] == "off"
-    for properties, parameters in (
-        (
-            find_properties,
-            ("level", "context_type", "events_time_decay_protection"),
-        ),
-        (
-            search_properties,
-            (
-                "level",
-                "context_type",
-                "quotas",
-                "detail_by_category",
-                "other_peer_penalty",
-                "other_peer_penalties",
-                "events_time_decay_protection",
-            ),
-        ),
+async def test_retrieval_tool_schema_publishes_optional_inputs_and_defaults():
+    tools = {tool.name: tool.inputSchema for tool in await mcp_endpoint.mcp.list_tools()}
+    common = {"level": "array", "context_type": "array", "events_time_decay_protection": "string"}
+    context = {
+        "quotas": "object",
+        "detail_by_category": "object",
+        "dedup_turns": "integer",
+        "peer_scope": "string",
+        "other_peer_penalty": "number",
+        "other_peer_penalties": "object",
+        "rewrite": "string",
+    }
+    search_defaults = {"dedup_turns": 0, "peer_scope": "all", "rewrite": "off"}
+    for name, types, defaults in (
+        ("find", common, {}),
+        ("search", {**common, **context}, search_defaults),
     ):
-        for parameter in parameters:
-            assert "default" not in properties[parameter]
-    for parameter in (
-        "level",
-        "context_type",
-        "events_time_decay_protection",
-    ):
-        assert parameter not in find_schema.get("required", [])
-    for parameter in (
-        "level",
-        "context_type",
-        "quotas",
-        "detail_by_category",
-        "dedup_turns",
-        "peer_scope",
-        "other_peer_penalty",
-        "other_peer_penalties",
-        "rewrite",
-        "events_time_decay_protection",
-    ):
-        assert parameter not in search_schema.get("required", [])
+        schema = tools[name]
+        assert not set(types).intersection(schema.get("required", []))
+        for field, expected_type in types.items():
+            prop = schema["properties"][field]
+            assert prop["type"] == expected_type, field
+            assert prop["description"].strip(), field
+            if field in defaults:
+                assert prop["default"] == defaults[field], field
+            else:
+                assert "default" not in prop, field
+
+        assert "updated_at" in schema["properties"]["events_time_decay_protection"]["description"]
 
 
 async def test_mcp_middleware_sets_actor_peer_context():

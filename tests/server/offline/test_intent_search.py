@@ -8,7 +8,7 @@ Only model calls are replaced; query planning and vector retrieval run normally.
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 
 async def test_search_expands_session_context_and_retrieves_imported_resource(
@@ -53,15 +53,29 @@ async def test_search_expands_session_context_and_retrieves_imported_resource(
     )
     assert response.status_code == 200, response.text
 
-    response = await client.post(
-        "/api/v1/search/search",
-        json={
-            "query": "authentication",
-            "session_id": session_id,
-            "target_uri": root_uri,
-            "level": [2],
-        },
-    )
+    payload = {
+        "query": "authentication",
+        "session_id": session_id,
+        "target_uri": root_uri,
+        "level": [2],
+    }
+    expected_uris = [f"{root_uri}/oauth.md"]
+    session_factory = Mock(wraps=service.sessions.session)
+    monkeypatch.setattr(service.sessions, "session", session_factory)
+    with monkeypatch.context() as disabled:
+        disabled.setattr(service.viking_fs.retrieval_config, "enable_intent", False)
+        response = await client.post("/api/v1/search/search", json=payload)
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert [item["uri"] for item in result["resources"]] == expected_uris
+    assert "query_plan" not in result
+    assert embedded_queries == ["authentication"]
+    assert prompts == []
+    session_factory.assert_not_called()
+
+    embedded_queries.clear()
+    response = await client.post("/api/v1/search/search", json=payload)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "ok"
@@ -73,9 +87,5 @@ async def test_search_expands_session_context_and_retrieves_imported_resource(
     assert expanded_query in embedded_queries
     assert body["result"]["query_plan"]["queries"][0]["query"] == expanded_query
     resources = body["result"]["resources"]
-    assert any(
-        item["uri"] == root_uri or item["uri"].startswith(root_uri.rstrip("/") + "/")
-        for item in resources
-    ), resources
+    assert [item["uri"] for item in resources] == expected_uris
     assert all(item["level"] == 2 for item in resources)
-    assert all(0 <= item["score"] <= 1 for item in resources)

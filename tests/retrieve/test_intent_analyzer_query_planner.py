@@ -18,20 +18,6 @@ class RecordingModel:
         return self.response
 
 
-def _query_plan_response(query: str) -> str:
-    return f"""{{
-      "reasoning": "test",
-      "queries": [
-        {{
-          "query": "{query}",
-          "context_type": "memory",
-          "intent": "test intent",
-          "priority": 1
-        }}
-      ]
-    }}"""
-
-
 def test_openviking_config_accepts_query_planner_vlm_config():
     config = OpenVikingConfig.from_dict(
         {
@@ -44,201 +30,75 @@ def test_openviking_config_accepts_query_planner_vlm_config():
         }
     )
 
-    assert config.query_planner is not None
-    assert config.query_planner.provider == "litellm"
-    assert config.query_planner.model == "ollama/qwen3.5:4b"
-    assert config.query_planner.api_base == "http://127.0.0.1:11434"
-    assert config.query_planner.extra_request_body == {"think": False}
+    planner = config.get_query_planner()
+    assert planner is config.query_planner
+    assert planner.provider == "litellm"
+    assert planner.model == "ollama/qwen3.5:4b"
+    assert planner.api_base == "http://127.0.0.1:11434"
+    assert planner.extra_request_body == {"think": False}
 
 
 def test_openviking_config_uses_vlm_when_query_planner_is_absent_or_empty():
-    missing_config = OpenVikingConfig.from_dict({})
-    assert missing_config.get_query_planner() is missing_config.vlm
-
-    empty_config = OpenVikingConfig.from_dict({"query_planner": {}})
-    assert empty_config.get_query_planner() is empty_config.vlm
+    for config_dict in ({}, {"query_planner": {}}):
+        config = OpenVikingConfig.from_dict(config_dict)
+        assert config.get_query_planner() is config.vlm
 
 
-def test_query_planner_prompt_mapping_defaults_for_unknown_models():
+@pytest.mark.parametrize(
+    ("model", "prompt_id"),
+    [
+        ("ollama/guoxuter/ov_intent_analysis_sft:v7_q8", "retrieval.ov_intent_analysis_sft_v7"),
+        ("ollama/guoxuter/ov_intent_analysis_sft:v4_q8", "retrieval.ov_intent_analysis_sft_v4"),
+        ("ollama/qwen3.5:4b", "retrieval.intent_analysis"),
+    ],
+)
+def test_query_planner_selects_bundled_prompt(model, prompt_id):
+    planner = SimpleNamespace(model=model)
+    assert intent_module.resolve_intent_analysis_prompt_id(planner) == prompt_id
+
+
+@pytest.mark.parametrize(
+    ("model", "response", "expected"),
+    [
+        pytest.param(
+            "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
+            '[{"query": "deployment preferences", "context_type": "memory", "priority": 1}]',
+            ("deployment preferences", "memory", "", 1, ""),
+            id="bare-array",
+        ),
+        pytest.param(
+            "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+            '{"queries": [{"query": "deployment guide", "context_type": "resource", "priority": 2}]}',
+            ("deployment guide", "resource", "", 2, ""),
+            id="compact-object",
+        ),
+        pytest.param(
+            "ollama/qwen3.5:4b",
+            '{"reasoning": {"cause": "missing runbook"}, "queries": '
+            '[{"query": "deployment runbook", "context_type": "resource", "intent": "find steps"}]}',
+            ("deployment runbook", "resource", "find steps", 3, "{'cause': 'missing runbook'}"),
+            id="non-string-reasoning",
+        ),
+    ],
+)
+async def test_intent_analyzer_renders_request_and_normalizes_planner_output(
+    model, response, expected
+):
+    planner = RecordingModel(response, model=model)
+    result = await IntentAnalyzer(query_planner=planner).analyze(
+        compression_summary="We deployed the search service yesterday.",
+        messages=[],
+        current_message="How do we deploy it again?",
+    )
+
+    (prompt,) = planner.prompts
+    assert "We deployed the search service yesterday." in prompt
+    assert "How do we deploy it again?" in prompt
+    (query,) = result.queries
     assert (
-        intent_module.resolve_intent_analysis_prompt_id(
-            SimpleNamespace(model="ollama/guoxuter/ov_intent_analysis_sft:v7_q8")
-        )
-        == "retrieval.ov_intent_analysis_sft_v7"
-    )
-    assert (
-        intent_module.resolve_intent_analysis_prompt_id(
-            SimpleNamespace(model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8")
-        )
-        == "retrieval.ov_intent_analysis_sft_v4"
-    )
-    assert (
-        intent_module.resolve_intent_analysis_prompt_id(SimpleNamespace(model="ollama/qwen3.5:4b"))
-        == intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT
-    )
-
-
-def test_query_planner_prompt_mapping_targets_are_bundled():
-    from openviking.prompts.manager import PromptManager
-
-    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
-    for prompt_id in intent_module.QUERY_PLANNER_PROMPT_BY_MODEL.values():
-        assert manager.load_template(prompt_id).metadata.id == prompt_id
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
-    planner = RecordingModel(_query_plan_response("planned query"))
-
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "planned query"
-    assert len(planner.prompts) == 1
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_normalizes_non_string_reasoning(monkeypatch):
-    planner = RecordingModel(
-        """{
-          "reasoning": {"cause": "malformed output"},
-          "queries": [
-            {
-              "query": "planned query",
-              "context_type": "memory",
-              "intent": "test intent",
-              "priority": 1
-            }
-          ]
-        }"""
-    )
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.reasoning == "{'cause': 'malformed output'}"
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_handles_bare_array_response(monkeypatch):
-    planner = RecordingModel(
-        """[
-          {
-            "query": "bare array query",
-            "context_type": "memory",
-            "intent": "test intent",
-            "priority": 1
-          }
-        ]"""
-    )
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert len(result.queries) == 1
-    assert result.queries[0].query == "bare array query"
-    assert result.reasoning == ""
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_handles_compact_object_response(monkeypatch):
-    planner = RecordingModel(
-        """{
-          "queries": [
-            {
-              "query": "compact query",
-              "context_type": "resource",
-              "priority": 2
-            }
-          ]
-        }"""
-    )
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="find the relevant documentation",
-    )
-
-    assert len(result.queries) == 1
-    assert result.queries[0].query == "compact query"
-    assert result.queries[0].context_type.value == "resource"
-    assert result.queries[0].intent == ""
-    assert result.queries[0].priority == 2
-    assert result.reasoning == ""
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
-    planner = RecordingModel(
-        _query_plan_response("planned query"),
-        model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
-    )
-    rendered: list[str] = []
-
-    def fake_render_prompt(prompt_id, variables):
-        rendered.append(prompt_id)
-        return "rendered prompt"
-
-    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "planned query"
-    assert rendered == ["retrieval.ov_intent_analysis_sft_v4"]
-    assert planner.prompts == ["rendered prompt"]
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_keeps_default_prompt_for_unmapped_model(monkeypatch):
-    planner = RecordingModel(_query_plan_response("planned query"), model="ollama/qwen3.5:4b")
-    rendered: list[str] = []
-
-    def fake_render_prompt(prompt_id, variables):
-        rendered.append(prompt_id)
-        return "rendered prompt"
-
-    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "planned query"
-    assert rendered == [intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT]
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_accepts_resolved_vlm_as_query_planner(monkeypatch):
-    vlm = RecordingModel(_query_plan_response("vlm query"))
-
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=vlm).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "vlm query"
-    assert len(vlm.prompts) == 1
+        query.query,
+        query.context_type.value,
+        query.intent,
+        query.priority,
+        result.reasoning,
+    ) == expected

@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.retrieve import ContextType, MatchedContext
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -29,38 +31,42 @@ def _memory(uri: str, score: float = 0.9, abstract: str = "", level: int = 2):
     )
 
 
-async def test_context_mode_returns_flat_entries_within_budget(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    async def fake_find(**kwargs):
-        del kwargs
-        return _FakeFindResult(
-            [
-                _memory("viking://user/test_user/memories/events/launch.md", 0.71, "Launch"),
-                _memory("viking://user/test_user/memories/entities/ov.md", 0.55, "OpenViking"),
-            ]
-        )
-
-    async def fake_read(uri, **kwargs):
-        del kwargs
-        return f"# Summary\ngist of {uri}\n\n# ChatLog:\n" + "x" * 300
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
+async def test_context_mode_returns_flat_entries_within_budget(client: httpx.AsyncClient):
+    uri = "viking://resources/context-sample.md"
+    sentence = "Use OAuth authorization codes to authenticate."
+    written = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": f"# Authentication\n\n{sentence}",
+            "mode": "create",
+            "wait": True,
+        },
+    )
+    assert written.status_code == 200, written.text
+    assert written.json()["result"]["vector_status"] == "complete"
 
     response = await client.post(
         "/api/v1/search/search",
-        json={"query": "what changed", "mode": "context", "max_tokens": 1200},
+        json={
+            "query": "OAuth",
+            "mode": "context",
+            "context_type": "resource",
+            "filter": {"op": "must", "field": "uri", "conds": [uri]},
+            "detail": "full",
+            "max_tokens": 1200,
+        },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     result = response.json()["result"]
-    assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
-    assert all(entry["detail"] != "uri" for entry in result["entries"])
-    assert result["rendered"].count("<memory ") == 2
-    assert result["stats"]["used_tokens"] <= 1200
+    entries = {entry["uri"]: entry for entry in result["entries"]}
+    assert uri in entries, entries
+    assert entries[uri]["category"] == "resources"
+    assert entries[uri]["detail"] == "full"
+    assert sentence in entries[uri]["text"]
+    assert sentence in result["rendered"]
+    assert 0 < result["stats"]["used_tokens"] <= 1200
 
 
 async def test_context_mode_quotas_use_category_ownership_roots(
@@ -200,11 +206,11 @@ async def test_context_and_list_default_limit_is_ten(
 
     async def fake_find(**kwargs):
         limits.append(("context", kwargs["limit"]))
-        return _FakeFindResult()
+        return FindResult(memories=[], resources=[], skills=[])
 
     async def fake_search(**kwargs):
         limits.append(("list", kwargs["limit"]))
-        return _FakeFindResult()
+        return FindResult(memories=[], resources=[], skills=[])
 
     monkeypatch.setattr(service.search, "find", fake_find)
     monkeypatch.setattr(service.search, "search", fake_search)
@@ -218,8 +224,8 @@ async def test_context_and_list_default_limit_is_ten(
         json={"query": "defaults"},
     )
 
-    assert context_response.status_code == 200
-    assert list_response.status_code == 200
+    assert context_response.status_code == 200, context_response.text
+    assert list_response.status_code == 200, list_response.text
     assert ("context", 10) in limits
     assert ("list", 10) in limits
 
@@ -272,29 +278,17 @@ async def test_context_mode_degrades_a_retrieval_failure(
     assert response.json()["result"]["stats"]["retrieval_errors"]
 
 
-async def test_list_mode_response_is_unchanged(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    hit = _memory("viking://user/test_user/memories/events/a.md", 0.5, "abs")
+async def test_list_mode_response_is_unchanged(client_with_resource):
+    client, uri = client_with_resource
+    payload = {"query": "sample document", "target_uri": uri}
+    default = await client.post("/api/v1/search/search", json=payload)
+    explicit = await client.post("/api/v1/search/search", json={**payload, "mode": "list"})
 
-    async def fake_result(**kwargs):
-        del kwargs
-        return _FakeFindResult([hit])
-
-    monkeypatch.setattr(service.search, "find", fake_result)
-    monkeypatch.setattr(service.search, "search", fake_result)
-
-    default = await client.post("/api/v1/search/search", json={"query": "plain"})
-    explicit = await client.post(
-        "/api/v1/search/search",
-        json={"query": "plain", "mode": "list"},
-    )
-
-    assert default.status_code == 200
+    assert default.status_code == explicit.status_code == 200
     assert default.json() == explicit.json()
-    assert "rendered" not in default.json()["result"]
+    result = default.json()["result"]
+    assert result["resources"]
+    assert "rendered" not in result
 
 
 async def test_context_mode_reads_real_agfs_content_and_sidecars(
@@ -345,40 +339,65 @@ async def test_context_mode_reads_real_agfs_content_and_sidecars(
     assert by_uri[directory_uri]["text"] == "Entities directory: projects, people and software."
 
 
-async def test_context_mode_dedup_ledger_round_trips_through_agfs(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
+async def test_context_mode_dedup_expires_after_session_advances(
+    client: httpx.AsyncClient, service, monkeypatch
 ):
-    file_uri = "viking://user/default/memories/events/repeat.md"
-    ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
-    await service.viking_fs.write_file(uri=file_uri, content="# Summary\nrepeated fact", ctx=ctx)
+    uri = "viking://resources/repeated-fact.md"
+    written = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": "# Repeated fact\n\nThe gateway listens on port 8080.",
+            "mode": "create",
+            "wait": True,
+        },
+    )
+    assert written.status_code == 200, written.text
+    assert written.json()["result"]["vector_status"] == "complete"
 
-    async def fake_find(**kwargs):
-        del kwargs
-        return _FakeFindResult([_memory(file_uri, 0.7, "repeat abstract")])
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-    create = await client.post("/api/v1/sessions", json={})
-    session_id = create.json()["result"]["session_id"]
+    created = await client.post("/api/v1/sessions", json={})
+    assert created.status_code == 200, created.text
+    session_id = created.json()["result"]["session_id"]
     payload = {
-        "query": "repeat",
+        "query": "gateway port",
         "mode": "context",
         "session_id": session_id,
-        "dedup_turns": 3,
+        "dedup_turns": 2,
         "query_expansion": "off",
+        "detail": "full",
+        "filter": {"op": "must", "field": "uri", "conds": [uri]},
     }
 
-    first = await client.post("/api/v1/search/search", json=payload)
-    assert [entry["uri"] for entry in first.json()["result"]["entries"]] == [file_uri]
+    planner = SimpleNamespace(get_completion_async=AsyncMock(return_value="NO_RELEVANT_MEMORY"))
+    with monkeypatch.context() as no_relevant:
+        no_relevant.setattr(
+            service.vlm_resolver, "get_query_planner", AsyncMock(return_value=planner)
+        )
+        suppressed = await client.post("/api/v1/search/search", json={**payload, "rewrite": True})
+    assert suppressed.status_code == 200, suppressed.text
+    result = suppressed.json()["result"]
+    assert result["stats"]["rewrite"] == "no_relevant"
+    assert result["rendered"] == result["digest"] == ""
+    assert [entry["uri"] for entry in result["entries"]] == [uri]
 
-    ledger_uri = f"viking://user/default/sessions/{session_id}/.recall_log.json"
-    ledger = json.loads(await service.viking_fs.read_file(ledger_uri, ctx=ctx))
-    assert file_uri in ledger["entries"]
+    for turn in range(3):
+        response = await client.post("/api/v1/search/search", json=payload)
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        if turn == 1:
+            assert result["entries"] == []
+            assert result["stats"]["dedup"]["cooled"] == 1
+        else:
+            (entry,) = result["entries"]
+            assert entry["uri"] == uri
+            assert "The gateway listens on port 8080." in entry["text"]
 
-    second = await client.post("/api/v1/search/search", json=payload)
-    assert second.json()["result"]["entries"] == []
-    assert second.json()["result"]["stats"]["dedup"]["cooled"] == 1
+        if turn < 2:
+            added = await client.post(
+                f"/api/v1/sessions/{session_id}/messages",
+                json={"role": "user", "content": f"Follow-up {turn + 1}"},
+            )
+            assert added.status_code == 200, added.text
 
 
 async def test_context_mode_first_recall_materializes_session_and_records_ledger(

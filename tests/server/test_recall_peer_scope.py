@@ -81,33 +81,45 @@ async def test_actor_scope_skips_the_open_peer_scan(
     service,
     monkeypatch,
 ):
-    calls = []
-
     async def fake_find(**kwargs):
-        calls.append(kwargs)
-        if kwargs["target_uri"].endswith("/events"):
+        target = kwargs["target_uri"]
+        if target.endswith("/peers/current/memories/events"):
+            return _FakeFindResult([_memory(f"{target}/current.md", 0.8, "Actor event")])
+        if target.endswith("/peers"):
             return _FakeFindResult(
-                [_memory("viking://user/test_user/peers/current/memories/events/current.md")]
+                [_memory(f"{target}/other/memories/events/other.md", 0.9, "Other peer event")]
             )
         return _FakeFindResult([])
 
     async def fake_read(uri, **kwargs):
-        del uri, kwargs
-        return "Summary: actor only.\n2026-07-09 ChatLog: details"
+        label = "Actor event" if uri.endswith("/current.md") else "Other peer event"
+        return f"# Summary\n{label}"
 
     monkeypatch.setattr(service.search, "find", fake_find)
     monkeypatch.setattr(service.fs, "read", fake_read)
-    response = await client.post(
-        "/api/v1/search/recall",
-        headers={"X-OpenViking-Actor-Peer": "current"},
-        json={
-            "query": "peer memory",
-            "peer_scope": "actor",
-            "quotas": {"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
-            "max_chars": 300,
-        },
-    )
+    headers = {"X-OpenViking-Actor-Peer": "current"}
+    payload = {
+        "query": "peer memory",
+        "quotas": {"events": 2, "entities": 0, "preferences": 0, "experiences": 0},
+        "max_chars": 5000,
+    }
 
-    assert response.status_code == 200
-    assert response.json()["result"]["rendered"].count("<memory ") == 1
-    assert all(not call["target_uri"].endswith("/peers") for call in calls)
+    all_peers = await client.post("/api/v1/search/recall", headers=headers, json=payload)
+    assert all_peers.status_code == 200, all_peers.text
+    entries = {entry["origin"]: entry["uri"] for entry in all_peers.json()["result"]["entries"]}
+    assert set(entries) == {"actor_peer", "other_peer"}
+    actor_uri = entries["actor_peer"]
+    other_uri = entries["other_peer"]
+    assert actor_uri.endswith("/peers/current/memories/events/current.md")
+    assert other_uri.endswith("/peers/other/memories/events/other.md")
+
+    actor = await client.post(
+        "/api/v1/search/recall", headers=headers, json={**payload, "peer_scope": "actor"}
+    )
+    assert actor.status_code == 200, actor.text
+    result = actor.json()["result"]
+    assert [(entry["uri"], entry["origin"]) for entry in result["entries"]] == [
+        (actor_uri, "actor_peer")
+    ]
+    assert "Actor event" in result["rendered"]
+    assert other_uri not in result["rendered"]

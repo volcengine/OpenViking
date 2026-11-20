@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""What SearchService.find_skills hands the package retriever."""
+"""Service contracts for package retrieval."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.retrieve import skill_package_retriever
 from openviking.server.identity import RequestContext, Role
 from openviking.service.search_service import SearchService
 from openviking_cli.exceptions import InvalidArgumentError
@@ -20,71 +20,46 @@ def _ctx():
     return RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
 
 
-@pytest.fixture
-def seen(monkeypatch):
-    captured = {}
-
-    class _Retriever:
-        def __init__(self, **kwargs):
-            captured["init"] = kwargs
-
-        async def retrieve_skills(self, query, ctx, **kwargs):
-            captured["retrieve"] = kwargs
-            return SimpleNamespace(matched_contexts=[])
-
-    monkeypatch.setattr(skill_package_retriever, "SkillPackageRetriever", _Retriever)
-    return captured
-
-
-def _service(rerank_config):
-    async def ensure_scope(target, ctx):
-        return None
-
+async def test_find_skills_uses_keyword_recall_without_an_embedder():
+    uri = f"{SKILLS}/deploy/scripts/rollback.md"
+    recall = AsyncMock(
+        return_value=[
+            {"uri": uri, "context_type": "skill", "_score": 0.05, "abstract": "Rollback steps"}
+        ],
+    )
+    store = SimpleNamespace(
+        search_by_keywords_in_tenant=recall,
+        get_account_backend=AsyncMock(
+            return_value=SimpleNamespace(collection_exists=AsyncMock(return_value=True))
+        ),
+    )
     fs = SimpleNamespace(
-        _ensure_retrieval_scope=ensure_scope,
-        _get_vector_store=lambda: object(),
-        _get_embedder=lambda _ctx: object(),
-        rerank_config=rerank_config,
-        retrieval_config=None,
-    )
-    return SearchService(fs)
-
-
-async def test_find_skills_does_not_apply_the_rerank_threshold(seen):
-    """Package search never reranks, so rerank.threshold must not filter its vector scores."""
-    rerank_config = SimpleNamespace(threshold=0.1)
-
-    await _service(rerank_config).find_skills(query="deploy", ctx=_ctx(), target_uri=SKILLS)
-
-    assert seen["init"].get("rerank_config") is None
-    assert seen["retrieve"]["score_threshold"] is None
-
-
-async def test_find_skills_forwards_the_filter_as_the_retrieval_scope(seen):
-    await _service(None).find_skills(
-        query="deploy", ctx=_ctx(), target_uri=SKILLS, filter=TAG_FILTER
+        _ensure_retrieval_scope=AsyncMock(),
+        _get_vector_store=lambda: store,
+        _get_embedder=lambda _ctx: None,
+        stat=AsyncMock(return_value={"isDir": True}),
+        rerank_config=SimpleNamespace(threshold=0.5),
     )
 
-    assert seen["retrieve"]["scope_dsl"] == TAG_FILTER
-
-
-async def test_find_skills_forwards_keywords_search_type(seen):
-    await _service(None).find_skills(
-        query="deploy",
+    result = await SearchService(fs).find_skills(
+        query="rollback",
         ctx=_ctx(),
         target_uri=SKILLS,
+        filter=TAG_FILTER,
         search_type="keywords",
     )
 
-    assert seen["retrieve"]["search_type"] == "keywords"
+    assert [(hit.uri, hit.score, hit.abstract) for hit in result.skills] == [
+        (uri, 0.05, "Rollback steps")
+    ]
+    assert recall.await_args.kwargs["query"] == "rollback"
+    assert recall.await_args.kwargs["extra_filter"] == TAG_FILTER
+    assert recall.await_args.kwargs["target_directories"] == [SKILLS]
 
 
 @pytest.mark.parametrize("query", ["", "  ", "broken\ud835"])
-async def test_find_skills_needs_a_valid_query_even_with_a_filter(seen, query):
-    """It embeds the query, so a filter cannot stand in the way it can on find."""
+async def test_find_skills_needs_a_valid_query_even_with_a_filter(query):
     with pytest.raises(InvalidArgumentError):
-        await _service(None).find_skills(
+        await SearchService().find_skills(
             query=query, ctx=_ctx(), target_uri=SKILLS, filter=TAG_FILTER
         )
-
-    assert seen == {}

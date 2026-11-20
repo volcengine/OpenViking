@@ -4,6 +4,7 @@ from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, Re
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve.types import TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import RerankConfig
 
 
 class FailingEmbedder:
@@ -12,8 +13,10 @@ class FailingEmbedder:
 
 
 class FixedReranker:
-    def rerank_batch(self, _query, documents):
-        return [0.9] * len(documents)
+    def rerank_batch(self, query, documents):
+        assert query == "OAuth token"
+        assert documents == ["OAuth token"]
+        return [0.9]
 
 
 class KeywordStorage:
@@ -44,38 +47,35 @@ def _ctx():
 
 
 @pytest.mark.asyncio
-async def test_keywords_quick_search_skips_embedding_and_uses_keyword_recall():
+@pytest.mark.parametrize(
+    ("mode", "recall_limit", "expected_score"),
+    [(RetrieverMode.QUICK, 5, 3.5), (RetrieverMode.THINKING, 10, 0.9)],
+)
+async def test_keywords_retrieval_uses_keyword_scores_or_reranks(
+    monkeypatch, mode, recall_limit, expected_score
+):
     storage = KeywordStorage()
-    retriever = HierarchicalRetriever(storage=storage, embedder=FailingEmbedder())
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: FixedReranker(),
+    )
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=FailingEmbedder(),
+        rerank_config=RerankConfig(ak="test", sk="test"),
+    )
 
     result = await retriever.retrieve(
         TypedQuery("OAuth token", None, ""),
         ctx=_ctx(),
         limit=5,
-        mode=RetrieverMode.QUICK,
+        mode=mode,
         search_type="keywords",
     )
 
-    assert [item.uri for item in result.matched_contexts] == ["viking://resources/oauth.md"]
-    assert storage.calls[0]["query"] == "OAuth token"
-    assert storage.calls[0]["limit"] == 5
-
-
-@pytest.mark.asyncio
-async def test_keywords_thinking_search_uses_global_keyword_recall_and_rerank():
-    storage = KeywordStorage()
-    retriever = HierarchicalRetriever(storage=storage, embedder=FailingEmbedder())
-    retriever._rerank_client = FixedReranker()
-
-    result = await retriever.retrieve(
-        TypedQuery("OAuth token", None, ""),
-        ctx=_ctx(),
-        limit=5,
-        mode=RetrieverMode.THINKING,
-        search_type="keywords",
-    )
-
-    assert [item.uri for item in result.matched_contexts] == ["viking://resources/oauth.md"]
-    assert len(storage.calls) == 1
-    assert storage.calls[0]["query"] == "OAuth token"
-    assert storage.calls[0]["limit"] == 10
+    assert [(hit.uri, hit.score) for hit in result.matched_contexts] == [
+        ("viking://resources/oauth.md", expected_score)
+    ]
+    assert [(call["query"], call["limit"]) for call in storage.calls] == [
+        ("OAuth token", recall_limit)
+    ]
