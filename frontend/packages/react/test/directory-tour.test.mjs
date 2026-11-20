@@ -8,6 +8,13 @@ import {
   openVikingDirectoryTourSteps,
 } from '@openviking/react/components/directory-tour';
 
+test('unsupported runtime locales fall back to the English preset', () => {
+  assert.equal(
+    getOpenVikingDirectoryTourSteps('en-GB'),
+    openVikingDirectoryTourSteps,
+  );
+});
+
 test('preset preserves six semantic targets and separates private/shared resources', () => {
   assert.equal(getOpenVikingDirectoryTourSteps(), openVikingDirectoryTourSteps);
   assert.deepEqual(

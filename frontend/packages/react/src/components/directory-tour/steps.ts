@@ -1,7 +1,7 @@
-import type { Locale } from '../../shared/locale.js';
+import { resolveLocale, type Locale } from '../../shared/locale.js';
 import type { DirectoryTourStep, DirectoryTourTarget } from './types.js';
-import enUS from './locales/steps-en-US.js';
-import zhCN from './locales/steps-zh-CN.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 
 const targets = [
   { id: 'memories', target: 'userMemories' },
@@ -17,15 +17,15 @@ type Preset = readonly (DirectoryTourStep & {
 })[];
 
 const stepsByLocale: Record<Locale, Preset> = {
-  'en-US': targets.map((step) => ({ ...step, ...enUS[step.target] })),
-  'zh-CN': targets.map((step) => ({ ...step, ...zhCN[step.target] })),
+  'en-US': targets.map((step) => ({ ...step, ...enUS.steps[step.target] })),
+  'zh-CN': targets.map((step) => ({ ...step, ...zhCN.steps[step.target] })),
 };
 
 /** Six standard directory steps, with localized titles and descriptions. */
 export function getOpenVikingDirectoryTourSteps(
   locale: Locale = 'en-US',
 ): Preset {
-  return stepsByLocale[locale];
+  return resolveLocale(stepsByLocale, locale);
 }
 
 /** English preset retained for consumers that provide their own step content. */
