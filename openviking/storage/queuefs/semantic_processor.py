@@ -1472,16 +1472,23 @@ class SemanticProcessor(DequeueHandlerBase):
             content, output_language_override=output_language_override
         )
         if live_context is not None:
+            serialized_arguments = json.dumps(
+                live_context["arguments"],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             prompt_variables = {
                 "file_name": file_name,
                 "title": live_context["title"],
                 "description": live_context["description"],
                 "tool_uri": live_context["tool_uri"],
-                "arguments": json.dumps(
-                    live_context["arguments"],
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
+                "arguments": serialized_arguments,
+                # The summary must name the mounted arguments without copying
+                # their values: values can carry kilobytes of code or data that
+                # busts the recall per-entry budget and turns every hit into a
+                # bare URI (#7692).
+                "argument_names": ", ".join(live_context["arguments"].keys()),
+                "arguments_total_chars": str(len(serialized_arguments)),
                 "output_language": output_language,
             }
         else:
@@ -1500,7 +1507,15 @@ class SemanticProcessor(DequeueHandlerBase):
                         safe_uri_for_log(file_path),
                     )
                 summary = await vlm.get_completion_async(prompt)
-        return result(summary.strip())
+        # File-level summaries have no other length gate: abstract_max_chars
+        # only applied to directory overviews, so an oversized file summary
+        # (live context with mounted code was the extreme case) could enter
+        # storage and then be dropped at injection time. This boundary is a
+        # declared hard maximum — sentence preservation must not exceed it.
+        summary = self._truncate_generated_text(
+            summary.strip(), config.semantic.abstract_max_chars, hard_cap=True
+        )
+        return result(summary)
 
     @staticmethod
     def _parse_live_context_metadata(content: str) -> Optional[Dict[str, Any]]:
@@ -1628,7 +1643,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return re.sub(r"viking://input_sample_[fc]\d+", replace_link, generated_content)
 
-    def _truncate_generated_text(self, text: str, max_chars: int) -> str:
+    def _truncate_generated_text(self, text: str, max_chars: int, *, hard_cap: bool = False) -> str:
         if max_chars <= 0 or len(text) <= max_chars:
             return text
 
@@ -1648,8 +1663,18 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if last_sentence_end_within_limit is not None:
             return text[:last_sentence_end_within_limit].strip()
-        if first_sentence_end is not None:
+        if first_sentence_end is not None and not hard_cap:
+            # Sentence-preserving mode (directory overviews): a single long
+            # first sentence is returned whole, even past the limit.
             return text[:first_sentence_end].strip()
+        if hard_cap:
+            # Declared-maximum mode (file summaries): the limit is an upper
+            # bound, so a long first sentence is cut inside the limit.
+            candidate = text[:max_chars].rstrip()
+            word_boundary = candidate.rfind(" ")
+            if word_boundary > 0:
+                return candidate[:word_boundary].rstrip()
+            return candidate
 
         candidate = text[: max_chars - 3].rstrip()
         word_boundary = candidate.rfind(" ")
