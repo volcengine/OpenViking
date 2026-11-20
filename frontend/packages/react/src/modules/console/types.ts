@@ -120,6 +120,8 @@ export interface ConsoleCommandOptions {
   allowAdminCommands?: boolean;
   /** The default uses the browser's file picker and downloads. */
   files?: ConsoleCommandFiles;
+  /** Open the host's local upload page for add-resource without explicit flags. */
+  onOpenLocalResourceImport?: () => void;
   /** The host can reuse its OVPack import dialog to confirm the local file. */
   choosePackFile?: (
     targetUri: string,

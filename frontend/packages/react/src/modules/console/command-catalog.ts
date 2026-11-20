@@ -91,6 +91,10 @@ export function consoleCommands(
       (spec) => !spec.admin || options?.allowAdminCommands,
     ).map((spec) => {
       const guide = guides[spec.name];
+      const description =
+        spec.name === 'add-resource' && options?.onOpenLocalResourceImport
+          ? text.localResourceImportHelp
+          : (guide?.description ?? text.commands[spec.name]);
       const positional = (
         spec.preferredPositional ??
         spec.positional ??
@@ -104,7 +108,7 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          description: guide?.description ?? text.commands[spec.name],
+          description,
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
           quickStart: guide?.quickStart,

@@ -7,7 +7,7 @@ import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
 
 const commands = {
   ...transferSession,
-  'add-resource': 'Add a resource from a URL',
+  'add-resource': 'Import a web URL, repository, or local file',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
   compile: 'Run compilation',
@@ -86,10 +86,12 @@ const messages = {
     },
   },
   commands,
+  localResourceImportHelp:
+    'Enter a web or repository URL to import it directly. Run the command by itself or with only a local path to open the Local upload page and choose files or folders.',
   commandGuides: {
     'add-resource': {
       description:
-        'Import a web or repository URL into Resources. The browser terminal does not accept local file paths.',
+        'Enter a web or repository URL to import it directly. For local uploads, choose a file in the browser.',
       examples: [
         'ov add-resource https://github.com/volcengine/OpenViking/blob/main/README.md',
       ],
@@ -156,6 +158,10 @@ const messages = {
     status: 'Config & status',
   },
   messages: {
+    localResourceImportOpened: () =>
+      'Choose files or folders on the Local upload page.',
+    localResourceImportFlags: () =>
+      'Use Local upload to configure the import, or use --temp-file-id to apply command options.',
     cancelled: () =>
       'Request cancelled; the server may still process an accepted operation.',
     ...transferErrors,

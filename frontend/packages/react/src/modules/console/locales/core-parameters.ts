@@ -1,7 +1,7 @@
 const enUS = {
   data: 'SKILL.md content, structured Skill JSON, or a remote Skill URL. Provide either this input or --temp-file-id.',
   'resource-source':
-    'Remote path or URL to import. Provide either this input or --temp-file-id.',
+    'Local path or remote URL. Provide either this input or --temp-file-id.',
   'temp-file-id':
     'ID returned by the temporary upload API. Use it in place of the source argument.',
   'resource-instruction': 'Instructions for processing the imported source',
@@ -16,7 +16,7 @@ const enUS = {
 
 const zhCN = {
   data: 'SKILL.md 原文、结构化 Skill JSON 或远程 Skill URL。与 --temp-file-id 二选一。',
-  'resource-source': '要导入的远程路径或 URL。与 --temp-file-id 二选一。',
+  'resource-source': '要导入的本地路径或远程 URL。与 --temp-file-id 二选一。',
   'temp-file-id': '临时上传接口返回的文件 ID，用于替代来源参数。',
   'resource-instruction': '导入时附加的处理说明',
   'ignore-dirs': '忽略的目录名，使用英文逗号分隔',
