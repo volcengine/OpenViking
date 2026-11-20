@@ -6,6 +6,7 @@ export type ContextSearchBody = {
   mode: "context";
   purpose: "coding";
   score_threshold: number;
+  events_time_decay_protection?: string;
   quotas?: Record<string, number>;
   max_tokens?: number;
   peer_scope?: "actor";
@@ -28,6 +29,7 @@ export type NormalizedContextEntry = {
 export function buildContextSearchBody(
   cfg?: Record<string, unknown>,
   options?: {
+    query?: string;
     sessionId?: string;
     excludeUris?: string[];
     localCompressorAvailable?: boolean;

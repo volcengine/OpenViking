@@ -110,6 +110,7 @@ memory 插件默认内置 OV-Usage。报告汇总自动召回和显式 OpenVikin
 | `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000`（SessionEnd）、`40000`（PreCompact） | 捕获类 hook 等待单会话状态锁的时长（毫秒） |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | 已提交会话的转录游标保留时长（毫秒），过期后删除状态文件 |
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，在 prompt 变成检索 query 前生效（[语法与示例](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#input-filters)） |
+| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | `auto` | 自动召回明确查询近期事件时使用 `7d` 保护期。可设为 `off` 或指定 `30d` 等固定保护期。MCP `find` 和 `search` 由调用方传入各自的参数。 |
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
 | `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
 

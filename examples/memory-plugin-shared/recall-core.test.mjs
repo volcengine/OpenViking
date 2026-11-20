@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveKnobs } from "./lib/config-schema.mjs";
 import {
   buildContextSearchBody,
   buildRecallEndpointBody,
@@ -36,10 +37,65 @@ test("context requests preserve the configured recall width and server budget", 
   assert.equal(body.purpose, "coding");
 });
 
-test("context requests send an event decay window only when one is configured", () => {
-  assert.equal(buildContextSearchBody({}).events_time_decay_protection, undefined);
-  assert.equal(buildContextSearchBody({ recallEventsDecayProtection: " " }).events_time_decay_protection, undefined);
-  assert.equal(buildContextSearchBody({ recallEventsDecayProtection: "7d" }).events_time_decay_protection, "7d");
+test("auto recall defaults to event decay only for explicit recency queries", () => {
+  const { settings } = resolveKnobs();
+  for (const query of ["最近一次部署故障怎么处理的？", "What is the latest deployment update?"]) {
+    assert.equal(buildContextSearchBody(settings, { query }).events_time_decay_protection, "7d", query);
+  }
+  for (const query of [
+    "最近想复查去年那次故障",
+    "请查一下最近一次 OV-9286 工单的处理记录",
+    "Show me the latest deployment notes from 2025-03-01",
+    "Find the latest deployment incident from last month",
+    "查一下 3 月 1 号最新的部署记录",
+    "最近想检查一下故障排查流程",
+    "SQLite 配置变更时要做什么？",
+    "",
+  ]) {
+    assert.equal(buildContextSearchBody(settings, { query }).events_time_decay_protection, undefined, query);
+  }
+});
+
+test("explicit event decay settings override auto recall intent", () => {
+  const recent = { query: "What is the latest deployment update?" };
+  const historical = { query: "How did we resolve ticket OV-9286 last year?" };
+  const cli = { name: "cli", data: { recallEventsDecayProtection: "30d" } };
+  const disabled = resolveKnobs({
+    layers: [cli],
+    env: { OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION: "off" },
+  }).settings;
+  assert.equal(buildContextSearchBody(disabled, recent).events_time_decay_protection, undefined);
+  assert.equal(buildContextSearchBody(resolveKnobs({ layers: [cli] }).settings, historical).events_time_decay_protection, "30d");
+  assert.equal(buildContextSearchBody({ recallEventsDecayProtection: "0" }, historical).events_time_decay_protection, "0");
+});
+
+test("context search retries without decay when an older server rejects that field", async () => {
+  const calls = [];
+  const legacyCachePath = await tempPath("context-face.json");
+  const query = "最近一次部署故障怎么处理的？";
+  const block = await buildRecallBlock(async (path, init) => {
+    assert.equal(path, "/api/v1/search/search");
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    if (body.events_time_decay_protection) {
+      return {
+        ok: false,
+        status: 400,
+        error: { details: { validation_errors: [
+          { loc: ["body", "events_time_decay_protection"], type: "extra_forbidden" },
+        ] } },
+      };
+    }
+    return { ok: true, result: { rendered: "A remembered deployment incident." } };
+  }, resolveKnobs().settings, query, { legacyCachePath });
+
+  assert.equal(calls.length, 2);
+  const { events_time_decay_protection: protection, ...fallbackBody } = calls[0];
+  assert.equal(protection, "7d");
+  assert.equal(fallbackBody.query, query);
+  assert.deepEqual(calls[1], fallbackBody);
+  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
+  assert.match(block, /A remembered deployment incident/);
 });
 
 test("context requests omit defaults owned by the server", () => {
