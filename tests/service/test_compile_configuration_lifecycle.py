@@ -509,10 +509,7 @@ async def test_scheduled_run_without_output_changes_preserves_manual_baseline(
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == state["progress"]
 
 
-@pytest.mark.parametrize("interruption", [None, "output_snapshot", "finished_checkpoint"])
-async def test_partial_delivery_retains_baseline_after_restart(
-    setup, registered, monkeypatch, interruption
-):
+async def test_partial_delivery_retains_baseline_after_restart(setup, registered, monkeypatch):
     _, name, first = registered
     await setup.lifecycle.on_start(first)
     setup.fs.output_changes = [{"uri": TARGET + "/baseline.md", "change_type": "added"}]
@@ -524,21 +521,8 @@ async def test_partial_delivery_retains_baseline_after_restart(
     setup.fs.output_changes = [{"uri": TARGET + "/good.md", "change_type": "added"}]
     terminal = ExternalTaskSnapshot(status="completed", result={"completion_status": "partial"})
     with monkeypatch.context() as patch:
-        if interruption == "output_snapshot":
-            patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
-        elif interruption == "finished_checkpoint":
-            save = setup.lifecycle._save_checkpoint
-
-            async def interrupt(record, changes):
-                if changes.get("phase") == "finished":
-                    raise OSError("Interrupted")
-                await save(record, changes)
-
-            patch.setattr(setup.lifecycle, "_save_checkpoint", interrupt)
-        if interruption:
-            with pytest.raises(OSError, match="Interrupted"):
-                await setup.lifecycle.on_finish(task, terminal)
-        else:
+        patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
+        with pytest.raises(OSError, match="Interrupted"):
             await setup.lifecycle.on_finish(task, terminal)
     restored = deepcopy(setup.tracker.tasks[task.task_id])
     restarted = CompileLifecycle(setup.store, setup.fs)

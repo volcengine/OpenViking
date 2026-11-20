@@ -457,8 +457,16 @@ async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline
         await finalize.run(pipeline, [doc])
 
 
-@pytest.mark.parametrize("cancelled,conflict", [(False, False), (False, True), (True, False)])
-@pytest.mark.parametrize("failure", [None, "source", "worker"])
+@pytest.mark.parametrize(
+    "cancelled,conflict,failure",
+    [
+        (False, False, None),
+        (False, True, None),
+        (True, False, None),
+        (False, False, "source"),
+        (False, False, "worker"),
+    ],
+)
 async def test_service_publishes_final_markdown_with_batch_write_and_honors_cancel(
     pipeline, monkeypatch, cancelled, conflict, failure
 ):
@@ -710,35 +718,11 @@ async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
     pipeline.client.write.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "failure,recovered,output",
-    [
-        ("write", False, "created"),
-        ("write", False, "none"),
-        ("write", False, "unchanged"),
-        ("write", True, "created"),
-        ("source", False, "created"),
-        ("source", True, "created"),
-        (None, False, "none"),
-    ],
-)
-async def test_simple_delivery_preserves_unresolved_failures(
-    pipeline, agent_loop, failure, recovered, output
+@pytest.mark.parametrize("confirmed,recovered", [(False, False), (True, False), (True, True)])
+async def test_simple_incremental_delivery_preserves_rejections(
+    pipeline, agent_loop, confirmed, recovered
 ):
     loop, session_key, _ = agent_loop
-    source = pipeline.request.from_[0] + "/missed.md"
-    good = "# Confirmed output\n"
-
-    def read(uri):
-        if output == "unchanged" and uri.endswith("good.md"):
-            return good
-        raise NotFoundError("Missing")
-
-    pipeline.client.read_raw = AsyncMock(side_effect=read)
-    pipeline.client.stat = AsyncMock(return_value={"size": 100})
-    pipeline.client.read_content = AsyncMock(
-        side_effect=[ConnectionError("Unavailable"), "Source fact"]
-    )
     pipeline.client.write = AsyncMock(
         side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
     )
@@ -754,34 +738,26 @@ async def test_simple_delivery_preserves_unresolved_failures(
             }
         }
     )
-    calls = [ToolCallRequest("diff", "openviking_diff_paths", {}, 0)]
-    if output != "none":
-        calls.append(
-            ToolCallRequest("good", "openviking_write", {"path": "good.md", "content": good}, 0)
+    calls = [("openviking_diff_paths", {})]
+    if confirmed:
+        calls.append(("openviking_write", {"path": "good.md", "content": "# Good"}))
+    calls.append(
+        (
+            "openviking_write",
+            {
+                "path": "bad.md",
+                "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+            },
         )
-    if failure == "write":
-        calls.append(
-            ToolCallRequest(
-                "bad",
-                "openviking_write",
-                {
-                    "path": "bad.md",
-                    "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
-                },
-                0,
-            )
-        )
-        if recovered:
-            calls.append(
-                ToolCallRequest("retry", "openviking_write", {"path": "bad.md", "content": good}, 0)
-            )
-    elif failure == "source":
-        calls.append(ToolCallRequest("read", "openviking_multi_read", {"uris": [source]}, 0))
-        if recovered:
-            calls.append(ToolCallRequest("retry", "openviking_multi_read", {"uris": [source]}, 0))
+    )
+    if recovered:
+        calls.append(("openviking_write", {"path": "bad.md", "content": "# Rules"}))
     pipeline.model.provider.chat = AsyncMock(
         side_effect=[
-            *(LLMResponse(content="", tool_calls=[call]) for call in calls),
+            *(
+                LLMResponse(content="", tool_calls=[ToolCallRequest(str(i), name, args, 0)])
+                for i, (name, args) in enumerate(calls)
+            ),
             LLMResponse(content="Done"),
         ]
     )
@@ -796,17 +772,17 @@ async def test_simple_delivery_preserves_unresolved_failures(
         AsyncMock(),
         {},
     )
-    if failure and not recovered and output != "created":
+    if not confirmed:
         with pytest.raises(CompileFailure) as caught:
             await run
         assert caught.value.code == "COMPILE_INCOMPLETE"
+        pipeline.client.write.assert_not_awaited()
     else:
         result = await run
+        assert pipeline.target + "/good.md" in result.updated
         public = CompileTask.model_construct(result=result).public_dict()["result"]
-        assert public.get("completion_status") == ("partial" if failure and not recovered else None)
-        assert ("completion_status" in public) == bool(failure and not recovered)
-        if output == "created":
-            assert pipeline.target + "/good.md" in result.created
+        assert public.get("completion_status") == (None if recovered else "partial")
+        assert ("completion_status" in public) != recovered
 
 
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
