@@ -105,14 +105,16 @@ for (const persistsFlag of [true, false]) {
 
 test('restores a submitted session on remount and allows submission after new messages', async () => {
   let view;
-  let pendingTokens = 0;
+  const sessionUri = 'viking://user/demo/sessions/demo';
+  let liveMessages = 0;
+  let commitCount = 1;
   let taskStatus = 'running';
   let taskRequests = 0;
   const service = {
     listSessions: async () => [{ id: 'demo', title: 'Demo' }],
     loadMessages: async () => [
       {
-        id: pendingTokens ? 'new-answer' : 'saved-answer',
+        id: liveMessages ? 'new-answer' : 'saved-answer',
         role: 'assistant',
         parts: [{ type: 'text', text: 'Saved answer.' }],
       },
@@ -122,13 +124,26 @@ test('restores a submitted session on remount and allows submission after new me
     const { pathname, searchParams } = new URL(url);
     assert.equal(method, 'GET');
     if (pathname === '/api/v1/sessions/demo') {
-      return ok({ pending_tokens: pendingTokens });
+      return ok({
+        uri: sessionUri,
+        commit_count: commitCount,
+        message_count: liveMessages,
+        pending_tokens: 0,
+      });
     }
     if (pathname === '/api/v1/tasks') {
       assert.equal(searchParams.get('resource_id'), 'demo');
       assert.equal(searchParams.get('task_type'), 'session_commit');
       assert.equal(searchParams.get('limit'), '1');
-      return ok([{ task_id: 'memory-task', status: taskStatus }]);
+      return ok([
+        {
+          task_id: 'memory-task',
+          status: taskStatus,
+          ...(taskStatus === 'completed' && {
+            result: { archive_uri: `${sessionUri}/history/archive_001` },
+          }),
+        },
+      ]);
     }
     if (pathname === '/api/v1/tasks/memory-task') {
       taskRequests++;
@@ -164,10 +179,19 @@ test('restores a submitted session on remount and allows submission after new me
     assert.equal(taskRequests, 1);
     await host.unmount();
 
-    pendingTokens = 12;
+    // A partial commit can leave a full turn live with zero pending tokens.
+    liveMessages = 2;
     host = await mount(tree);
     await select();
     assert.equal(view.messages.at(-1)?.id, 'new-answer');
+    assert.equal(status(), 'idle');
+    await host.unmount();
+
+    // A task from an older archive cannot certify the newest archive either.
+    liveMessages = 0;
+    commitCount = 2;
+    host = await mount(tree);
+    await select();
     assert.equal(status(), 'idle');
   } finally {
     await host.unmount();

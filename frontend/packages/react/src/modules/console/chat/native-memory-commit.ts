@@ -16,11 +16,17 @@ export async function readSessionCommitTask(
   signal: AbortSignal,
 ): Promise<TaskReference | undefined> {
   const [session, tasks] = await Promise.all([
-    request<{ pending_tokens?: number }>(
+    request<{ message_count: number; commit_count: number; uri: string }>(
       { method: 'GET', path: OV_PATH_BUILDERS.session(id) },
       signal,
     ),
-    request<{ task_id: string; status: TaskStatus }[]>(
+    request<
+      {
+        task_id: string;
+        status: TaskStatus;
+        result?: { archive_uri?: string };
+      }[]
+    >(
       {
         method: 'GET',
         path: OV_PATHS.tasks,
@@ -30,10 +36,17 @@ export async function readSessionCommitTask(
     ),
   ]);
   const task = tasks?.[0];
-  // A completed task only covers this history if there are no new messages.
-  if (!task?.task_id || (session?.pending_tokens ?? 0) > 0) return;
-  if (task.status !== 'completed' && isTaskTerminal(task.status)) return;
-  if (task.status === 'completed' && session?.pending_tokens !== 0) return;
+  // Session message_count includes the retained live tail, even when its
+  // pending_tokens are zero. A commit task cannot cover those live messages.
+  if (!task?.task_id || session?.message_count !== 0) return;
+  if (task.status === 'completed') {
+    if (!session.uri || !(session.commit_count > 0)) return;
+    const archive = `archive_${String(session.commit_count).padStart(3, '0')}`;
+    const latestArchive = `${session.uri.replace(/\/+$/, '')}/history/${archive}`;
+    if (task.result?.archive_uri !== latestArchive) return;
+  } else if (isTaskTerminal(task.status)) {
+    return;
+  }
   return { id: task.task_id, kind: 'memory', status: task.status };
 }
 
