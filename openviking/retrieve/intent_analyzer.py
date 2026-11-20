@@ -12,6 +12,7 @@ from openviking.config.vlm import VLMHandle
 from openviking.message import ContextPart, Message
 from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.prompts import render_prompt
+from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.retrieve.types import ContextType, QueryPlan, TypedQuery
 from openviking_cli.utils.llm import parse_json_from_response
 from openviking_cli.utils.logger import get_logger
@@ -48,6 +49,7 @@ class IntentAnalyzer:
 
     # Limit content length (about 10000 tokens)
     MAX_COMPRESSION_SUMMARY_CHARS = 30000
+    MAX_CHECKPOINT_SUMMARY_TOKENS = 2048
 
     def __init__(self, max_recent_messages: int = 5, *, query_planner: VLMHandle):
         """Initialize intent analyzer."""
@@ -156,9 +158,15 @@ class IntentAnalyzer:
         # Format recent messages
         recent = messages[-self.max_recent_messages :] if messages else []
         recent_lines = []
-        for message in recent:
+        remaining_checkpoint_tokens = self.MAX_CHECKPOINT_SUMMARY_TOKENS
+        # Spend the shared checkpoint budget on newer summaries first.
+        for message in reversed(recent):
             content = message.content
-            if not content and message.message_kind == "checkpoint":
+            if (
+                not content
+                and message.message_kind == "checkpoint"
+                and remaining_checkpoint_tokens > 0
+            ):
                 content = next(
                     (
                         part.abstract
@@ -167,9 +175,11 @@ class IntentAnalyzer:
                     ),
                     "",
                 )
+                content = truncate_text_to_token_budget(content, remaining_checkpoint_tokens)
+                remaining_checkpoint_tokens -= estimate_text_tokens(content)
             if content:
                 recent_lines.append(f"[{message.role}]: {content}")
-        recent_messages = "\n".join(recent_lines) if recent else "None"
+        recent_messages = "\n".join(reversed(recent_lines)) if recent else "None"
 
         # Current message
         current = current_message if current_message else "None"
