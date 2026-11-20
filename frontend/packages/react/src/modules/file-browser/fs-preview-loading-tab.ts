@@ -1,3 +1,4 @@
+import { directoryIcon, fileTypeIcon } from './fs-icon.js';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { decodePathLabel } from '../../shared/path-label.js';
@@ -19,6 +20,7 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
   if (isDirectory) {
     return {
       kind: 'directory',
+      icon: directoryIcon(),
       key: uri,
       title: decodePathLabel(name),
       loading: true,
@@ -48,6 +50,7 @@ export function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
   }
   return {
     kind: 'file',
+    icon: fileTypeIcon(name),
     key: uri,
     loading: true,
     title: decodePathLabel(name),

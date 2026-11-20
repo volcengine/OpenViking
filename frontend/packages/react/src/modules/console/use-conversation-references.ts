@@ -74,7 +74,12 @@ export function useConversationReferences({
   const clearReferences = useCallback(
     (sent?: readonly VikingBotReference[]) => {
       if (onSelectionChange) {
-        if (!sent) onSelectionChange([]);
+        const items = selection?.selected ?? emptyReferences;
+        const remaining = sent
+          ? items.filter((item) => !sent.includes(item))
+          : [];
+        if (!sent || remaining.length !== items.length)
+          onSelectionChange(remaining);
         return;
       }
       setSelected((current) => {
@@ -86,7 +91,7 @@ export function useConversationReferences({
           : { scope, items };
       });
     },
-    [scope, onSelectionChange],
+    [scope, onSelectionChange, selection?.selected],
   );
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {

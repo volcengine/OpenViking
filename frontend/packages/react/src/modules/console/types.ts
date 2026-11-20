@@ -92,7 +92,7 @@ export type ConsoleChatOptions = Omit<
   hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
   /** Set false to hide the built-in session commit action. */
   memoryCommit?: false;
-  /** Control selected references while Console loads the picker tree and search. The host clears sent references; Console clears selection when resetting the conversation. */
+  /** Control selected references while Console loads the picker tree and search. Console notifies the host to remove submitted references and clears selection when resetting the conversation. */
   referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
 };
 

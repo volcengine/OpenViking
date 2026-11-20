@@ -86,6 +86,11 @@ test('encoded FileBrowser paths display readable names while all operations reta
     );
     await t.test('loading preview tab shows the decoded file name', () => {
       assert.equal(tabTitle(view), fileLabel);
+      assert.ok(
+        view.container.querySelector(
+          `[role="tab"][data-key="${file}"] .ov-file-preview__tab-icon svg`,
+        ),
+      );
     });
 
     await act(async () => body.resolve(await ok('')));
@@ -112,6 +117,11 @@ test('encoded FileBrowser paths display readable names while all operations reta
     assert.equal(selected.at(-1), folder);
     await t.test('loading directory tab shows its decoded name', () => {
       assert.equal(tabTitle(view, folder), folderLabel);
+      assert.ok(
+        view.container.querySelector(
+          `[role="tab"][data-key="${folder}"] .ov-file-preview__tab-icon svg`,
+        ),
+      );
     });
     assert.ok(
       fetch.calls.some(
