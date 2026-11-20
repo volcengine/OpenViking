@@ -153,7 +153,7 @@ class StatsAggregator:
         self,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Query every memory record, one bounded page at a time.
+        """Read every memory record in pages ordered by update time.
 
         Uses the context_type="memory" filter; callers group by category in
         Python. A single query used to be capped at 10,000 rows, so accounts
@@ -164,10 +164,11 @@ class StatsAggregator:
         offset = 0
         while True:
             try:
-                page = await self._vikingdb.query(
+                page = await self._vikingdb.filter(
                     filter=Eq("context_type", "memory"),
                     limit=page_size,
                     offset=offset,
+                    order_by="updated_at",
                     output_fields=[
                         "uri",
                         "active_count",
