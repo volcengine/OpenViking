@@ -1104,6 +1104,17 @@
   opacity: 0.65;
 }
 
+@container (max-width: 440px) {
+  .ov-command-console__quick-actions {
+    gap: 3px;
+  }
+
+  .ov-command-console__quick-action {
+    padding-inline: 3px;
+    font-size: 11px;
+  }
+}
+
 .ov-command-console__input-row {
   position: relative;
   display: grid;
