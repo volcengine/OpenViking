@@ -76,15 +76,20 @@ export function useMemoryCommit({
     !chat.signal?.aborted
       ? latestCommitMessage(messages)
       : undefined;
+  const loadedHistory = chat.historyKey && chat.responseComplete === undefined;
+  const matchingSubmission =
+    !loadedHistory || submission?.messageId === messageId
+      ? submission
+      : undefined;
   const history = useMemoryCommitHistory(
     chat,
     owner,
     messageId,
     track,
-    Boolean(submission),
+    Boolean(matchingSubmission),
   );
   const { restoring } = history;
-  const currentSubmission = submission ?? history.submission;
+  const currentSubmission = matchingSubmission ?? history.submission;
   const task = currentSubmission?.taskKey
     ? tasks.find((item) => item.key === currentSubmission.taskKey)
     : undefined;

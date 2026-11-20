@@ -109,6 +109,8 @@ test('restores a submitted session on remount and allows submission after new me
   let liveMessages = 0;
   let commitCount = 1;
   let taskStatus = 'running';
+  let archiveStatus = 'completed';
+  let archiveRequests = 0;
   let taskRequests = 0;
   const service = {
     listSessions: async () => [{ id: 'demo', title: 'Demo' }],
@@ -135,6 +137,7 @@ test('restores a submitted session on remount and allows submission after new me
       assert.equal(searchParams.get('resource_id'), 'demo');
       assert.equal(searchParams.get('task_type'), 'session_commit');
       assert.equal(searchParams.get('limit'), '1');
+      if (!taskStatus) return ok([]);
       return ok([
         {
           task_id: 'memory-task',
@@ -144,6 +147,10 @@ test('restores a submitted session on remount and allows submission after new me
           }),
         },
       ]);
+    }
+    if (pathname === '/api/v1/sessions/demo/archives/archive_002') {
+      archiveRequests++;
+      return ok({ archive_id: 'archive_002', status: archiveStatus });
     }
     if (pathname === '/api/v1/tasks/memory-task') {
       taskRequests++;
@@ -193,6 +200,91 @@ test('restores a submitted session on remount and allows submission after new me
     host = await mount(tree);
     await select();
     assert.equal(status(), 'idle');
+    await host.unmount();
+
+    // The archive still provides durable completion after the task expires.
+    taskStatus = undefined;
+    host = await mount(tree);
+    await select();
+    assert.equal(status(), 'success');
+    assert.equal(archiveRequests, 1);
+    await host.unmount();
+
+    archiveStatus = 'failed';
+    host = await mount(tree);
+    await select();
+    assert.equal(status(), 'idle');
+    await host.unmount();
+
+    liveMessages = 2;
+    archiveStatus = 'completed';
+    host = await mount(tree);
+    await select();
+    assert.equal(status(), 'idle');
+    assert.equal(archiveRequests, 2);
+  } finally {
+    await host.unmount();
+  }
+});
+
+test('checks the latest reply when returning to a session with an older local submission', async () => {
+  let view;
+  let replyId = 'answer-a';
+  let lookups = 0;
+  const service = {
+    listSessions: async () => [
+      { id: 'demo', title: 'Demo' },
+      { id: 'other', title: 'Other' },
+    ],
+    loadMessages: async (sessionId) =>
+      sessionId === 'demo'
+        ? [
+            {
+              id: replyId,
+              role: 'assistant',
+              parts: [{ type: 'text', text: replyId }],
+            },
+          ]
+        : [],
+    commitSession: async () => ({ status: 'accepted', taskId: 'task-a' }),
+    getSessionCommitTask: async () => {
+      lookups++;
+      if (replyId === 'answer-b') return { id: 'task-b', status: 'completed' };
+    },
+  };
+  const taskService = {
+    getTask: async (id) => ({ id, status: 'completed' }),
+  };
+  function Host() {
+    view = useConversation({ chatOptions: { service, taskService } }, () => {});
+    return null;
+  }
+  const host = await mount(createElement(Host));
+  const select = async (id) => {
+    await act(async () => view.sessions.onSelect(id));
+    await settle();
+  };
+  const action = () => view.messages.at(-1)?.actions?.[0];
+  try {
+    await select('demo');
+    assert.equal(action()?.action.status, 'idle');
+    await act(async () =>
+      view.onMessageAction(action().messageId, action().action.key),
+    );
+    await settle();
+    assert.equal(action()?.action.status, 'success');
+
+    await select('other');
+    await select('demo');
+    assert.equal(action()?.action.status, 'success');
+    assert.equal(lookups, 1);
+
+    await select('other');
+    replyId = 'answer-b';
+    await select('demo');
+    assert.equal(action()?.messageId, 'answer-b');
+    assert.equal(action()?.action.status, 'success');
+    assert.equal(lookups, 2);
   } finally {
     await host.unmount();
   }

@@ -63,9 +63,10 @@ export function useMemoryCommitHistory(
     restored?.owner === owner && restored.historyKey === chat.historyKey
       ? restored
       : undefined;
-  // Opening history by selection or remount can expose a stored commit task.
-  // Query once the loaded history supplies a target message, and abort the
-  // lookup when that history, its scope, or the component goes away.
+  // History loading supplies message data. Commit state needs a separate lookup
+  // for the eligible reply after Console applies its display and cache rules.
+  // History can load on mount without a selection event. Abort the lookup when
+  // the target reply, history scope, or component goes away.
   useEffect(() => {
     if (
       !shouldRestore ||

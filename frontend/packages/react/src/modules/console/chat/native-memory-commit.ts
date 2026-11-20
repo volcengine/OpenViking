@@ -35,19 +35,30 @@ export async function readSessionCommitTask(
       signal,
     ),
   ]);
-  const task = tasks?.[0];
   // Session message_count includes the retained live tail, even when its
   // pending_tokens are zero. A commit task cannot cover those live messages.
-  if (!task?.task_id || session?.message_count !== 0) return;
-  if (task.status === 'completed') {
-    if (!session.uri || !(session.commit_count > 0)) return;
-    const archive = `archive_${String(session.commit_count).padStart(3, '0')}`;
-    const latestArchive = `${session.uri.replace(/\/+$/, '')}/history/${archive}`;
-    if (task.result?.archive_uri !== latestArchive) return;
-  } else if (isTaskTerminal(task.status)) {
-    return;
+  if (session?.message_count !== 0) return;
+  const task = tasks?.[0];
+  if (task && task.status !== 'completed') {
+    if (!task.task_id || isTaskTerminal(task.status)) return;
+    return { id: task.task_id, kind: 'memory', status: task.status };
   }
-  return { id: task.task_id, kind: 'memory', status: task.status };
+  if (!session.uri || !(session.commit_count > 0)) return;
+  const archiveId = `archive_${String(session.commit_count).padStart(3, '0')}`;
+  const latestArchive = `${session.uri.replace(/\/+$/, '')}/history/${archiveId}`;
+  if (task) {
+    if (!task.task_id || task.result?.archive_uri !== latestArchive) return;
+    return { id: task.task_id, kind: 'memory', status: 'completed' };
+  }
+
+  // Completed tasks expire. The latest archive's status remains available.
+  const archive = await request<{ status: string }>(
+    { method: 'GET', path: OV_PATH_BUILDERS.sessionArchive(id, archiveId) },
+    signal,
+  );
+  if (archive?.status === 'completed') {
+    return { id: latestArchive, kind: 'memory', status: 'completed' };
+  }
 }
 
 export async function submitSessionCommit(
