@@ -41,7 +41,7 @@ test('output directory suggestions and receipts display Chinese while submitting
   }
 });
 
-test('generated output directory suggestions keep literal Chinese Viking URI segments', async () => {
+test('generated output directory suggestions preserve directory names and user IDs', async () => {
   const view = await mountHitl(
     [
       card('compile_name', 'Name'),
@@ -50,7 +50,7 @@ test('generated output directory suggestions keep literal Chinese Viking URI seg
       }),
       card('compile_target', 'Target'),
     ],
-    { requestOptions: { userId: '中文用户' } },
+    { requestOptions: { userId: 'alice@example.com' } },
   );
   try {
     await view.start();
@@ -66,7 +66,7 @@ test('generated output directory suggestions keep literal Chinese Viking URI seg
     assert.ok(values.includes('viking://resources/研发周报_wiki'));
     assert.ok(
       values.includes(
-        'viking://user/%E4%B8%AD%E6%96%87%E7%94%A8%E6%88%B7/resources/研发周报_wiki',
+        'viking://user/alice@example.com/resources/研发周报_wiki',
       ),
     );
     assert.ok(
@@ -123,7 +123,7 @@ test('generated suggestions reuse a current-user alias for an existing encoded t
       }),
       card('compile_target', 'Target', { suggested_value: existing }),
     ],
-    { userId: 'alice' },
+    { userId: 'alice@example.com' },
   );
   try {
     await view.start();
@@ -137,7 +137,11 @@ test('generated suggestions reuse a current-user alias for an existing encoded t
       ),
     ].map((item) => item.value);
     assert.ok(values.includes(existing));
-    assert.ok(!values.includes('viking://user/alice/resources/研发周报_wiki'));
+    assert.ok(
+      !values.includes(
+        'viking://user/alice@example.com/resources/研发周报_wiki',
+      ),
+    );
   } finally {
     await view.unmount();
   }
