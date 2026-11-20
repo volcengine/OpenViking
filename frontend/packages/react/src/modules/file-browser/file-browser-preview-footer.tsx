@@ -108,7 +108,7 @@ export function renderPreviewFooter(
   const aiGenerated =
     tab?.kind === 'directory'
       ? hasDirectorySummary
-      : isAiGeneratedPreview(uri, browser.previewIsWiki);
+      : isAiGeneratedPreview(uri, browser.previewIsCompile);
   return tab &&
     tab.kind !== 'content' &&
     !tab.loading &&

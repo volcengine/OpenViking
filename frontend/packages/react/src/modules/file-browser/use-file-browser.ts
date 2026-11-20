@@ -292,7 +292,7 @@ export function useFileBrowser({
     previewError,
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
-    previewIsWiki: boards.isWiki,
+    previewIsCompile: boards.previewIsCompile,
     previewDirectorySummary: preview.directorySummary,
     dashboardError: boards.error,
     refreshWikiConflicts: boards.refreshConflicts,

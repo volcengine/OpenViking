@@ -25,7 +25,7 @@ export interface FileBrowserApi {
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
-  previewIsWiki: boolean;
+  previewIsCompile: boolean;
   previewDirectorySummary?: DirectorySummary;
   dashboardError: Error | null;
   refreshWikiConflicts: () => void;
