@@ -479,6 +479,8 @@ class _GrepMixin:
                 fallback_kwargs["allowed_uris"] = allowed_uris
             return self._attach_grep_tags(await self._grep_fs(**fallback_kwargs), tags_by_uri)
 
+        # The backend returns a page of candidates, so a full page may be incomplete.
+        candidate_limit_reached = len(result) >= remote_return_limit
         candidate_uris = [r["uri"] for r in result if r.get("uri")]
         if allowed_uris is not None:
             candidate_uris = [
@@ -490,21 +492,23 @@ class _GrepMixin:
                 for u in candidate_uris
                 if u != excluded_prefix and not u.startswith(excluded_prefix + "/")
             ]
-        if not candidate_uris:
-            # BM25 returned no candidates — the index confirms no matching content
-            return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
-
         # Step 2: local fs precise matching on candidate files
-        grep_result = await self._grep_in_files(
-            candidate_uris,
-            pattern,
-            case_insensitive,
-            node_limit,
-            ctx,
-            before_context,
-            after_context,
-        )
-        if tag_filter is None and not include_tags:
+        if candidate_uris:
+            grep_result = await self._grep_in_files(
+                candidate_uris,
+                pattern,
+                case_insensitive,
+                node_limit,
+                ctx,
+                before_context,
+                after_context,
+            )
+        else:
+            grep_result = {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+        if candidate_limit_reached:
+            grep_result["candidate_limit_reached"] = True
+        if not candidate_uris or (tag_filter is None and not include_tags):
             return grep_result
         return self._attach_grep_tags(
             grep_result,
@@ -638,7 +642,9 @@ class _GrepMixin:
             after_context: Number of lines to include after each match
 
         Returns:
-            Dict with matches, count, match_count, files_scanned
+            Dict with matches, count, match_count, files_scanned, limit_reached.
+            limit_reached indicates possible truncation before ACL filtering,
+            not a confirmed count of omitted or visible matches.
         """
         path = self._uri_to_path(uri, ctx=ctx)
 
@@ -671,6 +677,9 @@ class _GrepMixin:
             raise
 
         matches = result.get("matches", [])
+        # The backend applies node_limit before ACL filtering. Preserve only the
+        # cap signal, never the denied matches or their count.
+        limit_reached = bool(node_limit and len(matches) >= node_limit)
         results = []
         files_scanned_set = set()
         real_ctx = self._ctx_or_default(ctx)
@@ -732,6 +741,7 @@ class _GrepMixin:
             "count": len(results),
             "match_count": len(results),
             "files_scanned": files_scanned,
+            "limit_reached": limit_reached,
         }
 
     async def _grep_encrypted(

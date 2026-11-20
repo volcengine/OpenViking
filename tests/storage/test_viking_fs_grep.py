@@ -498,6 +498,39 @@ async def test_grep_vikingdb_auto_remote_limit_uses_five_times_node_limit(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("remote_count", "filter_out_all", "candidate_limit_reached"),
+    [(49, False, False), (50, False, True), (50, True, True)],
+)
+async def test_grep_vikingdb_preserves_candidate_limit_without_matches(
+    monkeypatch, remote_count, filter_out_all, candidate_limit_reached
+):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore(
+        results=[{"uri": f"viking://resources/{index}.md"} for index in range(remote_count)]
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    monkeypatch.setattr(fs, "read", AsyncMock(return_value=b"no regex match"))
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=10,
+        ctx=None,
+        allowed_uris={"viking://resources/other.md"} if filter_out_all else None,
+    )
+
+    assert vector_store.calls[0]["limit"] == 50
+    assert result["matches"] == []
+    assert result["files_scanned"] == (0 if filter_out_all else remote_count)
+    assert result.get("candidate_limit_reached", False) is candidate_limit_reached
+    assert not result.get("limit_reached")
+
+
+@pytest.mark.asyncio
 async def test_grep_vikingdb_does_not_project_tags_without_filter_or_request(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     vector_store = _DummyVectorStore(
@@ -1058,7 +1091,13 @@ async def test_grep_delegates_to_agfs_with_expected_filters(monkeypatch, fs):
         level_limit=3,
     )
 
-    assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+    assert result == {
+        "matches": [],
+        "count": 0,
+        "match_count": 0,
+        "files_scanned": 0,
+        "limit_reached": False,
+    }
     assert calls == [
         {
             "path": "/resources",
@@ -1157,6 +1196,7 @@ async def test_grep_maps_agfs_matches_to_viking_uris(monkeypatch, fs):
         "count": 2,
         "match_count": 2,
         "files_scanned": 7,
+        "limit_reached": False,
     }
 
 
@@ -1220,20 +1260,45 @@ def _restricted_acl() -> EffectiveAcl:
 
 
 @pytest.mark.asyncio
-async def test_grep_with_agfs_denies_acl_restricted_content_without_grant(monkeypatch):
-    """Native grep must not leak restricted-inheritance content to a user with no grant."""
+@pytest.mark.parametrize("node_limit", [10, 29, 30, None, 0])
+@pytest.mark.parametrize("deny_all", [False, True])
+async def test_grep_with_agfs_denies_acl_restricted_content_without_grant(
+    monkeypatch, node_limit, deny_all
+):
+    """Preserve the backend cap signal without exposing ACL-denied matches."""
+    granted = EffectiveAcl(
+        AclMode.RESTRICTED,
+        DirectAcl.from_entries([AclEntry("user:mallory", AclLevel.READ)]),
+        DirectAcl(),
+    )
+    raw_matches = [
+        {"file": f"secret{i}.md", "line": 1, "content": "SECRET_MARKER_4977"} for i in range(9)
+    ] + [{"file": f"visible{i}.md", "line": 1, "content": "visible needle"} for i in range(20)]
     viking_fs = _acl_grep_fs(
         monkeypatch,
-        {"viking://resources/secret.md": _restricted_acl()},
+        {
+            f"viking://resources/{match['file']}": (
+                _restricted_acl() if deny_all or i < 9 else granted
+            )
+            for i, match in enumerate(raw_matches)
+        },
     )
+
+    async def fake_grep(**kwargs):
+        return {"matches": raw_matches[: kwargs["node_limit"] or None]}
+
+    monkeypatch.setattr(viking_fs._async_agfs, "grep", fake_grep)
     ctx = RequestContext(user=UserIdentifier("acct1", "mallory"), role=Role.USER)
-
     result = await viking_fs._grep_with_agfs(
-        "viking://resources", pattern="SECRET_MARKER_4977", ctx=ctx
+        "viking://resources", pattern="needle", node_limit=node_limit, ctx=ctx
     )
 
-    assert result["matches"] == []
-    assert result["count"] == 0
+    expected_count = 0 if deny_all else (1 if node_limit == 10 else 20)
+    assert result["count"] == result["match_count"] == expected_count
+    assert len(result["matches"]) == expected_count
+    assert "SECRET_MARKER_4977" not in str(result)
+    assert "secret" not in str(result)
+    assert result["limit_reached"] is bool(node_limit and node_limit <= len(raw_matches))
 
 
 @pytest.mark.asyncio
