@@ -153,27 +153,37 @@ class StatsAggregator:
         self,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        """Query all memory records in a single DB round-trip.
+        """Read every memory record in pages ordered by update time.
 
-        Uses the context_type="memory" filter. Callers group by category
-        in Python to avoid N+1 queries.
+        Scope reads to the caller's context and return an empty list if any page
+        fails so callers never aggregate partial totals.
         """
-        try:
-            return await self._vikingdb.query(
-                filter=Eq("context_type", "memory"),
-                limit=10000,
-                output_fields=[
-                    "uri",
-                    "active_count",
-                    "updated_at",
-                    "created_at",
-                    "context_type",
-                ],
-                ctx=ctx,
-            )
-        except Exception as e:
-            logger.error("Error querying memories: %s", e)
-            return []
+        page_size = 1000
+        records: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            try:
+                page = await self._vikingdb.filter(
+                    filter=Eq("context_type", "memory"),
+                    limit=page_size,
+                    offset=offset,
+                    order_by="updated_at",
+                    output_fields=[
+                        "uri",
+                        "active_count",
+                        "updated_at",
+                        "created_at",
+                        "context_type",
+                    ],
+                    ctx=ctx,
+                )
+            except Exception as e:
+                logger.error("Error querying memories: %s", type(e).__name__)
+                return []
+            records.extend(page)
+            if len(page) < page_size:
+                return records
+            offset += len(page)
 
 
 def _parse_datetime(value) -> Optional[datetime]:
