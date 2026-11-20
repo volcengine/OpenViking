@@ -84,7 +84,7 @@ test('the add-resource quick action describes the local upload flow available in
     );
     assert.match(
       await hover(action()),
-      /For local uploads, choose a file in the browser/,
+      /Run the command by itself or with only a local path to open the Local upload page and choose files or folders/,
     );
     await host.execute('ov help');
     assert.match(
