@@ -498,7 +498,12 @@ def freshness_metadata(
 async def _read_existing_document(
     viking_fs: Any, uri: str, ctx: Optional[RequestContext]
 ) -> Optional[AbstractOverviewDocument]:
-    raw = await _raw_if_exists(viking_fs, uri, ctx)
+    return _parse_existing_document(await read_sidecar_if_exists(viking_fs, uri, ctx), uri)
+
+
+def _parse_existing_document(
+    raw: str | bytes | None, uri: str
+) -> Optional[AbstractOverviewDocument]:
     try:
         return parse_abstract_overview(raw) if raw is not None else None
     except AbstractOverviewFormatError as exc:
@@ -546,20 +551,14 @@ async def write_abstract_overview(
             logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
             return AbstractOverviewWriteResult(wrote=False)
 
-        existing_overview = (
-            parse_abstract_overview(existing_raw[1])
-            if existing_raw is not None and 1 in existing_raw
-            else await _read_existing_document(viking_fs, overview_uri, ctx)
-            if existing_raw is None
-            else None
-        )
-        existing_abstract = (
-            parse_abstract_overview(existing_raw[0])
-            if existing_raw is not None and 0 in existing_raw
-            else await _read_existing_document(viking_fs, abstract_uri, ctx)
-            if existing_raw is None
-            else None
-        )
+        if existing_raw is None:
+            current_overview = await read_sidecar_if_exists(viking_fs, overview_uri, ctx)
+            current_abstract = await read_sidecar_if_exists(viking_fs, abstract_uri, ctx)
+        else:
+            current_overview = existing_raw.get(ContextLevel.OVERVIEW)
+            current_abstract = existing_raw.get(ContextLevel.ABSTRACT)
+        existing_overview = _parse_existing_document(current_overview, overview_uri)
+        existing_abstract = _parse_existing_document(current_abstract, abstract_uri)
         merged_metadata = dict(metadata or {})
         if existing_abstract is not None:
             if "maintenance" in existing_abstract.metadata:
@@ -604,16 +603,6 @@ async def write_abstract_overview(
             if abstract is not None
             else None
         )
-        current_overview = (
-            existing_raw.get(1)
-            if existing_raw is not None
-            else await _raw_if_exists(viking_fs, overview_uri, ctx)
-        )
-        current_abstract = (
-            existing_raw.get(0)
-            if existing_raw is not None
-            else await _raw_if_exists(viking_fs, abstract_uri, ctx)
-        )
         if isinstance(current_overview, bytes):
             current_overview = current_overview.decode("utf-8")
         if isinstance(current_abstract, bytes):
@@ -637,7 +626,9 @@ async def write_abstract_overview(
             await viking_fs._async_agfs.pathlock_release(sidecar_lease)
 
 
-async def _raw_if_exists(viking_fs: Any, uri: str, ctx: Optional[RequestContext]) -> Optional[str]:
+async def read_sidecar_if_exists(
+    viking_fs: Any, uri: str, ctx: Optional[RequestContext]
+) -> str | bytes | None:
     read_file = getattr(viking_fs, "read_file", None)
     if read_file is None:
         return None
@@ -757,7 +748,7 @@ async def plan_abstract_overview_refresh(
             updated_freshness["pending_child_changes"] = decision.pending_after
             metadata["freshness"] = updated_freshness
             rendered = render_abstract_overview(level, dir_uri, document.body, metadata)
-            raw = await _raw_if_exists(viking_fs, uri, ctx)
+            raw = await read_sidecar_if_exists(viking_fs, uri, ctx)
             if rendered != raw:
                 await viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease)
         return decision

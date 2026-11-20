@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -25,12 +26,14 @@ from openviking.storage.abstract_overview import (
     deterministic_sample,
     freshness_metadata,
     read_abstract_overview_pending_snapshot,
+    read_sidecar_if_exists,
     write_abstract_overview,
 )
 from openviking.storage.context_update_plan import FileVectorSource, SemanticAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.pathlock_transfer import PathLockGuard
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
@@ -677,7 +680,7 @@ class SemanticTreeExecutor:
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
-            if self._aggregate_directory:
+            if self._aggregate_directory and self._generation_trigger != "memory_update":
                 try:
                     pending_snapshot = await read_abstract_overview_pending_snapshot(
                         viking_fs=self._viking_fs,
@@ -1406,6 +1409,7 @@ class SemanticTreeExecutor:
         sampled_entries: int,
         missing_summary_entries: Optional[int] = None,
         preset_abstract: bool = False,
+        existing_raw: Mapping[int, str | bytes] | None = None,
     ) -> AbstractOverviewWriteResult:
         metadata: Dict[str, Any] = {
             "generated_by": {
@@ -1423,6 +1427,12 @@ class SemanticTreeExecutor:
             metadata["source"] = self._source
         if preset_abstract:
             metadata["maintenance"] = "manual"
+        if existing_raw is None and self._source_raw_contents is not None:
+            existing_raw = {
+                level: raw
+                for level in (0, 1)
+                if (raw := self._source_raw_contents.get((dir_uri, level))) is not None
+            }
         wrote = await self._await_write(
             write_abstract_overview(
                 viking_fs=self._viking_fs,
@@ -1432,18 +1442,15 @@ class SemanticTreeExecutor:
                 ctx=self._ctx,
                 is_stale=self._is_stale,
                 metadata=metadata,
-                consume_pending=self._nodes[dir_uri].pending_snapshot,
+                # Memory refresh renders and writes while holding the sidecar lease.
+                consume_pending=(
+                    None
+                    if self._generation_trigger == "memory_update"
+                    else self._nodes[dir_uri].pending_snapshot
+                ),
                 lock=self._directory_leases.get(dir_uri) or self._lock,
                 log_prefix="[SemanticTree]",
-                existing_raw=(
-                    {
-                        level: raw
-                        for level in (0, 1)
-                        if (raw := self._source_raw_contents.get((dir_uri, level))) is not None
-                    }
-                    if self._source_raw_contents is not None
-                    else None
-                ),
+                existing_raw=existing_raw,
             )
         )
         if not wrote.wrote:
@@ -1500,8 +1507,25 @@ class SemanticTreeExecutor:
         )
         sampled_entries = 0
         preset_abstract = False
+        memory_update = self._generation_trigger == "memory_update"
+        existing_raw: dict[int, str | bytes] | None = None
         try:
-            if self._context_type == "skill" and classify_uri(dir_uri).is_skill_root:
+            if memory_update and total_entries == 0:
+                vector_store = self._viking_fs._get_vector_store()
+                if vector_store is not None:
+                    record_id = vector_record_id(
+                        self._ctx.account_id, dir_uri, ContextLevel.OVERVIEW
+                    )
+                    await vector_store.strict_delete([record_id], ctx=self._ctx)
+                await self._viking_fs.rm(
+                    f"{dir_uri}/.overview.md",
+                    ctx=self._ctx,
+                    lease_ref=self._directory_leases.get(dir_uri) or self._lock,
+                    no_vector=True,
+                )
+                should_write = False
+                need_vectorize = False
+            elif self._context_type == "skill" and classify_uri(dir_uri).is_skill_root:
                 # The package root describes the skill definition, independently
                 # of the summaries produced for its attachments.
                 definition_changed = f"{dir_uri}/SKILL.md" in self._changed_paths
@@ -1524,6 +1548,7 @@ class SemanticTreeExecutor:
                 should_write = False
             elif self._incremental_update and self._generation_trigger not in {
                 "content_copy",
+                "memory_update",
                 "reindex",
             }:
                 children_changed = await self._check_dir_children_changed(
@@ -1551,6 +1576,11 @@ class SemanticTreeExecutor:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
                     children_abstracts = await self._finalize_children_abstracts(node)
+                if memory_update:
+                    raw = await read_sidecar_if_exists(
+                        self._viking_fs, f"{dir_uri}/.abstract.md", self._ctx
+                    )
+                    existing_raw = {ContextLevel.ABSTRACT: raw} if raw is not None else {}
                 async with self._llm_sem:
                     generated = await self._processor._generate_directory_semantics(
                         dir_uri,
@@ -1560,6 +1590,7 @@ class SemanticTreeExecutor:
                         total_entries=total_entries,
                         overview_template=self._overview_template,
                         abstract_template=self._abstract_template,
+                        existing_raw=existing_raw,
                     )
                 overview, abstract = generated.overview, generated.abstract
                 preset_abstract = generated.preset_abstract
@@ -1572,6 +1603,12 @@ class SemanticTreeExecutor:
             if should_write:
                 assert overview is not None and abstract is not None
                 try:
+                    if existing_raw is not None:
+                        raw = await read_sidecar_if_exists(
+                            self._viking_fs, f"{dir_uri}/.overview.md", self._ctx
+                        )
+                        if raw is not None:
+                            existing_raw[ContextLevel.OVERVIEW] = raw
                     write_result = await self._write_directory_semantics(
                         dir_uri,
                         overview,
@@ -1580,6 +1617,7 @@ class SemanticTreeExecutor:
                         sampled_entries=sampled_entries,
                         missing_summary_entries=node.missing_summary_entries,
                         preset_abstract=preset_abstract,
+                        existing_raw=existing_raw,
                     )
                     if dir_uri == self._root_uri:
                         self._root_write_result = write_result
@@ -1597,6 +1635,12 @@ class SemanticTreeExecutor:
         except AbstractOverviewFormatError:
             raise
         except Exception as e:
+            if (
+                memory_update
+                and self._task_context is not None
+                and self._task_context.task_type == "content_write"
+            ):
+                raise
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             if aggregation := self._parent_aggregation_stats.get(dir_uri):
                 aggregation.status = "failed"
@@ -1613,6 +1657,8 @@ class SemanticTreeExecutor:
                 try:
                     directory_vector_kwargs: Dict[str, Any] = {}
                     include_abstract = self._context_type != "memory" or bool(abstract)
+                    if memory_update:
+                        include_abstract = write_result.abstract_body_changed
                     include_overview = True
                     if not include_abstract:
                         directory_vector_kwargs["include_abstract"] = False

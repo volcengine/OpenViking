@@ -446,6 +446,11 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     works = list(works)
     if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
         return False
+    memory_overview_requested = (
+        task.task_type == "content_write"
+        and isinstance(task.result, dict)
+        and task.result.get("overview_status") == "queued"
+    )
     rollback_failed = (
         task.task_type == "compile"
         and isinstance(task.result, dict)
@@ -456,7 +461,12 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     ):
         task.status = TaskStatus.CANCELLED
     else:
-        work_error = first_work_error(works)
+        # Memory navigation refresh is best-effort after the content write commits.
+        work_error = first_work_error(
+            (work for work in works if work.queue_name != "Semantic")
+            if memory_overview_requested
+            else works
+        )
         if work_error and task.error is None:
             task.error = sanitize_error(work_error)
         if task.error is not None:
@@ -474,6 +484,8 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         }
         if any(work.queue_name in projected for work in works):
             task.result["queue_status"] = projected
+        if memory_overview_requested and projected["Semantic"]["error_count"]:
+            task.result["overview_status"] = "skipped"
         for queue_name, field_name in (
             ("Semantic", "semantic_status"),
             ("Semantic", "overview_status"),
@@ -481,9 +493,7 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         ):
             if task.result.get(field_name) == "queued":
                 task.result[field_name] = (
-                    "failed"
-                    if projected.get(queue_name, {}).get("error_count", 0)
-                    else "complete"
+                    "failed" if projected[queue_name]["error_count"] else "complete"
                 )
     # Cancelled deliveries still need their execution stage and private context
     # for recovery and cleanup. Both expire with the Task record.

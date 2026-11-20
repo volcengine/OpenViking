@@ -58,6 +58,16 @@ class SemanticMessageWork:
                 ctx=ctx,
                 fallback_path_factory=lambda: get_viking_fs()._uri_to_path(self.msg.uri, ctx=ctx),
             )
+            if self.scope.lock is None and self.msg.generation_trigger == "memory_update":
+                # Serialize directory discovery, sidecar changes, and index publication.
+                viking_fs = get_viking_fs()
+                lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                    [
+                        viking_fs._uri_to_path(f"{self.msg.uri}/{name}", ctx=ctx)
+                        for name in (".abstract.md", ".overview.md")
+                    ]
+                )
+                self.scope = SemanticLockScope(lease, _owned=True)
 
         await run_to_completion(acquire)
         return True
@@ -67,7 +77,7 @@ class SemanticMessageWork:
 
     async def finish_processing(self, succeeded: bool) -> None:
         assert self.scope is not None
-        if self.msg.lock_handoff is not None:
+        if self.msg.lock_handoff is not None or self.msg.generation_trigger == "memory_update":
             await self._wait_for_embedding_work(
                 stop_waiting=getattr(self.processor, "_embedding_worker_stopped", None),
             )

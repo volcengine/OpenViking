@@ -8,10 +8,11 @@ import re
 import threading
 import time
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri
 from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.observability.context import (
@@ -48,6 +49,7 @@ from openviking.storage.abstract_overview import (
     body_for_preview,
     parse_abstract_overview,
     plan_abstract_overview_refresh,
+    read_sidecar_if_exists,
     write_abstract_overview,
 )
 from openviking.storage.errors import (
@@ -1319,6 +1321,7 @@ class SemanticProcessor(DequeueHandlerBase):
         total_entries: int,
         overview_template: Optional[str] = None,
         abstract_template: Optional[str] = None,
+        existing_raw: Mapping[int, str | bytes] | None = None,
     ):
         from openviking.config.generation import get_output_language_override
         from openviking.server.error_mapping import is_not_found_error
@@ -1327,14 +1330,12 @@ class SemanticProcessor(DequeueHandlerBase):
             generate_directory_semantics,
         )
 
-        try:
-            raw = await get_viking_fs().read_file(f"{dir_uri}/.abstract.md", ctx=ctx)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                raise
-            previous = None
-        else:
-            previous = parse_abstract_overview(raw)
+        raw = (
+            await read_sidecar_if_exists(get_viking_fs(), f"{dir_uri}/.abstract.md", ctx)
+            if existing_raw is None
+            else existing_raw.get(ContextLevel.ABSTRACT)
+        )
+        previous = parse_abstract_overview(raw) if raw is not None else None
         entries = {
             item["name"]: {
                 "kind": "file",

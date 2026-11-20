@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
@@ -131,25 +132,27 @@ async def test_memory_directory_completion_reflects_storage_failures(monkeypatch
         check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
     )
     root = "viking://user/usr1/memories/events"
-    fs = _FakeVikingFS({root: []}, {})
+    fs = _FakeVikingFS(
+        {root: [{"name": "event.md", "isDir": False}]}, {f"{root}/event.md": "Event details."}
+    )
     fs.exists = AsyncMock(return_value=True)
     if isinstance(failure, PermissionError):
         fs.write_file = AsyncMock(side_effect=failure)
     elif failure is not None:
         fs.ls = AsyncMock(side_effect=failure)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_work.resolve_telemetry", lambda *_: None
     )
     processor._generate_directory_semantics = AsyncMock(
-        return_value=DirectoryGeneration(overview="Empty directory.", abstract="")
+        return_value=DirectoryGeneration(overview="Event directory.", abstract="")
     )
-    result = await processor.on_dequeue(
-        _build_data(
-            _make_msg(uri=root, skip_vectorization=True, generation_trigger="memory_update")
+    with bind_task_context("write-task", "acc1", "usr1", task_type="content_write"):
+        result = await processor.on_dequeue(
+            _build_data(
+                _make_msg(uri=root, skip_vectorization=True, generation_trigger="memory_update")
+            )
         )
-    )
     assert result.outcome is (ProcessOutcome.FAILED if failure else ProcessOutcome.SUCCESS)
     if failure:
         assert str(failure) in result.error
