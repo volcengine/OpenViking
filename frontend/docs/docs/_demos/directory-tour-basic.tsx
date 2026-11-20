@@ -9,7 +9,7 @@ import type {
 } from '@openviking/react/components/file-tree';
 import {
   DirectoryTour,
-  openVikingDirectoryTourSteps,
+  getOpenVikingDirectoryTourSteps,
 } from '@openviking/react/components/directory-tour';
 import '@openviking/react/components/file-tree/style.css';
 import '@openviking/react/components/directory-tour/style.css';
@@ -23,22 +23,6 @@ const TARGETS: Record<string, string> = {
   userExperiences: 'user/memories/experiences',
   userPeers: 'user/peers',
 };
-const TITLES = [
-  '用户记忆（memories）',
-  '对话记录（sessions）',
-  '个人资料（resources）',
-  '团队公共资料（resources）',
-  'Agent 经验（experiences）',
-  '对象记忆（peers）',
-];
-const DESCRIPTIONS = [
-  'Agent 从对话中自动提炼的长期记忆 —— 你的身份、偏好和做过的决定。',
-  '即长期记忆，你和 Agent 的每一次对话、跑过的任务都完整保存在这里。追溯 Agent 的判断，可随时回来查看原文。',
-  '你主动导入的仅你可见的资料 —— 文档、笔记、知识库都放在这里。',
-  '成员均可见的公共知识库 —— 文档、规范、历史项目都放在这里。你的 Agent 回答时站在全团队的经验之上，不用每次从零讲起。',
-  'Agent 把成功完成的任务自动沉淀为经验。下次遇到类似问题，直接复用已有方案，少走弯路。',
-  '只属于某个对象的记忆（可以是某个仓库/Agent/同事），会单独存进 peers 子目录，互不干扰；通用的偏好和习惯，则放在 memories。',
-];
 const entry = (
   id: string,
   name: string,
@@ -85,11 +69,7 @@ export default function DirectoryTourBasic() {
     },
     [missing],
   );
-  const steps = openVikingDirectoryTourSteps.map((step, index) => ({
-    ...step,
-    title: zh ? TITLES[index] : step.title,
-    description: zh ? DESCRIPTIONS[index] : step.description,
-  }));
+  const steps = getOpenVikingDirectoryTourSteps(zh ? 'zh-CN' : 'en-US');
   const rows: FileTreeRow[] = [entry('user', 'Alice', 0, expanded.has('user'))];
   if (expanded.has('user')) {
     rows.push(
