@@ -67,13 +67,18 @@
   --ov-ui-drawer-width: 1000px;
 }
 
+.ov-file-browser-action-bar__drawer-content {
+  display: flex;
+  min-height: 100%;
+}
+
 .ov-file-browser-action-bar__drawer .ov-agent-connect {
-  height: 100%;
+  flex: 1;
 }
 
 .ov-file-browser-action-bar__drawer .ov-agent-connect__canvas {
   width: 100%;
-  min-width: 720px;
+  min-width: 0;
   min-height: 100%;
   box-shadow: none;
 }

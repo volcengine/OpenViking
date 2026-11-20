@@ -151,7 +151,10 @@ function FileBrowserActionBarView({
           lang={agentConnect.locale ?? locale}
           onClose={() => requestDrawerOpen(false)}
         >
-          <div ref={drawerExposure}>
+          <div
+            ref={drawerExposure}
+            className="ov-file-browser-action-bar__drawer-content"
+          >
             <AgentConnect
               {...agentConnect}
               locale={agentConnect.locale ?? locale}
