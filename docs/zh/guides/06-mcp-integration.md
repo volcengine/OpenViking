@@ -131,7 +131,7 @@ claude mcp add --transport http openviking \
 | `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `tags`(可选——只保留带有全部所列 `k=v` 标签的命中；格式不合法的标签会被拒绝), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选)。每条命中行末尾以 `tags=[...]` 给出该条目的标签 |
 | `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `tags`（两种模式均可选；list 模式的命中行末尾带 `tags=[...]`）, `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
 | `rule_search` | 检索适用于具体任务上下文的已启用 Rule。调用方仍需依据已知事实判断每条 Rule 的 `applies_when` 与 `exception` | `task_context`, `rule_probability_threshold`（可选，默认 `0.65`） |
-| `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uri`（读一个文件）或 `uris`（数组，一次读多个文件）, `offset`, `limit`（文本行数） |
+| `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uri`（读一个文件）或 `uris`（数组，一次读多个文件）, `offset`, `limit`（文本行数）, `max_tokens`、`cursor`（显式启用有界文本分页） |
 | `download` | 返回一个短时有效、只能使用一次的 URL，用 `curl` 获取单个文件的原始字节（任意类型，包括 PDF、图片、压缩包、音频和视频）；不返回文件内容。不支持目录 | `uri` |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order`(可选), `tags`(可选——只保留带有全部所列 `k=v` 标签的条目), `include_tags`(可选——在每个条目后追加 `tags=[...]`) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `offset`, `limit`, `include_abstract`(可选——同时展示每个目录的摘要；skill 目录的摘要就是它的名字和描述), `tags`(可选——只保留匹配的条目，且每条按相对 `uri` 的路径输出而不再缩进，因为命中项的上级目录通常已被过滤掉), `include_tags`(可选) |
@@ -171,6 +171,38 @@ claude mcp add --transport http openviking \
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。一次性用户 token 导入只传 `args.feishu_access_token`；用户 token watch 还必须传 `args.feishu_refresh_token`。可为该 watch 同时传入 `args.feishu_app_id` 和 `args.feishu_app_secret`，也可回退使用服务端应用凭证；实际使用的应用必须与用户 token 的签发应用一致。
 
 > `processing_mode=vectors_only` 会跳过 VLM 语义理解阶段，不生成或刷新 `.abstract.md` / `.overview.md`；它只向量化当前非隐藏资源文件，并保留已存在的旧语义产物。
+
+### 有界的已存储文本读取
+
+`read(uri="viking://resources/large.md", max_tokens=2000)` 启用无损单文件文本分页。
+普通读取保持原返回格式。服务器需显式配置独立的随机密钥：
+
+```json
+{"server": {"read_cursor_signing_key": "${OV_READ_CURSOR_KEY}"}}
+```
+
+通过部署环境的密钥管理提供至少 32 个 UTF-8 字节的随机密钥，不要复用 API key。
+所有 worker 和副本必须使用相同密钥；服务器不会自动生成进程级备用密钥。
+同密钥重启后游标仍可使用，轮换密钥使旧游标失效。游标本身可在密钥、调用者作用域和
+可见数据相同的 worker 之间使用，但不会改变存储后端的多进程或共享限制；完整的多实例
+共享存储集成尚未验证。游标没有基于时间的过期机制，
+也不授予访问权限，每页都会重新执行原有授权和可见内容读取。
+
+返回单个 JSON 文本块，包含 `uri`、`content`、`version`、`has_more`、`next_cursor`，
+不重复返回 structuredContent。续读时传相同的 `uri`、`max_tokens` 和返回的 `cursor`。
+直接拼接 JSON 解码后的 `content` 可还原完整可见文本，包括 CRLF 和超长行的片段。
+结束时 `has_more=false`、`next_cursor=null`。
+
+预算使用 OpenViking 的 token 估算器计算完整序列化 JSON，包含转义和元数据，
+不包含 JSON-RPC 外层，也不等同于任意模型的 tokenizer。每页另外受 1 MiB UTF-8
+JSON 上限约束；预算过小时明确报错，不返回无法前进的空页。版本是生成该页的同一份
+可见字符串的内容指纹；文本变化返回 `FAILED_PRECONDITION`，需不带游标重新开始。
+它检测内容变化，不提供历史存储版本。每页仍在原读取限制内读取并计算完整可见文件的
+指纹，不承诺减少存储 I/O 或提供文件系统原子快照。文件删除、权限撤销沿用原错误。
+
+分页模式不接受批量 `uris`、非默认 `offset`/`limit`、媒体、Live Context、委托读取或
+ACL bypass。游标绑定规范 URI、调用者范围和预算，更换这些参数需重新开始。
+
 
 ### 使用 skill 中引用的凭据
 
