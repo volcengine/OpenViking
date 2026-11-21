@@ -98,8 +98,11 @@ def split_source(
     table_header = ""
     match = _FRONTMATTER.match(content)
     frontmatter = match[0] if match else ""
+    repeat_budget = max_chars // 4
+    context = frontmatter if len(frontmatter) <= repeat_budget else ""
     fence = ""
     for i, line in enumerate(lines):
+        previous_headings, previous_table = headings, table_header
         start = offsets[-1]
         offsets.append(start + len(line))
         marker = _FENCE.match(line)
@@ -121,18 +124,28 @@ def split_source(
                 table_header = ""
             if not line.strip():
                 preferred.append(offsets[-1])
-        contexts.append(
-            frontmatter
-            + "\n".join(text for _, text in headings)
-            + ("\n" + table_header if table_header else "")
-        )
+        if headings is not previous_headings or table_header != previous_table:
+            # Reuse the same bounded context while the source structure is unchanged.
+            context_size = (
+                len(frontmatter)
+                + sum(len(text) for _, text in headings)
+                + max(len(headings) - 1, 0)
+                + (len(table_header) + 1 if table_header else 0)
+            )
+            context = (
+                frontmatter
+                + "\n".join(text for _, text in headings)
+                + ("\n" + table_header if table_header else "")
+                if context_size <= repeat_budget
+                else ""
+            )
+        contexts.append(context)
 
     def context_at(offset: int) -> str:
         """Return enclosing source context when it fits the repeat budget."""
         if not offset or not contexts:
             return ""
-        value = contexts[min(bisect_right(offsets, offset) - 1, len(contexts) - 1)]
-        return value if len(value) <= max_chars // 4 else ""
+        return contexts[min(bisect_right(offsets, offset) - 1, len(contexts) - 1)]
 
     ranges = []
     start = 0
