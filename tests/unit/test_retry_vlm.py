@@ -3,6 +3,7 @@
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import httpx
 import openai
@@ -271,3 +272,85 @@ def test_vlm_config_switches_model_after_primary_failure(status_code, code):
         assert instance.active_credential_id == "backup"
     finally:
         instance.close()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("body", "expected_kind"),
+    [
+        pytest.param(
+            {"error": {"code": "BadRequest", "type": "content_filter"}},
+            ModelErrorKind.CONTENT_SAFETY,
+            id="generic-code-specific-type",
+        ),
+        pytest.param(
+            {"error": {"code": "BadRequest", "innererror": {"code": "content_filter"}}},
+            ModelErrorKind.CONTENT_SAFETY,
+            id="azure-innererror",
+        ),
+        pytest.param(
+            {"code": "content_filter", "error": {"code": "BadRequest"}},
+            ModelErrorKind.CONTENT_SAFETY,
+            id="outer-code",
+        ),
+        pytest.param(
+            {"error": {"code": "BadRequest", "error_code": "context_length_exceeded"}},
+            ModelErrorKind.INPUT_TOO_LARGE,
+            id="body-error-code",
+        ),
+        pytest.param(
+            {"error": {"code": "rate_limit_exceeded", "message": "moderation 敏感"}},
+            ModelErrorKind.RATE_LIMIT_ERROR,
+            id="rate-limit-beats-message",
+        ),
+        pytest.param(
+            {"error": {"code": "BadRequest", "message": "moderation parameter is invalid"}},
+            ModelErrorKind.INVALID_REQUEST,
+            id="bad-parameter",
+        ),
+    ],
+)
+async def test_retry_vlm_structured_code_contract(body, expected_kind, asynchronous, monkeypatch):
+    from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(400, json=body)
+
+    backend = OpenAIVLM(
+        {"provider": "openai", "model": "test-model", "api_key": "test", "max_retries": 1}
+    )
+    client: Any
+    if asynchronous:
+        client = openai.AsyncOpenAI(
+            api_key="test",
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        )
+    else:
+        client = openai.OpenAI(
+            api_key="test",
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        )
+    monkeypatch.setattr(
+        backend, "get_async_client" if asynchronous else "get_client", lambda: client
+    )
+    try:
+        with pytest.raises(ModelError) as caught:
+            if asynchronous:
+                await RetryVLM(backend).get_completion_async(prompt="hello")
+            else:
+                RetryVLM(backend).get_completion(prompt="hello")
+        assert caught.value.kind is expected_kind
+        assert caught.value.status_code == 400
+        assert caught.value.code == body.get("error", body).get("code")
+        assert isinstance(caught.value.__cause__, openai.BadRequestError)
+        assert len(requests) == (2 if expected_kind is ModelErrorKind.RATE_LIMIT_ERROR else 1)
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
