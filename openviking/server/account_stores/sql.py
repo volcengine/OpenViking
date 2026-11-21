@@ -1318,8 +1318,12 @@ class SQLAccountStore(AccountStore):
             )
             .where(*predicates)
         )
-        async with self._session_factory() as session:
-            candidates = (await session.execute(statement)).all()
+        assert self._engine is not None
+        connection = await self._engine.connect()
+        try:
+            candidates = (await connection.execute(statement)).all()
+        finally:
+            await wait_sql_cleanup(connection.close())
         verified: dict[str, bool] = {}
         snapshot: AuthSnapshot | None = None
         groups: set[str] = set()

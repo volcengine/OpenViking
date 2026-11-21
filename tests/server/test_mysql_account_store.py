@@ -301,3 +301,28 @@ def test_mysql_account_runtime_across_caller_event_loops(mysql_params):
                 cursor.execute(
                     "DELETE FROM ov_accounts WHERE service_name=%s", (store._service_name,)
                 )
+
+
+async def test_mysql_auth_cancelled_query_returns_connection(mysql_accounts):
+    import pymysql
+
+    from tests.server.auth_connection_test_helpers import (
+        assert_auth_cancelled_query_returns_connection,
+    )
+
+    manager = await mysql_accounts()
+    await manager.close()
+    store = manager._store
+    store._engine_options["pool_size"] = 1
+
+    def query_running():
+        with pymysql.connect(
+            **store._url.translate_connect_args(username="user"),
+            autocommit=True,
+            cursorclass=pymysql.cursors.DictCursor,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SHOW FULL PROCESSLIST")
+                return any(row.get("Info") == "SELECT SLEEP(30)" for row in cursor.fetchall())
+
+    await assert_auth_cancelled_query_returns_connection(store, "SELECT SLEEP(30)", query_running)
