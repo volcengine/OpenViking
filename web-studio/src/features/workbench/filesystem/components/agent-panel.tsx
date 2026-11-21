@@ -260,6 +260,14 @@ export function AgentPanel({
           <div ref={bottomRef} />
         </div>
 
+        {chat.error && (
+          <div
+            role="alert"
+            className="border-t bg-destructive/5 px-4 py-2 text-sm text-destructive"
+          >
+            {t('agent.sendFailed', { error: chat.error })}
+          </div>
+        )}
         {botModeError ? (
           <div className="border-t bg-background/80 px-4 py-3 text-center text-sm text-muted-foreground">
             {t('agent.botDisabledFooter')}
