@@ -25,6 +25,7 @@ from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.agent.tools.registry import ToolExecutionResult, ToolRegistry
 from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.config.schema import SessionKey
+from vikingbot.providers.base import tool_arguments_json
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import cal_str_tokens
 
@@ -232,7 +233,7 @@ class LoopToolMixin:
                 "function": {
                     "name": tc.name,
                     # Unicode escapes inflate the history's character budget.
-                    "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                    "arguments": tool_arguments_json(tc),
                 },
             }
             for tc in response.tool_calls

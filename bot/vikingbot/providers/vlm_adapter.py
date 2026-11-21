@@ -689,6 +689,7 @@ class VLMProviderAdapter(LLMProvider):
                     id=tc.id,
                     name=tc.name,
                     arguments=tc.arguments,
+                    raw_arguments=getattr(tc, "raw_arguments", None),
                     tokens=0,
                 )
             )
