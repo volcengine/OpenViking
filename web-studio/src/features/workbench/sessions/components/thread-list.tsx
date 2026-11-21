@@ -17,6 +17,7 @@ import {
   useDeleteSession,
   useSessionListByRecency,
 } from '#/features/workbench/sessions/lib/use-sessions'
+import { filterDuplicateVikingBotSessions } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { normalizeOvClientError } from '#/shared/api/ov-client/index'
 import { cn } from '#/shared/lib/utils'
 import {
@@ -42,13 +43,14 @@ export function ThreadList({ activeSessionId, className }: ThreadListProps) {
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const {
-    data: sessions,
+    data: sessionRecords,
     error: listError,
     isError,
     isFetching,
     isPending,
     refetch,
   } = useSessionListByRecency()
+  const sessions = filterDuplicateVikingBotSessions(sessionRecords)
   const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
