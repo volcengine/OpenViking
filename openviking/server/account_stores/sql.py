@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -187,6 +188,7 @@ class SQLAccountStore(AccountStore):
         self._sql_lease = False
         self._engine: AsyncEngine | None = None
         self._sessions: async_sessionmaker[AsyncSession] | None = None
+        self._auth_admission: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 
     @staticmethod
     def _validate_credential_storage(mode: object) -> str:
@@ -338,6 +340,7 @@ class SQLAccountStore(AccountStore):
                 await self._engine.dispose()
             self._engine = None
             self._sessions = None
+            self._auth_admission = None
             if self._sql_lease:
                 self._sql_lease = False
                 await self._sql_runtime.release()
@@ -1258,6 +1261,30 @@ class SQLAccountStore(AccountStore):
                 )
 
     async def get_auth_snapshot(
+        self,
+        api_key: str,
+        *,
+        account_id_hint: str | None = None,
+        user_id_hint: str | None = None,
+    ) -> AuthSnapshot | None:
+        """Queue live auth reads before they contend for pooled connections."""
+        capacity = self._engine_options["pool_size"]
+        # SQLAlchemy treats pool_size=0 as unlimited (accepted by MySQL).
+        if capacity <= 0:
+            return await self._read_auth_snapshot(
+                api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
+            )
+        loop = asyncio.get_running_loop()
+        state = self._auth_admission
+        if state is None or state[0] is not loop:
+            state = (loop, asyncio.Semaphore(capacity))
+            self._auth_admission = state
+        async with state[1]:
+            return await self._read_auth_snapshot(
+                api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
+            )
+
+    async def _read_auth_snapshot(
         self,
         api_key: str,
         *,
