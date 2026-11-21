@@ -486,6 +486,9 @@ html.dark .ov-file-browser__empty-art {
   );
   cursor: pointer;
 }
+.ov-file-browser__dashboard--wiki {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
 .ov-file-browser__dashboard--pending {
   color: var(
     --ov-ui-color-dashboard-warning,
