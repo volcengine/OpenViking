@@ -417,6 +417,37 @@ class PgvectorConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SAG2Config(BaseModel):
+    """SAG2 lexical retrieval and bounded multi-hop expansion options."""
+
+    candidate_k: StrictInt = Field(default=50, ge=1, le=200)
+    seed_k: StrictInt = Field(default=10, ge=1, le=50)
+    expansion_term_limit: StrictInt = Field(default=20, ge=1, le=100)
+    protected_k: StrictInt = Field(default=5, ge=0, le=50)
+    max_hops: StrictInt = Field(default=1, ge=0, le=2)
+    max_judgments: Optional[StrictInt] = Field(default=None, ge=1)
+    max_query_terms: StrictInt = Field(default=80, ge=1, le=200)
+    max_context_tokens: StrictInt = Field(default=32000, ge=1)
+    total_timeout_s: float = Field(default=30.0, gt=0)
+    query_workers: StrictInt = Field(default=4, ge=1, le=32)
+    max_concurrent_scorers: StrictInt = Field(default=4, ge=1, le=32)
+    tokenizer: Literal["sag2-zh-v1"] = "sag2-zh-v1"
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_sag2(self):
+        if self.protected_k > self.candidate_k:
+            raise ValueError("sag2.protected_k cannot exceed candidate_k")
+        if self.max_judgments is None:
+            self.max_judgments = self.candidate_k + self.max_hops * (
+                self.candidate_k + self.seed_k + self.protected_k
+            )
+        if self.max_judgments < self.candidate_k:
+            raise ValueError("sag2.max_judgments must cover the initial candidate pool")
+        return self
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -430,7 +461,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "'vikingdb' (private deployment), 'opengauss', or 'pgvector'"
+            "'vikingdb' (private deployment), 'opengauss', 'pgvector', or 'sag2'"
         ),
     )
 
@@ -510,6 +541,8 @@ class VectorDBBackendConfig(BaseModel):
 
     pgvector: Optional[PgvectorConfig] = Field(default=None)
 
+    sag2: Optional[SAG2Config] = Field(default_factory=SAG2Config)
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
@@ -521,6 +554,7 @@ class VectorDBBackendConfig(BaseModel):
             "vikingdb",
             "opengauss",
             "pgvector",
+            "sag2",
         ]
 
         # Allow custom backend classes (containing dot) without standard validation
@@ -536,7 +570,10 @@ class VectorDBBackendConfig(BaseModel):
                 "or a valid Python class path."
             )
 
-        if self.backend in {"local", "cuvs"}:
+        if self.backend == "sag2" and self.sag2 is None:
+            raise ValueError("VectorDB sag2 backend requires 'sag2' config")
+
+        if self.backend in {"local", "cuvs", "sag2"}:
             pass
 
         elif self.backend == "http":

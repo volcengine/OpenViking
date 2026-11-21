@@ -3,6 +3,7 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
+import inspect
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -221,7 +222,12 @@ class _SemanticMixin:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
 
         embedder = self._get_embedder(real_ctx)
-        if search_type == "semantic" and not embedder:
+        if hasattr(storage, "account_requires_embedding"):
+            capability = storage.account_requires_embedding(real_ctx.account_id)
+            requires_embedding = await capability if inspect.isawaitable(capability) else capability
+        else:
+            requires_embedding = getattr(storage, "requires_embedding", True)
+        if search_type == "semantic" and requires_embedding and not embedder:
             raise RuntimeError("Embedder not configured.")
 
         retriever = HierarchicalRetriever(

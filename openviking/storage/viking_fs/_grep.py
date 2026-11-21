@@ -206,6 +206,8 @@ class _GrepMixin:
             backend_type = getattr(vector_store, "_backend_type", "unknown")
         # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
         # only these backends store the ``content`` field required for full-text grep.
+        # SAG2's retrieval tokenizer drops stopwords/punctuation, so it cannot
+        # provide authoritative candidates for exact grep; use the FS engine.
         if backend_type not in ("volcengine", "vikingdb", "opengauss"):
             return "fs"
 
