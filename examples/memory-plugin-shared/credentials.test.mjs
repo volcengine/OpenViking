@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { KNOB_BY_NAME } from "./lib/config-schema.mjs";
-import { CONNECTION_ENV_VARS, CREDENTIAL_ENV_VARS, resolveConnection } from "./lib/credentials.mjs";
+import { CONNECTION_ENV_VARS, CREDENTIAL_ENV_VARS, buildProxyConnection, loadCredentialFiles, resolveConnection } from "./lib/credentials.mjs";
+import { slotName } from "./lib/workspace-registry.mjs";
 
 /**
  * Run `fn` against an ovcli.conf / ov.conf pair in a throwaway directory. A
@@ -320,5 +321,79 @@ test("every spelling of a connection knob in the schema reaches the chain", asyn
         assert.equal(resolveConnection("codex", { env })[field], value, `plugin.codex.${spelling}`);
       });
     }
+  }
+});
+
+// --- the registry connection pointer ----------------------------------------
+
+test("loadCredentialFiles lets the pointer pick the file, env keeps its precedence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ov-pointer-"));
+  try {
+    const defaultConf = join(dir, "ovcli.conf");
+    const pointedConf = join(dir, "pointed.conf");
+    await writeFile(defaultConf, JSON.stringify({ url: "https://default.example.com", api_key: "default-key", user: "default-user" }));
+    await writeFile(pointedConf, JSON.stringify({ url: "https://work.example.com", api_key: "work-key", user: "work-user" }));
+
+    // No pointer: the default ovcli.conf path is the candidate.
+    const plain = loadCredentialFiles({});
+    assert.equal(plain.connectionFile, "");
+    assert.equal(plain.cliPathCandidate, join(homedir(), ".openviking", "ovcli.conf"));
+
+    // The pointer selects the file when the environment says nothing.
+    const pointed = loadCredentialFiles({}, { connectionFile: pointedConf });
+    assert.equal(pointed.connectionFile, pointedConf);
+    assert.equal(pointed.cliPath, pointedConf);
+    assert.equal(pointed.cliPathCandidate, pointedConf);
+    assert.equal(resolveConnection("codex", { env: {}, files: pointed }).user, "work-user");
+
+    // An OPENVIKING_CLI_CONFIG_FILE in the environment outranks the pointer.
+    const envWins = loadCredentialFiles(
+      { OPENVIKING_CLI_CONFIG_FILE: defaultConf },
+      { connectionFile: pointedConf },
+    );
+    assert.equal(envWins.connectionFile, "");
+    assert.equal(envWins.cliPath, defaultConf);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildProxyConnection resolves the workspace pointer once from its cwd", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ov-proxy-pointer-"));
+  try {
+    const home0 = join(dir, "home");
+    const root = join(dir, "repo");
+    const conf = join(home0, "connections", "agent.conf");
+    await mkdir(join(home0, "connections"), { recursive: true });
+    await writeFile(conf, JSON.stringify({ url: "https://agent.example.com", api_key: "agent-key", user: "agent-user" }));
+    await mkdir(join(root, ".openviking"), { recursive: true });
+    await writeFile(join(root, ".openviking", "config.json"), JSON.stringify({ version: 1 }));
+
+    const slots = join(home0, "workspaces");
+    await mkdir(slots, { recursive: true });
+    // Outside git there is no identity but the path — the slot readEntry looks in.
+    await writeFile(join(slots, slotName(root)), JSON.stringify({
+      version: 1,
+      identity: "path",
+      connection: { name: "agent" },
+    }));
+
+    const cfg = buildProxyConnection("agent-plugins", {
+      env: { OPENVIKING_HOME: home0 },
+      cwd: root,
+    });
+    assert.equal(cfg.connectionFile, conf);
+    assert.equal(cfg.cliPath, conf);
+    assert.equal(cfg.user, "agent-user");
+    assert.equal(cfg.baseUrl, "https://agent.example.com");
+
+    // And with no workspace above the cwd, the pointer changes nothing.
+    const detached = buildProxyConnection("agent-plugins", {
+      env: { OPENVIKING_HOME: home0 },
+      cwd: join(dir, "elsewhere"),
+    });
+    assert.equal(detached.connectionFile, "");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
