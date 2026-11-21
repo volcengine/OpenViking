@@ -59,6 +59,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     renderDashboard,
     acl,
     readOnly,
+    hideDeniedEntries,
     previewActions,
     onUriChange,
     onSelect,
@@ -99,6 +100,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   );
   const browser = useFileBrowser({
     rootUri,
+    hideDeniedEntries,
     locale,
     dashboardKinds,
     experienceDataSource,
@@ -140,9 +142,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);
-  const baseClass = stacked
-    ? 'ov-file-browser ov-file-browser--stacked'
-    : 'ov-file-browser';
+  const baseClass = `ov-file-browser${stacked ? ' ov-file-browser--stacked' : ''}`;
 
   const exposure = useExposureRef('file_browser_show', layoutRef);
   return (

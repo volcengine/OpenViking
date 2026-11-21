@@ -96,6 +96,7 @@ export interface FileBrowserActions {
 /** Internal options for the composed FileBrowser loader. */
 export interface UseFileBrowserOptions {
   rootUri: string;
+  hideDeniedEntries?: boolean;
   accessLabels?: Pick<FileBrowserLabels, 'accessDenied' | 'traverseOnly'>;
   /** Built-in copy; inherits the Provider locale, otherwise en-US. */
   locale?: Locale;
