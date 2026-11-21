@@ -792,3 +792,9 @@ Provider-, parser-, storage-, and encryption-specific fields are documented in [
   }
 }
 ```
+
+## Optional startup GC freeze
+
+`server.gc_freeze_on_startup` defaults to `false`. When enabled, the server collects and freezes surviving initialization objects immediately before the application lifespan begins serving requests. Automatic GC and its thresholds are unchanged; new allocations still participate in collection. The server unfreezes on lifespan exit, including exceptional exit, before closing runtime resources.
+
+This is an opt-in for one long-lived server lifespan per process. GC freezing is process-global; overlapping enabled lifespans and pre-existing frozen objects are rejected. Do not combine it with external code that freezes or unfreezes GC while the lifespan is active. Frozen cycles can retain objects until shutdown. Five-minute read-only measurements do not establish long-term memory safety or write/background-work behavior. Validate those workloads and restart with this option disabled to roll back.
