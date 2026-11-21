@@ -2285,6 +2285,11 @@ class MemoryUpdater:
                         continue
                     attempted_count += 1
                     logger.debug("memory vectorization enqueued uri=%s", safe_uri_for_log(uri))
+                else:
+                    logger.debug(
+                        "memory vectorization skipped; empty embedding input uri=%s",
+                        safe_uri_for_log(uri),
+                    )
 
             except Exception as e:
                 logger.debug(
