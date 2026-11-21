@@ -259,6 +259,17 @@ export async function listPending() {
   return entries;
 }
 
+/** Check for pending files without reading their transcript payloads. */
+export async function hasPending() {
+  const dir = getPendingDir();
+  await recoverStaleProcessing(dir);
+  try {
+    return (await readdir(dir)).some(filename => filename.endsWith(".json"));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Atomically claim a pending file for replay. Only the process that successfully
  * renames the file may send the HTTP replay.
