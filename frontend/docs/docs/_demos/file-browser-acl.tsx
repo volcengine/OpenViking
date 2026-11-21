@@ -13,6 +13,7 @@ export default function FileBrowserAclDemo() {
   const zh = locale === 'zh-CN';
   const [demo] = useState(createAclDemo);
   const [revision, setRevision] = useState(0);
+  const [hideDeniedEntries, setHideDeniedEntries] = useState(false);
   return (
     <div lang={locale}>
       <p>
@@ -23,6 +24,9 @@ export default function FileBrowserAclDemo() {
       <div
         style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}
       >
+        <Checkbox checked={hideDeniedEntries} onChange={setHideDeniedEntries}>
+          {zh ? '隐藏无权限节点' : 'Hide denied entries'}
+        </Checkbox>
         <Checkbox onChange={(next) => demo.setFailSave(next)}>
           {' '}
           {zh ? '模拟保存失败' : 'Simulate save failure'}
@@ -65,6 +69,7 @@ export default function FileBrowserAclDemo() {
           <FileBrowser
             key={revision}
             acl
+            hideDeniedEntries={hideDeniedEntries}
             locale={locale}
             rootUri="viking://resources"
             defaultUri={ACL_URI}

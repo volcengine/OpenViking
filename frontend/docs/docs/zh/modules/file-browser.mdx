@@ -115,6 +115,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | defaultExpansionSnapshot  | 恢复本次挂载的展开路径和手动折叠记录。优先于 `defaultExpandedUris`。                                               | `FileBrowserExpansionSnapshot`                                          | -                        |
 | onExpansionSnapshotChange | 上报完整快照，包括可选且有序的 `pendingEdits`。请保存完整对象以便恢复。                                            | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                        |
 | readOnly                  | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
+| hideDeniedEntries         | 隐藏目录树中 `access: 'denied'` 的节点，保留可穿透目录和服务端分页                                                 | `boolean`                                                               | `false`                  |
 | acl                       | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
 | agentConnect              | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
 | agentConnectOpen          | 传入 `agentConnect` 后可从外层控制内置抽屉；见[受控示例](../components/file-browser-action-bar#从其他入口打开)     | `boolean`                                                               | -                        |
@@ -605,6 +606,7 @@ await browserRef.current?.openResource(directoryUri);
 - 保存期间不能重复提交或关闭弹窗；保存失败时保留上次成功的授权并显示服务端的原因。
 - 保存成功后刷新目录和预览；服务端的索引更新可能异步完成，以服务端的鉴权结果为准。
 - 目录列表（`fs/ls`）里 `access: 'denied'` 的节点不能选中或展开，`access: 'container'` 的节点只能展开以访问有权限的子节点、不能预览自身。
+- 设置 `hideDeniedEntries` 可在目录树中隐藏无权限节点，可穿透目录仍保留。该配置只改变展示，缓存分页、分页偏移和权限检查保留服务端原始响应。
 - 授权调用 `GET`、`PUT /api/v1/acl`，恢复继承时将 `acl_mode` 设为 `inherit` 并发送空的直接授权列表；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
 - 用户组目录需要账号管理权限，资源管理者无权读取时会显示失败和重试，可以用 `acl.listPrincipals` 接入自己的目录。
 - `acl.readOnly` 只禁止修改授权，与 `readOnly` 相互独立。
