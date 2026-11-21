@@ -1133,7 +1133,7 @@ export class OpenVikingClient {
   ): Promise<JsonObject>;
   commitSession(
     sessionId: string,
-    optionsOrKeepRecentCount: CommitSessionOptions | number = {},
+    optionsOrKeepRecentCount?: CommitSessionOptions | number,
     telemetry?: unknown,
     eventTags?: string[],
   ): Promise<JsonObject> {
@@ -1143,7 +1143,11 @@ export class OpenVikingClient {
       if (telemetry !== undefined) options.telemetry = telemetry;
       if (eventTags !== undefined) options.eventTags = eventTags;
     } else {
-      options = optionsOrKeepRecentCount;
+      options = optionsOrKeepRecentCount ?? {};
+      if (optionsOrKeepRecentCount === undefined) {
+        if (telemetry !== undefined) options.telemetry = telemetry;
+        if (eventTags !== undefined) options.eventTags = eventTags;
+      }
     }
     const body = compact({
       enable_working_memory: options.enableWorkingMemory,
