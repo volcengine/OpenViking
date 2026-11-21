@@ -332,6 +332,26 @@ docker compose up -d
 
 > **安全提示**：服务部署后默认监听并暴露于公网。请妥善保管 `OPENVIKING_ROOT_API_KEY`，在对外开放前请阅读[公网访问安全指南](12-public-access.md)。
 
+### 部署到 Pethost
+
+在 [Pethost](https://pethost.dev/templates/openviking/) 上通过 OpenViking 一键模板部署。
+
+#### 预置资源与环境
+
+- **服务镜像**：使用官方镜像 `ghcr.io/volcengine/openviking`，固定到某个发布版本，监听 1933 端口，并分配 HTTPS 地址。
+- **持久化存储**：在 `/app/.openviking` 挂载持久卷，`ov.conf` 和默认工作目录（`/app/.openviking/data`）都保存在这里。
+- **默认配置**：Embedding（`text-embedding-3-small`）和 VLM（`gpt-4o-mini`）采用 OpenAI。部署时仅需填写 `OPENAI_API_KEY`；管理员密钥 `OPENVIKING_ROOT_API_KEY` 自动生成，保存在项目的 `.env` 中。Bot 默认关闭（`OPENVIKING_WITH_BOT=0`），`OPENVIKING_PUBLIC_BASE_URL` 为项目地址。
+
+#### 快速初始化（Web Studio）
+
+1. **配置管理员密钥**：从项目的 `.env` 中复制 `OPENVIKING_ROOT_API_KEY`，访问 `https://<你的域名>/studio/settings` 并保存。
+2. **创建用户**：访问 `https://<你的域名>/studio/users` 创建首个账户和用户。
+3. **开始使用**：之后通过 Web Studio、`ov` CLI 和 SDK 使用该用户 API Key。
+
+#### 配置管理
+
+`OPENVIKING_CONF_CONTENT` 仅在首次启动时写入 `ov.conf`。其中的密钥写作 `${OPENAI_API_KEY}` 和 `${OPENVIKING_ROOT_API_KEY}`，服务每次启动时展开，因此在 `.env` 中修改密钥后重启即可生效。其他设置请在服务终端中编辑 `/app/.openviking/ov.conf` 后重启。模板源码见 [GitHub](https://github.com/pethost-dev/templates/tree/main/openviking)。
+
 ### 多实例部署注意事项
 
 使用本地向量后端（`local` 或 `cuvs`）时，OpenViking 默认通过操作系统文件锁独占 `storage.workspace`。`.openviking.lock` 文件会保留在磁盘上，文件存在不代表服务正在运行；正常关闭或进程终止后，操作系统会释放锁。不要手动删除运行中服务的锁文件。
