@@ -69,6 +69,7 @@ const resources = {
       success: '成功',
     },
     table: {
+      delegatedBy: 'Admin 操作者：{{user}}',
       accountId: '账号 ID',
       apiType: 'API 类型',
       duration: '耗时',

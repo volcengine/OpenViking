@@ -703,6 +703,7 @@ def apply_http_metrics_finalize(
             account_id=final_account_id,
             request_id=root_attrs.request_id,
             user_id=root_attrs.user_id,
+            delegated_by_user_id=getattr(request.state, "delegated_by_user_id", None),
             url_path=root_attrs.url_path,
             result_count=getattr(request.state, "retrieval_result_count", None),
             error_code=captured_error.code if include_error and captured_error else None,

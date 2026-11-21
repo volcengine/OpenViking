@@ -38,6 +38,7 @@ def test_public_http_error_is_bounded_and_redacts_credentials() -> None:
     assert "dXNlcjpwYXNz" not in error.message
     assert "top secret" not in error.message
     assert "bearer-secret" not in error.message
+
     assert error.details == {
         "api_key": "[REDACTED]",
         "app_secret": "[REDACTED]",
@@ -48,6 +49,16 @@ def test_public_http_error_is_bounded_and_redacts_credentials() -> None:
             "message": "password=[REDACTED]",
         },
     }
+
+
+def test_public_error_redacts_the_explicit_delegation_authorization_scheme() -> None:
+    error = sanitize_public_http_error(
+        code="DENIED",
+        message="Rejected OpenViking-Delegate synthetic-admin-secret",
+        details={"Authorization": "OpenViking-Delegate synthetic-header-secret"},
+    )
+    assert "synthetic-admin-secret" not in error.message
+    assert "synthetic-header-secret" not in str(error.details)
 
 
 def test_oversized_public_error_details_use_bounded_marker() -> None:

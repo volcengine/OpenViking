@@ -142,7 +142,8 @@ function captureUploadConnection() {
         current.userId === connection.userId &&
         current.apiKey === connection.apiKey &&
         current.adminApiKey === connection.adminApiKey &&
-        current.identityHeaders === connection.identityHeaders
+        current.identityHeaders === connection.identityHeaders &&
+        current.adminDelegation === connection.adminDelegation
       )
     },
   }

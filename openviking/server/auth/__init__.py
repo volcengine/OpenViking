@@ -141,7 +141,11 @@ async def _build_request_context(
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
+        delegated_by_user_id=identity.delegated_by_user_id,
     )
+    if identity.delegated_by_user_id is not None:
+        ctx.api_key = None
+        request.state.delegated_by_user_id = identity.delegated_by_user_id
     manager = getattr(request.app.state, "api_key_manager", None)
     deletion = None
     if (
@@ -177,11 +181,30 @@ async def resolve_identity(
         x_api_key = request.headers.get("X-API-Key")
     if authorization is None:
         authorization = request.headers.get("Authorization")
+    # Direct dependency callers may leave FastAPI Header() defaults unbound;
+    # keep the existing extractor's type filtering before parsing a scheme.
+    x_api_key = x_api_key if isinstance(x_api_key, str) else None
+    authorization = authorization if isinstance(authorization, str) else None
     x_openviking_account = _normalize_header_value(x_openviking_account)
     x_openviking_user = _normalize_header_value(x_openviking_user)
-    api_key = _extract_api_key(x_api_key, authorization)
-
     plugin = _get_plugin(request)
+    target = request.headers.get("X-OpenViking-Delegate-User")
+    scheme, _, credential = (authorization or "").partition(" ")
+    delegated_auth = scheme.lower() == "openviking-delegate"
+    if target is not None or delegated_auth:
+        if plugin.auth_mode != "api_key":
+            raise PermissionDeniedError(
+                "Admin user delegation requires native API key authentication"
+            )
+        if target is None or not delegated_auth or not credential.strip() or x_api_key:
+            raise PermissionDeniedError(
+                "Delegation requires only OpenViking-Delegate authorization and a target user"
+            )
+        # Old servers do not recognize this authorization scheme, so a rolling
+        # downgrade cannot reinterpret a delegated request as full Admin.
+        api_key = credential.strip()
+    else:
+        api_key = _extract_api_key(x_api_key, authorization)
     return await plugin.resolve_identity(
         request,
         api_key=api_key,
@@ -463,5 +486,6 @@ def is_personal_api_key_auth(request: Request | None, ctx: RequestContext) -> bo
         request is not None
         and _auth_mode(request) == "api_key"
         and not ctx.from_oauth
+        and ctx.delegated_by_user_id is None
         and bool(ctx.api_key)
     )

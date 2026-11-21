@@ -22,6 +22,7 @@ from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
+    AuthSnapshot,
     DeletionRecord,
     GroupSummary,
     UsersPage,
@@ -1475,6 +1476,44 @@ class FileStore(AccountStore):
         """
         await self._refresh_users_for_management_read(account_id)
         return await self.get_user(account_id, user_id)
+
+    supports_admin_delegation = True
+
+    async def get_admin_delegation(
+        self, api_key: str, *, account_id: str, admin_user_id: str, target_user_id: str
+    ) -> AuthSnapshot | None:
+        # Explicit delegation reads persisted state even with a running watcher;
+        # it must not inherit an indefinitely cached group or revoked key.
+        async with self._mutation_lock:
+            accounts = await self._read_json(ACCOUNTS_PATH) or {}
+            account = accounts.get("accounts", {}).get(account_id)
+            users_data = (
+                await self._read_json(USERS_PATH_TEMPLATE.format(account_id=account_id)) or {}
+            )
+            users = users_data.get("users", {})
+            admin, target = users.get(admin_user_id), users.get(target_user_id)
+            if (
+                account is None
+                or account.get("deletion")
+                or not admin
+                or admin.get("deletion")
+                or admin.get("role") != Role.ADMIN
+                or not target
+                or target.get("deletion")
+                or target.get("role", Role.USER) not in (Role.USER, Role.ADMIN)
+                or not await self._key_matches(admin.get("key", ""), api_key)
+            ):
+                return None
+            groups_data = (
+                await self._read_json(GROUPS_PATH_TEMPLATE.format(account_id=account_id)) or {}
+            )
+            groups = self._group_memberships(users, groups_data.get("groups", {}))
+            return AuthSnapshot(
+                account_id=account_id,
+                user_id=target_user_id,
+                role=Role.USER,
+                group_ids=groups.get(target_user_id, ()),
+            )
 
     @deprecated(
         "get_user_for_management is a FileStore compatibility path and will be removed.",

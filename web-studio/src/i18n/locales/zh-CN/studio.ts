@@ -1,4 +1,15 @@
 const studio = {
+  delegation: {
+    title: '打开用户视图',
+    description:
+      '使用账户 Admin 凭据打开 {{account}} 内的普通用户视图。操作采用 USER 权限，请求审计保留你的 Admin 身份。',
+    user: '已有用户 ID',
+    open: '打开用户视图',
+    checking: '正在核验用户视图…',
+    profile: '用户视图：{{user}}',
+    unverified:
+      '服务端尚未核验此代理用户视图，请重新连接支持 Admin 用户代理的服务端。',
+  },
   credentialStorage: {
     sessionOnly:
       '当前环境无法保存连接改动，刷新或关闭页面后，本次改动将丢失。已有本地记录会保留。',

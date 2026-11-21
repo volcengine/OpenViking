@@ -4,7 +4,7 @@ import type { ConnectionDraft } from '#/features/connection/lib/types'
 
 export type WorkbenchIdentity = Pick<
   ConnectionDraft,
-  'accountId' | 'userId' | 'apiKey'
+  'accountId' | 'userId' | 'apiKey' | 'adminDelegation'
 >
 
 function identity(connection: ConnectionDraft): WorkbenchIdentity {
@@ -12,6 +12,7 @@ function identity(connection: ConnectionDraft): WorkbenchIdentity {
     accountId: connection.accountId,
     userId: connection.userId,
     apiKey: connection.apiKey,
+    ...(connection.adminDelegation ? { adminDelegation: true } : {}),
   }
 }
 
@@ -53,6 +54,7 @@ export function restoreSurface(
       accountId: saved.accountId,
       userId: saved.userId,
       apiKey: saved.apiKey,
+      adminDelegation: saved.adminDelegation,
     }
   }
   const account = profile.managementAccountId

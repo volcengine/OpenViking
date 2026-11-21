@@ -12,4 +12,6 @@ export type ConnectionDraft = {
   apiKey: string
   baseUrl: string
   userId: string
+  /** Explicit server-verified Admin credential → fixed USER protocol. */
+  adminDelegation?: boolean
 }

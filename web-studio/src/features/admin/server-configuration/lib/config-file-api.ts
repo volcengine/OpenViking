@@ -136,8 +136,13 @@ export function createConfigFileApi(
   trusted: boolean,
 ) {
   const { client } = createOvClient({
+    credentialScope: 'control',
     baseUrl: connection.baseUrl,
-    connection: { ...connection, identityHeaders: trusted },
+    connection: {
+      ...connection,
+      identityHeaders: trusted,
+      adminDelegation: false,
+    },
   })
   const url = '/api/v1/admin/configuration'
   return {

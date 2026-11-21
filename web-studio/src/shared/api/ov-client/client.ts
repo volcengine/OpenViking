@@ -1,4 +1,5 @@
 import i18n from '#/i18n/core'
+import { adminDelegationHeaders } from './delegation'
 import { resolveApiKeyAuth } from '#/shared/api/auth'
 import type { InternalAxiosRequestConfig } from 'axios'
 import axios, { AxiosHeaders } from 'axios'
@@ -183,6 +184,12 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 
   let connection: OvConnectionState = {
+    ...(options.connection?.adminDelegation
+      ? {
+          adminDelegation: true,
+          delegationVerified: options.connection.delegationVerified,
+        }
+      : {}),
     adminApiKey: options.connection?.adminApiKey ?? '',
     apiKey:
       options.connection?.apiKey ??
@@ -204,6 +211,19 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 
   instance.interceptors.request.use((config) => {
     const headers = AxiosHeaders.from(config.headers)
+    const delegated =
+      connection.adminDelegation && runtimeOptions.credentialScope !== 'control'
+    if (delegated && runtimeOptions.apiKeyAuth !== 'header') {
+      throw new OvClientError({
+        code: 'PERMISSION_DENIED',
+        statusCode: 403,
+        message: i18n.t('studio:delegation.unverified'),
+      })
+    }
+    const delegationHeaders = adminDelegationHeaders({
+      ...connection,
+      adminDelegation: delegated,
+    })
     config.baseURL = runtimeOptions.baseUrl
 
     for (const [key, value] of Object.entries(defaultHeaders)) {
@@ -223,13 +243,13 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 
     // Workbench callers cannot override the data credential with a control
     // header left over from management mode.
-    if (runtimeOptions.credentialScope === 'data') {
+    if (runtimeOptions.credentialScope === 'data' || delegated) {
       headers.delete('X-API-Key')
       headers.delete('Authorization')
     }
     const credentialHeader =
       runtimeOptions.apiKeyAuth === 'bearer' ? 'Authorization' : 'X-API-Key'
-    if (!readHeader(headers, credentialHeader)?.trim()) {
+    if (!delegated && !readHeader(headers, credentialHeader)?.trim()) {
       const apiKey =
         runtimeOptions.apiKeyAuth === 'bearer' ||
         runtimeOptions.credentialScope === 'data'
@@ -266,6 +286,12 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
     }
 
     config.headers = headers
+    headers.delete('X-OpenViking-Delegate-User')
+    if (delegated) {
+      headers.delete('X-OpenViking-User')
+      for (const [name, value] of Object.entries(delegationHeaders))
+        headers.set(name, value)
+    }
     maybeInjectTelemetry(config, runtimeOptions.defaultTelemetry)
 
     return config

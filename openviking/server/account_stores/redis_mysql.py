@@ -748,6 +748,12 @@ class RedisMySQLAccountStore(AccountStore):
         # the latest persisted state, which MySQL indexes directly.
         return await self._read_mysql(lambda: self._mysql.get_user_membership(account_id, user_id))
 
+    supports_admin_delegation = True
+
+    async def get_admin_delegation(self, api_key: str, **kwargs):
+        # Explicit authority/target reads bypass every Redis identity cache.
+        return await self._read_mysql(lambda: self._mysql.get_admin_delegation(api_key, **kwargs))
+
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
         value = await self._read_through(
             account_id,

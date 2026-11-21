@@ -70,6 +70,9 @@ def is_due(record: Dict[str, Any], now: datetime) -> bool:
 
 async def encrypt_credential(encryptor: Any, ctx: RequestContext) -> Dict[str, str]:
     from openviking.crypto.exceptions import ConfigError
+    from openviking.server.auth.delegation import require_unbound_credential_export
+
+    require_unbound_credential_export(ctx, "Scheduled Compile credential storage")
 
     if not ctx.api_key:
         raise FailedPreconditionError(

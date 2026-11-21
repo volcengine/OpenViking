@@ -33,6 +33,7 @@ export function createResourceAclApi(
   connection: ConnectionDraft,
   trusted: boolean,
   useAccountAdminCredential = false,
+  delegationVerified = false,
 ) {
   const { client } = createOvClient({
     baseUrl: connection.baseUrl,
@@ -42,6 +43,8 @@ export function createResourceAclApi(
         ? connection.adminApiKey
         : connection.apiKey,
       identityHeaders: trusted,
+      adminDelegation: connection.adminDelegation && !useAccountAdminCredential,
+      delegationVerified,
     },
   })
   const configuration = '/api/v1/admin/accounts/{account_id}/configuration'

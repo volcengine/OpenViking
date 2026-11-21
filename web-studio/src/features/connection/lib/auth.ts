@@ -1,4 +1,5 @@
 import type { ConnectionDraft } from '#/features/connection/lib/types'
+import i18n from '#/i18n/core'
 import { createApiKeyHeaders, resolveApiKeyAuth } from '#/shared/api/auth'
 import type { ServerMode } from '#/shared/types/auth'
 
@@ -15,13 +16,24 @@ export function createConnectionHealthHeaders(
   const apiKey =
     auth === 'bearer'
       ? connection.apiKey
-      : serverMode === 'trusted'
-        ? connection.adminApiKey || connection.apiKey
-        : credential === 'data'
-          ? connection.apiKey
-          : connection.adminApiKey || connection.apiKey
+      : credential === 'data' && connection.adminDelegation
+        ? connection.adminApiKey
+        : serverMode === 'trusted'
+          ? connection.adminApiKey || connection.apiKey
+          : credential === 'data'
+            ? connection.apiKey
+            : connection.adminApiKey || connection.apiKey
   if (!apiKey) return headers
   Object.assign(headers, createApiKeyHeaders(apiKey, auth))
+  if (credential === 'data' && connection.adminDelegation) {
+    if (auth !== 'header')
+      throw new Error(i18n.t('studio:delegation.unverified'))
+    headers['X-OpenViking-Delegate-User'] = connection.userId
+    headers['X-OpenViking-Account'] = connection.accountId
+    delete headers['X-API-Key']
+    headers.Authorization = `OpenViking-Delegate ${apiKey}`
+    return headers
+  }
   const isHosted = auth === 'bearer'
   const assertedIdentity = !(
     serverMode === 'trusted' && credential === 'control'

@@ -1,4 +1,5 @@
 import { ConnectionProfilesList } from '#/features/connection/components/connection-profiles'
+import { AdminUserView } from './admin-user-view'
 import { useTranslation } from 'react-i18next'
 
 // Local connection configuration is also the recovery page for an unavailable server.
@@ -10,6 +11,7 @@ export function ConnectionSettingsPage() {
         {t('appShell:footer.connection')}
       </h1>
       <ConnectionProfilesList />
+      <AdminUserView />
     </div>
   )
 }

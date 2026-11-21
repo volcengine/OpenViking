@@ -169,7 +169,7 @@ export async function verifyStudioSetup(
   let health = await fetchConnectionHealth(
     connection,
     signal,
-    connection.apiKey ? 'data' : 'control',
+    connection.apiKey || connection.adminDelegation ? 'data' : 'control',
   ).catch(async (error: unknown) => {
     if (connection.apiKey && connection.adminApiKey) {
       try {
@@ -245,6 +245,7 @@ export async function verifyStudioSetup(
     connection.apiKey ||= connection.adminApiKey
   }
   const managementOnly =
+    !connection.adminDelegation &&
     mode === 'api_key' &&
     connection.serviceSelection === 'opensource' &&
     !connection.apiKey &&

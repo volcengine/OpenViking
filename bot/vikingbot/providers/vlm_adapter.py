@@ -63,7 +63,7 @@ _SENSITIVE_ERROR_KV_RE = re.compile(
     r"(?i)((?:api[_-]?key|authorization|credential|password|secret|token)"
     r"[\"']?\s*[:=]\s*[\"']?)[^\s,;\]\}\"']+"
 )
-_BEARER_TOKEN_RE = re.compile(r"(?i)(bearer\s+)[^\s,;\]\}\"']+")
+_BEARER_TOKEN_RE = re.compile(r"(?i)((?:bearer|OpenViking-Delegate)\s+)[^\s,;\]\}\"']+")
 _API_KEY_TOKEN_RE = re.compile(r"\bsk-[a-zA-Z0-9._-]{8,}")
 _SERVER_REQUEST_ID_HEADERS = ("x-request-id",)
 _SERVER_TRACE_ID_HEADERS = (
@@ -96,8 +96,8 @@ def _exception_chain(error: BaseException) -> list[BaseException]:
 
 def _redact_error_text(value: str) -> str:
     value = redact_image_data_urls(value)
-    value = _SENSITIVE_ERROR_KV_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
     value = _BEARER_TOKEN_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
+    value = _SENSITIVE_ERROR_KV_RE.sub(lambda match: f"{match.group(1)}<redacted>", value)
     value = _API_KEY_TOKEN_RE.sub("<redacted>", value)
     if len(value) > _MAX_ERROR_LOG_VALUE_CHARS:
         return value[:_MAX_ERROR_LOG_VALUE_CHARS] + "...[truncated]"

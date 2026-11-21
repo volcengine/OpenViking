@@ -130,6 +130,7 @@ export function resolveStudioEntry({
 }): '/admin' | '/home' | '/filesystem' {
   const hasDataIdentity =
     Boolean(connection.apiKey) ||
+    Boolean(connection.adminDelegation) ||
     serverMode === 'trusted' ||
     serverMode === 'dev'
   if (canManage && (preferredMode === 'management' || !hasDataIdentity))

@@ -375,3 +375,30 @@ async def test_main_batch_membership_and_conditional_key_rotation_invalidate_sna
             "acme", "alice", "another-key", expected_api_key="old-key"
         )
     assert (await snapshot(reader, "new-key"))["user_id"] == "alice"
+
+
+async def test_admin_delegation_bypasses_warm_redis_authority_and_group_caches(backend):
+    reader, authority = backend.reader, backend.mysql
+    await authority.create_group("acme", "editors")
+    await authority.add_group_members("acme", "editors", ["alice"])
+    await reader.get_auth_snapshot("admin-key", account_id_hint="acme", user_id_hint="admin")
+    assert await reader.get_user_group_ids("acme", "alice") == ("editors",)
+    target = await reader.get_admin_delegation(
+        "admin-key", account_id="acme", admin_user_id="admin", target_user_id="alice"
+    )
+    assert target["role"] == "user"
+    assert target["group_ids"] == ("editors",)
+    # Direct authority writes intentionally leave the two Redis readers stale.
+    await authority.remove_group_members("acme", "editors", ["alice"])
+    for store in [reader, backend.writer]:
+        target = await store.get_admin_delegation(
+            "admin-key", account_id="acme", admin_user_id="admin", target_user_id="alice"
+        )
+        assert target["group_ids"] == ()
+    await authority.revoke_active_api_keys("acme", "admin")
+    assert (
+        await reader.get_admin_delegation(
+            "admin-key", account_id="acme", admin_user_id="admin", target_user_id="alice"
+        )
+        is None
+    )

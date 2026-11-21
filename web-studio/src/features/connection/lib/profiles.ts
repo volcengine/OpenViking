@@ -150,6 +150,7 @@ export function connectionProfileFingerprint(
     normalized.userId,
     normalized.apiKey,
     normalized.adminApiKey,
+    ...(normalized.adminDelegation ? ['admin-delegation'] : []),
   ])
 }
 
