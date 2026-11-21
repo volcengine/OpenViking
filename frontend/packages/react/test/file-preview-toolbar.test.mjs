@@ -65,6 +65,9 @@ test('standalone preview offers editing only on the active editable level', asyn
     assert.equal(button(view, 'Edit'), undefined);
     assert.ok(button(view, 'Custom command'));
     await click(view, 'Body');
+    const editIcon = button(view, 'Edit')?.querySelector('svg');
+    assert.equal(editIcon?.getAttribute('width'), '12');
+    assert.equal(editIcon?.getAttribute('height'), '12');
     await click(view, 'Edit');
     await waitForEditor(view.container);
     assert.equal(

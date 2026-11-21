@@ -125,7 +125,7 @@ export function FilePreviewToolbar({
           disabled={actions.busy}
           onClick={actions.startEditing}
         >
-          <EditIcon width={14} height={14} aria-hidden="true" />
+          <EditIcon width={12} height={12} aria-hidden="true" />
         </Button>
       ) : null}
       {pinned.map((action) => (

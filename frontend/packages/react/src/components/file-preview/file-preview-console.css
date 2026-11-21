@@ -277,6 +277,16 @@
   overflow-wrap: anywhere;
 }
 
+/* A JSON tree row is a node, not a source line. The base viewer reports the
+ * record number here, so every row in a regular JSON document would show 1. */
+.ov-file-preview .ark-agentic-file-viewer-json__gutter {
+  display: none;
+}
+
+.ov-file-preview .ark-agentic-file-viewer-json__row {
+  padding-inline-start: 16px;
+}
+
 .ov-file-preview__copy-path {
   display: inline-flex;
   align-items: center;
