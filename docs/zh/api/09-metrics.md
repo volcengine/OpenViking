@@ -75,6 +75,16 @@ scrape_configs:
 - 人工查看组件瞬时状态更适合使用 `/api/v1/observer/*`。
 - `/metrics` 现在也包含 VikingBot feedback observability 指标，这些指标来自对持久化 session 数据的 scrape-time 聚合；具体指标族与示例可参见 Metrics 概念文档中的 feedback 章节。
 
+## Embedding 用量观测
+
+具体 Embedding 入口通过共享事件总线，为现有操作发布一条不含内容的 `embedding.call`。字段包括 `attempt_id`、`outcome`、`observation_scope`、可空 Token 计数、`usage_known_fields`、`usage_complete`、`usage_quality` 和 `usage_provenance`。重试分别结算；等待文档准入时取消不算已发起的 provider attempt。
+
+`embedding_operation` 表示适配器操作（包括本地推理），不能当作物理 HTTP 请求数。Ark 为每次 SDK 调用记录 `provider_attempt`，因此多模态 hybrid 的两次请求分别保留。SDK 调用可能在发送数据前失败，这些事件也不是完整账单。现有 query 准入、重试及模型输出保持原行为。
+
+缺失用量保留 `null`，显式零值保留零。缺少输入计数时，不把 Embedding 的 total 推算成生成输出。字符估算仍保留在事件中，标为 `usage_quality="estimated"` 和 `usage_provenance="character_estimate"`；支持读取服务端用量的适配器优先使用已报告输入。`openviking_embedding_tokens_*` 及 ingestion Token 计数现仅累计服务端已报告的已知值，排除估算。`openviking_embedding_usage_reports_total{quality="actual|estimated|unknown"}` 展示观测质量。总 Token 计数要求输入与输出均已知。为兼容已有调用，历史 pull model 计数保留已知和估算小计；它不能当作完整账单，也不能与事件计数相加。
+
+事件不新增提示词、响应正文、密钥、原始错误或来源文档内容。本改动不引入跨请求合批，也不把一次操作的用量分摊给不同主体。
+
 ## 相关文档
 
 - [指标与 Metrics](../concepts/12-metrics.md) - 指标族、标签、feedback 指标与 PromQL 示例

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import openai
 
+from openviking.models.embedder.attempt import embedding_usage, observe_embedding
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbeddingInput,
@@ -129,17 +130,10 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         if not usage:
             return
 
-        def _val(key: str, default: int = 0) -> int:
-            if isinstance(usage, dict):
-                return int(usage.get(key, default) or default)
-            return int(getattr(usage, key, default) or default)
-
-        prompt_tokens = _val("prompt_tokens") or _val("input_tokens", 0)
-        total_tokens = _val("total_tokens", prompt_tokens)
-        completion_tokens = max(total_tokens - prompt_tokens, 0)
+        prompt_tokens, completion_tokens = embedding_usage(usage)
 
         get_current_telemetry().add_token_usage_by_source(
-            "embedding", prompt_tokens, completion_tokens
+            "embedding", prompt_tokens or 0, completion_tokens or 0
         )
         self.update_token_usage(
             model_name=self.model_name,
@@ -228,6 +222,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed
     # ------------------------------------------------------------------
 
+    @observe_embedding("dashscope")
     @model_error_boundary
     def embed(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
         if isinstance(text, list):
@@ -260,6 +255,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_async
     # ------------------------------------------------------------------
 
+    @observe_embedding("dashscope")
     @model_error_boundary
     async def embed_async(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
         if isinstance(text, list):
@@ -298,6 +294,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_content — multimodal content (text + image URLs)
     # ------------------------------------------------------------------
 
+    @observe_embedding("dashscope")
     @model_error_boundary
     def embed_content(
         self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
@@ -334,6 +331,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e
 
+    @observe_embedding("dashscope")
     @model_error_boundary
     async def embed_content_async(
         self,
