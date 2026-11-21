@@ -226,6 +226,8 @@ print(result)
 
 `add_resource` 会自动处理本地路径对应的文件上传。
 
+目录上传遇到无法列出的目录时会停止。SDK 在上传前抛出扫描错误并删除未完成的 ZIP，保留源文件。
+
 ```python
 from openviking_sdk import SyncHTTPClient
 
