@@ -142,7 +142,7 @@ export function AclAddPrincipal({
         aria-label={text.addPrincipal}
         aria-haspopup="dialog"
         value={keyword}
-        placeholder={open ? text.search : text.addPrincipal}
+        placeholder={text.search}
         disabled={disabled}
         aria-expanded={open && !disabled}
         aria-controls={open ? `${id}-options` : undefined}
