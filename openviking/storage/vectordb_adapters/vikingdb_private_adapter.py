@@ -21,6 +21,7 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
     """Adapter for private VikingDB deployment."""
 
     _DATA_BATCH_SIZE = 100
+    _CAN_ORDER_BY_DATE_TIME = False
     _STRING_FIELD_BYTE_LIMIT = VIKINGDB_STRING_FIELD_BYTE_LIMIT
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
     USE_CONTENT_FIELD = True
