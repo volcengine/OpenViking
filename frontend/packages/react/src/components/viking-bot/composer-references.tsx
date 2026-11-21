@@ -1,5 +1,6 @@
 import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
+import { createContext, useContext } from 'react';
 import type { RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
@@ -23,43 +24,60 @@ export function selectReference(
     ]);
 }
 
+export const ComposerReferenceContext = createContext<{
+  config?: VikingBotReferences;
+  disabled: boolean;
+  labels: VikingBotLabels;
+  locale: Locale;
+} | null>(null);
+
+function MentionReferencePicker({
+  editor,
+  query,
+  command,
+}: Parameters<NonNullable<MentionConfig['render']>>[0]) {
+  const context = useContext(ComposerReferenceContext);
+  if (!context?.config || context.disabled) return null;
+  return (
+    <ReferencePicker
+      locale={context.locale}
+      config={context.config}
+      editor={editor}
+      query={query}
+      labels={context.labels}
+      onSelect={(item) =>
+        command({ tagType: 'file', label: item.name, value: item.uri })
+      }
+    />
+  );
+}
+
 export function composerMention(
   config: VikingBotReferences | undefined,
   disabled: boolean,
-  labels: VikingBotLabels,
-  locale: Locale,
-): MentionConfig | undefined {
-  if (!config) return undefined;
+): MentionConfig {
   return {
     option: [],
-    shouldShow: ({ editor }) => !disabled && editor.isFocused,
+    shouldShow: ({ editor }) =>
+      Boolean(config && !disabled && editor.isFocused),
     onSelect: (item, { editor, range }) => {
+      if (disabled || !config) return;
       const reference = config.rows.find(
         (row) => row.kind === 'entry' && row.uri === item.value,
       );
       if (
-        disabled ||
         !reference ||
         reference.kind !== 'entry' ||
-        reference.disabled
+        reference.disabled ||
+        reference.selectable === false
       )
         return;
       selectReference(config, reference);
       editor.chain().focus().deleteRange(range).run();
     },
-    render: ({ query, command, editor }) =>
-      disabled ? null : (
-        <ReferencePicker
-          locale={locale}
-          config={config}
-          editor={editor}
-          query={query}
-          labels={labels}
-          onSelect={(item) =>
-            command({ tagType: 'file', label: item.name, value: item.uri })
-          }
-        />
-      ),
+    // Ark captures this renderer when the mention opens. The React portal
+    // still receives later reference rows, loading state and labels via context.
+    render: (props) => <MentionReferencePicker {...props} />,
   };
 }
 
@@ -81,6 +99,7 @@ export function ReferenceButton({
       key={disabled ? 'disabled' : 'enabled'}
       label={labels.reference}
       placement="top"
+      alignment="start"
       trigger={(props) => (
         <Tooltip
           content={labels.reference}
@@ -96,7 +115,9 @@ export function ReferenceButton({
             aria-label={labels.reference}
             disabled={disabled}
           >
-            @
+            <span className="ov-viking-bot__attach-glyph" aria-hidden="true">
+              @
+            </span>
           </Button>
         </Tooltip>
       )}

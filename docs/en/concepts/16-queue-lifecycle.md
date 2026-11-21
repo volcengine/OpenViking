@@ -169,3 +169,16 @@ a warning and leaves the delivery for recovery while consumption continues.
 For this release, ExternalTaskService retains its baseline target reservations
 and execution guard for pre-key deliveries, restoring reservations before workers
 start. These transitional guards are scheduled for removal in the next release.
+
+SessionCommit uses an account/user `group_key` on initial and recovery enqueue,
+allowing concurrent sessions to share the streaming-memory batcher. Waiting for
+a predecessor archive returns `ProcessResult.retry()` without publishing a
+replacement. The original message returns to its group tail, allowing the
+predecessor to continue. RETRY and REQUEUED both increment the persisted Work
+`requeue_count`; this counter has no retry limit.
+Batch work and all merge groups finish before processing returns, including on
+failure or cancellation; shutdown leaves the message unacknowledged.
+Submit cancellation keeps the existing count/time/close batching window.
+Cancelling a flush propagates to batch processing and settles its waiting items
+as cancelled. Multiple group failures preserve the first observed exception
+after the remaining groups finish.

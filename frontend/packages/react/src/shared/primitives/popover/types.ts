@@ -50,12 +50,18 @@ export interface PopoverProps {
   anchorRef?: RefObject<HTMLElement | null>;
   /** 触发方式，默认 `hover`。 Trigger mode, `hover` by default. */
   trigger?: PopoverTrigger;
+  /** 点击已打开的触发元素时是否关闭，默认 true。Whether another trigger click closes it. */
+  clickToClose?: boolean;
   /** 悬停后多久展示，单位毫秒。延迟只作用于 `hover`。 Hover delay in ms; `hover` only. */
   delay?: number;
   /** Controlled visibility; omitted values use instance-local state. */
   open?: boolean;
   /** Surface semantics; defaults to dialog for click and note for hover. */
   role?: AriaRole;
+  /** Hides a purely visual surface from assistive technology. */
+  ariaHidden?: boolean;
+  /** Render a visual surface in its owning Modal layer. */
+  portalWithinModal?: boolean;
   /** 为真时不展示浮层。 Suppresses the surface; the trigger still renders. */
   disabled?: boolean;
   /** 浮层容器的额外类名。 Extra class names for the surface. */

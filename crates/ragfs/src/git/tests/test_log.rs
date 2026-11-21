@@ -77,6 +77,7 @@
                 account: "acct".to_string(),
                 branch: "main".to_string(),
                 limit: 2,
+                offset: 0,
                 paths: Some(vec![
                     "resources/target.md".to_string(),
                     "resources/docs".to_string(),
@@ -93,6 +94,7 @@
                 account: "acct".to_string(),
                 branch: "main".to_string(),
                 limit: 10,
+                offset: 0,
                 paths: Some(vec!["resources/target.md".to_string()]),
             })
             .await
@@ -114,6 +116,7 @@
                 account: "acct".to_string(),
                 branch: "main".to_string(),
                 limit: 10,
+                offset: 0,
                 paths: Some(Vec::new()),
             })
             .await
@@ -139,6 +142,7 @@
                     account: "acct_log_budget".into(),
                     branch: "main".into(),
                     limit: 1,
+                    offset: 0,
                     paths: Some(vec!["resources/target.md".into()]),
                 },
                 2,
@@ -173,6 +177,7 @@
                     account: "acct_log_match".into(),
                     branch: "main".into(),
                     limit: 1,
+                    offset: 0,
                     paths: Some(vec!["resources/target.md".into()]),
                 },
                 2,
@@ -198,6 +203,7 @@
                     account: "acct_log_complete".into(),
                     branch: "main".into(),
                     limit: 1,
+                    offset: 0,
                     paths: Some(vec!["resources/never-created.md".into()]),
                 },
                 2,
@@ -240,6 +246,7 @@
                     account: "acct_log_reads".into(),
                     branch: "main".into(),
                     limit: 1,
+                    offset: 0,
                     paths: Some(vec!["resources/stable/never-created.md".into()]),
                 },
                 3,
@@ -264,16 +271,18 @@
             "history objects were re-read"
         );
 
-        for (paths, expected) in [
-            (vec!["resources/stable/never-created.md"], vec![]),
+        for (paths, offset, expected) in [
+            (vec!["resources/stable/never-created.md"], 0, vec![]),
             (
                 vec![
                     "resources/stable/never-created.md",
                     "resources/stable/target.md",
                     "resources/stable",
                 ],
+                0,
                 vec![commits[0]],
             ),
+            (vec!["resources/stable/target.md"], 1, vec![]),
         ] {
             object_store.reset();
             let log = svc
@@ -281,6 +290,7 @@
                     account: "acct_log_reads".into(),
                     branch: "main".into(),
                     limit: 10,
+                    offset,
                     paths: Some(paths.into_iter().map(str::to_owned).collect()),
                 })
                 .await

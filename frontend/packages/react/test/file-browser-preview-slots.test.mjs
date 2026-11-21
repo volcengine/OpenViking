@@ -117,31 +117,22 @@ test('custom preview editing retains drafts after failure and respects readOnly'
     const editor = await waitForEditor(view.container);
     assert.equal(editor.textContent, '# Guide');
     await setEditor(editor, '# Updated guide');
-    const confirmSave = async () => {
+    const save = async () => {
       let result;
       await act(async () => {
-        result = actions.saveEditing();
+        result = await actions.saveEditing();
       });
-      const confirm = document.querySelector(
-        '.ov-file-preview-version-note [type="submit"]',
-      );
-      assert.ok(confirm);
-      await act(async () => confirm.click());
       return result;
     };
-    assert.equal(await confirmSave(), false);
+    assert.equal(await save(), false);
     assert.equal(snapshots, 0);
     await settle();
     assert.equal(view.container.querySelector('.cm-content'), editor);
     assert.equal(editor.textContent, '# Updated guide');
     assert.equal(actions.busy, false);
     fail = false;
-    assert.equal(await confirmSave(), true);
-    assert.equal(snapshots, 1);
-    assert.match(
-      view.container.textContent,
-      /file was saved, but a new version was not created/,
-    );
+    assert.equal(await save(), true);
+    assert.equal(snapshots, 0);
     await settle();
     assert.equal(actions.editing, false);
     assert.equal(writes, 2);

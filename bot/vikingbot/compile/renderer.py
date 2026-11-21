@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import posixpath
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -34,7 +35,7 @@ from vikingbot.compile.models import (
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
 _FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
-_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
+_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^[ \t]*(?:type|["']type["'])[ \t]*:""")
 _BARE_VIKING_URI_RE = re.compile(r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+""")
 _LEADING_H1_RE = re.compile(r"\A(?:[ \t]*\r?\n)*#[ \t]+[^\r\n]*(?:\r?\n|\Z)")
 _LEGACY_RELATED_PAGES_RE = re.compile(
@@ -80,6 +81,21 @@ def has_unclosed_frontmatter(content: bytes) -> bool:
     return opening is not None and _FRONTMATTER_END_RE.search(content[opening.end() :]) is None
 
 
+def _format_yaml_frontmatter_error(exc: yaml.YAMLError) -> str:
+    problem = getattr(exc, "problem", None)
+    context = getattr(exc, "context", None)
+    mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+    if context and problem:
+        reason = f"{context}: {problem}"
+    else:
+        reason = problem or context or str(exc).splitlines()[0].strip()
+    if mark is not None:
+        # match.group(1) starts on line 2 of the Markdown file (after opening "---").
+        location = f"line {mark.line + 2}, column {mark.column + 1}"
+        return f"{reason} ({location})" if reason else location
+    return reason
+
+
 def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
     """Validate a Markdown artifact and return its declared OKF type, if any."""
     if not path.casefold().endswith(".md"):
@@ -109,7 +125,11 @@ def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
         frontmatter = yaml.safe_load(match.group(1))
     except yaml.YAMLError as exc:
         if raw_declares_type:
-            raise ValueError(f'OKF Markdown file "{path}" has invalid YAML frontmatter') from exc
+            detail = _format_yaml_frontmatter_error(exc)
+            suffix = f": {detail}" if detail else ""
+            raise ValueError(
+                f'OKF Markdown file "{path}" has invalid YAML frontmatter{suffix}'
+            ) from exc
         return
     if not isinstance(frontmatter, dict):
         if raw_declares_type:
@@ -174,23 +194,32 @@ def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bo
     return False
 
 
-def _linkify_source_uris(body: str, source_roots: Mapping[str, str]) -> str:
-    protected = LinkRenderer.protected_markdown_spans(body)
+def _linkify_source_uris(
+    body: str,
+    source_roots: Mapping[str, str],
+    *,
+    protected_spans: list[tuple[int, int]] | None = None,
+) -> str:
     replacements: list[tuple[int, int, str]] = []
     for match in _BARE_VIKING_URI_RE.finditer(body):
         start = match.start()
         target = match.group(0).rstrip(".,;:!?")
         end = start + len(target)
-        if any(not (end <= span_start or start >= span_end) for span_start, span_end in protected):
-            continue
         if start > 0 and end < len(body) and body[start - 1] == "<" and body[end] == ">":
             continue
         if not _citation_target_allowed(target, source_roots):
+            continue
+        if protected_spans is None:
+            protected_spans = LinkRenderer.protected_markdown_spans(body)
+        if any(start < span_end and end > span_start for span_start, span_end in protected_spans):
             continue
         label = target.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
         label = label.replace("[", r"\[").replace("]", r"\]") or "Source"
         encoded_target = LinkRenderer.encode_markdown_target(target)
         replacements.append((start, end, f"[{label}]({encoded_target})"))
+
+    if not replacements:
+        return body
 
     rendered = list(body)
     for start, end, replacement in reversed(replacements):
@@ -357,6 +386,11 @@ def validate_relative_file_path(path: str) -> str:
     return relative
 
 
+def output_path_key(path: str) -> str:
+    """Identify case and Unicode aliases before writing to portable storage."""
+    return unicodedata.normalize("NFC", validate_relative_file_path(path)).casefold()
+
+
 def is_reserved_wiki_page_uri(uri: str) -> bool:
     return uri.rstrip("/").rsplit("/", 1)[-1].lower() in _RESERVED_FILENAMES
 
@@ -488,6 +522,7 @@ class WikiRenderer:
             ):
                 raise ValueError(f"workspace payload was not loaded for file {index}")
 
+        spans_by_page: dict[int, list[tuple[int, int]]] = {}
         for link in bundle.links:
             if link.f is None or link.t is None or link.f == link.t:
                 raise ValueError("WikiLink endpoints must be non-null and non-self")
@@ -496,11 +531,16 @@ class WikiRenderer:
                 raise ValueError(f"WikiLink references an unknown page_id: f={link.f}, t={link.t}")
             if not link.match_text:
                 raise ValueError("WikiLink match_text is required")
+            if link.f not in spans_by_page:
+                spans_by_page[link.f] = LinkRenderer.protected_markdown_spans(
+                    source_page.body_markdown
+                )
             if not LinkRenderer.can_render_link(
                 source_page.body_markdown,
                 link.match_text,
                 page_uris[link.f][0],
                 page_uris[link.t][0],
+                protected_spans=spans_by_page[link.f],
             ):
                 raise ValueError(
                     f"WikiLink match_text is not a satisfiable body anchor: {link.match_text!r}"
@@ -532,17 +572,26 @@ class WikiRenderer:
             incoming = (
                 [link for link in resolved_links if link.to_uri == uri] if memory_target else []
             )
+            body = page.body_markdown.strip()
+            protected_spans = (
+                spans_by_page.get(page.page_id) if body == page.body_markdown else None
+            )
             if memory_target:
                 rendered_body, rendered_count = LinkRenderer.render_links_with_count(
-                    page.body_markdown.strip(),
+                    body,
                     uri,
                     [link.model_dump() for link in outgoing],
+                    protected_spans=protected_spans,
                 )
             else:
-                rendered_body = page.body_markdown.strip()
+                rendered_body = body
                 rendered_count = 0
             result.link_count += rendered_count
-            rendered_body = _linkify_source_uris(rendered_body, source_roots)
+            rendered_body = _linkify_source_uris(
+                rendered_body,
+                source_roots,
+                protected_spans=protected_spans if rendered_count == 0 else None,
+            )
             source_ids = list(
                 dict.fromkeys(value.strip() for value in page.source_ids if value.strip())
             )

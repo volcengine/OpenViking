@@ -605,13 +605,40 @@ pub(super) async fn dispatch(
         }
         Commands::Compile {
             command,
+            compile_name,
             from_uris,
             to,
             skill,
             instruction,
             args,
         } => {
-            let (from_uris, to, skill, instruction, args) = match command {
+            let client = ctx.get_client();
+            if let Some(compile_name) = compile_name {
+                return commands::compile::run_saved(
+                    &client,
+                    &compile_name,
+                    args,
+                    ctx.output_format,
+                    ctx.compact,
+                )
+                .await;
+            }
+            let (from_uris, to, skill, instruction, args, compile_name) = match command {
+                Some(CompileCommands::Create {
+                    compile_name,
+                    from_uris,
+                    to,
+                    skill,
+                    instruction,
+                    args,
+                }) => (
+                    from_uris,
+                    Some(to),
+                    skill,
+                    instruction,
+                    args,
+                    Some(compile_name),
+                ),
                 Some(CompileCommands::Memory {
                     to,
                     instruction,
@@ -622,16 +649,17 @@ pub(super) async fn dispatch(
                     "memory".to_string(),
                     instruction,
                     args,
+                    None,
                 ),
                 None => (
                     from_uris,
                     to,
-                    skill.expect("--skill is required without a Compile subcommand"),
+                    skill.expect("--skill is required without --compile-name"),
                     instruction,
                     args,
+                    None,
                 ),
             };
-            let client = ctx.get_client();
             commands::compile::run(
                 &client,
                 from_uris,
@@ -639,6 +667,7 @@ pub(super) async fn dispatch(
                 skill,
                 instruction,
                 args,
+                compile_name,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -683,11 +712,12 @@ pub(super) async fn dispatch(
             append,
             mode,
             wait,
+            use_snapshot,
             processing_mode,
+            defer_processing,
             tags,
             tag_mode,
             acl,
-            edit_source,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -702,11 +732,12 @@ pub(super) async fn dispatch(
                 from_file,
                 effective_mode,
                 wait,
+                use_snapshot,
                 processing_mode,
+                defer_processing,
                 tags,
                 tag_mode,
                 acl,
-                edit_source,
                 ctx,
             )
             .await
@@ -774,6 +805,7 @@ pub(super) async fn dispatch(
             tags,
             read_content,
             events_time_decay_protection,
+            args,
         } => {
             handlers::handle_search(
                 query,
@@ -791,6 +823,7 @@ pub(super) async fn dispatch(
                 tags,
                 read_content,
                 events_time_decay_protection,
+                args,
                 ctx,
             )
             .await

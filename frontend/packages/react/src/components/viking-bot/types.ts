@@ -3,6 +3,7 @@ import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, RefObject } from 'react';
 
 import type { VikingBotInteractionProps } from './interaction/types.js';
+import type { VikingBotDebugContext } from './message-debug.js';
 import type {
   VikingBotInputFeatures,
   VikingBotSessions,
@@ -29,6 +30,8 @@ export interface VikingBotMessageListProps {
   footer?: ReactNode;
   /** 当前身份作用域的标识；值变化时重置展示状态。Identity scope; changes reset display state. */
   listKey?: string;
+  /** 消息日期复制的排查标识，不含请求配置。Diagnostic identifiers copied from dates, without request configuration. */
+  debugContext?: VikingBotDebugContext;
   /** 打开消息中引用的资源。Opens a resource referenced by a message. */
   onOpenUri?: (uri: string) => void;
   /** 复制由宿主执行，列表只上报意图。The host copies; the list reports intent. */
@@ -116,6 +119,8 @@ export interface VikingBotProps
   locale?: Locale;
   /** Host-owned session history and actions. */
   sessions?: VikingBotSessions;
+  /** 排查标识；会话默认取 sessions.currentId。Diagnostic identifiers; sessionId defaults to sessions.currentId. */
+  debugContext?: VikingBotDebugContext;
   /** Optional extension controls, such as a host-provided More menu. */
   headerActions?: ReactNode;
   /** 附加到根元素的类名。Class name applied to the root element. */
@@ -126,6 +131,8 @@ export interface VikingBotProps
   draft?: string;
   /** 宿主已选中的附件。Attachments already selected by the host. */
   attachments?: readonly VikingBotAttachment[];
+  /** 文件选择器接受的类型。Accepted types in the file picker. */
+  accept?: string;
   /** 是否正在回复。Whether a reply is streaming. */
   isSending?: boolean;
   /** Supplied from the service's canSteer capability. Defaults to false. */

@@ -18,6 +18,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import ListingResponse, Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
+from openviking.server.skill_history import reject_generic_skill_mutation
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.ttl.wiring import attach_expires_at
@@ -42,7 +43,7 @@ def _reject_managed_tools_uri(
 
 @router.get("/ls")
 async def ls(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="File or directory Viking URI"),
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
     output: str = Query("agent", description="Output format: original or agent"),
@@ -68,7 +69,7 @@ async def ls(
     include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List directory contents."""
+    """List a directory's children or return the file itself."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
@@ -106,7 +107,7 @@ async def ls(
 
 @router.get("/tree")
 async def tree(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="File or directory Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Maximum returned abstract length"),
     include_abstract: Optional[bool] = Query(
@@ -127,7 +128,7 @@ async def tree(
     include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get directory tree."""
+    """List directory descendants or return a file as a single-node tree."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
@@ -248,6 +249,7 @@ async def mkdir(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     _reject_managed_tools_uri("mkdir", [uri], _ctx)
+    reject_generic_skill_mutation(uri, "mkdir")
     try:
         await service.fs.mkdir(
             uri,
@@ -280,6 +282,7 @@ async def rm(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     _reject_managed_tools_uri("rm", [uri], _ctx)
+    reject_generic_skill_mutation(uri, "rm")
     try:
         result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait)
     except AGFSNotFoundError:
@@ -340,6 +343,7 @@ async def cp(
         resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
     )
     _reject_managed_tools_uri("cp", [from_uri, to_uri], _ctx)
+    reject_generic_skill_mutation(to_uri, "cp")
     try:
         result = await service.fs.cp(
             from_uri,
@@ -382,6 +386,8 @@ async def mv(
         resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
     )
     _reject_managed_tools_uri("mv", [from_uri, to_uri], _ctx)
+    reject_generic_skill_mutation(from_uri, "mv")
+    reject_generic_skill_mutation(to_uri, "mv")
     try:
         await service.fs.mv(from_uri, to_uri, ctx=_ctx)
     except AGFSNotFoundError:

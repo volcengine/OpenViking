@@ -42,6 +42,17 @@
   gap: 8px;
   box-sizing: border-box;
   padding: 8px 8px 12px;
+  background-color: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+}
+
+/*
+ * 目录树、预览区或预览内容渲染失败时，兜底占满所在面板并垂直居中。宿主传入的预览操作区
+ * 由 FilePreview 自己的错误边界接住，兜底直接挂在 .ov-file-preview 下，因此单独列出。
+ */
+.ov-file-browser > .ov-error-boundary,
+.ov-file-browser__tree > .ov-error-boundary,
+.ov-file-browser .ov-file-preview > .ov-error-boundary {
+  flex: 1;
 }
 
 /* Only the line participates in layout; the hit area overlaps each pane's inset. */
@@ -475,20 +486,75 @@ html.dark .ov-file-browser__empty-art {
   );
   cursor: pointer;
 }
+.ov-file-browser__dashboard--wiki {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
 .ov-file-browser__dashboard--pending {
   color: var(
     --ov-ui-color-dashboard-warning,
     var(--ov-ui-dashboard-warning-default)
   );
 }
+.ov-file-browser__dashboard--unknown {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
 .ov-file-browser__dashboard:focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;
 }
 
-.ov-file-browser__preview-action--danger {
+.ov-file-preview__edit-actions
+  ~ :is(
+    .ov-file-browser__preview-action--history,
+    .ov-file-browser__preview-action--copy-content
+  ).ov-button:not(:disabled) {
+  color: var(--ov-ui-file-preview-text-secondary);
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history.ov-button {
+  border-radius: 8px;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history.ov-button:not(:hover):not(
+    :focus-visible
+  ) {
+  border-color: transparent;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history
+  .ov-file-preview__action-icon
+  > svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--history
+  .ov-file-preview__action-icon
+  > svg
+  path {
+  /* Match the 1.2-unit stroke in the console's 14-unit viewBox. */
+  stroke-width: 1.37;
+}
+
+.ov-file-preview__edit-actions
+  ~ .ov-file-browser__preview-action--copy-content.ov-button:not(:disabled):not(
+    :hover
+  ) {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+
+.ov-dropdown__item.ov-file-browser__preview-action--danger:not(:disabled) {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
+.ov-file-browser__preview-pane .ov-file-preview__footer {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
 .ov-file-browser__preview-meta {
   display: flex;
   flex-wrap: wrap;

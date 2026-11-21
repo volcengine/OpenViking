@@ -9,9 +9,10 @@ from fastapi import APIRouter, Depends, Path, Query
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import ErrorInfo, Response
+from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.storage.stats_aggregator import MEMORY_CATEGORIES, StatsAggregator
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
@@ -59,10 +60,8 @@ async def get_session_stats(
     try:
         result = await aggregator.get_session_extraction_stats(session_id, service, _ctx)
         return Response(status="ok", result=result)
-    except KeyError:
-        return error_response(
-            code="NOT_FOUND", message=f"Session not found: {session_id}"
-        )
+    except (KeyError, NotFoundError):
+        return error_response(code="NOT_FOUND", message=f"Session not found: {session_id}")
     except Exception as e:
         logger.error("Failed to get session stats for %s: %s", session_id, e)
         return error_response(

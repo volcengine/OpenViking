@@ -33,6 +33,14 @@ Switch the library to see the space and user levels clear and reload. The exampl
 
 ```
 
+### Rendering failure
+
+When host content fails to render, the block shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/scope-cascade-crash.tsx" preview
+
+```
+
 ## API
 
 ### ScopeCascade
@@ -80,3 +88,7 @@ An option returned by the load functions.
 - Each level loads its complete list in one call; server-side search and pagination are not supported. With more than 10 options, a search box filters them locally by label.
 - An option without `icon` gets the level's default icon: [LibraryIcon](../components/icons) (a round gradient swatch picked by `id`) for libraries, and `SpaceIcon` and `UserIcon` for spaces and users. An `icon` returned by your load function is used as is.
 - Types are exported from `@openviking/react/modules/scope-cascade`: `ScopeCascadeProps`, `ScopeCascadeSelection` and `ScopeCascadeApi` (the three load functions together). `ScopeSwitcherOption` and `ScopeSwitcherLabels` come from `@openviking/react/components/scope-switcher`. The package root exports only the component and `ScopeCascadeProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

@@ -1,25 +1,14 @@
-import type { RefObject } from 'react';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
-import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
-import type { SearchHit, SearchMode } from './search-types.js';
+import type { SearchFailure, SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-/**
- * 结果区：计数行与列表，另有空态、加载骨架与失败三态。
- *
- * 计数行只在有结果时出现——没搜过的时候它没有可数的东西，画一条「检索到 0 条」
- * 反而像搜索失败了。
- *
- * The result area: the count line and the list, plus the empty, loading and failure
- * states.
- *
- * The count line only appears when there are results: before a search there is nothing
- * to count, and "0 results" reads as a failure.
- */
+/** Search results, with empty, loading, and error states. */
 export interface FileBrowserSearchResultsProps {
-  mode: SearchMode;
+  open: boolean;
   listId: string;
   activeIndex: number;
   query: string;
@@ -27,13 +16,10 @@ export interface FileBrowserSearchResultsProps {
   onRetry: () => void;
   hits: SearchHit[];
   loading: boolean;
-  error: Error | null;
+  failure: SearchFailure | null;
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
-  /** 「切换」不在时的焦点去处，通常是搜索输入框。 Where focus goes when the switch is gone. */
-  fallbackFocusRef?: RefObject<HTMLElement | null>;
-  onSelectMode: (mode: SearchMode) => void;
   onOpen: (uri: string) => void;
 }
 
@@ -41,7 +27,7 @@ export interface FileBrowserSearchResultsProps {
 const SKELETON_WIDTHS = [368, 348, 319, 359, 335, 316, 368, 351];
 
 export function FileBrowserSearchResults({
-  mode,
+  open,
   listId,
   activeIndex,
   query,
@@ -49,20 +35,20 @@ export function FileBrowserSearchResults({
   onRetry,
   hits,
   loading,
-  error,
+  failure,
   searched,
   text,
-  fallbackFocusRef,
-  onSelectMode,
   onOpen,
 }: FileBrowserSearchResultsProps) {
-  // 模式行只在真有结果时出现：设计稿的空态、加载态与失败态都没有这一行，它上面
-  // 的数字也只在有东西可数时才说得通。
-  //
-  // The mode row appears only when there are results: the design draws neither the
-  // empty, loading nor failure state with it, and its number only means something
-  // when there is something to count.
-  if (loading) {
+  const exposure = useExposure(
+    hits.length
+      ? 'file_browser_search_results_show'
+      : 'file_browser_search_empty_show',
+    hits,
+    undefined,
+    open && searched && !loading && !failure,
+  );
+  if (loading && !hits.length) {
     return (
       <div className="ov-file-browser-search__skeletons" aria-busy="true">
         <p role="status" className="ov-file-browser-search__sr-only">
@@ -84,19 +70,25 @@ export function FileBrowserSearchResults({
     );
   }
 
-  if (error) {
-    return (
-      <>
-        <div role="alert" className="ov-file-browser-search__error">
-          <p>{text.searchFailed}</p>
-          <p>{error.message}</p>
-        </div>
-        <Button size="small" onClick={onRetry}>
-          {text.retry}
-        </Button>
-      </>
-    );
-  }
+  const invalidPattern = failure?.reason === 'invalid-pattern';
+  const feedback = failure ? (
+    <>
+      <div role="alert" className="ov-file-browser-search__error">
+        <p>{text.searchFailed}</p>
+        <p>{invalidPattern ? text.searchInvalidPattern : failure.message}</p>
+        {invalidPattern ? (
+          <details>
+            <summary>{text.searchErrorDetails}</summary>
+            <p>{failure.message}</p>
+          </details>
+        ) : null}
+      </div>
+      <Button size="small" disabled={loading} onClick={onRetry}>
+        {text.retry}
+      </Button>
+    </>
+  ) : null;
+  if (feedback && !hits.length) return feedback;
 
   if (!searched) {
     return (
@@ -119,22 +111,21 @@ export function FileBrowserSearchResults({
 
   if (hits.length === 0) {
     return (
-      <p role="status" className="ov-file-browser-search__no-results">
-        {text.searchEmpty}
-      </p>
+      <Empty
+        ref={exposure}
+        illustration="search"
+        title={text.searchEmpty}
+        className="ov-file-browser-search__no-results"
+      />
     );
   }
 
   return (
     <>
-      <FileBrowserSearchModeRow
-        mode={mode}
-        count={hits.length}
-        text={text}
-        fallbackFocusRef={fallbackFocusRef}
-        onSelectMode={onSelectMode}
-      />
+      {feedback}
+      {loading ? <p role="status">{text.searchLoading}</p> : null}
       <ul
+        ref={exposure}
         id={listId}
         role="listbox"
         aria-label={text.searchTitle}

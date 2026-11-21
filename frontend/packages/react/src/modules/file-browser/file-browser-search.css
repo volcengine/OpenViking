@@ -25,6 +25,7 @@
  */
 .ov-file-browser-search .ov-modal__panel {
   height: min(640px, calc(100dvh - 48px));
+  border-radius: 20px;
 }
 
 /*
@@ -91,6 +92,7 @@
 
 /* 漏斗与 Modal 的关闭按钮同尺寸，两者相距 8；关闭按钮宽 28，所以右侧留 36。 */
 .ov-file-browser-search__advanced-toggle {
+  position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -114,6 +116,27 @@
 .ov-file-browser-search__advanced-toggle:focus-visible {
   outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline-offset: -2px;
+}
+
+.ov-file-browser-search__filter-count {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  display: flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+  font-size: 10px;
+  line-height: 16px;
 }
 
 /* ── 内容区 ───────────────────────────────────────────────────────── */
@@ -142,8 +165,9 @@
 .ov-file-browser-search__summary {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   padding-left: 12px;
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
@@ -232,12 +256,12 @@
 }
 
 .ov-file-browser-search__menu .ov-file-browser-search__menu-item:hover {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
 }
 
 .ov-file-browser-search__menu
   .ov-file-browser-search__menu-item[aria-selected='true'] {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
 
@@ -245,6 +269,12 @@
   .ov-file-browser-search__menu-item[aria-selected='true']
   .ov-file-browser-search__menu-name {
   font-weight: 500;
+}
+
+.ov-file-browser-search__menu .ov-select__check {
+  width: 16px;
+  height: 16px;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
 
 .ov-file-browser-search__menu .ov-file-browser-search__menu-item:focus-visible {
@@ -276,7 +306,7 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -311,7 +341,7 @@
 .ov-file-browser-search__result[aria-selected='true'],
 .ov-file-browser-search__result:focus-visible {
   border-bottom-color: transparent;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
   outline: none;
 }
 
@@ -390,14 +420,15 @@
 
 /* ── 空态、加载、失败 ─────────────────────────────────────────────── */
 
-/* 空态从内容区顶部往下 120，插画与两行文案间距 24。 */
+/* 结果区已有 16px 内边距，桌面上合计 120px，矮屏让位给内容。 */
 .ov-file-browser-search__empty {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding-top: 120px;
+  padding-block-start: clamp(12px, calc(100dvh - 416px), 104px);
+  overflow: auto;
   text-align: center;
 }
 
@@ -422,6 +453,7 @@
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
+  letter-spacing: 0.003em;
 }
 
 .ov-file-browser-search__empty-hint {
@@ -429,6 +461,7 @@
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
+  letter-spacing: 0.003em;
 }
 
 /* 骨架：八条 55 高的行，每条一个 15 的圆点加一根 15 高的圆头横条。 */
@@ -486,11 +519,10 @@
   margin: 0;
 }
 
+/* 无结果空态在结果区内垂直居中。 */
 .ov-file-browser-search__no-results {
-  margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  font-size: 13px;
-  line-height: 22px;
+  flex: 1;
+  justify-content: center;
 }
 
 .ov-file-browser-search__sr-only {
@@ -702,28 +734,129 @@
   white-space: nowrap;
 }
 
-.ov-file-browser-search__scope-menu {
-  max-height: 188px;
-  margin-top: 4px;
-  padding: 4px;
-  overflow: auto;
-  border: 1px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+.ov-file-browser-search__scope-popover {
+  width: min(380px, calc(100vw - 32px));
+  max-width: none;
+  padding: 12px;
   border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: var(--ov-ui-overlay-shadow, var(--ov-ui-overlay-shadow-default));
+}
+
+.ov-file-browser-search__scope-menu {
   font-size: 13px;
   line-height: 22px;
 }
 
-.ov-file-browser-search__scope-current {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.ov-file-browser-search__scope-tree,
+.ov-file-browser-search__scope-branches {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.ov-file-browser-search__scope-current > :first-child {
-  width: auto;
+.ov-file-browser-search__scope-tree {
+  max-height: min(320px, calc(100dvh - 160px));
+  overflow: auto;
+}
+
+.ov-file-browser-search__scope-branches {
+  margin-inline-start: 10px;
+  padding-inline-start: 12px;
+  border-inline-start: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+
+.ov-file-browser-search__scope-row {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+}
+
+.ov-file-browser-search__scope-row:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
+}
+
+.ov-file-browser-search__scope-expand {
+  display: flex;
+  width: 20px;
+  height: 28px;
   flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+
+.ov-file-browser-search__scope-expand > svg {
+  width: 12px;
+  height: 12px;
+  transform: rotate(-90deg);
+}
+
+.ov-file-browser-search__scope-expand[aria-expanded='true'] > svg {
+  transform: none;
+}
+
+.ov-file-browser-search__scope-expand:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
+}
+
+.ov-file-browser-search__scope-row > :is(.ov-checkbox, .ov-radio) {
+  min-width: 0;
+  min-height: 32px;
+  flex: 1;
+}
+
+.ov-file-browser-search__scope-row :is(.ov-checkbox__text, .ov-radio__text) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.ov-file-browser-search__scope-row
+  :is(.ov-checkbox__text, .ov-radio__text)
+  > svg {
+  flex: none;
+}
+
+.ov-file-browser-search__scope-row
+  :is(.ov-checkbox__text, .ov-radio__text)
+  > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-message {
+  padding: 4px 8px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+
+.ov-file-browser-search__scope-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+
+.ov-file-browser-search__scope-actions {
+  display: flex;
+  gap: 8px;
+  margin-inline-start: auto;
 }
 
 .ov-file-browser-search__scope-choice {
@@ -766,23 +899,55 @@
 
 .ov-file-browser-search__dates {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
 }
 
 .ov-file-browser-search__dates > .ov-date-picker {
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
 
-/* ── 窄屏：高级面板独占内容区 ─────────────────────────────────────── */
+/* ── 窄屏：高级面板位于计数行下方 ─────────────────────────────────── */
 
 @media (max-width: 720px) {
+  .ov-file-browser-search--advanced .ov-file-browser-search__content {
+    flex-direction: column;
+  }
+
   .ov-file-browser-search--advanced .ov-file-browser-search__results {
+    flex: none;
+    padding-block: 12px;
+  }
+
+  .ov-file-browser-search--advanced
+    .ov-file-browser-search__results
+    > :not(.ov-file-browser-search__summary) {
     display: none;
   }
 
   .ov-file-browser-search__advanced {
+    flex: 1;
     width: 100%;
+    min-height: 0;
+  }
+
+  .ov-file-browser-search__dates {
+    position: relative;
+  }
+
+  .ov-file-browser-search__dates > .ov-date-picker {
+    position: static;
+  }
+
+  .ov-file-browser-search__dates .ov-date-picker__popup {
+    max-width: 100%;
+  }
+
+  .ov-file-browser-search__dates
+    > .ov-date-picker:last-child
+    .ov-date-picker__popup {
+    right: 0;
+    left: auto;
   }
 }

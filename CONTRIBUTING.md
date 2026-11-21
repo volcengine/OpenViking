@@ -219,6 +219,11 @@ control flow over comments that restate the code.
 For Rust, Go, TypeScript, documentation, and plugin changes, use the formatter,
 lint, type-check, and test commands defined by that component.
 
+Read the [developer logging guide](docs/repository/LOGGING.md) before adding or
+changing log output. It defines levels, safe content, output ownership, and
+verification. Python runtime logs use `get_logger(__name__)`; bootstrap and
+interactive/protocol output follow the guide's separate rules.
+
 ### Tests
 
 Validate the smallest meaningful public contract and major failure boundary affected

@@ -42,7 +42,12 @@ export function Indicator({
       title={label}
       aria-label={label}
       onClick={(event) => event.stopPropagation()}
-      style={{ ...INDICATOR, color: pending ? '#eb7d00' : '#0b9e6b' }}
+      style={{
+        ...INDICATOR,
+        color: pending
+          ? 'var(--ov-ui-color-warning, var(--ov-ui-warning-default))'
+          : 'var(--ov-ui-color-status-success, var(--ov-ui-status-success-default))',
+      }}
     >
       {indicator.kind === 'experience' ? (
         <ExperienceBoardIcon width={12} height={12} aria-hidden />

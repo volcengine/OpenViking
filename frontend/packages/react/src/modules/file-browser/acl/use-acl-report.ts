@@ -1,4 +1,8 @@
-import { toError } from '../fs-model.js';
+import { isOvClientError } from '../../../client/errors.js';
+import { useAnalyticsRef } from '../../../shared/analytics/context.js';
+import { beginMutation } from '../../../shared/analytics/mutation.js';
+import { toError } from '../../../shared/request/fs-errors.js';
+import { localRequestErrors } from '../../../client/observe-errors.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
   FileBrowserAclContext,
@@ -16,19 +20,23 @@ export function useAclReport({
   open,
   readOnly,
   onUpdated,
+  onPermissionDenied,
 }: {
   uri: string;
   context: FileBrowserAclContext;
   open: boolean;
   readOnly: boolean;
+  onPermissionDenied: () => void;
   onUpdated: (report: FileBrowserAclReport) => void;
 }) {
+  const analytics = useAnalyticsRef();
   const [report, setReport] = useState<FileBrowserAclReport>();
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [error, setError] = useState<Error>();
   const [phase, setPhase] = useState<'loading' | 'ready' | 'saving'>('loading');
-  const [saved, setSaved] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const denied = useRef(onPermissionDenied);
+  denied.current = onPermissionDenied;
   const pending = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
   // The open panel synchronizes its resource ACL with the native service; URI,
@@ -43,12 +51,14 @@ export function useAclReport({
     setReport(undefined);
     setError(undefined);
     setConfirmation(undefined);
-    setSaved(false);
     const { client, requestOptions } = context;
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
-    void readAcl(client, uri, { ...requestOptions, signal }).then(
+    void readAcl(localRequestErrors(client), uri, {
+      ...requestOptions,
+      signal,
+    }).then(
       (value) => {
         if (!signal.aborted) {
           setReport(value);
@@ -57,6 +67,10 @@ export function useAclReport({
       },
       (cause: unknown) => {
         if (!signal.aborted) {
+          if (isOvClientError(cause) && cause.statusCode === 403) {
+            denied.current();
+            return;
+          }
           setError(toError(cause));
           setPhase('ready');
         }
@@ -81,11 +95,12 @@ export function useAclReport({
     pending.current = true;
     setPhase('saving');
     setError(undefined);
-    setSaved(false);
     const { client, requestOptions } = context;
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
+    let completed = false;
+    const event = beginMutation(analytics, 'file_browser_acl_change');
     try {
       const value = await writeAcl(
         client,
@@ -94,12 +109,16 @@ export function useAclReport({
         change && { direct_entries: change.entries, mode: change.mode },
       );
       if (signal.aborted) return;
+      completed = true;
+      event?.success();
       setReport(value);
       setConfirmation(undefined);
-      setSaved(true);
       onUpdated(value);
     } catch (cause) {
-      if (!signal.aborted) setError(toError(cause));
+      if (!signal.aborted) {
+        if (!completed) event?.fail(cause);
+        setError(toError(cause));
+      }
     } finally {
       if (!controller.signal.aborted && lifetime.current === controller) {
         pending.current = false;
@@ -111,7 +130,6 @@ export function useAclReport({
   function change(entries: FileBrowserAclEntry[]) {
     if (!report || pending.current || readOnly) return;
     const plan = planChange(report, normalizeEntries(entries));
-    setSaved(false);
     setError(undefined);
     if (plan.confirmation)
       setConfirmation({ kind: 'restrict', entries: plan.entries });
@@ -123,7 +141,6 @@ export function useAclReport({
     confirmation,
     error,
     phase,
-    saved,
     retry: () => setGeneration((value) => value + 1),
     change,
     restore: () => {

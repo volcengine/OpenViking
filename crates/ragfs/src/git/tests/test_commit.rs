@@ -1,8 +1,7 @@
     // ── 1 ──────────────────────────────────────────────────────────────
     #[tokio::test]
     async fn test_commit_first_creates_root_commit() {
-        let (_dir, vfs, object_store, ref_store, svc) = make_service("acct");
-        vfs.put("resources/a.md", b"hello");
+        let (_dir, _vfs, object_store, ref_store, svc) = make_service("acct");
 
         let resp = svc
             .commit(req("acct", "main", "first", None))
@@ -15,7 +14,7 @@
                 changed,
                 ..
             } => {
-                assert!(changed >= 1, "should record at least one change");
+                assert_eq!(changed, 0);
                 let parents = commit_parents(
                     object_store.as_ref() as &dyn ObjectStore,
                     "acct",
@@ -29,7 +28,7 @@
                     commit_oid,
                 )
                 .await;
-                assert_ne!(tree, ObjectId::empty_tree(gix_hash::Kind::Sha1));
+                assert_eq!(tree, ObjectId::empty_tree(gix_hash::Kind::Sha1));
                 let head = ref_store.read("acct", "refs/heads/main").await.unwrap();
                 assert_eq!(head, commit_oid);
             }

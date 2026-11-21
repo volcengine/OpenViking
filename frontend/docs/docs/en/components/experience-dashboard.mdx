@@ -27,6 +27,14 @@ Switch between "Experience directory", "Experience file", "Host data" and "Error
 
 The example uses fixed data: click an experience name to open its file view; clicking a trajectory name only shows the URI it receives.
 
+### Rendering failure
+
+When host content fails to render, the component shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/experience-dashboard-crash.tsx" preview
+
+```
+
 ## API
 
 ### ExperienceDashboard
@@ -49,8 +57,9 @@ The example uses fixed data: click an experience name to open its file view; cli
 | onPageChange     | Called on paging with the target page; "Load more" also calls it when `onLoadMore` is absent; both omitted disables those controls              | `(page: number) => void`                                                                                                | -                              |
 | onLoadMore       | Called when "Load more" is clicked so the host appends the next page; wins over `onPageChange`, which is used as `page + 1` when omitted        | `() => void`                                                                                                            | -                              |
 | onOpenUri        | Called with the matching URI when an experience name or a trajectory's open button is clicked; those buttons are disabled when omitted          | `(uri: string) => void`                                                                                                 | -                              |
+| onOpenTrajectory | Called when a row’s Trajectory details button is clicked. Supplying it shows the button.                                                        | `(trajectory: ExperienceTrajectory, trigger: HTMLButtonElement) => void`                                                | -                              |
 | labels           | Overrides interface text                                                                                                                        | `Partial<ExperienceDashboardLabels>`                                                                                    | -                              |
-| slots            | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                      | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                   | -                              |
+| slots            | Replaces dashboard sections or the [rendering error fallback](../guide/getting-started#custom-error-display)                                    | `ExperienceDashboardProps['slots']`                                                                                     | -                              |
 | locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                   | `'zh-CN' \| 'en-US'`                                                                                                    | Inherited, otherwise `'en-US'` |
 | className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                     | HTML attributes                                                                                                         | -                              |
 
@@ -65,6 +74,7 @@ The example uses fixed data: click an experience name to open its file view; cli
 | trajectories    | Injection trajectories on the Impact tab, in the order you pass them                                                                                  | `readonly ExperienceTrajectory[]`                                                                         | -       |
 | trajectoryTotal | Total number of injection trajectories, shown after the heading; hidden when omitted                                                                  | `number`                                                                                                  | -       |
 | sources         | Trajectories the experience was generated from, on the Source tab, in the order you pass them                                                         | `readonly ExperienceTrajectory[]`                                                                         | -       |
+| sourceGroups    | Commit groups newest first. Takes precedence over the flat `sources` list.                                                                            | `readonly ExperienceSourceGroup[]`                                                                        | -       |
 | testMaterials   | Test materials, see `data.testMaterials` below for the fields; the Test tab appears once this is provided, even as an empty array                     | `readonly { id: string; title: string; content: string; taskQuery?: string; uri?: string }[]`             | -       |
 
 ### ExperienceItem
@@ -111,6 +121,10 @@ Fields of each item in the `data.testMaterials` array.
 | error    | Shows the error state and `error.message` when the section has no data, except appended trajectory pages   | `Error \| null` | -       |
 | onRetry  | Called when Retry is clicked; the component sends no requests itself. The button is disabled when omitted  | `() => void`    | -       |
 
+### Section slots
+
+Pass callbacks in `slots.sections` for `list`, `effect`, `outcomes`, `trajectories`, `sources`, or `tests`. Each callback receives the dashboard data, the section’s request state (including retry when available), and pagination and navigation controls. Its second argument is the built-in content. Return that content to reuse it or `null` to hide the section. Test tab availability follows `data.testMaterials`.
+
 ## Notes
 
 - `states` is set per section and usually shows only while that section has no data: `list` covers the experience list of the directory view, `effect` the three Impact metrics, `outcomes` the outcome distribution, `trajectories` the injection trajectories, `sources` the source trace and `tests` the test materials. Two exceptions apply. When appending a trajectory page fails, the loaded rows stay and the error with its retry appears below the list. When `effect` carries `loading` or `error`, that block becomes a skeleton or an error even if `data.effect` still has values, because the metrics fetch on their own and stale numbers must not sit beside a failed refresh. The errors and retries of different sections are independent.
@@ -120,3 +134,7 @@ Fields of each item in the `data.testMaterials` array.
 - Copying uses `navigator.clipboard.writeText`, which is available only over HTTPS or on localhost; when it is unavailable or the browser rejects it, the button shows "Copy failed".
 - The component is `100%` high and scrolls its content internally, so give its parent a height.
 - Types are exported from `@openviking/react/components/experience-dashboard`, including `ExperienceDashboardTab` and `ExperienceOutcome`; the package root exports only the component and `ExperienceDashboardProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

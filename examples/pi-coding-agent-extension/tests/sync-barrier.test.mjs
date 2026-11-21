@@ -596,3 +596,27 @@ test("the takeover barrier drains only within the budget it is given", async () 
     assert.equal(calls.length, 1);
   });
 });
+
+test("a commit without takeover waits behind the session's queued messages", async () => {
+  await withPendingDir(async () => {
+    let commits = 0;
+    const c = client({
+      fetchJSON: async () => ({ ok: false, status: 503, error: { code: "UNAVAILABLE" } }),
+      commitSessionResponse: async () => {
+        commits++;
+        return { result: { task_id: "t-1" } };
+      },
+    });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-shutdown");
+    const sid = sync.sessionId;
+    await enqueue("addMessage", sid, { role: "user", content: "parked" }, { createdAt: Date.now() + 60_000 });
+
+    assert.equal(await sync.commit({ timeoutMs: 3000 }), null);
+    assert.equal(commits, 0, "no commit overtakes the queued message");
+    assert.deepEqual((await listPending()).map(({ entry }) => [entry.type, entry.sessionId]), [
+      ["addMessage", sid],
+      ["commitSession", sid],
+    ]);
+  });
+});

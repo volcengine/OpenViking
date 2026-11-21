@@ -10,7 +10,10 @@ import { CommandConsoleRecordBody } from './command-console-record-body.js';
 import type { CommandConsoleRecordProps } from './command-console-record-body.js';
 import { CommandConsoleRecordTime } from './command-console-record-time.js';
 import { CommandConsoleResultHeader } from './command-console-result-header.js';
-import { CommandConsoleUriText } from './command-console-uri-text.js';
+import {
+  CommandConsoleCommandArguments,
+  CommandConsoleUriText,
+} from './command-console-uri-text.js';
 
 const STATUS_TEXT = {
   pending: 'pending',
@@ -41,9 +44,8 @@ export function CommandConsoleRecordItem(props: CommandConsoleRecordProps) {
                   name={input.command.name}
                 />
               </span>
-              <CommandConsoleUriText
-                text={input.rest}
-                mode="literal"
+              <CommandConsoleCommandArguments
+                input={input}
                 onOpenUri={props.onOpenUri}
               />
             </>

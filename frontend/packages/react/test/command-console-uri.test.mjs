@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const value = 'ov cp "viking://resources/a.md" viking://resources/b.md';
@@ -12,14 +12,21 @@ const props = {
   onOpenUri() {},
 };
 
-test('input and command echoes render URI anchors without changing the native value', () => {
-  const html = renderToStaticMarkup(createElement(CommandConsole, props));
+test('command echoes keep URI anchors while the input mirror stays plain text', () => {
+  const html = renderMarkup(createElement(CommandConsole, props));
   for (const uri of ['viking://resources/a.md', 'viking://resources/b.md']) {
-    assert.equal(html.split(`href="${uri}"`).length - 1, 2);
+    assert.equal(html.split(`href="${uri}"`).length - 1, 1);
   }
+  const mirror = html.slice(
+    html.indexOf('<span class="ov-command-console__input-mirror">'),
+    html.indexOf('<span id=', html.indexOf('ov-command-console__input-mirror')),
+  );
+  assert.doesNotMatch(mirror, /<a\b/);
+  assert.match(mirror, />viking:\/\/resources\/a\.md<\/span>/);
+  assert.match(mirror, />viking:\/\/resources\/b\.md<\/span>/);
   assert.match(
     html,
-    /<textarea[^>]*>ov cp &quot;viking:\/\/resources\/a.md&quot; viking:\/\/resources\/b.md<\/textarea>/,
+    /<textarea[^>]*>ov cp "viking:\/\/resources\/a.md" viking:\/\/resources\/b.md<\/textarea>/,
   );
   assert.doesNotMatch(
     html,
@@ -30,16 +37,21 @@ test('input and command echoes render URI anchors without changing the native va
 
 test('literal URI links preserve punctuation and native targets while ignoring non-resource text', () => {
   const text = 'VIKING://resources/a.md, error: denied; javascript:alert(1)';
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       value: text,
       records: [],
       onValueChange() {},
     }),
   );
-  assert.match(html, /href="VIKING:\/\/resources\/a.md,"/);
+  assert.doesNotMatch(html, /href="VIKING:\/\//);
+  assert.match(html, />VIKING:\/\/resources\/a\.md,<\/span>/);
   assert.doesNotMatch(html, /href="(?:javascript|error):/);
   assert.match(html, /error: denied; javascript:alert/);
+  assert.match(
+    html,
+    /<textarea[^>]*>VIKING:\/\/resources\/a\.md, error: denied; javascript:alert\(1\)<\/textarea>/,
+  );
 });
 
 test('status fields and write-result lines use the same URI links', () => {
@@ -58,7 +70,7 @@ test('status fields and write-result lines use the same URI links', () => {
       content: { variant: 'write-result', lines: [`Written: ${uri}`] },
     },
   ];
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, { ...props, value: '', records }),
   );
   assert.equal(html.split(`href="${uri}"`).length - 1, 2);
@@ -93,7 +105,7 @@ test('result headings, summaries and embedded tree values also link URIs', () =>
     status: 'success',
     content,
   }));
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, { ...props, value: '', records }),
   );
   assert.equal(html.split(`href="${uri}"`).length - 1, 9);
@@ -105,7 +117,7 @@ test('result headings, summaries and embedded tree values also link URIs', () =>
 test('Markdown links URI text and aliases while retaining the default URL filter', () => {
   const uri = 'viking://resources/a.md';
   const text = `# ${uri}\n\nPlain ${uri}, **${uri}**\n\n- ${uri}\n\n[Resource](${uri})\n\n| URI |\n| --- |\n| ${uri} |\n\n[unsafe](javascript:alert%281%29)`;
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       ...props,
       value: '',

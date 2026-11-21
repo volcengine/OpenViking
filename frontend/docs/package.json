@@ -9,7 +9,7 @@
     "preview": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@openviking/react": "0.1.11",
+    "@openviking/react": "0.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -36,6 +36,7 @@
     "#file-tree-basic-data": "./docs/_demos/file-tree-basic-data.ts",
     "#file-tree-basic-icons": "./docs/_demos/file-tree-basic-icons.tsx",
     "#demo-controls": "./internal-controls.ts",
+    "#render-failure": "./docs/_demos/render-failure.tsx",
     "#file-browser-preview-controls": "./docs/_demos/file-browser-preview-controls.tsx",
     "#file-browser-basic-data": "./docs/_demos/file-browser-basic-data.ts",
     "#file-browser-search-data": "./docs/_demos/file-browser-search-data.ts",
@@ -43,7 +44,13 @@
     "#file-preview-actions.css": "./docs/_demos/file-preview-actions.css",
     "#file-browser-native-demo": "./docs/_demos/file-browser-native-demo.ts",
     "#file-preview-code-data": "./docs/_demos/file-preview-code-data.ts",
+    "#toast-style.css": "./toast-preview.css",
     "#notification-style.css": "./notification-preview.css",
-    "#console-tasks-service": "./docs/_demos/console-tasks-service.ts"
+    "#console-tasks-service": "./docs/_demos/console-tasks-service.ts",
+    "#viking-bot-directory": "./docs/_demos/use-viking-bot-directory.ts",
+    "#context-picker-demo": "./docs/_demos/use-context-picker-demo.ts",
+    "#context-picker-data": "./docs/_demos/context-picker-data.ts",
+    "#viking-bot-directory-data": "./docs/_demos/viking-bot-directory-data.ts",
+    "#console-hitl-service": "./docs/_demos/console-hitl-service.ts"
   }
 }

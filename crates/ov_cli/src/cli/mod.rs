@@ -31,6 +31,22 @@ use clap::{ArgAction, Parser, Subcommand};
 
 const MAX_TIME_DECAY_DURATION_DAYS: u128 = 3000 * 365;
 
+/// Return the unchanged configuration name or a CLI usage error before contacting the server.
+fn parse_compile_name(value: &str) -> Result<String, &'static str> {
+    static NAME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|[A-Za-z0-9_〇\p{Unified_Ideograph}][A-Za-z0-9_〇\p{Unified_Ideograph}-]{0,31})$",
+        )
+        .expect("valid compile name pattern")
+    });
+    if NAME.is_match(value) {
+        return Ok(value.to_owned());
+    }
+    Err(
+        "Use Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Maximum length: 64 characters for ASCII-only names, 32 for names containing Han characters.",
+    )
+}
+
 fn parse_event_time_decay_protection(value: &str) -> std::result::Result<String, String> {
     if value == "0" {
         return Ok(value.to_string());
@@ -627,6 +643,8 @@ pub(crate) enum Commands {
         /// Wait for async processing to finish
         #[arg(long, default_value = "false", help_heading = "Common options")]
         wait: bool,
+        #[arg(long, help_heading = "Advanced options")]
+        use_snapshot: bool,
         /// Content post-write processing mode
         #[arg(
             long = "processing-mode",
@@ -635,6 +653,9 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
+        /// Save content without semantic or vector processing
+        #[arg(long = "defer-processing", help_heading = "Advanced options")]
+        defer_processing: bool,
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
@@ -644,14 +665,6 @@ pub(crate) enum Commands {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
-        /// Who made the edit, recorded in Compile output versions
-        #[arg(
-            long = "edit-source",
-            default_value = "manual",
-            value_parser = ["manual", "agent", "compile"],
-            help_heading = "Advanced options"
-        )]
-        edit_source: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -850,6 +863,9 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         events_time_decay_protection: Option<String>,
+        /// JSON args for keyword search: {"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":1000}
+        #[arg(long, value_name = "json", help_heading = "Advanced options")]
+        args: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -1109,6 +1125,9 @@ pub(crate) enum Commands {
     Compile {
         #[command(subcommand)]
         command: Option<CompileCommands>,
+        /// Execute this persistent configuration without overriding its inputs
+        #[arg(long, value_name = "name", allow_hyphen_values = true, value_parser = parse_compile_name, conflicts_with_all = ["from_uris", "to", "skill", "instruction"])]
+        compile_name: Option<String>,
         /// Source file or directory; repeat the flag or separate entries with commas.
         /// Omitted with `--skill memory`, which consolidates `--to` in place.
         #[arg(long = "from", value_delimiter = ',', value_name = "uri")]
@@ -1117,12 +1136,12 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "uri")]
         to: Option<String>,
         /// Skill directory or SKILL.md Viking URI; the literal `memory` runs memory consolidation
-        #[arg(long, value_name = "uri", required = true)]
+        #[arg(long, value_name = "uri", required_unless_present = "compile_name")]
         skill: Option<String>,
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
         instruction: Option<String>,
-        /// Provider arguments as JSON
+        /// JSON args; named runs use only owner_user_id
         #[arg(long, value_name = "json")]
         args: Option<String>,
     },

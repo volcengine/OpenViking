@@ -27,47 +27,27 @@ from openviking.session.memory.utils.description_template import (
 )
 
 
-@pytest.mark.parametrize("memory_type", EDITABLE_MEMORY_TEMPLATE_FIELDS)
-@pytest.mark.parametrize("origin", ["deployment", "account"])
 @pytest.mark.parametrize(
-    ("text", "expected"),
+    ("memory_type", "origin"),
     [
-        ("Plain instructions", "Plain instructions"),
-        ("{{ language }}", "en"),
-        (
-            "{% if language == 'en' %}English{% elif language == 'ja' %}日本語{% else %}中文{% endif %}",
-            "English",
-        ),
-        ("{{ language.strip().upper().lower() }}", "en"),
-        ("{{ language | trim | upper | lower }}", "en"),
-        ("{% set label = language | upper %}{{ label }}", "EN"),
-        ("{{ language | default('en') | upper }}", "EN"),
-        ("{% set label = language.upper() %}{{ label }}", "EN"),
-        (
-            "{% for title, value in [('Use', language), ('Also', 'dates')] %}{{ loop.index }} {{ title }} {{ value }};{% endfor %}",
-            "1 Use en;2 Also dates;",
-        ),
-        (
-            "{% if language is defined and language is string and language is not none %}{{ language }}{% endif %}",
-            "en",
-        ),
+        ("profile", "deployment"),
+        ("events", "account"),
+        ("preferences", "account"),
+        ("entities", "deployment"),
     ],
 )
-def test_descriptions_render_identically_in_all_schema_prompts(memory_type, origin, text, expected):
+def test_descriptions_render_identically_in_all_schema_prompts(memory_type, origin):
     defaults = memory_template_data(MemoryTypeRegistry().get(memory_type))
     editable = EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]
     supplied = {
-        "description": "TYPE: " + text,
-        "fields": [{"name": name, "description": name + ": " + text} for name in editable],
+        "description": "TYPE: {{ language }}",
+        "fields": [{"name": name, "description": name + ": {{ language }}"} for name in editable],
     }
     data = _complete_template(defaults, supplied, memory_type)
     if origin == "deployment":
         schema = MemoryTypeRegistry(load_schemas=False)._parse_memory_type(data)
     else:
         schema = _validate_template(data, memory_type, deployment_defaults=defaults)
-    schema = schema.model_copy(deep=True)
-    assert not hasattr(schema, "_account_description")
-    assert "_account_description" not in memory_template_data(schema)
     assert schema.description == supplied["description"]
 
     generator = SchemaModelGenerator([schema], template_context={"language": "en"})
@@ -82,14 +62,11 @@ def test_descriptions_render_identically_in_all_schema_prompts(memory_type, orig
         template_context={"language": "en"},
     )
     python_contract = create_extraction_output_protocol("python").render_contract(protocol_context)
-    assert "TYPE: " + expected in operations.model_fields[memory_type].description
-    assert "TYPE: " + expected in python_contract
-    for field in schema.fields:
-        if field.name in editable:
-            assert not hasattr(field, "_account_description")
-            assert "_account_description" not in field.model_dump()
-            assert field.name + ": " + expected in model.model_fields[field.name].description
-            assert field.name + ": " + expected in python_contract
+    assert "TYPE: en" in operations.model_fields[memory_type].description
+    assert "TYPE: en" in python_contract
+    for name in editable:
+        assert f"{name}: en" in model.model_fields[name].description
+        assert f"{name}: en" in python_contract
 
 
 @pytest.mark.parametrize("request_kind", ["empty", "roundtrip", "type_only", "field_only"])
@@ -112,8 +89,6 @@ def test_unchanged_deployment_descriptions_keep_existing_language_rendering(requ
     type_description = operations.model_fields["profile"].description
     assert ("CUSTOM en" if request_kind == "type_only" else "TYPE EN") in type_description
     assert ("CUSTOM en" if request_kind == "field_only" else "FIELD EN") in field_description
-    assert not hasattr(deployment, "_account_description")
-    assert not hasattr(deployment.fields[0], "_account_description")
 
 
 @pytest.mark.parametrize("field", ["description", "fields.content.description"])
@@ -199,7 +174,30 @@ def test_deployment_change_does_not_change_old_description_rendering():
     assert old_model.model_json_schema() == new_model.model_json_schema()
 
 
-def test_missing_context_keeps_existing_undefined_behavior_and_does_not_recurse():
+def test_render_description_template_with_and_without_language_context():
+    for template, expected in [
+        ("Plain instructions", "Plain instructions"),
+        ("{{ language }}", "en"),
+        (
+            "{% if language == 'en' %}English{% elif language == 'ja' %}日本語{% else %}中文{% endif %}",
+            "English",
+        ),
+        ("{{ language.strip().upper().lower() }}", "en"),
+        ("{{ language | trim | upper | lower }}", "en"),
+        ("{% set label = language | upper %}{{ label }}", "EN"),
+        ("{{ language | default('en') | upper }}", "EN"),
+        ("{% set label = language.upper() %}{{ label }}", "EN"),
+        (
+            "{% for title, value in [('Use', language), ('Also', 'dates')] %}{{ loop.index }} {{ title }} {{ value }};{% endfor %}",
+            "1 Use en;2 Also dates;",
+        ),
+        (
+            "{% if language is defined and language is string and language is not none %}{{ language }}{% endif %}",
+            "en",
+        ),
+    ]:
+        assert render_description_template(template, {"language": "en"}) == expected, template
+
     assert render_description_template("{{ language }}", {}) == ""
     assert render_description_template("{{ language | default('en') }}", {}) == "en"
     assert render_description_template("{{ language | default('en') }}", {"language": ""}) == ""

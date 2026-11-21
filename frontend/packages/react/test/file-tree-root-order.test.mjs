@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { act, createElement } from 'react';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileTree } from '@openviking/react/components/file-tree';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
-import { mount, ok } from './helpers/module-dom.mjs';
+import { mount, ok, settle } from './helpers/module-dom.mjs';
 
 function directory(id, uri, depth = 0) {
   return { kind: 'entry', type: 'directory', id, uri, name: id, depth };
@@ -38,9 +38,9 @@ test('FileTree can reorder context root branches without reordering children or 
   ]);
   const renderIds = (props) =>
     Array.from(
-      renderToStaticMarkup(
-        createElement(FileTree, { rows, ...props }),
-      ).matchAll(/data-file-tree-row-id="([^"]+)"/g),
+      renderMarkup(createElement(FileTree, { rows, ...props })).matchAll(
+        /data-file-tree-row-id="([^"]+)"/g,
+      ),
       (match) => match[1],
     );
 
@@ -82,6 +82,62 @@ test('FileBrowser displays user first even when fs/ls returns it last', async ()
       (row) => row.getAttribute('data-file-tree-row-id'),
     );
     assert.deepEqual(ids, [uris[2], uris[0], uris[1]]);
+  } finally {
+    await host.unmount();
+  }
+});
+
+test('FileBrowser marks only shared resources and labels an expanded empty folder', async () => {
+  const shared = 'viking://resources';
+  const user = 'viking://user/alice';
+  const personal = `${user}/resources`;
+  const agent = 'viking://agent';
+  const endpoints = `${agent}/endpoints`;
+  const listing = new Map([
+    ['viking://', [shared, user, agent]],
+    [user, [personal]],
+    [agent, [endpoints]],
+  ]);
+  const host = await mount(
+    createElement(
+      OpenVikingProvider,
+      {
+        baseURL: 'https://ov.test',
+        fetch: (url) => {
+          const uri = new URL(String(url)).searchParams.get('uri');
+          return ok(
+            (listing.get(uri) ?? []).map((uri) => ({ uri, isDir: true })),
+          );
+        },
+      },
+      createElement(FileBrowser, {
+        locale: 'zh-CN',
+        dashboardKinds: [],
+        labels: { tree: { empty: '暂无文件' } },
+      }),
+    ),
+  );
+  const row = (uri) =>
+    host.container.querySelector(`[data-file-tree-row-id="${uri}"]`);
+  const expand = async (uri) => {
+    await act(async () =>
+      row(uri).querySelector('[data-role="toggle"]').click(),
+    );
+    await settle();
+  };
+  try {
+    await expand(user);
+    await expand(agent);
+    assert.equal(row(`${endpoints}::empty`), null);
+    await expand(endpoints);
+    assert.match(row(`${endpoints}::empty`).textContent, /该文件夹为空/);
+    assert.doesNotMatch(row(`${endpoints}::empty`).textContent, /暂无文件/);
+    assert.equal(
+      row(shared).querySelector('.ov-file-tree__shared')?.textContent,
+      '共享',
+    );
+    assert.ok(row(personal));
+    assert.equal(row(personal).querySelector('.ov-file-tree__shared'), null);
   } finally {
     await host.unmount();
   }

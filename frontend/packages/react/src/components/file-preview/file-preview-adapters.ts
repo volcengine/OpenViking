@@ -1,9 +1,8 @@
-import { fenceMarkdownFrontmatter } from './file-preview-frontmatter.js';
+import { fenceMarkdownFrontmatter } from '../../shared/markdown/preview-frontmatter.js';
 import { code } from '@ark-design/ui/file-viewer/adapters/code';
 import { diff } from '@ark-design/ui/file-viewer/adapters/diff';
 import { html } from '@ark-design/ui/file-viewer/adapters/html';
 import { image } from '@ark-design/ui/file-viewer/adapters/image';
-import { json } from '@ark-design/ui/file-viewer/adapters/json';
 import { markdown } from '@ark-design/ui/file-viewer/adapters/markdown';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import { media } from '@ark-design/ui/file-viewer/adapters/media';
@@ -13,12 +12,16 @@ import { table } from '@ark-design/ui/file-viewer/adapters/table';
 import { text } from '@ark-design/ui/file-viewer/adapters/text';
 import { word } from '@ark-design/ui/file-viewer/adapters/word';
 import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
+import { DirectoryHeading } from './directory-heading.js';
+import { sessionJsonAdapter } from './session-json-adapter.js';
 
 import {
   originalImageTarget,
   preserveVikingImages,
   recoverImportedMarkdownImages,
 } from './file-preview-markdown-images.js';
+
+export type DirectoryLinkMode = 'resources' | 'anchors';
 
 /**
  * 组件内置的格式集合：文本、文档、图片与音视频。
@@ -29,7 +32,7 @@ import {
  * CAD 与 3D 需要额外的引擎与伴随资源，不放进公共组件。
  *
  * 本模块会静态引入底座，因此只能被懒加载的正文模块引用，不能进入包的顶层
- * 导入链——底座会静态引入浏览器专用组件，顶层导入会破坏服务端渲染。
+ * 导入链，减少控制台首屏加载体积。
  *
  * The formats the component ships: text, documents, images and media. The image
  * adapter reads content while the media adapter reads a reference; the base
@@ -43,25 +46,49 @@ import {
 export function createFilePreviewAdapterList({
   onLinkClick,
   resolveImage,
+  directoryLinks,
+  sessionMessages = false,
 }: {
   /**
-   * Markdown 正文里的链接被点击时调用。传入后由回调接管导航，底座不再自行
-   * 跳转；只有 Markdown Adapter 支持这个回调，其余格式忽略它。
+   * 接管 Markdown 正文里的链接；目录正文通过内部模式保留外链原生导航。
    *
-   * Called when a link inside a Markdown body is clicked. Supplying it hands
-   * navigation to the callback and the base no longer jumps on its own. Only the
-   * Markdown adapter supports this; other formats ignore it.
+   * Handles Markdown links; directory bodies use an internal mode to preserve native external links.
    */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   resolveImage?: (src: string) => Promise<string>;
+  directoryLinks?: DirectoryLinkMode;
+  sessionMessages?: boolean;
 } = {}): FileViewerCoreProps['adapters'] {
   return [
     code({ showLineNumbers: true }),
     text({ showLineNumbers: true }),
-    json({ defaultExpandDepth: 4 }),
+    sessionJsonAdapter(sessionMessages),
     markdown({
-      onLinkClick,
+      onLinkClick: directoryLinks ? undefined : onLinkClick,
+      allowedLinkProtocols:
+        directoryLinks === 'resources' ? ['viking'] : undefined,
       rendererProps: {
+        slots: directoryLinks ? { Header: DirectoryHeading } : undefined,
+        linkPolicy: directoryLinks
+          ? (target) => {
+              const url = target.trim();
+              const scheme = /^([a-z][a-z\d+.-]*):/i.exec(url)?.[1];
+              return url.startsWith('#') ||
+                (directoryLinks === 'resources' &&
+                  url &&
+                  !url.startsWith('//') &&
+                  (!scheme || scheme.toLowerCase() === 'viking'))
+                ? { render: true, callback: true, navigation: 'callback' }
+                : true;
+            }
+          : undefined,
+        eventCallbacks: {
+          onLinkClick:
+            directoryLinks && onLinkClick
+              ? (event, link) =>
+                  onLinkClick(event, { url: link.url, fileType: 'markdown' })
+              : undefined,
+        },
         // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
         parsing: { enabledHtmlTags: true },
         sourcePlugins: (current) => [

@@ -1,30 +1,28 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Scheduled Compile: due-slot checks and task submission via Redis expiry.
+"""Due-slot scheduling for creator-owned Compile configurations.
 
-``trigger_if_due`` owns the decision and submission under the target record
-lock. The distributed ExpiryScheduler discovers candidates; a startup scan and
-six-hour compensation scans repair registrations and recover missed triggers,
-because the target record (not Redis) is the source of truth.
+The persisted next slot is authoritative; Redis wakes the shared execution path
+and compensation scans recover missed notifications without changing manual run times.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
+from openviking.core.identifiers import validate_user_id
 from openviking.crypto.encryptor import build_credential_encryptor as build_credential_encryptor
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext, Role
-from openviking.service.compile_targets import CompileStore, task_ctx
+from openviking.service.compile_targets import CompileStore, validate_compile_name
 from openviking_cli.exceptions import (
-    ConflictError,
     FailedPreconditionError,
-    NotFoundError,
+    InvalidArgumentError,
     UnavailableError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -59,24 +57,15 @@ def next_slot(schedule: Dict[str, Any], now: datetime) -> datetime:
     return current_slot(schedule, now) + _period(schedule)
 
 
-def next_run_at(record: Dict[str, Any], now: Optional[datetime] = None) -> Optional[str]:
-    if not record.get("auto_update"):
-        return None
-    return next_slot(record["update_schedule"], now or datetime.now(TZ)).isoformat()
-
-
-def is_due(record: Dict[str, Any], slot: datetime) -> bool:
-    def before(value: Optional[str]) -> bool:
-        return value is None or datetime.fromisoformat(value) < slot
-
-    enabled_at = record.get("auto_update_enabled_at")
-    return (
-        record.get("status") == "active"
-        and bool(record.get("auto_update"))
-        and enabled_at is not None
-        and datetime.fromisoformat(enabled_at) < slot
-        and before(record.get("last_triggered_slot"))
-    )
+def is_due(record: Dict[str, Any], now: datetime) -> bool:
+    """Return whether the saved schedule has an unclaimed slot at or before ``now``."""
+    if not record.get("auto_update") or not record.get("next_triggered_slot"):
+        return False
+    if datetime.fromisoformat(record["next_triggered_slot"]) > now:
+        return False
+    slot = current_slot(record["update_schedule"], now)
+    previous = record.get("last_triggered_slot")
+    return previous is None or datetime.fromisoformat(previous) < slot
 
 
 async def encrypt_credential(encryptor: Any, ctx: RequestContext) -> Dict[str, str]:
@@ -101,15 +90,15 @@ async def encrypt_credential(encryptor: Any, ctx: RequestContext) -> Dict[str, s
 
 
 class CompileScheduler:
+    """Schedule creator-owned configurations independently of their mutable execution identity."""
+
     def __init__(
         self,
         compile_service: Any,
         store: CompileStore,
-        viking_fs: Any,
     ) -> None:
         self._compile = compile_service
         self._store = store
-        self._fs = viking_fs
         self._expiry: Any = None
         self._identity_resolver: Any = None
         self._group_resolver: Any = None
@@ -125,18 +114,9 @@ class CompileScheduler:
         self._identity_resolver = resolver
         self._group_resolver = group_resolver
 
-    async def save_credential(self, ctx: RequestContext) -> tuple[Dict[str, Any], Dict[str, str]]:
-        """Return ``(executor, credential)``; a trusted-mode root key is saved as ``key_type=root``."""
-        key_type = "user"
-        if self._identity_resolver is not None and ctx.api_key:
-            try:
-                identity = await self._identity_resolver(ctx.api_key)
-            except Exception:
-                identity = None
-            if identity is not None and identity.role == Role.ROOT and identity.account_id is None:
-                key_type = "root"
-        executor = {"account_id": ctx.account_id, "user_id": ctx.user.user_id, "key_type": key_type}
-        return executor, await encrypt_credential(self.credential_encryptor, ctx)
+    async def save_credential(self, ctx: RequestContext) -> Dict[str, str]:
+        """Return the encrypted request key; reject missing keys."""
+        return await encrypt_credential(self.credential_encryptor, ctx)
 
     def install_expiry(self, scheduler: Any) -> None:
         """Register the redis backend handler; call before ExpiryRuntime.start_roles()."""
@@ -166,7 +146,9 @@ class CompileScheduler:
             try:
                 await self.scan_once()
             except Exception:
-                logger.exception("Compile scheduler scan failed")
+                logger.info(
+                    "compile scheduler scan failed; retrying next scan", extra={"degraded": True}
+                )
             try:
                 await asyncio.wait_for(self._stop.wait(), COMPENSATION_SCAN_SECONDS)
             except asyncio.TimeoutError:
@@ -177,118 +159,105 @@ class CompileScheduler:
     async def scan_once(self, now: Optional[datetime] = None) -> None:
         now = now or datetime.now(TZ)
         for account_id in await self._store.list_accounts():
-            for item in await self._store.list_summaries(account_id):
+            async for compile_name, record in self._store.iter_records(account_id):
                 try:
-                    if item.get("auto_update") and is_due(
-                        item, current_slot(item["update_schedule"], now)
-                    ):
-                        await self.trigger_if_due(account_id, item["to"], now)
-                    elif item.get("auto_update"):
-                        await self.reschedule(account_id, item)
+                    owner_user_id = record["execution_context"]["owner_user_id"]
+                    if is_due(record, now):
+                        await self.trigger_if_due(account_id, owner_user_id, compile_name, now)
+                    elif record["auto_update"]:
+                        await self.reschedule(account_id, owner_user_id, compile_name, record)
                 except Exception:
-                    logger.exception("Compile schedule check failed for %s", item.get("to"))
+                    logger.debug(
+                        "compile schedule check failed name_hash=%s", short_hash(str(compile_name))
+                    )
 
     async def reschedule(
         self,
         account_id: str,
+        owner_user_id: str,
+        compile_name: str,
         record: Dict[str, Any],
         *,
         raise_on_error: bool = False,
     ) -> None:
-        """Mirror the target URI's current schedule in the expiry scheduler.
-
-        Strict callers receive 412 when enabling without Redis and 503 on registration failure.
-        """
+        """Mirror the persisted slot in Redis without advancing it or changing execution state."""
         if self._expiry is None:
-            if raise_on_error and record.get("auto_update"):
+            if raise_on_error and record["auto_update"]:
                 raise FailedPreconditionError(
-                    "Scheduled Compile requires a configured Redis scheduler",
-                    details={"reason": "COMPILE_SCHEDULER_DISABLED"},
+                    "Scheduled Compile requires a configured Redis scheduler"
                 )
             return
         from openviking.scheduling.expiry import ExpiryMode, ExpiryRegistration, ItemIdentity
 
-        identity = ItemIdentity(
-            COMPILE_TARGET_ITEM_TYPE,
-            account_id,
-            "_system",
-            record["to"],
-        )
+        identity = ItemIdentity(COMPILE_TARGET_ITEM_TYPE, account_id, owner_user_id, compile_name)
         try:
-            if record.get("status") == "active" and record.get("auto_update"):
-                schedule = record["update_schedule"]
-                due = next_slot(schedule, datetime.now(TZ))
+            if record["auto_update"] and record["next_triggered_slot"]:
+                due = datetime.fromisoformat(record["next_triggered_slot"])
                 await self._expiry.report(
                     ExpiryRegistration(
                         identity=identity,
                         due_at_ms=int(due.timestamp() * 1000),
-                        timeout_seconds=int(_period(schedule).total_seconds()),
+                        timeout_seconds=int(_period(record["update_schedule"]).total_seconds()),
                         mode=ExpiryMode.IDLE_ONESHOT,
                     )
                 )
             else:
                 await self._expiry.unregister(identity)
         except Exception as exc:
-            # The compensation scan repairs a missing or stale registration.
-            logger.warning("Compile reschedule failed for %s", record["to"], exc_info=True)
+            (logger.debug if raise_on_error else logger.info)(
+                "compile reschedule failed name_hash=%s error_type=%s",
+                short_hash(str(compile_name)),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
+            )
             if raise_on_error:
                 raise UnavailableError(
-                    "compile scheduler", "Cannot register scheduled Compile; retry the request"
+                    "compile scheduler", "Cannot register scheduled Compile"
                 ) from exc
 
-    # ---------- decision and submission ----------
+    async def trigger_if_due(
+        self,
+        account_id: str,
+        owner_user_id: str,
+        compile_name: str,
+        now: Optional[datetime] = None,
+    ) -> str:
+        """Submit the latest due slot and advance its schedule under the configuration lock.
 
-    async def trigger_if_due(self, account_id: str, to: str, now: Optional[datetime] = None) -> str:
-        """Submit the URI's due slot once under its state lock.
-
-        ``now`` defaults to Beijing time. Return submitted, disabled or not_due;
-        missing targets raise LookupError. Saved slots prevent duplicate submissions.
+        A failed submission leaves the slot due. Retries by the same executor reuse its
+        slot-specific idempotency key; a different executor has a separate task namespace.
         """
-        to = to.rstrip("/")
+        from openviking.service.compile_service import CompileRequest
+
         now = now or datetime.now(TZ)
-        async with self._store.edit(account_id, to) as record:
-            if record["to"] != to:
-                raise LookupError(f"Compile target not found: {to}")
-            slot = current_slot(record["update_schedule"], now) if record["auto_update"] else None
-            if slot is None or not is_due(record, slot):
-                await self.reschedule(account_id, record, raise_on_error=True)
-                return "not_due"
-            slot_iso = slot.isoformat()
-            key = f"compile-schedule:{hashlib.sha256(to.encode('utf-8')).hexdigest()}:{slot_iso}"
-            outcome = "submitted"
-            try:
-                ctx, connection = await self._executor(record)
-                owner_ctx = task_ctx(account_id, ctx.user.user_id)
-                # Initial failures can leave the output directory uncreated.
-                if record.get("initialized") and not await self._fs.exists(
-                    record["to"], ctx=owner_ctx
-                ):
-                    raise NotFoundError(record["to"], "compile target")
-            except (FailedPreconditionError, NotFoundError) as exc:
-                record["auto_update"] = False
-                record["execution_context"]["credential"] = None
-                record["last_error"] = (
-                    f"Compile target is missing: {record['to']}"
-                    if isinstance(exc, NotFoundError)
-                    else exc.message
+        async with self._store.edit(account_id, owner_user_id, compile_name) as record:
+            if not is_due(record, now):
+                await self.reschedule(
+                    account_id, owner_user_id, compile_name, record, raise_on_error=True
                 )
-                outcome = "disabled"
-            else:
-                try:
-                    await self._compile.create_scheduled(
-                        record, ctx=ctx, connection=connection, idempotency_key=key
-                    )
-                except ConflictError:
-                    pass  # Same slot already submitted with older parameters.
+                return "not_due"
+            slot = current_slot(record["update_schedule"], now)
+            slot_iso = slot.isoformat()
+            ctx, connection = await self._executor(record)
+            await self._compile.create(
+                CompileRequest(compile_name=compile_name),
+                ctx=ctx,
+                connection=connection,
+                idempotency_key=f"compile-schedule:{owner_user_id}:{compile_name}:{slot_iso}",
+                trigger="scheduled",
+                locked_record=record,
+                scheduled_slot=slot_iso,
+            )
             record["last_triggered_slot"] = slot_iso
-        await self.reschedule(account_id, record, raise_on_error=True)
-        return outcome
+            record["next_triggered_slot"] = next_slot(record["update_schedule"], now).isoformat()
+        await self.reschedule(account_id, owner_user_id, compile_name, record, raise_on_error=True)
+        return "submitted"
 
     async def _executor(self, record: Dict[str, Any]) -> tuple[RequestContext, Dict[str, Any]]:
         """Verify the saved key and load the executor's current account groups.
 
-        A user key must resolve to the same user; a root key must still be the
-        root key, and the run acts as the saved user (as trusted requests do).
+        A user key must match the saved identity and supplies its current role.
+        A root key acts with the saved executor role, defaulting to USER when absent.
         """
         context = record["execution_context"]
         executor, credential = context.get("executor"), context.get("credential")
@@ -304,25 +273,27 @@ class CompileScheduler:
             api_key = json.loads(plaintext.decode("utf-8"))["api_key"]
         except Exception as exc:
             raise invalid from exc
-        group_ids = ()
+        role = Role.parse(executor.get("role", Role.USER))
+        group_ids = tuple(executor.get("group_ids", ()))
         if self._identity_resolver is not None:
             try:
                 identity = await self._identity_resolver(api_key)
             except Exception as exc:
                 raise invalid from exc
             root_key = identity.role == Role.ROOT and identity.account_id is None
-            if root_key != (executor.get("key_type") == "root") or (
-                not root_key
-                and (identity.account_id, identity.user_id)
-                != (executor["account_id"], executor["user_id"])
+            if not root_key and (identity.account_id, identity.user_id) != (
+                executor["account_id"],
+                executor["user_id"],
             ):
                 raise invalid
+            if not root_key:
+                role = identity.role
             group_ids = tuple(
                 await self._group_resolver(executor["account_id"], executor["user_id"])
             )
         ctx = RequestContext(
             user=UserIdentifier(account_id=executor["account_id"], user_id=executor["user_id"]),
-            role=Role.USER,
+            role=role,
             group_ids=group_ids,
             api_key=api_key,
         )
@@ -339,18 +310,29 @@ class _ExpiryHandler:
         self._scheduler = scheduler
 
     async def handle(self, request: Any) -> Any:
-        """Trigger the callback's target URI; missing targets complete and failures retry."""
+        """Trigger a saved name; missing configurations complete and submission failures retry."""
         from openviking.scheduling.expiry import CallbackResult, CallbackStatus
 
         identity = request.identity
-        to = identity.local_id
-        if not isinstance(to, str) or not to:
+        compile_name = identity.local_id
+        try:
+            validate_compile_name(compile_name)
+            if error := validate_user_id(identity.user_id):
+                raise InvalidArgumentError(error)
+        except InvalidArgumentError:
             return CallbackResult(CallbackStatus.COMPLETED, "not_found")
         try:
-            outcome = await self._scheduler.trigger_if_due(identity.account_id, to)
-        except LookupError:
-            return CallbackResult(CallbackStatus.COMPLETED, "not_found")
+            if (
+                await self._scheduler._store.get(
+                    identity.account_id, identity.user_id, compile_name
+                )
+                is None
+            ):
+                return CallbackResult(CallbackStatus.COMPLETED, "not_found")
+            outcome = await self._scheduler.trigger_if_due(
+                identity.account_id, identity.user_id, compile_name
+            )
         except Exception:
-            logger.warning("Compile schedule callback failed", exc_info=True)
+            logger.info("compile schedule callback failed; retrying", extra={"degraded": True})
             return CallbackResult(CallbackStatus.RETRY, "trigger_failed")
         return CallbackResult(CallbackStatus.COMPLETED, outcome)

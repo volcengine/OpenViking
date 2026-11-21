@@ -27,6 +27,14 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 示例使用固定数据：点击经验名称进入文件视图，点击轨迹名称只显示收到的 URI。
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/experience-dashboard-crash.tsx" preview
+
+```
+
 ## API
 
 ### ExperienceDashboard
@@ -49,8 +57,9 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | onPageChange     | 点击翻页时触发，参数为目标页码；未提供 `onLoadMore` 时「加载更多」也调用它；两者都省略时这些按钮禁用                  | `(page: number) => void`                                                                                                | -                        |
 | onLoadMore       | 点击「加载更多」时触发，由宿主追加下一页；优先于 `onPageChange`，省略时回退到 `onPageChange(page + 1)`                | `() => void`                                                                                                            | -                        |
 | onOpenUri        | 点击经验名称或轨迹的打开按钮时触发，参数为对应的 URI；省略时这些按钮禁用                                              | `(uri: string) => void`                                                                                                 | -                        |
+| onOpenTrajectory | 点击来源轨迹的「轨迹详情」时触发。提供后显示入口。                                                                    | `(trajectory: ExperienceTrajectory, trigger: HTMLButtonElement) => void`                                                | -                        |
 | labels           | 覆盖界面文案                                                                                                          | `Partial<ExperienceDashboardLabels>`                                                                                    | -                        |
-| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                     | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                   | -                        |
+| slots            | 覆盖看板区块或[渲染错误展示](../guide/getting-started#自定义错误展示)                                                 | `ExperienceDashboardProps['slots']`                                                                                     | -                        |
 | locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                                                                                    | 继承上级，默认 `'en-US'` |
 | className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                | HTML 属性                                                                                                               | -                        |
 
@@ -65,6 +74,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | trajectories    | 「应用效果」页签中的注入轨迹，按传入顺序显示                                                                | `readonly ExperienceTrajectory[]`                                                                         | -      |
 | trajectoryTotal | 注入轨迹总数，显示在标题后，省略时不显示                                                                    | `number`                                                                                                  | -      |
 | sources         | 「来源追溯」页签中生成该经验的轨迹，按传入顺序显示                                                          | `readonly ExperienceTrajectory[]`                                                                         | -      |
+| sourceGroups    | 按更新时间倒序排列的提交分组。优先于扁平的 `sources` 列表。                                                 | `readonly ExperienceSourceGroup[]`                                                                        | -      |
 | testMaterials   | 测试材料，字段见下方 `data.testMaterials`；提供后（包括空数组）才显示「测试」页签                           | `readonly { id: string; title: string; content: string; taskQuery?: string; uri?: string }[]`             | -      |
 
 ### ExperienceItem
@@ -109,6 +119,10 @@ import '@openviking/react/components/experience-dashboard/style.css';
 | error   | 加载失败的错误，对应区域显示失败与重试；追加轨迹页失败时例外，已加载的记录保留 | `Error \| null` | -      |
 | onRetry | 点击重试时触发                                                                 | `() => void`    | -      |
 
+### 区块插槽
+
+在 `slots.sections` 中为 `list`、`effect`、`outcomes`、`trajectories`、`sources` 或 `tests` 传入渲染函数。函数接收看板数据、该区块的请求状态（包括可用的重试回调）、分页和导航回调。第二个参数是默认内容，可以直接返回，也可以返回 `null` 隐藏该区块。「测试」页签仍由 `data.testMaterials` 决定。
+
 ## 注意
 
 - `states` 的键与区域对应，通常只在对应区域没有数据时显示：`list` 目录视图的列表，`effect` 应用效果的三个指标，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。有两处例外：追加轨迹页失败时，已加载的记录保留，错误与重试显示在列表下方；`effect` 的 `loading` 或 `error` 一旦给出，即使 `data.effect` 仍有值也整块替换为骨架或错误，因为指标是独立取数的，旧值不能与刷新失败同时显示。
@@ -118,3 +132,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 - 复制使用 `navigator.clipboard.writeText`，只在 HTTPS 或 localhost 下可用；不可用或浏览器拒绝时按钮显示「复制失败」。
 - 组件高度为 `100%` 且内容区自己滚动，父元素需要给出高度。
 - 类型从 `@openviking/react/components/experience-dashboard` 导出，包括 `ExperienceDashboardTab` 和 `ExperienceOutcome`；包根入口只导出组件和 `ExperienceDashboardProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

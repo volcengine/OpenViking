@@ -1,15 +1,15 @@
+import { useDashboardAnalytics } from './use-dashboard-analytics.js';
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useState } from 'react';
 
 import { useLocale } from '../../shared/locale-context.js';
-import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
-import { DashboardTabs } from './dashboard-tabs.js';
+import { DashboardTabs, experienceTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
-import {
-  ExperienceQueryState,
-  ExperienceTableSkeleton,
-} from './experience-state.js';
+import { ExperienceQueryState } from './experience-state.js';
+import { createSectionRenderer } from './render-section.js';
 import { ExperienceImpact } from './experience-impact.js';
-import { ExperienceList } from './experience-list.js';
+import { ExperienceDirectory } from './experience-directory.js';
 import { ExperiencePagination } from './experience-pagination.js';
 import { ExperienceSources } from './experience-sources.js';
 import { ExperienceTests } from './experience-tests.js';
@@ -36,10 +36,15 @@ export function ExperienceDashboardContent({
   onLoadMore,
   locale: localeProp,
   onOpenUri,
+  onOpenTrajectory,
   labels,
+  slots,
   className,
   ...rest
 }: ExperienceDashboardProps) {
+  const track = useTrack();
+  const events = useDashboardAnalytics({ onOpenUri, onPageChange });
+  const exposure = useExposure('experience_dashboard_show', uri);
   const locale = useLocale(localeProp);
   const [localTab, setLocalTab] = useState<ExperienceDashboardTab>('impact');
   const [localDays, setLocalDays] = useState(7);
@@ -50,20 +55,17 @@ export function ExperienceDashboardContent({
   if (localTab === 'test' && missingTest) setLocalTab('impact');
   const days = controlledDays ?? localDays;
   const setTab = (value: ExperienceDashboardTab) => {
+    if (value !== tab) track('experience_dashboard_tab_change');
     setLocalTab(value);
     onTabChange?.(value);
   };
   const setDays = (value: number) => {
+    if (value !== days) track('experience_dashboard_range_change');
     setLocalDays(value);
     onDaysChange?.(value);
   };
   const t = experienceLabels(locale, labels);
   const directory = kind === 'directory';
-  const tabs = [
-    { key: 'impact' as const, title: t.impact },
-    { key: 'source' as const, title: t.source },
-    ...(missingTest ? [] : [{ key: 'test' as const, title: t.test }]),
-  ];
   const activeState = directory
     ? states.list
     : tab === 'source'
@@ -86,20 +88,6 @@ export function ExperienceDashboardContent({
   // a value versus no value — so this stays a ternary rather than `??`.
   const pageCount =
     data.total === undefined ? page + (hasMore ? 2 : 1) : undefined;
-  // 目录骨架的占位行数：知道总数时按当前页还剩多少行算，最后一页不满时骨架不会
-  // 虚报成一整页——20 行骨架换成 1 行表会把下面的内容往上拉一千多像素。总数未知
-  // 时当作本页是满的，退回每页条数；页码越界时按 0 行算。
-  //
-  // How many placeholder rows the directory skeleton draws: with a known total it is
-  // what is left on the current page, so a short final page does not pretend to be a
-  // full one — a 20-row skeleton collapsing into a 1-row table drags everything below
-  // it up by a thousand-odd pixels. An unknown total counts as a full page, falling back
-  // to the page size; a page past the end draws no rows.
-  const remainingRows = Math.max(
-    0,
-    (data.total ?? (page + 1) * pageSize) - page * pageSize,
-  );
-  const skeletonRows = Math.min(pageSize, remainingRows);
   const pagination = paged ? (
     <ExperiencePagination
       page={page}
@@ -108,55 +96,56 @@ export function ExperienceDashboardContent({
       pageSize={pageSize}
       loading={activeState?.loading}
       labels={t}
-      onPageChange={onPageChange}
+      onPageChange={events.page}
     />
   ) : null;
+  const loadMore =
+    onLoadMore ?? (onPageChange ? () => onPageChange(page + 1) : undefined);
+  const renderSection = createSectionRenderer(
+    slots?.sections,
+    {
+      uri,
+      data,
+      days,
+      locale,
+      page,
+      pageSize,
+      startIndex,
+      hasMore,
+      loadingMore,
+      onPageChange: events.page,
+      onLoadMore: loadMore,
+      onOpenUri,
+      onOpenTrajectory,
+    },
+    states,
+    events,
+  );
   return (
     <div
       {...rest}
+      ref={exposure}
       data-resource-uri={uri}
       className={['ov-experience-dashboard', className]
         .filter(Boolean)
         .join(' ')}
     >
       {directory ? (
-        <div className="ov-experience-dashboard__body">
-          <h2 className="ov-experience-dashboard__list-title">
-            {t.allExperiences}
-            {/* 不写成 `data.total && …`：总数可能是 0，而 0 要显示成「· 0」。
-             *
-             * Not `data.total && …`: the total may be 0, and 0 must read as "· 0". */}
-            {data.total === undefined ? '' : ` · ${data.total}`}
-          </h2>
-          {data.experiences?.length ? (
-            <ExperienceList
-              items={data.experiences}
-              locale={locale}
-              startIndex={startIndex}
-              labels={t}
-              onOpenUri={onOpenUri}
-            />
-          ) : states.list?.loading ? (
-            // 目录表用表格骨架占住整页高度；通用占位条只有一百多像素，数据到达时
-            // 页面会突然长高一截。
-            //
-            // The directory table holds a page's height with its own skeleton; generic
-            // bars are a hundred-odd pixels and the page jumps when data lands.
-            <ExperienceTableSkeleton rows={skeletonRows} label={t.loading} />
-          ) : (
-            <DashboardState
-              state={states.list}
-              empty={t.empty}
-              loading={t.loading}
-              failed={t.failed}
-              retry={t.retry}
-            />
-          )}
-          {pagination}
-        </div>
+        <ExperienceDirectory
+          data={data}
+          labels={t}
+          locale={locale}
+          page={page}
+          pageSize={pageSize}
+          startIndex={startIndex}
+          state={states.list}
+          onOpenUri={events.experience}
+          renderList={(content) => renderSection('list', content)}
+          pagination={pagination}
+        />
       ) : (
         <DashboardTabs
-          tabs={tabs}
+          tabs={experienceTabs(t, missingTest)}
           active={tab}
           label={t.title}
           onChange={setTab}
@@ -174,51 +163,47 @@ export function ExperienceDashboardContent({
                 trajectoriesState={states.trajectories ?? {}}
                 hasMore={hasMore}
                 loadingMore={loadingMore}
-                // 显式回调优先；只有旧回调的宿主仍按文档约定翻页。
-                // An explicit callback wins; an older-only host still pages as documented.
-                onLoadMore={
-                  onLoadMore ??
-                  (onPageChange ? () => onPageChange(page + 1) : undefined)
-                }
-                onOpenUri={onOpenUri}
+                onLoadMore={loadMore}
+                renderSection={renderSection}
+                onOpenUri={events.trajectory}
               />
             ) : tab === 'source' ? (
-              data.sources?.length ? (
+              renderSection(
+                'sources',
                 <ExperienceSources
+                  groups={data.sourceGroups}
                   items={data.sources}
+                  state={states.sources}
+                  onOpenTrajectory={onOpenTrajectory}
                   labels={t}
                   locale={locale}
-                  onOpenUri={onOpenUri}
-                />
-              ) : (
-                <ExperienceQueryState
-                  state={states.sources}
-                  rows={4}
-                  empty={t.emptySource}
-                  loading={t.loading}
-                  failed={t.failed}
-                  retry={t.retry}
-                />
+                  onOpenUri={events.source}
+                />,
               )
-            ) : data.testMaterials?.length ? (
-              <>
-                <ExperienceTests
-                  items={data.testMaterials}
-                  startIndex={startIndex}
-                  labels={t}
-                  onOpenUri={onOpenUri}
-                />
-                {pagination}
-              </>
             ) : (
-              <ExperienceQueryState
-                state={states.tests}
-                rows={4}
-                empty={t.emptyTests}
-                loading={t.loading}
-                failed={t.failed}
-                retry={t.retry}
-              />
+              <>
+                {renderSection(
+                  'tests',
+                  data.testMaterials?.length ? (
+                    <ExperienceTests
+                      items={data.testMaterials}
+                      startIndex={startIndex}
+                      labels={t}
+                      onOpenUri={events.test}
+                    />
+                  ) : (
+                    <ExperienceQueryState
+                      state={states.tests}
+                      rows={4}
+                      empty={t.emptyTests}
+                      loading={t.loading}
+                      failed={t.failed}
+                      retry={t.retry}
+                    />
+                  ),
+                )}
+                {data.testMaterials?.length ? pagination : null}
+              </>
             )}
           </div>
         </DashboardTabs>

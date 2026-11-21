@@ -1,153 +1,154 @@
-import { useEffect, useMemo, useState } from 'react';
-
-import { OV_PATHS } from '../../client/paths.js';
+import { createSearchObserver, type SearchTarget } from './search-observer.js';
+import { QueryObservation } from '../../shared/monitoring/query-observation.js';
+import { type Workflow } from '../../shared/monitoring/workflow.js';
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.js';
+import { useMemo, useRef, useSyncExternalStore } from 'react';
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isAbort, toError } from './fs-model.js';
+import { isOvClientError } from '../../client/errors.js';
+import { useQueryScope } from '../../shared/request/use-query-scope.js';
 import type {
   SearchFilters,
+  SearchFailure,
   SearchMode,
   SearchResult,
 } from './search-types.js';
-import {
-  buildSearchBody,
-  normalizeFindResult,
-  normalizeGlobResult,
-  normalizeGrepResult,
-  type RawFindResult,
-} from './search-model.js';
-
-/** 模式到接口路径。`find`/`search` 语义检索，`grep`/`glob` 模式匹配。 */
-const SEARCH_PATHS: Record<SearchMode, string> = {
-  find: OV_PATHS.searchFind,
-  search: OV_PATHS.searchQuery,
-  grep: OV_PATHS.searchGrep,
-  glob: OV_PATHS.searchGlob,
-};
+import { buildSearchBody, isSemantic } from './search-model.js';
 
 export interface SearchState {
-  /** 归一后的结果；未搜索时为 `null`。Normalised result, `null` before any search. */
+  monitoring?: Workflow<SearchTarget>;
   result: SearchResult | null;
-  /** 搜索是否进行中。Whether a search is running. */
   loading: boolean;
-  /** 搜索失败的原因。Why the search failed. */
   error: Error | null;
+  failure: SearchFailure | null;
+  retry: () => void;
 }
-
 export interface UseFsSearchOptions {
   client: OvClient | null;
-  /** 检索方式。Retrieval mode. */
   mode: SearchMode;
-  /** 已去抖的查询词；空串表示没有搜索。The debounced query; empty means no search. */
+  /** Already debounced by the calling block. */
   query: string;
-  /** 高级筛选。Advanced filters. */
   filters: SearchFilters;
-  /** 搜索的根，也是目录筛选的兜底。The search root, also the scope fallback. */
   rootUri: string;
-  /**
-   * 重新取数的代次。宿主调用刷新时递增，让同一查询词重新请求——外部数据变了
-   * 而查询词没变，只靠依赖是看不出来的。
-   *
-   * Reload generation. A host increments it on refresh so the same query is
-   * requested again: the data changed while the query did not, which dependencies
-   * alone cannot express.
-   */
-  generation?: number;
   requestOptions?: OvRequestOptions;
 }
+const emptySubscribe = () => () => {};
+const emptySnapshot = () => undefined;
 
-/** 把任意响应交给对应的归一函数。Routes a response to its normaliser. */
-function normalize(mode: SearchMode, raw: unknown): SearchResult {
-  const payload = (raw ?? {}) as { matches?: unknown } & RawFindResult;
-  if (mode === 'grep') return normalizeGrepResult(payload.matches);
-  if (mode === 'glob') return normalizeGlobResult(payload.matches);
-  return normalizeFindResult(payload);
-}
-
-/**
- * 四种检索方式的取数。模式、查询词或筛选变化都发新请求并取消上一次——旧响应
- * 回来时若已作废，写进去就会盖住当前结果。
- *
- * Loading for the four retrieval modes. A mode, query or filter change issues a new
- * request and cancels the previous one: publishing a stale response would overwrite
- * the current view.
- */
 export function useFsSearch({
   client,
   mode,
   query,
   filters,
   rootUri,
-  generation = 0,
   requestOptions,
 }: UseFsSearchOptions): SearchState {
-  // 请求体按筛选的具体字段缓存，而不是依赖 `filters` 对象本身：调用方可能每次
-  // 渲染都新建一个等价对象，把它当依赖会让 effect 反复重跑并取消上一次请求。
-  //
-  // The request is memoised on the individual filter fields rather than the `filters`
-  // object: a caller may build an equivalent object every render, and depending on it
-  // would re-run the effect and cancel the previous request each time.
-  const body = useMemo(
-    () => buildSearchBody(mode, query, filters, rootUri),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      mode,
-      query,
-      rootUri,
-      filters.scopes,
-      filters.levels,
-      filters.timeField,
-      filters.since,
-      filters.until,
-      filters.caseInsensitive,
-    ],
+  const analytics = useAnalyticsRef();
+  const retryCause = useRef<WeakRef<Error> | undefined>(undefined);
+  const {
+    request,
+    error,
+    aborted,
+    retry: retryScope,
+  } = useQueryScope(
+    client,
+    requestOptions,
+    `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
   );
-
-  const request = useMemo(
+  const bodyKey = JSON.stringify(
+    buildSearchBody(mode, query, filters, rootUri),
+  );
+  const hasFilters = Boolean(
+    filters.scopes.length ||
+    (isSemantic(mode) &&
+      (filters.levels.length || filters.since || filters.until)) ||
+    (mode === 'grep' && filters.caseInsensitive),
+  );
+  const observer = useMemo(
     () =>
-      client && query.trim()
-        ? { client, mode, body, generation, requestOptions }
-        : null,
-    [client, mode, body, generation, query, requestOptions],
+      createSearchObserver(
+        request,
+        mode,
+        query,
+        bodyKey,
+        hasFilters,
+        analytics,
+        retryCause,
+      ),
+    [request, mode, query, bodyKey, hasFilters, analytics],
   );
-  const [response, setResponse] = useState<{
-    request: NonNullable<typeof request>;
-    result: SearchResult | null;
-    error: Error | null;
-  }>();
-
-  // Cancel superseded requests and never render a previous mode, query or scope
-  // while waiting for the active request. A transport may ignore cancellation.
-  useEffect(() => {
-    if (!request) return;
-    const controller = new AbortController();
-    void request.client
-      .request<unknown>({
-        method: 'POST',
-        path: SEARCH_PATHS[request.mode],
-        body: request.body,
-        options: { ...request.requestOptions, signal: controller.signal },
-      })
-      .then(
-        (raw) => {
-          if (!controller.signal.aborted)
-            setResponse({
-              request,
-              result: normalize(request.mode, raw),
-              error: null,
+  const observation = useMemo(
+    () =>
+      new QueryObservation(
+        request?.client ?? null,
+        `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
+      ),
+    [request, mode],
+  );
+  const subscribe = useMemo(
+    () =>
+      observer && !aborted
+        ? (notify: () => void) => {
+            observation.observe(
+              observer.getCurrentResult(),
+              observer.getCurrentQuery(),
+            );
+            const unsubscribe = observer.subscribe((result) => {
+              observation.observe(result, observer.getCurrentQuery());
+              notify();
             });
-        },
-        (cause: unknown) => {
-          if (!controller.signal.aborted && !isAbort(cause))
-            setResponse({ request, result: null, error: toError(cause) });
-        },
-      );
-    return () => controller.abort();
-  }, [request]);
-
-  const current = request && response?.request === request ? response : null;
+            return () => {
+              observation.cancel();
+              unsubscribe();
+            };
+          }
+        : emptySubscribe,
+    [observer, aborted, observation],
+  );
+  const getSnapshot = useMemo(
+    () => (observer ? () => observer.getCurrentResult() : emptySnapshot),
+    [observer],
+  );
+  const result = useSyncExternalStore(subscribe, getSnapshot);
+  const monitoring = observer
+    ? observation.operations(observer.getCurrentQuery())[0]
+    : undefined;
+  useWorkflowCommit(
+    monitoring,
+    !!result?.data && !result.isFetching && !result.error,
+    () => ({ resultCount: result!.data!.total, hasMore: null }),
+  );
+  const failureError = error ?? result?.error ?? null;
+  const invalidPattern =
+    mode === 'grep' &&
+    isOvClientError(failureError) &&
+    failureError.code === 'INVALID_ARGUMENT' &&
+    /^(?:invalid operation: )?Invalid (?:grep pattern|regex(?: pattern)?):/.test(
+      failureError.message,
+    );
   return {
-    result: current?.result ?? null,
-    loading: !!request && !current,
-    error: current?.error ?? null,
+    monitoring,
+    result: result?.data ?? null,
+    loading:
+      !!client && !!query.trim() && !error && (!result || result.isFetching),
+    error: failureError,
+    failure: failureError
+      ? {
+          reason: invalidPattern ? 'invalid-pattern' : 'request',
+          message: failureError.message,
+        }
+      : null,
+    retry: () => {
+      if (aborted) return;
+      if (observer) {
+        const binding = bindingOf(client);
+        retryCause.current =
+          result?.error && binding?.controller.options && binding.active()
+            ? new WeakRef(result.error)
+            : undefined;
+        void observer.refetch({ cancelRefetch: false });
+      } else retryScope();
+    },
   };
 }

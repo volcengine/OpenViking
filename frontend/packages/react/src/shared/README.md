@@ -24,8 +24,10 @@ General-purpose basic pieces. The caller supplies business content and specific 
 - `tooltip`: a positioned surface rendered into `document.body`, shown on hover or focus, or toggled by click. It renders into the body because an ancestor's `overflow: hidden` would clip an in-flow surface.
 - `popover`: the white-card counterpart of `tooltip` for structured or interactive content, also rendered into `document.body`, with the same trigger and placement options.
 - `divider`: a single `role="separator"` rule whose length, thickness and color the caller passes.
+- `empty`: an empty state with a built-in line illustration above a title, an optional description and an optional action. `default` fits a content area, `compact` fits popovers, trees and cards. A failure passes `role="alert"`; the default `ErrorBoundary` fallback uses it with the `crash` illustration.
 - `resizable`: `ResizableHandle`, a draggable `role="separator"` that resizes a neighbouring panel with pointer drag or the arrow keys. The caller owns the width and receives each clamped value through `onResize`.
 - `overlay`: positioning and scroll helpers for floating surfaces such as `tooltip`, `popover`, `modal` and `drawer`. `useOverlayPosition` flips a surface to the opposite side when space runs out and clamps it to the viewport, `lockBodyScroll` counts its owners and restores the host's inline styles when the last one releases, and `OverlayPlacement` is the shared placement type.
+- `toast`: compact, top-center feedback. See [Toast](#toast).
 - `notification`: a top-right notification stack for task status and result feedback; see [Notification](#notification).
 
 ### `auth/`
@@ -42,6 +44,15 @@ What the six forms in `components/auth/` share: the `<form>` frame with title, d
 - `locale-context.tsx`: `useLocale` and `LocaleProvider`, the language scope all public entries share. It is separate from the request client's Context, so switching language keeps requests and state.
 
 Translations stay with their owner in `locales/en-US.ts` and `locales/zh-CN.ts`; `auth/` and `primitives/modal/` follow the same layout.
+
+### Toast
+
+- `useToast` returns `[toast, holder]`. Place the holder inside the caller's locale and theme scope. Import from the internal `primitives/toast/index` and include `primitives/toast/style.css` in the consuming stylesheet.
+- The API matches Notification: `loading`, `info`, `success`, `warning`, `error`, `normal`, `remove` and `clear`. Each variant accepts a config with `content` and returns an ID; reusing an ID updates in place. Toast has content only, without Notification's `title` or `btn`.
+- `loading` uses the built-in LoadingIcon and stays visible by default. Other types dismiss after 3000 ms. Explicit `duration` takes precedence; `duration: 0` disables auto-dismiss. Hover or focus within a toast pauses the timer; a close button is shown by default.
+- `onDismiss` runs when manual or timed dismissal begins. `onClose` runs after the exit animation, including `remove` and `clear`; those methods do not call `onDismiss`. Unmount cleans up the instance. There is no global API.
+- `locale` and per-key `labels` overrides control built-in text. Locale changes preserve notices and caller-supplied content. Toast and Notification share the internal `notice` state, timers, icons and portal implementation, with separate instances and presentation.
+- The [internal feedback demo](../../../../docs/docs/_demos/toast-feedback.tsx) contrasts client validation with a simulated API failure and updates loading to a result. Error routing and copy rules live in the [block guide](../modules/AGENTS.md#错误反馈).
 
 ### Notification
 

@@ -33,6 +33,14 @@ import '@openviking/react/modules/scope-cascade/style.css';
 
 ```
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，区块显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/scope-cascade-crash.tsx" preview
+
+```
+
 ## API
 
 ### ScopeCascade
@@ -80,3 +88,7 @@ import '@openviking/react/modules/scope-cascade/style.css';
 - 每一级一次返回完整列表，不支持服务端搜索和分页。超过 10 项时显示搜索框，在本地按选项文字过滤。
 - 选项没有 `icon` 时，知识库显示 [LibraryIcon](../components/icons)（按 `id` 取色的圆形渐变色块），数据空间和用户分别显示 `SpaceIcon`、`UserIcon`；加载函数返回了 `icon` 就使用它。
 - 类型从 `@openviking/react/modules/scope-cascade` 导出：`ScopeCascadeProps`、`ScopeCascadeSelection`，以及三个加载函数合在一起的 `ScopeCascadeApi`；`ScopeSwitcherOption` 和 `ScopeSwitcherLabels` 从 `@openviking/react/components/scope-switcher` 导出。包根入口只导出组件和 `ScopeCascadeProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

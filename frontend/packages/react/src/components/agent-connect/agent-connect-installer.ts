@@ -37,7 +37,11 @@ export function getInstallerInstructions(
   locale: AgentConnectLocale,
   apiKey: string,
   baseUrl: string,
+  isEnterprise = false,
 ) {
   const command = getInstallerCommand(harness, locale, apiKey, baseUrl);
-  return resolveAgentConnectLabels(locale).installerInstructions(name, command);
+  const labels = resolveAgentConnectLabels(locale);
+  return isEnterprise
+    ? labels.enterpriseInstallerInstructions(command)
+    : labels.installerInstructions(name, command);
 }

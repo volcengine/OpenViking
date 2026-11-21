@@ -8,9 +8,10 @@ impl GitService {
     /// set, traversal continues through unrelated commits until `limit`
     /// matching commits are collected or history ends. Filtered traversal
     /// returns `GitError::LogScanLimitExceeded` when history remains after
-    /// 1,000 candidate commits.
+    /// 1,000 candidate commits. Offsets above `i64::MAX` are rejected before I/O.
     pub async fn log(&self, mut req: LogRequest) -> Result<Vec<LogEntry>, GitError> {
         validate_account_id(&req.account)?;
+        i64::try_from(req.offset).map_err(|_| GitError::InvalidLogOffset(req.offset))?;
         req.paths = normalize_log_paths(req.paths)?;
         if req.limit == 0 {
             return Ok(Vec::new());
@@ -46,6 +47,7 @@ impl GitService {
         let mut tree_cache = crate::git::tree_builder::TreeLookupCache::new();
         let mut next_meta: Option<CommitMeta> = None;
         let mut scanned = 0usize;
+        let mut skipped = 0usize;
         let mut out = Vec::new();
 
         while let Some(commit_oid) = next_oid {
@@ -85,9 +87,13 @@ impl GitService {
             next_meta = parent_meta;
 
             if include {
-                out.push(log_entry_from_meta(commit_oid, meta));
-                if out.len() >= req.limit {
-                    return Ok(out);
+                if skipped < req.offset {
+                    skipped += 1;
+                } else {
+                    out.push(log_entry_from_meta(commit_oid, meta));
+                    if out.len() >= req.limit {
+                        return Ok(out);
+                    }
                 }
             }
 
@@ -161,17 +167,12 @@ impl GitService {
 
         if latest_oid == current_head {
             return self
-                .load_snapshot_log_entries(store.as_ref(), req, latest.0, req.limit)
+                .load_snapshot_log_entries(store.as_ref(), req, latest.0, req.offset, req.limit)
                 .await;
         }
 
         match self
-            .scan_snapshot_log_tail(
-                req,
-                current_head,
-                latest_oid,
-                crate::git::snapshot_log::SNAPSHOT_LOG_TAIL_SCAN_LIMIT,
-            )
+            .scan_snapshot_log_tail(req, current_head, latest_oid)
             .await?
         {
             Some(tail) => {
@@ -189,17 +190,18 @@ impl GitService {
                 .await?;
                 if fresh_head == latest_oid {
                     return self
-                        .load_snapshot_log_entries(store.as_ref(), req, latest.0, req.limit)
+                        .load_snapshot_log_entries(
+                            store.as_ref(),
+                            req,
+                            latest.0,
+                            req.offset,
+                            req.limit,
+                        )
                         .await;
                 }
                 if fresh_head != current_head {
                     if let Some(tail) = self
-                        .scan_snapshot_log_tail(
-                            req,
-                            fresh_head,
-                            latest_oid,
-                            crate::git::snapshot_log::SNAPSHOT_LOG_TAIL_SCAN_LIMIT,
-                        )
+                        .scan_snapshot_log_tail(req, fresh_head, latest_oid)
                         .await?
                     {
                         self.trigger_snapshot_log_backfill(&req.account, &req.branch);
@@ -225,27 +227,40 @@ impl GitService {
         latest_id: i64,
         mut tail: Vec<LogEntry>,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
-        if tail.len() >= req.limit {
-            tail.truncate(req.limit);
-            return Ok(Some(tail));
+        // The tail contains matches newer than the indexed boundary.
+        // Skip `offset` matches first, then collect up to `limit` total.
+        let mut skipped = 0usize;
+        let mut out = Vec::new();
+        for entry in tail.drain(..) {
+            if skipped < req.offset {
+                skipped += 1;
+            } else {
+                out.push(entry);
+                if out.len() >= req.limit {
+                    return Ok(Some(out));
+                }
+            }
         }
-        let remaining = req.limit - tail.len();
+
+        let remaining_offset = req.offset.saturating_sub(skipped);
+        let remaining_limit = req.limit - out.len();
+
         let Some(indexed) = self
-            .load_snapshot_log_entries(store, req, latest_id, remaining)
+            .load_snapshot_log_entries(store, req, latest_id, remaining_offset, remaining_limit)
             .await?
         else {
             return Ok(None);
         };
-        let mut seen: HashSet<ObjectId> = tail.iter().map(|entry| entry.oid).collect();
+        let mut seen: HashSet<ObjectId> = out.iter().map(|entry| entry.oid).collect();
         for entry in indexed {
             if seen.insert(entry.oid) {
-                tail.push(entry);
+                out.push(entry);
             }
-            if tail.len() >= req.limit {
+            if out.len() >= req.limit {
                 break;
             }
         }
-        Ok(Some(tail))
+        Ok(Some(out))
     }
 
     /// Load SnapshotLog hits and project them to `LogEntry` values.
@@ -254,13 +269,14 @@ impl GitService {
         store: &dyn crate::git::snapshot_log::SnapshotLogStore,
         req: &LogRequest,
         max_id: i64,
+        offset: usize,
         limit: usize,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
         let Some(paths) = req.paths.as_ref() else {
             return Ok(None);
         };
         let hits = match store
-            .query_path_commits(&req.account, &req.branch, paths, max_id, limit)
+            .query_path_commits(&req.account, &req.branch, paths, max_id, offset, limit)
             .await
         {
             Ok(hits) => hits,
@@ -301,18 +317,17 @@ impl GitService {
     }
 
     /// Scan HEAD toward latest indexed commit, returning tail matches only.
+    /// No scan limit — walks first-parent chain until hitting latest or root.
     async fn scan_snapshot_log_tail(
         &self,
         req: &LogRequest,
         head: ObjectId,
         latest_oid: ObjectId,
-        max_commits_scanned: usize,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
         let paths = req.paths.as_ref().expect("filtered request");
         let mut tree_cache = crate::git::tree_builder::TreeLookupCache::new();
         let mut next_oid = Some(head);
         let mut next_meta: Option<CommitMeta> = None;
-        let mut scanned = 0usize;
         let mut out = Vec::new();
 
         while let Some(commit_oid) = next_oid {
@@ -333,7 +348,6 @@ impl GitService {
                 None => None,
             };
 
-            scanned += 1;
             tree_cache.begin_batch();
             if commit_touches_any_path(
                 self.object_store.as_ref(),
@@ -346,22 +360,14 @@ impl GitService {
             .await?
             {
                 out.push(log_entry_from_meta(commit_oid, meta));
-                if out.len() >= req.limit {
+                // Count matches after offset without adding two user-supplied integers.
+                if out.len().saturating_sub(req.offset) >= req.limit {
                     return Ok(Some(out));
                 }
             }
 
             next_oid = parent_oid;
             next_meta = parent_meta;
-            if scanned >= max_commits_scanned && next_oid.is_some() && next_oid != Some(latest_oid)
-            {
-                return Err(GitError::LogScanLimitExceeded {
-                    scanned,
-                    max_scanned: max_commits_scanned,
-                    matched: out.len(),
-                    requested: req.limit,
-                });
-            }
         }
 
         Ok(None)

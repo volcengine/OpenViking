@@ -12,6 +12,8 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
+from openviking.observability.log_safety import short_hash
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -115,7 +117,16 @@ class StreamingBatcher(Generic[T, R]):
         if should_flush:
             self._trigger_background_flush("count")
 
-        return await future
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            # Keep delivery settlement behind accepted shared work. Cancellation
+            # does not change the existing count/time/close batching window.
+            try:
+                await run_to_completion(lambda: future)
+            except Exception:
+                pass
+            raise
 
     async def close(self) -> R | None:
         if self._closed:
@@ -151,10 +162,13 @@ class StreamingBatcher(Generic[T, R]):
                     if metadata is not None:
                         metadata.setdefault("batch_id", batch_id)
                         metadata.setdefault("batch_trace_id", batch_trace_id)
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 for item in items:
                     if not item.future.done():
-                        item.future.set_exception(exc)
+                        if isinstance(exc, asyncio.CancelledError):
+                            item.future.cancel()
+                        else:
+                            item.future.set_exception(exc)
                 raise
 
             self._last_result = result
@@ -169,7 +183,10 @@ class StreamingBatcher(Generic[T, R]):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            logger.warning("[%s] timer loop not started: no running event loop", self.name)
+            logger.debug(
+                "batch timer unavailable; no running event loop batch_hash=%s",
+                short_hash(str(self.name)),
+            )
             self._timer_task = None
             return
         self._timer_task = _create_background_task(
@@ -208,14 +225,20 @@ class StreamingBatcher(Generic[T, R]):
                     try:
                         await flush_task
                     except Exception as exc:
-                        logger.warning(
-                            "[%s] timer flush failed while stopping: %s",
-                            self.name,
-                            exc,
+                        logger.debug(
+                            "batch timer flush failed during shutdown batch_hash=%s error_type=%s",
+                            short_hash(str(self.name)),
+                            type(exc).__name__,
+                            extra={"error_type": type(exc).__name__},
                         )
                 raise
             except Exception as exc:
-                logger.warning("[%s] timer flush iteration failed: %s", self.name, exc)
+                logger.info(
+                    "batch timer flush failed; continuing timer loop batch_hash=%s error_type=%s",
+                    short_hash(str(self.name)),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
 
     async def _should_flush_by_time_or_count(self) -> bool:
         async with self._buffer_lock:
@@ -236,7 +259,12 @@ class StreamingBatcher(Generic[T, R]):
             try:
                 await self.flush(reason)
             except Exception as exc:
-                logger.warning("[%s] background flush failed: %s", self.name, exc)
+                logger.debug(
+                    "background batch flush failed batch_hash=%s error_type=%s",
+                    short_hash(str(self.name)),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
+                )
 
         _create_background_task(
             loop,

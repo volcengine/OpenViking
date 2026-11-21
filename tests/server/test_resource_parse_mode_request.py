@@ -27,6 +27,7 @@ def test_add_resource_request_exposes_parse_mode_only_inside_args():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.MonkeyPatch):
     add_resource = AsyncMock(
         return_value={"status": "success", "root_uri": "viking://resources/demo"}
@@ -51,6 +52,7 @@ async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_route_forwards_connector_auth_config(monkeypatch: pytest.MonkeyPatch):
     add_resource = AsyncMock(
         return_value={"status": "success", "root_uri": "viking://resources/docs"}

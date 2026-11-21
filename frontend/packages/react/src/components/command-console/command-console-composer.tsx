@@ -1,7 +1,9 @@
-import { useId, useRef } from 'react';
-import type { RefObject } from 'react';
+import { useId, useImperativeHandle, useRef } from 'react';
+import type { Ref, RefObject } from 'react';
 
 import { getCommandConsoleInlineCompletion } from './command-completion.js';
+import type { pickCommandConsoleCommands } from './command-console-empty.js';
+import { CommandConsoleQuickActions } from './command-console-quick-actions.js';
 import { useCommandConsoleComposerKeyboard } from './use-command-console-composer-keyboard.js';
 import { CommandConsoleInputMirror } from './command-console-input-mirror.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
@@ -9,15 +11,19 @@ import type { CommandConsoleCompletion } from './use-command-console-completion.
 
 export interface CommandConsoleComposerProps {
   anchorRef: RefObject<HTMLDivElement | null>;
+  inputRef?: Ref<HTMLTextAreaElement>;
   assistId: string;
   onFocus: () => void;
   onDismiss: (value: string) => void;
   onRequestPalette: () => void;
   value: string;
+  quickCommands?: ReturnType<typeof pickCommandConsoleCommands>;
+  onPickQuickCommand: (value: string) => void;
   history: readonly string[];
   labels: ResolvedCommandConsoleLabels;
   completion: CommandConsoleCompletion;
   disabled: boolean;
+  busy: boolean;
   readOnly: boolean;
   canSubmit: boolean;
   activeIndex: number;
@@ -30,15 +36,19 @@ export interface CommandConsoleComposerProps {
 /** 命令输入区：受控输入、键盘补全与提交意图。 */
 export function CommandConsoleComposer({
   anchorRef,
+  inputRef: externalInputRef,
   assistId,
   onFocus,
   onDismiss,
   onRequestPalette,
   value,
+  quickCommands,
+  onPickQuickCommand,
   history,
   labels,
   completion,
   disabled,
+  busy,
   readOnly,
   canSubmit,
   activeIndex,
@@ -47,7 +57,10 @@ export function CommandConsoleComposer({
   onSubmit,
   onOpenUri,
 }: CommandConsoleComposerProps) {
+  const inputDisabled = disabled || busy;
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The textarea is always mounted; React owns external ref replacement and cleanup.
+  useImperativeHandle(externalInputRef, () => inputRef.current!, []);
   const inputId = useId();
   const mirrorRef = useRef<HTMLSpanElement>(null);
   const showSuggestions =
@@ -69,7 +82,7 @@ export function CommandConsoleComposer({
     history,
     completion,
     inline,
-    disabled,
+    disabled: inputDisabled,
     readOnly,
     canSubmit,
     activeIndex,
@@ -84,8 +97,17 @@ export function CommandConsoleComposer({
     <div
       ref={anchorRef}
       className="ov-command-console__composer"
-      data-disabled={disabled || undefined}
+      data-disabled={inputDisabled || undefined}
+      aria-busy={busy || undefined}
     >
+      {quickCommands?.length ? (
+        <CommandConsoleQuickActions
+          commands={quickCommands}
+          label={labels.quickStart}
+          disabled={inputDisabled || readOnly}
+          onPick={onPickQuickCommand}
+        />
+      ) : null}
       <div className="ov-command-console__input-row" data-value={`${value}\n`}>
         <label className="ov-command-console__input-label" htmlFor={inputId}>
           {labels.placeholder}
@@ -114,7 +136,7 @@ export function CommandConsoleComposer({
           value={value}
           placeholder={labels.placeholder}
           readOnly={readOnly}
-          disabled={disabled}
+          disabled={inputDisabled}
           autoCapitalize="off"
           autoCorrect="off"
           spellCheck={false}

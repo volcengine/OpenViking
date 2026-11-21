@@ -1,3 +1,4 @@
+import { usePreviewActionExposure } from '../../shared/analytics/preview-actions.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Fragment } from 'react';
 import {
@@ -50,11 +51,12 @@ export function FilePreviewMenu({
         <Fragment key={index}>
           {index > 0 ? <DropdownSeparator /> : null}
           {group.map((action) => (
-            <DropdownItem
+            <PreviewMenuItem
               key={action.key}
               className={['ov-file-preview__menu-item', action.className]
                 .filter(Boolean)
                 .join(' ')}
+              action={action}
               disabled={disabled || pending || action.disabled}
               onClick={() => onSelect(action)}
             >
@@ -62,10 +64,30 @@ export function FilePreviewMenu({
                 {action.icon}
               </span>
               {action.label}
-            </DropdownItem>
+            </PreviewMenuItem>
           ))}
         </Fragment>
       ))}
     </Dropdown>
+  );
+}
+
+function PreviewMenuItem({
+  action,
+  children,
+  ...props
+}: {
+  action: FilePreviewAction;
+  children: import('react').ReactNode;
+  key?: string;
+  className?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const ref = usePreviewActionExposure([action]);
+  return (
+    <DropdownItem {...props} ref={ref}>
+      {children}
+    </DropdownItem>
   );
 }

@@ -9,27 +9,9 @@ import {
 } from './helpers/preview-native-dom.mjs';
 
 const cases = [
-  [
-    `${rootUri}/photo.png`,
-    false,
-    [],
-    ['download', 'exportPack', 'delete'],
-    false,
-  ],
-  [
-    `${rootUri}/recording.webm`,
-    false,
-    [],
-    ['download', 'exportPack', 'delete'],
-    false,
-  ],
-  [
-    `${rootUri}/guide.md`,
-    false,
-    [],
-    ['download', 'history', 'exportPack', 'delete'],
-    true,
-  ],
+  [`${rootUri}/photo.png`, false, [], ['download', 'delete'], false],
+  [`${rootUri}/recording.webm`, false, [], ['download', 'delete'], false],
+  [`${rootUri}/guide.md`, false, [], ['download', 'delete'], true],
   [`${rootUri}/folder`, true, [], ['importPack', 'exportPack'], false],
   ['viking://system/config.json', false, [], ['download'], false],
   ['viking://system/skills', true, [], [], false],
@@ -43,14 +25,14 @@ const cases = [
       `${home}/memories/experiences/a.md`,
       false,
       [],
-      ['download', 'history', 'exportPack', 'delete'],
+      ['download', 'history', 'delete'],
       false,
     ],
     [
       `${home}/memories/experiences/nested/a.md`,
       false,
       [],
-      ['download', 'history', 'exportPack', 'delete'],
+      ['download', 'history', 'delete'],
       true,
     ],
   ]),
@@ -72,23 +54,17 @@ const cases = [
     `${target}/doc.md`,
     false,
     [{ to: target }],
-    ['download', 'history', 'exportPack', 'delete'],
+    ['download', 'history', 'delete'],
     true,
   ],
   [
     `${rootUri}/wiki-other/doc.md`,
     false,
     [{ to: target }],
-    ['download', 'history', 'exportPack', 'delete'],
+    ['download', 'delete'],
     true,
   ],
-  [
-    `${target}/.abstract.md`,
-    false,
-    [{ to: target }],
-    ['download', 'exportPack'],
-    false,
-  ],
+  [`${target}/.abstract.md`, false, [{ to: target }], ['download'], false],
 ];
 for (const [uri, isDir, targets, actions, editable] of cases) {
   test(`native resource rules: ${uri}`, async () => {
@@ -174,7 +150,7 @@ test('boolean visibility hides defaults without granting resources a capability 
     await view.render(tree(fetch, uri, { ...props, readOnly: true }));
     assert.deepEqual(
       context.defaultActions.flat().map((item) => item.key),
-      ['download', 'history', 'exportPack'],
+      ['download'],
     );
     assert.equal(context.canEdit, false);
   } finally {

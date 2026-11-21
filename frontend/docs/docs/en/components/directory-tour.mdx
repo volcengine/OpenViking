@@ -14,7 +14,7 @@ A non-modal, step-by-step tour of the directories in your app: it highlights eac
 import {
   DirectoryTour,
   DirectoryTourIntro,
-  openVikingDirectoryTourSteps,
+  getOpenVikingDirectoryTourSteps,
 } from '@openviking/react/components/directory-tour';
 import '@openviking/react/components/directory-tour/style.css';
 ```
@@ -23,13 +23,13 @@ import '@openviking/react/components/directory-tour/style.css';
 
 ### Basic usage
 
-Click "Explore OV directories" to start the six-step tour. To see the fallback at step 5, first check "Simulate missing experiences", then advance to that step and click "Next" to continue.
+Click "Explore OV directories" to start the six-step tour. To see step 5 anchored to the current user’s root when experiences are missing, first check "Simulate missing experiences", then advance to that step.
 
 ```tsx file="../../_demos/directory-tour-basic.tsx" preview
 
 ```
 
-The example locates rows with the `getRowElement` method of [FileTree](./file-tree). When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
+The example locates rows with the `getRowElement` method of [FileTree](./file-tree). The host resolves `userExperiences` to the current user’s root row when its loaded directory listing confirms that experiences are absent. When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
 
 ### Custom content
 
@@ -65,12 +65,15 @@ Size constraints in `className` and `style` keep their CSS semantics. The card a
 | locateTimeout    | How long to wait for `locateTarget`, in milliseconds, before showing the fallback card                                                                                                                                                                                             | `number`                                                                        | `10000`                        |
 | locateTarget     | Returns the directory row element of a step: load and expand the directory, then return the row once it has rendered, or `null` if it cannot be found. `signal` aborts when the step changes, the tour unmounts or the timeout hits; each step uses the fallback card when omitted | `(target: string, signal: AbortSignal) => Promise<DirectoryTourAnchor \| null>` | -                              |
 | onStepChange     | Called with the new index when the user advances from the current step                                                                                                                                                                                                             | `(index: number) => void`                                                       | -                              |
-| onClose          | Called when the close button is clicked or Escape is pressed; without it no close button is shown and Escape is ignored                                                                                                                                                            | `() => void`                                                                    | -                              |
+| showCloseButton  | Shows the default card’s close button when `onClose` is also provided; does not affect Escape or `context.close()`                                                                                                                                                                 | `boolean`                                                                       | `false`                        |
+| onClose          | Called on Escape, on a visible close-button click, or by `context.close()`; without it, closing is ignored                                                                                                                                                                         | `() => void`                                                                    | -                              |
 | onComplete       | Called when the last step ends (the user confirms the card or calls `context.complete()`), with the skipped step ids; the tour stops rendering afterwards, and you close it and decide what to persist                                                                             | `(result: DirectoryTourResult) => void`                                         | -                              |
 | renderContent    | Replaces the card content once the row is located; `title` then only names the dialog for assistive technology and `description` is not shown                                                                                                                                      | `(context: DirectoryTourContentContext) => ReactNode`                           | -                              |
 | labels           | Overrides interface text                                                                                                                                                                                                                                                           | `DirectoryTourLabels`                                                           | -                              |
 | locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                                                                      | `'zh-CN' \| 'en-US'`                                                            | Inherited, otherwise `'en-US'` |
 | className, style | Class name and style of the card root, for sizing and theme variables                                                                                                                                                                                                              | `string`, `CSSProperties`                                                       | -                              |
+
+For `userExperiences`, wait for the parent listing to finish. If it confirms the directory is missing and the current user’s root is known, return that root row. If the target exists but is unavailable, return `null`.
 
 ### DirectoryTourStep
 
@@ -98,7 +101,7 @@ The argument of `renderContent`.
 | index    | Zero-based index of the current step                                         | `number`            | -       |
 | total    | Number of steps                                                              | `number`            | -       |
 | complete | Confirms the step: moves to the next one, and calls `onComplete` on the last | `() => void`        | -       |
-| close    | Closes the tour like the close button, by calling `onClose`                  | `() => void`        | -       |
+| close    | Calls `onClose`, regardless of `showCloseButton`                             | `() => void`        | -       |
 
 ### DirectoryTourResult
 
@@ -135,18 +138,20 @@ A presentational card body, usually rendered inside `renderContent`. Put actions
 | labels      | Overrides the confirm button text; only `done` applies                                                                                                                                       | `Pick<DirectoryTourLabels, 'done'>` | -                              |
 | locale      | Interface language, see [Internationalization](../guide/i18n); inside `renderContent` it does not inherit the `locale` of `DirectoryTour`, so pass it here or set it on `OpenVikingProvider` | `'zh-CN' \| 'en-US'`                | Inherited, otherwise `'en-US'` |
 
-### openVikingDirectoryTourSteps
+### getOpenVikingDirectoryTourSteps
 
-A six-step preset with English text; each step's `target` takes one of the values below. The component knows no account paths, so map each `target` to a directory row in `locateTarget`: `userResources` is the user's private resources directory, and `sharedResources` is the root-level resources directory shared by the team.
+`getOpenVikingDirectoryTourSteps(locale = 'en-US')` returns a six-step preset in `'zh-CN'` or `'en-US'`. Pass your app’s resolved language both to this function and to `DirectoryTour.locale` to set the step content and controls respectively; the function does not read the Provider. Each step’s `target` takes one of the values below. The component knows no account paths, so map each `target` to a directory row in `locateTarget`: `userResources` is the user's private resources directory, and `sharedResources` is the root-level resources directory shared by the team.
 
 | Step id              | `target`          | Directory introduced            |
 | -------------------- | ----------------- | ------------------------------- |
 | `memories`           | `userMemories`    | User memories (memories)        |
-| `sessions`           | `userSessions`    | Conversations (sessions)        |
+| `sessions`           | `userSessions`    | Session records (sessions)      |
 | `personal-resources` | `userResources`   | Personal resources (resources)  |
 | `shared-resources`   | `sharedResources` | Team resources (resources)      |
 | `experiences`        | `userExperiences` | Agent experiences (experiences) |
 | `peers`              | `userPeers`       | Object memories (peers)         |
+
+`openVikingDirectoryTourSteps` remains the English preset, equivalent to `getOpenVikingDirectoryTourSteps('en-US')`. When adopting the localized preset, remove old `title`, `description` and `illustration` overrides to use the built-in content and artwork. Explicit overrides are still supported.
 
 ## Notes
 
@@ -159,9 +164,8 @@ A six-step preset with English text; each step's `target` takes one of the value
 - The position follows scrolling, window resizing and row size changes, and the card stays inside the visual viewport, including the effect of zoom and the soft keyboard. When the row scrolls out of view, the card and highlight hide together.
 - The card is a non-modal `dialog`: it takes focus once shown, calls `onClose` on Escape, and gives focus back to the previous element on close if that element is still in the document. An Escape already handled with `preventDefault()` by your own controls does not reach the tour.
 - The card renders in the browser's top layer through the Popover API, so you need no `z-index` and it creates no full-screen mask or SVG. It requires a browser that supports the API.
-- Server rendering creates no overlay. An initially open tour creates it only after hydration completes.
-- The preset text is English, so provide your own `title` and `description` for other languages. The illustrations of the six preset targets are bundled with the JavaScript and need no image hosting.
-- The package root exports only `DirectoryTour` and `DirectoryTourProps`. Import `DirectoryTourIntro`, `openVikingDirectoryTourSteps` and the other types from `@openviking/react/components/directory-tour`.
+- Use `getOpenVikingDirectoryTourSteps(locale)` for localized steps. Custom step titles and descriptions remain unchanged. The illustrations of the six preset targets are bundled with the JavaScript and need no image hosting. Their light and dark variants follow the host’s `html.dark` theme.
+- The package root exports only `DirectoryTour` and `DirectoryTourProps`. Import `DirectoryTourIntro`, `getOpenVikingDirectoryTourSteps`, `openVikingDirectoryTourSteps` and the other types from `@openviking/react/components/directory-tour`.
 
 ## Theme variables
 
@@ -175,3 +179,7 @@ The card renders under `document.body` and inherits the `--ov-ui-*` variables in
 | `--ov-ui-directory-tour-secondary`  | Text of `description` and `features`               | `--ov-ui-color-text-2`   |
 | `--ov-ui-directory-tour-muted`      | Progress and `DirectoryTourIntro` description text | `--ov-ui-color-text-3`   |
 | `--ov-ui-directory-tour-border`     | Card outline                                       | `--ov-ui-color-border-3` |
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

@@ -1,8 +1,31 @@
+import type { FilePreviewDirectoryTab, FilePreviewFileTab } from './types.js';
 import type { FileSource } from '@ark-design/ui/file-viewer';
 
 import type { FilePreviewSource } from './types.js';
 
-/** 把字符串编码成字节，避免依赖 `File` 构造器（服务端渲染阶段没有它）。 */
+/**
+ * `source` 的 memo 依赖。逐项列出而不是取摘要：字符串按值比较，长度与首尾
+ * 片段相同的两份正文会被摘要判成同一份，底座就会一直显示旧内容；`File`/`Blob`
+ * 按对象身份比较，同名同路径换一个实例也能被认出来。
+ *
+ * The memo dependency for `source`. Every field is listed rather than hashed:
+ * strings compare by value, and a digest built from length plus edges would treat
+ * two same-length bodies with matching ends as identical, leaving the base on the
+ * old content; `File`/`Blob` compare by identity, so a different instance under
+ * the same name and path is still detected.
+ */
+export function sourceDeps(source: FilePreviewSource) {
+  return [
+    source.content,
+    source.file,
+    source.url,
+    source.fileName,
+    source.fileType,
+    source.path,
+  ] as const;
+}
+
+/** 把正文编码成底座支持的字节来源。 */
 function encodeText(content: string): Uint8Array {
   return new TextEncoder().encode(content);
 }
@@ -33,8 +56,8 @@ export function toFileSource(
     return {
       kind: 'file',
       file:
-        typeof File === 'undefined' || file instanceof File
-          ? (file as File)
+        file instanceof File
+          ? file
           : new File([file], fileName, { type: file.type }),
       name: fileName,
       ...(fileType ? { fileType } : {}),
@@ -65,4 +88,22 @@ export function toFileSource(
  */
 export function isEmptyFile(source: FilePreviewSource): boolean {
   return source.content === '';
+}
+
+export function levelToFileTab(
+  tab: FilePreviewDirectoryTab,
+  key: string,
+): FilePreviewFileTab | undefined {
+  const level = tab.levels.find((candidate) => candidate.key === key);
+  if (!level) return undefined;
+  return {
+    kind: 'file',
+    key: `${tab.key}::${level.key}`,
+    source: level.source,
+    emptyLabel: level.emptyLabel,
+    resources: level.resources ?? tab.resources,
+    resolveImage: tab.resolveImage,
+    operations: tab.operations,
+    slots: tab.slots,
+  };
 }

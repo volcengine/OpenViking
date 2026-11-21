@@ -12,16 +12,18 @@ interface DetailViewProps {
   apiKey: string;
   locale: AgentConnectLocale;
   baseUrl: string;
+  isEnterprise: boolean;
   agreementUrl?: string;
   onCopy?: (text: string) => void;
 }
 
-/** 指南和凭据变化时重建复制区，不将凭据放进 DOM 或 React key。 */
+/** 指南和凭据变化时重建复制区；切换语言保留曝光周期，凭据不进入 DOM 或 React key。 */
 export function AgentConnectDetailView({
   selected,
   apiKey,
   locale,
   baseUrl,
+  isEnterprise,
   agreementUrl,
   onCopy,
 }: DetailViewProps) {
@@ -34,6 +36,7 @@ export function AgentConnectDetailView({
     apiKey,
     baseUrl,
     activeGuide?.id,
+    isEnterprise,
   );
   const [credentials, setCredentials] = useState({
     apiKey,
@@ -101,7 +104,7 @@ export function AgentConnectDetailView({
         </div>
       ) : null}
       <AgentConnectInstructionsView
-        key={`${selected.id}:${locale}:${activeGuide?.id ?? ''}:${credentials.revision}`}
+        key={`${selected.id}:${activeGuide?.id ?? ''}:${isEnterprise}:${credentials.revision}`}
         instructions={instructions}
         apiKey={apiKey}
         locale={locale}

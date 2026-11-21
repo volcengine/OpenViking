@@ -97,7 +97,7 @@ test('preview-only summary links select the level without revealing the tree', a
   }
 });
 
-test('root summary opens its level while retaining the no-tree-row result', async () => {
+test('root summary reveals the root without a tree row; out-of-root links still fail', async () => {
   const fetch = recordingFetch((call) =>
     call.path.endsWith('/fs/stat') ? ok({ isDir: true }) : response(call),
   );
@@ -106,7 +106,7 @@ test('root summary opens its level while retaining the no-tree-row result', asyn
   try {
     for (const uri of [ROOT, 'viking://']) {
       const link = `${uri}${uri.endsWith('/') ? '' : '/'}.overview.md`;
-      assert.equal(await command(handle, link), false);
+      assert.equal(await command(handle, link), uri === ROOT);
       assert.match(activeLevel(view)?.textContent ?? '', /L1/);
       assert.equal(
         fetch.calls.filter((call) => summaries.test(call.path)).at(-1).uri,

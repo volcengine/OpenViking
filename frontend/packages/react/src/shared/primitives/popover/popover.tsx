@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useViewActive } from '../../view-activity.js';
 import { useModalFocusShard } from '../modal/focus-shards.js';
 import { useOverlayPosition } from '../overlay/use-overlay-position.js';
 import type { PopoverProps } from './types.js';
@@ -47,8 +48,8 @@ function useMergedRef(
 /**
  * 弹出层：挂一段结构化信息或一小块可交互内容。
  *
- * 渲染到 `document.body`，因此不会被祖先的 `overflow: hidden` 裁掉——文件树的
- * 行就处在这样的容器里。定位用 fixed 视口坐标，空间不足时翻到对侧。
+ * 渲染到所属 Modal 的外层或 `document.body`，避免被祖先裁剪。
+ * 定位用 fixed 视口坐标，空间不足时翻到对侧。
  *
  * 与 `Tooltip` 分开，是因为两者视觉与语义都不同：提示是深色的一句话，弹出层是
  * 白底卡片。共用的部分（portal、定位、主题变量同步）留在 `overlay/`。
@@ -56,8 +57,8 @@ function useMergedRef(
  * A surface holding structured information or a small piece of interactive
  * content.
  *
- * It renders into `document.body`, so an ancestor's `overflow: hidden` cannot clip
- * it — the file tree's rows sit inside exactly such a container. Positioning uses
+ * It renders into its owning Modal layer or `document.body` to escape clipping
+ * ancestors. Positioning uses
  * fixed viewport coordinates and flips sides when space runs out.
  *
  * It is separate from `Tooltip` because the two differ in look and semantics: a
@@ -71,16 +72,20 @@ export function Popover({
   alignment = 'center',
   anchorRef,
   trigger = 'hover',
+  clickToClose = true,
   delay = 300,
   open: controlledOpen,
   role,
+  ariaHidden,
+  portalWithinModal = false,
   disabled = false,
   className,
   style,
   onOpenChange,
 }: PopoverProps) {
+  const active = useViewActive();
   const [localOpen, setOpen] = useState(false);
-  const open = !disabled && (controlledOpen ?? localOpen);
+  const open = active && !disabled && (controlledOpen ?? localOpen);
   const triggerRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   // 用 state 而不是 ref 持有浮层节点：定位 effect 要在节点挂载后重跑，
@@ -127,10 +132,10 @@ export function Popover({
   // 卸载时清掉未触发的定时器。 Clear a pending timer on unmount.
   useEffect(() => clearTimer, [clearTimer]);
 
-  // 浮层 portal 到 body 后不在所属 Modal 的 DOM 子树里，`FocusLock` 的 Tab 序列
+  // 浮层 portal 到 Modal 面板之外，`FocusLock` 的 Tab 序列
   // 看不到它。打开时登记成 shard，Tab 才能进入；关闭或卸载时注销。
   //
-  // The surface portals into `body`, outside the owning Modal's DOM subtree, so
+  // The surface portals outside the owning Modal panel, so
   // `FocusLock`'s tab sequence cannot reach it. Registering it while open makes Tab
   // enter; closing or unmounting unregisters it.
   useEffect(() => {
@@ -139,13 +144,13 @@ export function Popover({
   }, [open, registerFocusShard]);
 
   // `disabled` 变真时立即收起，避免浮层留在屏幕上。
-  // Collapse as soon as `disabled` turns true.
+  // Collapse and release browser timers when disabled or the owner view is hidden.
   useEffect(() => {
-    if (disabled) {
+    if (disabled || !active) {
       clearTimer();
       setOpen(false);
     }
-  }, [disabled, clearTimer]);
+  }, [active, disabled, clearTimer]);
 
   // useEffect 必要性：`click` 触发时要响应浮层外的按下与 Esc，这是文档级
   // 事件，只有挂到 document 才能捕获；浮层渲染在 portal 里，DOM 上不是触发
@@ -176,9 +181,9 @@ export function Popover({
   }, [change, open, surfaceNode, trigger]);
 
   const show = () => {
-    if (disabled) return;
+    if (disabled || !active) return;
     if (trigger === 'click') {
-      change(!open);
+      if (!open || clickToClose) change(!open);
       return;
     }
     clearTimer();
@@ -254,6 +259,7 @@ export function Popover({
         <div
           ref={attachSurface}
           id={id}
+          aria-hidden={ariaHidden}
           role={role ?? (trigger === 'click' ? 'dialog' : 'note')}
           className={['ov-popover', className].filter(Boolean).join(' ')}
           data-placement={position.placement}
@@ -263,7 +269,9 @@ export function Popover({
         >
           {content}
         </div>,
-        document.body,
+        // Use the owning Modal's layer, outside its clipping, transformed panel.
+        (portalWithinModal && triggerRef.current?.closest('.ov-modal')) ||
+          document.body,
       )
     : null;
 

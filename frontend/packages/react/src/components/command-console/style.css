@@ -2,6 +2,7 @@
 @import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
 @import '../../shared/primitives/tooltip/style.css';
+@import '../../shared/primitives/empty/empty.css';
 @import './command-console.css';
 @import './command-console-empty.css';
 

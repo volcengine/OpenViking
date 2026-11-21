@@ -1,9 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
+import json
 import re
 from collections import Counter
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from openviking.retrieve.context_assembler import pipeline as pipeline_module
 from openviking.retrieve.context_assembler import rewrite as rewrite_module
@@ -22,11 +27,13 @@ from openviking.retrieve.context_assembler.params import (
     normalize_quotas,
 )
 from openviking.retrieve.context_assembler.pipeline import assemble_context
-from openviking.retrieve.context_assembler.render import render_entry
+from openviking.retrieve.context_assembler.render import render_context, render_entry
 from openviking.retrieve.context_assembler.tiers import tier_window
 from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 USER_ROOT = "viking://user/test_user"
 SKILLS_ROOT = f"{USER_ROOT}/skills"
@@ -171,74 +178,31 @@ async def test_assembly_returns_readable_entries_within_budget():
     assert result.rendered.count("<memory ") == 3
 
 
-async def test_query_expansion_fans_out_planned_queries(monkeypatch):
-    queries_seen = []
-    auto_create_flags = []
-
-    async def fake_expand(*, query, session, mode, **kwargs):
-        del session, mode, kwargs
-        return [query, "expanded query"], "used"
-
-    async def fake_find(**kwargs):
-        queries_seen.append(kwargs["query"])
-        assert kwargs["events_time_decay_protection"] == "2d"
-        return _FakeFindResult()
-
-    async def fake_get(session_id, ctx, *, auto_create=False):
-        del ctx
-        assert session_id == "s1"
-        auto_create_flags.append(auto_create)
-        return _fake_session()
-
-    monkeypatch.setattr(pipeline_module, "expand_queries", fake_expand)
+async def test_disabled_intent_does_not_load_session_or_expand_query():
+    uri = f"{USER_ROOT}/memories/preferences/language.md"
+    find = AsyncMock(return_value=_FakeFindResult(memories=[_hit(uri, 0.8, "Prefers Python")]))
+    get_session = AsyncMock()
+    get_planner = AsyncMock()
     service = SimpleNamespace(
-        search=SimpleNamespace(find=fake_find),
+        search=SimpleNamespace(find=find, is_intent_enabled=lambda: False),
         fs=SimpleNamespace(read=None),
-        sessions=SimpleNamespace(get=fake_get),
-        viking_fs=None,
-        vlm_resolver=_DEFAULT_VLM_RESOLVER,
+        sessions=SimpleNamespace(get=get_session),
+        vlm_resolver=SimpleNamespace(get_query_planner=get_planner),
     )
 
     result = await assemble_context(
         service=service,
         ctx=_ctx(),
         params=AssembleParams(
-            query="short",
-            events_time_decay_protection="2d",
-            session_id="s1",
-            query_expansion="auto",
-            peer_scope="actor",
+            query="raw query", session_id="s1", query_expansion="auto", peer_scope="actor"
         ),
     )
 
-    assert auto_create_flags == [False]
-    assert queries_seen == ["short", "expanded query"]
-    assert result.stats["query_expansion"] == "used"
-
-
-async def test_disabled_intent_does_not_load_session_or_expand_query():
-    async def fake_find(**kwargs):
-        assert kwargs["query"] == "raw query"
-        return _FakeFindResult()
-
-    async def fail_get(*args, **kwargs):
-        del args, kwargs
-        raise AssertionError("session must not be loaded when intent is disabled")
-
-    service = SimpleNamespace(
-        search=SimpleNamespace(find=fake_find, is_intent_enabled=lambda: False),
-        fs=SimpleNamespace(read=None),
-        sessions=SimpleNamespace(get=fail_get),
-        viking_fs=None,
-    )
-
-    result = await assemble_context(
-        service=service,
-        ctx=_ctx(),
-        params=AssembleParams(query="raw query", session_id="s1", query_expansion="auto"),
-    )
-
+    get_session.assert_not_awaited()
+    get_planner.assert_not_awaited()
     assert result.stats["query_expansion"] == "off"
+    assert [call.kwargs["query"] for call in find.await_args_list] == ["raw query"]
+    assert [entry.uri for entry in result.entries] == [uri]
 
 
 async def test_resource_bucket_uses_actor_scope_without_other_peer_scan():
@@ -382,22 +346,31 @@ async def test_purpose_quotas_are_not_truncated_by_global_limit():
 
 
 async def test_rewrite_failure_keeps_rendered_context(monkeypatch):
-    hits = [{"uri": f"{USER_ROOT}/memories/events/a.md", "score": 0.6, "abstract": "abs"}]
-    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
+    uri = f"{USER_ROOT}/memories/preferences/language.md"
+    hits = [_hit(uri, 0.8, "Prefers Python")]
 
-    async def failing_rewrite(**kwargs):
-        del kwargs
-        return "", "timeout", None
+    async def pending_completion(_prompt):
+        await asyncio.Event().wait()
 
-    monkeypatch.setattr(pipeline_module, "rewrite_context", failing_rewrite)
-    result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
-        ctx=_ctx(),
-        params=AssembleParams(query="rewrite me", rewrite=True),
+    complete = AsyncMock(side_effect=pending_completion)
+    resolver = SimpleNamespace(
+        get_query_planner=AsyncMock(return_value=SimpleNamespace(get_completion_async=complete))
+    )
+    config = OpenVikingConfig.from_dict({"retrieval": {"recall_rewrite_timeout_s": 0.02}})
+    monkeypatch.setattr(rewrite_module, "get_openviking_config", lambda: config)
+    result = await asyncio.wait_for(
+        assemble_context(
+            service=_service(hits=hits, bodies={}, vlm_resolver=resolver),
+            ctx=_ctx(),
+            params=AssembleParams(query="language", rewrite=True, peer_scope="actor"),
+        ),
+        timeout=2,
     )
 
+    complete.assert_awaited_once()
     assert result.digest == ""
-    assert result.rendered.count("<memory ") == 1
+    assert f'uri="{uri}"' in result.rendered
+    assert "Prefers Python" in result.rendered
     assert result.stats["rewrite"] == "timeout"
 
 
@@ -458,22 +431,28 @@ async def test_rewrite_kernel_distinguishes_no_relevant_from_invalid_output(monk
 
 
 async def test_rewrite_receives_only_served_uris(monkeypatch):
-    served_uri = f"{USER_ROOT}/memories/events/a.md"
-    hits = [{"uri": served_uri, "score": 0.6, "abstract": "abs"}]
-    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda mode: True)
-
-    async def ok_rewrite(**kwargs):
-        assert kwargs["valid_uris"] == [served_uri]
-        return f"OpenViking memory digest:\n- fact 来源：{served_uri}", "ok", None
-
-    monkeypatch.setattr(pipeline_module, "rewrite_context", ok_rewrite)
+    served = f"{USER_ROOT}/memories/preferences/served.md"
+    excluded = f"{USER_ROOT}/memories/preferences/excluded.md"
+    hits = [_hit(served, 0.7, "Prefers short answers"), _hit(excluded, 0.8, "Unrelated")]
+    complete = AsyncMock(
+        return_value=f"- Prefers short answers 来源：{served}\n- Unrelated 来源：{excluded}"
+    )
+    resolver = SimpleNamespace(
+        get_query_planner=AsyncMock(return_value=SimpleNamespace(get_completion_async=complete))
+    )
+    monkeypatch.setattr(
+        rewrite_module, "get_openviking_config", lambda: OpenVikingConfig.from_dict({})
+    )
     result = await assemble_context(
-        service=_service(hits=hits, bodies={}),
+        service=_service(hits=hits, bodies={}, vlm_resolver=resolver),
         ctx=_ctx(),
-        params=AssembleParams(query="rewrite me", rewrite="auto"),
+        params=AssembleParams(
+            query="response style", rewrite=True, exclude_uris=[excluded], peer_scope="actor"
+        ),
     )
 
-    assert result.digest.startswith("OpenViking memory digest:")
+    assert [entry.uri for entry in result.entries] == [served]
+    assert result.digest == f"OpenViking memory digest:\n- Prefers short answers 来源：{served}"
     assert result.stats["rewrite"] == "ok"
 
 
@@ -580,6 +559,55 @@ def test_memory_keeps_overview_as_the_cheaper_abstract_substitute():
     assert oversized_abstract_needs_body(candidate, per_entry_cap(60, 1))
     plan = plan_entries([candidate], {uri: body}, max_tokens=60, detail=None)
     assert [(e.detail, e.text) for e in plan.entries] == [("overview", "A thing happened.")]
+
+
+@pytest.mark.parametrize(
+    "category,directory", [("resources", False), ("skills", False), ("resources", True)]
+)
+def test_spare_budget_restores_complete_content_above_the_per_entry_cap(category, directory):
+    candidates, contents, originals = [], {}, {}
+    for i in range(10):
+        uri = f"viking://resources/{i}.md"
+        text = str(i) + "摘" * 255
+        candidate = _resource_candidate("" if directory else text, category=category, uri=uri)
+        candidate.is_directory = directory
+        candidates.append(candidate)
+        originals[uri] = text
+        if directory:
+            contents[f"{uri}/.overview.md"] = text
+
+    plan = plan_entries(candidates, contents, max_tokens=1600)
+    assert len(plan.entries) == 10
+    assert sum(bool(e.text) for e in plan.entries) == 3
+    assert all(not e.text or e.text == originals[e.uri] for e in plan.entries)
+    assert any(e.tokens > plan.stats["per_entry_cap"] for e in plan.entries)
+    assert estimate_text_tokens(render_context(plan.entries)) <= plan.stats["used_tokens"] <= 1600
+
+
+def test_restored_abstracts_do_not_duplicate_the_same_body():
+    candidates = [
+        _resource_candidate("摘" * 256, uri=f"viking://resources/{i}.md") for i in range(10)
+    ]
+    plan = plan_entries(candidates, {}, max_tokens=1600)
+    assert len(plan.entries) == 10
+    assert [e.text for e in plan.entries if e.text] == ["摘" * 256]
+
+
+def test_spare_summaries_do_not_displace_existing_full_upgrades():
+    uri = f"{USER_ROOT}/memories/events/a.md"
+    event = _resource_candidate("event", category="events", uri=uri)
+    resources = [
+        _resource_candidate(str(i) + "摘" * 255, uri=f"{USER_ROOT}/resources/{i}.md")
+        for i in range(9)
+    ]
+    body = "# Summary\nEvent gist\n\n# Detail\n" + "x" * 5000
+
+    plan = plan_entries([event, *resources], {uri: body}, max_tokens=1600)
+
+    assert len(plan.entries) == 10
+    assert (plan.entries[0].detail, plan.entries[0].text) == ("full", body)
+    assert all(entry.detail == "uri" for entry in plan.entries[1:])
+    assert estimate_text_tokens(render_context(plan.entries)) <= plan.stats["used_tokens"] <= 1600
 
 
 def test_built_in_memory_types_report_one_declared_category():
@@ -854,9 +882,13 @@ async def test_skills_bucket_forwards_the_caller_filter():
     finds = []
     service = _skill_service([], finds=finds)
 
-    await _assemble_skills(service, filter={"op": "must", "field": "tags", "conds": ["ops"]})
+    await _assemble_skills(
+        service, filter={"op": "must", "field": "search_tags", "conds": ["team=ops"]}
+    )
 
-    assert {"op": "must", "field": "tags", "conds": ["ops"]} in finds[0]["filter"]["conds"]
+    assert {"op": "must", "field": "search_tags", "conds": ["team=ops"]} in finds[0]["filter"][
+        "conds"
+    ]
 
 
 async def test_a_filter_only_query_stays_on_the_generic_path():
@@ -883,7 +915,7 @@ async def test_a_filter_only_query_stays_on_the_generic_path():
     )
 
     result = await _assemble_skills(
-        service, query="", filter={"op": "must", "field": "tags", "conds": ["ops"]}
+        service, query="", filter={"op": "must", "field": "search_tags", "conds": ["team=ops"]}
     )
 
     assert [name for name, _ in calls] == ["find", "find"]
@@ -1238,9 +1270,19 @@ async def test_flat_context_rerank_widens_recall_and_reorders_the_cut():
 
 
 async def test_context_rerank_scores_against_the_expanded_queries_once(monkeypatch):
-    async def fake_expand(*, query, session, mode, **kwargs):
-        del session, mode, kwargs
-        return [query, "fix for Redis OOM incident"], "used"
+    planner = SimpleNamespace(
+        get_completion_async=AsyncMock(
+            return_value=json.dumps({"queries": [{"query": "fix for Redis OOM incident"}]})
+        )
+    )
+    session = _fake_session()
+    session.get_context_for_search = AsyncMock(
+        return_value={"latest_archive_overview": "Redis OOM"}
+    )
+    monkeypatch.setattr(
+        "openviking.retrieve.context_assembler.expansion.get_openviking_config",
+        lambda: OpenVikingConfig.from_dict({}),
+    )
 
     redis = _hit(f"{PREFERENCES}/redis.md", 0.6, "redis oom fix")
     finds = []
@@ -1257,21 +1299,27 @@ async def test_context_rerank_scores_against_the_expanded_queries_once(monkeypat
             self.calls.append((query, list(documents)))
             return [0.9 if "redis" in d and "Redis" in query else 0.03 for d in documents]
 
-    monkeypatch.setattr(pipeline_module, "expand_queries", fake_expand)
     client = _QueryAwareClient({})
+    get_session = AsyncMock(return_value=session)
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
         fs=SimpleNamespace(read=None),
-        sessions=SimpleNamespace(get=lambda *args, **kwargs: _async_value(_fake_session())),
+        sessions=SimpleNamespace(get=get_session),
         viking_fs=None,
-        vlm_resolver=_DEFAULT_VLM_RESOLVER,
+        vlm_resolver=SimpleNamespace(get_query_planner=AsyncMock(return_value=planner)),
     )
 
     result = await _assemble_flat(
-        _rerank_service(service, client), query="how did we fix it?", session_id="s1"
+        _rerank_service(service, client),
+        query="how did we fix it?",
+        session_id="s1",
+        events_time_decay_protection="2d",
     )
 
+    get_session.assert_awaited_once_with("s1", _ctx(), auto_create=False)
+    assert result.stats["query_expansion"] == "used"
     assert [call["query"] for call in finds] == ["how did we fix it?", "fix for Redis OOM incident"]
+    assert {call["events_time_decay_protection"] for call in finds} == {"2d"}
     assert [query for query, _ in client.calls] == [
         "how did we fix it?\nfix for Redis OOM incident"
     ]
@@ -1325,26 +1373,22 @@ async def test_a_lone_bucket_recalls_past_its_quota_for_rerank():
 
 
 async def test_bucketed_rerank_pool_is_capped_per_quota_and_reports_it():
-    events = f"{USER_ROOT}/memories/events"
-
-    async def fake_find(**kwargs):
-        if kwargs["target_uri"] != events:
-            return _FakeFindResult()
-        # Ignores the limit, as overfetch for cooled URIs can return more.
-        return _FakeFindResult(
-            memories=[_hit(f"{events}/{i}.md", 0.9 - i * 0.1, f"e{i}") for i in range(5)]
-        )
-
-    service = SimpleNamespace(
-        search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=lambda uri, **kwargs: _async_value(f"# Summary\n{uri}")),
-        sessions=SimpleNamespace(),
-        viking_fs=None,
+    own = f"{USER_ROOT}/memories/events"
+    actor = f"{USER_ROOT}/peers/current/memories/events"
+    other = f"{USER_ROOT}/peers/other/memories/events"
+    service = _bucket_service(
+        {
+            own: [_hit(f"{own}/0.md", 0.9, "e0"), _hit(f"{own}/1.md", 0.8, "e1")],
+            actor: [_hit(f"{actor}/2.md", 0.7, "e2"), _hit(f"{actor}/3.md", 0.6, "e3")],
+            f"{USER_ROOT}/peers": [_hit(f"{other}/4.md", 0.5, "e4")],
+        }
     )
     client = _FakeRerankClient({"e3": 0.9})
 
     result = await _assemble_flat(
-        _rerank_service(service, client), quotas={"events": 1, "entities": 1}
+        _rerank_service(service, client),
+        quotas={"events": 1, "entities": 1},
+        peer_scope="all",
     )
 
     # 2 x quota per bucket, and the empty entities bucket's room goes to events.
@@ -1395,7 +1439,7 @@ async def test_filter_only_query_skips_context_rerank():
     service = _rerank_service(_flat_service(FLAT_HITS, finds), client)
 
     result = await _assemble_flat(
-        service, query="", filter={"op": "must", "field": "tags", "conds": ["ops"]}
+        service, query="", filter={"op": "must", "field": "search_tags", "conds": ["team=ops"]}
     )
 
     assert client.calls == []

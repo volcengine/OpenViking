@@ -747,12 +747,6 @@ mod tests {
     const VALID_OID_HEX: &str = "0123456789abcdef0123456789abcdef01234567";
 
     #[test]
-    fn test_cas_mode_variants() {
-        assert_eq!(CasMode::Native, CasMode::Native);
-        assert_ne!(CasMode::Native, CasMode::RedisLock);
-    }
-
-    #[test]
     fn test_s3_config_default() {
         let config = S3Config::default();
         assert_eq!(config.region, "us-east-1");
@@ -761,52 +755,22 @@ mod tests {
     }
 
     #[test]
-    fn test_object_key_with_prefix() {
+    fn test_snapshot_keys_preserve_persisted_layout() {
         let oid: ObjectId = VALID_OID_HEX.parse().unwrap();
-        let key = build_object_key("git", "acct1", &oid);
-        assert_eq!(
-            key,
-            "git/acct1/objects/01/23456789abcdef0123456789abcdef01234567"
-        );
-    }
-
-    #[test]
-    fn test_object_key_empty_prefix() {
-        let oid: ObjectId = VALID_OID_HEX.parse().unwrap();
-        let key = build_object_key("", "acct1", &oid);
-        assert_eq!(
-            key,
-            "acct1/objects/01/23456789abcdef0123456789abcdef01234567"
-        );
-    }
-
-    #[test]
-    fn test_object_key_trailing_slash_prefix() {
-        let oid: ObjectId = VALID_OID_HEX.parse().unwrap();
-        // A trailing slash on the prefix must not produce a double slash.
-        let key = build_object_key("git/", "acct1", &oid);
-        assert_eq!(
-            key,
-            "git/acct1/objects/01/23456789abcdef0123456789abcdef01234567"
-        );
-    }
-
-    #[test]
-    fn test_ref_key_with_prefix() {
-        let key = build_ref_key("git", "acct1", "refs/heads/main");
-        assert_eq!(key, "git/acct1/refs/heads/main");
-    }
-
-    #[test]
-    fn test_ref_key_empty_prefix() {
-        let key = build_ref_key("", "acct1", "refs/heads/main");
-        assert_eq!(key, "acct1/refs/heads/main");
-    }
-
-    #[test]
-    fn test_ref_key_trailing_slash_prefix() {
-        let key = build_ref_key("git/", "acct1", "refs/heads/main");
-        assert_eq!(key, "git/acct1/refs/heads/main");
+        for (prefix, root) in [("", "acct1"), ("git", "git/acct1"), ("git/", "git/acct1")] {
+            assert_eq!(
+                build_object_key(prefix, "acct1", &oid),
+                format!("{root}/objects/01/23456789abcdef0123456789abcdef01234567")
+            );
+            assert_eq!(
+                build_ref_key(prefix, "acct1", "refs/heads/main"),
+                format!("{root}/refs/heads/main")
+            );
+            assert_eq!(
+                build_index_key(prefix, "acct1", "main"),
+                format!("{root}/index/main.json")
+            );
+        }
     }
 
     #[test]
@@ -833,23 +797,5 @@ mod tests {
         // Valid hex but too short to be a SHA-1 object id.
         let err = parse_ref_oid("0123abcd").unwrap_err();
         assert!(matches!(err, RefStoreError::Backend(_)));
-    }
-
-    #[test]
-    fn test_index_key_with_prefix() {
-        let key = build_index_key("git", "acct1", "main");
-        assert_eq!(key, "git/acct1/index/main.json");
-    }
-
-    #[test]
-    fn test_index_key_empty_prefix() {
-        let key = build_index_key("", "acct1", "main");
-        assert_eq!(key, "acct1/index/main.json");
-    }
-
-    #[test]
-    fn test_index_key_trailing_slash_prefix() {
-        let key = build_index_key("git/", "acct1", "main");
-        assert_eq!(key, "git/acct1/index/main.json");
     }
 }
