@@ -125,6 +125,22 @@ class TestReleaseDataDirLock:
         assert _probe_lock(workspace).returncode == 0
 
 
+class TestLockHolderDiagnostics:
+    @pytest.mark.skipif(sys.platform == "win32", reason="open-file tables are POSIX-only")
+    def test_contention_message_identifies_the_holder(self, tmp_path):
+        """The lock error must point at the foreign process holding the file."""
+        parent_lock = acquire_data_dir_lock(str(tmp_path))
+        try:
+            result = _probe_lock(tmp_path)
+            assert result.returncode == 2, result.stderr
+            # The probe subprocess contends against this very process, so the
+            # diagnostics must name it instead of forcing a blind process hunt.
+            assert str(os.getpid()) in result.stdout
+            assert "connect clients over HTTP" in result.stdout
+        finally:
+            release_data_dir_lock(parent_lock)
+
+
 class TestProcessLockIntegration:
     @pytest.mark.parametrize("crash", [False, True])
     def test_concurrent_start_and_exit_release_lock(self, tmp_path, crash):
