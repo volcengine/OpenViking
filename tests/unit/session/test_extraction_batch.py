@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.message import Message, TextPart
+from openviking.message import ContextPart, Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.session.checkpoints import CheckpointRequest
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
+    bound_oversized_extraction_messages,
+    estimate_extraction_message_tokens,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
@@ -385,6 +387,135 @@ def test_auto_commit_policy_resolves_phase2_batch_limits():
     assert resolve_extraction_batch_limits({}).enabled is False
 
 
+def test_model_window_batches_sessions_without_an_auto_commit_policy():
+    limits = resolve_extraction_batch_limits(None, prompt_token_limit=11469)
+
+    assert limits == ExtractionBatchLimits(max_message_tokens=11469, max_messages=None)
+    assert limits.enabled is True
+
+
+def test_model_window_caps_a_policy_that_exceeds_it():
+    limits = resolve_extraction_batch_limits(
+        {"pending_token_threshold": 150000, "message_count_threshold": 100},
+        prompt_token_limit=11469,
+    )
+
+    assert limits == ExtractionBatchLimits(max_message_tokens=11469, max_messages=100)
+
+
+def test_policy_threshold_still_wins_when_it_is_the_smaller_one():
+    limits = resolve_extraction_batch_limits(
+        {"pending_token_threshold": 8000},
+        prompt_token_limit=11469,
+    )
+
+    assert limits.max_message_tokens == 8000
+
+
+def test_unknown_model_window_keeps_the_policy_only_path():
+    limits = resolve_extraction_batch_limits(
+        {"pending_token_threshold": 150000, "message_count_threshold": 100}, None
+    )
+
+    assert limits == ExtractionBatchLimits(max_message_tokens=150000, max_messages=100)
+
+
+def test_a_window_sized_oversized_archive_splits_into_multiple_passes():
+    messages = [_message(f"m{index}", text="word " * 3000) for index in range(3)]
+
+    # One message fits the window on its own; any pair of them does not.
+    window_limit = messages[0].estimated_tokens
+
+    batches = plan_extraction_batches(
+        messages,
+        resolve_extraction_batch_limits(None, prompt_token_limit=window_limit),
+    )
+
+    assert [[message.id for message in batch.messages] for batch in batches] == [
+        ["m0"],
+        ["m1"],
+        ["m2"],
+    ]
+    assert all(batch.estimated_tokens <= window_limit for batch in batches)
+
+
+def test_messages_inside_the_ceiling_are_not_touched():
+    message = _message("m0", text="short")
+    limits = ExtractionBatchLimits(max_message_tokens=1000)
+
+    bounded, trimmed = bound_oversized_extraction_messages([message], limits)
+
+    assert trimmed == 0
+    assert bounded[0] is message
+
+
+def test_without_a_ceiling_nothing_is_trimmed():
+    messages = [_message("m0", text="word " * 4000)]
+
+    bounded, trimmed = bound_oversized_extraction_messages(messages, ExtractionBatchLimits())
+
+    assert trimmed == 0
+    assert bounded == messages
+
+
+def test_a_single_oversized_message_is_trimmed_inside_the_ceiling():
+    message = _message("m0", text="word " * 4000)
+    limits = ExtractionBatchLimits(max_message_tokens=1000)
+    assert message.estimated_tokens > 1000
+
+    bounded, trimmed = bound_oversized_extraction_messages([message], limits)
+
+    assert trimmed == 1
+    assert bounded[0].id == "m0"
+    assert bounded[0].role == "user"
+    assert bounded[0].estimated_tokens <= 1000
+    assert "truncated for extraction" in bounded[0].content
+    # The stored message is untouched; only the extraction copy is trimmed.
+    assert "truncated for extraction" not in message.content
+
+
+def test_a_hydrated_tool_output_is_trimmed_but_keeps_its_identity():
+    message = Message(
+        id="m0",
+        role="assistant",
+        parts=[
+            TextPart("ran a command"),
+            ToolPart(
+                tool_id="call_1",
+                tool_name="terminal",
+                tool_output="x " * 20000,
+                tool_status="completed",
+            ),
+        ],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=1500)
+    )
+
+    assert trimmed == 1
+    tool_part = next(part for part in bounded[0].parts if isinstance(part, ToolPart))
+    assert tool_part.tool_id == "call_1"
+    assert tool_part.tool_name == "terminal"
+    assert tool_part.tool_output.endswith("characters kept]")
+    assert bounded[0].estimated_tokens <= 1500
+
+
+def test_every_planned_pass_stays_inside_the_ceiling_with_twelve_thousand_tokens():
+    # Fixture shape reported on #5894: 12 messages that together vastly exceed a
+    # small-window ceiling must never reach the extraction callback in one pass.
+    messages = [_message(f"m{index}", text="word " * 1000) for index in range(12)]
+    limits = resolve_extraction_batch_limits(None, prompt_token_limit=4000)
+    assert estimate_extraction_message_tokens(messages) > limits.max_message_tokens
+
+    bounded, _ = bound_oversized_extraction_messages(messages, limits)
+    batches = plan_extraction_batches(bounded, limits)
+
+    assert len(batches) > 1
+    assert all(batch.estimated_tokens <= limits.max_message_tokens for batch in batches)
+    assert sum(len(batch.messages) for batch in batches) == 12
+
+
 def test_phase2_batches_split_an_oversized_batch_by_message_count():
     messages = [_message(f"m{index}") for index in range(5)]
 
@@ -662,3 +793,257 @@ async def test_long_term_memory_batches_follow_the_planned_limit():
         ["u3"],
     ]
     assert all(step == "long_term" for _, step, _ in recorded_batches)
+
+
+@pytest.mark.asyncio
+async def test_long_term_memory_batches_bound_an_oversized_message_before_extraction():
+    session = Session(viking_fs=None)
+    messages = [_message("u1", text="word " * 4000), _message("u2", text="small")]
+    delivered = []
+
+    async def extract(batch):
+        delivered.append(sum(message.estimated_tokens for message in batch))
+        return []
+
+    async def record(operation_name, step, batch, fn):
+        return await fn()
+
+    await session._extract_long_term_memories_with_batching(
+        messages=messages,
+        limits=ExtractionBatchLimits(max_message_tokens=1000),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+    )
+
+    # Nothing over the ceiling may ever reach the extraction callback.
+    assert delivered
+    assert max(delivered) <= 1000
+
+
+def test_every_tool_output_of_a_multi_part_message_is_trimmed():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(tool_id=f"c{index}", tool_name="terminal", tool_output="x " * 10000)
+            for index in range(9)
+        ],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    assert [part.tool_id for part in bounded[0].parts if isinstance(part, ToolPart)] == [
+        f"c{index}" for index in range(9)
+    ]
+
+
+def test_a_tool_input_dominated_call_is_trimmed_not_only_its_output():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="call_1",
+                tool_name="write_file",
+                tool_input={"content": "x " * 40000},
+                tool_output="saved",
+                tool_status="completed",
+            )
+        ],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    tool_part = next(part for part in bounded[0].parts if isinstance(part, ToolPart))
+    assert tool_part.tool_id == "call_1"
+    assert tool_part.tool_output == "saved"
+    assert tool_part.tool_input["content"].endswith("characters kept]")
+
+
+def test_a_context_abstract_is_trimmed():
+    message = Message(
+        id="m",
+        role="user",
+        parts=[ContextPart(uri="viking://user/default/memories/profile.md", abstract="x " * 40000)],
+    )
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    context_part = next(part for part in bounded[0].parts if isinstance(part, ContextPart))
+    assert context_part.uri == "viking://user/default/memories/profile.md"
+    assert context_part.abstract.endswith("characters kept]")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param(_message("m", text="word " * 4000), id="long-text"),
+        pytest.param(
+            Message(
+                id="m",
+                role="assistant",
+                parts=[
+                    ToolPart(tool_id=f"c{index}", tool_name="terminal", tool_output="x " * 10000)
+                    for index in range(9)
+                ],
+            ),
+            id="nine-tool-outputs",
+        ),
+        pytest.param(
+            Message(
+                id="m",
+                role="assistant",
+                parts=[
+                    ToolPart(
+                        tool_id="call_1",
+                        tool_name="write_file",
+                        tool_input={"content": "x " * 40000},
+                        tool_output="saved",
+                        tool_status="completed",
+                    )
+                ],
+            ),
+            id="tool-input-dominated",
+        ),
+        pytest.param(
+            Message(
+                id="m",
+                role="user",
+                parts=[
+                    ContextPart(
+                        uri="viking://user/default/memories/profile.md", abstract="x " * 40000
+                    )
+                ],
+            ),
+            id="context-abstract",
+        ),
+        pytest.param(
+            Message(
+                id="m",
+                role="assistant",
+                parts=[
+                    ToolPart(
+                        tool_id="call_1",
+                        tool_name="write_files",
+                        tool_input={
+                            "files": [
+                                {"path": f"f{index}.txt", "content": "x " * 10000}
+                                for index in range(9)
+                            ]
+                        },
+                        tool_output="saved",
+                        tool_status="completed",
+                    )
+                ],
+            ),
+            id="multi-leaf-tool-input",
+        ),
+    ],
+)
+async def test_nothing_above_the_ceiling_reaches_the_extraction_callback(message):
+    session = Session(viking_fs=None)
+    delivered = []
+    original = [
+        (type(part).__name__, getattr(part, "text", ""), getattr(part, "tool_output", ""))
+        for part in message.parts
+    ]
+
+    async def extract(batch):
+        delivered.append(sum(item.estimated_tokens for item in batch))
+        return []
+
+    async def record(operation_name, step, batch, fn):
+        return await fn()
+
+    await session._extract_long_term_memories_with_batching(
+        messages=[message],
+        limits=ExtractionBatchLimits(max_message_tokens=4000),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+    )
+
+    assert delivered
+    assert max(delivered) <= 4000
+    assert [
+        (type(part).__name__, getattr(part, "text", ""), getattr(part, "tool_output", ""))
+        for part in message.parts
+    ] == original
+
+
+def test_a_tool_input_with_many_large_leaves_is_trimmed_across_all_leaves():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="call_1",
+                tool_name="write_files",
+                tool_input={
+                    "files": [
+                        {"path": f"f{index}.txt", "content": "x " * 10000} for index in range(9)
+                    ]
+                },
+                tool_output="saved",
+                tool_status="completed",
+            )
+        ],
+    )
+    assert message.estimated_tokens > 4000
+
+    bounded, trimmed = bound_oversized_extraction_messages(
+        [message], ExtractionBatchLimits(max_message_tokens=4000)
+    )
+
+    assert trimmed == 1
+    assert bounded[0].estimated_tokens <= 4000
+    tool_part = next(part for part in bounded[0].parts if isinstance(part, ToolPart))
+    files = tool_part.tool_input["files"]
+    assert tool_part.tool_id == "call_1"
+    assert tool_part.tool_output == "saved"
+    assert [entry["path"] for entry in files] == [f"f{index}.txt" for index in range(9)]
+    assert all(entry["content"].endswith("characters kept]") for entry in files)
+
+
+def test_an_unfittable_message_returns_the_smallest_achievable_form():
+    message = Message(
+        id="m",
+        role="assistant",
+        parts=[
+            ToolPart(
+                tool_id="call_1",
+                tool_name="write_files",
+                tool_input={
+                    "files": [
+                        {"path": f"f{index}.txt", "content": "x " * 2000} for index in range(400)
+                    ]
+                },
+                tool_output="saved",
+                tool_status="completed",
+            )
+        ],
+    )
+    limits = ExtractionBatchLimits(max_message_tokens=4000)
+
+    bounded, trimmed = bound_oversized_extraction_messages([message], limits)
+
+    assert trimmed == 1
+    # Shortening alone cannot reach the ceiling here: 400 marked leaves still cost
+    # more than the budget. The pass must still shrink to the smallest reachable
+    # form and stay flagged so the caller reports it.
+    assert bounded[0].estimated_tokens < message.estimated_tokens / 10
+    assert plan_extraction_batches(bounded, limits)[0].oversized is True
