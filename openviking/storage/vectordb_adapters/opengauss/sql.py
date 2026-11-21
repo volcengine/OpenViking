@@ -457,11 +457,18 @@ def _build_where_clause(
             return f"NOT ({clause})", params
         if not conds:
             return "", []
+        # ``NOT IN`` / ``NOT (x = ANY(col))`` evaluate to NULL when the column
+        # itself is NULL, so a plain negation silently drops every row that
+        # never set the field. Such a row does not carry an excluded value, so
+        # it has to survive the filter; guard the NULL case explicitly.
         if field in (array_fields or set()):
             comparisons = [f"NOT (%s = ANY({quoted_field}))" for _ in conds]
-            return " AND ".join(comparisons), list(conds)
+            return f"({quoted_field} IS NULL OR ({' AND '.join(comparisons)}))", list(conds)
         placeholders = ", ".join(["%s"] * len(conds))
-        return f"{quoted_field} NOT IN ({placeholders})", list(conds)
+        return (
+            f"({quoted_field} IS NULL OR {quoted_field} NOT IN ({placeholders}))",
+            list(conds),
+        )
 
     if op == "prefix":
         prefix = str(filters.get("prefix", ""))
