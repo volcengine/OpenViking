@@ -7,10 +7,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.server.identity import RequestContext, Role
+from openviking.core.global_policy import PolicyPathScope, PolicyScopePlan
+from openviking.server.identity import DataAccessScope, RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
+from openviking.storage.acl import AclAction, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.expr import And, Eq, PathScope
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -67,6 +71,126 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
 
     assert result["isLocked"] is True
     assert lock_queries == [path]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entries,expected",
+    [
+        ([{"principal": "user:alice", "level": "read"}], "read"),
+        (
+            [
+                {"principal": "user:alice", "level": "read"},
+                {"principal": "group:editors", "level": "write"},
+            ],
+            "write",
+        ),
+        (
+            [
+                {"principal": "user:alice", "level": "read"},
+                {"principal": "group:editors", "level": "write"},
+                {"principal": "user:*", "level": "manage"},
+            ],
+            "manage",
+        ),
+        ([], None),
+    ],
+)
+async def test_stat_reports_effective_access_without_exposing_denied_metadata(
+    monkeypatch, fs, entries, expected
+):
+    uri = "viking://resources/shared/guide.md"
+    ctx = RequestContext(
+        user=UserIdentifier("default", "alice"),
+        role=Role.USER,
+        group_ids=("editors",),
+    )
+    # An unrelated manager grant must not grant this caller any extra access.
+    effective = EffectiveAcl.from_permissions(
+        DirectAcl.from_entries([*entries, {"principal": "user:other", "level": "manage"}]),
+        DirectAcl(),
+        mode=AclMode.RESTRICTED,
+    )
+    fs.acl_manager = SimpleNamespace(
+        is_enabled=AsyncMock(return_value=True),
+        resolve_many=AsyncMock(return_value={uri: effective}),
+    )
+    stat = AsyncMock(return_value={"name": "guide.md", "isDir": False, "size": 12})
+    monkeypatch.setattr(fs._async_agfs, "stat", stat)
+    monkeypatch.setattr(fs, "_is_path_locked_async", AsyncMock(return_value=True))
+
+    if expected is None:
+        with pytest.raises(PermissionDeniedError):
+            await fs.stat(uri, ctx=ctx, include_lock_status=True)
+        stat.assert_not_awaited()
+        return
+
+    result = await fs.stat(uri, ctx=ctx, include_lock_status=True)
+
+    assert result == {
+        "uri": uri,
+        "name": "guide.md",
+        "isDir": False,
+        "size": 12,
+        "access": expected,
+        "isLocked": True,
+        "id": vector_record_id(ctx.account_id, uri, level=2),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ls", "tree"])
+async def test_listings_preserve_traversable_containers_without_extra_metadata(
+    monkeypatch, fs, method
+):
+    # Paths are fixed valid literals; isolate native grammar validation while
+    # exercising the real scope decisions and storage permission checks.
+    monkeypatch.setattr(
+        "openviking.core.global_policy.validate_global_policy_path", lambda path: path
+    )
+    root = "viking://user/owner"
+    container = f"{root}/container"
+    child = f"{container}/child.md"
+    ctx = RequestContext(
+        user=UserIdentifier("test_account", "delegate"),
+        role=Role.GLOBAL,
+        data_access=DataAccessScope(
+            owner_user_id="owner",
+            operation=AclAction.READ,
+            plan=PolicyScopePlan("allowed", (PolicyPathScope("container/child.md", False),), ()),
+            policy_hash=None,
+            request_root=root,
+            requested_targets=(root,),
+            effective_targets=(child,),
+        ),
+    )
+    path = "/local/test_account/user/owner"
+    entries = [
+        make_entry(f"{path}/container", extra={"tags": ["private"]}),
+        make_entry(f"{path}/container/child.md", is_dir=False),
+        make_entry(f"{path}/denied.md", is_dir=False),
+    ]
+    monkeypatch.setattr(
+        fs, "_uri_to_path", lambda uri, **_: uri.replace("viking://", "/local/test_account/")
+    )
+    monkeypatch.setattr(fs, "_path_to_uri", _std_path_to_uri)
+    monkeypatch.setattr(fs._async_agfs, "tree_directory", AsyncMock(return_value=entries))
+    monkeypatch.setattr(
+        fs,
+        "_ls_entries",
+        AsyncMock(
+            return_value=[dict(entries[index]["info"], tags=["private"]) for index in (0, 2)]
+        ),
+    )
+
+    result = await getattr(fs, method)(root, output="original", ctx=ctx)
+
+    expected = [(container, "container")]
+    if method == "tree":
+        expected.append((child, "read"))
+    assert [(entry["uri"], entry["access"]) for entry in result] == expected
+    assert "tags" not in result[0]
+    assert result[0]["isDir"] is True
 
 
 @pytest.mark.asyncio
@@ -477,19 +601,12 @@ async def test_iter_visible_tree_entries_level_limit_passed_to_rust(monkeypatch,
 @pytest.mark.asyncio
 async def test_iter_visible_tree_entries_offset_and_node_limit_after_acl(monkeypatch, fs):
     """PY-ITER-002: offset and node_limit apply after ACL filtering."""
-    visible_count = 0
-
     entries = [
         make_entry(f"/local/test_account/resources/{name}", name, is_dir=False)
         for name in ["a", "b", "c", "d", "e"]
     ]
 
-    def fake_is_accessible(_uri, _ctx):
-        nonlocal visible_count
-        visible_count += 1
-        return True
-
-    patch_tree_env(monkeypatch, fs, entries, is_accessible=fake_is_accessible)
+    patch_tree_env(monkeypatch, fs, entries)
 
     results = []
     async for entry, _entry_uri in fs._iter_visible_tree_entries(
@@ -498,7 +615,6 @@ async def test_iter_visible_tree_entries_offset_and_node_limit_after_acl(monkeyp
         results.append(entry)
 
     assert [entry["info"]["name"] for entry in results] == ["b", "c"]
-    assert visible_count == 3, "only skipped and returned entries should be ACL checked"
 
 
 @pytest.mark.asyncio
@@ -704,10 +820,10 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
 
     fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
-    async def fake_can_access_many(uris, _ctx):
-        return {uri: "/restricted" not in uri for uri in uris}
+    async def fake_permissions_many(uris, _ctx):
+        return {uri: None if "/restricted" in uri else AclLevel.READ for uri in uris}
 
-    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+    monkeypatch.setattr(fs, "_permissions_many", fake_permissions_many)
 
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
     assert result[0]["name"] == "sub"
@@ -751,6 +867,7 @@ async def test_tree_agent_structure(monkeypatch, fs):
             "modTime": "2026-01-01T00:00:00.000Z",
             "rel_path": "a",
             "abstract": "",
+            "access": "manage",
         },
         {
             "uri": "viking://resources/sub",
@@ -759,6 +876,7 @@ async def test_tree_agent_structure(monkeypatch, fs):
             "modTime": "2026-01-01T00:00:00.000Z",
             "rel_path": "sub",
             "abstract": "L0 summary",
+            "access": "manage",
         },
     ]
     summary.assert_awaited_once_with("viking://resources/sub", "abstract", ctx=_default_ctx())
@@ -799,7 +917,7 @@ async def test_tree_agent_normalizes_modtime_to_utc(monkeypatch, fs):
         ctx=_default_ctx(),
     )
 
-    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "rel_path", "abstract"}
+    assert set(result[0]) == {"uri", "size", "isDir", "modTime", "rel_path", "abstract", "access"}
     assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
 
 
@@ -835,10 +953,10 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
 
     fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
-    async def fake_can_access_many(uris, _ctx, **_kwargs):
-        return {uri: not uri.endswith("/restricted") for uri in uris}
+    async def fake_permissions_many(uris, _ctx):
+        return {uri: None if uri.endswith("/restricted") else AclLevel.WRITE for uri in uris}
 
-    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+    monkeypatch.setattr(fs, "_permissions_many", fake_permissions_many)
     summary = AsyncMock(
         side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
     )
@@ -852,7 +970,8 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
         ctx=_default_ctx(),
     )
 
-    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "abstract"}
+    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "abstract", "access"}
+    assert result[0]["access"] == "write"
     assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
     assert result[1] == {
         "name": "restricted",
@@ -876,6 +995,7 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
     assert "overview" not in result[1]
     assert result[2]["overview"] == "L1 overview"
     summary.assert_awaited_once_with("viking://resources/docs", "overview", ctx=_default_ctx())
+
 
 @pytest.mark.asyncio
 async def test_tree_filters_and_paginates_before_summary_reads(monkeypatch, fs):
