@@ -83,6 +83,42 @@ class TargetReader(Tool):
         return json.dumps({"path": path, "content": content}, ensure_ascii=False)
 
 
+class AssignedDraftReuse(Tool):
+    """Copy only an assigned snapshot into the worker's own output directory."""
+
+    name = "reuse_draft"
+    description = (
+        "After comparing all assigned evidence, copy an unchanged draft to its assigned output "
+        "path. Use write_file or edit_file when the body needs changes."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "content_file": {
+                "type": "string",
+                "description": "Exact content_file of an assigned document from assignment.json.",
+            },
+        },
+        "required": ["content_file"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, sandbox, drafts, writer):
+        self.sandbox = sandbox
+        self.drafts = drafts
+        self.writer = writer
+
+    async def execute(self, tool_context=None, *, content_file):
+        if content_file not in self.drafts:
+            raise ValueError("Draft is outside this Reduce assignment")
+        path, snapshot = self.drafts[content_file]
+        path = validate_relative_file_path(path)
+        content = (await self.sandbox.read_file_bytes(snapshot)).decode("utf-8")
+        if not path.lower().endswith(".md") or not content.strip():
+            raise ValueError("Reused draft must be nonempty UTF-8 Markdown")
+        return await self.writer.execute(tool_context, path=path, content=content)
+
+
 def agent_runner(loop, session_key, connection, limits):
     """Bind metered AgentLoops with isolated file tools and no submission protocol."""
 
@@ -93,8 +129,10 @@ def agent_runner(loop, session_key, connection, limits):
         output_root = f"{root}/output"
         sandbox = model.files.sandbox
         assignment = dict(data)
+        allow_draft_reuse = assignment.pop("allow_draft_reuse", False)
         assignment["documents"] = []
         readonly_paths = {"assignment.json": f"{root}/assignment.json"}
+        assigned_drafts = {}
         for index, document in enumerate(data.get("documents", [])):
             path = f"inputs/{index}.md"
             await sandbox.write_file(
@@ -102,6 +140,8 @@ def agent_runner(loop, session_key, connection, limits):
             )
             assignment["documents"].append({"path": document["path"], "content_file": path})
             readonly_paths[path] = f"{root}/{path}"
+            if allow_draft_reuse:
+                assigned_drafts[path] = (document["path"], readonly_paths[path])
         await sandbox.write_file(
             f"{root}/assignment.json", json.dumps(assignment, ensure_ascii=False)
         )
@@ -112,6 +152,10 @@ def agent_runner(loop, session_key, connection, limits):
                 raise ValueError(f"Compile requires {name}")
             registry.register(
                 CompileChildTool(tool, output_root, merge_only=True, readonly_paths=readonly_paths)
+            )
+        if assigned_drafts:
+            registry.register(
+                AssignedDraftReuse(sandbox, assigned_drafts, registry.get("write_file"))
             )
         evidence = EvidenceReader(model.files, data)
         if evidence.allowed:

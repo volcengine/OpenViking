@@ -23,6 +23,7 @@ async def run(runtime, node, groups):
                 "conditions, conflicting claims and applicability. One group may produce multiple files. "
                 "Read selected historical files before updating; preserve unrelated content.",
                 {
+                    "allow_draft_reuse": True,
                     "documents": [vars(doc) for doc in group.documents],
                     "historical_files": [
                         relative_uri_path(runtime.target, uri) for uri in group.target_uris
