@@ -1852,10 +1852,21 @@ def test_langgraph_store_unsupported_ttl_still_rejects_before_mutation(
     assert store.get(namespace, "item").value == original
 
 
-def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
+@pytest.mark.parametrize(
+    "namespace,encoded_namespace",
+    [
+        (("filesystem", "user-a"), "filesystem/user-a"),
+        (("org/team", "memories"), "org!steam/memories"),
+        ((r"org\team", "memories"), "org!bteam/memories"),
+        (("org!steam", "memories"), "org%21steam/memories"),
+        (("org!bteam", "memories"), "org%21bteam/memories"),
+        (("org%2Fteam", "memories"), "org%252Fteam/memories"),
+        (("用户/小王", "memories"), "%E7%94%A8%E6%88%B7!s%E5%B0%8F%E7%8E%8B/memories"),
+    ],
+)
+def test_langgraph_store_round_trips_separator_keys_and_namespaces(namespace, encoded_namespace):
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
-    namespace = ("filesystem", "user-a")
     cases = {
         "profile": "profile",
         "/docs/readme.md": "!sdocs!sreadme.md",
@@ -1875,30 +1886,31 @@ def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
     for key, encoded in cases.items():
         policy = "cobalt deployment" if key == "/docs/readme.md" else "amber checklist"
         store.put(namespace, key, {"key": key, "policy": policy})
-        data_uri = f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
-        index_uri = f"viking://~/memories/langgraph_store/index/filesystem/user-a/{encoded}.md"
+        data_uri = f"viking://~/memories/langgraph_store/data/{encoded_namespace}/{encoded}.json"
+        index_uri = f"viking://~/memories/langgraph_store/index/{encoded_namespace}/{encoded}.md"
         assert data_uri in client.records
         assert index_uri in client.records
 
-    assert all("%2F" not in uri for uri in client.records)
+    assert all("%2F" not in uri and "%5C" not in uri for uri in client.records)
 
     for key in cases:
         item = store.get(namespace, key)
         assert item is not None
+        assert item.namespace == namespace
         assert item.key == key
         assert item.value["key"] == key
 
     assert {item.key for item in store.search(namespace, limit=100)} == set(cases)
     semantic = store.search(namespace, query="cobalt", limit=5)
     assert [item.key for item in semantic] == ["/docs/readme.md"]
-    assert store.list_namespaces(prefix=("filesystem",)) == [namespace]
+    assert store.list_namespaces(prefix=namespace[:1]) == [namespace]
 
     store.delete(namespace, "/docs/readme.md")
     assert (
-        "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs!sreadme.md.json"
+        f"viking://~/memories/langgraph_store/data/{encoded_namespace}/!sdocs!sreadme.md.json"
     ) not in client.records
     assert (
-        "viking://~/memories/langgraph_store/index/filesystem/user-a/!sdocs!sreadme.md.md"
+        f"viking://~/memories/langgraph_store/index/{encoded_namespace}/!sdocs!sreadme.md.md"
     ) not in client.records
 
 

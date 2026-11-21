@@ -374,6 +374,11 @@ NAMESPACES = (
     ("users", "ada", "prefs", "v2"),
     ("users", "a*b", "prefs"),
     ("用户", "小王", "prefs"),
+    ("teams", "ops/platform", "prefs"),
+    ("teams", r"ops\platform", "prefs"),
+    ("teams", "ops!splatform", "prefs"),
+    ("teams", "ops!bplatform", "prefs"),
+    ("teams", "ops", "platform", "prefs"),
 )
 
 
