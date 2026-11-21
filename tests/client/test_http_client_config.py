@@ -62,6 +62,20 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
     assert client._profile_enabled is True
 
 
+def test_async_http_client_preserves_timeout_from_ovcli_config_with_bom(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps({"url": "http://config-host:1933", "timeout": 12.5}),
+        encoding="utf-8-sig",
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+    monkeypatch.delenv("OPENVIKING_TIMEOUT", raising=False)
+
+    client = AsyncHTTPClient()
+
+    assert client._timeout == 12.5
+
+
 def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(
