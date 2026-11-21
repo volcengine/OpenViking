@@ -1,16 +1,9 @@
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useViewActive } from '../../shared/view-activity.js';
 import { useOverlayPosition } from '../../shared/primitives/overlay/use-overlay-position.js';
 import { navigatePopoverTab } from './popover-tab-navigation.js';
-
-const subscribe = () => () => {};
 
 /** Private non-modal popover shared by history and the reference toolbar. */
 export function BotPopover({
@@ -18,6 +11,7 @@ export function BotPopover({
   trigger: renderTrigger,
   children,
   placement = 'bottom',
+  alignment = 'end',
   onOpen,
   hover = false,
 }: {
@@ -25,22 +19,26 @@ export function BotPopover({
   trigger: (props: ButtonHTMLAttributes<HTMLButtonElement>) => ReactNode;
   children: (close: () => void) => ReactNode;
   placement?: 'top' | 'bottom';
+  alignment?: 'start' | 'end';
   onOpen?: () => void;
   hover?: boolean;
 }) {
-  const mounted = useSyncExternalStore(
-    subscribe,
-    () => true,
-    () => false,
-  );
-  const native = mounted && 'popover' in HTMLElement.prototype;
+  const active = useViewActive();
+  const native = 'popover' in HTMLElement.prototype;
   const [open, setOpen] = useState(false);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const dismissTimer = useRef<number | undefined>(undefined);
   const skipFocus = useRef(false);
   const id = useId();
-  const position = useOverlayPosition(open, anchor, surface, placement, 'end');
+  const position = useOverlayPosition(
+    open,
+    anchor,
+    surface,
+    placement,
+    alignment,
+  );
+  if (!active && open) setOpen(false);
   const cancelDismiss = () => window.clearTimeout(dismissTimer.current);
   const hide = () => {
     cancelDismiss();
@@ -48,6 +46,7 @@ export function BotPopover({
     else setOpen(false);
   };
   const show = () => {
+    if (!active) return;
     cancelDismiss();
     if (native)
       surface?.showPopover({
@@ -61,7 +60,7 @@ export function BotPopover({
   const close = () => {
     skipFocus.current = true;
     hide();
-    anchor.current?.querySelector('button')?.focus();
+    if (active) anchor.current?.querySelector('button')?.focus();
     skipFocus.current = false;
   };
   const interest: HTMLAttributes<HTMLElement> = hover
@@ -166,25 +165,24 @@ export function BotPopover({
                 if (!open) onOpen?.();
               },
       })}
-      {mounted
-        ? createPortal(
-            <div
-              ref={setSurface}
-              id={id}
-              popover={native ? 'auto' : undefined}
-              role="dialog"
-              tabIndex={-1}
-              aria-label={label}
-              hidden={!native && !open}
-              className={`ov-viking-bot__popover ov-viking-bot__popover--${placement}`}
-              style={{ top: position.top, left: position.left }}
-              {...interest}
-            >
-              {open ? children(close) : null}
-            </div>,
-            document.body,
-          )
-        : null}
+      {active &&
+        createPortal(
+          <div
+            ref={setSurface}
+            id={id}
+            popover={native ? 'auto' : undefined}
+            role="dialog"
+            tabIndex={-1}
+            aria-label={label}
+            hidden={!native && !open}
+            className={`ov-viking-bot__popover ov-viking-bot__popover--${placement}`}
+            style={{ top: position.top, left: position.left }}
+            {...interest}
+          >
+            {open ? children(close) : null}
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }

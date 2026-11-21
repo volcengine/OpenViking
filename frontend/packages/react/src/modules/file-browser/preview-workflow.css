@@ -4,6 +4,10 @@
 .ov-file-browser-workflow .ov-modal__body {
   padding: 24px;
 }
+.ov-file-browser-workflow .ov-modal__panel,
+.ov-compile-picker .ov-modal__panel {
+  background: var(--ov-ui-color-bg-9, var(--ov-ui-bg-9-default));
+}
 .ov-file-browser-workflow h2 {
   margin: 0 32px 8px 0;
   font-size: 18px;
@@ -23,11 +27,11 @@
   padding: 0;
   border: 0;
 }
-.ov-file-browser-workflow label {
+.ov-file-browser-workflow label:not(.ov-checkbox) {
   display: block;
   margin-block-start: 12px;
 }
-.ov-file-browser-workflow :is(input:not([type='checkbox']), textarea, select) {
+.ov-file-browser-workflow select {
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
@@ -42,9 +46,18 @@
   min-height: 80px;
   resize: vertical;
 }
-.ov-file-browser-workflow :is(input, textarea, select):focus-visible {
+.ov-file-browser-workflow :is(select, .ov-textarea):focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 2px;
+}
+.ov-file-saved-snapshot .ov-file-history__snapshot {
+  padding: 0;
+  border: 0;
+}
+@media (max-width: 480px) {
+  .ov-file-saved-snapshot .ov-file-history__snapshot-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .ov-file-browser-workflow__actions {
   display: flex;
@@ -52,10 +65,7 @@
   gap: 8px;
   margin-block-start: 24px;
 }
-.ov-file-browser-workflow__error {
-  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
-  overflow-wrap: anywhere;
-}
+
 .ov-file-browser-workflow__versions {
   display: grid;
   gap: 12px;
@@ -77,11 +87,249 @@
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 
-.ov-file-browser-workflow input[type='checkbox'] {
-  appearance: auto;
-  width: 16px;
-  height: 16px;
-  margin-inline-end: 8px;
-  vertical-align: middle;
-  accent-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+.ov-compile-config__rows {
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 20px;
+  background: var(--ov-ui-color-bg-white, var(--ov-ui-bg-white-default));
+}
+.ov-compile-config__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 16px;
+  font-size: 14px;
+}
+.ov-compile-config__row + .ov-compile-config__row {
+  border-block-start: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+}
+.ov-compile-config__row > :first-child {
+  flex-shrink: 0;
+}
+.ov-compile-config__row > :last-child {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 280px;
+  max-width: 70%;
+  min-width: 0;
+  font-size: 13px;
+}
+.ov-compile-config__row svg {
+  flex-shrink: 0;
+}
+.ov-compile-config__path,
+.ov-compile-config__target > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: start;
+}
+.ov-compile-config__target {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-inline-size: 0;
+  block-size: 32px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-compile-config__hint {
+  margin: 8px 0 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  line-height: 20px;
+}
+.ov-pack-import__upload {
+  position: relative;
+}
+.ov-pack-import__upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.ov-pack-import__upload input:disabled {
+  cursor: default;
+}
+.ov-pack-import__upload label {
+  display: flex !important;
+  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 !important;
+  padding: 32px 20px;
+  border: 1px dashed var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 12px;
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.ov-pack-import__upload svg {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-pack-import__upload strong {
+  font-weight: 500;
+}
+.ov-pack-import__upload label > span {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-pack-import__upload .ov-pack-import__choose {
+  margin-block-start: 8px;
+  padding: 4px 16px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-pack-import__upload:focus-within {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+@media (max-width: 480px) {
+  .ov-compile-config__row {
+    padding: 14px 12px;
+    gap: 8px;
+  }
+}
+
+.ov-compile-config__chevron {
+  transform: rotate(90deg);
+}
+
+.ov-compile-config__legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ov-compile-schedule {
+  display: grid;
+  gap: 20px;
+  margin-block-start: 24px;
+}
+.ov-compile-schedule__field {
+  display: grid;
+  gap: 8px;
+}
+.ov-compile-schedule__field > label {
+  margin: 0 !important;
+  font-size: 13px;
+}
+.ov-compile-schedule .ov-select,
+.ov-compile-schedule .ov-input {
+  width: 100%;
+  min-width: 0;
+}
+.ov-compile-schedule__frequency legend {
+  padding: 0;
+  margin-block-end: 8px;
+  font-size: 13px;
+}
+.ov-compile-schedule__choices {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ov-compile-schedule .ov-compile-schedule__choice {
+  display: flex;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  flex: 1 1 max-content;
+  margin: 0;
+}
+.ov-compile-schedule__choice .ov-radio__mask {
+  display: none;
+}
+.ov-compile-schedule__choice .ov-radio__text {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 4px;
+  background: var(--ov-ui-color-bg-white, var(--ov-ui-bg-white-default));
+  padding: 6px 8px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+.ov-compile-schedule__choice.ov-radio--checked .ov-radio__text {
+  border-color: var(
+    --ov-ui-color-primary-disabled,
+    var(--ov-ui-primary-disabled-default)
+  );
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  font-weight: 500;
+}
+.ov-compile-schedule__choice input:focus-visible ~ .ov-radio__text,
+.ov-compile-config__target:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-compile-schedule__choice.ov-radio--disabled {
+  cursor: not-allowed;
+}
+.ov-compile-config__row > .ov-button {
+  font-weight: 400;
+}
+.ov-compile-config__value > .ov-button {
+  border-radius: 4px;
+}
+.ov-compile-config__paths {
+  display: grid;
+  gap: 4px;
+  max-inline-size: 360px;
+  overflow-wrap: anywhere;
+}
+.ov-compile-config__value {
+  display: flex;
+  min-inline-size: 0;
+}
+.ov-compile-config__value > :is(.ov-button, .ov-compile-config__target) {
+  inline-size: 100%;
+}
+.ov-compile-config__value:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.ov-file-browser-workflow__loading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  inline-size: 100%;
+  block-size: 100%;
+  min-block-size: 180px;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-file-browser-workflow__loading > .ov-loading-icon {
+  font-size: 20px;
+}
+
+.ov-compile-config__tabs {
+  margin-bottom: 16px;
 }

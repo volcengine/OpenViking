@@ -685,7 +685,7 @@ async def test_glob_delegates_to_agfs_with_paging_and_visibility(monkeypatch, fs
                     "is_dir": False,
                 }
             ],
-            "next_token": None,
+            "next_token": "past-visible-limit",
         },
     ]
 
@@ -707,66 +707,6 @@ async def test_glob_delegates_to_agfs_with_paging_and_visibility(monkeypatch, fs
     }
     assert [call["continuation_token"] for call in calls] == [None, "tok-1"]
     assert all(call["page_size"] == 3 for call in calls)
-
-
-@pytest.mark.asyncio
-async def test_glob_stops_after_reaching_limit_at_page_end(monkeypatch, fs):
-    calls = []
-
-    async def fake_glob_directory(path, pattern, **kwargs):
-        calls.append({"path": path, "pattern": pattern, **kwargs})
-        return {
-            "entries": [
-                {
-                    "path": "/local/test_account/resources/group/a.md",
-                    "rel_path": "group/a.md",
-                    "name": "a.md",
-                    "is_dir": False,
-                },
-                {
-                    "path": "/local/test_account/resources/group/b.md",
-                    "rel_path": "group/b.md",
-                    "name": "b.md",
-                    "is_dir": False,
-                },
-            ],
-            "next_token": "tok-should-not-be-used",
-        }
-
-    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
-
-    result = await fs.glob("**/*.md", uri="viking://resources", node_limit=2, ctx=_default_ctx())
-
-    assert result == {
-        "matches": [
-            "viking://resources/group/a.md",
-            "viking://resources/group/b.md",
-        ],
-        "count": 2,
-    }
-    assert len(calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_glob_trusts_backend_glob_matches(monkeypatch, fs):
-    async def fake_glob_directory(path, pattern, **kwargs):
-        return {
-            "entries": [
-                {
-                    "path": "/local/test_account/resources/a.md",
-                    "rel_path": "a.md",
-                    "name": "a.md",
-                    "is_dir": False,
-                }
-            ],
-            "next_token": None,
-        }
-
-    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
-
-    result = await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
-
-    assert result == {"matches": ["viking://resources/a.md"], "count": 1}
 
 
 @pytest.mark.asyncio
@@ -802,7 +742,7 @@ async def test_glob_checks_access_before_listing(monkeypatch, fs):
         called = True
         raise PermissionError(f"denied: {uri}")
 
-    monkeypatch.setattr(fs, "_ensure_access", fake_ensure_access)
+    monkeypatch.setattr(fs, "_ensure_traversable", fake_ensure_access)
 
     with pytest.raises(PermissionError):
         await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
@@ -865,30 +805,7 @@ async def test_glob_preserves_root_uri(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_glob_keeps_directory_matches(monkeypatch, fs):
-    async def fake_glob_directory(path, pattern, **kwargs):
-        return {
-            "entries": [
-                {
-                    "path": "/local/test_account/resources/folder",
-                    "rel_path": "folder",
-                    "name": "folder",
-                    "is_dir": True,
-                }
-            ],
-            "next_token": None,
-        }
-
-    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
-
-    result = await fs.glob("**/*", uri="viking://resources", ctx=_default_ctx())
-
-    # Trailing slash is the only type signal the flat `matches` list can carry.
-    assert result == {"matches": ["viking://resources/folder/"], "count": 1}
-
-
-@pytest.mark.asyncio
-async def test_glob_marks_directories_but_not_files(monkeypatch, fs):
+async def test_glob_preserves_entry_types_in_flat_and_detailed_results(monkeypatch, fs):
     async def fake_glob_directory(path, pattern, **kwargs):
         return {
             "entries": [
@@ -923,45 +840,18 @@ async def test_glob_marks_directories_but_not_files(monkeypatch, fs):
         "viking://resources/b.md",
     ]
 
+    async def missing_stat(uri, **_kwargs):
+        raise NotFoundError(uri, "file")
 
-@pytest.mark.asyncio
-async def test_glob_directory_metadata_uses_is_dir_instead_of_trailing_slash(monkeypatch, fs):
-    async def fake_glob_directory(path, pattern, **kwargs):
-        return {
-            "entries": [
-                {
-                    "path": "/local/test_account/resources/folder",
-                    "rel_path": "folder",
-                    "name": "folder",
-                    "is_dir": True,
-                }
-            ],
-            "next_token": None,
-        }
-
-    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
-
-    async def fake_stat(*_args, **_kwargs):
-        raise NotFoundError("viking://resources/folder", "file")
-
-    monkeypatch.setattr(fs, "stat", fake_stat)
-
-    result = await fs.glob(
-        "**/*",
-        uri="viking://resources",
-        ctx=_default_ctx(),
-        extra_fields=[],
-    )
-
-    assert result == {
+    monkeypatch.setattr(fs, "stat", missing_stat)
+    detailed = await fs.glob("**/*", uri="viking://resources", ctx=_default_ctx(), extra_fields=[])
+    assert detailed == {
         "matches": [
-            {
-                "uri": "viking://resources/folder",
-                "name": "folder",
-                "isDir": True,
-            }
+            {"uri": "viking://resources/folder", "name": "folder", "isDir": True},
+            {"uri": "viking://resources/a.md", "name": "a.md", "isDir": False},
+            {"uri": "viking://resources/b.md", "name": "b.md", "isDir": False},
         ],
-        "count": 1,
+        "count": 3,
     }
 
 

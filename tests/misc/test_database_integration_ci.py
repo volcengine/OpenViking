@@ -25,7 +25,12 @@ def report(tmp_path, *, skipped=None, omitted=None):
     cases = [("tests.server.test_account_services", name) for name in sorted(ci.ACCOUNT_CASES)] + [
         ("tests.server.test_redis_mysql_account_store", "test_auth[encrypted]"),
         ("tests.service.test_task_work_contract", "test_history[mysql-stage]"),
+        ("tests.service.test_task_work_contract", "test_history[postgres-stage]"),
         ("tests.resource.test_watch_store", "test_watch[mysql]"),
+        ("tests.resource.test_watch_store", "test_watch[postgres]"),
+        ("tests.resource.test_watch_main_integration", "test_refresh[mysql]"),
+        ("tests.resource.test_watch_process", "test_claim[mysql]"),
+        ("tests.resource.test_watch_process", "test_claim[postgres]"),
     ]
     for module, name in cases:
         if name == omitted:
@@ -51,7 +56,12 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
         "accounts": 2,
         "redis_mysql": 1,
         "task_work_mysql": 1,
+        "task_work_postgres": 1,
         "watch_mysql": 1,
+        "watch_postgres": 1,
+        "watch_runtime_mysql": 1,
+        "watch_process_mysql": 1,
+        "watch_process_postgres": 1,
     }
 
 
@@ -61,7 +71,12 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
         *sorted(ci.ACCOUNT_CASES),
         "test_auth[encrypted]",
         "test_history[mysql-stage]",
+        "test_history[postgres-stage]",
         "test_watch[mysql]",
+        "test_watch[postgres]",
+        "test_refresh[mysql]",
+        "test_claim[mysql]",
+        "test_claim[postgres]",
     ],
 )
 @pytest.mark.parametrize("status", ["skipped", "omitted"])
@@ -84,10 +99,10 @@ def test_verifier_rejects_incomplete_case_even_when_its_suite_has_passes(tmp_pat
     case = ET.SubElement(
         tree.getroot(),
         "testcase",
-        classname="tests.server.test_redis_mysql_account_store",
-        name="test_another_snapshot",
+        classname="tests.resource.test_watch_process",
+        name="test_another_claim[mysql]",
     )
     ET.SubElement(case, status)
     tree.write(path)
-    with pytest.raises(RuntimeError, match="test_another_snapshot did not pass"):
+    with pytest.raises(RuntimeError, match=r"test_another_claim\[mysql\] did not pass"):
         ci.verify(path)

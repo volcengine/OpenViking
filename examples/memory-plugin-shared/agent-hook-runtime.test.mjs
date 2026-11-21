@@ -6,7 +6,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { filterCaptureTurns } from "./lib/capture-utils.mjs";
-import { expectExit, runHookScript, withMockOpenViking, writeJson } from "./testing/support.mjs";
+import { listPending } from "./lib/pending-queue.mjs";
+import { expectExit, runHookScript, withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
 
 import {
   addAgentMessages,
@@ -473,4 +474,29 @@ test("captured messages carry the effective peer in the body, and none when peer
     ],
     [{ role: "user", content: "c" }],
   ]);
+});
+
+test("a commit after a send that got parked waits behind the parked messages", async () => {
+  await withPendingDir(async () => {
+    const posts = [];
+    const fetchJSON = async (path) => {
+      posts.push(path);
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    };
+    const sent = await addAgentMessages(fetchJSON, "agent-parked", [
+      { role: "user", content: "question" },
+      { role: "assistant", content: "answer" },
+    ]);
+    assert.equal(sent.queued, 2);
+
+    const committed = await commitAgentSession(fetchJSON, "agent-parked");
+    assert.equal(committed.ok, false);
+    assert.equal(committed.pendingQueued, true);
+    assert.equal(posts.some((path) => path.endsWith("/commit")), false, "no commit overtakes the messages");
+    assert.deepEqual((await listPending()).map(({ entry }) => entry.type), [
+      "addMessage",
+      "addMessage",
+      "commitSession",
+    ]);
+  });
 });

@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   loading: false,
   pathname: '/admin/users',
   gatewayHost: false,
+  serverMode: 'api_key',
 }))
 vi.mock('#/features/connection/hooks/use-studio-mode', () => ({
   useStudioMode: () => state,
@@ -17,6 +18,7 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     isConnectionRoleLoading: state.loading,
     isGatewayHost: state.gatewayHost,
+    serverMode: state.serverMode,
   }),
 }))
 vi.mock('@tanstack/react-router', async (original) => ({
@@ -38,6 +40,7 @@ afterEach(() => {
   state.loading = false
   state.pathname = '/admin/users'
   state.gatewayHost = false
+  state.serverMode = 'api_key'
 })
 async function mount() {
   const Admin = Route.options.component as ComponentType & {
@@ -70,6 +73,15 @@ it('mounts the management subtree only for an authorized identity', async () => 
   state.canManage = true
   await mount()
   expect(screen.getByTestId('management-page')).toBeTruthy()
+})
+
+it('explains that administration is unavailable in development mode', async () => {
+  state.serverMode = 'dev'
+  state.pathname = '/admin/configuration/server'
+  await mount()
+  expect(screen.queryByTestId('management-page')).toBeNull()
+  expect(screen.getByRole('heading').textContent).toBe('modes.devUnavailable')
+  expect(screen.getByText('modes.devUnavailableDescription')).toBeTruthy()
 })
 
 it.each([

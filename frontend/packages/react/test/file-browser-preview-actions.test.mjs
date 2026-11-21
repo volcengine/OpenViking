@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -70,10 +71,7 @@ test('deletion failure retains the confirmation, supports retry and preserves it
     assert.match(dialog().textContent, /删除文档？/);
     assert.equal(fetch.calls.length, reads);
     await click(button('删除', dialog()));
-    assert.match(
-      dialog().querySelector('[role="alert"]').textContent,
-      /Try again/,
-    );
+    assert.match(notificationError().textContent, /Try again/);
     assert.equal(button('删除', dialog()).disabled, false);
     assert.equal(
       view.container.querySelector('button[aria-label="编辑"]') !== null,
@@ -83,8 +81,8 @@ test('deletion failure retains the confirmation, supports retry and preserves it
     await click(button('删除', dialog()));
     await settle();
     assert.equal(
-      document.querySelector('.ov-file-browser-delete [role="alert"]'),
-      null,
+      Boolean(document.querySelector('.ov-file-browser-delete [role="alert"]')),
+      false,
     );
     assert.equal(
       fetch.calls.filter((call) => call.path === '/api/v1/fs').length,

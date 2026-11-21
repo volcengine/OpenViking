@@ -16,6 +16,7 @@ from typing import List, Optional, Union
 
 from PIL import Image
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.output import create_parse_artifact_writer
 from openviking.parse.parsers.base_parser import BaseParser
@@ -27,6 +28,7 @@ from openviking.parse.parsers.media.large_image_processor import (
 from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking.parse.parsers.media.utils import _convert_svg_to_png
 from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.parser_config import ImageConfig
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -96,7 +98,7 @@ class ImageParser(BaseParser):
 
         Raises:
             FileNotFoundError: If source file doesn't exist
-            ValueError: If image processing fails
+            InvalidArgumentError: If image contents are invalid
         """
         # Convert to Path object
         file_path = Path(source) if isinstance(source, str) else source
@@ -106,51 +108,36 @@ class ImageParser(BaseParser):
         # Load image (SVG is converted to PNG first since PIL doesn't support it)
         # For other formats not natively supported by VLM/embedding, convert to PNG
         # to ensure end-to-end compatibility with image understanding and vectorization
+        file_bytes = file_path.read_bytes()
+        image_bytes = file_bytes
+        needs_png_conversion = file_path.suffix.lower() not in {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".webp",
+        }
+        if (
+            file_path.suffix.lower() == ".svg"
+            or file_bytes[:4] == b"<svg"
+            or (file_bytes[:5] == b"<?xml" and b"<svg" in file_bytes[:100])
+        ):
+            converted_png_bytes = _convert_svg_to_png(file_bytes)
+            if converted_png_bytes is None:
+                raise ValueError("SVG files require cairosvg. Install it: pip install cairosvg")
+            image_bytes = converted_png_bytes
+            needs_png_conversion = True
+
+        # Verify in-memory contents so filesystem errors remain server failures.
         try:
-            file_bytes = file_path.read_bytes()
-            if (
-                file_path.suffix.lower() == ".svg"
-                or file_bytes[:4] == b"<svg"
-                or (file_bytes[:5] == b"<?xml" and b"<svg" in file_bytes[:100])
-            ):
-                png_bytes = _convert_svg_to_png(file_bytes)
-                if png_bytes is None:
-                    raise ValueError("SVG files require cairosvg. Install it: pip install cairosvg")
-                img = Image.open(io.BytesIO(png_bytes))
-                img.verify()
-                img.close()
-                img = Image.open(io.BytesIO(png_bytes))
-                # Save as PNG in output
-                needs_png_conversion = True
-                converted_png_bytes = png_bytes  # Save for small-image branch
-            else:
-                # Check if extension is in VLM-natively supported list
-                suffix_lower = file_path.suffix.lower()
-                supported_by_vlm = suffix_lower in {
-                    ".png",
-                    ".jpg",
-                    ".jpeg",
-                    ".gif",
-                    ".bmp",
-                    ".webp",
-                }
-                if supported_by_vlm:
-                    img = Image.open(file_path)
-                    img.verify()  # Verify that it's a valid image
-                    img.close()  # Close and reopen to reset after verify()
-                    img = Image.open(file_path)
-                    needs_png_conversion = False
-                else:
-                    # Convert unsupported formats to PNG for VLM compatibility
-                    img = Image.open(file_path)
-                    img.verify()
-                    img.close()
-                    img = Image.open(file_path)
-                    needs_png_conversion = True
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                image.verify()
+            img = Image.open(io.BytesIO(image_bytes))
             width, height = img.size
             format_str = img.format or file_path.suffix[1:].upper() if file_path.suffix else "JPEG"
-        except Exception as e:
-            raise ValueError(f"Invalid image file: {file_path}. Error: {e}") from e
+        except (OSError, SyntaxError, Image.DecompressionBombError) as e:
+            raise InvalidArgumentError(f"Invalid image file: {file_path.name}. Error: {e}") from e
 
         # Resolve names
         display_stem, stem, original_filename = resolve_media_names(
@@ -204,7 +191,12 @@ class ImageParser(BaseParser):
                 # budgets. The preview + tiles are the canonical representation. The
                 # `original_filename` metadata field records the original name for reference
                 # but the corresponding file is not persisted.
-                logger.debug(f"Processing large image {original_filename}: {width}x{height}")
+                logger.debug(
+                    "Processing large image path=%s width=%d height=%d",
+                    safe_path_for_log(str(original_filename)),
+                    width,
+                    height,
+                )
 
                 # Save low-res preview (original is too large to store)
                 await writer.write_bytes(

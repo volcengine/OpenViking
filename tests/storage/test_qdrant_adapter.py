@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.qdrant_collection import QdrantCollection
 from openviking.storage.vectordb.collection.qdrant_rest import QdrantError, QdrantRestClient
 from openviking.storage.vectordb.qdrant_sparse import (
@@ -411,6 +412,41 @@ def test_parent_uri_round_trips_on_read() -> None:
     )
 
     assert record["parent_uri"] == "/resources"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {
+            "mode": "bm25",
+            "fields": ["content"],
+            "bm25_k1": 1.2,
+            "bm25_b": 0.75,
+            "advance": {"post_process_input_limit": 20},
+        },
+    ],
+)
+def test_keyword_search_preserves_unsupported_backend_error(options) -> None:
+    transport = _ScriptedTransport()
+    collection = QdrantCollection(
+        client=QdrantRestClient("http://qdrant.local", opener=transport),
+        collection_name="docs",
+        metadata_collection_name="docs__meta",
+        dense_vector_name="dense",
+        sparse_vector_name="sparse",
+        vector_dim=2,
+        distance="cosine",
+        sparse_enabled=False,
+        sparse_weight=0.0,
+    )
+    adapter = _qdrant_adapter_for_collection(collection)
+    adapter._collection = Collection(collection)
+
+    with pytest.raises(NotImplementedError, match="use the filesystem fallback"):
+        adapter.search_by_keywords(query="test query", **options)
+
+    assert transport.requests == []
 
 
 def test_numeric_scalar_field_types_map_to_qdrant_numeric_schemas() -> None:

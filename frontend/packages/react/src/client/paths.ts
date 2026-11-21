@@ -27,15 +27,21 @@ export const OV_PATHS = {
   fsLs: '/api/v1/fs/ls',
   fsAttrs: '/api/v1/fs/attrs',
   compile: '/api/v1/compile',
+  compileCreate: '/api/v1/compile/create',
   compileConfigs: '/api/v1/compile/configs',
   compileConfig: '/api/v1/compile/config',
   compileConfigUpdate: '/api/v1/compile/config/update',
   snapshotLog: '/api/v1/snapshot/log',
+  snapshotCommit: '/api/v1/snapshot/commit',
   snapshotVersions: '/api/v1/snapshot/versions',
   snapshotShow: '/api/v1/snapshot/show',
+  snapshotDiff: '/api/v1/snapshot/diff',
+  snapshotRestore: '/api/v1/snapshot/restore',
   resourceTempUpload: '/api/v1/resources/temp_upload',
   packImport: '/api/v1/pack/import',
   packExport: '/api/v1/pack/export',
+  packBackup: '/api/v1/pack/backup',
+  packRestore: '/api/v1/pack/restore',
   experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
   experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
   /** 读取条目状态。Read an entry's status. */
@@ -97,6 +103,8 @@ export const OV_PATH_BUILDERS = {
   /** 会话的消息。Messages of one session. */
   sessionMessages: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/messages`,
+  sessionMessagesBatch: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.sessionMessages(sessionId)}/batch`,
   sessionCommit: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/commit`,
   sessionContext: (sessionId: string) =>

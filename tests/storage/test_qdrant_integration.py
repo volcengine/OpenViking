@@ -47,8 +47,13 @@ from scripts.maintenance.qdrant_sparse_upgrade import SparseDictionaryUpgrade
 QDRANT_URL = os.environ.get("QDRANT_URL")
 requires_qdrant = pytest.mark.skipif(not QDRANT_URL, reason="QDRANT_URL not set")
 requires_local_qdrant = pytest.mark.skipif(
-    not QDRANT_URL or urlsplit(QDRANT_URL).hostname not in {"127.0.0.1", "localhost", "::1"},
-    reason="a localhost QDRANT_URL is required for concurrency tests",
+    not QDRANT_URL
+    or not (
+        urlsplit(QDRANT_URL).hostname in {"127.0.0.1", "localhost", "::1"}
+        # GitHub job containers reach their disposable service through its DNS name.
+        or (os.environ.get("GITHUB_ACTIONS") == "true" and QDRANT_URL == "http://qdrant:6333")
+    ),
+    reason="a localhost or disposable CI Qdrant service is required for concurrency tests",
 )
 
 

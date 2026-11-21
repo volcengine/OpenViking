@@ -32,6 +32,14 @@
         "author_email": "bot@viking.local",
         "local": {
             "base_dir": ""
+        },
+        "snapshot": {
+            "log": {
+                "provider": "sqlite",
+                "sqlite": {
+                    "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
+                }
+            }
         }
     }
 }

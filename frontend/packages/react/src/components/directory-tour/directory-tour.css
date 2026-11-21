@@ -119,6 +119,13 @@
   line-height: 20px;
   overflow-wrap: anywhere;
 }
+.ov-directory-tour__unavailable {
+  margin-top: 4px;
+  color: var(
+    --ov-ui-directory-tour-muted,
+    var(--ov-ui-directory-tour-muted-fallback)
+  );
+}
 .ov-directory-tour__illustration {
   display: flex;
   align-items: center;
@@ -142,6 +149,13 @@
   max-height: none;
   flex-shrink: 0;
   object-fit: cover;
+}
+.ov-directory-tour__artwork--dark,
+html.dark .ov-directory-tour__artwork--light {
+  display: none;
+}
+html.dark .ov-directory-tour__artwork--dark {
+  display: block;
 }
 .ov-directory-tour__actions {
   display: flex;

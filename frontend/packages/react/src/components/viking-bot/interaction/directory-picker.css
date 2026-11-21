@@ -1,0 +1,68 @@
+.ov-viking-bot__directory-status {
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__directory-trigger.ov-button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-weight: 400;
+}
+.ov-viking-bot__directory-trigger > span {
+  flex: 1;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+}
+.ov-viking-bot__directory-trigger > svg {
+  flex-shrink: 0;
+}
+.ov-viking-bot__directory-trigger > svg:last-child {
+  transform: rotate(90deg);
+}
+.ov-viking-bot__directory-trigger.ov-button[aria-invalid='true'] {
+  border-color: var(
+    --ov-ui-color-error-border,
+    var(--ov-ui-error-border-default)
+  );
+  background: var(--ov-ui-color-error-bg, var(--ov-ui-error-bg-default));
+}
+.ov-viking-bot__directory-trigger.ov-button[aria-invalid='true']:is(
+    :hover,
+    :focus-visible
+  ) {
+  border-color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+.ov-viking-bot__directory-trigger.ov-button[aria-invalid='true']:focus-visible {
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-error, var(--ov-ui-error-default)) 30%,
+      transparent
+    );
+}
+.ov-viking-bot__create-directory-title {
+  padding: 0;
+  margin: 0 0 24px;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.ov-viking-bot__create-directory .ov-viking-bot__directory-status {
+  margin-block: 8px;
+}
+.ov-viking-bot__create-directory .ov-input {
+  width: 100%;
+}
+.ov-viking-bot__create-directory-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}

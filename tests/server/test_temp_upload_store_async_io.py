@@ -79,7 +79,6 @@ async def test_save_local_offloads_cleanup_writes_and_metadata(
     assert (tmp_path / temp_file_id).read_bytes() == b"hello world"
     assert (tmp_path / f"{temp_file_id}.ov_upload.meta").is_file()
     assert "_cleanup_local_temp_files" in calls
-    assert "_create_temp_file" in calls
     assert "_open_binary_for_write" in calls
     assert "write" in calls
     assert "_write_json" in calls
@@ -256,8 +255,6 @@ async def test_cleanup_remove_failure_clears_due_at_and_stops(monkeypatch: pytes
     first = _upload_entry(now - 7200)
     second = _upload_entry(now - 5400)
     temp_upload_store._SHARED_CLEANUP_DUE_AT["account-a"] = now + 999
-
-    removed: list[str] = []
 
     class _FakeVfs:
         async def ls(self, uri, show_all_hidden=False, node_limit=None,

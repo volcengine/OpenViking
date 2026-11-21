@@ -5,8 +5,9 @@
 import asyncio
 import sys
 from dataclasses import replace
-from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -217,7 +218,7 @@ class _SnapshotMixin:
                 entries may be files or directories. Directories are expanded
                 recursively with the snapshot pruning rules applied. ``None``
                 (default) enumerates the whole account tree. An empty list is
-                forwarded as an explicit empty path list (no-op commit). A
+                forwarded as an explicit empty path list (no file changes). A
                 path that exists in neither the VFS nor the previous snapshot
                 logs a warning and is treated as a no-op deletion.
             branch: Branch to advance. Defaults to ``"main"``.
@@ -231,6 +232,7 @@ class _SnapshotMixin:
             added/updated/removed). Both variants include ``ignored``: the
             number of candidate paths skipped by the account ``.ovgitignore``
             rules (system pruning is not counted). Noop omits ``changed``.
+            The first commit creates a valid snapshot even with no file changes.
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
@@ -300,7 +302,7 @@ class _SnapshotMixin:
                 ) from exc
         try:
             scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
-            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.WRITE)
+            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
             if lease is not None:
@@ -326,7 +328,8 @@ class _SnapshotMixin:
         author_name: Optional[str] = None,
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
-        record_restore: Optional[Callable[..., Awaitable[None]]] = None,
+        allow_missing_source: bool = False,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Restore a project subtree to the state at ``source_commit``.
 
@@ -346,8 +349,11 @@ class _SnapshotMixin:
             message: Optional commit message; defaults to a generated string.
             author_name / author_email: Override the default bot author.
             ctx: Request context (provides ``account_id``).
-            record_restore: Optional version callback under the writeback lease;
-                whole-account restores also lend it the metadata-covering lease.
+            allow_missing_source: Restore an absent source subtree as empty.
+                Existing source files remain invalid directory targets.
+            lease_ref: Existing content lease shared during restore writeback.
+                The caller schedules indexing from returned paths (or partial-error
+                paths) after releasing this lease.
 
         Returns:
             Dict containing ``result`` (``"applied"`` / ``"noop"`` / ``"dry_run"``)
@@ -396,6 +402,8 @@ class _SnapshotMixin:
         }
         if tree_dir is not None:
             kwargs["project_dir"] = tree_dir
+        if allow_missing_source:
+            kwargs["allow_missing_source"] = True
         # ROOT is used by the local, unauthenticated deployment mode and by
         # trusted internal callers. Keep its existing dry-run path unchanged.
         if dry_run and real_ctx.role == Role.ROOT:
@@ -424,9 +432,9 @@ class _SnapshotMixin:
             else f"/local/{account}"
         )
         partial_exc: Optional[GitRestoreWritebackPartialError] = None
-        record_error: Optional[BaseException] = None
         try:
-            lease = await self._async_agfs.pathlock_acquire_tree(lock_path)
+            lock_options = {"owner_lease_ref": lease_ref} if lease_ref is not None else {}
+            lease = await self._async_agfs.pathlock_acquire_tree(lock_path, **lock_options)
         except LockAcquisitionError:
             raise ResourceBusyError(
                 f"Resource is being processed: {project_dir or '*'}",
@@ -455,23 +463,12 @@ class _SnapshotMixin:
                 # re-raise happen below, outside the tree lock.
                 partial_exc = exc
                 result = None
-            if record_restore is not None:
-                try:
-                    from openviking.service.task_tracker_concurrency import run_to_completion
-
-                    await run_to_completion(
-                        lambda: record_restore(
-                            partial_exc.to_dict() if partial_exc else result,
-                            lease_ref=lease,
-                            metadata_lease=lease if project_dir is None else None,
-                        )
-                    )
-                except BaseException as exc:
-                    record_error = exc
         finally:
             await self._async_agfs.pathlock_release(lease)
 
         if partial_exc is not None:
+            if lease_ref is not None:
+                raise partial_exc
             # HEAD has moved forward but some VFS writes/deletes failed.
             # Still schedule reindex for the paths that *did* reach the VFS so
             # the vector index doesn't stay stale, then re-raise so the caller
@@ -484,16 +481,15 @@ class _SnapshotMixin:
                     project_dir=project_dir,
                     real_ctx=real_ctx,
                 )
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore partial: reindex scheduling failed; "
-                    "HEAD advanced but reindex was not queued"
+            except Exception as _log_error:
+                logger.error(
+                    "git restore partial: reindex scheduling failed; HEAD advanced but reindex was not queued error_type=%s",
+                    type(_log_error).__name__,
                 )
             raise partial_exc
 
-        if result.get("result") != "applied":
-            if record_error is not None:
-                raise record_error
+        # Shared-lease callers start indexing after their outer content lock is released.
+        if result.get("result") != "applied" or lease_ref is not None:
             return result
 
         written = list(result.get("written_paths") or [])
@@ -508,18 +504,16 @@ class _SnapshotMixin:
                 )
                 if task_id is not None:
                     result["task_id"] = task_id
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore reindex task creation failed; "
-                    "falling back to fire-and-forget rebuild"
+            except Exception as _log_error:
+                logger.info(
+                    "git restore reindex task creation failed; falling back to fire-and-forget rebuild error_type=%s",
+                    type(_log_error).__name__,
                 )
                 self._schedule_vector_rebuild(
                     written=written,
                     deleted=deleted,
                     ctx=self._restore_reindex_context(real_ctx),
                 )
-        if record_error is not None:
-            raise record_error
         return result
 
     async def _schedule_restore_reindex_for_paths(
@@ -609,27 +603,45 @@ class _SnapshotMixin:
         path: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        """Like ``show(target_ref, path=...)`` but returns the full envelope.
+        """Read an authorized path at a fixed commit, retaining blob and commit metadata.
 
-        Returns ``{"oid": str, "size": int, "bytes": bytes}`` without
-        stripping. Used by the HTTP snapshot router to populate
-        ``X-Snapshot-Oid`` / ``X-Snapshot-Size`` response headers.
+        ``target_ref`` accepts a commit, branch, or tag; ``path`` is a Viking URI.
+        Returns ``oid`` (blob ID), ``size``, ``bytes``, ``commit_oid``, and
+        ``commit_time_seconds`` (committer Unix seconds, not file modification time).
+        Access is checked before resolving the ref; missing commits or paths propagate.
+        A missing tree path carries whether it was a file in the first parent.
         """
         real_ctx = self._ctx_or_default(ctx)
         await self._ensure_access(path, real_ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=target_ref,
-            path=tree_path,
+        commit = await self._async_agfs.run(
+            "git_show", account=account, target_ref=target_ref, path=None
         )
+        # Pin moving refs so the content and timestamp always describe the same commit.
+        commit_oid = commit["oid"]
+        try:
+            resp = await self._async_agfs.run(
+                "git_show",
+                account=account,
+                target_ref=commit_oid,
+                path=tree_path,
+            )
+        except AGFSPathNotFoundError as exc:
+            first_parent = next(iter(commit["parents"]), None)
+            exc.deleted_file = first_parent is not None and await self._async_agfs.run(
+                "git_path_is_file", account=account, commit_oid=first_parent, path=tree_path
+            )
+            raise
         if not isinstance(resp, dict) or "bytes" not in resp:
             raise TypeError(
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
             )
-        return resp
+        return {
+            **resp,
+            "commit_oid": commit_oid,
+            "commit_time_seconds": commit["committer"]["time_seconds"],
+        }
 
     async def diff(
         self,
@@ -756,12 +768,14 @@ class _SnapshotMixin:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
 
-        Returns a list of commit metadata dicts (same shape as ``show(target_ref)``).
+        Skip ``offset`` matching commits before collecting results. Returns a
+        list of commit metadata dicts (same shape as ``show(target_ref)``).
         """
         if limit <= 0:
             return []
@@ -783,6 +797,7 @@ class _SnapshotMixin:
             account=account,
             branch=branch,
             limit=limit,
+            offset=offset,
             paths=tree_paths,
         )
 
@@ -865,14 +880,20 @@ class _SnapshotMixin:
         """
         try:
             from openviking.service.reindex_executor import ReindexExecutor
-        except Exception:
-            logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
+        except Exception as _log_error:
+            logger.info(
+                "ReindexExecutor import failed; skipping rebuild error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("[VikingFS] git restore vector rebuild skipped: no running event loop")
+        except RuntimeError as _log_error:
+            logger.info(
+                "git restore vector rebuild skipped: no running event loop error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         tasks = self._collect_restore_vector_tasks(written, deleted)
@@ -995,6 +1016,15 @@ class _SnapshotMixin:
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
-                logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
-        except Exception:
-            logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)
+                logger.info(
+                    "unknown vector rebuild op %s for %s",
+                    short_hash(str(op)),
+                    safe_uri_for_log(str(uri)),
+                )
+        except Exception as _log_error:
+            logger.error(
+                "git restore vector task %s failed for %s error_type=%s",
+                short_hash(str(op)),
+                safe_uri_for_log(str(uri)),
+                type(_log_error).__name__,
+            )

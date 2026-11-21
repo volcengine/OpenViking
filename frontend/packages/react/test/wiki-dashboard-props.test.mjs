@@ -3,7 +3,7 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
 import { getFileTypeIcon } from '@openviking/react/icons';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { mount } from './helpers/module-dom.mjs';
 
 const conflict = {
@@ -35,7 +35,10 @@ test('Wiki file operations work without a document URI or displayed path', async
     onOpenUri: (...args) => events.push(['open', ...args]),
   };
   const view = await mount(h(WikiDashboard, props));
-  assert.equal(view.container.querySelector('.ov-wiki-dashboard__path'), null);
+  assert.equal(
+    view.container.querySelector('button[aria-label="Open file"]'),
+    null,
+  );
   assert.deepEqual(
     [...view.container.querySelectorAll('[data-action-icon]')].map(
       (icon) => icon.dataset.actionIcon,
@@ -57,12 +60,9 @@ test('Wiki file operations work without a document URI or displayed path', async
       data: { ...props.data, path: 'handbook/policy.md' },
     }),
   );
-  assert.match(
-    view.container.querySelector('.ov-wiki-dashboard__path').textContent,
-    /handbook\/policy.md/,
-  );
+  assert.doesNotMatch(view.container.textContent, /handbook\/policy\.md/);
   await act(async () =>
-    view.container.querySelector('.ov-wiki-dashboard__path button').click(),
+    view.container.querySelector('button[aria-label="Open file"]').click(),
   );
   assert.equal(events.at(-1).length, 1);
   assert.deepEqual(events.at(-1), ['open']);
@@ -122,7 +122,41 @@ test('Wiki actions are entirely host-owned for pending and fixed conflicts', asy
   await view.unmount();
 });
 
-test('Wiki file icons follow the shared filename mapping in lists and conflict paths', async () => {
+test('the edit icon invokes the host editor only for enabled pending conflicts', async () => {
+  const fixed = { ...conflict, id: 'fixed', state: 'fixed', fixTime: 200 };
+  const events = [];
+  const props = {
+    kind: 'file',
+    locale: 'zh-CN',
+    data: { path: 'handbook/policy.md', conflicts: [conflict, fixed] },
+    onOpenUri: () => events.push('open'),
+  };
+  const view = await mount(
+    h(WikiDashboard, { ...props, onEditConflict: (item) => events.push(item) }),
+  );
+  const editButtons = () =>
+    view.container.querySelectorAll('button[aria-label^="人工修改："]');
+  assert.equal(editButtons().length, 1);
+  assert.equal(
+    editButtons()[0].getAttribute('aria-label'),
+    '人工修改：Approval policy differs',
+  );
+  assert.equal(
+    view.container.querySelector('button[aria-label="打开文件"]'),
+    null,
+  );
+  await act(async () => editButtons()[0].click());
+  assert.deepEqual(events, [conflict]);
+
+  await view.render(h(WikiDashboard, { ...props, onEditConflict: null }));
+  assert.equal(editButtons().length, 1);
+  assert.equal(editButtons()[0].getAttribute('aria-disabled'), 'true');
+  await act(async () => editButtons()[0].click());
+  assert.deepEqual(events, [conflict]);
+  await view.unmount();
+});
+
+test('Wiki directory file icons follow the shared filename mapping', async () => {
   const names = ['handbook/policy.md', 'handbook/guide.pdf'];
   const view = await mount(
     h(WikiDashboard, { kind: 'directory', data: { files: names } }),
@@ -131,7 +165,7 @@ test('Wiki file icons follow the shared filename mapping in lists and conflict p
     [...svg.querySelectorAll('path')].map((path) => path.getAttribute('d'));
   const expected = (name) => {
     const container = document.createElement('div');
-    container.innerHTML = renderToStaticMarkup(h(getFileTypeIcon(name)));
+    container.innerHTML = renderMarkup(h(getFileTypeIcon(name)));
     return shape(container);
   };
   assert.deepEqual(
@@ -139,16 +173,6 @@ test('Wiki file icons follow the shared filename mapping in lists and conflict p
       shape,
     ),
     names.map(expected),
-  );
-  await view.render(
-    h(WikiDashboard, {
-      kind: 'file',
-      data: { conflicts: [conflict], path: names[0] },
-    }),
-  );
-  assert.deepEqual(
-    shape(view.container.querySelector('.ov-wiki-dashboard__path svg')),
-    expected(names[0]),
   );
   await view.unmount();
 });

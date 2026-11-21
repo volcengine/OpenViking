@@ -1,8 +1,10 @@
+import { Exposure } from '../../shared/analytics/exposure.js';
 import type { ReactNode } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
 import { useFilePreviewCommands } from './file-preview-command-state.js';
 import { FilePreviewActionList } from './file-preview-action-list.js';
+import { isPreviewActionAvailableDuringEdit } from './file-preview-action-visibility.js';
 import { normalizeFilePreviewActions } from './normalize-file-preview-actions.js';
 import type { FilePreviewActionSource } from './action-types.js';
 import type {
@@ -30,9 +32,16 @@ export function FilePreviewToolbar({
       ? actionItems(actions)
       : (actionItems ?? []),
   );
-  const pinned = groups.flat().filter((action) => action.pinned);
+  const pinned = groups
+    .flat()
+    .filter(
+      (action) =>
+        action.pinned &&
+        (!actions.editing || isPreviewActionAvailableDuringEdit(action)),
+    );
   const items = groups.map((group) => group.filter((action) => !action.pinned));
-  const switchVisible = actions.canSwitchView && options?.viewSwitch !== false;
+  const switchVisible =
+    !actions.editing && actions.canSwitchView && options?.viewSwitch !== false;
   const editVisible = actions.canEdit && options?.edit !== false;
   const hasItems = items.some(
     (item) => !Array.isArray(item) || item.length > 0,
@@ -65,21 +74,23 @@ export function FilePreviewToolbar({
           >
             {text.leaveEditing}
           </Button>
-          <Button
-            size="small"
-            type="primary"
-            className="ov-file-preview__edit-action"
-            icon={
-              <span
-                aria-hidden="true"
-                className="ov-file-preview__edit-icon ov-file-preview__edit-icon--save"
-              />
-            }
-            loading={actions.busy}
-            onClick={() => void actions.saveEditing()}
-          >
-            {text.save}
-          </Button>
+          <Exposure name="file_preview_save_show">
+            <Button
+              size="small"
+              type="primary"
+              className="ov-file-preview__edit-action"
+              icon={
+                <span
+                  aria-hidden="true"
+                  className="ov-file-preview__edit-icon ov-file-preview__edit-icon--save"
+                />
+              }
+              loading={actions.busy}
+              onClick={() => void actions.saveEditing()}
+            >
+              {text.save}
+            </Button>
+          </Exposure>
         </div>
       ) : null}
 
@@ -95,7 +106,7 @@ export function FilePreviewToolbar({
               type="button"
               className="ov-file-preview__switch-item"
               aria-pressed={actions.viewMode === mode}
-              disabled={actions.busy || actions.editing}
+              disabled={actions.busy}
               onClick={() => actions.setViewMode(mode)}
             >
               {mode === 'preview' ? text.previewMode : text.sourceMode}
@@ -132,7 +143,6 @@ export function FilePreviewToolbar({
           <FilePreviewActionList
             items={items}
             pending={commands.pending}
-            failure={commands.failure}
             execute={(action) => commands.execute(action, actions.busy)}
             disabled={actions.busy}
             text={text}

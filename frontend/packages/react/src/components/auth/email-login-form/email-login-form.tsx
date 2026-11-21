@@ -1,3 +1,6 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
+import { useTrack } from '../../../shared/analytics/use-track.js';
+import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useId } from 'react';
 import { Field } from '../../../shared/auth/fields.js';
 import { FormFrame } from '../../../shared/auth/form-frame.js';
@@ -5,7 +8,7 @@ import { useAuthLabels } from '../../../shared/auth/use-auth-labels.js';
 import { useForm, validEmail } from '../../../shared/auth/use-form.js';
 import type { EmailLoginFormProps } from './types.js';
 
-export function EmailLoginForm({
+function EmailLoginFormView({
   defaultEmail = '',
   readOnlyEmail,
   forgotPassword,
@@ -15,6 +18,8 @@ export function EmailLoginForm({
   labels: overrides,
   ...options
 }: EmailLoginFormProps) {
+  const track = useTrack();
+  const exposure = useExposure('email_login_form_show');
   const id = useId();
   const labels = useAuthLabels(locale, overrides);
   const form = useForm({ email: defaultEmail, password: '' }, (values) => ({
@@ -24,13 +29,15 @@ export function EmailLoginForm({
   return (
     <FormFrame
       {...options}
+      formRef={exposure}
       labels={labels}
       submitLabel={labels.login}
       validate={form.validate}
       secondaryAction={alternateLogin}
-      onSubmit={() =>
-        onSubmit?.({ ...form.values, email: form.values.email.trim() })
-      }
+      onSubmit={() => {
+        track('email_login_form_submit');
+        onSubmit?.({ ...form.values, email: form.values.email.trim() });
+      }}
     >
       <Field
         id={`${id}-email`}
@@ -57,3 +64,8 @@ export function EmailLoginForm({
     </FormFrame>
   );
 }
+
+export const EmailLoginForm = withMonitoring(
+  EmailLoginFormView,
+  'EmailLoginForm',
+);

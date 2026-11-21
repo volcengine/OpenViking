@@ -4,6 +4,7 @@ from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
+from openviking.observability.log_safety import short_hash
 from openviking_cli.utils.logger import get_logger
 
 COLLECTION_NAME = "context"
@@ -422,6 +423,29 @@ class CuVSConfig(BaseModel):
         return self
 
 
+class PgvectorConfig(BaseModel):
+    """PostgreSQL + pgvector. Credentials are resolved from a DSN environment variable."""
+
+    dsn_env: str = Field(default="OV_POSTGRES_DSN", min_length=1)
+    index_type: Literal["flat", "hnsw"] = "flat"
+    connection_pool_min_size: int = Field(default=1, ge=1)
+    connection_pool_max_size: int = Field(default=10, ge=1)
+    candidate_limit: int = Field(default=1000, ge=1, le=10000)
+    m: int = Field(default=16, ge=2, le=100)
+    ef_construction: int = Field(default=64, ge=4, le=1000)
+    ef_search: int = Field(default=100, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def validate_pool(self):
+        if self.connection_pool_min_size > self.connection_pool_max_size:
+            raise ValueError("pgvector pool minimum must not exceed maximum")
+        if self.ef_construction < 2 * self.m:
+            raise ValueError("pgvector ef_construction must be at least twice m")
+        return self
+
+    model_config = {"extra": "forbid"}
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -435,7 +459,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "'vikingdb' (private deployment), or 'qdrant' (REST) or 'opengauss'"
+            "'vikingdb' (private deployment), 'qdrant' (REST), 'opengauss', or 'pgvector'"
         ),
     )
 
@@ -520,6 +544,8 @@ class VectorDBBackendConfig(BaseModel):
         description="Custom parameters for custom backend adapters",
     )
 
+    pgvector: Optional[PgvectorConfig] = Field(default=None)
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
@@ -531,11 +557,14 @@ class VectorDBBackendConfig(BaseModel):
             "vikingdb",
             "qdrant",
             "opengauss",
+            "pgvector",
         ]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
-            logger.info("Using custom VectorDB backend: %s", self.backend)
+            logger.debug(
+                "custom vector backend selected backend_hash=%s", short_hash(str(self.backend))
+            )
             return self
 
         if self.backend not in standard_backends:
@@ -570,10 +599,10 @@ class VectorDBBackendConfig(BaseModel):
                 if not self.volcengine.region:
                     raise ValueError("VectorDB volcengine backend requires 'region' to be set")
             if self.volcengine and self.volcengine.host and not uses_api_key:
-                logger.warning(
-                    "VectorDB volcengine backend: 'volcengine.host' is ignored in AK/SK mode. "
-                    "Using region-based console/data hosts for region='%s'.",
-                    self.volcengine.region or "",
+                logger.info(
+                    "vector backend custom host ignored; using region-based hosts region_hash=%s",
+                    short_hash(str(self.volcengine.region or "")),
+                    extra={"degraded": True},
                 )
 
         elif self.backend == "vikingdb":
@@ -583,6 +612,16 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "qdrant":
             if not (self.qdrant and (self.qdrant.url or self.url)):
                 raise ValueError("VectorDB qdrant backend requires qdrant.url or url to be set")
+
+        elif self.backend == "pgvector":
+            if self.pgvector is None:
+                raise ValueError("VectorDB pgvector backend requires 'pgvector' config")
+            if self.distance_metric not in {"cosine", "l2", "ip", "l1"}:
+                raise ValueError("pgvector distance_metric must be cosine, l2, ip or l1")
+            if self.dimension > 16000:
+                raise ValueError("pgvector vector supports at most 16000 dimensions")
+            if self.dimension > 2000 and self.pgvector.index_type == "hnsw":
+                raise ValueError("pgvector vector HNSW supports at most 2000 dimensions; use flat")
         elif self.backend == "opengauss":
             if not self.opengauss:
                 raise ValueError("VectorDB opengauss backend requires 'opengauss' config")

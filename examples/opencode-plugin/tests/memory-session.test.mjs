@@ -8,6 +8,8 @@ import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
 import { contextMessageEvents } from "../lib/v2-events.mjs"
 import { initLogger } from "../lib/utils.mjs"
+import { listPending } from "../lib/shared/pending-queue.mjs"
+import { withPendingDir } from "../../memory-plugin-shared/testing/support.mjs"
 
 async function withTempDir(prefix, fn) {
   const dir = await mkdtemp(join(tmpdir(), prefix))
@@ -875,4 +877,48 @@ test("commit of a session the server no longer has drops the stale local mapping
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
+})
+
+test("a closing session whose messages got queued commits behind them", async () => {
+  await withPendingDir(async () => {
+    const posts = []
+    const server = createServer(async (req, res) => {
+      for await (const _ of req) { /* drain */ }
+      res.setHeader("Content-Type", "application/json")
+      if (req.url === "/health") return res.end(JSON.stringify({ status: "ok" }))
+      if (req.method === "POST") posts.push(req.url)
+      res.statusCode = 503
+      res.end(JSON.stringify({ status: "error", error: { code: "UNAVAILABLE" } }))
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      await withTempDir("ov-oc-session-", async (dir) => {
+        const endpoint = `http://127.0.0.1:${server.address().port}`
+        const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+        const sessionID = "oc-session-parked"
+        await manager.init()
+        await manager.handleEvent({ type: "session.created", properties: { info: { id: sessionID } } })
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id: "msg-parked", sessionID, role: "user" } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: {
+            part: { id: "part-parked", messageID: "msg-parked", sessionID, type: "text", text: "Remember the parked turn." },
+          },
+        })
+
+        await manager.flushSession(sessionID, { commit: true, reason: "session.deleted" })
+
+        assert.equal(posts.some((url) => url.endsWith("/commit")), false, `commit overtook the queued message: ${posts.join(", ")}`)
+        assert.deepEqual((await listPending()).map(({ entry }) => [entry.type, entry.sessionId]), [
+          ["addMessage", "oc-oc-session-parked"],
+          ["commitSession", "oc-oc-session-parked"],
+        ])
+      })
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
 })

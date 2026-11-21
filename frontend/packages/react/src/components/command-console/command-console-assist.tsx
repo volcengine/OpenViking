@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import type { RefObject } from 'react';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
 import { getCommandConsoleCommandInputText } from './command-input.js';
@@ -134,9 +135,12 @@ export function CommandConsoleAssist({
           ))}
         </div>
       ) : !command ? (
-        <div className="ov-command-console__no-suggestions" role="status">
-          {labels.noSuggestions}
-        </div>
+        <Empty
+          size="compact"
+          illustration="search"
+          title={labels.noSuggestions}
+          className="ov-command-console__no-suggestions"
+        />
       ) : null}
     </div>
   );

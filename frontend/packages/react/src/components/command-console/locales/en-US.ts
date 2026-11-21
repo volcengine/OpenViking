@@ -1,6 +1,8 @@
 import type { ResolvedCommandConsoleLabels } from '../command-console-labels.js';
 
 const messages = {
+  quoteArguments:
+    'Wrap paths and text containing spaces in quotes, such as "release notes".',
   placeholder: '>_ Enter CLI commands, e.g. ov find OpenViking',
   unavailableMessage: 'Commands are unavailable right now.',
   send: 'Send',
@@ -8,6 +10,7 @@ const messages = {
   historyCommands: 'History',
   suggestions: 'Command suggestions',
   noSuggestions: 'No matching commands',
+  cancelled: 'Cancelled',
   pending: 'Running',
   success: 'Succeeded',
   error: 'Failed',
@@ -17,6 +20,7 @@ const messages = {
   emptyDescription: 'Work directly with your context through the CLI',
   quickStart: 'Quick start:',
   noResult: 'No result returned',
+  codeOutput: 'Command output',
   justNow: 'Just now',
   formatMinutesAgo: (minutes) =>
     `${minutes} minute${minutes === 1 ? '' : 's'} ago`,
@@ -37,3 +41,8 @@ const messages = {
 } satisfies ResolvedCommandConsoleLabels;
 
 export default messages;
+
+export const renderErrors = {
+  console: 'Command console could not be displayed.',
+  result: 'Command result could not be displayed.',
+};

@@ -1,3 +1,12 @@
+import { useLocale } from '../../shared/locale-context.js';
+import {
+  renderErrors as renderEn,
+  trajectoryDetail as detailEn,
+} from './locales/en-US.js';
+import {
+  renderErrors as renderZh,
+  trajectoryDetail as detailZh,
+} from './locales/zh-CN.js';
 import type { ExperienceDashboardLabels } from './types.js';
 import { mergeLabels } from '../../shared/locale.js';
 
@@ -54,6 +63,7 @@ const en: ExperienceDashboardLabels = {
   jumpPrevious: 'Jump back some pages',
   jumpNext: 'Jump forward some pages',
   updated: 'Updated',
+  updatedTag: 'Updated',
   success: 'Task success',
   partial: 'Partial success',
   unfinished: 'Unfinished',
@@ -115,6 +125,7 @@ const zh: ExperienceDashboardLabels = {
   jumpPrevious: '向前跳转若干页',
   jumpNext: '向后跳转若干页',
   updated: '更新于',
+  updatedTag: '更新',
   success: '任务成功',
   partial: '部分成功',
   unfinished: '未完成',
@@ -129,3 +140,11 @@ export const experienceLabels = (
   labels?: Partial<ExperienceDashboardLabels>,
 ): ExperienceDashboardLabels =>
   mergeLabels(locale === 'zh-CN' ? zh : en, labels);
+
+export const trajectoryDetailLabels = (locale: string) =>
+  locale === 'zh-CN' ? detailZh : detailEn;
+
+/** Private render-failure copy; independent of request errors and public label overrides. */
+export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {
+  return useLocale(locale) === 'zh-CN' ? renderZh : renderEn;
+}

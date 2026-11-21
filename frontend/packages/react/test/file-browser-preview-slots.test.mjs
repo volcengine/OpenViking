@@ -75,6 +75,7 @@ test('custom preview editing retains drafts after failure and respects readOnly'
   let actions;
   let fail = true;
   let writes = 0;
+  let snapshots = 0;
   const fallback = fixture();
   const fetch = (input, init) => {
     if (String(input).includes('/content/write')) {
@@ -90,6 +91,10 @@ test('custom preview editing retains drafts after failure and respects readOnly'
             ),
           )
         : ok({});
+    }
+    if (String(input).includes('/snapshot/commit')) {
+      snapshots++;
+      return Promise.resolve(new Response('', { status: 503 }));
     }
     return fallback(input, init);
   };
@@ -112,13 +117,22 @@ test('custom preview editing retains drafts after failure and respects readOnly'
     const editor = await waitForEditor(view.container);
     assert.equal(editor.textContent, '# Guide');
     await setEditor(editor, '# Updated guide');
-    await act(async () => assert.equal(await actions.saveEditing(), false));
+    const save = async () => {
+      let result;
+      await act(async () => {
+        result = await actions.saveEditing();
+      });
+      return result;
+    };
+    assert.equal(await save(), false);
+    assert.equal(snapshots, 0);
     await settle();
     assert.equal(view.container.querySelector('.cm-content'), editor);
     assert.equal(editor.textContent, '# Updated guide');
     assert.equal(actions.busy, false);
     fail = false;
-    await act(async () => assert.equal(await actions.saveEditing(), true));
+    assert.equal(await save(), true);
+    assert.equal(snapshots, 0);
     await settle();
     assert.equal(actions.editing, false);
     assert.equal(writes, 2);

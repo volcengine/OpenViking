@@ -22,9 +22,12 @@ from openviking.config.generation import get_output_language_override
 from openviking.config.vlm import VLMResolver
 from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
@@ -232,9 +235,16 @@ class StreamingMemoryUpdater:
             (await self._get_group_batcher(group_key)).submit(group_request)
             for group_key, group_request in grouped_requests
         ]
-        group_results = list(await asyncio.gather(*submissions))
+        submissions = [asyncio.ensure_future(submission) for submission in submissions]
+        try:
+            group_results = list(await asyncio.gather(*submissions))
+        except (Exception, asyncio.CancelledError):
+            # Drain accepted groups before delivery settlement while preserving
+            # gather's first failure, rather than choosing by group order.
+            await run_to_completion(lambda: asyncio.gather(*submissions, return_exceptions=True))
+            raise
         result = combine_streaming_memory_results(*group_results, fallback_request_count=1)
-        await self._apply_post_group_links(request, result)
+        await run_to_completion(lambda: self._apply_post_group_links(request, result))
         return result
 
     async def _apply_post_group_links(
@@ -245,9 +255,21 @@ class StreamingMemoryUpdater:
         links = merge_link_lists(list(getattr(request.operations, "resolved_links", []) or []))
         if not links:
             return
+        skipped_uris = {
+            op.uri
+            for op in result.apply_result.skipped_operations
+            if op.reason_code == MemoryOperationSkipCode.PARSE_ERROR
+        }
         links = remap_stored_links(
             links, dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
+        links = [
+            link
+            for link in links
+            if link.from_uri not in skipped_uris and link.to_uri not in skipped_uris
+        ]
+        if not links:
+            return
         viking_fs = safe_get_viking_fs()
         lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
         async with self._apply_lock:
@@ -475,11 +497,28 @@ class StreamingMemoryUpdater:
         _check_template_batch_conflicts(batches, merged_batches)
         results = []
         for batch, merged_operations in zip(batches, merged_batches, strict=True):
-            apply_result = await self._apply_operations(
-                operations=merged_operations,
-                request=batch[0],
-                messages=_combined_request_messages(batch),
-            )
+            if merged_operations is None:
+                merged_operations = ResolvedOperations(
+                    upsert_operations=[], delete_file_contents=[], errors=[]
+                )
+                apply_result = MemoryUpdateResult()
+                for request in batch:
+                    for uri in sorted(_request_uri_set(request)):
+                        apply_result.add_skipped(
+                            SkippedMemoryOperation(
+                                uri=uri,
+                                memory_type=group_key.memory_type,
+                                reason_code=MemoryOperationSkipCode.PARSE_ERROR,
+                                reason="Memory merge response could not be parsed after format retries",
+                                source=memory_operation_source_from_request(request),
+                            )
+                        )
+            else:
+                apply_result = await self._apply_operations(
+                    operations=merged_operations,
+                    request=batch[0],
+                    messages=_combined_request_messages(batch),
+                )
             results.append(
                 StreamingMemoryUpdateResult(
                     operations=merged_operations,
@@ -539,8 +578,10 @@ class StreamingMemoryUpdater:
                 if lease is not None:
                     await viking_fs._async_agfs.pathlock_release(lease)
 
-    async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-        """Plan cross-session proposals together within one peer, type and template batch."""
+    async def _merge_requests(
+        self, requests: list[MemoryUpdateRequest]
+    ) -> ResolvedOperations | None:
+        """Reconcile one peer/type/template batch, returning None for an unparseable plan."""
         operations = _combine_resolved_operations(request.operations for request in requests)
         if operations.has_errors():
             return operations
@@ -561,7 +602,21 @@ class StreamingMemoryUpdater:
         }
         contested = replacements.keys() & (new_targets | edit_targets)
         cross_session = _requests_span_sessions(requests)
-        if cross_session:
+        mixed_edits = set() if cross_session else edit_targets & (new_targets | contested)
+        if mixed_edits and len(operations.upsert_operations) == 1:
+            registry = requests[0].memory_registry or self.registry or get_default_registry()
+            edit = operations.upsert_operations[0]
+            direct_apply, _ = await classify_memory_merge_mode(
+                [edit], schema=registry.get(edit.memory_type)
+            )
+            if direct_apply:
+                # An unchanged edit supersedes a pure delete. Link migrations still need a plan.
+                mixed_edits.intersection_update(
+                    disputed
+                    | operations.delete_replacements.keys()
+                    | detect_split_replacements(operations).keys()
+                )
+        if cross_session or mixed_edits:
             # A dict can only express agreed replacements. Pass every alternative to the planner.
             for uri in disputed:
                 operations.delete_replacements.pop(uri, None)
@@ -582,26 +637,36 @@ class StreamingMemoryUpdater:
                 ),
             )
 
-            if operations.has_errors():
+            if operations is None or operations.has_errors():
                 return operations
 
         # Independent patches on the same old file require a single final write.
         # Same-session sequential updates retain their existing order.
         writes = Counter(uri for op in operations.upsert_operations for uri in op.uris)
-        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        splits = detect_split_replacements(operations)
         if not cross_session:
-            conflicts.update(new_targets & edit_targets)
-        elif not operations.upsert_operations and not operations.delete_file_contents:
-            conflicts.update(contested | disputed)
+            # A same-session write supersedes a pure delete of its own target.
+            # Replacements and splits also migrate links, so retain those for validation.
+            operations.delete_file_contents = [
+                file
+                for file in operations.delete_file_contents
+                if file.uri not in writes
+                or file.uri in operations.delete_replacements
+                or file.uri in splits
+                or file.uri in disputed
+            ]
+
+        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        if not operations.upsert_operations and not operations.delete_file_contents:
+            conflicts.update(contested | disputed | mixed_edits)
         if cross_session:
             conflicts.update(uri for uri, count in writes.items() if count > 1)
-        splits = detect_split_replacements(operations)
         for file in operations.delete_file_contents:
             if (
-                cross_session
+                (cross_session or mixed_edits)
                 and not operations.delete_replacements.get(file.uri)
                 and file.uri not in splits
-                and (file.uri in contested or file.uri not in replacements)
+                and (file.uri not in replacements or (cross_session and file.uri in contested))
             ):
                 conflicts.add(file.uri)
             if file.uri in disputed and (
@@ -624,7 +689,7 @@ class StreamingMemoryUpdater:
 
 def _check_template_batch_conflicts(
     batches: list[list[MemoryUpdateRequest]],
-    merged_batches: list[ResolvedOperations] | None = None,
+    merged_batches: list[ResolvedOperations | None] | None = None,
 ) -> None:
     """Reject cross-template file conflicts before any batch writes.
 
@@ -758,8 +823,8 @@ async def merge_memory_operations(
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
     output_language_override: str | None = None,
-) -> ResolvedOperations:
-    """Merge resolved memory operations by memory type/URI using patch context."""
+) -> ResolvedOperations | None:
+    """Merge operations by memory type and URI. None denotes an exhausted parse retry."""
 
     if operations.has_errors():
         tracer.info(
@@ -836,6 +901,8 @@ async def merge_memory_operations(
         ops_list = upsert_groups.get(group_key, [])
         if not isinstance(merge_result, Exception):
             merged = merge_result
+            if merged is None:
+                return None
             if merged.has_errors():
                 return ResolvedOperations(
                     upsert_operations=[], delete_file_contents=[], errors=merged.errors
@@ -867,14 +934,24 @@ async def merge_memory_operations(
             f"target_count={len(_unique_operation_uris(ops_list))} error={merge_result}",
             console=trace_console,
         )
-        logger.warning(
-            "[streaming_memory_updater] merge failed for %s (%s): %s",
-            memory_type,
-            peer_label,
-            merge_result,
+        logger.debug(
+            "memory merge failed type_hash=%s error_type=%s",
+            short_hash(str(memory_type)),
+            type(merge_result).__name__,
+            extra={"error_type": type(merge_result).__name__},
         )
         if strict_extract_errors or is_cross_extraction_group(ops_list):
             raise merge_result
+        logger.info(
+            "memory merge failed; keeping original operations total=%d error_type=%s",
+            len(ops_list),
+            type(merge_result).__name__,
+            extra={
+                "degraded": True,
+                "total": len(ops_list),
+                "error_type": type(merge_result).__name__,
+            },
+        )
         # Fallback: keep original operations and delete files for this group
         merged_upserts.extend(ops_list)
         fallback_deletes = delete_groups.get(group_key, [])
@@ -923,7 +1000,8 @@ async def merge_one_memory_type_operations(
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
     output_language_override: str | None = None,
-) -> ResolvedOperations:
+) -> ResolvedOperations | None:
+    """Resolve one memory type using its patches, returning None for an unparseable plan."""
     registry = registry or get_default_registry()
     schema = registry.get(memory_type)
     delete_files = list(delete_files or [])
@@ -973,7 +1051,7 @@ async def merge_one_memory_type_operations(
         )
 
     if force_merge:
-        fast_path, fast_path_reason = False, "cross_session_batch"
+        fast_path, fast_path_reason = False, "forced_merge"
     else:
         fast_path, fast_path_reason = await classify_memory_merge_mode(operations, schema=schema)
     if fast_path:
@@ -1112,7 +1190,8 @@ async def merge_one_memory_type_operations(
         max_iterations=1,
     )
     merged, _ = await orchestrator.run()
-    merged = merged or ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
+    if merged is None:
+        return None
     tracer.info(
         "[streaming_memory_updater] llm merge output "
         f"memory_type={memory_type} upserts={len(merged.upsert_operations)} "
@@ -1234,10 +1313,11 @@ async def render_operation_after_file_content(
             )
         except Exception as exc:
             logger.debug(
-                "Failed to preview memory patch field: memory_type=%s field=%s",
-                op.memory_type,
-                field_def.name,
-                exc_info=True,
+                "memory patch field preview failed type_hash=%s field_hash=%s error_type=%s",
+                short_hash(str(op.memory_type)),
+                short_hash(str(field_def.name)),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
             )
             tracer.info(
                 "[streaming_memory_updater] skipping preview field update after merge_op failure "
@@ -1314,10 +1394,10 @@ async def classify_memory_merge_mode(
                 return True, "single_existing_content_unchanged"
         except Exception as exc:
             logger.debug(
-                "Failed to render memory patch preview for merge-mode classification: "
-                "memory_type=%s",
-                getattr(op, "memory_type", None),
-                exc_info=True,
+                "memory patch merge preview failed type_hash=%s error_type=%s",
+                short_hash(str(getattr(op, "memory_type", None) or "")),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
             )
             tracer.info(
                 "[streaming_memory_updater] merge-mode preview failed; falling back to "

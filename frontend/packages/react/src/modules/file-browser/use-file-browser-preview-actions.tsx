@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { useOvClient } from '../../client/provider.js';
 import { OV_PATHS } from '../../client/paths.js';
@@ -6,13 +6,14 @@ import type { OvRequestOptions } from '../../client/types.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserDeleteDialog } from './file-browser-delete-dialog.js';
 import { FileBrowserNativeDialog } from './file-browser-native-dialog.js';
+import { PreviewSavedSnapshot } from './preview-saved-snapshot.js';
 import { PreviewMutationError } from './preview-query-state.js';
 import { usePreviewMutation } from './use-preview-mutation.js';
 import { previewPolicy } from './preview-policy.js';
 import { defaultPreviewActions } from './preview-default-actions.js';
 import { downloadPreview } from './preview-native.js';
 import { isBinaryFile } from './fs-file-kind.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { FileBrowserPreviewActions } from './preview-types.js';
@@ -49,6 +50,8 @@ export function useFileBrowserPreviewActions({
   onUpdated: () => void;
 }) {
   const client = useOvClient();
+  const writable = useRef(canWrite);
+  writable.current = canWrite;
   const key = scopeKeyOf(client, requestOptions, `${rootUri}:${uri}`);
   const policy = previewPolicy({
     uri: uri ?? '',
@@ -60,12 +63,22 @@ export function useFileBrowserPreviewActions({
   });
   const [opened, setOpened] = useState<{
     key: string;
-    kind: 'delete' | 'history' | 'importPack' | 'configure';
+    kind: 'delete' | 'history' | 'importPack' | 'configure' | 'saveSnapshot';
     uri: string;
   }>();
   const deletion = usePreviewMutation(`${rootUri}:${uri}`, requestOptions);
+  const [transferAction, setTransferAction] = useState<
+    'download' | 'exportPack'
+  >('download');
   const transfer = usePreviewMutation(`${rootUri}:${uri}`, requestOptions);
   const canDelete = Boolean(client && enabled && policy.delete);
+  const canSaveSnapshot = Boolean(
+    client &&
+    enabled &&
+    policy.edit &&
+    policy.fileHistory &&
+    !policy.versionedFile,
+  );
   const show = (kind: NonNullable<typeof opened>['kind']) => {
     if (!uri) return;
     setOpened({
@@ -94,6 +107,7 @@ export function useFileBrowserPreviewActions({
         setOpened(undefined);
         onDeleted(uri);
       },
+      'file_browser_resource_delete',
     );
   };
   const actionItems =
@@ -105,10 +119,15 @@ export function useFileBrowserPreviewActions({
           canDelete,
           show,
           deleteFile,
-          download: (pack) =>
-            transfer.run((api, overrides) =>
-              downloadPreview(api, uri, pack, overrides),
-            ),
+          download: (pack) => {
+            if (!transfer.pending)
+              setTransferAction(pack ? 'exportPack' : 'download');
+            return transfer.run(
+              (api, overrides) => downloadPreview(api, uri, pack, overrides),
+              undefined,
+              pack ? 'file_browser_pack_export' : 'file_preview_download',
+            );
+          },
         })
       : [];
   const kind = opened?.key === key ? opened.kind : undefined;
@@ -116,9 +135,16 @@ export function useFileBrowserPreviewActions({
     policy,
     actionItems,
     context: { canDelete, deleteFile },
+    onFileSaved: () => {
+      if (writable.current && canSaveSnapshot) show('saveSnapshot');
+    },
     dialog: (
       <>
-        <PreviewMutationError error={transfer.error} text={text.workflow} />
+        <PreviewMutationError
+          error={transfer.error}
+          title={text.workflow.failureTitle(text[transferAction])}
+          locale={locale}
+        />
         {uri && kind === 'delete' ? (
           <FileBrowserDeleteDialog
             key={key}
@@ -133,13 +159,29 @@ export function useFileBrowserPreviewActions({
             onConfirm={confirm}
           />
         ) : null}
-        {uri && kind && kind !== 'delete' ? (
+        {uri && kind === 'saveSnapshot' && canWrite ? (
+          <PreviewSavedSnapshot
+            key={`${key}:saveSnapshot`}
+            uri={uri}
+            locale={locale}
+            text={text.workflow}
+            requestOptions={requestOptions}
+            triggerRef={triggerRef}
+            onClose={() => setOpened(undefined)}
+            onUpdated={onUpdated}
+          />
+        ) : null}
+        {uri && kind && kind !== 'delete' && kind !== 'saveSnapshot' ? (
           <FileBrowserNativeDialog
             key={`${key}:${kind}`}
             kind={kind}
             uri={opened?.uri ?? uri}
             canWrite={canWrite}
-            versioned={policy.versionedFile}
+            canSaveSnapshot={canSaveSnapshot}
+            versioned={
+              policy.versionedFile || (!isFile && dashboard?.kind === 'wiki')
+            }
+            directory={!isFile && dashboard?.kind === 'wiki'}
             showContent={isFile && !isBinaryFile(uri)}
             text={text}
             locale={locale}

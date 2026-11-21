@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -16,6 +17,50 @@ import {
   writes,
   failure,
 } from './helpers/acl-dom.mjs';
+
+test('effective grant sources follow permission levels when direct and inherited grants overlap', async () => {
+  const report = {
+    ...initial(),
+    direct_entries: [
+      { principal: 'user:bob', level: 'read' },
+      { principal: 'user:carol', level: 'manage' },
+      { principal: 'user:dana', level: 'manage' },
+    ],
+    inherited_entries: [
+      { principal: 'user:bob', level: 'manage' },
+      { principal: 'user:carol', level: 'manage' },
+      { principal: 'user:dana', level: 'read' },
+    ],
+    effective_entries: ['bob', 'carol', 'dana'].map((id) => ({
+      principal: `user:${id}`,
+      level: 'manage',
+    })),
+  };
+  const fetch = fixture((call) =>
+    call.path.endsWith('/acl') ? ok(report) : undefined,
+  );
+  const view = await mount(tree(fetch));
+  try {
+    await open();
+    for (const [id, source] of [
+      ['bob', 'Inherited from parent'],
+      ['carol', 'Direct grant'],
+      ['dana', 'Direct grant'],
+    ]) {
+      const entry = document
+        .querySelector(`button[aria-label="user:${id}: Can manage"]`)
+        ?.closest('.ov-file-browser-acl__entry');
+      assert.ok(entry, `Expected effective manage permission for ${id}`);
+      assert.equal(
+        entry.querySelector('.ov-file-browser-acl__source')?.textContent,
+        source,
+        `Unexpected effective permission source for ${id}`,
+      );
+    }
+  } finally {
+    await view.unmount();
+  }
+});
 
 test('an increase retains inheritance; a decrease requires confirmation and language switches preserve it', async () => {
   const fetch = fixture();
@@ -56,12 +101,14 @@ test('an increase retains inheritance; a decrease requires confirmation and lang
   }
 });
 
-test('restore clears direct grants, reports removed principals, and uses native DELETE', async () => {
+test('restore clears direct grants using PUT when the gateway blocks DELETE', async () => {
   const report = { ...initial(), acl_mode: 'restricted' };
   const fetch = fixture((call) =>
     call.path.endsWith('/acl') && call.init.method === 'GET'
       ? ok(report)
-      : undefined,
+      : call.path.endsWith('/acl') && call.init.method === 'DELETE'
+        ? failure('ApiBlocked')
+        : undefined,
   );
   const view = await mount(tree(fetch));
   try {
@@ -72,9 +119,12 @@ test('restore clears direct grants, reports removed principals, and uses native 
       /user:bob/,
     );
     await click(button('Confirm'));
-    assert.equal(writes(fetch)[0].init.method, 'DELETE');
-    assert.equal(writes(fetch)[0].uri, URI);
-    assert.equal(writes(fetch)[0].body, undefined);
+    assert.equal(writes(fetch)[0].init.method, 'PUT');
+    assert.deepEqual(writes(fetch)[0].body, {
+      uri: URI,
+      acl_mode: 'inherit',
+      entries: [],
+    });
   } finally {
     await view.unmount();
   }
@@ -85,9 +135,7 @@ test('principal selection is native, paginated, and never requests credentials',
   const view = await mount(tree(fetch));
   try {
     await open();
-    await act(async () =>
-      document.querySelector('.ov-file-browser-acl__add input').focus(),
-    );
+    await click(document.querySelector('.ov-file-browser-acl__add input'));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 240)));
     const request = fetch.calls.find((call) => call.path.endsWith('/users'));
     assert.equal(request.query.include_credentials, 'false');
@@ -119,10 +167,7 @@ test('save failure retains previous grants and the server reason', async () => {
   try {
     await open();
     await level('group:research', 'Can edit');
-    assert.match(
-      document.querySelector('.ov-file-browser-acl__failure').textContent,
-      /Membership changed/,
-    );
+    assert.match(notificationError().textContent, /Membership changed/);
     assert.ok(
       document.querySelector('button[aria-label="group:research: Can read"]'),
     );
@@ -146,8 +191,14 @@ test('ACL is opt-in and a 403 does not invent an effective read or write level',
     await view.render(tree(fetch, { acl: true }, { userId: 'default' }));
     await settle();
     assert.ok(fetch.countOf('/api/v1/acl') > 0);
-    assert.equal(document.querySelector('.ov-file-browser-acl__manage'), null);
-    assert.equal(document.querySelector('.ov-file-browser-acl__tag'), null);
+    assert.equal(
+      Boolean(document.querySelector('.ov-file-browser-acl__manage')),
+      false,
+    );
+    assert.equal(
+      Boolean(document.querySelector('.ov-file-browser-acl__tag')),
+      false,
+    );
   } finally {
     await view.unmount();
   }

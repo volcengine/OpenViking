@@ -11,6 +11,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_user_root
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
@@ -403,7 +404,16 @@ class DeletionService:
             if deleted is not True:
                 raise RuntimeError("Cleanup task no longer owns the identity deletion")
         except Exception as exc:
-            logger.exception("%s cleanup failed for %s/%s", scope, account_id, user_id)
+            logger.error(
+                "Identity cleanup failed scope=%s",
+                scope,
+                extra={
+                    "account_id": account_id,
+                    "user_id": user_id,
+                    "task_id": task_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
             error = f"{scope.capitalize()} cleanup failed: {exc}"
             await tracker.fail(task_id, error, **owner)
             return error
@@ -476,6 +486,7 @@ class DeletionService:
         except NotFoundError:
             return
 
+        skipped_uploads = 0
         for upload in uploads:
             uri = str(upload.get("uri") or "").rstrip("/")
             if not uri or uri == _SHARED_UPLOAD_ROOT:
@@ -491,11 +502,24 @@ class DeletionService:
             meta_uri = f"{uri}/meta"
             try:
                 meta = json.loads(await viking_fs.read_file(meta_uri, ctx=ctx))
-            except Exception:
-                logger.warning("Skipping shared upload with unreadable metadata: %s", meta_uri)
+            except Exception as exc:
+                skipped_uploads += 1
+                logger.debug(
+                    "Shared upload metadata unreadable; skipping upload",
+                    extra={
+                        "target_id": safe_uri_for_log(meta_uri),
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 continue
             if meta.get("account") == ctx.account_id and meta.get("user") == ctx.user.user_id:
                 await viking_fs.rm(uri, recursive=True, ctx=ctx)
+
+        if skipped_uploads:
+            logger.info(
+                "Shared uploads skipped during identity cleanup",
+                extra={"total": len(uploads), "skipped": skipped_uploads},
+            )
 
 
 class _DeletionProcessor(DequeueHandlerBase):

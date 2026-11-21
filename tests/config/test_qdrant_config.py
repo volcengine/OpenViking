@@ -81,6 +81,7 @@ def test_account_connection_replaces_cluster_secrets_and_physical_names(account)
             "dense_vector_name": "cluster-vector",
         },
         opengauss={"password": "test-cluster-password"},
+        pgvector={"dsn_env": "CLUSTER_DSN"},
         custom_params={"api_key": "test-custom-key", "data_collection_name": "custom-data"},
     )
     assert resolve_effective_vectordb(cluster, None) == cluster
@@ -90,6 +91,7 @@ def test_account_connection_replaces_cluster_secrets_and_physical_names(account)
     assert resolved.qdrant.metadata_collection_name is None
     assert resolved.qdrant.dense_vector_name == "vector"
     assert resolved.opengauss.password == ""
+    assert resolved.pgvector is None
     assert resolved.custom_params == {}
     assert cluster.qdrant.api_key == "test-cluster-key"
 

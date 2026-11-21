@@ -1,4 +1,4 @@
-import { Button } from '#demo-controls';
+import { Checkbox, Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLang } from '@rspress/core/runtime';
@@ -9,7 +9,7 @@ import type {
 } from '@openviking/react/components/file-tree';
 import {
   DirectoryTour,
-  openVikingDirectoryTourSteps,
+  getOpenVikingDirectoryTourSteps,
 } from '@openviking/react/components/directory-tour';
 import '@openviking/react/components/file-tree/style.css';
 import '@openviking/react/components/directory-tour/style.css';
@@ -23,22 +23,6 @@ const TARGETS: Record<string, string> = {
   userExperiences: 'user/memories/experiences',
   userPeers: 'user/peers',
 };
-const TITLES = [
-  '用户记忆（memories）',
-  '对话记录（sessions）',
-  '个人资料（resources）',
-  '团队公共资料（resources）',
-  'Agent 经验（experiences）',
-  '对象记忆（peers）',
-];
-const DESCRIPTIONS = [
-  'Agent 从对话中自动提炼的长期记忆 —— 你的身份、偏好和做过的决定。',
-  '即长期记忆，你和 Agent 的每一次对话、跑过的任务都完整保存在这里。追溯 Agent 的判断，可随时回来查看原文。',
-  '你主动导入的仅你可见的资料 —— 文档、笔记、知识库都放在这里。',
-  '成员均可见的公共知识库 —— 文档、规范、历史项目都放在这里。你的 Agent 回答时站在全团队的经验之上，不用每次从零讲起。',
-  'Agent 把成功完成的任务自动沉淀为经验。下次遇到类似问题，直接复用已有方案，少走弯路。',
-  '只属于某个对象的记忆（可以是某个仓库/Agent/同事），会单独存进 peers 子目录，互不干扰；通用的偏好和习惯，则放在 memories。',
-];
 const entry = (
   id: string,
   name: string,
@@ -68,9 +52,9 @@ export default function DirectoryTourBasic() {
   // the expanded path before resolving the DOM element. Never fetch inside Tour.
   const locateTarget = useCallback(
     (target: string, signal: AbortSignal) => {
-      const id = TARGETS[target];
-      if (signal.aborted || !id || (missing && target === 'userSessions'))
-        return Promise.resolve(null);
+      const id =
+        missing && target === 'userExperiences' ? 'user' : TARGETS[target];
+      if (signal.aborted || !id) return Promise.resolve(null);
       flushSync(() =>
         setExpanded(
           (old) =>
@@ -85,24 +69,19 @@ export default function DirectoryTourBasic() {
     },
     [missing],
   );
-  const steps = openVikingDirectoryTourSteps.map((step, index) => ({
-    ...step,
-    nextLabel: zh && index === 4 ? '下一个' : undefined,
-    title: zh ? TITLES[index] : step.title,
-    description: zh ? DESCRIPTIONS[index] : step.description,
-  }));
+  const steps = getOpenVikingDirectoryTourSteps(zh ? 'zh-CN' : 'en-US');
   const rows: FileTreeRow[] = [entry('user', 'Alice', 0, expanded.has('user'))];
   if (expanded.has('user')) {
     rows.push(
       entry('user/memories', 'memories', 1, expanded.has('user/memories')),
     );
-    if (expanded.has('user/memories'))
+    if (!missing && expanded.has('user/memories'))
       rows.push(entry('user/memories/experiences', 'experiences', 2));
     rows.push(
       entry('user/peers', 'peers', 1),
       entry('user/resources', 'resources', 1),
     );
-    if (!missing) rows.push(entry('user/sessions', 'sessions', 1));
+    rows.push(entry('user/sessions', 'sessions', 1));
   }
   rows.push(entry('resources', 'Resources', 0));
   return (
@@ -122,19 +101,17 @@ export default function DirectoryTourBasic() {
               ? '了解 OV 目录树'
               : 'Explore OV directories'}
         </Button>
-        <label>
-          <input
-            type="checkbox"
-            checked={missing}
-            onChange={(event) => {
-              close();
-              setMissing(event.target.checked);
-            }}
-          />
+        <Checkbox
+          checked={missing}
+          onChange={(next) => {
+            close();
+            setMissing(next);
+          }}
+        >
           <span>
-            {zh ? '模拟 sessions 不存在' : 'Simulate missing sessions'}
+            {zh ? '模拟 experiences 不存在' : 'Simulate missing experiences'}
           </span>
-        </label>
+        </Checkbox>
         <output aria-live="polite">
           {complete ? (zh ? '引导已完成' : 'Guide completed') : ''}
           {skipped ? ` (${skipped} ${zh ? '步已跳过' : 'skipped'})` : ''}

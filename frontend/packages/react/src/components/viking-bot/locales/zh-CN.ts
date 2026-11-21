@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { VikingBotLabels } from '../model.js';
 
 const messages = {
@@ -9,8 +10,21 @@ const messages = {
   session: '会话',
   locateSession: '在文件目录定位会话',
   sessionHistory: '历史会话',
+  sessionActions: '会话操作',
   newSession: '新建会话',
   emptySessions: '暂无历史会话',
+  renameSessionAction: '重命名',
+  removeSessionAction: '删除',
+  renameSession: '重命名会话',
+  removeSession: '删除会话',
+  sessionName: '会话名称',
+  requiredSessionName: '请输入会话名称',
+  saveSessionName: '保存',
+  cancelSessionAction: '取消',
+  confirmSessionRemoval: '删除',
+  sessionRemovalNotice: '删除后无法恢复该会话。',
+  renameSessionFailed: '重命名会话失败。',
+  removeSessionFailed: '删除会话失败。',
   loading: '加载中…',
   loadMore: '加载更多',
   reference: '引用文件或目录',
@@ -23,13 +37,21 @@ const messages = {
   welcomeTitle: '欢迎使用 VikingBot',
   welcomeDescription:
     '连接你的资料、记忆与上下文，让每一份数据都成为可用的知识。',
-  placeholder: '向 VikingBot 提问',
+  placeholder: '可以基于目录进行问答',
   send: '发送',
   stop: '停止',
   attach: '添加资源',
+  attachmentLimit: (limit: number) =>
+    `单次最多上传 ${new Intl.NumberFormat('zh-CN').format(limit)} 个附件`,
   removeAttachment: '移除附件',
+  uploadingAttachment: '上传中…',
+  attachmentUploadFailed: '附件上传失败',
   copy: '复制',
   copied: '已复制',
+  copyMessageDebug: '复制消息排查信息',
+  copySessionDebug: '复制当前已加载消息的排查元数据',
+  debugCopied: '排查信息已复制',
+  debugCopyFailed: '排查信息复制失败，请重试。',
   reasoning: '推理',
   thinking: '思考中',
   tool: '工具调用',
@@ -45,3 +67,13 @@ const messages = {
 } satisfies Required<VikingBotLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  bot: '对话区域显示失败',
+  list: '消息列表显示失败',
+  message: '消息显示失败',
+  composer: '输入区域显示失败',
+  interaction: '交互表单显示失败',
+  header: '会话工具栏显示失败',
+  footer: '对话附加内容显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

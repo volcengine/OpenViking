@@ -1,7 +1,11 @@
+@import '../../shared/error-boundary/error-boundary.css';
+@import '../../shared/primitives/select/style.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
+@import '../../shared/primitives/empty/empty.css';
 @import '../../shared/dashboard/dashboard.css';
 @import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
 @import './wiki-dashboard.css';
 @import './wiki-severity-filter.css';

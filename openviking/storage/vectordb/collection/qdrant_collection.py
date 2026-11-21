@@ -1136,8 +1136,14 @@ class QdrantCollection(ICollection):
         offset: int = 0,
         filters: dict[str, Any] | None = None,
         output_fields: list[str] | None = None,
+        mode: str | None = None,
+        fields: list[str] | None = None,
+        bm25_k1: float | None = None,
+        bm25_b: float | None = None,
+        advance: dict[str, Any] | None = None,
     ) -> SearchResult:
         del index_name, keywords, query, limit, offset, filters, output_fields
+        del mode, fields, bm25_k1, bm25_b, advance
         raise NotImplementedError(
             "Qdrant does not provide OpenViking content grep; use the filesystem fallback"
         )

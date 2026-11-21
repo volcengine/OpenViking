@@ -40,7 +40,10 @@ _MCP_OPENVIKING_TOOL_RE = re.compile(
     r"^mcp__(?:openviking|plugin_.+_openviking)__(find|search|list|read|multi_read)$",
     re.IGNORECASE,
 )
-_MCP_SEARCH_RESULT_RE = re.compile(r"^- \[[^]]+\]\s+(viking://.+?)\s*$")
+# MCP find/search/list lines may end with the entry's tags as a JSON string array
+# (`` tags=["team=search"]``). The suffix is display metadata, not part of the URI.
+_MCP_TAGS_SUFFIX = r'(?:\s+tags=\[(?:"(?:[^"\\]|\\.)*"(?:,\s*"(?:[^"\\]|\\.)*")*)?\])?'
+_MCP_SEARCH_RESULT_RE = re.compile(r"^- \[[^]]+\]\s+(viking://.+?)" + _MCP_TAGS_SUFFIX + r"\s*$")
 _OPENVIKING_SEARCH_TABLE_ROW_RE = re.compile(
     r"^\s*\d+\s{2,}(?:memory|resource|skill)\s{2,}"
     r"(viking://.+?)\s{2,}(?:\d+)?\s{2,}(?:\d+(?:\.\d+)?)?\s{2,}.*$"
@@ -49,6 +52,8 @@ _OPENVIKING_SEARCH_SIMPLE_ROW_RE = re.compile(
     r"^\s*\d+\s+(?:memory|resource|skill)\s+(viking://\S+)\s*$"
 )
 _LIST_FILE_RE = re.compile(r"^\s*\[file\]\s+(.+?)\s*$")
+# list prints the suffix only when include_tags was requested.
+_LIST_FILE_WITH_TAGS_RE = re.compile(r"^\s*\[file\]\s+(.+?)" + _MCP_TAGS_SUFFIX + r"\s*$")
 # Historical transcripts recorded the removed uid-less shorthand; newer ones use
 # the viking://~ home alias. Both are canonicalized to the caller's user root.
 _USER_MEMORY_SHORTHAND_PREFIX = "viking://user/memories/"
@@ -333,9 +338,10 @@ class MemoryUsageExtractor:
         if operation == "list":
             parent_uri = str(tool_input.get("uri") or "").strip()
             candidates.extend(_iter_list_file_uris(output, parent_uri))
+            line_re = _LIST_FILE_WITH_TAGS_RE if tool_input.get("include_tags") else _LIST_FILE_RE
             for text in _iter_text_fields(output):
                 for line in text.splitlines():
-                    match = _LIST_FILE_RE.fullmatch(line)
+                    match = line_re.fullmatch(line)
                     if match is None:
                         continue
                     label = match.group(1).split(" - ", 1)[0].strip()

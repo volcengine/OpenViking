@@ -1,10 +1,11 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
 import { mediaKind } from './file-preview-media.js';
 import { useCallback } from 'react';
 
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import type { FilePreviewPanelActions } from './file-preview-edit-context.js';
 import type {
-  FilePreviewActions,
   FilePreviewFileTab,
   FilePreviewSource,
   FilePreviewTab,
@@ -44,13 +45,26 @@ export function useFilePreviewActionsContext({
   setViewMode: (mode: FilePreviewViewMode) => void;
   editing: Editing;
   operations: Operations;
-}): FilePreviewActions {
-  const startEditing = useCallback(() => {
-    if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
-      return;
-    setViewMode('source');
-    void editing.start(fileTab);
-  }, [editing, fileTab, setViewMode]);
+}): FilePreviewPanelActions {
+  const track = useTrack();
+  const selectView = (mode: FilePreviewViewMode) => {
+    if (mode !== viewMode)
+      track(
+        mode === 'source'
+          ? 'file_preview_source_view_select'
+          : 'file_preview_preview_view_select',
+      );
+    setViewMode(mode);
+  };
+  const startEditingAtAnnotation = useCallback(
+    (matchText?: string) => {
+      if (!fileTab?.editing || mediaKind(fileTab.source) || editing.editing)
+        return;
+      setViewMode('source');
+      void editing.start(fileTab, matchText);
+    },
+    [editing, fileTab, setViewMode],
+  );
 
   const saveEditing = useCallback(async () => {
     if (!fileTab) return false;
@@ -84,15 +98,17 @@ export function useFilePreviewActionsContext({
     source: currentSource,
     path: currentPath,
     viewMode,
-    setViewMode,
+    setViewMode: selectView,
     canSwitchView,
     editing: editing.editing,
+    draft: editing.editing ? editing.draft : undefined,
     busy: editing.saving || editing.loadingEdit,
     canEdit:
       Boolean(fileTab?.editing) &&
       !mediaKind(fileTab!.source) &&
       !editing.editing,
-    startEditing,
+    startEditing: () => startEditingAtAnnotation(),
+    startEditingAtAnnotation,
     saveEditing,
     cancelEditing,
     canCopyPath: Boolean(currentPath),

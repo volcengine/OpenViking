@@ -40,7 +40,7 @@ PROVIDER_BINDING = frozenset(
 # are behavior/infra defaults, not tenant routing or credentials.
 PROVIDER_SPECIFIC_ISOLATED = frozenset({"extra_body", "model_path"})
 BACKEND_CONNECTIONS = frozenset(
-    {"path", "url", "volcengine", "vikingdb", "qdrant", "opengauss", "cuvs", "custom_params"}
+    {"path", "url", "volcengine", "vikingdb", "qdrant", "cuvs", "opengauss", "pgvector", "custom_params"}
 )
 
 
