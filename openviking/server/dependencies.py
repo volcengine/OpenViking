@@ -4,16 +4,15 @@
 
 from typing import TYPE_CHECKING, Optional
 
-from openviking.service.core import OpenVikingService
-
 if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
+    from openviking.service.core import OpenVikingService
 
-_service: Optional[OpenVikingService] = None
+_service: Optional["OpenVikingService"] = None
 _server_config: Optional["ServerConfig"] = None
 
 
-def get_service() -> OpenVikingService:
+def get_service() -> "OpenVikingService":
     """Get the OpenVikingService instance.
 
     Returns:
@@ -27,12 +26,12 @@ def get_service() -> OpenVikingService:
     return _service
 
 
-def get_service_or_none() -> Optional[OpenVikingService]:
+def get_service_or_none() -> Optional["OpenVikingService"]:
     """Return the registered OpenVikingService, or None if not set."""
     return _service
 
 
-def set_service(service: Optional[OpenVikingService]) -> None:
+def set_service(service: Optional["OpenVikingService"]) -> None:
     """Set (or clear) the OpenVikingService instance.
 
     Args:

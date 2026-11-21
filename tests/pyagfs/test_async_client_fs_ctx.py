@@ -38,7 +38,6 @@ class _RecordingClient:
         self.list_options = options
         return []
 
-
 @pytest.mark.asyncio
 async def test_async_client_derives_account_ctx_from_local_agfs_path() -> None:
     client = _RecordingClient()
