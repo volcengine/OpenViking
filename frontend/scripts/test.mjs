@@ -83,6 +83,8 @@ try {
               'bot-client': './src/client/client.ts',
               'bot-service': './src/modules/console/chat/native-service.ts',
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
+              'bot-composer-tools':
+                './test/fixtures/viking-bot-composer-tools.ts',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
               'bot-message-debug': './test/fixtures/viking-bot-debug.ts',

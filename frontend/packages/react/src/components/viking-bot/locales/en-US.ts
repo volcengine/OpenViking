@@ -40,6 +40,8 @@ const messages = {
   send: 'Send',
   stop: 'Stop',
   attach: 'Add resources',
+  attachmentLimit: (limit: number) =>
+    `Upload up to ${new Intl.NumberFormat('en-US').format(limit)} attachments per message`,
   removeAttachment: 'Remove attachment',
   uploadingAttachment: 'Uploading…',
   attachmentUploadFailed: 'Attachment upload failed',
