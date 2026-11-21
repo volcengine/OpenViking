@@ -500,6 +500,26 @@ Download a file as raw bytes. This is intended for images, PDFs, and other non-t
 |-----------|------|----------|-------------|
 | `uri` | string | Yes | File URI to download |
 
+| `max_bytes` | integer | No | Optional nonnegative byte limit (maximum `2^63 - 2`); zero accepts only an empty file |
+
+An oversized file returns `RESOURCE_EXHAUSTED`. The server reuses the authorized
+bounded-read owner: stat rejects known large files, and the subsequent read is
+limited to `max_bytes + 1` to cover growth. Omitting the option retains the current
+unbounded behavior. Signed download links keep their existing URI and single-use
+semantics; adding a limit cannot change the authorized file.
+
+The SDKs enforce the limit locally as well, including when an older server ignores
+`max_bytes`. Python uses `download_bytes(uri, max_bytes=...)`, TypeScript uses
+`downloadBytes(uri, { maxBytes: ..., signal })` (a nonnegative safe integer), and Go
+uses `DownloadBytesWithLimit(ctx, uri, maxBytes)`. Async Python and its synchronous
+wrapper support the same option. Responses close/cancel on overflow, cancellation
+or transport error. Limits count decoded response bytes; transport/decompression
+buffers and copies used to return one byte array are additional memory. This is a
+bounded materialization API, not a file-streaming API or a total network/heap cap.
+Server error bodies also pass through the limit; an oversized error body returns
+`RESOURCE_EXHAUSTED` instead of being fully loaded for parsing.
+
+
 **Python SDK**
 
 ```python

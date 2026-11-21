@@ -1906,9 +1906,13 @@ class FSService:
         result["count"] = len(matches)
         return result
 
-    async def read_file_bytes(self, uri: str, ctx: RequestContext) -> bytes:
+    async def read_file_bytes(
+        self, uri: str, ctx: RequestContext, *, max_bytes: int | None = None
+    ) -> bytes:
         """Read file as raw bytes."""
         viking_fs = self._ensure_initialized()
+        if max_bytes is not None:
+            return await viking_fs.read_file_bytes(uri, ctx=ctx, max_bytes=max_bytes)
         return await viking_fs.read_file_bytes(uri, ctx=ctx)
 
     async def write(

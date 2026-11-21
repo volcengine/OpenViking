@@ -478,6 +478,9 @@ class AsyncHTTPClient:
         call_kwargs = dict(request_kwargs)
         if headers:
             call_kwargs["headers"] = headers
+        if call_kwargs.pop("stream", False):
+            request = self._http.build_request(method, url, **call_kwargs)
+            return await self._http.send(request, stream=True)
         request_method = getattr(self._http, "request", None)
         if callable(request_method):
             return await request_method(method, url, **call_kwargs)
@@ -512,6 +515,7 @@ class AsyncHTTPClient:
         ):
             return response
 
+        await response.aclose()
         retry_headers = dict(headers)
         retry_headers[GATEWAY_TOKEN_HEADER] = self._gateway_token
         return await self._send_http_request(method, url, retry_headers, request_kwargs)
@@ -1575,16 +1579,53 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def download_bytes(self, uri: str) -> bytes:
-        """Download an OpenViking file without interpreting its contents."""
+    async def download_bytes(self, uri: str, *, max_bytes: int | None = None) -> bytes:
+        """Download raw bytes, optionally bounding server reads and local buffering.
+
+        Older servers may ignore max_bytes; the bounded client path still stops
+        reading and closes the response if the decoded body exceeds the limit.
+        """
+        if max_bytes is not None and (
+            type(max_bytes) is not int or not 0 <= max_bytes <= 2**63 - 2
+        ):
+            raise ValueError("max_bytes must be a nonnegative integer below 2**63 - 1")
+        params: Dict[str, Any] = {"uri": VikingURI.normalize(uri)}
+        if max_bytes is None:
+            response = await self._request("GET", "/api/v1/content/download", params=params)
+            if not response.is_success:
+                self._handle_response_data(response)
+            return bytes(response.content)
+        params["max_bytes"] = max_bytes
         response = await self._request(
-            "GET",
-            "/api/v1/content/download",
-            params={"uri": VikingURI.normalize(uri)},
+            "GET", "/api/v1/content/download", params=params, stream=True
         )
-        if not response.is_success:
-            self._handle_response_data(response)
-        return bytes(response.content)
+        try:
+            length = response.headers.get("Content-Length")
+            if (
+                length
+                and length.isdecimal()
+                and int(length) > max_bytes
+                and not response.headers.get("Content-Encoding")
+            ):
+                raise ResourceExhaustedError(
+                    "Download exceeds max_bytes", details={"max_bytes": max_bytes}
+                )
+            content = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=min(64 * 1024, max_bytes + 1)):
+                if len(content) + len(chunk) > max_bytes:
+                    raise ResourceExhaustedError(
+                        "Download exceeds max_bytes", details={"max_bytes": max_bytes}
+                    )
+                content.extend(chunk)
+            data = bytes(content)
+            if not response.is_success:
+                # Reuse the SDK error mapping without reading the stream twice.
+                self._handle_response_data(
+                    httpx.Response(response.status_code, content=data, request=response.request)
+                )
+            return data
+        finally:
+            await response.aclose()
 
     async def abstract(self, uri: str) -> str:
         response = await self._request(
@@ -3331,8 +3372,10 @@ class SyncHTTPClient:
     def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return run_async(self._async_client.read_raw(uri, offset=offset, limit=limit))
 
-    def download_bytes(self, uri: str) -> bytes:
-        return run_async(self._async_client.download_bytes(uri))
+    def download_bytes(self, uri: str, *, max_bytes: int | None = None) -> bytes:
+        if max_bytes is None:
+            return run_async(self._async_client.download_bytes(uri))
+        return run_async(self._async_client.download_bytes(uri, max_bytes=max_bytes))
 
     def abstract(self, uri: str) -> str:
         return run_async(self._async_client.abstract(uri))
