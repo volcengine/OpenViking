@@ -129,8 +129,8 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   if (limitConfigured) body.quotas = codingQuotas(limit);
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
-  const decayProtection = String(cfg.recallEventsDecayProtection || "").trim();
-  if (decayProtection) body.events_time_decay_protection = decayProtection;
+  const decayProtection = String(cfg.recallEventsDecayProtection ?? "").trim();
+  if (decayProtection && decayProtection !== "off") body.events_time_decay_protection = decayProtection;
 
   const sessionId = String(options.sessionId || "").trim();
   if (sessionId) {
@@ -520,10 +520,21 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
-  const res = await fetchJSON("/api/v1/search/search", {
+  const search = () => fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
   }, { actorPeerId, timeoutMs: contextRequestTimeoutMs(cfg, body) });
+  let res = await search();
+  const validationErrors = res.error?.details?.validation_errors;
+  if (!res.ok && body.events_time_decay_protection
+      && (res.status === 400 || res.status === 422)
+      && Array.isArray(validationErrors)
+      && validationErrors.some((error) => error.type === "extra_forbidden"
+        && error.loc?.at(-1) === "events_time_decay_protection")) {
+    // Older servers can support context search without supporting event decay.
+    delete body.events_time_decay_protection;
+    res = await search();
+  }
 
   if (!res.ok) {
     const status = res.status || 0;

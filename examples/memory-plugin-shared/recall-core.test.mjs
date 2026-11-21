@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveKnobs } from "./lib/config-schema.mjs";
 import {
   buildContextSearchBody,
   buildRecallEndpointBody,
@@ -36,10 +37,51 @@ test("context requests preserve the configured recall width and server budget", 
   assert.equal(body.purpose, "coding");
 });
 
-test("context requests send an event decay window only when one is configured", () => {
-  assert.equal(buildContextSearchBody({}).events_time_decay_protection, undefined);
-  assert.equal(buildContextSearchBody({ recallEventsDecayProtection: " " }).events_time_decay_protection, undefined);
-  assert.equal(buildContextSearchBody({ recallEventsDecayProtection: "7d" }).events_time_decay_protection, "7d");
+test("shared auto recall uses a 30-day event decay protection period by default", () => {
+  const { settings } = resolveKnobs({ harness: "codex" });
+  assert.equal(buildContextSearchBody(settings).events_time_decay_protection, "30d");
+  const { settings: magpie } = resolveKnobs({ harness: "magpie" });
+  assert.equal(buildContextSearchBody(magpie).events_time_decay_protection, undefined);
+});
+
+test("explicit event decay settings override the default protection period", () => {
+  const cli = { name: "cli", data: { recallEventsDecayProtection: "7d" } };
+  const disabled = resolveKnobs({
+    layers: [cli],
+    env: { OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION: "off" },
+  }).settings;
+  assert.equal(buildContextSearchBody(disabled).events_time_decay_protection, undefined);
+  assert.equal(buildContextSearchBody(resolveKnobs({ layers: [cli] }).settings).events_time_decay_protection, "7d");
+  assert.equal(buildContextSearchBody({ recallEventsDecayProtection: "0" }).events_time_decay_protection, "0");
+});
+
+test("context search retries without decay when an older server rejects that field", async () => {
+  const calls = [];
+  const legacyCachePath = await tempPath("context-face.json");
+  const query = "最近一次部署故障怎么处理的？";
+  const block = await buildRecallBlock(async (path, init) => {
+    assert.equal(path, "/api/v1/search/search");
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    if (body.events_time_decay_protection) {
+      return {
+        ok: false,
+        status: 400,
+        error: { details: { validation_errors: [
+          { loc: ["body", "events_time_decay_protection"], type: "extra_forbidden" },
+        ] } },
+      };
+    }
+    return { ok: true, result: { rendered: "A remembered deployment incident." } };
+  }, resolveKnobs().settings, query, { legacyCachePath });
+
+  assert.equal(calls.length, 2);
+  const { events_time_decay_protection: protection, ...fallbackBody } = calls[0];
+  assert.equal(protection, "30d");
+  assert.equal(fallbackBody.query, query);
+  assert.deepEqual(calls[1], fallbackBody);
+  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
+  assert.match(block, /A remembered deployment incident/);
 });
 
 test("context requests omit defaults owned by the server", () => {
