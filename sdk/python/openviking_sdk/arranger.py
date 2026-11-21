@@ -300,6 +300,9 @@ class _ContextArrangerBase:
             return (
                 VikingURI.normalize(str(mount.get("tool_uri", ""))) == resource.tool_uri
                 and mount.get("arguments", {}) == resource.arguments
+                and mount.get("title") == resource.title
+                and mount.get("description") == resource.description
+                and mount.get("timeout_seconds") == resource.timeout_seconds
             )
         return False
 
