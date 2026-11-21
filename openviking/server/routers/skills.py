@@ -637,23 +637,23 @@ async def find_skills(
         user_result_dict = (
             user_result.to_dict() if hasattr(user_result, "to_dict") else dict(user_result or {})
         )
-        user_hits = [
-            await _skill_summary_from_hit(hit, service, _ctx)
-            for hit in user_result_dict.get("skills", [])
-        ]
-
         agent_result = agent_execution.result
         agent_result_dict = (
             agent_result.to_dict() if hasattr(agent_result, "to_dict") else dict(agent_result or {})
         )
-        agent_hits = [
-            await _skill_summary_from_hit(hit, service, _ctx)
-            for hit in agent_result_dict.get("skills", [])
-        ]
 
-        merged_hits = [*user_hits, *agent_hits]
-        merged_hits.sort(key=lambda hit: (-hit.get("score", 0), hit["root_uri"]))
-        merged_hits = merged_hits[: request.limit]
+        merged_hits = [
+            *user_result_dict.get("skills", []),
+            *agent_result_dict.get("skills", []),
+        ]
+        merged_hits.sort(
+            key=lambda hit: (-hit.get("score", 0), _skill_root_from_hit_uri(hit.get("uri", "")))
+        )
+        # 先选出全局前 K 条，避免读取落选技能包的摘要。
+        merged_hits = [
+            await _skill_summary_from_hit(hit, service, _ctx)
+            for hit in merged_hits[: request.limit]
+        ]
 
         return Response(
             status="ok",

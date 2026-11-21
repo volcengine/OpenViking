@@ -54,6 +54,13 @@ async def test_find_skills_applies_one_limit_across_same_named_skills_in_both_sp
     agent_root = "viking://agent/skills"
     user_hit = _grouped_hit(f"{user_root}/data.service", 0.89)
     agent_hit = _grouped_hit(f"{agent_root}/data.service", 0.94)
+    selected_roots = {f"{user_root}/data.service", f"{agent_root}/data.service"}
+    root_abstract = fake_search.abstract.side_effect
+
+    async def selected_abstract(uri, *, ctx):
+        if uri not in selected_roots:
+            raise RuntimeError("Unselected skill abstract is unavailable")
+        return await root_abstract(uri, ctx=ctx)
 
     async def find(**kwargs):
         if kwargs["target_uri"] == user_root:
@@ -62,6 +69,7 @@ async def test_find_skills_applies_one_limit_across_same_named_skills_in_both_sp
         return {"skills": [agent_hit, _grouped_hit(f"{agent_root}/another", 0.74)]}
 
     fake_search.find.side_effect = find
+    fake_search.abstract.side_effect = selected_abstract
 
     response = await skills_router.find_skills(
         skills_router.FindSkillsRequest(query="backup", limit=2),
@@ -76,3 +84,49 @@ async def test_find_skills_applies_one_limit_across_same_named_skills_in_both_sp
         f"{user_root}/data.service",
     ]
     assert [hit["uri"] for hit in result["skills"]] == [agent_hit["uri"], user_hit["uri"]]
+    assert [hit["score"] for hit in result["skills"]] == [0.94, 0.89]
+    assert [hit["abstract"] for hit in result["skills"]] == [
+        agent_hit["abstract"],
+        user_hit["abstract"],
+    ]
+    assert all(hit["level"] == 2 for hit in result["skills"])
+    assert fake_search.abstract.await_count == 2
+    assert {call.args[0] for call in fake_search.abstract.await_args_list} == selected_roots
+
+
+async def test_find_skills_breaks_score_ties_by_package_root(fake_search, request_context):
+    user_root = f"viking://user/{request_context.user.user_id}/skills"
+    roots = [f"{user_root}/backup", f"{user_root}/backup.extra"]
+
+    async def find(**kwargs):
+        if kwargs["target_uri"] == user_root:
+            return {"skills": [_grouped_hit(root) for root in reversed(roots)]}
+        return {"skills": [_grouped_hit("viking://agent/skills/shared", 0.5)]}
+
+    fake_search.find.side_effect = find
+    response = await skills_router.find_skills(
+        skills_router.FindSkillsRequest(query="backup", limit=2), _ctx=request_context
+    )
+
+    assert [hit["root_uri"] for hit in response["result"]["skills"]] == roots
+    assert fake_search.abstract.await_count == 2
+
+
+async def test_find_skills_propagates_selected_abstract_failure(fake_search, request_context):
+    user_root = f"viking://user/{request_context.user.user_id}/skills"
+    selected_root = f"{user_root}/backup"
+
+    async def find(**kwargs):
+        if kwargs["target_uri"] == user_root:
+            return {"skills": [_grouped_hit(selected_root)]}
+        return {"skills": [_grouped_hit("viking://agent/skills/shared", 0.5)]}
+
+    fake_search.find.side_effect = find
+    fake_search.abstract.side_effect = RuntimeError("Selected skill abstract is unavailable")
+
+    with pytest.raises(RuntimeError, match="Selected skill abstract is unavailable"):
+        await skills_router.find_skills(
+            skills_router.FindSkillsRequest(query="backup", limit=1), _ctx=request_context
+        )
+
+    fake_search.abstract.assert_awaited_once_with(selected_root, ctx=request_context)
