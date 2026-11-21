@@ -1,5 +1,7 @@
 import fs from "fs"
 import path from "path"
+import { randomUUID } from "node:crypto"
+import { setTimeout as delay } from "node:timers/promises"
 import {
   extractTextFromPayload,
   isCaptureEnabled,
@@ -28,19 +30,74 @@ import {
 
 const STALE_SESSION_STATE_MS = 7 * 24 * 60 * 60 * 1000
 
+// Publish a nonempty lock directory atomically. Reapers remove only the
+// observed dead owner's unique marker; rmdir cannot remove a new live lock.
+async function withStateLock(statePath, write) {
+  const lockPath = `${statePath}.lock`
+  const owner = `${process.pid}-${randomUUID()}`
+  const staging = await fs.promises.mkdtemp(`${lockPath}-`)
+  try {
+    await fs.promises.writeFile(path.join(staging, owner), "", { mode: 0o600 })
+    const deadline = Date.now() + 5000
+    for (;;) {
+      try {
+        await fs.promises.rename(staging, lockPath)
+        break
+      } catch (error) {
+        if (!["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].includes(error.code)) throw error
+        const markers = await fs.promises.readdir(lockPath).catch((err) => {
+          if (err.code === "ENOENT") return []
+          throw err
+        })
+        for (const marker of markers) {
+          const pid = Number(/^(\d+)-[0-9a-f-]+$/.exec(marker)?.[1])
+          if (!Number.isSafeInteger(pid) || pid <= 0) continue
+          try {
+            process.kill(pid, 0)
+          } catch (err) {
+            if (err.code === "ESRCH") await fs.promises.rm(path.join(lockPath, marker), { force: true })
+          }
+        }
+        await fs.promises.rmdir(lockPath).catch((err) => {
+          if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(err.code)) throw err
+        })
+        if (Date.now() >= deadline) throw new Error("Timed out waiting for the session state lock")
+        await delay(30)
+      }
+    }
+    try {
+      return await write()
+    } finally {
+      await fs.promises.unlink(path.join(lockPath, owner))
+      await fs.promises.rmdir(lockPath).catch((error) => {
+        if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error
+      })
+    }
+  } finally {
+    await fs.promises.rm(staging, { recursive: true, force: true })
+  }
+}
+
+async function readSessionState(statePath) {
+  try {
+    const parsed = JSON.parse(await fs.promises.readFile(statePath, "utf8"))
+    if (parsed?.version !== 2) throw new Error("Unsupported session map version")
+    return new Map(Object.entries(parsed.sessions ?? {}))
+  } catch (error) {
+    if (error.code === "ENOENT") return new Map()
+    throw error
+  }
+}
+
 export function createMemorySessionManager({ config, pluginRoot }) {
   const sessions = new Map()
+  const savedRows = new Map()
+  const pendingPrune = new Set()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
   let initBackground = Promise.resolve()
-  // Serialize saves: concurrent saveState() calls (a debounced save racing
-  // with flushAll / flushSession / session deletion) all share the same
-  // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
-  // another already moved it. Chaining through a promise queue keeps at most
-  // one write+rename in flight. Each queued save re-serializes the in-memory
-  // `sessions` map at execution time, so the last save always persists the
-  // latest state.
+  // Serialize this manager's saves as well as the cross-process disk writes.
   let saveChain = Promise.resolve()
 
   function enqueueSave() {
@@ -71,46 +128,69 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function loadState() {
     try {
-      if (!fs.existsSync(statePath)) {
-        log("INFO", "persistence", "No session state file found, starting fresh")
-        return
-      }
-      const data = JSON.parse(await fs.promises.readFile(statePath, "utf8"))
-      if (data.version !== 2) {
-        log("ERROR", "persistence", "Unsupported session map version", { version: data.version })
-        return
-      }
       const staleBefore = Date.now() - STALE_SESSION_STATE_MS
-      let pruned = 0
-      for (const [opencodeSessionId, persisted] of Object.entries(data.sessions ?? {})) {
+      for (const [id, persisted] of await readSessionState(statePath)) {
         if (isPrunable(persisted, staleBefore)) {
-          pruned += 1
+          pendingPrune.add(id)
           continue
         }
-        sessions.set(opencodeSessionId, deserializeSessionState(persisted))
+        const state = deserializeSessionState(persisted)
+        sessions.set(id, state)
+        savedRows.set(id, JSON.stringify(serializeSessionState(state)))
       }
-      log("INFO", "persistence", "Session state loaded", { count: sessions.size, pruned })
-      if (pruned > 0) await enqueueSave()
+      log("INFO", "persistence", "Session state loaded", { count: sessions.size, pruned: pendingPrune.size })
+      if (pendingPrune.size > 0) await enqueueSave()
     } catch (error) {
       log("ERROR", "persistence", "Failed to load session state", { error: error?.message })
-      if (fs.existsSync(statePath)) {
-        await fs.promises.rename(statePath, `${statePath}.corrupted.${Date.now()}`)
-      }
     }
   }
 
   async function saveState() {
+    const tempPath = `${statePath}.${randomUUID()}.tmp`
     try {
-      const persisted = {}
-      for (const [opencodeSessionId, state] of sessions.entries()) {
-        persisted[opencodeSessionId] = serializeSessionState(state)
-      }
-      const tempPath = `${statePath}.tmp`
-      await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
-      await fs.promises.rename(tempPath, statePath)
-      log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
+      await withStateLock(statePath, async () => {
+        let disk
+        try {
+          disk = await readSessionState(statePath)
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error
+          await fs.promises.rename(statePath, `${statePath}.corrupted.${randomUUID()}`)
+          disk = new Map()
+        }
+        const staleBefore = Date.now() - STALE_SESSION_STATE_MS
+        for (const id of pendingPrune) {
+          const row = disk.get(id)
+          if (row && isPrunable(row, staleBefore)) disk.delete(id)
+        }
+        const saved = new Map()
+        for (const [id, state] of sessions) {
+          const row = serializeSessionState(state)
+          const serialized = JSON.stringify(row)
+          const previous = savedRows.get(id)
+          if (serialized === previous) continue
+          // A different manager can remove a session while we still have it
+          // loaded. Its deletion wins over our stale snapshot.
+          if (previous !== undefined && !disk.has(id)) continue
+          const current = disk.get(id)
+          if (current && JSON.stringify(serializeSessionState(deserializeSessionState(current))) !== previous) {
+            log("WARN", "persistence", "Session state changed in another manager", { session_id: id })
+            continue
+          }
+          disk.set(id, row)
+          saved.set(id, serialized)
+        }
+        const removed = [...savedRows.keys()].filter((id) => !sessions.has(id))
+        for (const id of removed) disk.delete(id)
+        await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: Object.fromEntries(disk), lastSaved: Date.now() }, null, 2), { mode: 0o600 })
+        await fs.promises.rename(tempPath, statePath)
+        for (const [id, row] of saved) savedRows.set(id, row)
+        for (const id of removed) savedRows.delete(id)
+        pendingPrune.clear()
+        log("DEBUG", "persistence", "Session state saved", { count: disk.size })
+      })
     } catch (error) {
       log("ERROR", "persistence", "Failed to save session state", { error: error?.message })
+      await fs.promises.rm(tempPath, { force: true }).catch(() => {})
     }
   }
 

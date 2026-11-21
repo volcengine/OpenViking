@@ -1,6 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import fs from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -67,6 +69,75 @@ function baseConfig(endpoint) {
     commitKeepRecentCount: 10,
   }
 }
+
+test("independent managers keep each other's sessions and do not restore a deletion", async () => {
+  await withTempDir("ov-oc-multiple-locations-", async (dir) => {
+    await withCaptureServer(async ({ endpoint }) => {
+      const config = { ...baseConfig(endpoint), autoCapture: false }
+      const openManager = async () => {
+        const manager = createMemorySessionManager({ config, pluginRoot: dir })
+        await manager.init()
+        return manager
+      }
+      const state = () => JSON.parse(fs.readFileSync(join(dir, "openviking-session-state.json"))).sessions
+      const first = await openManager()
+      const second = await openManager()
+      first.getMappedSessionId("location-one")
+      second.getMappedSessionId("location-two")
+      await first.flushAll()
+      await second.flushAll()
+      assert.deepEqual(Object.keys(state()).sort(), ["location-one", "location-two"])
+
+      const stale = await openManager()
+      await first.handleEvent({ type: "session.deleted", sessionID: "location-one" })
+      stale.getMappedSessionId("location-three")
+      await stale.flushAll()
+      assert.deepEqual(Object.keys(state()).sort(), ["location-three", "location-two"])
+    })
+  })
+})
+
+test("different processes can save disjoint sessions to one state file", async () => {
+  await withTempDir("ov-oc-multiple-processes-", async (dir) => {
+    await withCaptureServer(async ({ endpoint }) => {
+      const url = new URL("../lib/memory-session.mjs", import.meta.url).href
+      const script = `
+        import { once } from "node:events"
+        import { createMemorySessionManager } from ${JSON.stringify(url)}
+        const config = JSON.parse(process.argv[1])
+        const manager = createMemorySessionManager({ config, pluginRoot: process.argv[2] })
+        await manager.init()
+        manager.getMappedSessionId(process.argv[3])
+        process.stdin.resume()
+        process.stdout.write("ready")
+        await once(process.stdin, "end")
+        await manager.flushAll()
+      `
+      const processes = ["process-one", "process-two"].map((id) => {
+        const child = spawn(process.execPath, ["--input-type=module", "-e", script,
+          JSON.stringify({ ...baseConfig(endpoint), autoCapture: false }), dir, id])
+        const exit = once(child, "exit")
+        const ready = Promise.race([
+          once(child.stdout, "data"),
+          exit.then(([code]) => { throw new Error(`Writer exited before ready: ${code}`) }),
+        ])
+        return { child, ready, exit }
+      })
+      try {
+        await Promise.all(processes.map(({ ready }) => ready))
+        for (const { child } of processes) child.stdin.end()
+        for (const { exit } of processes) assert.deepEqual(await exit, [0, null])
+        const { sessions } = JSON.parse(fs.readFileSync(join(dir, "openviking-session-state.json")))
+        assert.deepEqual(Object.keys(sessions).sort(), ["process-one", "process-two"])
+      } finally {
+        for (const { child } of processes) {
+          if (child.exitCode === null) child.kill()
+        }
+        await Promise.allSettled(processes.map(({ exit }) => exit))
+      }
+    })
+  })
+})
 
 test("deferred startup loads local state without waiting for legacy migration", async () => {
   await withTempDir("ov-oc-deferred-", async (dir) => {
