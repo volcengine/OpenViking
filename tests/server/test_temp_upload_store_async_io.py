@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Event-loop safety and cleanup-throttle tests for temporary HTTP uploads."""
 
+import os
 import time
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from openviking.server import temp_upload_store
+from openviking.server.config import ServerConfig
+from openviking.server.identity import RequestContext
 
 
 class _UploadFile:
@@ -83,6 +87,49 @@ async def test_save_local_offloads_cleanup_writes_and_metadata(
     assert "write" in calls
     assert "_write_json" in calls
     assert "_close_file" in calls
+
+
+@pytest.mark.asyncio
+async def test_save_local_skips_file_removed_during_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request_context: RequestContext
+):
+    removed = tmp_path / "a-expired.md"
+    expired = tmp_path / "b-expired.md"
+    expired_meta = tmp_path / "b-expired.md.ov_upload.meta"
+    fresh = tmp_path / "fresh.md"
+    for path in (removed, expired, expired_meta, fresh):
+        path.touch()
+    old = time.time() - 7200
+    for path in (removed, expired):
+        os.utime(path, (old, old))
+
+    real_iterdir = Path.iterdir
+    real_is_file = Path.is_file
+
+    def ordered_iterdir(path: Path) -> Iterator[Path]:
+        entries = real_iterdir(path)
+        return iter(sorted(entries)) if path == tmp_path else entries
+
+    def is_file_before_removal(path: Path) -> bool:
+        is_file = real_is_file(path)
+        if path == removed and is_file:
+            path.unlink()
+        return is_file
+
+    config = SimpleNamespace(storage=SimpleNamespace(get_upload_temp_dir=lambda: tmp_path))
+    monkeypatch.setattr(Path, "iterdir", ordered_iterdir)
+    monkeypatch.setattr(Path, "is_file", is_file_before_removal)
+    monkeypatch.setattr(temp_upload_store, "get_openviking_config", lambda: config)
+
+    server_config = ServerConfig.model_validate({"temp_upload": {"ttl_seconds": 3600}})
+    store = temp_upload_store.TempUploadStore(server_config)
+    temp_file_id = await store.save_upload(_UploadFile([b"new upload"]), "local", request_context)
+
+    assert (tmp_path / temp_file_id).read_bytes() == b"new upload"
+    assert not removed.exists()
+    assert not expired.exists()
+    assert not expired_meta.exists()
+    assert fresh.is_file()
 
 
 @pytest.mark.asyncio
