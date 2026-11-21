@@ -1321,6 +1321,10 @@ class SQLAccountStore(AccountStore):
         assert self._engine is not None
         connection = await self._engine.connect()
         try:
+            # This single unlocked SELECT needs only a statement snapshot.
+            # Closing the connection restores the pool isolation level.
+            if self._url.drivername == "postgresql+psycopg":
+                await connection.execution_options(isolation_level="AUTOCOMMIT")
             candidates = (await connection.execute(statement)).all()
         finally:
             await wait_sql_cleanup(connection.close())
