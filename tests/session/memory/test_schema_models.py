@@ -23,6 +23,7 @@ from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     to_pascal_case,
 )
+from openviking.session.memory.utils.description_template import DescriptionTemplateError
 from openviking.session.memory.utils.json_parser import parse_json_with_stability
 
 
@@ -180,6 +181,63 @@ class TestSchemaModelGenerator:
         assert en_model.model_fields["topic"].description == "snake_case only"
         assert zh_model.model_fields["topic"].description == "natural zh-CN phrase"
         assert "zh-CN summary" in zh_ops_model.model_fields["conditional"].description
+
+    def test_unknown_variable_in_field_description_names_template_and_variable(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="entities",
+            description="Entities",
+            fields=[
+                MemoryField(
+                    name="category",
+                    field_type=FieldType.STRING,
+                    description="search viking://user/{{ user_space }}/memories/entities/ ...",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+            filename_template="entities.md",
+            directory="test://dir",
+        )
+
+        with pytest.raises(DescriptionTemplateError) as caught:
+            SchemaModelGenerator(
+                [memory_type], template_context={"language": "en"}
+            ).create_flat_data_model(memory_type)
+
+        error = caught.value
+        assert error.reason == "unknown_variable"
+        assert error.variable == "user_space"
+        assert error.memory_type == "entities"
+        assert error.field == "fields.category.description"
+        message = str(error)
+        assert "entities" in message
+        assert "fields.category.description" in message
+        assert "user_space" in message
+
+    def test_unknown_variable_in_type_description_names_memory_type(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="entities",
+            description="Search v2://user/{{ user_space }}/memories/",
+            fields=[
+                MemoryField(
+                    name="category",
+                    field_type=FieldType.STRING,
+                    description="Category",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+            filename_template="entities.md",
+            directory="test://dir",
+        )
+
+        with pytest.raises(DescriptionTemplateError) as caught:
+            SchemaModelGenerator(
+                [memory_type], template_context={"language": "en"}
+            ).create_structured_operations_model()
+
+        error = caught.value
+        assert error.field == "description"
+        assert error.memory_type == "entities"
+        assert error.variable == "user_space"
 
     def test_create_flat_data_model(self, sample_memory_type, registry_with_sample):
         """Test creating a flat data model for a single memory type."""

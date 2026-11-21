@@ -62,10 +62,14 @@ _NODES = (
 
 
 class ContentTemplateError(ValueError):
-    def __init__(self, reason: str, line: int = 0):
+    def __init__(self, reason: str, line: int = 0, variable: str | None = None):
         self.reason = reason
         self.line = line
-        super().__init__(f"content_template: {reason}" + (f" (line {line})" if line else ""))
+        self.variable = variable
+        detail = f" '{variable}'" if variable else ""
+        super().__init__(
+            f"content_template: {reason}{detail}" + (f" (line {line})" if line else "")
+        )
 
 
 class _ContentEnvironment(ImmutableSandboxedEnvironment):
@@ -215,8 +219,9 @@ def _parse(
         # invoke it after rejecting arithmetic, calls and other unsupported AST.
         unknown = meta.find_undeclared_variables(tree) - allowed
         if unknown:
-            line = next(n.lineno for n in tree.find_all(nodes.Name) if n.name in unknown)
-            raise ContentTemplateError("unknown_variable", line)
+            name = sorted(unknown)[0]
+            line = next(n.lineno for n in tree.find_all(nodes.Name) if n.name == name)
+            raise ContentTemplateError("unknown_variable", line, name)
         return tree
     except TemplateError as exc:
         raise ContentTemplateError("invalid_jinja", getattr(exc, "lineno", 0) or 0) from exc
