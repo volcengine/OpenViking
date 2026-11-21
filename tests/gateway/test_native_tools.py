@@ -1485,8 +1485,12 @@ async def test_client_openviking_tools_turn_gateway_tools_off(setup_kernel, cred
     ).tools_active
 
 
-@pytest.mark.parametrize("arguments", [None, "", "{}", "{broken"])
-async def test_anthropic_stream_no_argument_tool(running_gateway, arguments):
+@pytest.mark.parametrize(
+    ("arguments", "owned"),
+    [(None, True), ("", True), ("{}", True), ("{broken", True), ("{broken", False)],
+    ids=["no-delta", "empty-delta", "empty-object", "malformed-gateway", "malformed-client"],
+)
+async def test_anthropic_stream_no_argument_tool(running_gateway, arguments, owned):
     app, client, admin, key, _, _ = running_gateway
     await enable_tools(client, admin)
     requests, calls = [], []
@@ -1498,10 +1502,17 @@ async def test_anthropic_stream_no_argument_tool(running_gateway, arguments):
         if request.path != "/v1/messages":
             return None
         requests.append(await request.json())
-        value = native_response("anthropic", len(requests), owned=len(requests) == 1)
+        value = native_response(
+            "anthropic",
+            len(requests),
+            owned=len(requests) == 1 and owned,
+            mixed=len(requests) == 1 and not owned,
+        )
         if len(requests) > 1:
             return await wire_response(request, "anthropic", value, True)
-        value["content"][-1].update(name="openviking_health", input={})
+        value["content"][-1].update(input={})
+        if owned:
+            value["content"][-1]["name"] = "openviking_health"
         events = native_events("anthropic", value)
         events = [e for e in events if e.get("delta", {}).get("type") != "input_json_delta"]
         if arguments is not None:
@@ -1527,12 +1538,74 @@ async def test_anthropic_stream_no_argument_tool(running_gateway, arguments):
         headers={"Authorization": "Bearer " + key["key"]},
         json=request_body("anthropic", True),
     )
-    if arguments == "{broken":
+    if not owned:
         assert "gateway_tool_error" in response.text and not calls
+        assert len(requests) == 1
+        return
+    assert "gateway_tool_error" not in response.text
+    visible = visible_response("anthropic", response, True)
+    assert visible["stop_reason"] == "end_turn"
+    assert len(requests) == 2
+    assistant, result = requests[1]["messages"][-2:]
+    assert assistant["content"][-1]["input"] == {}
+    if arguments == "{broken":
+        assert not calls
+        assert result["role"] == "user"
+        [block] = result["content"]
+        assert block["type"] == "tool_result"
+        assert block["tool_use_id"] == "gateway-1"
+        assert block["is_error"] is True
+        assert "Invalid tool arguments" in block["content"]
     else:
-        visible_response("anthropic", response, True)
-        assert len(requests) == 2 and len(calls) == 1
-        assert requests[1]["messages"][-2]["content"][-1]["input"] == {}
+        assert len(calls) == 1
+        assert not result["content"][0].get("is_error")
+
+
+@pytest.mark.parametrize("strict", [True, False], ids=["strict", "regex-escapes"])
+async def test_anthropic_stream_grep_arguments(running_gateway, strict):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin)
+    requests, calls = [], []
+    expected = {"uri": "viking://user/memories", "pattern": r'"aliases"\s*:\s*\{\d+\\a'}
+    arguments = (
+        r'{"uri":"viking://user/memories","pattern":"\"aliases\"\\s*:\\s*\\{\\d+\\\\\u0061"}'
+    )
+    if not strict:
+        for escape in ("s", "{", "d"):
+            arguments = arguments.replace("\\\\" + escape, "\\" + escape)
+
+    async def backend(request):
+        if request.path == "/mcp":
+            calls.append(await request.json())
+            return web.json_response({"id": 1, "result": {"content": []}})
+        if request.path != "/v1/messages":
+            return None
+        requests.append(await request.json())
+        value = native_response("anthropic", len(requests), owned=len(requests) == 1)
+        if len(requests) > 1:
+            return await wire_response(request, "anthropic", value, True)
+        value["content"][-1].update(name="openviking_grep", input=expected)
+        events = native_events("anthropic", value)
+        split = arguments.index(r"\s") + 1
+        deltas = [
+            e["delta"] for e in events if e.get("delta", {}).get("type") == "input_json_delta"
+        ]
+        for delta, fragment in zip(deltas, (arguments[:split], arguments[split:]), strict=True):
+            delta["partial_json"] = fragment
+        return web.Response(body=b"".join(sse(e) for e in events), content_type="text/event-stream")
+
+    app.state.test_backend["handler"] = backend
+    response = await client.post(
+        "/v1/messages",
+        headers={"Authorization": "Bearer " + key["key"]},
+        json=request_body("anthropic", True),
+    )
+    assert "gateway_tool_error" not in response.text
+    assert visible_response("anthropic", response, True)["stop_reason"] == "end_turn"
+    [call] = calls
+    assert call["params"] == {"name": "grep", "arguments": expected}
+    assert requests[1]["messages"][-2]["content"][-1]["input"] == expected
+    assert not requests[1]["messages"][-1]["content"][0].get("is_error")
 
 
 @pytest.mark.parametrize("used_gateway_tool", [False, True])
