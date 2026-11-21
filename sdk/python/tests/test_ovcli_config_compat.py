@@ -4,10 +4,41 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
 from openviking_sdk import AsyncHTTPClient
+from openviking_sdk.config import load_ovcli_config
+
+
+def test_load_ovcli_config_uses_utf8_with_cp936_default(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "user": "—研究用户",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    original_read_text = Path.read_text
+
+    def cp936_default_read_text(self, encoding=None, errors=None):
+        return original_read_text(
+            self,
+            encoding=encoding or "cp936",
+            errors=errors,
+        )
+
+    monkeypatch.setattr(Path, "read_text", cp936_default_read_text)
+
+    config = load_ovcli_config(str(config_path))
+
+    assert config is not None
+    assert config.user == "—研究用户"
 
 
 def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, monkeypatch):

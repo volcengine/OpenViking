@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
 
+from openviking_cli.client._http_compat import _timeout_configured_outside_call
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.retrieve.types import ContextType
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
@@ -29,6 +31,31 @@ class FakeSearchHTTP:
                 },
             },
         )
+
+
+def test_timeout_config_detects_utf8_file_with_cp936_default(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {"timeout": 12.5, "user": "—研究用户"},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    original_read_text = Path.read_text
+
+    def cp936_default_read_text(self, encoding=None, errors=None):
+        return original_read_text(
+            self,
+            encoding=encoding or "cp936",
+            errors=errors,
+        )
+
+    monkeypatch.setattr(Path, "read_text", cp936_default_read_text)
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+    monkeypatch.delenv("OPENVIKING_TIMEOUT", raising=False)
+
+    assert _timeout_configured_outside_call() is True
 
 
 def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monkeypatch):

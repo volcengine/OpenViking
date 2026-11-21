@@ -90,7 +90,7 @@ def load_config() -> Config:
 
     if path.exists():
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 raw = f.read()
 
             # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
@@ -827,7 +827,7 @@ def save_config(
     full_data = {}
     if path.exists():
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 full_data = json.load(f)
         except (json.JSONDecodeError, IOError):
             pass
