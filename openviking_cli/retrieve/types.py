@@ -289,6 +289,8 @@ class MatchedContext:
     # Recall-stage vector score and time factor, retained after model rerank.
     origin_score: Optional[float] = None
     time_score: Optional[float] = None
+    # Seed URI whose explicit `related` link introduced this hit (relation expansion).
+    related_from: Optional[str] = None
 
 
 @dataclass
@@ -386,6 +388,8 @@ class FindResult:
         if ctx.origin_score is not None:
             result["origin_score"] = ctx.origin_score
             result["time_score"] = ctx.time_score
+        if ctx.related_from is not None:
+            result["related_from"] = ctx.related_from
         return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
@@ -438,6 +442,7 @@ class FindResult:
                 score=d.get("score", 0.0),
                 origin_score=d.get("origin_score"),
                 time_score=d.get("time_score"),
+                related_from=d.get("related_from"),
                 match_reason=d.get("match_reason", ""),
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )
