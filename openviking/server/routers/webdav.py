@@ -421,6 +421,15 @@ async def move(
     if not normalized_path:
         return _error(405, "Moving the resources root is not supported")
 
+    # RFC 4918 forbids moving a resource onto itself or into its own subtree.
+    # The overwrite path deletes the destination before mv; for a same-URI
+    # MOVE that destination is the source itself, so the request would destroy
+    # the file and then fail on a missing source.
+    if destination_path == normalized_path:
+        return _error(403, "Source and destination must differ")
+    if destination_path.startswith(normalized_path + "/"):
+        return _error(403, "Cannot move a resource into itself")
+
     service = get_service()
     src_uri = _resource_uri(normalized_path)
     dst_uri = _resource_uri(destination_path)
