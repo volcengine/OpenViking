@@ -42,6 +42,14 @@ The example has a reasoning and tool-call timeline, search result cards, Markdow
 
 The example uses fixed data: sending only clears the draft, and selected files are not uploaded.
 
+### Attachment limit
+
+Select up to 10 attachments, then hover the disabled add-file button to see the limit. Removing an attachment enables it again. The example keeps selected attachments in the browser and does not upload them.
+
+```tsx file="../../_demos/viking-bot-attachment-limit.tsx" preview
+
+```
+
 ### User messages
 
 User messages sit on the right with attachments outside the bubble, and a message with only attachments gets no empty bubble; click an attachment or the copy button, and the value the callback receives appears below the example.
@@ -366,33 +374,41 @@ To link a directory tree to the composer, write its selected directory to `refer
 
 ### VikingBotComposer
 
-| Property              | Description                                                                                                                                 | Type                                                                  | Default                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
-| value                 | Text of the input box, controlled                                                                                                           | `string`                                                              | Required                       |
-| attachments           | Attachments already selected, shown above the input box                                                                                     | `readonly VikingBotAttachment[]`                                      | `[]`                           |
-| references            | Candidates and selected file and directory references; the reference entry is hidden when omitted                                           | `VikingBotReferences`                                                 | -                              |
-| quickInputs           | Quick inputs shown above the input box; clicking one fills the draft without sending                                                        | `readonly VikingBotQuickInput[]`                                      | -                              |
-| disabled              | Disables the composer, including typing, sending, adding files and picking references                                                       | `boolean`                                                             | `false`                        |
-| disabledReason        | Message shown while the composer is disabled                                                                                                | `string`                                                              | -                              |
-| isSending             | A reply is in progress; `onCancel` and `canSendWhileStreaming` control stopping and additional input                                        | `boolean`                                                             | `false`                        |
-| isSubmitting          | A follow-up is awaiting acceptance; prevents duplicate submissions                                                                          | `boolean`                                                             | `false`                        |
-| canSendWhileStreaming | Allow input while generating; the host maps the service capability `canSteer`                                                               | `boolean`                                                             | `false`                        |
-| variant               | Layout of the composer                                                                                                                      | `'default' \| 'compact'`                                              | `'default'`                    |
-| accept                | File types the file picker accepts, passed to the `accept` of `<input type="file">`                                                         | `string`                                                              | -                              |
-| maxAttachments        | Maximum number of attachments; the add-file button is disabled once it is reached, and files beyond the remaining count are not reported    | `number`                                                              | `10`                           |
-| onValueChange         | Called when the input changes; when omitted, input is not reported and sending is unavailable                                               | `(value: string) => void`                                             | -                              |
-| onSend                | Called on send with the text, attachments and references; clear the draft and attachments yourself, and sending is unavailable when omitted | `(draft: VikingBotDraft) => void`                                     | -                              |
-| onCancel              | Called when stop is clicked; the stop button is hidden while replying when omitted                                                          | `() => void`                                                          | -                              |
-| onFilesAdded          | Called when the user picks or drops files, and you upload them; the add-file button is shown when set                                       | `(files: readonly File[]) => void`                                    | -                              |
-| onAttachmentRemove    | Called when an attachment's remove button is clicked; the button is hidden when omitted                                                     | `(attachment: VikingBotAttachment) => void`                           | -                              |
-| onOpenUri             | Called with the URI when a reference tag is clicked                                                                                         | `(uri: string) => void`                                               | -                              |
-| onQuickInputSelect    | Takes over clicks on quick inputs; the draft is no longer filled automatically                                                              | `(input: VikingBotQuickInput) => void`                                | -                              |
-| actions               | Extra controls in the toolbar after the attach and reference buttons                                                                        | `ReactNode`                                                           | -                              |
-| slots                 | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                              |
-| labels                | Overrides interface text; all keys are listed in `DEFAULT_LABELS`                                                                           | `VikingBotLabels`                                                     | -                              |
-| locale                | Interface language, see [Internationalization](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
-| className             | Class name applied to the root element                                                                                                      | `string`                                                              | -                              |
-| ref                   | Imperative handle of the composer                                                                                                           | `Ref<VikingBotComposerRef>`                                           | -                              |
+| Property              | Description                                                                                                                                    | Type                                                                  | Default                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
+| value                 | Text of the input box, controlled                                                                                                              | `string`                                                              | Required                       |
+| attachments           | Attachments already selected, shown above the input box                                                                                        | `readonly VikingBotAttachment[]`                                      | `[]`                           |
+| references            | Candidates and selected file and directory references; the reference entry is hidden when omitted                                              | `VikingBotReferences`                                                 | -                              |
+| quickInputs           | Quick inputs shown above the input box; clicking one fills the draft without sending                                                           | `readonly VikingBotQuickInput[]`                                      | -                              |
+| disabled              | Disables the composer, including typing, sending, adding files and picking references                                                          | `boolean`                                                             | `false`                        |
+| disabledReason        | Message shown while the composer is disabled                                                                                                   | `string`                                                              | -                              |
+| isSending             | A reply is in progress; `onCancel` and `canSendWhileStreaming` control stopping and additional input                                           | `boolean`                                                             | `false`                        |
+| isSubmitting          | A follow-up is awaiting acceptance; prevents duplicate submissions                                                                             | `boolean`                                                             | `false`                        |
+| canSendWhileStreaming | Allow input while generating; the host maps the service capability `canSteer`                                                                  | `boolean`                                                             | `false`                        |
+| variant               | Layout of the composer                                                                                                                         | `'default' \| 'compact'`                                              | `'default'`                    |
+| accept                | File types the file picker accepts, passed to the `accept` of `<input type="file">`                                                            | `string`                                                              | -                              |
+| maxAttachments        | Maximum attachments; at the limit, the disabled add-file button explains the limit on hover; files beyond the remaining count are not reported | `number`                                                              | `10`                           |
+| onValueChange         | Called when the input changes; when omitted, input is not reported and sending is unavailable                                                  | `(value: string) => void`                                             | -                              |
+| onSend                | Called on send with the text, attachments and references; clear the draft and attachments yourself, and sending is unavailable when omitted    | `(draft: VikingBotDraft) => void`                                     | -                              |
+| onCancel              | Called when stop is clicked; the stop button is hidden while replying when omitted                                                             | `() => void`                                                          | -                              |
+| onFilesAdded          | Called when the user picks or drops files, and you upload them; the add-file button is shown when set                                          | `(files: readonly File[]) => void`                                    | -                              |
+| onAttachmentRemove    | Called when an attachment's remove button is clicked; the button is hidden when omitted                                                        | `(attachment: VikingBotAttachment) => void`                           | -                              |
+| onOpenUri             | Called with the URI when a reference tag is clicked                                                                                            | `(uri: string) => void`                                               | -                              |
+| onQuickInputSelect    | Takes over clicks on quick inputs; the draft is no longer filled automatically                                                                 | `(input: VikingBotQuickInput) => void`                                | -                              |
+| actions               | Extra controls in the toolbar after the attach and reference buttons                                                                           | `ReactNode`                                                           | -                              |
+| slots                 | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                     | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                              |
+| labels                | Overrides interface text; all keys are listed in `DEFAULT_LABELS`                                                                              | `VikingBotLabels`                                                     | -                              |
+| locale                | Interface language, see [Internationalization](../guide/i18n)                                                                                  | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
+| className             | Class name applied to the root element                                                                                                         | `string`                                                              | -                              |
+| ref                   | Imperative handle of the composer                                                                                                              | `Ref<VikingBotComposerRef>`                                           | -                              |
+
+### VikingBotLabels
+
+| Property        | Description                                                                       | Type                        | Default                                        |
+| --------------- | --------------------------------------------------------------------------------- | --------------------------- | ---------------------------------------------- |
+| attachmentLimit | Tooltip formatter receiving `maxAttachments` when the attachment limit is reached | `(limit: number) => string` | `Upload up to {limit} attachments per message` |
+
+The remaining labels are listed in `DEFAULT_LABELS`.
 
 ### VikingBotComposerRef
 

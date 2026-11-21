@@ -135,6 +135,12 @@
 .ov-viking-bot__submit {
   flex-shrink: 0;
 }
+.ov-viking-bot__attach-trigger {
+  display: inline-flex;
+}
+.ov-viking-bot__attach-trigger > .ov-button:disabled {
+  pointer-events: none;
+}
 .ov-viking-bot__submit.ov-button {
   border-radius: 8px;
 }

@@ -85,21 +85,39 @@ export function VikingBotSubmit({
 
 export function VikingBotAttach({
   label,
+  tip,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; tip?: string }) {
+  const hasDisabledHint = Boolean(props.disabled && tip !== undefined);
+  const button = (
+    <Button
+      {...props}
+      size="mini"
+      type="text"
+      iconOnly
+      htmlType="button"
+      className="ov-viking-bot__attach"
+      aria-label={label}
+      aria-hidden={hasDisabledHint || undefined}
+    >
+      <AttachSvg aria-hidden="true" focusable="false" />
+    </Button>
+  );
   return (
-    <Tooltip content={label}>
-      <Button
-        {...props}
-        size="mini"
-        type="text"
-        iconOnly
-        htmlType="button"
-        className="ov-viking-bot__attach"
-        aria-label={label}
-      >
-        <AttachSvg aria-hidden="true" focusable="false" />
-      </Button>
+    <Tooltip content={tip ?? label}>
+      {!hasDisabledHint ? (
+        button
+      ) : (
+        <span
+          className="ov-viking-bot__attach-trigger"
+          role="button"
+          aria-disabled="true"
+          aria-label={label}
+          tabIndex={0}
+        >
+          {button}
+        </span>
+      )}
     </Tooltip>
   );
 }
