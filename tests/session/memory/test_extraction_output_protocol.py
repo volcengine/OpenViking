@@ -189,6 +189,17 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
     )
 
 
+def test_json_format_retry_includes_parser_error():
+    protocol = create_extraction_output_protocol("json")
+    error = "preferences.0.page_id: Field required"
+
+    retry = protocol.render_format_retry(error)
+
+    assert f"Parser error: {error}" in retry
+    assert "output ONLY a valid JSON object matching the required schema" in retry
+    assert "Parser error:" not in protocol.render_format_retry()
+
+
 def test_python_contract_and_bindings_expose_only_selected_schema_fields():
     uri = "viking://user/alice/memories/preferences/editor.md"
     body = 'Use Vim\n  Keep "quotes", tabs\tand 中文; literal \\n.'
