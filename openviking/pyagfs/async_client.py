@@ -324,6 +324,22 @@ class AsyncAGFSClient:
             )
         )
 
+    async def _copy_file(self, src_path: str, dst_path: str, *, fs_ctx: Dict[str, str]) -> None:
+        """Copy a prevalidated file under a lease after its parent is prepared."""
+        from .helpers import _copy_file
+
+        await run_to_completion(
+            lambda: asyncio.to_thread(
+                _copy_file,
+                self._client,
+                src_path,
+                dst_path,
+                stream=True,
+                fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, True),
+                parent_prepared=True,
+            )
+        )
+
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:
         if "ctx" not in kwargs or kwargs["ctx"] is None:
             path = kwargs.get("path")

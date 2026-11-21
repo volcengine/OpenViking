@@ -7,10 +7,11 @@ import inspect
 import math
 import time
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -36,7 +37,6 @@ from openviking.storage.expr import And, Eq, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
-    _ABSTRACT_WORKER_COUNT,
     LS_ALL_NODES,
     _ensure_non_empty_search_query,
     _is_directory_not_empty_error,
@@ -134,6 +134,15 @@ def _rel_path_sort_key(uri: str, root_uri: str) -> List[str]:
     else:
         rel_path = normalized_uri
     return [part for part in rel_path.split("/") if part and part != "."]
+
+
+@dataclass(frozen=True)
+class _TransferEntry:
+    source_uri: str
+    target_uri: str
+    source_path: str
+    target_path: str
+    is_dir: bool
 
 
 class _OpsMixin:
@@ -516,7 +525,7 @@ class _OpsMixin:
         try:
             if is_dir:
                 await self._ensure_descendant_access(old_uri, ctx, action=AclAction.READ)
-            source_uris = await self._prepare_transfer_entries(
+            manifest = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
             )
             files_created = await self._copy_agfs_entry(
@@ -528,6 +537,7 @@ class _OpsMixin:
                 ctx=copy_ctx,
                 lease_ref=lease,
                 copy_semantic_sidecars=copy_semantic_sidecars,
+                manifest=manifest,
             )
             vector_result = None
             if maintain_vectors:
@@ -537,7 +547,17 @@ class _OpsMixin:
                         new_uri,
                         recursive=is_dir,
                         ctx=copy_ctx,
-                        **({"source_uris": source_uris} if is_dir else {}),
+                        **(
+                            {
+                                "source_uris": [entry.source_uri for entry in manifest],
+                                "source_expected_levels": {
+                                    entry.source_uri: {0, 1} if entry.is_dir else {2}
+                                    for entry in manifest
+                                },
+                            }
+                            if is_dir
+                            else {}
+                        ),
                     )
                 except Exception:
                     try:
@@ -600,9 +620,9 @@ class _OpsMixin:
         is_dir: bool,
         move: bool,
         ctx: Optional[RequestContext],
-    ) -> List[str]:
+    ) -> tuple[_TransferEntry, ...]:
         """Validate all affected entries under the lease before the first content write."""
-        source_uris: List[str] = []
+        entries: List[_TransferEntry] = []
         # Copy ACLs were checked under the lease; retain per-path namespace guards.
         guard_ctx = ctx if move else replace(self._ctx_or_default(ctx), bypass_acl=True)
 
@@ -614,13 +634,12 @@ class _OpsMixin:
             if move:
                 if directory or source != old_uri:
                     await self._ensure_access(source, ctx, action=AclAction.MANAGE)
-            else:
+            if not move or source != old_uri:
                 await self._ensure_copy_source_access(source, recursive=directory, ctx=guard_ctx)
             await self._ensure_access(target, guard_ctx, action=AclAction.WRITE)
-            await self._ensure_transfer_target_type(
-                self._uri_to_path(target, ctx=ctx), target, is_dir=directory
-            )
-            source_uris.append(source)
+            target_path = self._uri_to_path(target, ctx=ctx)
+            await self._ensure_transfer_target_type(target_path, target, is_dir=directory)
+            entries.append(_TransferEntry(source, target, source_path, target_path, directory))
             if directory:
                 # Match the copy traversal exactly; user content can use names
                 # that the namespace listing API hides, such as tasks/_system.
@@ -635,7 +654,7 @@ class _OpsMixin:
                     )
 
         await visit(old_uri, new_uri, is_dir)
-        return source_uris
+        return tuple(entries)
 
     async def _ensure_copy_source_access(
         self,
@@ -732,6 +751,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any],
         copy_semantic_sidecars: bool = True,
+        manifest: tuple[_TransferEntry, ...],
     ) -> int:
         if is_dir:
             return await self._copy_directory_under_tree_locks(
@@ -742,6 +762,7 @@ class _OpsMixin:
                 ctx=ctx,
                 lease_ref=lease_ref,
                 copy_semantic_sidecars=copy_semantic_sidecars,
+                manifest=manifest,
             )
 
         await self._async_agfs.cp(
@@ -853,9 +874,10 @@ class _OpsMixin:
 
         operation_id = uuid.uuid4().hex
         try:
-            uris_to_move = await self._prepare_transfer_entries(
+            manifest = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
             )
+            uris_to_move = [entry.source_uri for entry in manifest]
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -873,6 +895,7 @@ class _OpsMixin:
                         ctx=ctx,
                         lease_ref=lease,
                         copy_semantic_sidecars=copy_semantic_sidecars,
+                        manifest=manifest,
                     )
                     or 0
                 )
@@ -902,7 +925,17 @@ class _OpsMixin:
                         new_uri,
                         recursive=is_dir,
                         ctx=ctx,
-                        **({"source_uris": uris_to_move} if is_dir else {}),
+                        **(
+                            {
+                                "source_uris": uris_to_move,
+                                "source_expected_levels": {
+                                    entry.source_uri: {0, 1} if entry.is_dir else {2}
+                                    for entry in manifest
+                                },
+                            }
+                            if is_dir
+                            else {}
+                        ),
                         **({"restore_acl": restore_acl} if restore_acl is not None else {}),
                     )
                 elif vector_mode == "delete_source":
@@ -969,6 +1002,8 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         copy_semantic_sidecars: bool = True,
+        *,
+        manifest: tuple[_TransferEntry, ...],
     ) -> int:
         """Copy source to destination for mv without deleting source."""
         del is_temp
@@ -983,6 +1018,7 @@ class _OpsMixin:
             ctx=ctx,
             lease_ref=lease_ref,
             copy_semantic_sidecars=copy_semantic_sidecars,
+            manifest=manifest,
         )
 
     async def _copy_directory_under_tree_locks(
@@ -996,6 +1032,8 @@ class _OpsMixin:
         transfer_source_uri: str | None = None,
         transfer_target_uri: str | None = None,
         copy_semantic_sidecars: bool = True,
+        *,
+        manifest: tuple[_TransferEntry, ...],
     ) -> int:
         """Copy a directory under the operation's source and target Tree leases.
 
@@ -1013,73 +1051,62 @@ class _OpsMixin:
         transfer_source_uri = transfer_source_uri or old_uri
         transfer_target_uri = transfer_target_uri or new_uri
         fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
-        # Tree acquisition may already have created the target to hold its lock.
-        try:
-            stat = await self._async_agfs.stat(new_path)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                raise
-            await self._async_agfs.mkdir(new_path, fs_ctx=fs_ctx)
-        else:
-            if not stat.get("isDir", False):
-                raise InvalidArgumentError(f"transfer target is not a directory: {new_uri}")
-        copied = 1
-        entries = await self._async_agfs.ls(old_path, fs_ctx=fs_ctx)
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name in (".", ".."):
+        file_jobs: List[_TransferEntry] = []
+        copied_directories = 0
+
+        for entry in manifest:
+            name = entry.source_path.rsplit("/", 1)[-1]
+            if not entry.is_dir:
+                if copy_semantic_sidecars or name not in ABSTRACT_OVERVIEW_FILENAMES:
+                    file_jobs.append(entry)
                 continue
-            old_child = f"{old_path.rstrip('/')}/{name}"
-            new_child = f"{new_path.rstrip('/')}/{name}"
-            old_child_uri = f"{old_uri.rstrip('/')}/{name}"
-            new_child_uri = f"{new_uri.rstrip('/')}/{name}"
-            await self._ensure_copy_source_access(
-                old_child_uri,
-                recursive=bool(entry.get("isDir", False)),
-                ctx=ctx,
-            )
-            if entry.get("isDir", False):
-                copied += await self._copy_directory_under_tree_locks(
-                    old_child,
-                    new_child,
-                    old_uri=old_child_uri,
-                    new_uri=new_child_uri,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                    transfer_source_uri=transfer_source_uri,
-                    transfer_target_uri=transfer_target_uri,
-                    copy_semantic_sidecars=copy_semantic_sidecars,
+            # Tree acquisition may already have created the target to hold its lock.
+            try:
+                stat = await self._async_agfs.stat(entry.target_path)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                await self._async_agfs.mkdir(entry.target_path, fs_ctx=fs_ctx)
+            else:
+                if not stat.get("isDir", False):
+                    raise InvalidArgumentError(
+                        f"transfer target is not a directory: {entry.target_uri}"
+                    )
+            copied_directories += 1
+
+        async def copy_file(entry: _TransferEntry) -> int:
+            name = entry.source_path.rsplit("/", 1)[-1]
+            worker_fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
+            if name in ABSTRACT_OVERVIEW_FILENAMES:
+                raw = await self._async_agfs.cat(entry.source_path, fs_ctx=worker_fs_ctx)
+                level = ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
+                rewritten = rewrite_abstract_overview_for_transfer(
+                    raw,
+                    level=level,
+                    source_dir_uri=entry.source_uri.rsplit("/", 1)[0],
+                    target_dir_uri=entry.target_uri.rsplit("/", 1)[0],
+                    source_scope_uri=transfer_source_uri,
+                    target_scope_uri=transfer_target_uri,
+                )
+                await self._async_agfs.write(
+                    entry.target_path,
+                    rewritten.encode("utf-8"),
+                    fs_ctx=worker_fs_ctx,
                 )
             else:
-                if name in ABSTRACT_OVERVIEW_FILENAMES:
-                    if not copy_semantic_sidecars:
-                        continue
-                    raw = await self._async_agfs.cat(old_child, fs_ctx=fs_ctx)
-                    level = (
-                        ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
-                    )
-                    rewritten = rewrite_abstract_overview_for_transfer(
-                        raw,
-                        level=level,
-                        source_dir_uri=old_uri,
-                        target_dir_uri=new_uri,
-                        source_scope_uri=transfer_source_uri,
-                        target_scope_uri=transfer_target_uri,
-                    )
-                    await self._async_agfs.write(
-                        new_child,
-                        rewritten.encode("utf-8"),
-                        fs_ctx=fs_ctx,
-                    )
-                else:
-                    await self._async_agfs.cp(
-                        old_child,
-                        new_child,
-                        recursive=False,
-                        fs_ctx=fs_ctx,
-                    )
-                copied += 1
-        return copied
+                await self._async_agfs._copy_file(
+                    entry.source_path,
+                    entry.target_path,
+                    fs_ctx=worker_fs_ctx,
+                )
+            return 1
+
+        copied_files = await bounded_map(
+            file_jobs,
+            copy_file,
+            concurrency=FILE_TASK_CONCURRENCY,
+        )
+        return copied_directories + sum(copied_files)
 
     async def _copy_dir_through_vikingfs(
         self,
@@ -1721,7 +1748,7 @@ class _OpsMixin:
         if not dir_jobs:
             return
 
-        worker_count = min(_ABSTRACT_WORKER_COUNT, len(dir_jobs))
+        worker_count = min(FILE_TASK_CONCURRENCY, len(dir_jobs))
 
         cursor = 0
         cursor_lock = asyncio.Lock()

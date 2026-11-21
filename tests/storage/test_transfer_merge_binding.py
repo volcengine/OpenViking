@@ -16,6 +16,7 @@ from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchTas
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.expr import And, PathScope
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
@@ -83,10 +84,66 @@ async def seed_vector(backend, uri, content):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("orphan_count", [1, 205])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_target(
+    indexed_fs, monkeypatch, operation, orphan_count, cleanup_fails
+):
+    from openviking.storage.expr import Eq
+
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/archive"
+    source_file, target_file = source + "/a.md", target + "/a.md"
+    keep = target + "/keep.md"
+    orphans = [f"{source}/gone-{i:03d}.md" for i in range(orphan_count)]
+    await fs.write_file_bytes(source_file, b"new", ctx=ctx)
+    await fs.write_file_bytes(keep, b"keep original", ctx=ctx)
+    for uri in [source_file, keep, *orphans]:
+        await seed_vector(backend, uri, uri)
+    account_backend = await backend._get_backend_for_context(ctx)
+    query, delete = account_backend.strict_query, backend._strict_transfer_delete
+    cleanup_batches = []
+
+    def is_orphan_query(expr):
+        if isinstance(expr, Eq):
+            return expr.field == "uri" and expr.value in orphans
+        return any(is_orphan_query(cond) for cond in getattr(expr, "conds", []))
+
+    async def query_without_orphan_recheck(*args, **kwargs):
+        if is_orphan_query(kwargs.get("filter")):
+            raise TimeoutError("orphan recheck must not run")
+        return await query(*args, **kwargs)
+
+    async def delete_orphans(ctx, ids):
+        if set(ids).intersection(orphans):
+            cleanup_batches.append(ids)
+            if cleanup_fails:
+                raise TimeoutError("orphan cleanup unavailable")
+        return await delete(ctx, ids)
+
+    monkeypatch.setattr(account_backend, "strict_query", query_without_orphan_recheck)
+    monkeypatch.setattr(backend, "_strict_transfer_delete", delete_orphans)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+
+    assert result["vectors"]["written"] == 1
+    assert cleanup_batches and all(len(batch) <= 100 for batch in cleanup_batches)
+    remaining = await backend.get(orphans, ctx=ctx)
+    assert len(remaining) == (orphan_count if cleanup_fails else 0)
+    assert await fs.read_file_bytes(keep, ctx=ctx) == b"keep original"
+    assert await backend.get_context_by_uri(keep, ctx=ctx)
+    assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
+    assert await backend.get_context_by_uri(target_file, ctx=ctx)
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("directory", [False, True])
-@pytest.mark.parametrize("phase", ["source", "target"])
-async def test_transfer_uses_queries_without_count_or_sort(
-    indexed_fs, monkeypatch, operation, directory, phase
+async def test_transfer_uses_complete_directory_scan_and_legacy_file_reads(
+    indexed_fs, monkeypatch, operation, directory
 ):
     fs, backend = indexed_fs
     ctx = root_ctx()
@@ -98,19 +155,18 @@ async def test_transfer_uses_queries_without_count_or_sort(
     await seed_vector(backend, source_file, "new")
     await seed_vector(backend, target_file, "old")
     adapter = (await backend._get_backend_for_context(ctx))._adapter
-    original_count, original_query = adapter.count, adapter.query
+    original_count, original_query = backend._strict_transfer_count, adapter.query
     count_calls, queries = [], []
 
-    def stale_count(*args, **kwargs):
+    async def count(*args, **kwargs):
         count_calls.append(True)
-        count = original_count(*args, **kwargs)
-        return count + (len(count_calls) == (1 if phase == "source" else 2))
+        return await original_count(*args, **kwargs)
 
     def query(**kwargs):
         queries.append(kwargs)
         return original_query(**kwargs)
 
-    monkeypatch.setattr(adapter, "count", stale_count)
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
     monkeypatch.setattr(adapter, "query", query)
     await getattr(fs, operation)(
         source, target, ctx=ctx, **({"recursive": directory} if operation == "cp" else {})
@@ -119,7 +175,10 @@ async def test_transfer_uses_queries_without_count_or_sort(
     assert not count_calls
     assert len(queries) >= 2  # Both source reads and target replacement use this path.
     assert all(
-        q.get("order_by") is None and q["offset"] == 0 and q["limit"] == 100 for q in queries
+        q.get("order_by") == ("updated_at" if directory else None)
+        and q["offset"] == 0
+        and q["limit"] == 100
+        for q in queries
     )
     assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
     records = await backend.get([vector_record_id(ctx.account_id, target_file, 2)], ctx=ctx)
@@ -130,7 +189,7 @@ async def test_transfer_uses_queries_without_count_or_sort(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("disappear_all", [False, True])
-async def test_transfer_skips_source_record_disappearing_before_fetch(
+async def test_directory_transfer_skips_source_record_disappearing_before_fetch(
     indexed_fs, monkeypatch, operation, disappear_all
 ):
     fs, backend = indexed_fs
@@ -140,6 +199,8 @@ async def test_transfer_skips_source_record_disappearing_before_fetch(
     for uri in [a, b]:
         await fs.write_file_bytes(uri, b"new", ctx=ctx)
         await seed_vector(backend, uri, "new")
+    await fs.write_file_bytes(target + "/keep.md", b"important old data", ctx=ctx)
+    await seed_vector(backend, target + "/keep.md", "keep old index")
     await seed_vector(backend, target + "/b.md", "old target index")
     original_get = backend._strict_transfer_get
 
@@ -154,6 +215,8 @@ async def test_transfer_skips_source_record_disappearing_before_fetch(
         source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
     )
     assert result["vectors"]["written"] == (0 if disappear_all else 1)
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"important old data"
     assert await fs.read_file_bytes(target + "/b.md", ctx=ctx) == b"new"
     records = await backend.get([target + "/b.md"], ctx=ctx)
     assert [record["abstract"] for record in records] == ["old target index"]
@@ -330,11 +393,15 @@ async def test_directory_transfer_reads_all_exact_entries_with_native_storage(
     assert result["vectors"]["scanned"] == result["vectors"]["written"] == len(names)
     assert result["vectors"]["batches"] >= 3
     assert set(source_uris + old_targets).issubset(read_ids)
-    assert not set(untouched).intersection(read_ids)
+    # Source prefix inventory sees orphan IDs; target-only URIs stay out of the query.
+    assert not set(untouched[2:]).intersection(read_ids)
     target_ids = [vector_record_id(ctx.account_id, uri, 2) for uri in old_targets]
     assert {record["uri"] for record in await backend.get(target_ids, ctx=ctx)} == set(old_targets)
     assert not await backend.get(old_targets, ctx=ctx)
-    assert {record["uri"] for record in await backend.get(untouched, ctx=ctx)} == set(untouched)
+    assert not await backend.get([untouched[0]], ctx=ctx)
+    assert {record["uri"] for record in await backend.get(untouched[1:], ctx=ctx)} == set(
+        untouched[1:]
+    )
     assert len(await backend.get(source_uris, ctx=ctx)) == (len(names) if operation == "cp" else 0)
     assert await fs.read_file_bytes(f"{target}/keep.md", ctx=ctx) == b"keep"
     assert await fs.read_file_bytes(f"{target}/literal.md#chunk_0001", ctx=ctx) == b"new"
@@ -850,3 +917,174 @@ async def test_partial_source_sync_fails_task_without_replaying_moves(
     reenqueue.assert_not_awaited()
     assert await fs.read_file_bytes(f"{target}/a.md", ctx=ctx) == b"payload"
     assert await fs.read_file_bytes(f"{source}/z.md", ctx=ctx) == b"payload"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("phase", ["source", "target"])
+async def test_directory_transfer_keeps_old_target_when_record_disappears_before_read(
+    indexed_fs, monkeypatch, operation, phase
+):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    for uri in [source + "/a.md", source + "/b.md"]:
+        await fs.write_file_bytes(uri, b"new", ctx=ctx)
+        await seed_vector(backend, uri, "new")
+    await fs.write_file_bytes(target + "/keep.md", b"important old data", ctx=ctx)
+    await seed_vector(backend, target + "/a.md", "old a")
+    account = await backend._get_backend_for_context(ctx)
+    query = account.strict_query
+    calls = 0
+
+    async def delete_then_query(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == (1 if phase == "source" else 2):
+            missing = source + "/b.md" if phase == "source" else target + "/a.md"
+            await account.strict_delete([missing])
+        return await query(**kwargs)
+
+    monkeypatch.setattr(account, "strict_query", delete_then_query)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == (1 if phase == "source" else 2)
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"important old data"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_directory_transfer_does_not_depend_on_count_api(indexed_fs, monkeypatch, operation):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    for uri in [source + "/a.md", source + "/b.md"]:
+        await fs.write_file_bytes(uri, b"new", ctx=ctx)
+        await seed_vector(backend, uri, "new")
+    await fs.write_file_bytes(target + "/keep.md", b"important old data", ctx=ctx)
+    await seed_vector(backend, target + "/a.md", "old a")
+    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == 2
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"important old data"
+    assert await fs.read_file_bytes(target + "/a.md", ctx=ctx) == b"new"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+    count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_directory_transfer_keeps_unread_vectors_after_page_deletion(
+    indexed_fs, monkeypatch, operation
+):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    records = []
+    for i in range(201):
+        uri = f"{source}/{i:03}.md"
+        await fs.write_file_bytes(uri, b"new", ctx=ctx)
+        records.append(
+            {
+                "id": uri,
+                "uri": uri,
+                "level": 2,
+                "vector": [0.1] * 4,
+                "abstract": "new",
+                "updated_at": f"2026-01-01T00:{i // 60:02}:{i % 60:02}Z",
+                "account_id": ctx.account_id,
+            }
+        )
+    await backend.upsert_many(records, ctx=ctx)
+    await fs.write_file_bytes(target + "/keep.md", b"old data", ctx=ctx)
+    account = await backend._get_backend_for_context(ctx)
+    query = account.strict_query
+    calls = 0
+
+    async def delete_before_second_page(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            await account.strict_delete([source + "/000.md"])
+        return await query(**kwargs)
+
+    monkeypatch.setattr(account, "strict_query", delete_before_second_page)
+    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == 200
+    assert await backend.get([vector_record_id(ctx.account_id, target + "/100.md", 2)], ctx=ctx)
+    assert await fs.read_file_bytes(target + "/keep.md", ctx=ctx) == b"old data"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
+    count.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("phase", ["source", "target"])
+async def test_transfer_recovers_missing_directory_level_from_manifest(
+    indexed_fs, monkeypatch, operation, phase
+):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/target"
+    await fs.write_file_bytes(source + "/a.md", b"new", ctx=ctx)
+    await seed_vector(backend, source + "/a.md", "new")
+    for level in (0, 1):
+        await backend.upsert(
+            {
+                "id": vector_record_id(ctx.account_id, source, level),
+                "uri": source,
+                "level": level,
+                "vector": [0.1] * 4,
+                "abstract": "source summary",
+                "account_id": ctx.account_id,
+            },
+            ctx=ctx,
+        )
+        await backend.upsert(
+            {
+                "id": f"old-root-{level}",
+                "uri": target,
+                "level": level,
+                "vector": [0.1] * 4,
+                "abstract": "old summary",
+                "account_id": ctx.account_id,
+            },
+            ctx=ctx,
+        )
+    account = await backend._get_backend_for_context(ctx)
+    query = account.strict_query
+    removed = False
+
+    async def incomplete_first_page(**kwargs):
+        nonlocal removed
+        page = await query(**kwargs)
+        scope = kwargs["filter"]
+        missing_id = (
+            vector_record_id(ctx.account_id, source, 1) if phase == "source" else "old-root-1"
+        )
+        is_first_scope = (
+            isinstance(scope, And) and PathScope("uri", source, depth=-1) in scope.conds
+            if phase == "source"
+            else any(record["id"] == missing_id for record in page)
+        )
+        if not removed and is_first_scope:
+            removed = True
+            page = [record for record in page if record["id"] != missing_id]
+        return page
+
+    monkeypatch.setattr(account, "strict_query", incomplete_first_page)
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    assert result["vectors"]["written"] == 3
+    assert await backend.get([vector_record_id(ctx.account_id, target, 1)], ctx=ctx)
+    assert not await backend.get(["old-root-0", "old-root-1"], ctx=ctx)
