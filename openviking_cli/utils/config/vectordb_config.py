@@ -402,6 +402,16 @@ class PgvectorConfig(BaseModel):
     connection_pool_min_size: int = Field(default=1, ge=1)
     connection_pool_max_size: int = Field(default=10, ge=1)
     candidate_limit: int = Field(default=1000, ge=1, le=10000)
+    filter_exact_threshold: StrictInt = Field(
+        default=1000,
+        ge=0,
+        le=10000,
+        description=(
+            "For filtered HNSW queries admitted by a cheap scalar index plan, rank "
+            "exactly when at most this many rows match. Probe at most threshold + 1 "
+            "ids; skip full scans and existing exact plans. Zero disables routing."
+        ),
+    )
     m: int = Field(default=16, ge=2, le=100)
     ef_construction: int = Field(default=64, ge=4, le=1000)
     ef_search: int = Field(default=100, ge=1, le=1000)

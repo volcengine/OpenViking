@@ -177,6 +177,9 @@ try {
     {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
+      // The full suite needs headroom on shared CI runners; focused runs keep
+      // the guard's default limit.
+      timeout: process.argv.length > 2 ? undefined : 600_000,
     },
   );
   process.exitCode = await completed;
