@@ -295,7 +295,11 @@ async fn failed_tasks_are_terminal() {
     .await
     .unwrap_err();
     assert_eq!(error.code(), "MODEL_ERROR");
-    assert!(error.to_string().contains("failed: resource processing failed"));
+    assert!(
+        error
+            .to_string()
+            .contains("failed: resource processing failed")
+    );
     assert!(!error.to_string().contains("continues"));
     assert_eq!(bounded(peer).await.unwrap().len(), 1);
 }
@@ -320,9 +324,20 @@ async fn cancelled_tasks_surface_a_cancelled_code() {
     assert!(error.to_string().contains("ov task status task-import"));
     assert!(!error.to_string().contains("cancelled: cancelled"));
     match error {
-        crate::error::Error::Api { message, details, status, .. } => {
-            assert_eq!(message, "Task task-import cancelled; check with: ov task status task-import");
-            assert_eq!(details.unwrap(), json!({"task_id": "task-import", "status": "cancelled"}));
+        crate::error::Error::Api {
+            message,
+            details,
+            status,
+            ..
+        } => {
+            assert_eq!(
+                message,
+                "Task task-import cancelled; check with: ov task status task-import"
+            );
+            assert_eq!(
+                details.unwrap(),
+                json!({"task_id": "task-import", "status": "cancelled"})
+            );
             assert_eq!(status, None);
         }
         other => panic!("{other}"),
@@ -353,4 +368,106 @@ async fn connection_failures_are_bounded() {
     .unwrap_err();
     assert_eq!(error.code(), "UNAVAILABLE");
     assert!(error.to_string().contains("ov task status task-import"));
+}
+
+async fn reindex(client: &HttpClient, wait: bool) -> crate::error::Result<Value> {
+    bounded(client.reindex(
+        "viking://resources/demo",
+        "semantic_and_vectors",
+        wait,
+        true,
+        vec!["team=search".into()],
+        "append",
+        false,
+    ))
+    .await
+}
+
+#[tokio::test]
+async fn reindex_submits_once_and_polls_beyond_the_http_timeout() {
+    let accepted = json!({"status":"ok","result":{"status":"accepted","task_id":"reindex-1"}});
+    let completed = json!({"status":"ok","result":{
+        "status":"completed","result":{"rebuilt_records":3,"task_id":"reindex-1"}
+    }});
+
+    let (client, peer) = server(vec![
+        (200, accepted.clone(), 0),
+        (200, task("running"), 0),
+        (200, completed, 0),
+    ])
+    .await;
+    assert_eq!(
+        reindex(&client, true).await.unwrap(),
+        json!({"rebuilt_records":3})
+    );
+    let requests = bounded(peer).await.unwrap();
+    assert!(requests[0].starts_with("POST /api/v1/content/reindex "));
+    let (_, body) = requests[0].split_once("\r\n\r\n").unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(body).unwrap(),
+        json!({
+            "uri":"viking://resources/demo","mode":"semantic_and_vectors","wait":false,
+            "force":true,"recursive":false,"tags":["team=search"],"tag_mode":"append"
+        })
+    );
+    assert!(
+        requests[1..]
+            .iter()
+            .all(|request| { request.starts_with("GET /api/v1/tasks/reindex-1 ") })
+    );
+
+    let (client, peer) = server(vec![(200, accepted, 0)]).await;
+    assert_eq!(
+        reindex(&client, false).await.unwrap(),
+        json!({"status":"accepted","task_id":"reindex-1"})
+    );
+    assert_eq!(bounded(peer).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn reindex_wait_preserves_partial_failure_and_cancellation_contracts() {
+    let accepted = json!({"status":"ok","result":{"status":"accepted","task_id":"reindex-1"}});
+    let partial = json!({"status":"failed","result":{"failed_records":2,"task_id":"reindex-1"}});
+    let errors = json!([{"message":"bad document","uri":"viking://resources/demo/file.md"}]);
+    let failed = json!({"status":"failed","error":"could not rebuild","result":{
+        "code":"MODEL_ERROR","details":{"model":"test"},"queue_status":{"Semantic":{"errors":errors}}
+    }});
+    let cancelled = json!({"status":"cancelled","error":null,"result":null});
+
+    for (terminal, expected) in [
+        (partial, json!({"failed_records":2})),
+        (
+            failed,
+            json!({"code":"MODEL_ERROR","message":"could not rebuild","details":{
+                "task_id":"reindex-1","model":"test","errors":errors
+            }}),
+        ),
+        (
+            cancelled,
+            json!({"code":"PROCESSING_ERROR","message":"Task processing was cancelled",
+            "details":{"task_id":"reindex-1","status":"cancelled"}}),
+        ),
+    ] {
+        let (client, peer) = server(vec![
+            (200, accepted.clone(), 0),
+            (200, json!({"status":"ok","result":terminal}), 0),
+        ])
+        .await;
+        match reindex(&client, true).await {
+            Ok(result) => assert_eq!(result, expected),
+            Err(crate::error::Error::Api {
+                code,
+                message,
+                details,
+                ..
+            }) => {
+                assert_eq!(
+                    json!({"code":code,"message":message,"details":details}),
+                    expected
+                );
+            }
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+        assert_eq!(bounded(peer).await.unwrap().len(), 2);
+    }
 }
