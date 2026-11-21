@@ -462,7 +462,10 @@ def create_app(
                 from openviking_gateway.app import seed_defaults
 
                 await seed_defaults(gateway, "default")
-            yield
+            from openviking.server.startup_gc import startup_gc_freeze
+
+            with startup_gc_freeze(config.gc_freeze_on_startup):
+                yield
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
