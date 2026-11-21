@@ -1,5 +1,6 @@
-import { Button } from '../../shared/primitives/button/button.js';
+import { useAclManager } from './acl/use-acl-manager.js';
 import { useToast } from '../../shared/primitives/toast/use-toast.js';
+import { AclPermissionError } from './acl/acl-permission-error.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useOvClient,
@@ -51,6 +52,7 @@ export function useFileBrowserAcl({
   }>();
   const [opened, setOpened] = useState<string>();
   const [generation, setGeneration] = useState(0);
+  const [toast, toastHolder] = useToast({ locale });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const { baseURL, apiKey, accountId, userId, resourceId } =
     requestOptions ?? {};
@@ -134,30 +136,39 @@ export function useFileBrowserAcl({
   // Pending saves may finish after the host changes its locale or labels.
   const currentText = useRef(text);
   currentText.current = text;
-  const [toast, toastHolder] = useToast({ locale });
+  const openManager = useAclManager({
+    key,
+    uri,
+    loadPermission,
+    onLevel: (current) => {
+      setPermission({ key, level: current });
+      if (current === 'manage') setOpened(key);
+      else toast.warning({ content: text.permissionChanged });
+    },
+    onError: () => setPermission({ key, error: true }),
+  });
+  function permissionDenied() {
+    setOpened(undefined);
+    setPermission({ key });
+    setGeneration((value) => value + 1);
+    toast.warning({ content: text.permissionChanged });
+  }
   return {
     checkWrite,
     canDelete: !enabled || level === 'manage',
     canEdit: !enabled || level === 'write' || level === 'manage',
     titleExtra:
       enabled && permission?.key === key && permission.error ? (
-        <span className="ov-file-browser-acl__lookup-error" role="status">
-          {text.loadFailed}
-          <Button
-            size="small"
-            type="default"
-            htmlType="button"
-            onClick={() => setGeneration((value) => value + 1)}
-          >
-            {text.retry}
-          </Button>
-        </span>
+        <AclPermissionError
+          text={text}
+          onRetry={() => setGeneration((value) => value + 1)}
+        />
       ) : level ? (
         <AclTag
           level={level}
           text={text}
           triggerRef={triggerRef}
-          onManage={() => setOpened(key)}
+          onManage={() => void openManager()}
         />
       ) : null,
     drawer: (
@@ -176,6 +187,7 @@ export function useFileBrowserAcl({
             userId={identity.userId}
             options={options}
             onClose={() => setOpened(undefined)}
+            onPermissionDenied={permissionDenied}
             onUpdated={(report) => {
               toast.success({ content: currentText.current.saved });
               // Keep the Modal mounted while the manager probe refreshes; a downgrade
