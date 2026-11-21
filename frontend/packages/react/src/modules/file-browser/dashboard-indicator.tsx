@@ -44,7 +44,7 @@ export function DashboardIndicator({
     <Tooltip content={label} placement="right">
       <button
         type="button"
-        className={`ov-file-browser__dashboard${statusClass}`}
+        className={`ov-file-browser__dashboard ov-file-browser__dashboard--${dashboard.kind}${statusClass}`}
         aria-label={label}
         onClick={(event) => {
           event.stopPropagation();
