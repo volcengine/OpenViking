@@ -166,7 +166,7 @@ export function ExperienceDetailRoute() {
       <header className="grid gap-3">
         <div>
           <Button
-            render={<Link to="/agent-experience" />}
+            render={<Link to="/agent-experience" search={true} />}
             nativeButton={false}
             size="xs"
             variant="ghost"
