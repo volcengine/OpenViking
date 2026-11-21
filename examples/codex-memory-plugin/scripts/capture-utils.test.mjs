@@ -1114,3 +1114,16 @@ test("captureToolMaxChars still caps tool output when an operator lowers it", ()
   assert.ok(completed.tool_output.length <= 1000);
   assert.match(completed.tool_output, /\[truncated\]$/);
 });
+
+test('Codex capture preserves literal user memory markup and distinct repeated requests', () => {
+  const text = 'Explain this literal example: <openviking-context>user-authored example</openviking-context>.';
+  const entry = (id, value) => ({ type: 'response_item', payload: {
+    type: 'message', id, role: 'user', content: [{ type: 'input_text', text: value }],
+  } });
+  const entries = [entry('literal', text), entry('approval-1', 'Approve this reviewed update only.'),
+    entry('approval-2', 'Approve this reviewed update only.'),
+    entry('correction', 'Correction: preserve the original recording.'), entry('literal', text)];
+  const turns = extractCaptureTurns(entries, CAPTURE_CONFIG);
+  assert.deepEqual(turns.map(turn => turn.text), [text, 'Approve this reviewed update only.',
+    'Approve this reviewed update only.', 'Correction: preserve the original recording.']);
+});
