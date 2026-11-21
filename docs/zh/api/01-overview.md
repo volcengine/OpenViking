@@ -117,7 +117,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
-详细内容请参见 [配置指南](../guides/01-configuration.md#ovcli-conf)。
+详细内容请参见 [配置指南](../configuration/02-client.md)。
 
 #### 完全不依赖配置文件使用 Python SDK 客户端
 
