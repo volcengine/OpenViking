@@ -80,6 +80,38 @@ def test_markdown_file_read_normalizes_unicode_bom_text(tmp_path, encoding):
     assert MarkdownParser()._read_file(path) == content
 
 
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"])
+def test_markdown_file_read_normalizes_bomless_unicode_text(tmp_path, encoding):
+    content = "# Heading\n\nBody\n"
+    path = tmp_path / f"unicode-bomless-{encoding}.md"
+    path.write_bytes(content.encode(encoding))
+
+    assert MarkdownParser()._read_file(path) == content
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"])
+def test_markdown_file_read_normalizes_bomless_unicode_cjk_text(tmp_path, encoding):
+    content = "中文标题\n这是正文。\n"
+    path = tmp_path / f"unicode-bomless-cjk-{encoding}.md"
+    path.write_bytes(content.encode(encoding))
+
+    assert MarkdownParser()._read_file(path) == content
+
+
+def test_encoding_detection_preserves_nul_binary_without_unicode_text_layout(tmp_path):
+    raw = b"\x00\x00\x00\x01" * 32
+    path = tmp_path / "control-binary.md"
+
+    assert detect_and_convert_encoding(raw, path) == raw
+
+
+def test_encoding_detection_preserves_utf8_text_with_nul(tmp_path):
+    raw = b"Hello\x00World"
+    path = tmp_path / "embedded-nul.md"
+
+    assert detect_and_convert_encoding(raw, path) == raw
+
+
 @pytest.mark.parametrize(
     ("encoding", "content"),
     [
