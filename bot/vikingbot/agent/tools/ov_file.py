@@ -5,6 +5,7 @@ import base64
 import hashlib
 import itertools
 import json
+import re
 import tempfile
 import time
 from abc import ABC
@@ -1139,6 +1140,16 @@ class VikingMultiReadTool(OVFileTool):
             return "video"
         return None
 
+    @staticmethod
+    def _normalize_line_number(value: object, field_name: str) -> int:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if re.fullmatch(r"-?\d+", stripped):
+                return int(stripped)
+        raise ValueError(f"{field_name} must be an integer")
+
     @property
     def name(self) -> str:
         return "openviking_multi_read"
@@ -1275,6 +1286,8 @@ class VikingMultiReadTool(OVFileTool):
         level = "read"  # 默认获取完整内容
         client = None
         try:
+            offset = self._normalize_line_number(offset, "offset")
+            limit = self._normalize_line_number(limit, "limit")
             if not uris:
                 return "Error: No URIs provided."
 
@@ -1370,9 +1383,17 @@ class VikingMultiReadTool(OVFileTool):
                         )
                         skill_runtime = getattr(tool_context, "skill_runtime", None)
                         if skill_runtime is not None:
-                            active_skill = await skill_runtime.activate_from_read(uri, content)
-                            if active_skill is not None:
-                                content = skill_runtime.render_skill_content(active_skill)
+                            activation_params = {
+                                "uris": [uri],
+                                "offset": offset,
+                                "limit": limit,
+                            }
+                            if skill_runtime.is_activation_call(self.name, activation_params):
+                                active_skill = await skill_runtime.activate_from_read(uri, content)
+                                if active_skill is not None:
+                                    content = skill_runtime.render_skill_content(active_skill)
+                            else:
+                                skill_runtime.note_remote_read(uri)
                         return {
                             "uri": uri,
                             "content": content,
