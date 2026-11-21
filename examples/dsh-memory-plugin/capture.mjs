@@ -26,8 +26,10 @@ export function isOpenVikingPluginMessage(message) {
     || (source?.kind === "plugin" && source.plugin === OPENVIKING_PLUGIN_SOURCE);
 }
 
-function isSyntheticUserMessage(message) {
+function isSyntheticUserMessage(message, inputSourceKinds = []) {
+  if (isOpenVikingPluginMessage(message)) return true;
   const kind = message?.source?.kind;
+  if (typeof kind === "string" && inputSourceKinds.includes(kind)) return false;
   if (kind === "plugin") return true;
   if (typeof kind === "string" && kind.startsWith("plugin:")) return true;
   // DSH's v4 migration gives first-party context producers their own kinds
@@ -63,7 +65,7 @@ function captureMessage(event, message, config, toolNames) {
   // DSH v4 gives producer-owned context messages their own kind. Treat
   // user-role messages with an explicit non-user/tool kind as synthetic;
   // untagged legacy messages stay capturable for backward compatibility.
-  if (isSyntheticUserMessage(message)) return null;
+  if (isSyntheticUserMessage(message, config.inputSourceKinds)) return null;
   if (message.role === "assistant" && config.captureAssistantTurns === false) {
     return null;
   }
@@ -96,18 +98,18 @@ function captureMessage(event, message, config, toolNames) {
   return payload;
 }
 
-// Recall queries use only what the user typed. Injected context (time-context,
+// Recall queries use only what the user typed or a listed kind relayed. Injected context (time-context,
 // job notices, other plugins' blocks, our own recall) and tool results would
 // otherwise trigger recall on their own and pollute the query text.
-function isUserInput(message) {
+function isUserInput(message, inputSourceKinds) {
   if (!message || message.role !== "user") return false;
   if (message.source?.kind === "tool") return false;
-  return !isSyntheticUserMessage(message);
+  return !isSyntheticUserMessage(message, inputSourceKinds);
 }
 
-export function promptText(messages) {
+export function promptText(messages, config = {}) {
   return (messages || [])
-    .filter(isUserInput)
+    .filter(message => isUserInput(message, config.inputSourceKinds))
     .map(message => extractTextFromPayload(message))
     .filter(Boolean)
     .join("\n\n")

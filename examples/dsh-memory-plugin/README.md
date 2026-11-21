@@ -265,6 +265,7 @@ Common environment variables:
 | `OPENVIKING_PEER_ID` | Explicit actor peer |
 | `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace's git identity by default; `0` sends no peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` for cross-workspace recall or `actor` for isolation |
+| `OPENVIKING_INPUT_SOURCE_KINDS` | Comma-separated DSH message source kinds whose user-role messages count as real input (see Behavior) |
 
 The profile's `cordis.patch.yml` can also carry plugin config:
 
@@ -309,6 +310,7 @@ The older size settings apply to fallback recall, not the primary context reques
 - Agent startup injects the OpenViking profile, the available-memory index, and the `<available-skills>` catalog through `agent.inject()`, and registers the per-session disposal commit. On DSH `0.1.7` and later this runs from the serial `agent/created` event (`{ agent, source, signal? }`), which holds queued input until it settles; DSH `0.1.0-rc.6` and `0.1.5` emit `agent/created` without `source` and start the session through `agent/session-start` instead. Startup runs once per agent, and `agent/pre-step` delivers the profile only if startup did not.
 - `agent/pre-step` retrieves with the current step input and appends a durable plugin message to that same step.
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
+- User-role messages with a producer-owned source kind (`time-context`, `tool-jobs`, other plugins' blocks) are context, not input: they are neither captured nor used as recall queries. A host plugin that relays what people wrote under its own kind can list that kind in `inputSourceKinds` (`OPENVIKING_INPUT_SOURCE_KINDS`, empty by default) so those messages are captured as user turns and drive recall. The plugin's own injections are never treated as input.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
 - `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
