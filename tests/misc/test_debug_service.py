@@ -556,3 +556,28 @@ class TestDebugService:
         service = DebugService()
         assert service.observer is service._observer
         assert isinstance(service.observer, ObserverService)
+
+
+class TestObserverServiceUsage:
+    """Tests for ObserverService.usage."""
+
+    def test_usage_reports_vector_count(self):
+        vikingdb = MagicMock()
+        vikingdb.collection_exists = AsyncMock(return_value=True)
+        vikingdb.count = AsyncMock(return_value=7)
+
+        status = asyncio.run(ObserverService(vikingdb=vikingdb).usage())
+
+        assert status.name == "usage"
+        assert status.is_healthy is True
+        assert status.has_errors is False
+        assert "7" in status.status
+
+    def test_usage_flags_failed_vector_count(self):
+        vikingdb = MagicMock()
+        vikingdb.collection_exists = AsyncMock(return_value=True)
+        vikingdb.count = AsyncMock(side_effect=RuntimeError("count failed"))
+
+        status = asyncio.run(ObserverService(vikingdb=vikingdb).usage())
+
+        assert status.has_errors is True
