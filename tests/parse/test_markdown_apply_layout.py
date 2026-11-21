@@ -9,9 +9,14 @@ isolated while replaying their layouts.
 """
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from PIL import Image
+
+from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME, _rewrite_content
 from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.markdown import MarkdownParser, _Layout, _LayoutOp
@@ -127,18 +132,52 @@ class TestApplyLayout:
             assert fake.files[uri] == f"[target](../{name}.txt)"
 
 
-async def test_markdown_parser_writes_local_artifact_and_manifest(tmp_path: Path):
+@pytest.mark.parametrize(
+    "image_refs",
+    [
+        (),
+        ("assets/chart.png", "./assets/chart.png", "assets/../assets/chart.png"),
+        ("assets/chart.png", "other/chart.png", "./assets/chart.png"),
+    ],
+)
+async def test_markdown_parser_writes_local_artifact_and_manifest(tmp_path: Path, image_refs):
     store = LocalParseOutputStore(str(tmp_path / "artifacts"))
     parser = MarkdownParser()
+    content = "# Hello\n\nworld"
+    for index, reference in enumerate(image_refs):
+        image = tmp_path / reference
+        image.parent.mkdir(parents=True, exist_ok=True)
+        if not image.exists():
+            Image.new("RGB", (64, 64), "red" if index == 0 else "blue").save(image)
+        content += (
+            f'\n\n<img src="{reference}">' if index == 2 else f"\n\n![image {index}]({reference})"
+        )
 
-    result = await parser.parse_content(
-        "# Hello\n\nworld",
-        source_path=str(tmp_path / "hello.md"),
-        parse_output_store=store,
-    )
+    source = tmp_path / "hello.md"
+    source.write_text(content, encoding="utf-8")
+    result = await parser.parse(source, parse_output_store=store)
 
     assert result.artifact_ref is not None
     assert result.artifact_ref.backend == "local"
     assert result.artifact_ref.resource_rel == "hello"
-    assert Path(result.artifact_ref.root, "hello", "hello.md").read_text() == "# Hello\n\nworld"
-    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {"hello/hello.md"}
+    root = Path(result.artifact_ref.root, "hello")
+    assert (root / "hello.md").read_text() == content
+    manifest = await read_artifact_manifest(store, result.artifact_ref)
+    expected_paths = {"hello/hello.md"}
+    if image_refs:
+        mappings = json.loads((root / IMAGE_MAPPINGS_FILENAME).read_text())
+        mapping = mappings["hello.md"]
+        assert set(mapping) == set(image_refs)
+        sources = {(tmp_path / reference).resolve() for reference in image_refs}
+        assert len(set(mapping.values())) == len(sources)
+        assert len(list(root.glob("*.png"))) == len(sources)
+        for reference, name in mapping.items():
+            assert (root / name).read_bytes() == (tmp_path / reference).read_bytes()
+        rewritten, count = _rewrite_content(
+            content, "viking://resources/hello", set(mapping.values()), mapping
+        )
+        assert count == len(image_refs)
+        assert rewritten.count("viking://resources/hello/") == len(image_refs)
+        expected_paths.update(f"hello/{name}" for name in mapping.values())
+        expected_paths.add(f"hello/{IMAGE_MAPPINGS_FILENAME}")
+    assert set(manifest) == expected_paths
