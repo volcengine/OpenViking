@@ -287,7 +287,7 @@ def test_build_where_clause_supports_array_membership_negation_and_prefix():
         {"search_tags"},
     )
     assert '%s = ANY("search_tags")' in sql
-    assert 'NOT (%s = ANY("search_tags"))' in sql
+    assert 'NOT COALESCE(%s = ANY("search_tags"), FALSE)' in sql
     assert '"uri" LIKE %s ESCAPE' in sql
     assert params == ["env=prod", "hidden=true", r"/resources/demo\_%"]
 
@@ -313,7 +313,7 @@ def test_empty_in_and_or_are_contradictions_not_unfiltered_scans():
     assert params == []
 
     sql, params = _build_where_clause({"op": "must_not", "field": "id", "conds": []})
-    assert sql == ""
+    assert sql == "TRUE"
     assert params == []
 
 
