@@ -23,6 +23,8 @@ _MESSAGE_CONTEXT_MEMBERS = frozenset(
         "get_timestamp_from_ranges",
         "get_session_timestamp",
         "get_event_content",
+        "get_message_excerpt",
+        "get_message_excerpt_id",
         "get_resource_event_content",
     }
 )

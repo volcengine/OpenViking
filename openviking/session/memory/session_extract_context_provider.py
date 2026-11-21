@@ -75,6 +75,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         output_language_override: str | None = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
+        self._source_messages = self.messages if isinstance(self.messages, list) else []
         self.latest_archive_overview = latest_archive_overview
         self._source_archive_uri = source_archive_uri
         self._extraction_scope = extraction_scope
@@ -128,6 +129,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
                 split_long_text_messages=self.split_long_text_messages_for_extraction,
                 source_archive_uri=self._source_archive_uri,
                 extraction_scope=self._extraction_scope,
+                source_messages=self._source_messages,
             )
         return self._extract_context
 
@@ -296,7 +298,13 @@ types when required by their schemas.
             time_display = session_time_str
 
         extract_context = self.get_extract_context()
-        conversation = self._assemble_conversation(extract_context.messages)
+        include_sources = any(
+            schema.memory_type == "structured_records"
+            for schema in self.get_memory_schemas(self._ctx)
+        )
+        conversation = self._assemble_conversation(
+            extract_context.messages, include_sources=include_sources
+        )
 
         return {
             "role": "user",
@@ -309,12 +317,12 @@ Relative times (e.g., 'last week', 'next month') are based on Session Time, not 
 After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
         }
 
-    def _assemble_conversation(self, messages: Any) -> str:
+    def _assemble_conversation(self, messages: Any, *, include_sources: bool = False) -> str:
         """Assemble conversation string from messages.
 
         Args:
             messages: List of Message objects
-            latest_archive_overview: Optional overview from previous archive for context
+            include_sources: Label chunks belonging to the same original message.
 
         Returns:
             Formatted conversation string
@@ -322,6 +330,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         from openviking.message import Message
 
         conversation_sections: List[str] = []
+        chunk_meta = self.get_extract_context().chunk_meta if include_sources else {}
 
         def format_message_with_parts(msg: Message) -> str:
             """Format message parts for extraction.
@@ -358,7 +367,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             if not body.strip():
                 return None
             speaker = msg.peer_id or msg.role
-            return f"[{idx}][{msg.role}][{speaker}]: {body}"
+            header = f"[{idx}][{msg.role}][{speaker}]"
+            if include_sources:
+                chunk = chunk_meta.get(id(msg))
+                source_index = idx - chunk.chunk_index if chunk else idx
+                header += f"[source={source_index}]"
+            return f"{header}: {body}"
 
         formatted_messages = [
             formatted

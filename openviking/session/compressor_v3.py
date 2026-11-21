@@ -785,6 +785,7 @@ class SessionCompressorV3:
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
                 memory_registry=registry,
+                extract_context=extract_context,
                 isolation_options={
                     "allowed_memory_types": allowed_memory_types,
                     "allow_self": allow_self_memory,

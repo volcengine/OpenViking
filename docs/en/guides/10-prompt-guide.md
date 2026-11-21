@@ -608,6 +608,21 @@ A conservative approach is:
 3. change structural fields last
 4. modify only one prompt category at a time so impact is easier to isolate
 
+### Enable Structured Source Records
+
+Copy `opt_in/structured_records.yaml` from the built-in memory templates into
+`memory.custom_templates_dir`, restart the service, and commit a new session.
+The extraction model selects tables, terms, corrections, and prior deliverables
+worth retaining. OpenViking copies the selected text from the original message
+and labels its author role. Each version remains available as a separate record.
+
+Use `find` with `target_uri="viking://~/memories/structured_records"` and
+`read_content=true` to fetch evidence bodies in the search response. Set a
+`limit` appropriate to the caller's context budget. Each record contains a
+contiguous excerpt from one original message. For large tables, select
+self-contained row groups. Check the period, applicability, and version in the
+returned evidence when answering.
+
 ## Validation and Troubleshooting
 
 After modifying a prompt, validate it at two levels: whether the template was actually picked up, and whether the capability output changed as expected.
