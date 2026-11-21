@@ -6,7 +6,7 @@ import {
   type EditorView,
   type ViewUpdate,
 } from '@codemirror/view';
-import { Prism } from './prism-language.js';
+import { Prism } from '../../shared/prism-language.js';
 
 const highlighted = StateEffect.define<DecorationSet>();
 
@@ -28,14 +28,34 @@ function decorations(text: string, grammar: Prism.Grammar) {
       ...classes,
       ...names.map((name) => `ov-file-preview__token--${name}`),
     ];
-    for (const child of [token.content].flat()) visit(child, next);
+    // The console colors Markdown front matter's bracketed lists as a unit.
+    let sequenceDepth = 0;
+    for (const child of [token.content].flat()) {
+      const bracket =
+        token.type === 'front-matter' &&
+        typeof child !== 'string' &&
+        child.type === 'punctuation'
+          ? child.content
+          : undefined;
+      if (bracket === '[') sequenceDepth += 1;
+      visit(
+        child,
+        sequenceDepth > 0
+          ? [...next, 'ov-file-preview__token--flow-sequence']
+          : next,
+      );
+      if (bracket === ']' && sequenceDepth > 0) sequenceDepth -= 1;
+    }
   };
   for (const token of Prism.tokenize(text, grammar)) visit(token, []);
   return Decoration.set(ranges);
 }
 
 /** Defer full-document Prism tokenization; map existing marks while typing. */
-export function prismHighlight(grammar: Prism.Grammar, onError: () => void) {
+export function prismHighlight(
+  grammar: Prism.Grammar,
+  onError: (reason: unknown) => void,
+) {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet = Decoration.none;
@@ -49,8 +69,8 @@ export function prismHighlight(grammar: Prism.Grammar, onError: () => void) {
           try {
             const result = decorations(this.view.state.doc.toString(), grammar);
             this.view.dispatch({ effects: highlighted.of(result) });
-          } catch {
-            onError();
+          } catch (reason) {
+            onError(reason);
           }
         }, 100);
       }

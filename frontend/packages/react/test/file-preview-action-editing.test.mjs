@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import { waitForEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -55,14 +56,10 @@ for (const fails of [false, true]) {
         fails ? reject(new Error('Retry me')) : resolve(42),
       );
       assert.equal(button('Run').disabled, false);
-      if (fails)
-        assert.match(
-          document.querySelector('[role="alert"]').textContent,
-          /Retry me/,
-        );
+      if (fails) assert.match(notificationError().textContent, /Retry me/);
       await click(button('Run'));
       assert.equal(calls, 2);
-      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.equal(Boolean(notificationError()), false);
     } finally {
       resolve();
       await view.unmount();

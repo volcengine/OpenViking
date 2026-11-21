@@ -232,7 +232,7 @@ class AnthropicProtocol(ToolProtocol):
 
     def end(self):
         if not self.stopped or not self.finish or self.closed != set(self.blocks):
-            raise ToolLoopError("Incomplete Anthropic message")
+            raise ToolLoopError("Incomplete Anthropic message", code="tool_upstream_incomplete")
         blocks = [self.blocks[i] for i in sorted(self.blocks)]
         self.output = [{"role": "assistant", "content": blocks}]
         self.calls = [

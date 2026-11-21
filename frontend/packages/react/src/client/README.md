@@ -181,8 +181,8 @@ const fixedFetch: typeof fetch = async () =>
 
 `createOvClient` returns an `OvClient` with `request`, `requestEnvelope`, `stream` and `baseURL`, the interface blocks depend on. Blocks always use the client created by their nearest Provider, and the Provider takes no client of your own, so `fetch` is how you change the transport for them. Whatever the transport, the Client owns three things and blocks do not repeat them: joining the service address with the path, turning identity fields into headers, and turning a response into a result or an `OvClientError`.
 
-## Server rendering
+## Browser runtime
 
-Importing `@openviking/react/client` has no side effects, so it is safe during server rendering. `createOvClient` needs a `fetch`, either the global one or the one you pass, and throws without one.
+The client runs in the browser. `createOvClient` needs a `fetch`, either the global one or the one you pass, and throws without one.
 
 The client tests are in `packages/react/test/client*.test.mjs`; run them with `npm test` from `frontend/` (see the [workspace README](../../../../README.md)).

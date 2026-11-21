@@ -55,11 +55,11 @@ test('EOF without terminal event is failure; partial answer survives and retry i
   assert.equal(await controller.send('question'), false);
   assert.equal(controller.getSnapshot().error.code, 'BOT_STREAM_TRUNCATED');
   assert.equal(
-    controller.getSnapshot().messages.at(-1).parts[0].text,
+    controller.getSnapshot().messages.at(-2).parts[0].text,
     'partial',
   );
   assert.equal(await controller.send('retry'), false);
-  assert.equal(controller.getSnapshot().messages.length, 4);
+  assert.equal(controller.getSnapshot().messages.length, 6);
   stop();
 });
 

@@ -18,13 +18,38 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 
 ### ls()
 
-列出目录内容。
+列出目录的子节点；URI 指向文件时，将文件自身作为一条记录返回。目录列表不包含请求的目录自身。
+
+| 目标 | `ls` | `ls` 设置 `recursive=true` / `tree` |
+|------|------|-------------------------------------|
+| 目录 URI | 直接子节点 | 后代节点，`rel_path` 相对于目标目录 |
+| 文件 URI | 一条文件记录，不带 `rel_path` | 一条文件记录，`rel_path` 为文件名 |
+
+文件结果沿用目录列表的 `original`、`agent` 和 `simple` 纯 URI 输出格式。
+请求文件摘要或概览时，对应字段为空字符串，不读取父目录摘要。
+文件结果的 `has_more=false`；`offset>=1` 或 tags 不匹配时返回空数组。
+通过 `extra_fields=id,locked` 按需返回 `id` 和 `isLocked`，文件不返回 `count`。
+显式指定隐藏文件时无需设置 `show_all_hidden=true`，存储内部名称仍不暴露。
+目录读取已明确抛出的 `NOT_FOUND`、`PERMISSION_DENIED` 等错误继续传播。
+
+文件目标兼容由文件系统服务提供，作用于 HTTP、SDK、CLI 和 MCP 入口。
+内部 `VikingFS.ls/tree` 保留原有目录接口行为，同步和 OVPack 等操作不增加文件类型探测。
+
+首先尝试目录读取，收到 Not-a-directory 错误后改为读取文件元数据。
+由于部分对象存储后端对文件目标返回空列表，目录读取为空时也会检查目标类型。
+目录读取成功为空、随后元数据确认不存在时，保留原来的空列表结果。
+例如 S3 的非递归 `ls` 对不存在的前缀仍返回 HTTP 200 和空数组。
+元数据查询的权限错误及其他后端错误继续传播；Not-a-directory 后确认目标不存在时，仍返回 `NOT_FOUND`。
+
+对外接口的非空目录列表不增加类型检查请求。普通请求读取到空页且 `offset>0` 时，
+直接返回空列表，不再探测元数据。GLOBAL 和有数据访问范围约束的请求仍保留类型校验，
+因为被授权遍历的容器必须是目录。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | 文件或目录的 Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
@@ -149,6 +174,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
+# 单个文件，仍使用列表响应结构
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  --data-urlencode "uri=viking://resources/project/readme.md" \
+  --data-urlencode "output=original" \
+  -H "X-API-Key: your-key"
+
 # 递归列表
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
@@ -200,6 +231,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
       "uri": "viking://resources/docs/",
+      "access": "read",
       "tags": ["team=search"]
     }
   ],
@@ -207,17 +239,34 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 }
 ```
 
+`ls`、递归列表、`tree` 和 `stat` 的条目均返回 `access`，表示当前请求身份对该 URI 的有效权限。`original` 和 `agent` 输出都包含该字段；`simple=true` 的纯路径列表保持不变。
+
+| access | 含义 |
+|------------|------|
+| `denied` | 无权访问；列表只保留名称占位，不能展开；直接请求 `stat` 仍返回 403 |
+| `container` | 仅可展开目录以访问获授权的子项，不能读取目录自身的内容或修改它 |
+| `read` | 可读 |
+| `write` | 可读、可写 |
+| `manage` | 可读、可写、可管理 |
+
+共享资源合并直接授权、继承授权、用户组和管理员隐式权限。ACL 字段缺失或直接授权为空不会自动变成 `denied`：仍按祖先 ACL 及默认共享规则解析；`restricted` 且无匹配授权时才拒绝普通用户。关闭 ACL 时、或 URI 不属于共享资源时，使用原有身份及目录权限规则，包括系统文件的只读限制，不以是否存在向量记录决定权限。
+
+客户端可以复用列表中的 `access` 控制编辑入口，无需逐项请求 `stat` 或管理员专用的 ACL 接口。`access` 不代表格式可编辑、目录可删除或所有后代均已授权；具体操作仍执行其路径限制与当时的权限检查。底层文件模式 `mode` 不是当前身份的权限。
+
 ---
 
 ### tree()
 
-获取目录树结构。
+获取目录的后代节点；URI 指向文件时，将该文件作为单节点树返回。
+响应仍是扁平节点数组。文件的 `rel_path` 为文件名（如 `readme.md`），
+`level_limit` 不产生额外后代节点。设置 `directories_only=true` 时排除文件，返回空数组。
+文件分页、tags、元数据和错误行为与上面的 `ls` 一致。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | 文件或目录的 Viking URI |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
 | abs_limit | int | 否 | HTTP：256；SDK：128 | 返回的摘要最大长度 |
 | include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
@@ -421,6 +470,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "access": "write",
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   }
@@ -439,6 +489,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": true,
     "isLocked": false,
+    "access": "manage",
     "uri": "viking://resources/docs",
     "count": 42
   }

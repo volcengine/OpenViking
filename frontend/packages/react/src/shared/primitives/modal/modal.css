@@ -73,8 +73,10 @@
   background: var(--ov-ui-color-fill-hover, var(--ov-ui-fill-hover-default));
 }
 .ov-modal__close:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: -2px;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 .ov-modal__mask.ov-modal--enter,
 .ov-modal__mask.ov-modal--exit {
@@ -117,5 +119,12 @@
     height: 44px;
     top: 8px;
     right: 8px;
+  }
+}
+
+@media (forced-colors: active) {
+  .ov-modal__close:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 }

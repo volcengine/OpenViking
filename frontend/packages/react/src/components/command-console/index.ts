@@ -14,6 +14,7 @@ export type {
   CommandConsoleLabels,
   CommandConsoleProps,
   CommandConsoleRecord,
+  CommandConsoleTask,
   CommandConsoleRecordContent,
   CommandConsoleRecordStatus,
   CommandConsoleResourcePreviewContent,
@@ -26,5 +27,6 @@ export type {
   CommandConsoleStatusRow,
   CommandConsoleTextContent,
   CommandConsoleWriteResultContent,
+  CommandConsoleWriteResultUriLine,
   CommandConsoleQuickCommand,
 } from './types.js';

@@ -66,7 +66,7 @@ async def read_source(client, uri) -> str | CompileSourceRange:
         raise CompileFailure(
             "INVALID_ARGUMENT", f"Unsupported Compile image format: {uri}", stage="pipeline"
         )
-    result = await VikingMultiReadTool._read_image(client, uri)
+    result = await VikingMultiReadTool._read_image(client, uri, for_compile=True)
     if not result["success"]:
         raise CompileFailure("SOURCE_READ_FAILED", f"{uri}: {result['content']}", stage="pipeline")
     return CompileSourceRange(uri, 0, 0, 0, 0, "", image=result["image"], sha256=result["sha256"])

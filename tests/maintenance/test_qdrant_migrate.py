@@ -5950,7 +5950,7 @@ def test_qdrant_ci_workflow_lists_required_suites(monkeypatch) -> None:
     lite_steps = lite_job["steps"]
     test_step = next(step for step in lite_steps if "pytest" in step.get("run", ""))
     assert test_step["env"] == {
-        "QDRANT_URL": "${{ inputs.qdrant_integration && 'http://127.0.0.1:6333' || '' }}",
+        "QDRANT_URL": "${{ inputs.qdrant_integration && 'http://qdrant:6333' || '' }}",
         "QDRANT_API_KEY": "",
         "TEST_PATHS_JSON": "${{ inputs.test_paths_json }}",
     }

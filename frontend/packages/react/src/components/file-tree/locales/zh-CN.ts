@@ -1,12 +1,11 @@
 import type { ResolvedLabels } from '../file-tree-row-context.js';
 
 const messages = {
-  readOnly: '只读',
-  noAccess: '无权限',
-  traverseOnly: '仅可遍历',
   search: '搜索文件 ⌘+K...',
   refresh: '刷新文件树',
   empty: '暂无文件',
+  emptyDirectory: '该文件夹为空',
+  shared: '共享',
   error: '加载失败',
   retry: '重试',
   loadMore: '加载更多',
@@ -31,7 +30,7 @@ const messages = {
       cases: '用于训练经验的交互案例',
       trajectories: '可复用的任务执行轨迹',
       experiences: '自动提炼的执行经验',
-      sharedResources: 'Agent 可引用的外部资料',
+      sharedResources: '团队成员共享的知识资料',
       agentRoot: 'Agent 的能力、工具与经验',
       agentEndpoints: '账号内共享的通信端点配置',
       agentPayments: '账号内共享的支付能力配置',

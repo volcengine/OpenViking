@@ -1,150 +1,87 @@
 import { useCallback, useId, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { OV_PATHS } from '../../client/paths.js';
-import { Button } from '../../shared/primitives/button/button.js';
-import { readCompileConfig } from './preview-native.js';
+import { TabList } from '../../shared/primitives/tabs/tab-list.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
+import { resolveDashboardUri } from './dashboard-resource.js';
+import { readCompileCatalog } from './dashboard-data.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
-import { usePreviewMutation } from './use-preview-mutation.js';
-import {
-  PreviewMutationError,
-  PreviewQueryState,
-} from './preview-query-state.js';
-import { PreviewCompileSchedule } from './preview-compile-schedule.js';
-import type {
-  CompileConfig,
-  PreviewWorkflowProps,
-} from './preview-workflow-types.js';
+import { PreviewQueryState } from './preview-query-state.js';
+import { PreviewCompileDetails } from './preview-compile-details.js';
+import type { PreviewWorkflowProps } from './preview-workflow-types.js';
+export type { CompileField } from './preview-compile-details.js';
 
-type Props = PreviewWorkflowProps & {
-  canWrite: boolean;
-  loadingText: string;
-  retryText: string;
-};
-export function PreviewCompileConfig(props: Props) {
-  const { uri, text, requestOptions, loadingText, retryText } = props;
+export function PreviewCompileConfig(
+  props: PreviewWorkflowProps & {
+    canWrite: boolean;
+    loadingText: string;
+    retryText: string;
+  },
+) {
   const query = useDashboardQuery(
     useCallback(
-      (client: OvClient, options: OvRequestOptions) =>
-        readCompileConfig(client, uri, options),
-      [uri],
+      async (client: OvClient, options: OvRequestOptions) => {
+        const uri = normalizeResourceUri(
+          await resolveDashboardUri(client, props.uri, options),
+        );
+        const catalog = await readCompileCatalog(client, uri, options);
+        return catalog.named
+          ? catalog.targets.filter(
+              (item) =>
+                normalizeResourceUri(item.to) === uri &&
+                Boolean(item.compile_name),
+            )
+          : [{ to: uri }];
+      },
+      [props.uri],
     ),
-    requestOptions,
+    props.requestOptions,
   );
+  const [selected, setSelected] = useState<string>();
+  const tabsId = useId();
+  const choices = query.data ?? [];
+  const choice =
+    choices.find((item) => item.compile_name === selected) ?? choices[0];
   return (
     <>
       <PreviewQueryState
         query={query}
-        text={{ ...text, loading: loadingText, retry: retryText }}
+        text={{
+          ...props.text,
+          loading: props.loadingText,
+          retry: props.retryText,
+        }}
       />
-      {query.data ? (
-        <CompileConfigForm {...props} initial={query.data} />
+      {choices.length > 1 ? (
+        <TabList
+          id={tabsId}
+          label={props.text.configuration}
+          className="ov-compile-config__tabs"
+          activeKey={choice!.compile_name!}
+          items={choices.map((item) => ({
+            key: item.compile_name!,
+            label: item.compile_name,
+          }))}
+          manual
+          onChange={setSelected}
+        />
+      ) : null}
+      {query.data && !choices.length ? (
+        <p role="status">{props.text.configurationEmpty}</p>
+      ) : null}
+      {choice ? (
+        <div
+          role={choices.length > 1 ? 'tabpanel' : undefined}
+          aria-labelledby={
+            choices.length > 1 ? `${tabsId}-${choice.compile_name}` : undefined
+          }
+        >
+          <PreviewCompileDetails
+            key={choice.compile_name ?? choice.to}
+            {...props}
+            compileName={choice.compile_name}
+          />
+        </div>
       ) : null}
     </>
-  );
-}
-function CompileConfigForm({
-  uri,
-  initial,
-  text,
-  locale,
-  canWrite,
-  requestOptions,
-  onUpdated,
-  onClose,
-}: Props & { initial: CompileConfig }) {
-  const id = useId();
-  const [draft, setDraft] = useState(initial);
-  const [sources, setSources] = useState(initial.from.join('\n'));
-  const mutation = usePreviewMutation(uri, requestOptions);
-  const change = (value: Partial<CompileConfig>) => {
-    setDraft((current) => ({ ...current, ...value }));
-    mutation.reset();
-  };
-  return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!canWrite) return;
-        const body = {
-          to: uri,
-          from: sources
-            .split('\n')
-            .map((value) => value.trim())
-            .filter(Boolean),
-          skill: draft.skill,
-          instruction: draft.instruction,
-          auto_update: draft.auto_update,
-          update_schedule: draft.update_schedule,
-        };
-        void mutation.run(
-          (client, options) =>
-            client.request({
-              method: 'POST',
-              path: OV_PATHS.compileConfigUpdate,
-              body,
-              options,
-            }),
-          onUpdated,
-        );
-      }}
-    >
-      <fieldset disabled={!canWrite || mutation.pending}>
-        <label htmlFor={`${id}-sources`}>{text.sources}</label>
-        <textarea
-          id={`${id}-sources`}
-          required
-          value={sources}
-          onChange={(event) => {
-            setSources(event.target.value);
-            mutation.reset();
-          }}
-        />
-        <label htmlFor={`${id}-skill`}>{text.skill}</label>
-        <input
-          id={`${id}-skill`}
-          required
-          value={draft.skill}
-          onChange={(event) => change({ skill: event.target.value })}
-        />
-        <label htmlFor={`${id}-instruction`}>{text.instruction}</label>
-        <textarea
-          id={`${id}-instruction`}
-          value={draft.instruction ?? ''}
-          onChange={(event) => change({ instruction: event.target.value })}
-        />
-        <label htmlFor={`${id}-automatic`}>
-          <input
-            id={`${id}-automatic`}
-            type="checkbox"
-            checked={draft.auto_update}
-            onChange={(event) => change({ auto_update: event.target.checked })}
-          />
-          {text.automatic}
-        </label>
-        <PreviewCompileSchedule
-          value={draft.update_schedule}
-          text={text}
-          locale={locale}
-          onChange={(update_schedule) => change({ update_schedule })}
-        />
-      </fieldset>
-      <PreviewMutationError error={mutation.error} text={text} />
-      {mutation.succeeded ? <p role="status">{text.saved}</p> : null}
-      <div className="ov-file-browser-workflow__actions">
-        <Button size="small" htmlType="button" onClick={onClose}>
-          {text.cancel}
-        </Button>
-        {canWrite ? (
-          <Button
-            size="small"
-            type="primary"
-            htmlType="submit"
-            loading={mutation.pending}
-          >
-            {text.save}
-          </Button>
-        ) : null}
-      </div>
-    </form>
   );
 }

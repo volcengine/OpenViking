@@ -2,8 +2,8 @@
 
 use super::REVISION_TTL;
 use crate::cache_runtime::{
-    CacheError, CacheOperation, CacheResult, CacheRuntime, Expiration, ScriptDefinition,
-    ScriptRequest, ScriptValue, SetCondition, SetOptions, SetResult,
+    CacheError, CacheOperation, CacheResult, CacheRuntime, Expiration, ScriptRequest,
+    ScriptValue, SetCondition, SetOptions, SetResult,
 };
 use bytes::Bytes;
 use std::future::Future;
@@ -28,15 +28,9 @@ end
 return redis.call("DEL", KEYS[1])
 "#;
 
-const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
-    ScriptDefinition {
-        id: RENEW_SCRIPT_ID,
-        redis_lua: RENEW_SCRIPT,
-    },
-    ScriptDefinition {
-        id: RELEASE_SCRIPT_ID,
-        redis_lua: RELEASE_SCRIPT,
-    },
+const SCRIPT_DEFINITIONS: &[(&str, &str)] = &[
+    (RENEW_SCRIPT_ID, RENEW_SCRIPT),
+    (RELEASE_SCRIPT_ID, RELEASE_SCRIPT),
 ];
 
 /// One leader lease. Its ownership token stays inside AGFS.
@@ -62,11 +56,11 @@ impl CacheBackend {
     ) -> CacheResult<Self> {
         validate_component("service_name", service_name)?;
         runtime.require_operations(&[CacheOperation::Set, CacheOperation::ExecuteScript])?;
-        for definition in SCRIPT_DEFINITIONS {
-            runtime.register_script(*definition)?;
+        for &(script_id, redis_lua) in SCRIPT_DEFINITIONS {
+            runtime.register_script(script_id.to_string(), redis_lua.to_string())?;
         }
-        for definition in REVISION_SCRIPTS {
-            runtime.register_script(*definition)?;
+        for &(script_id, redis_lua) in REVISION_SCRIPTS {
+            runtime.register_script(script_id.to_string(), redis_lua.to_string())?;
         }
         Ok(Self {
             runtime,
@@ -260,17 +254,17 @@ mod tests {
 pub(super) const ALLOCATE: &str = "ragfs.revision.allocate.v1";
 pub(super) const PUBLISH: &str = "ragfs.revision.publish.v1";
 pub(super) const LATEST: &str = "ragfs.revision.latest.v1";
-const REVISION_SCRIPTS: &[ScriptDefinition] = &[
-    ScriptDefinition {
-        id: ALLOCATE,
-        redis_lua: r#"
+const REVISION_SCRIPTS: &[(&str, &str)] = &[
+    (
+        ALLOCATE,
+        r#"
 redis.call("INCR", KEYS[1])
 return redis.call("GET", KEYS[1])
 "#,
-    },
-    ScriptDefinition {
-        id: PUBLISH,
-        redis_lua: r#"
+    ),
+    (
+        PUBLISH,
+        r#"
 local function less(a, b)
     return #a < #b or (#a == #b and a < b)
 end
@@ -285,9 +279,6 @@ end
 redis.call("SET", KEYS[2], latest, "PX", ARGV[2])
 return latest
 "#,
-    },
-    ScriptDefinition {
-        id: LATEST,
-        redis_lua: r#"return redis.call("GET", KEYS[1]) or "0""#,
-    },
+    ),
+    (LATEST, r#"return redis.call("GET", KEYS[1]) or "0""#),
 ];

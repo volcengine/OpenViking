@@ -53,7 +53,7 @@ export function fixture(intercept) {
     }
     if (call.path.endsWith('/fs/ls')) return ok([{ uri: URI, isDir: true }]);
     if (call.path.endsWith('/fs/stat'))
-      return ok({ isDir: true, permission: 'manage' });
+      return ok({ isDir: true, access: 'manage' });
     if (
       call.path.endsWith('/content/abstract') ||
       call.path.endsWith('/content/overview')
@@ -102,8 +102,14 @@ export async function level(principal, text) {
   const entry = [
     ...document.querySelectorAll('.ov-file-browser-acl__entry'),
   ].find((node) => node.querySelector(`button[aria-label^="${principal}:"]`));
-  await click(entry?.querySelector('button'));
-  await click(button(text, entry));
+  const trigger = entry?.querySelector('button');
+  await click(trigger);
+  await click(
+    button(
+      text,
+      document.getElementById(trigger.getAttribute('aria-controls')),
+    ),
+  );
 }
 export const writes = (fetch) =>
   fetch.calls.filter(

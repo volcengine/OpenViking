@@ -1,14 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
+import {
+  beginMutation,
+  type MutationTarget,
+} from '../../shared/analytics/mutation.js';
+import { useContext, useEffect, useMemo, useState } from 'react';
+import { NotificationScopeContext } from '../../shared/feedback/notification-context.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 
 /** A dialog owns its pending mutation. Failed submissions retain the caller's draft. */
 export function usePreviewMutation(
   uri: string,
   requestOptions?: OvRequestOptions,
 ) {
+  const analytics = useAnalyticsRef();
   const client = useOvClient();
+  const feedback = useContext(NotificationScopeContext);
   const inherited = useOvSignal();
   const signal = requestOptions?.signal ?? inherited;
   const key = scopeKeyOf(client, requestOptions, uri);
@@ -35,6 +43,8 @@ export function usePreviewMutation(
       options: OvRequestOptions,
     ) => Promise<unknown>,
     onSuccess?: () => void,
+    analyticsTarget?: MutationTarget,
+    onError?: (error: unknown) => void,
   ) => {
     if (
       !client ||
@@ -44,13 +54,16 @@ export function usePreviewMutation(
     )
       return;
     owner.pending = true;
+    feedback?.dismiss(state?.owner === owner ? state.error : undefined);
     const composed = signal
       ? AbortSignal.any([signal, owner.controller.signal])
       : owner.controller.signal;
     setState({ owner, pending: true });
+    const event = beginMutation(analytics, analyticsTarget);
     try {
       await operation(client, { ...requestOptions, signal: composed });
       if (composed.aborted) return;
+      event?.success();
       setState({ owner, pending: false, succeeded: true });
       try {
         onSuccess?.();
@@ -58,7 +71,11 @@ export function usePreviewMutation(
         /* Notification cannot undo API success. */
       }
     } catch (error) {
-      if (!composed.aborted) setState({ owner, pending: false, error });
+      if (!composed.aborted) {
+        event?.fail(error);
+        setState({ owner, pending: false, ...(onError ? {} : { error }) });
+        onError?.(error);
+      }
     } finally {
       owner.pending = false;
     }
@@ -66,7 +83,10 @@ export function usePreviewMutation(
   return {
     run,
     reset: () => {
-      if (!owner.pending) setState(undefined);
+      if (!owner.pending) {
+        feedback?.dismiss(state?.owner === owner ? state.error : undefined);
+        setState(undefined);
+      }
     },
     pending: state?.owner === owner && state.pending,
     error: state?.owner === owner ? state.error : undefined,

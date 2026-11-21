@@ -40,10 +40,10 @@ test('Wiki module binds operation URIs and resets local filters when the documen
   const first = 'viking://user/alice/resources/wiki/first.md';
   const next = first.replace('first.md', 'next.md');
   const view = await mount(render(first));
-  assert.equal(
-    view.container.querySelector('.ov-wiki-dashboard__actions'),
-    null,
-  );
+  assert.doesNotMatch(view.container.textContent, /first\.md/);
+  const action = view.container.querySelector('button[aria-label="Open file"]');
+  assert.ok(action?.querySelector('svg'));
+  assert.equal(action.textContent, '');
   await act(async () =>
     view.container.querySelector('[aria-haspopup="listbox"]').click(),
   );
@@ -60,7 +60,7 @@ test('Wiki module binds operation URIs and resets local filters when the documen
   );
   assert.match(view.container.textContent, /Approval policy differs/);
   await act(async () =>
-    view.container.querySelector('.ov-wiki-dashboard__path button').click(),
+    view.container.querySelector('button[aria-label="Open file"]').click(),
   );
   assert.deepEqual(events.at(-1), ['open', next]);
   await view.unmount();

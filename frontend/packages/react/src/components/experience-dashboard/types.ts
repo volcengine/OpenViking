@@ -1,4 +1,5 @@
-import type { HTMLAttributes } from 'react';
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
+import type { HTMLAttributes, ReactNode } from 'react';
 import type { DashboardStatus } from '../../shared/dashboard/dashboard-state.js';
 
 export interface ExperienceItem {
@@ -6,6 +7,15 @@ export interface ExperienceItem {
   name: string;
   description?: string;
   modTime?: string;
+  /**
+   * 是否在用户上次查看之后有更新，为真时名称右侧显示「更新」标记。
+   * 判定由宿主完成，组件只负责展示。
+   *
+   * Whether the experience changed since the user last looked at it; a true value
+   * shows the "Updated" tag beside the name. The host decides, the component only
+   * renders it.
+   */
+  isUpdated?: boolean;
   injectionCount?: number;
   recallCount?: number;
   trajectoryCount?: number;
@@ -24,6 +34,28 @@ export interface ExperienceTrajectory {
 export type ExperienceOutcome =
   'success' | 'partial' | 'unfinished' | 'failure' | 'unknown';
 
+export interface ExperienceSourceGroup {
+  id: string;
+  updatedAt: string;
+  trajectories: readonly ExperienceTrajectory[];
+}
+
+export interface ExperienceTrajectoryMessages {
+  archiveUri?: string;
+  items: readonly {
+    role: string;
+    content: string;
+    createdAt?: string;
+    tools?: readonly {
+      id: string;
+      name: string;
+      status: string;
+      input?: unknown;
+      output?: string;
+    }[];
+  }[];
+}
+
 export interface ExperienceDashboardData {
   experiences?: readonly ExperienceItem[];
   total?: number;
@@ -36,6 +68,7 @@ export interface ExperienceDashboardData {
   trajectories?: readonly ExperienceTrajectory[];
   trajectoryTotal?: number;
   sources?: readonly ExperienceTrajectory[];
+  sourceGroups?: readonly ExperienceSourceGroup[];
   testMaterials?: readonly {
     id: string;
     title: string;
@@ -97,6 +130,7 @@ export interface ExperienceDashboardLabels {
   jumpPrevious: string;
   jumpNext: string;
   updated: string;
+  updatedTag: string;
   success: string;
   partial: string;
   unfinished: string;
@@ -105,6 +139,38 @@ export interface ExperienceDashboardLabels {
   unsupportedMetric: string;
   open: string;
 }
+
+export type ExperienceDashboardSection =
+  'list' | 'effect' | 'outcomes' | 'trajectories' | 'sources' | 'tests';
+
+export interface ExperienceDashboardSectionContext extends Pick<
+  ExperienceDashboardProps,
+  | 'uri'
+  | 'page'
+  | 'pageSize'
+  | 'startIndex'
+  | 'hasMore'
+  | 'loadingMore'
+  | 'onPageChange'
+  | 'onLoadMore'
+  | 'onOpenUri'
+  | 'onOpenTrajectory'
+> {
+  data: ExperienceDashboardData;
+  state?: ExperienceDashboardState;
+  days: number;
+  locale: NonNullable<ExperienceDashboardProps['locale']>;
+}
+
+export type ExperienceDashboardSections = Partial<
+  Record<
+    ExperienceDashboardSection,
+    (
+      context: ExperienceDashboardSectionContext,
+      defaultContent: ReactNode,
+    ) => ReactNode
+  >
+>;
 
 export interface ExperienceDashboardProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -122,10 +188,7 @@ export interface ExperienceDashboardProps extends Omit<
   loadingMore?: boolean;
   startIndex?: number;
   states?: Partial<
-    Record<
-      'list' | 'outcomes' | 'trajectories' | 'sources' | 'tests',
-      ExperienceDashboardState
-    >
+    Record<ExperienceDashboardSection, ExperienceDashboardState>
   >;
   locale?: 'en-US' | 'zh-CN';
   onTabChange?: (tab: ExperienceDashboardTab) => void;
@@ -137,6 +200,16 @@ export interface ExperienceDashboardProps extends Omit<
    */
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
+  onOpenTrajectory?: (
+    trajectory: ExperienceTrajectory,
+    trigger: HTMLButtonElement,
+  ) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: {
+    errorFallback?: ErrorFallback;
+    /** Replaces individual sections while keeping their data and controls available. */
+    sections?: ExperienceDashboardSections;
+  };
   labels?: Partial<ExperienceDashboardLabels>;
 }
 

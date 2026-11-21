@@ -1,7 +1,11 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
-  formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
+  previewAiGenerated: 'AI 生成',
+  formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 字符数`,
+  formatPreviewUpdatedAt: (time) => `更新于 ${time}`,
+  previewModelNotice: '内容解析由 内容理解大模型 提供',
   accessDenied: '无权查看此节点。',
   traverseOnly: '此目录仅可展开以访问有权限的子节点。',
   systemDirectory: '选择此目录中的文件以预览内容。',
@@ -15,22 +19,28 @@ const messages = {
   searchHint: '输入关键词后即可搜索上下文文件或目录',
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
+  searchInvalidPattern:
+    '正则表达式无效。请使用 ^test.* 匹配行首为 test 的内容；查找星号本身请用 \\*。',
+  searchErrorDetails: '错误详情',
   searchModePlaceholders: {
-    find: '输入语义检索内容',
+    find: '搜索文件或目录',
     search: '输入需要结合会话理解的问题',
-    grep: '输入正则表达式或精确文本',
+    grep: '输入正文正则，例如 test.*',
     glob: '输入文件模式，例如 **/*.md',
   },
   searchModeHints: {
     find: '基于向量匹配的语义检索',
     search: '携带上下文的语义检索',
-    grep: '全文检索',
-    glob: '全文检索文件名',
+    grep: '按正则表达式检索正文',
+    glob: '按通配符匹配文件名',
   },
   searchAdvanced: '高级选项',
   searchClear: '清空',
   searchScopes: '目录',
   searchPickScope: '选择目录',
+  searchAllScopes: '全部目录',
+  searchCancelScopes: '取消',
+  searchConfirmScopes: '确认',
   searchScopesUnsupported: '当前范围不支持按目录筛选',
   searchLevels: '内容',
   searchLevelLabels: ['L0 摘要', 'L1 总览', 'L2 全文'],
@@ -42,14 +52,12 @@ const messages = {
   searchIgnoreCase: '忽略大小写',
   searchFilterUnsupported: '当前检索方式不支持此筛选',
   searchResultCount: (count) => `检索到 ${count} 条结果`,
-  searchVia: '向量检索方式',
+  searchVia: '检索方式',
   searchSwitchMode: '切换',
   searchAdvancedLabel: '高级筛选',
+  searchAdvancedLabelWithCount: (label, count) => `${label}（${count}）`,
   loading: '加载中…',
   searchDismiss: 'Esc 退出',
-  searchPreview: '搜索结果预览',
-  searchPreviewEmpty: '暂无可预览内容',
-  searchPreviewFailed: '预览加载失败',
   searchLoading: '搜索中…',
   previewMode: '预览',
   sourceMode: '源码',
@@ -70,10 +78,21 @@ const messages = {
   resizeTree: '调整目录树宽度',
   l0Summary: 'L0 摘要',
   l1Overview: 'L1 总览',
+  emptyL0Summary: '暂无 L0 摘要',
+  emptyL1Overview: '暂无 L1 总览',
   summaryEmpty: '暂无生成内容',
   summaryFailed: '摘要加载失败。',
 } satisfies Required<ShellLabels>;
 
 export default messages;
 
+export const emptySummaries = { l0: '暂无 L0 摘要', l1: '暂无 L1 总览' };
+
 export const stackedEmpty = '从上方选中一个文件预览';
+
+export const renderErrors = {
+  browser: '文件浏览器显示失败',
+  tree: '目录树显示失败',
+  preview: '文件预览失败',
+  search: '搜索结果显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

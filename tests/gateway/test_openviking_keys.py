@@ -1,7 +1,8 @@
 """OpenViking API keys used directly as gateway keys (``openviking_keys``)."""
 
+import time
+
 import pytest
-from conftest import make_due
 
 from openviking_gateway.models import Policy
 from openviking_gateway.proxy import resolve_binding
@@ -98,28 +99,39 @@ async def test_request_during_user_data_deletion_does_not_block_the_key(running_
     assert await management.credential(RECORD)
 
 
-async def test_capture_worker_delivers_with_the_stored_key(running_gateway):
+async def test_finished_turn_is_saved_with_the_requests_key(running_gateway):
     app, client, _, _, _, writes = running_gateway
     calls = record_openviking_calls(app)
-    headers = {**bearer(OV_KEY), "X-OpenViking-Session": "direct"}
-    messages = [{"role": "user", "content": "Remember the blue cluster"}]
-    for _ in range(2):
-        response = await client.post(
-            "/v1/chat/completions", headers=headers, json={"model": "model", "messages": messages}
-        )
-        assert response.status_code == 200, response.text
-        messages += [
-            {"role": "assistant", "content": "hello"},
-            {"role": "user", "content": "And the red one"},
-        ]
-    await make_due(app.state.store)
-    for _ in range(5):
-        if writes:
-            break
-        await app.state.worker.once()
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={**bearer(OV_KEY), "X-OpenViking-Session": "direct"},
+        json={"model": "model", "messages": [{"role": "user", "content": "Remember blue"}]},
+    )
+    assert response.status_code == 200, response.text
     assert writes
     session_keys = {key for path, key in calls if path.startswith("/api/v1/sessions")}
     assert session_keys == {OV_KEY}
+
+
+async def test_key_record_in_use_does_not_expire(running_gateway):
+    app, client, _, _, _, _ = running_gateway
+    management, ttl = app.state.management, app.state.config.session_ttl_seconds
+    assert (await client.get("/v1/models", headers=bearer(OV_KEY))).status_code == 200
+    record = await management.credential(RECORD)
+    stored = {k: v for k, v in record.items() if k not in {"account", "id", "expires_at"}}
+    # More than half of the lifetime left: the record is not written again.
+    assert (await client.get("/v1/models", headers=bearer(OV_KEY))).status_code == 200
+    assert await management.credential(RECORD) == record
+    # Close to its end, a request in use extends it, and the user's record with it.
+    await management.save("tenant", "keys", RECORD, stored, ttl=60)
+    await management.save("tenant", "users", "bob", {"user_id": "bob"}, ttl=60)
+    assert (await client.get("/v1/models", headers=bearer(OV_KEY))).status_code == 200
+    refreshed = await management.credential(RECORD)
+    assert refreshed["expires_at"] > time.time() + ttl - 60
+    assert {k: v for k, v in refreshed.items() if k != "expires_at"} == {
+        k: v for k, v in record.items() if k != "expires_at"
+    }
+    assert (await management.get("tenant", "users", "bob"))["expires_at"] > time.time() + 3600
 
 
 async def test_revoked_openviking_key_deletes_the_record(running_gateway):
@@ -134,7 +146,7 @@ async def test_revoked_openviking_key_deletes_the_record(running_gateway):
     # Without a record, OpenViking is asked again and still rejects the key.
     response = await client.get("/v1/models", headers=bearer(OV_KEY))
     assert response.status_code == 401
-    assert response.json()["reason"] == "openviking_http_401"
+    assert response.json()["reason"] == "openviking_key_invalid"
     assert await app.state.management.credential(RECORD) is None
 
 

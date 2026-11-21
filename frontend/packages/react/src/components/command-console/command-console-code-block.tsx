@@ -1,5 +1,6 @@
 import { CommandConsoleCopyButton } from './command-console-copy-button.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
+import { isCommandConsoleJson } from './command-console-result-text.js';
 import { formatCommandConsoleJson } from './command-console-text.js';
 import { CommandConsoleUriText } from './command-console-uri-text.js';
 
@@ -24,13 +25,20 @@ export function CommandConsoleCodeBlock({
         copiedLabel={labels.copied}
         onCopy={onCopy}
       />
-      <pre className="ov-command-console__code-content">
+      {/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Labelled code output must support keyboard horizontal scrolling. */}
+      <pre
+        className="ov-command-console__code-content"
+        role="region"
+        aria-label={labels.codeOutput}
+        tabIndex={0}
+      >
         <CommandConsoleUriText
           text={formatCommandConsoleJson(text)}
-          mode="literal"
+          mode={isCommandConsoleJson(text) ? 'json' : 'literal'}
           onOpenUri={onOpenUri}
         />
       </pre>
+      {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
     </div>
   );
 }

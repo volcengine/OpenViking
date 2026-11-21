@@ -1,19 +1,22 @@
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { useId, type ReactNode } from 'react';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
-import {
-  PreviewMutationError,
-  PreviewQueryState,
-} from './preview-query-state.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
+import { LazyContent } from '../../shared/lazy-content.js';
+import { PreviewLoading, PreviewQueryState } from './preview-query-state.js';
+import { PreviewHistoryTabs } from './preview-history-tabs.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type { DashboardQuery } from './use-dashboard-query.js';
 import type { DiffLine } from './preview-diff.js';
-
+import type { Locale } from '../../shared/locale.js';
+const load = async () => ({
+  default: (await import('./preview-history-core.js')).PreviewHistoryCore,
+});
 export function PreviewHistoryRevision({
   content,
   current,
   selectedPath,
+  addedFile,
   view,
   compare,
   changes,
@@ -23,10 +26,19 @@ export function PreviewHistoryRevision({
   text,
   setView,
   onCopy,
+  extraActions,
+  controls,
+  comparison,
+  locale,
+  loading = false,
+  queryState,
 }: {
-  content: DashboardQuery<string>;
+  content: DashboardQuery<string | null>;
+  loading?: boolean;
+  queryState?: ReactNode;
   current: DashboardQuery<unknown>;
   selectedPath?: string;
+  addedFile?: boolean;
   view: 'preview' | 'source';
   compare: boolean;
   changes?: DiffLine[];
@@ -36,38 +48,44 @@ export function PreviewHistoryRevision({
   text: FileBrowserWorkflowLabels & { loading: string; retry: string };
   setView: (view: 'preview' | 'source') => void;
   onCopy: () => void;
+  extraActions?: ReactNode;
+  controls?: ReactNode;
+  comparison?: ReactNode;
+  locale: Locale;
 }) {
-  const statusText = text;
+  const id = useId();
+  const deleted = content.data === null;
+  const displayedChanges = compare && !identical ? changes : undefined;
+  const ready =
+    !loading &&
+    content.data !== undefined &&
+    !content.loading &&
+    !content.error &&
+    (!compare || (!current.loading && !current.error));
   return (
-    <div className="ov-file-history__main">
-      <div className="ov-file-history__revision">
+    <section className="ov-file-history__content-panel">
+      <div className="ov-file-history__content-card">
+        <div className="ov-file-history__corner-marks" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
         <div className="ov-file-history__toolbar">
-          <div
-            className="ov-file-preview__switch"
-            role="group"
-            aria-label={text.historyPreview}
-          >
-            {(['preview', 'source'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className="ov-file-preview__switch-item"
-                aria-pressed={view === mode}
-                disabled={!selectedPath || compare}
-                onClick={() => setView(mode)}
-              >
-                {mode === 'preview'
-                  ? text.historyPreview
-                  : text.historyMarkdown}
-              </button>
-            ))}
-          </div>
-          <div className="ov-file-history__commands">
+          {controls}
+          <PreviewHistoryTabs
+            id={id}
+            value={view}
+            onChange={setView}
+            text={text}
+          />
+          <div className="ov-file-history__toolbar-actions">
+            {extraActions}
             <Button
               size="small"
               type="outline"
               icon={<CopyIcon aria-hidden="true" />}
-              disabled={content.data === undefined}
+              disabled={typeof content.data !== 'string'}
               loading={copy.pending}
               onClick={onCopy}
             >
@@ -75,51 +93,70 @@ export function PreviewHistoryRevision({
             </Button>
           </div>
         </div>
-        <PreviewMutationError error={copy.error} text={text} />
-        <div className="ov-file-history__content">
-          <PreviewQueryState query={content} text={statusText} />
-          {compare ? (
-            <PreviewQueryState query={current} text={statusText} />
+        {comparison ? (
+          <div className="ov-file-history__directory-comparison">
+            {comparison}
+          </div>
+        ) : null}
+        <div
+          className="ov-file-history__viewer"
+          id={`${id}-panel`}
+          role="tabpanel"
+          aria-labelledby={`${id}-${view}`}
+          tabIndex={0}
+        >
+          <PreviewQueryState query={content} text={text} showLoading={false} />
+          {queryState}
+          {loading || content.loading || (compare && current.loading) ? (
+            <PreviewLoading label={text.loading} />
           ) : null}
           {compare ? (
-            identical ? (
-              <p>{text.noChanges}</p>
-            ) : changes ? (
-              <ol className="ov-file-history__diff">
-                {changes.map(({ kind, text: line }, index) => (
-                  <li key={index} data-change={kind}>
-                    <span aria-hidden="true">{index + 1}</span>
-                    <code>
-                      {kind === 'added'
-                        ? '+ '
-                        : kind === 'removed'
-                          ? '− '
-                          : '  '}
-                      {line.trimEnd() || '\u00a0'}
-                    </code>
-                  </li>
-                ))}
-              </ol>
-            ) : null
-          ) : content.data !== undefined ? (
-            view === 'preview' && /\.md$/i.test(selectedPath ?? '') ? (
-              <div className="ov-file-history__markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-                  {content.data}
-                </ReactMarkdown>
-              </div>
-            ) : (
-              <pre>{content.data}</pre>
-            )
+            <PreviewQueryState
+              query={current}
+              text={text}
+              showLoading={false}
+            />
+          ) : null}
+          {compare && identical && !deleted ? (
+            <p className="ov-file-history__no-diff-notice" role="status">
+              {text.noChanges}
+            </p>
+          ) : null}
+          {ready && deleted && !displayedChanges?.length ? (
+            <Empty
+              size="compact"
+              illustration="tray"
+              title={text.deletedVersion}
+            />
+          ) : ready ? (
+            <LazyContent
+              load={load}
+              contentProps={{
+                content: content.data ?? '',
+                changes: displayedChanges,
+                view,
+                locale,
+                path: selectedPath,
+                addedFile,
+                deletedFile: deleted,
+              }}
+              fallback={<PreviewLoading label={text.loading} />}
+            />
           ) : null}
         </div>
-        {compare && changes && !identical ? (
+        {displayedChanges?.length ? (
           <div className="ov-file-history__legend">
-            <span data-change="removed">{text.removedLines}</span>
-            <span data-change="added">{text.addedLines}</span>
+            <span className="ov-file-history__removed-legend">
+              <i />
+              {text.removedLines}
+            </span>
+            <span className="ov-file-history__added-legend">
+              <i />
+              {text.addedLines}
+            </span>
           </div>
         ) : null}
       </div>
-    </div>
+    </section>
   );
 }

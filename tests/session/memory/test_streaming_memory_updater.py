@@ -1013,24 +1013,74 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_merge_requests_rejects_uri_conflicts_between_operation_kinds():
-    updater = StreamingMemoryUpdater(registry=_registry())
+@pytest.mark.parametrize(
+    "case,calls,expected",
+    [
+        ("add_delete", 0, "conflict content"),
+        ("add_edit", 1, "merged"),
+        ("edit_delete", 1, "merged"),
+        ("forget", 1, None),
+        ("parse_error", 2, "old conflict"),
+        ("unchanged", 0, "old conflict"),
+        ("write_failure", 0, "old conflict"),
+    ],
+)
+async def test_same_session_uri_conflicts(monkeypatch, case, calls, expected):
+    add, edit = _note_op("conflict"), _note_update_op("conflict")
+    target, other = edit.old_memory_file_content, _note_delete_file("obsolete")
+    fs = InMemoryVikingFS({f.uri: MemoryFileUtils.write(f) for f in (target, other)})
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig())
+    monkeypatch.setattr(PatchMergeContextProvider, "search_files", AsyncMock(return_value=[]))
+    upserts = [edit] if case in {"edit_delete", "forget", "unchanged", "parse_error"} else [add]
+    deletes = [] if case == "add_edit" else [target]
+    if case == "add_edit":
+        upserts.append(edit)
+    if case == "unchanged":
+        edit.memory_fields["content"].blocks[0].replace = "old conflict"
+        deletes.append(other)
+    if case == "write_failure":
+        fs.write_file = AsyncMock(side_effect=OSError("injected write failure"))
+
+    program = "notes_1.content.edit(search='old conflict', replace='merged')"
+    if case == "forget":
+        program = "notes_1.delete()"
+    elif case == "parse_error":
+        program = "invalid response!"
+    resolver = _TestVLMResolver()
+    resolver.get_completion_async = AsyncMock(return_value=program + "\nsdk.commit()")
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        vlm_resolver=resolver,
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+    )
     request = MemoryUpdateRequest(
         operations=ResolvedOperations(
-            upsert_operations=[_note_op("conflict")],
-            delete_file_contents=[_note_delete_file("conflict")],
+            upsert_operations=upserts,
+            delete_file_contents=deletes,
+            resolved_links=[StoredLink(from_uri=target.uri, to_uri=other.uri)]
+            if case == "parse_error"
+            else [],
             errors=[],
         ),
         messages=[],
         ctx=_ctx(),
         metadata={"session_id": "session-a"},
     )
-
-    merged = await updater._merge_requests([request])
-
-    assert merged.upsert_operations == []
-    assert merged.delete_file_contents == []
-    assert "Conflicting add/update/delete results" in merged.errors[0]
+    try:
+        result = await updater.submit(request)
+    finally:
+        await updater.close()
+    assert resolver.get_completion_async.await_count == calls
+    assert bool(result.apply_result.errors) == (case == "write_failure")
+    if case == "parse_error":
+        assert not fs.writes
+        assert [op.reason_code for op in result.apply_result.skipped_operations] == [
+            MemoryOperationSkipCode.PARSE_ERROR
+        ]
+    assert (other.uri in fs.files) == (case != "unchanged")
+    raw = fs.files.get(target.uri)
+    assert (MemoryFileUtils.read(raw).plain_content() if raw is not None else None) == expected
 
 
 def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source():
@@ -1711,6 +1761,159 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
     assert sorted(result.apply_result.written_uris) == sorted([self_op.uris[0], peer_op.uris[0]])
     assert self_op.uris[0] in fs.files
     assert peer_op.uris[0] in fs.files
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("buffered", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_cancelled_submit_preserves_window_and_waits_for_all_merge_groups(
+    monkeypatch, buffered, fail
+):
+    peer_id = "web-visitor-alice"
+    entered = {key: asyncio.Event() for key in (None, peer_id)}
+    release = {key: asyncio.Event() for key in (None, peer_id)}
+    finished = {key: asyncio.Event() for key in (None, peer_id)}
+    reasons = {}
+
+    async def process_batch(self, group_key, requests, reason):
+        key = group_key.peer_id
+        reasons[key] = reason
+        entered[key].set()
+        await release[key].wait()
+        finished[key].set()
+        if fail and key is None:
+            raise OSError("self merge failed")
+        return StreamingMemoryUpdateResult(
+            operations=requests[0].operations,
+            apply_result=MemoryUpdateResult(),
+            request_count=1,
+        )
+
+    monkeypatch.setattr(StreamingMemoryUpdater, "_process_batch", process_batch)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8 if buffered else 1,
+            max_wait_seconds=60,
+            timer_check_interval_seconds=60,
+        ),
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[_note_op("self"), _peer_note_op("peer", peer_id)],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+    submit = asyncio.create_task(updater.submit(request))
+    close = None
+    try:
+        if buffered:
+
+            async def wait_for_buffered_groups():
+                while await updater.get_buffered_operation_count() != 2:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(wait_for_buffered_groups(), 1)
+            assert not any(event.is_set() for event in entered.values())
+        else:
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())), 1)
+        submit.cancel()
+        await asyncio.sleep(0)
+        if buffered:
+            assert not any(event.is_set() for event in entered.values())
+            assert await updater.get_buffered_operation_count() == 2
+            close = asyncio.create_task(updater.close())
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())), 1)
+        assert reasons == dict.fromkeys(entered, "close" if buffered else "count")
+        assert not submit.done()
+
+        release[None].set()
+        await asyncio.wait_for(finished[None].wait(), 1)
+        assert not finished[peer_id].is_set()
+        assert not submit.done()
+        submit.cancel()
+        await asyncio.sleep(0)
+        assert not submit.done()
+
+        release[peer_id].set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(submit, 1)
+        assert all(event.is_set() for event in finished.values())
+    finally:
+        for event in release.values():
+            event.set()
+        await asyncio.gather(submit, close or updater.close(), return_exceptions=True)
+        await updater.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer_fails_first", [False, True])
+@pytest.mark.parametrize("other_fails", [False, True])
+async def test_failed_merge_group_waits_for_other_group_to_finish(
+    monkeypatch, peer_fails_first, other_fails
+):
+    failed = asyncio.Event()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    first_error = (
+        ValueError("peer merge failed") if peer_fails_first else OSError("self merge failed")
+    )
+    later_error = (
+        OSError("self merge failed") if peer_fails_first else ValueError("peer merge failed")
+    )
+
+    async def process_batch(self, group_key, requests, reason):
+        if (group_key.peer_id is not None) == peer_fails_first:
+            failed.set()
+            raise first_error
+        started.set()
+        await release.wait()
+        finished.set()
+        if other_fails:
+            raise later_error
+        return StreamingMemoryUpdateResult(
+            operations=requests[0].operations,
+            apply_result=MemoryUpdateResult(),
+            request_count=1,
+        )
+
+    monkeypatch.setattr(StreamingMemoryUpdater, "_process_batch", process_batch)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[
+                _note_op("self"),
+                _peer_note_op("peer", "web-visitor-alice"),
+            ],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+    submit = asyncio.create_task(updater.submit(request))
+    try:
+        await asyncio.wait_for(failed.wait(), 1)
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.sleep(0)
+        assert not submit.done()
+        assert not finished.is_set()
+        release.set()
+        with pytest.raises(type(first_error), match=str(first_error)) as error:
+            await asyncio.wait_for(submit, 1)
+        assert error.value is first_error
+        assert finished.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(submit, return_exceptions=True)
+        await updater.close()
 
 
 @pytest.mark.asyncio

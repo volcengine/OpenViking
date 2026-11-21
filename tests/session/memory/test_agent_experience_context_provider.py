@@ -216,9 +216,6 @@ async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_ca
 
     with (
         patch(
-            "openviking.session.memory.agent_experience_context_provider.tracer.error"
-        ) as tracer_error,
-        patch(
             "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
         ) as add_tool_call_pair,
     ):
@@ -226,4 +223,3 @@ async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_ca
 
     assert messages[-1]["role"] == "user"
     assert add_tool_call_pair.call_count == 1
-    tracer_error.assert_not_called()

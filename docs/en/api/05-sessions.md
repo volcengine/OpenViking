@@ -1078,6 +1078,8 @@ payload shape with HTTP, Go, or TypeScript code.
 POST /api/v1/sessions/{session_id}/messages
 ```
 
+Use the optional `interrupted: true` field on an assistant message to record that its reply stopped before completion. The stored message keeps the partial content and includes the flag on history reads. The same field is accepted on each assistant message in a batch.
+
 **Simple Mode (Backward Compatible)**
 
 ```bash

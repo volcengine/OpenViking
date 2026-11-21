@@ -26,6 +26,12 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.skill_history import (
+    read_skill_history,
+    record_skill_change,
+    skill_history_summary,
+    skill_package_hash,
+)
 from openviking.server.skill_package_update import clear_skill_package_contents
 from openviking.server.skill_source_metadata import (
     SOURCE_METADATA_FILENAME,
@@ -141,7 +147,8 @@ async def _list_skills_from_root(
             ctx=ctx,
             output="agent",
             abs_limit=1024,
-            node_limit=node_limit,
+            # The internal history directory must not consume the caller's Skill quota.
+            node_limit=node_limit + 1,
         )
         entries = page.entries
     except NotFoundError:
@@ -153,7 +160,10 @@ async def _list_skills_from_root(
             continue
         if not await _entry_looks_like_skill(service, ctx, entry):
             continue
-        results.append(_skill_summary_from_entry(entry))
+        summary = _skill_summary_from_entry(entry)
+        history = await read_skill_history(service.fs, ctx, summary["root_uri"])
+        summary.update(skill_history_summary(history))
+        results.append(summary)
     return results
 
 
@@ -506,6 +516,9 @@ async def _read_skill_detail(
                 result["revision"] = revision
         if include_source:
             result["source"] = await read_skill_source_metadata(service, ctx, root_uri)
+        history = await read_skill_history(service.fs, ctx, root_uri)
+        result.update(skill_history_summary(history))
+        result["history"] = (history or {}).get("events", [])
         return result
 
     if include_integrity:
@@ -669,6 +682,34 @@ async def validate_skill(
     return Response(status="ok", result=result)
 
 
+@router.get("/{skill_name}/audit")
+async def get_skill_audit(
+    skill_name: str = ApiPath(..., description="Skill name"),
+    target_uri: Optional[str] = None,
+    limit: int = 50,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Read the persistent ownership record and change timeline, including deletes."""
+    if limit < 1 or limit > 1000:
+        raise InvalidArgumentError("Skill audit limit must be between 1 and 1000")
+    service = get_service()
+    candidate_roots = (
+        [_skill_root_uri(_ctx, skill_name, target_uri)]
+        if target_uri
+        else [
+            _skill_root_uri(_ctx, skill_name),
+            _skill_root_uri(_ctx, skill_name, "viking://agent/skills"),
+        ]
+    )
+    for root_uri in candidate_roots:
+        history = await read_skill_history(service.fs, _ctx, root_uri)
+        if history is not None:
+            result = dict(history)
+            result["events"] = history["events"][-limit:]
+            return Response(status="ok", result=result)
+    raise NotFoundError(candidate_roots[0], "skill audit history")
+
+
 @router.get("/{skill_name}")
 async def get_skill(
     skill_name: str = ApiPath(..., description="Skill name"),
@@ -712,6 +753,7 @@ async def update_skill(
     """Replace an existing agent skill with new content."""
     service = get_service()
     root_uri = await _require_skill(service, _ctx, skill_name, request.target_uri)
+    before_hash = None
 
     data = request.data
     allow_local_path_resolution = False
@@ -768,7 +810,7 @@ async def update_skill(
             logger.warning(warning, exc_info=True)
 
         async def prepare_replacement() -> None:
-            nonlocal update_lease, privacy_lease
+            nonlocal update_lease, privacy_lease, before_hash
             update_lease = await viking_fs._async_agfs.pathlock_acquire_tree(
                 viking_fs._uri_to_path(root_uri, ctx=_ctx)
             )
@@ -776,6 +818,7 @@ async def update_skill(
             # Recheck the installed definition under the lock.
             if not await viking_fs.exists(f"{root_uri}/SKILL.md", ctx=_ctx):
                 raise NotFoundError(root_uri, "skill")
+            before_hash = await skill_package_hash(viking_fs, _ctx, root_uri)
             if privacy is not None:
                 # Always acquire package then config, and keep both locks
                 # until this update's writes have finished.
@@ -785,9 +828,6 @@ async def update_skill(
                     ),
                     timeout_secs=30.0,
                 )
-            await clear_skill_package_contents(
-                viking_fs, root_uri, ctx=_ctx, lease_ref=update_lease
-            )
 
         async def release_update_locks() -> None:
             try:
@@ -852,14 +892,18 @@ async def update_skill(
                 await run_to_completion(prepare_replacement)
                 # All synchronous configuration changes must finish before the
                 # package can produce background summary or embedding work.
-                await run_to_completion(
+                preparation.skill_dict = await run_to_completion(
                     lambda: service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
                         preparation.skill_dict,
-                        preparation.privacy_values,
+                        preparation.privacy,
                         _ctx,
                         change_reason="auto-extracted from update_skill",
-                        delete_if_empty=True,
                         owner_lease_ref=privacy_lease,
+                    )
+                )
+                await run_to_completion(
+                    lambda: clear_skill_package_contents(
+                        viking_fs, root_uri, ctx=_ctx, lease_ref=update_lease
                     )
                 )
                 result = await service.resources.add_skill(
@@ -874,6 +918,8 @@ async def update_skill(
                     source_metadata=skill_source,
                     task_id=task_id,
                     owner_lease_ref=update_lease,
+                    request_id=getattr(http_request.state, "request_id", None),
+                    before_hash=before_hash,
                 )
         except BaseException:
             await run_to_completion(
@@ -911,6 +957,7 @@ async def update_skill(
 
 @router.delete("/{skill_name}")
 async def delete_skill(
+    http_request: Request,
     skill_name: str = ApiPath(..., description="Skill name"),
     target_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
@@ -918,12 +965,27 @@ async def delete_skill(
     """Remove one installed agent skill."""
     service = get_service()
     root_uri = await _require_skill(service, _ctx, skill_name, target_uri)
+    before_hash = await skill_package_hash(service.fs, _ctx, root_uri)
     result = await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
+    history = await record_skill_change(
+        service.fs,
+        _ctx,
+        root_uri,
+        operation="delete",
+        request_id=getattr(http_request.state, "request_id", None),
+        before_hash=before_hash,
+        after_hash=None,
+    )
     privacy_deleted = False
     privacy = service.privacy_configs
     if privacy is not None:
         privacy_deleted = await privacy.delete(_ctx, "skill", skill_name)
-    response_result: Dict[str, Any] = {"name": skill_name, "uri": root_uri, "root_uri": root_uri}
+    response_result: Dict[str, Any] = {
+        "name": skill_name,
+        "uri": root_uri,
+        "root_uri": root_uri,
+        **skill_history_summary(history),
+    }
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
     response_result["privacy_deleted"] = privacy_deleted

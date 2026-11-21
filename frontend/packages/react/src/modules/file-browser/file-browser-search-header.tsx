@@ -1,14 +1,15 @@
 import type { ComponentPropsWithoutRef, RefObject } from 'react';
+import { useLocale } from '../../shared/locale-context.js';
 
-import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
-import type { SearchMode } from './search-types.js';
+import FilterIcon from '../../../../icons/svg/file-browser/search-filter.svg?react';
+import type { SearchFilters, SearchMode } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
 /**
  * 弹窗头部：一个无边框的搜索输入，右侧是高级筛选开关。
  *
  * 关闭按钮由 `Modal` 自己渲染，这里不再画一个——两个关闭按钮位置不同、尺寸
- * 不同，会让人不知道该点哪个。漏斗放在它左侧，与设计稿一致。
+ * 不同，会让人不知道该点哪个。筛选按钮放在它左侧。
  *
  * 没有可见标题：设计稿的头部只有输入框和图标。`Modal` 仍收到 `title` 作无障碍名。
  *
@@ -16,8 +17,8 @@ import type { ResolvedLabels } from './file-browser-labels.js';
  * right.
  *
  * The close button comes from `Modal`, so none is drawn here — two close buttons in
- * different places and sizes leave the user unsure which to press. The funnel sits to
- * its left, matching the design.
+ * different places and sizes leave the user unsure which to press. The filter button
+ * sits to its left.
  *
  * There is no visible title: the design's header holds only the input and the icons.
  * `Modal` still receives `title` as its accessible name.
@@ -28,6 +29,7 @@ export interface FileBrowserSearchHeaderProps {
   text: ResolvedLabels;
   inputRef: RefObject<HTMLInputElement | null>;
   advancedOpen: boolean;
+  filters: SearchFilters;
   inputProps: Pick<
     ComponentPropsWithoutRef<'input'>,
     | 'onKeyDown'
@@ -49,10 +51,19 @@ export function FileBrowserSearchHeader({
   text,
   inputRef,
   advancedOpen,
+  filters,
   inputProps,
   onChange,
   onToggleAdvanced,
 }: FileBrowserSearchHeaderProps) {
+  const locale = useLocale();
+  const filterCount =
+    filters.scopes.length +
+    filters.levels.length +
+    Number(Boolean(filters.since)) +
+    Number(Boolean(filters.until)) +
+    Number(filters.caseInsensitive);
+  const formattedCount = new Intl.NumberFormat(locale).format(filterCount);
   return (
     <div className="ov-file-browser-search__header">
       <input
@@ -68,11 +79,26 @@ export function FileBrowserSearchHeader({
       <button
         type="button"
         className="ov-file-browser-search__advanced-toggle"
-        aria-label={text.searchAdvancedLabel}
+        aria-label={
+          filterCount
+            ? text.searchAdvancedLabelWithCount(
+                text.searchAdvancedLabel,
+                formattedCount,
+              )
+            : text.searchAdvancedLabel
+        }
         aria-expanded={advancedOpen}
         onClick={onToggleAdvanced}
       >
-        <FilterIcon width={16} height={16} aria-hidden="true" />
+        <FilterIcon width={28} height={28} aria-hidden="true" />
+        {filterCount > 0 ? (
+          <span
+            className="ov-file-browser-search__filter-count"
+            aria-hidden="true"
+          >
+            {formattedCount}
+          </span>
+        ) : null}
       </button>
     </div>
   );

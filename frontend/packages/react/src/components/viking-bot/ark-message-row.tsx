@@ -32,7 +32,9 @@ function MessageActions({
           type="default"
           key={`${messageId}:${action.key}`}
           htmlType="button"
-          className="ov-viking-bot__message-action"
+          className={`ov-viking-bot__message-action${action.status === 'success' ? ' ov-viking-bot__message-action--success' : ''}${action.appearance === 'pill' ? ' ov-viking-bot__message-action--pill' : ''}`}
+          icon={action.icon}
+          loading={action.loading}
           disabled={
             Boolean(action.disabledReason) ||
             action.status === 'pending' ||
@@ -57,6 +59,7 @@ export function VikingBotMessageRow({
   onMessageAction,
   renderMessage,
   showTime,
+  debugText,
   locale,
 }: {
   message: VikingBotMessage;
@@ -66,6 +69,7 @@ export function VikingBotMessageRow({
   onMessageAction?: (messageId: string, actionKey: string) => void;
   renderMessage?: (message: VikingBotMessage) => React.ReactNode;
   showTime?: boolean;
+  debugText?: () => string;
   locale?: string;
 }) {
   if (renderMessage) {
@@ -93,6 +97,7 @@ export function VikingBotMessageRow({
   const footer = (
     <MessageFooter
       message={message}
+      debugText={debugText}
       showTime={showTime || message.role === 'user'}
       labels={labels}
       locale={locale}
@@ -101,7 +106,7 @@ export function VikingBotMessageRow({
   );
   return (
     <article
-      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
+      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}${message.answerSummary ? ' ov-viking-bot__message--answers' : ''}`}
     >
       {message.role === 'user' ? (
         <UserMessageGroup

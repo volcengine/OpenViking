@@ -1,10 +1,11 @@
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  toDirectoryTab,
-  toFileTab,
-} from '../src/modules/file-browser/fs-model.ts';
+const { toDirectoryTab, toFileTab } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'browser-preview-model.js'))
+);
 
 test('a file tab shows the file name, not the whole URI', () => {
   const tab = toFileTab(
@@ -69,12 +70,12 @@ test('a tree row keeps its own aria-expanded under the hover popover', async () 
   await tree.unmount();
 });
 
-test('a selected file shows loading instead of the no-selection illustration before hydration', async () => {
+test('a selected file shows loading instead of the no-selection illustration on initial client render', async () => {
   const { FileBrowser } =
     await import('@openviking/react/modules/file-browser');
   const { createElement } = await import('react');
-  const { renderToStaticMarkup } = await import('react-dom/server');
-  const html = renderToStaticMarkup(
+  const { renderMarkup } = await import('./helpers/csr-render.mjs');
+  const html = renderMarkup(
     createElement(FileBrowser, { uri: 'viking://resources/guide.md' }),
   );
   assert.match(html, /ov-file-browser__hint[^>]*role="status"[^>]*>Loading…/);

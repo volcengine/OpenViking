@@ -66,10 +66,12 @@ export interface DirectoryTourProps {
   currentStep?: number;
   defaultStep?: number;
   placement?: 'right' | 'left';
-  /** Deadline before automatically skipping an unresolved target. Default 10000. */
+  /** Deadline before showing the current step without an anchor. Default 10000. */
   locateTimeout?: number;
   className?: string;
   style?: CSSProperties;
+  /** Shows the default card's close button when onClose is provided. Default false. */
+  showCloseButton?: boolean;
   /** Host loads/expands the path and resolves only after the row is rendered.
    * Must respect cancellation. No network or business DTO belongs to the tour. */
   locateTarget?: (

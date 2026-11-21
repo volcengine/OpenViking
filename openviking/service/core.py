@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
@@ -45,6 +47,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.compile_target_tag_processor import CompileTargetTagProcessor
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -224,7 +227,7 @@ class OpenVikingService:
                 max_concurrent_external_task=max_concurrent_external_task,
             )
         else:
-            logger.warning("RAGFS client not initialized, skipping queue manager")
+            logger.info("RAGFS client not initialized; skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
@@ -378,10 +381,9 @@ class OpenVikingService:
 
             self._data_dir_lock_path = acquire_data_dir_lock(storage.workspace)
         else:
-            logger.warning(
-                "Skipping workspace process lock for '%s'; multi-process access may corrupt "
-                "embedded vector storage",
-                storage.workspace,
+            logger.info(
+                "Workspace process lock disabled; concurrent access may corrupt embedded vector storage",
+                extra={"target_id": safe_path_for_log(storage.workspace)},
             )
         self._data_dir_lock_acquired = True
 
@@ -585,10 +587,17 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count, user_count = await directory_initializer.initialize_account_workspace(
-            default_ctx,
-            sync_system_assets=False,
+        # The vector collection can be pre-created externally. Existing resource
+        # metadata distinguishes a workspace restart from initial provisioning.
+        new_workspace = not await self._viking_fs.exists(
+            "viking://resources/.abstract.md", ctx=default_ctx
         )
+        source_type = "create_collection" if new_workspace else "workspace_init"
+        with bind_dashboard_token_source_type(source_type):
+            account_count, user_count = await directory_initializer.initialize_account_workspace(
+                default_ctx,
+                sync_system_assets=False,
+            )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,
@@ -727,19 +736,11 @@ class OpenVikingService:
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,
                 compile_store,
-                self._viking_fs,
             )
             self._compile_scheduler.credential_encryptor = (
                 self._external_task_service.credential_encryptor
             )
-            self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
-            self._compile_service.lifecycle.save_credential = (
-                self._compile_scheduler.save_credential
-            )
-        self._fs_service.compile_versions = self._compile_service.lifecycle.versions
-        self._fs_service.compile_lifecycle = self._compile_service.lifecycle
-        self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+            self._compile_service.configure_scheduler(self._compile_scheduler)
 
         if self._queue_manager:
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
@@ -768,6 +769,11 @@ class OpenVikingService:
             self._queue_manager.get_queue(
                 self._queue_manager.CONTENT_WRITE,
                 dequeue_handler=ContentWriteProcessor(self._viking_fs, self._vikingdb_manager),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.COMPILE_TARGET_TAG,
+                dequeue_handler=CompileTargetTagProcessor(self._fs_service),
                 allow_create=True,
             )
             self._queue_manager.get_queue(
@@ -852,13 +858,17 @@ class OpenVikingService:
         if should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
                 await wait_for_mineru_ready(pdf_config.mineru_endpoint)
-                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+                logger.info(
+                    "MinerU preflight passed",
+                    extra={"target_id": safe_uri_for_log(pdf_config.mineru_endpoint)},
+                )
             except RuntimeError as exc:
                 if pdf_config.strategy == "mineru":
                     await self._stop_expiry()
                     raise
-                logger.warning(
-                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                logger.info(
+                    "MinerU preflight failed; fallback will retry on first parse",
+                    extra={"error_type": type(exc).__name__, "degraded": True},
                 )
 
         if self._runtime_config_manager is not None:
@@ -884,7 +894,7 @@ class OpenVikingService:
         try:
             await runtime.close()
         except Exception as exc:
-            logger.exception("Expiry shutdown failed")
+            logger.error("Expiry shutdown failed", extra={"error_type": type(exc).__name__})
             if getattr(exc, "code", None) == "shard_not_stopped":
                 # Retain the runtime and leave QueueFS/AGFS open for still-running
                 # callbacks. The caller can retry close after they terminate.
@@ -1125,14 +1135,15 @@ class OpenVikingService:
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0, 0
-        if lease_ref is not None:
-            return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease_ref
-            )
-        async with self.account_workspace_lock(ctx) as lease:
-            return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease
-            )
+        with bind_dashboard_token_source_type("create_account"):
+            if lease_ref is not None:
+                return await self._directory_initializer.initialize_account_workspace(
+                    ctx, lease_ref=lease_ref
+                )
+            async with self.account_workspace_lock(ctx) as lease:
+                return await self._directory_initializer.initialize_account_workspace(
+                    ctx, lease_ref=lease
+                )
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
@@ -1164,8 +1175,9 @@ class OpenVikingService:
                     f"User workspace is busy and cannot be initialized now: {ctx.user.user_id}",
                     uri=uri,
                 ) from exc
-            return await self._directory_initializer.initialize_user_directories(
-                ctx, lease_ref=lease
-            )
+            with bind_dashboard_token_source_type("register_user"):
+                return await self._directory_initializer.initialize_user_directories(
+                    ctx, lease_ref=lease
+                )
         finally:
             await guard.close()

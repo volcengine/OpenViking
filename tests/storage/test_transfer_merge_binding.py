@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.pyagfs import get_binding_client
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority, WatchPatch, WatchTask
 from openviking.server.identity import RequestContext, Role
@@ -603,9 +604,21 @@ async def test_transfer_normalizes_uri_for_files_and_vectors(indexed_fs, operati
     source_arg = source.replace("resources/", "resources//") if alias_side == "source" else source
     target_arg = target.replace("resources/", "resources//") if alias_side == "target" else target
 
-    await getattr(fs, operation)(source_arg, target_arg, ctx=ctx)
+    result = await getattr(fs, operation)(source_arg, target_arg, ctx=ctx)
+
+    assert len(result["operation_id"]) == 32
+    assert result["operation"] == ("copy" if operation == "cp" else "move")
+    assert result["phase"] == "completed"
+    assert result["files_created"] == 1
+    assert result["vectors"]["scanned"] == result["vectors"]["written"] == 1
+    assert result["vectors"]["batches"] == 1
+    assert result["vectors"]["restored"] == 0
+    if operation == "mv":
+        assert result["files_deleted"] == 1
+        assert result["vectors"]["deleted"] >= 1
 
     assert await fs.read_file_bytes(target, ctx=ctx) == b"new"
+    assert await fs.exists(source, ctx=ctx) == (operation == "cp")
     records = await backend.get_context_by_uri(target, ctx=ctx)
     assert records
     records = await backend.get([record["id"] for record in records], ctx=ctx)
@@ -625,7 +638,9 @@ async def test_directory_transfer_allows_sibling_lock_and_releases_own_locks(
     ctx = root_ctx()
     source = "viking://resources/source"
     target = "viking://resources/target"
-    await fs.write_file_bytes(f"{source}/file.bin", b"new", ctx=ctx)
+    await fs.write_file_bytes(f"{source}/file.bin", b"\x00\xff", ctx=ctx)
+    await fs.write_file_bytes(f"{source}/.hidden", b"hidden", ctx=ctx)
+    await fs.mkdir(f"{source}/empty", ctx=ctx)
     if target_exists:
         await fs.write_file_bytes(f"{target}/file.bin", b"old", ctx=ctx)
         await fs.write_file_bytes(f"{target}/only.bin", b"keep", ctx=ctx)
@@ -634,7 +649,9 @@ async def test_directory_transfer_allows_sibling_lock_and_releases_own_locks(
     try:
         kwargs = {"recursive": True} if operation == "cp" else {}
         await getattr(fs, operation)(source, target, ctx=ctx, **kwargs)
-        assert await fs.read_file_bytes(f"{target}/file.bin", ctx=ctx) == b"new"
+        assert await fs.read_file_bytes(f"{target}/file.bin", ctx=ctx) == b"\x00\xff"
+        assert await fs.read_file_bytes(f"{target}/.hidden", ctx=ctx) == b"hidden"
+        assert (await fs.stat(f"{target}/empty", ctx=ctx))["isDir"]
         if target_exists:
             assert await fs.read_file_bytes(f"{target}/only.bin", ctx=ctx) == b"keep"
         assert await fs.exists(source, ctx=ctx) == (operation == "cp")
@@ -762,13 +779,17 @@ async def test_sync_failure_preserves_staged_content(
 
 
 @pytest.mark.asyncio
-async def test_successful_sync_reports_applied_changes_and_cleans_temp(binding_fs):
+async def test_sync_requires_directory_before_applying_changes_and_cleaning_temp(binding_fs):
     fs, ctx = binding_fs, root_ctx()
     source, target = "viking://temp/import", "viking://resources/target"
     for name in ("added.md", "updated.md", "newdir/file.md"):
         await fs.write_file_bytes(f"{source}/{name}", b"new payload", ctx=ctx)
     for name in ("updated.md", "removed.md", "olddir/file.md"):
         await fs.write_file_bytes(f"{target}/{name}", b"old", ctx=ctx)
+
+    with pytest.raises(AGFSNotADirectoryError):
+        await fs.sync_tree(f"{source}/updated.md", target, ctx=ctx)
+    assert await fs.read_file_bytes(f"{target}/updated.md", ctx=ctx) == b"old"
 
     diff = await fs.sync_tree(source, target, ctx=ctx, delete_temp_after=True)
 

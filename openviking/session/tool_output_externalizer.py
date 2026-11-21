@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.message import Message
 from openviking.message.part import ToolPart
+from openviking.observability.log_safety import short_hash
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.session import working_memory as wm
 from openviking.session.tool_result_store import (
@@ -154,14 +155,12 @@ class ToolOutputExternalizer:
                         include_metadata=False,
                     )
                 except Exception as exc:
-                    logger.warning(
-                        "Failed to hydrate externalized tool output for extraction: "
-                        "session=%s message_id=%s tool_id=%s ref=%s error=%s",
-                        self._session_id,
-                        msg.id,
-                        part.tool_id,
-                        ref,
-                        exc,
+                    logger.info(
+                        "externalized tool output unavailable; retaining reference session_hash=%s ref_hash=%s error_type=%s",
+                        short_hash(str(self._session_id)),
+                        short_hash(str(ref)),
+                        type(exc).__name__,
+                        extra={"degraded": True, "error_type": type(exc).__name__},
                     )
                     continue
                 part.tool_output = result.get("content", "")

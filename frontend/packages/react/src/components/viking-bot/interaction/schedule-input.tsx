@@ -1,101 +1,168 @@
-import { useState } from 'react';
-
+import { useId, useRef } from 'react';
+import { Radio } from '../../../shared/primitives/radio/radio.js';
+import { InteractionField } from './interaction-field.js';
+import type { VikingBotInteractionFields } from './field-types.js';
+import type { FieldErrors } from './field-validation.js';
+import {
+  Select,
+  SelectOption,
+} from '../../../shared/primitives/select/index.js';
+import { ScheduleTimeInput } from './schedule-time-input.js';
+import { defaultScheduleTime, type FormError } from './form-value.js';
+import type { Locale } from '../../../shared/locale.js';
 import type { InteractionLabels } from './labels.js';
 import type {
   VikingBotInteractionRequest,
   VikingBotScheduleValue,
 } from './types.js';
 
-type ScheduleRequest = Extract<
-  VikingBotInteractionRequest,
-  { kind: 'schedule' }
->;
-type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
-
-const DEFAULT_TIME = '09:00';
-
-/** 定时输入。Schedule input. */
 export function ScheduleInput({
   request,
+  value,
   labels,
+  locale,
   disabled,
+  invalid,
+  fields,
+  fieldErrors,
   onChange,
 }: {
-  request: ScheduleRequest;
+  request: Extract<VikingBotInteractionRequest, { kind: 'schedule' }>;
+  value: VikingBotScheduleValue;
   labels: InteractionLabels;
-  disabled?: boolean;
-  onChange: (value: unknown) => void;
+  locale: Locale;
+  disabled: boolean;
+  invalid?: FormError;
+  fields?: VikingBotInteractionFields;
+  fieldErrors?: FieldErrors;
+  onChange: (value: VikingBotScheduleValue) => void;
 }) {
-  const [value, setValue] = useState<VikingBotScheduleValue>(
-    request.initialValue,
-  );
-  const time = value.mode === 'none' ? DEFAULT_TIME : value.time;
-  const weekday: Weekday = value.mode === 'weekly' ? value.weekday : 1;
-
-  const update = (next: VikingBotScheduleValue) => {
-    setValue(next);
+  const id = useId();
+  const previous = useRef({
+    time: value.mode === 'none' ? '' : value.time,
+    weekday: value.mode === 'weekly' ? value.weekday : 1,
+  });
+  const change = (next: VikingBotScheduleValue) => {
+    if (disabled) return;
     onChange(next);
   };
-
+  const changeMode = (mode: VikingBotScheduleValue['mode']) => {
+    if (disabled) return;
+    if (value.mode !== 'none') previous.current.time = value.time;
+    if (value.mode === 'weekly') previous.current.weekday = value.weekday;
+    if (mode === 'none') return change({ mode });
+    const time = previous.current.time || defaultScheduleTime();
+    change(
+      mode === 'daily'
+        ? { mode, time }
+        : { mode, time, weekday: previous.current.weekday },
+    );
+  };
+  const modes = [
+    ['daily', labels.scheduleDaily],
+    ['weekly', labels.scheduleWeekly],
+    ['none', labels.scheduleNone],
+  ] as const;
+  const weekdays = labels.weekdays.map((label, index) => ({
+    value: index + 1,
+    label,
+  }));
   return (
     <div className="ov-viking-bot__schedule">
-      <select
-        className="ov-viking-bot__interaction-input"
+      <InteractionField
+        id={`${id}-mode`}
+        label={labels.scheduleFrequency}
+        group
+        config={fields?.mode}
         value={value.mode}
+        onChange={changeMode}
         disabled={disabled}
-        aria-label={labels.scheduleWeekly}
-        onChange={(event) => {
-          const mode = event.target.value as VikingBotScheduleValue['mode'];
-          if (mode === 'none') update({ mode: 'none' });
-          else if (mode === 'daily') update({ mode: 'daily', time });
-          else update({ mode: 'weekly', time, weekday });
-        }}
+        error={fieldErrors?.mode}
       >
-        <option value="none">{labels.scheduleNone}</option>
-        <option value="daily">{labels.scheduleDaily}</option>
-        <option value="weekly">{labels.scheduleWeekly}</option>
-      </select>
-      {value.mode !== 'none' ? (
-        <input
-          type="time"
-          className="ov-viking-bot__interaction-input"
-          value={time}
-          disabled={disabled}
-          aria-label={labels.scheduleTime}
-          onChange={(event) =>
-            update(
-              value.mode === 'weekly'
-                ? { mode: 'weekly', time: event.target.value, weekday }
-                : { mode: 'daily', time: event.target.value },
-            )
-          }
-        />
-      ) : null}
+        {(field) => (
+          <div
+            {...field}
+            role="radiogroup"
+            className="ov-viking-bot__schedule-modes"
+          >
+            {modes.map(([mode, label]) => (
+              <Radio
+                key={mode}
+                className="ov-viking-bot__schedule-mode"
+                name={`${id}-mode`}
+                value={mode}
+                checked={value.mode === mode}
+                disabled={disabled}
+                onChange={() => changeMode(mode)}
+              >
+                {label}
+              </Radio>
+            ))}
+          </div>
+        )}
+      </InteractionField>
       {value.mode === 'weekly' ? (
-        <select
-          className="ov-viking-bot__interaction-input"
-          value={weekday}
+        <InteractionField
+          id={`${id}-weekday`}
+          label={labels.scheduleWeekday}
+          config={fields?.weekday}
+          value={value.weekday}
+          onChange={(weekday) => change({ ...value, weekday })}
           disabled={disabled}
-          aria-label={labels.scheduleWeekday}
-          onChange={(event) =>
-            update({
-              mode: 'weekly',
-              time,
-              weekday: Number(event.target.value) as Weekday,
-            })
+          error={
+            invalid === 'weekdayRequired'
+              ? labels.weekdayRequired
+              : fieldErrors?.weekday
           }
         >
-          {labels.weekdays.map((name, index) => (
-            <option key={name} value={index + 1}>
-              {name}
-            </option>
-          ))}
-        </select>
+          {(field) => (
+            <Select
+              {...field}
+              value={[value.weekday]}
+              onChange={(selected) =>
+                change({
+                  ...value,
+                  weekday: selected[0] as 1 | 2 | 3 | 4 | 5 | 6 | 7,
+                })
+              }
+              disabled={disabled}
+              locale={locale}
+            >
+              {weekdays.map((option) => (
+                <SelectOption key={option.value} value={option.value}>
+                  {option.label}
+                </SelectOption>
+              ))}
+            </Select>
+          )}
+        </InteractionField>
       ) : null}
-      {request.timezone ? (
-        <small className="ov-viking-bot__interaction-hint">
-          {request.timezone}
-        </small>
+      {value.mode !== 'none' ? (
+        <InteractionField
+          id={`${id}-time`}
+          label={labels.scheduleTime}
+          config={fields?.time}
+          value={value.time}
+          onChange={(time) => change({ ...value, time })}
+          disabled={disabled}
+          error={
+            invalid === 'timeInvalid' ? labels.timeInvalid : fieldErrors?.time
+          }
+        >
+          {(field) => (
+            <ScheduleTimeInput
+              controlProps={field}
+              id={field.id}
+              value={value.time}
+              disabled={disabled}
+              labels={labels}
+              timezone={request.timezone}
+              invalid={Boolean(field['aria-invalid'])}
+              errorId={field['aria-describedby']}
+              onChange={(time) => change({ ...value, time })}
+            />
+          )}
+        </InteractionField>
       ) : null}
     </div>
   );
