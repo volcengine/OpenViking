@@ -20,6 +20,11 @@ description: |
   - Do NOT name events after who was chatting. Name them after what specifically happened.
   - Avoid broad umbrella events such as "team arrangement", "project discussion", "weekend plan", or "meeting chat" when the conversation actually contains multiple smaller actionable sub-events.
 
+  # Work materials and deliverables
+  - Extract an event when the user supplies a new reference document, baseline table, or rule for ongoing work, or provides a concrete correction or revision. Extract a delivery event when the assistant provides the requested final work product. A table, list, or JSON response can contain the complete material or result.
+  - Keep each coherent document, table, or batch of related changes together. Record distinct revisions as separate events so earlier versions can be referenced later.
+  - Describe an assistant deliverable as the version actually delivered. Record user acceptance only when explicitly confirmed by the user.
+
   # Granularity Examples
   ## Bad Example
   Conversation facts:
@@ -138,6 +143,7 @@ fields:
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
+      For a work artifact, correction, or deliverable, preserve its stated name, affected scope, and any explicit batch, period, version, or effective date.
 
   - name: ranges
     type: string
@@ -149,4 +155,6 @@ fields:
       For events, ranges MUST include at least one user-role message that states or supports the event.
       If an assistant message confirms, normalizes, or completes the event, include both the originating user message and the assistant message.
       Never output assistant-only ranges for events.
+      For work materials and corrections, select the original message ranges containing the complete material or change, including relevant table headers, rows, units, and scope qualifiers.
+      For a final delivery, include the user request and the assistant message containing the delivered result, even when the result consists solely of structured data.
     merge_op: immutable
