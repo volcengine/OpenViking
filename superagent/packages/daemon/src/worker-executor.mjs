@@ -296,12 +296,24 @@ const RUNTIMES = {
 };
 
 export class WorkerExecutor {
+  // settings(): the router's { runtime, model, effort }, which a task without
+  // a model of its own follows on the router's runtime (tasks from before
+  // workers had settings of their own).
   constructor({ config, logger = null, settings = () => ({}), spawn = nodeSpawn }) {
     Object.assign(this, { config, logger, settings, spawn });
   }
 
   supports(runtime) {
     return WORKER_RUNTIMES.includes(runtime);
+  }
+
+  // The file a runtime keeps one of a task's sessions in, if it is still
+  // there: what a worker that takes the task over on another runtime reads.
+  transcriptFile(runtime, taskId, sessionId) {
+    if (!sessionId || !WORKER_RUNTIMES.includes(runtime)) return null;
+    const file = sessionFile(this.config, process.env, runtime, taskId, sessionId);
+    // The file itself, not a link to it: the path is handed to another worker.
+    try { return file ? fs.realpathSync(file) : null; } catch { return null; }
   }
 
   // Whether a task's last session can go on into a new round: 'kept',
@@ -315,8 +327,12 @@ export class WorkerExecutor {
     try { return fs.statSync(file).size > maxBytes ? 'large' : 'kept'; } catch { return 'deleted'; }
   }
 
-  // The model and effort of the router's runtime, when the task runs on it.
+  // The model and effort a task took when it started, reopened or moved to
+  // another runtime (worker-settings.mjs; '' is the CLI's own default). A
+  // task from before that follows the router's, when it runs on the router's
+  // runtime.
   modelFor(task) {
+    if (task.model != null || task.effort != null) return { model: task.model || null, effort: task.effort || null };
     const { runtime, model, effort } = this.settings();
     if (runtime !== task.runtime) return { model: null, effort: null };
     return { model: model && model !== runtime ? model : null, effort: effort || null };

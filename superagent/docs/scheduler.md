@@ -93,7 +93,8 @@ With `workers`, the main session is a **router**. It still reads every input,
 through the inbox above, and answers what is quick. A request that needs real
 work (running or changing code, investigating, research, writing a document)
 becomes a **task** (`packages/daemon/src/tasks.mjs`), and a **worker** does it:
-a separate session on the router's own runtime. The worker never talks to
+a separate session, on the runtime the workers' settings name (the router's
+unless the owner set another with `/workers`). The worker never talks to
 people; it reports, and the router relays the report where the request was
 made. The router stays the only outlet, so every check on the delivery path
 (authority, freshness fence, thread placement, bot fuse, approvals, outbox
@@ -246,7 +247,7 @@ it.
 
 ### Workers
 
-A worker turn is one run of the router's runtime CLI in its non-interactive
+A worker turn is one run of its task's runtime CLI in its non-interactive
 mode, resuming the task's own session (`worker-executor.mjs`):
 
 | Runtime | Turn | First turn of a task that follows one on the same runtime |
@@ -283,7 +284,8 @@ directory, measured:
 
 No process runs between turns, so an idle task holds nothing; Durable,
 OpenCode and Ark have no worker mode, and `task_create` tells the router to
-handle the request itself there. A task keeps the runtime it started on.
+handle the request itself when workers are set to run there. A task keeps its
+runtime while it works (see Runtime, model and effort).
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in a directory under `<workspace>/tasks/` (see Task
 directories).
@@ -327,6 +329,88 @@ summary/draft and artifacts, and an instruction to check existing work before
 repeating outside actions. A preallocated session ID or turn counter alone is
 never evidence that Claude can resume a session. Recovery can repeat work;
 outside actions are not guaranteed to run exactly once.
+
+
+### Runtime, model and effort
+
+Workers have settings of their own, apart from the router's
+(`worker-settings.mjs`, kept in SQLite): the runtime, and per runtime the
+model and effort. The owner sets them with `/workers` in a direct chat
+(`/workers runtime pi`, `/workers model <name>` or `<runtime>:<name>`,
+`/workers effort high`, `/workers fallback claude`, `… default` / `router` to
+go back). Unset, they follow the router, as workers did before: the router's
+runtime, and its model and effort when the worker runs on the same runtime
+(the CLI's own default on another). So the router can run where workers
+cannot (DSH, Ark) and hand work to workers on Codex, or the two can use
+different models on one runtime.
+
+A task takes its runtime, model and effort when it starts, and keeps them as
+long as its session goes on. Changing a setting, or the router's runtime,
+never moves a task that can carry on where it is: tasks at work finish where
+they started, and a task that reopens for a new round goes on in its session,
+on its runtime, model and effort. Only a new task, or a round whose session
+cannot go on (gone, too large, or never checkpointed), takes the settings of
+the moment; such a round starts a fresh session anyway, from a handover when
+that is another runtime. The one exception is a runtime that cannot serve:
+
+- **Out of quota.** A turn that fails with a used-up quota, usage or billing
+  limit (Codex "You've hit your usage limit", Claude Code "5-hour limit
+  reached", `insufficient_quota`, an overdue balance, a 402) marks its runtime
+  out for 30 minutes, for every task. The task moves at once, without a retry
+  on that runtime. While a runtime is out, new tasks and new rounds start on
+  the fallback, and a queued task about to take a turn there moves before it
+  runs. After the pause, the first task to try the runtime finds out whether
+  it is back. Setting a runtime with `/workers runtime` or `/workers fallback`
+  lifts its pause.
+- **Still failing.** A turn that fails for a passing reason (5xx, overloaded,
+  a reset connection, a dropped stream: what the CLI calls transient or the
+  router's failure policy calls recoverable) runs again on its runtime twice,
+  as before; if it still fails, the task moves.
+
+A task that must move goes to the runtime workers are set to, when that is
+another one, else to the fallback: `/workers fallback`, by default the
+router's `fallbackRuntime` when workers can run there. Never to a runtime that
+is out itself. One round moves at most twice for failures, so two failing
+runtimes are not tried back and forth; with nowhere to go, the failure is
+reported as before. A failure another runtime would share (a cancelled turn,
+a rejected key, a bad request) moves nothing. A turn whose worker filed its
+final report before the failure is complete: the report stands, and the
+runtime is only marked out.
+
+### Handover
+
+One runtime cannot resume another's session. A task that moves (a new round
+whose session cannot go on, on the runtime workers use now, or a runtime that
+cannot serve) records a
+handover (`task_handovers`): where it was (runtime, model, the session its last
+turn ran in and that session's file) and why it moves. Its next turn starts a
+new session on the new runtime, in the same task directory, from a brief that
+begins with the handover:
+
+```
+[handover] You take this task over from a worker that ran on codex (gpt-5.6-sol). codex cannot serve any more for now: its quota or usage limit is used up ("You've hit your usage limit. …").
+You run on pi, in the same directory (<workspace>/tasks/t12), with whatever that worker left there. Before you go on, check where the work stands (files, git status and branches) and what was already done outside the directory (commits, pushes, pull requests, comments, documents); do not repeat an outside action that was already done.
+The last messages of that worker's session, oldest first (clipped; tool output left out):
+| [input] [task t12] …
+| [worker] Implemented slugify; tests pass. Pushing the branch next.
+| [tool calls] exec_command {"cmd":"git push -u origin slugify"}
+Its whole session, if you need more of it: ~/.codex/sessions/2026/11/19/rollout-…-<thread>.jsonl (Codex rollout JSONL: …). It is long: search or read only the parts you need.
+The task record follows.
+[task t12] …   (the rebuilt brief: every round's request, context, note, directory, summary, last answer, artifacts)
+```
+
+The last messages (`worker-transcript.mjs`) are read from the end of the
+session file each runtime keeps (Pi in `<dataDir>/workers/<task>/`, Codex and
+TraeX rollouts in their homes, Claude Code under `~/.claude/projects/`): the
+inputs the worker got, its own words, and one line per tool call; at most
+eight entries and 6,000 characters. Tool output and reasoning are left out:
+they are long, and the directory holds the real state. The whole file stays
+where it is, for the new worker to read when it needs more; earlier sessions
+of the task are named too. Until a turn on the new runtime completes, every
+brief carries the handover (a failed first turn, or a restart, does not lose
+it); after that the new session carries on as any other.
+
+`/tasks t12` shows a task's runtime, model and effort, and its handovers.
 
 ### Task directories
 
@@ -446,10 +530,12 @@ the reply text, so a rewritten reply is a new message).
 The owner sees the tasks with `/tasks` in a direct chat (live ones, recent
 ended ones, slots, whether each result reached the requester), one task with
 `/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
-at work. The Core answers these without the model.
+at work. `/workers` shows and sets what workers run on (see Runtime, model and
+effort). The Core answers these without the model.
 
 Activities: `task.created` (with `parent`), `task.reopened` (round, the
 status it had, what it found of its directory and session),
 `task.turn_started`, `task.turn_completed` (with usage), `task.reported`,
 `task.handed_back`, `task.round_handed_back`, `task.report_unrelayed`,
-`task.ended`, `task.dirs_cleaned` (what a sweep deleted and freed).
+`task.ended`, `task.dirs_cleaned` (what a sweep deleted and freed),
+`task.runtime_switched` (from, to, why, whether a session was handed over).
