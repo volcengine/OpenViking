@@ -145,7 +145,10 @@
   font-size: 16px;
   font-weight: 400;
 }
-.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled) {
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled),
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled):hover,
+.ov-viking-bot__composer
+  .ov-viking-bot__attach.ov-button:not(:disabled):active {
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button:disabled {
