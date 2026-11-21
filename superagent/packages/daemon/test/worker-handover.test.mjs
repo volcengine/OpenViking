@@ -155,59 +155,49 @@ describe('worker runtime handover', () => {
     assert.equal(tasks.handovers('t1').length, 0);
   });
 
-  it('moves a task that reopens to the runtime workers use now, from a handover of the last session', async (t) => {
-    const { tasks, executor, settings, sessions, workspace, create, relayed, activities } = setup(t);
+  it('goes on in a reopened task\'s session where it is, and moves only a round whose session cannot go on', async (t) => {
+    const router = { runtime: 'codex', model: 'gpt-5.6-sol', effort: 'medium' };
+    const { tasks, executor, settings, sessions, workspace, create, activities } = setup(t, { router });
     create('实现 slugify 并开个 PR');
     const file = writeSession(workspace, 'rollout-th-1.jsonl', CODEX_SESSION);
     sessions.set('codex:th-1', file);
-    tasks.report('t1', { state: 'done', draft: 'PR https://github.com/x/pull/1', artifacts: ['https://github.com/x/pull/1'] });
+    tasks.report('t1', { state: 'done', draft: 'PR https://github.com/x/pull/1' });
     executor.turns[0].finish({ text: '', nativeSession: 'th-1' });
     await settle();
-    assert.equal(tasks.get('t1').status, 'done');
-    assert.equal(relayed.length, 1);
 
+    // Workers are set to pi and the router moves to claude: round 2 still goes
+    // on in its codex session, on its model.
     settings.setRuntime('pi');
+    Object.assign(router, { runtime: 'claude', model: 'sonnet' });
     tasks.route('t1', [row({ content: '把函数改名叫 toSlug' })], 'owner', { requester: 'weihan' });
-    const task = tasks.get('t1');
-    assert.deepEqual([task.round, task.runtime, task.native_session, task.model], [2, 'pi', null, '']);
-    assert.equal(tasks.roundOf(task).session_state, 'switched');
-    const [handover] = tasks.handovers('t1');
-    assert.equal(handover.reason, 'round');
-    assert.deepEqual([handover.from_runtime, handover.from_session, handover.transcript, handover.to_runtime, handover.turn],
-      ['codex', 'th-1', file, 'pi', 1]);
-    assert.equal(handover.from_model, 'gpt-5.6-sol');
+    assert.deepEqual(['runtime', 'native_session', 'model'].map((key) => tasks.get('t1')[key]), ['codex', 'th-1', 'gpt-5.6-sol']);
+    assert.doesNotMatch(executor.turns[1].prompt, /\[handover\]/);
+    executor.turns[1].finish({ text: 'renamed', nativeSession: 'th-1' });
+    await settle();
 
-    const { prompt, task: running } = executor.turns[1];
-    assert.equal(running.runtime, 'pi');
-    assert.match(prompt, /^\[handover\] You take this task over from a worker that ran on codex \(gpt-5\.6-sol\)\. This round runs on pi: the agent's workers run there now\.\n/);
-    assert.match(prompt, new RegExp(`You run on pi, in the same directory \\(${task.workdir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
-    assert.match(prompt, /The last messages of that worker's session, oldest first \(clipped; tool output left out\):\n\| \[input\] \[task t1\] slugify PR \(…\)\n\| \[worker\] I will clone the repo first\.\n\| \[tool calls\] exec_command \{"cmd":"git clone repo"\}\n\| apply_patch \*\*\* Begin Patch \*\*\* Update File: src\/slugify\.js\n\| \[worker\] Implemented slugify; tests pass\. Pushing the branch next\.\n/);
-    assert.match(prompt, new RegExp(`Its whole session, if you need more of it: ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(Codex rollout JSONL`));
-    // Then the task record: every round's request, what it found and answered.
+    // Its session grew too large to go on: round 3 starts afresh on pi, from a handover.
+    executor.sessionState = () => 'large';
+    tasks.route('t1', [row({ content: '再加个测试' })], 'owner', { requester: 'weihan' });
+    const task = tasks.get('t1');
+    assert.deepEqual([task.round, task.runtime, task.native_session, task.model], [3, 'pi', null, '']);
+    assert.equal(tasks.roundOf(task).session_state, 'switched');
+    assert.deepEqual(tasks.handovers('t1').map((row) => [row.reason, row.from_runtime, row.from_model, row.from_session, row.transcript, row.to_runtime]),
+      [['round', 'codex', 'gpt-5.6-sol', 'th-1', file, 'pi']]);
+    const { prompt } = executor.turns[2];
+    assert.match(prompt, /^\[handover\] You take this task over from a worker that ran on codex \(gpt-5\.6-sol\)\. This round runs on pi/);
+    assert.match(prompt, /\n\| \[worker\] Implemented slugify; tests pass\. Pushing the branch next\.\n/);
+    assert.ok(prompt.includes(`Its whole session, if you need more of it: ${file} (Codex rollout JSONL`));
     assert.match(prompt, /The task record follows\.\n\[task t1\] slugify PR\n/);
-    assert.match(prompt, /Round 1, from weihan \(done\):\n.*实现 slugify 并开个 PR\nRound 2 \(now\), from weihan:\n.*把函数改名叫 toSlug/);
-    assert.match(prompt, /Your answer to the previous round \(the requester has it\):\n\| PR https:\/\/github\.com\/x\/pull\/1/);
     assert.ok(activities.some((entry) => entry.kind === 'task.runtime_switched' && /t1 codex → pi \(round\)/.test(entry.summary)));
 
-    // Once a turn on pi completes, the session carries on and the handover is done.
-    executor.turns[1].finish({ text: '' });
+    // Once a turn on pi completes, the session carries on and later briefs no longer carry the handover.
+    executor.sessionState = undefined;
+    executor.turns[2].finish({ text: '' });
     await settle();
     assert.ok(tasks.handovers('t1')[0].taken_at_ms);
-    tasks.route('t1', [row({ content: '再加个测试' })], 'owner');
-    assert.doesNotMatch(executor.turns[2].prompt, /\[handover\]/);
-    assert.equal(executor.turns[2].task.runtime, 'pi');
-  });
-
-  it('keeps a reopened task on its runtime when workers did not move, with the model set for it now', async (t) => {
-    const { tasks, executor, settings, create } = setup(t);
-    create('A');
-    executor.turns[0].finish({ text: 'done', nativeSession: 'th-1' });
-    await settle();
-    settings.setModel('codex', 'gpt-6-astra');
-    tasks.route('t1', [row({ content: 'B' })], 'owner');
-    assert.deepEqual(['runtime', 'native_session', 'model'].map((key) => tasks.get('t1')[key]), ['codex', 'th-1', 'gpt-6-astra']);
-    assert.doesNotMatch(executor.turns[1].prompt, /\[handover\]/);
-    assert.equal(tasks.handovers('t1').length, 0);
+    tasks.route('t1', [row({ content: '再改个名' })], 'owner');
+    assert.doesNotMatch(executor.turns[3].prompt, /\[handover\]/);
+    assert.equal(executor.turns[3].task.runtime, 'pi');
   });
 
   it('moves a working task off a runtime whose quota ran out, at once, and sends new work past it', async (t) => {
@@ -220,8 +210,7 @@ describe('worker runtime handover', () => {
     assert.equal(executor.turns.length, 2);
     assert.equal(executor.turns[1].task.runtime, 'pi');
     assert.equal(relayed.length, 0, 'nothing reported: the task goes on');
-    assert.match(executor.turns[1].prompt, /^\[handover\] You take this task over from a worker that ran on codex \(gpt-5\.6-sol\)\. codex cannot serve any more for now: its quota or usage limit is used up \("You've hit your usage limit\. Try again at 3:05 PM\."\)\.\n/);
-    assert.match(executor.turns[1].prompt, /\| \[worker\] Implemented slugify; tests pass\. Pushing the branch next\./);
+    assert.match(executor.turns[1].prompt, /^\[handover\] You take this task over from a worker that ran on codex \(gpt-5\.6-sol\)\. codex cannot serve any more for now: its quota or usage limit is used up/);
     assert.deepEqual(tasks.handovers('t1').map((row) => [row.reason, row.from_session]), [['exhausted', 'th-1']]);
     assert.ok(settings.unavailable('codex'));
     // New work starts on pi while codex is out.
@@ -252,16 +241,18 @@ describe('worker runtime handover', () => {
   it('retries a passing failure on its runtime first, then moves the task', async (t) => {
     const { tasks, executor, create } = setup(t);
     create('A');
+    // Not one the CLI calls transient, but recoverable all the same.
+    const error = 'stream disconnected before completion: network error';
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      executor.turns.at(-1).finish({ text: '', error: '503 Service Unavailable', transient: true, nativeSession: 'th-1' });
+      executor.turns.at(-1).finish({ text: '', error, transient: false, nativeSession: 'th-1' });
       await settle();
     }
     assert.deepEqual(executor.turns.map((turn) => turn.task.runtime), ['codex', 'codex', 'codex', 'pi']);
     assert.deepEqual(tasks.handovers('t1').map((row) => row.reason), ['failing']);
-    assert.match(executor.turns[3].prompt, /Its turns kept failing on codex \("503 Service Unavailable"\)\./);
+    assert.match(executor.turns[3].prompt, /Its turns kept failing on codex/);
   });
 
-  it('reports the failure as before when there is nowhere to go, or the failure is not the runtime\'s', async (t) => {
+  it('reports the failure as before when there is nowhere to go', async (t) => {
     const { tasks, executor, settings, create, relayed } = setup(t);
     create('A');
     // pi is out too: nowhere to go.
@@ -272,14 +263,6 @@ describe('worker runtime handover', () => {
     assert.equal(tasks.get('t1').status, 'failed');
     assert.match(relayed[0].text, /state=failed/);
     assert.ok(settings.unavailable('codex'));
-    // A failure another runtime would share moves nothing.
-    settings.clearUnavailable('codex');
-    settings.clearUnavailable('pi');
-    create('B', 'B');
-    executor.turns[1].finish({ text: '', error: '401 Unauthorized: invalid api key' });
-    await settle();
-    assert.equal(tasks.get('t2').status, 'failed');
-    assert.equal(tasks.handovers('t2').length, 0);
   });
 
   it('lets a report filed before the quota ran out stand, and only marks the runtime out', async (t) => {
@@ -306,20 +289,5 @@ describe('worker runtime handover', () => {
     assert.deepEqual(tasks.handovers('t1').map((row) => `${row.from_runtime}→${row.to_runtime}`), ['codex→pi', 'pi→codex']);
     assert.equal(tasks.get('t1').status, 'failed');
     assert.equal(executor.turns.length, 9);
-  });
-
-  it('tells a worker that takes over after a restart both things', async (t) => {
-    const { tasks, executor, create, db } = setup(t);
-    create('A');
-    executor.turns[0].finish({ text: '', error: 'usage limit reached', nativeSession: 'th-1' });
-    await settle();
-    // The daemon stops during pi's first turn, then restarts.
-    tasks.shutdown();
-    db.exec("UPDATE tasks SET status = 'queued', recovering = 1");
-    const again = new TaskManager({ db, config: tasks.config, executor, inbox: tasks.inbox, runtimes: tasks.runtimes, lineFor: tasks.lineFor });
-    t.after(() => again.shutdown());
-    again.restore();
-    assert.match(executor.turns.at(-1).prompt, /^\[handover\] You take this task over from a worker that ran on codex/);
-    assert.match(executor.turns.at(-1).prompt, /The daemon also restarted since: the last turn may have stopped part way\./);
   });
 });

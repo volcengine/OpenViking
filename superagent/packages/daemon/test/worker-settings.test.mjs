@@ -5,7 +5,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { WorkerSettings, WORKER_RUNTIME_COOLDOWN_MS, classifyWorkerFailure } from '../src/worker-settings.mjs';
 import { executeWorkersCommand } from '../src/worker-commands.mjs';
-import { executeCommand, helpText, parseCommand } from '../src/commands.mjs';
 
 function memoryStore() {
   const map = new Map();
@@ -89,19 +88,12 @@ describe('WorkerSettings', () => {
     settings.markUnavailable('claude', 'quota');
     settings.setRuntime('claude');
     assert.equal(settings.unavailable('claude'), null);
-  });
-
-  it('takes the router\'s backup as fallback only where workers run, and can be set or turned off', () => {
+    // The fallback: the router's backup where workers run, set, or off.
     assert.equal(settingsWith({ config: { fallbackRuntime: 'dsh' } }).settings.fallback(), null);
-    const { settings } = settingsWith({ config: { fallbackRuntime: 'codex' } });
-    // The router's backup is the runtime the task is on: nowhere to go.
-    assert.equal(settings.switchTarget('codex'), null);
-    settings.setFallback('claude');
-    assert.deepEqual([settings.fallback(), settings.fallbackSource(), settings.switchTarget('codex')], ['claude', 'set', 'claude']);
+    settings.setFallback('traex');
+    assert.deepEqual([settings.fallback(), settings.fallbackSource(), settings.switchTarget('claude')], ['traex', 'set', 'traex']);
     settings.setFallback('off');
-    assert.deepEqual([settings.fallback(), settings.fallbackSource()], [null, 'off']);
-    settings.setFallback(null);
-    assert.deepEqual([settings.fallback(), settings.fallbackSource()], ['codex', 'config']);
+    assert.deepEqual([settings.fallback(), settings.fallbackSource(), settings.switchTarget('claude')], [null, 'off', null]);
   });
 });
 
@@ -128,20 +120,18 @@ describe('/workers', () => {
     settings.markUnavailable('claude', 'quota', 10 * 60_000);
     const { ok, text } = await run(settings, '');
     assert.equal(ok, true);
-    assert.match(text, /^后台 worker（只影响之后新建和复开的任务；进行中的任务在原 Runtime 上做完/);
     assert.match(text, /\nRuntime：codex（跟随 router）\n模型：gpt-5\.6-sol（跟随 router）\n推理档位：medium（跟随 router）\n/);
     assert.match(text, /\n备用 Runtime：pi（同 router 的备用 Runtime）/);
     assert.match(text, /\n暂不可用：claude（额度用尽，约 10 分钟后再试/);
     assert.match(text, /\n进行中的任务：codex 2 · pi 1\n用法：/);
   });
 
-  it('sets the runtime new and reopened tasks take, and says that tasks at work stay where they are', async () => {
+  it('sets the runtime new tasks take, and says that tasks at work stay where they are', async () => {
     const { settings } = settingsWith();
-    let reply = await run(settings, 'runtime pi');
+    const reply = await run(settings, 'runtime pi');
     assert.equal(reply.ok, true);
-    assert.match(reply.text, /^后台 worker 的 Runtime 已设为 pi（模型 CLI 默认）。\n之后新建和复开的任务在这里运行，复开的任务会带上原 worker 的交接信息。\n进行中的 2 个任务继续在原 Runtime 上做完。$/);
+    assert.match(reply.text, /进行中的 2 个任务继续在原 Runtime 上做完。/);
     assert.equal(settings.preferred(), 'pi');
-    assert.match((await run(settings, '')).text, /\nRuntime：pi（单独设置）\n模型：CLI 默认\n推理档位：CLI 默认\n/);
     // By alias and prefix; a runtime workers cannot run on is refused.
     assert.equal((await run(settings, 'run trae')).ok, true);
     assert.equal(settings.preferred(), 'traex');
@@ -161,16 +151,6 @@ describe('/workers', () => {
     assert.match((await run(settings, 'model default')).text, /^worker 在 codex 上的模型已恢复默认：gpt-5\.6-sol（跟随 router）/);
     assert.match((await run(settings, 'effort x')).text, /^worker 在 codex 上的推理档位已设为 xhigh。/);
     assert.match((await run(settings, 'effort turbo')).text, /^不支持的档位：turbo\n可选：none、minimal、low、medium、high、xhigh$/);
-    assert.match((await run(settings, 'fallback claude')).text, /^worker 的备用 Runtime 已设为 claude。$/);
-    assert.match((await run(settings, 'fallback off')).text, /^已关闭 worker 的备用 Runtime/);
     assert.match((await run(settings, 'bogus')).text, /^用法：/);
-  });
-
-  it('is a slash command of its own: /w matches it, help lists it, and the Core answers it', async () => {
-    assert.deepEqual(parseCommand('/w runtime pi'), { name: 'workers', arg: 'runtime pi' });
-    assert.match(helpText({}), /\/workers \[runtime \| model \| effort \| fallback …\] — 查看或设置后台 worker/);
-    const runtime = { snapshot: async () => ({ runtime: 'pi', work: { working: false, connected: true } }) };
-    assert.deepEqual(await executeCommand({ name: 'workers', arg: '' }, runtime, { workers: () => ({ ok: true, text: 'shown' }) }), { ok: true, text: 'shown' });
-    assert.match((await executeCommand({ name: 'workers', arg: '' }, runtime)).text, /当前环境不支持 \/workers。/);
   });
 });

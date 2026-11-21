@@ -14,8 +14,9 @@ import { recentTranscript, TRANSCRIPT_FORMATS } from './worker-transcript.mjs';
 // reads every input (through the inbox), answers what is quick, and hands
 // longer work to a task with task_create. Each task gets a worker: its own
 // session, run one turn at a time (worker-executor.mjs), on the runtime,
-// model and effort the workers' settings name when the task starts or
-// reopens (worker-settings.mjs, /workers). A task keeps them while it works.
+// model and effort the workers' settings name when the task starts, or
+// reopens with no session to go on in (worker-settings.mjs, /workers). A task
+// keeps them while it works, and in every round its session goes on in.
 // It moves to another runtime only when it must: its runtime's quota ran out,
 // or its turns keep failing there. The move is a handover (task_handovers):
 // the next turn starts a session on the new runtime from the task record, the
@@ -701,27 +702,32 @@ export class TaskManager {
   // carried on only when it is still there and not too large: otherwise the
   // round starts a fresh session from the task record (brief).
   //
-  // A new round is new work: it takes the runtime, model and effort workers
-  // run on now. When that is another runtime, the round starts there from a
-  // handover (handOver) instead of carrying the session on.
+  // A round that can go on in its session stays with the worker that has it:
+  // on its runtime, model and effort, whatever workers or the router run on
+  // now. Only a runtime out of quota moves it, when its turn is about to
+  // start (leaveUnavailable). A round that cannot (its session is gone, too
+  // large, or was never checkpointed) starts a fresh session anyway: it is new
+  // work, and takes the runtime, model and effort workers run on now, from a
+  // handover (handOver) when that is another runtime.
   openRound(task, origin, requester) {
     const number = (task.round ?? 1) + 1;
     const dir = this.dirState(task.workdir);
     const workdir = dir?.removed_at_ms != null || !isDirectory(task.workdir) ? 'removed' : dir?.pruned_at_ms != null ? 'pruned' : 'kept';
     fs.mkdirSync(task.workdir, { recursive: true });
     this.db.prepare('DELETE FROM task_workdirs WHERE path = ?').run(task.workdir);
-    const target = this.runtimes?.forNewWork?.() ?? task.runtime;
-    const moving = Boolean(target && task.runtime && target !== task.runtime && this.executor.supports?.(target) !== false);
-    const session = moving ? 'switched' : !task.native_session ? (workdir === 'removed' ? 'deleted' : 'none')
+    const state = !task.native_session ? (workdir === 'removed' ? 'deleted' : 'none')
       : this.executor.sessionState?.(task, { maxBytes: ROUND_SESSION_MAX_BYTES }) ?? 'kept';
+    const target = state === 'kept' ? task.runtime : this.runtimes?.forNewWork?.() ?? task.runtime;
+    const moving = Boolean(target && task.runtime && target !== task.runtime && this.executor.supports?.(target) !== false);
+    const session = moving ? 'switched' : state;
     this.insertRound(task.id, number, origin, requester, { firstTurn: task.turns + 1, reopenedFrom: task.status, workdir, session });
     this.db.prepare(`UPDATE tasks SET round = ?, status = 'queued', ended_at_ms = NULL, updated_at_ms = ?,
       native_session = ? WHERE id = ?`).run(number, this.now(), session === 'kept' ? task.native_session : null, task.id);
     if (moving) {
       // The session it leaves is the one it ended with.
       this.handOver({ ...this.get(task.id), native_session: task.native_session }, target, { reason: 'round' });
-    } else if (this.runtimes) {
-      // The same runtime: the round takes the model and effort set for it now.
+    } else if (this.runtimes && session !== 'kept') {
+      // A fresh session on the same runtime: the model and effort set for it now.
       const settings = this.settingsFor(task.runtime);
       this.db.prepare('UPDATE tasks SET model = ?, effort = ? WHERE id = ?').run(settings.model, settings.effort, task.id);
     }
@@ -1208,10 +1214,13 @@ export class TaskManager {
     const failure = result.error ? classifyWorkerFailure(result.error) : null;
     if (failure?.exhausted) this.runtimes?.markUnavailable?.(task.runtime, result.error);
     if (failed && failure.exhausted && this.moveOff(task, 'exhausted', result.error)) return;
-    // A passing failure runs the turn again; so does one whose resumed session
+    // A passing failure (one the CLI calls transient, or one the router's
+    // failure policy calls recoverable; never a used-up quota, which would only
+    // fail again here) runs the turn again; so does one whose resumed session
     // was gone (its CLI cleaned it up): settleInputs dropped the checkpoint, so
     // the next turn starts a new session from the task record.
-    if (failed && (result.transient || result.sessionLost) && (this.retries.get(taskId) ?? 0) < TRANSIENT_RETRIES) {
+    const passing = failed && !failure.exhausted && Boolean(result.transient || failure.recoverable);
+    if ((passing || (failed && result.sessionLost)) && (this.retries.get(taskId) ?? 0) < TRANSIENT_RETRIES) {
       this.retries.set(taskId, (this.retries.get(taskId) ?? 0) + 1);
       this.setStatus(taskId, 'queued');
       this.request(taskId);
@@ -1219,7 +1228,7 @@ export class TaskManager {
     }
     // Still failing for a passing reason after the retries: another runtime
     // may serve where this one does not.
-    if (failed && (failure.recoverable || result.transient) && this.moveOff(task, 'failing', result.error)) return;
+    if (passing && this.moveOff(task, 'failing', result.error)) return;
     this.retries.delete(taskId);
     if (this.voidRound(task)) return;
     let report = final;

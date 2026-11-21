@@ -5,9 +5,10 @@
 // from the router's (/workers, worker-commands.mjs). A setting left unset
 // follows the router, as workers did before they had settings of their own.
 //
-// A task takes its runtime, model and effort when it starts or reopens for a
-// new round, and keeps them while it works: changing a setting never moves a
-// task in the middle of its work. Only a runtime that cannot serve any more
+// A task takes its runtime, model and effort when it starts, or reopens for a
+// new round whose session cannot go on, and keeps them while its session goes
+// on: changing a setting, or the router's runtime, never moves a task that can
+// carry on where it is. Only a runtime that cannot serve any more
 // (its quota or usage limit used up) or that keeps failing moves a working
 // task, to another runtime, through a handover (tasks.mjs).
 
@@ -171,7 +172,7 @@ export class WorkerSettings {
     if (this.read(`unavailable:${runtime}`)) this.write(`unavailable:${runtime}`, '');
   }
 
-  // The runtime a new task, or a task reopening for a new round, starts on:
+  // The runtime a new task, or a round that cannot go on in its session, starts on:
   // the preferred one, unless it is out of quota and the fallback is not.
   forNewWork() {
     const preferred = this.preferred();

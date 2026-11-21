@@ -13,8 +13,9 @@
 //   /workers fallback <name | off | default>  where a task goes when its runtime's quota runs out
 //
 // A setting applies to work that starts after it: a new task, or a task that
-// reopens for a new round. A task at work keeps its runtime, model and effort
-// until it ends, unless its runtime cannot serve (tasks.mjs, handover).
+// reopens for a new round whose session cannot go on. A task at work, or one
+// that reopens and can go on in its session, keeps its runtime, model and
+// effort, unless its runtime cannot serve (tasks.mjs, handover).
 
 import { matchPrefix } from './commands.mjs';
 import { RUNTIME_ALIASES, modelIdProblem, parseRuntimeModelSelector, staticModelEntries } from './runtime-catalog.mjs';
@@ -22,7 +23,7 @@ import { isWorkerRuntime } from './worker-settings.mjs';
 import { WORKER_RUNTIMES } from './worker-executor.mjs';
 
 const USAGE = '用法：/workers runtime <名称|router> · /workers model <名称|default> · /workers effort <档位|default> · /workers fallback <名称|off|default>';
-const SCOPE = '只影响之后新建和复开的任务；进行中的任务在原 Runtime 上做完，只有原 Runtime 额度用尽或持续失败时才交接到其他 Runtime。';
+const SCOPE = '只影响之后新建的任务，以及复开时原会话已续不上的任务；进行中的任务和复开后能续上原会话的任务留在原 Runtime，只有原 Runtime 额度用尽或持续失败时才交接到其他 Runtime。';
 const FOLLOW = new Set(['router', 'follow', 'default', '跟随']);
 const VERBS = ['runtime', 'model', 'effort', 'fallback'];
 
@@ -167,7 +168,7 @@ function runtimeCommand(settings, tasks, arg) {
   const elsewhere = liveElsewhere(tasks, runtime);
   return { ok: true, text: [
     `后台 worker 的 Runtime 已设为 ${runtime}（模型 ${model.model || 'CLI 默认'}${model.effort ? ` · 档位 ${model.effort}` : ''}）。`,
-    '之后新建和复开的任务在这里运行，复开的任务会带上原 worker 的交接信息。',
+    '之后新建的任务在这里运行；复开的任务能续上原会话就留在原 Runtime，续不上时在这里接着做，并带上原 worker 的交接信息。',
     elsewhere ? `进行中的 ${elsewhere} 个任务继续在原 Runtime 上做完。` : '',
     wasOut ? `${runtime} 之前因额度用尽被暂停，现已恢复使用。` : '',
   ].filter(Boolean).join('\n') };

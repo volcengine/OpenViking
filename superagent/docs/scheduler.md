@@ -344,11 +344,14 @@ runtime, and its model and effort when the worker runs on the same runtime
 cannot (DSH, Ark) and hand work to workers on Codex, or the two can use
 different models on one runtime.
 
-A task takes its runtime, model and effort when it starts, and again when it
-reopens for a new round; then it keeps them until it ends. Changing a setting
-never moves a task in the middle of its work: tasks at work finish where they
-started, and only new tasks and new rounds take the new settings. The one
-exception is a runtime that cannot serve:
+A task takes its runtime, model and effort when it starts, and keeps them as
+long as its session goes on. Changing a setting, or the router's runtime,
+never moves a task that can carry on where it is: tasks at work finish where
+they started, and a task that reopens for a new round goes on in its session,
+on its runtime, model and effort. Only a new task, or a round whose session
+cannot go on (gone, too large, or never checkpointed), takes the settings of
+the moment; such a round starts a fresh session anyway, from a handover when
+that is another runtime. The one exception is a runtime that cannot serve:
 
 - **Out of quota.** A turn that fails with a used-up quota, usage or billing
   limit (Codex "You've hit your usage limit", Claude Code "5-hour limit
@@ -360,8 +363,9 @@ exception is a runtime that cannot serve:
   it is back. Setting a runtime with `/workers runtime` or `/workers fallback`
   lifts its pause.
 - **Still failing.** A turn that fails for a passing reason (5xx, overloaded,
-  a reset connection) runs again on its runtime twice, as before; if it still
-  fails, the task moves.
+  a reset connection, a dropped stream: what the CLI calls transient or the
+  router's failure policy calls recoverable) runs again on its runtime twice,
+  as before; if it still fails, the task moves.
 
 A task that must move goes to the runtime workers are set to, when that is
 another one, else to the fallback: `/workers fallback`, by default the
@@ -376,7 +380,8 @@ runtime is only marked out.
 ### Handover
 
 One runtime cannot resume another's session. A task that moves (a new round
-on the runtime workers use now, or a runtime that cannot serve) records a
+whose session cannot go on, on the runtime workers use now, or a runtime that
+cannot serve) records a
 handover (`task_handovers`): where it was (runtime, model, the session its last
 turn ran in and that session's file) and why it moves. Its next turn starts a
 new session on the new runtime, in the same task directory, from a brief that
