@@ -223,6 +223,12 @@ client.session(session_id="demo-session").commit(
 print(result)
 ```
 
+`session(must_exist=True)` validates the session before returning a handle on the
+synchronous client. The asynchronous client's `session()` factory is
+synchronous and cannot await a request, so it rejects `must_exist=True` with a
+`ValueError` instead of ignoring it; use `await client.session_exists(session_id)`
+to validate explicitly.
+
 ### Add a Resource from a Local File
 
 `add_resource` returns a `task_id` by default. Query `client.get_task(result["task_id"])` and use the processed output after the task reaches `completed`.
