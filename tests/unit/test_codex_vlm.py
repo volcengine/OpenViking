@@ -217,6 +217,33 @@ async def test_codex_async_stream_uses_text_deltas_when_completed_output_is_none
     mock_real_client.responses.stream.assert_not_called()
 
 
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_completion_ignores_responses_event_without_type(
+    mock_resolve,
+    mock_openai_class,
+):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    final_response = _build_final_response("heartbeat ignored")
+    mock_stream = _MockResponsesEventStream(
+        [
+            SimpleNamespace(type=None),
+            SimpleNamespace(type="response.completed", response=final_response),
+        ]
+    )
+    mock_real_client = MagicMock()
+    mock_real_client.responses.create.return_value = mock_stream
+    mock_openai_class.return_value = mock_real_client
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+
+    assert vlm.get_completion("hello") == "heartbeat ignored"
+    assert mock_stream.closed is True
+
+
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
 def test_vlm_config_accepts_codex_without_api_key(_mock_auth_available):
     from openviking.models.vlm.retry_vlm import RetryVLM
