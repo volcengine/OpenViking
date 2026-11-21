@@ -44,6 +44,17 @@ class ModelError(Exception):
         self.status_code = status_code
         self.code = code
 
+    def __str__(self) -> str:
+        # Provider exception text may contain request excerpts or the complete
+        # rejection response. Keep typed facts public; the original SDK error
+        # remains available to trusted in-process callers via the cause chain.
+        kind = self.kind if isinstance(self.kind, ModelErrorKind) else ModelErrorKind.UNKNOWN
+        message = brief_for(kind.value) or UNKNOWN_BRIEF
+        status = self.status_code
+        if type(status) is int and 100 <= status <= 599:
+            return f"{message} (HTTP {status}; {kind.value})"
+        return f"{message} ({kind.value})"
+
 
 _CODE_KINDS = {
     # Authentication and authorization.

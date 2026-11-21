@@ -155,9 +155,16 @@ _SENSITIVE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _MAX_ERROR_LEN = 500
+_MODEL_RESPONSE_BODY = re.compile(r"(Error code:\s*[1-5]\d{2})\s*-\s*.*", re.I | re.S)
+_DIAGNOSTIC_TASK_KEYS = frozenset(
+    {"error", "errors", "error_message", "err_brief", "cleanup_error", "last_sync_error"}
+)
 
 
 def sanitize_error(error: str) -> str:
+    # SDK status strings can embed the complete provider response. They are
+    # diagnostics, not a safe summary of the rejected request or its contents.
+    error = _MODEL_RESPONSE_BODY.sub(r"\1 [provider response body omitted]", error)
     sanitized = _SENSITIVE_PATTERNS.sub("[REDACTED]", error)
     if len(sanitized) > _MAX_ERROR_LEN:
         sanitized = sanitized[:_MAX_ERROR_LEN] + "...[truncated]"
@@ -218,15 +225,40 @@ def serialize_work_errors(values: Optional[Iterable[Any]]) -> list[Dict[str, Any
     return details
 
 
-def sanitize_task_result(result: Any) -> Any:
+def sanitize_task_result(
+    result: Any,
+    *,
+    diagnostics: bool = False,
+    message_is_error: bool = False,
+    _error_value: bool = False,
+) -> Any:
     if isinstance(result, dict):
         return {
-            key: sanitize_task_result(value)
+            key: sanitize_task_result(
+                value,
+                diagnostics=diagnostics,
+                message_is_error=message_is_error,
+                _error_value=(
+                    _error_value
+                    or key in _DIAGNOSTIC_TASK_KEYS
+                    or (key == "message" and message_is_error)
+                ),
+            )
             for key, value in result.items()
             if key not in SENSITIVE_TASK_KEYS
         }
     if isinstance(result, list):
-        return [sanitize_task_result(item) for item in result]
+        return [
+            sanitize_task_result(
+                item,
+                diagnostics=diagnostics,
+                message_is_error=message_is_error,
+                _error_value=_error_value,
+            )
+            for item in result
+        ]
+    if diagnostics and _error_value and isinstance(result, str):
+        return sanitize_error(result)
     return result
 
 
@@ -262,7 +294,15 @@ class TaskRecord:
                 compile_meta.pop("input_signature", None)
                 compile_meta.pop("owner_user_id", None)
         return {
-            **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
+            **(
+                {
+                    "execution_events": sanitize_task_result(
+                        deepcopy(self.execution_events), diagnostics=True
+                    )
+                }
+                if include_events
+                else {}
+            ),
             "task_id": self.task_id,
             "task_type": self.task_type,
             "status": self.status.value,
@@ -272,8 +312,12 @@ class TaskRecord:
             "resource_id": self.resource_id,
             "meta": sanitize_task_result(public_meta),
             "stage": self.stage,
-            "result": sanitize_task_result(deepcopy(self.result)),
-            "error": self.error,
+            "result": sanitize_task_result(
+                deepcopy(self.result),
+                diagnostics=True,
+                message_is_error=self.status in {TaskStatus.FAILED, TaskStatus.CANCELLED},
+            ),
+            "error": sanitize_error(self.error) if self.error is not None else None,
             "created_at_iso": datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat(),
             "updated_at_iso": datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat(),
         }
@@ -403,9 +447,7 @@ def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None
             kind=kind,
             status=task.status.value,
             stage=sanitize_error(stage) if stage else None,
-            error=sanitize_error(task.error)
-            if kind == "error_recorded" and task.error
-            else None,
+            error=sanitize_error(task.error) if kind == "error_recorded" and task.error else None,
             recorded_at=recorded_at,
         )
 
@@ -417,10 +459,7 @@ def queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
         "processed": summary.processed,
         "requeue_count": summary.requeue_count,
         "error_count": summary.error_count,
-        "errors": [
-            project_work_error(error)
-            for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]
-        ],
+        "errors": [project_work_error(error) for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]],
     }
 
 
@@ -483,9 +522,7 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         ):
             if task.result.get(field_name) == "queued":
                 task.result[field_name] = (
-                    "failed"
-                    if projected.get(queue_name, {}).get("error_count", 0)
-                    else "complete"
+                    "failed" if projected.get(queue_name, {}).get("error_count", 0) else "complete"
                 )
     # Cancelled deliveries still need their execution stage and private context
     # for recovery and cleanup. Both expire with the Task record.
