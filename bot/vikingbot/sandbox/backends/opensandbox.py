@@ -1,6 +1,7 @@
 """OpenSandbox backend implementation using official SDK."""
 
 import json
+import os
 import posixpath
 import shlex
 from collections.abc import AsyncIterator
@@ -58,6 +59,9 @@ class OpenSandboxBackend(SandboxBackend):
             from opensandbox.models.sandboxes import Host, NetworkPolicy, NetworkRule, Volume
 
             volume_options = {}
+            sandbox_env = {}
+            if timezone := os.environ.get("TZ"):
+                sandbox_env["TZ"] = timezone
             if self._osb_config.managed:
                 if self._host_workspace is None:
                     raise ValueError("Managed OpenSandbox requires a dedicated host workspace")
@@ -67,7 +71,7 @@ class OpenSandboxBackend(SandboxBackend):
                     WORKSPACE_GID_LABEL: str(owner.st_gid),
                 }
                 # Numeric users may not have a passwd entry or access to image /root.
-                volume_options["env"] = {"HOME": "/workspace"}
+                sandbox_env["HOME"] = "/workspace"
                 volume_options["volumes"] = [
                     Volume(
                         name="workspace",
@@ -76,6 +80,8 @@ class OpenSandboxBackend(SandboxBackend):
                         read_only=False,
                     )
                 ]
+            if sandbox_env:
+                volume_options["env"] = sandbox_env
 
             network = self._osb_config.network
             policy = NetworkPolicy(
