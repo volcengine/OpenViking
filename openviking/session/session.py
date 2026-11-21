@@ -2692,6 +2692,30 @@ class Session:
                         safe_uri_for_log(archive_uri),
                         enable_working_memory,
                     )
+                    if (
+                        ov_config.memory.archive_source_index_enabled
+                        and effective_policy.self_enabled
+                    ):
+                        from openviking.session.archive_source_index import index_archive_sources
+
+                        fs = self._viking_fs
+                        path = fs._uri_to_path(archive_uri, ctx=self.ctx)
+                        lease = await fs._async_agfs.pathlock_acquire_tree(
+                            path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+                        )
+                        try:
+                            # Hold the archive lease until the index writes settle so
+                            # a concurrent delete cannot leave searchable copies behind.
+                            if await fs.exists(f"{archive_uri}/messages.jsonl", ctx=self.ctx):
+                                await index_archive_sources(fs, archive_uri, messages, self.ctx)
+                                task_context = get_task_context()
+                                await tracker.wait_for_task_work(
+                                    task_id,
+                                    exclude_work_id=task_context.work_id if task_context else None,
+                                    timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+                                )
+                        finally:
+                            await fs._async_agfs.pathlock_release(lease)
                     checkpoint_requests = (
                         await self._checkpoints.collect_requests_for_phase2(
                             archive_uri,

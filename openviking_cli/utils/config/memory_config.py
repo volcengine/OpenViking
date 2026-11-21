@@ -96,6 +96,10 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    archive_source_index_enabled: bool = Field(
+        default=False,
+        description="Index bounded excerpts of committed user and assistant text with archive locators.",
+    )
     extraction_output_format: Literal["json", "python"] = Field(
         default="python",
         description=(
