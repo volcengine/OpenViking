@@ -52,7 +52,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import SUBMIT_EXHAUSTED, ExternalTaskSnapshot
-from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
+from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.pathlock_recovery import (
@@ -242,6 +242,7 @@ class CompileStore(Protocol):
     async def put_run(
         self, account_id: str, owner_user_id: str, compile_name: str, run: dict
     ) -> None: ...
+    async def cancel_queued_run(self, task: TaskRecord) -> None: ...
     def lock_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Any: ...
@@ -487,6 +488,20 @@ class CompileStateStore:
         path = self._run_path(account_id, owner_user_id, compile_name, run["task_id"])
         async with self.locked(path) as lease:
             await self.write_json(path, run, lease)
+
+    async def cancel_queued_run(self, task: TaskRecord) -> None:
+        """Finalize an unstarted Run using the Task's persisted cancellation time."""
+        compile_meta = (task.meta.get("request") or {}).get("compile") or {}
+        owner = compile_meta.get("owner_user_id")
+        name = compile_meta.get("compile_name")
+        if task.account_id is None or not owner or not name:
+            return
+        path = self._run_path(task.account_id, owner, name, task.task_id)
+        async with self.locked(path) as lease:
+            run = await self.read_json(path)
+            if run is not None and run["status"] == "queued" and run["started_at"] is None:
+                run.update(status="cancelled", finished_at=task.updated_at)
+                await self.write_json(path, run, lease)
 
     async def list_runs(
         self,
