@@ -26,7 +26,7 @@ import { localSocketPath, supportsFileModes } from '../src/platform/index.mjs';
 import { Store } from '../src/store.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { chatEvent, mailEvent, subjectEvent } from './event-fixture.mjs';
-import { fakeConnectors, larkConnectors } from './action-fixture.mjs';
+import { fakeConnectors, larkConnectors, larkSuccess } from './action-fixture.mjs';
 
 const TOKEN = 'runtime-token';
 const OWNER = { id: 'ou_owner12345678', target: { user_id: 'ou_owner12345678' } };
@@ -2181,5 +2181,137 @@ describe('workers scheduler', () => {
     store.ingest(chatEvent({ messageId: 'om_durableTask123', chatType: 'group' }));
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_durableTask123'], title: 'x' }),
       (error) => error.code === 'unsupported' && /Workers run on pi, codex, traex or claude; this runtime is durable/.test(error.message));
+  });
+});
+
+describe('updating a card in place', () => {
+  const card = (text) => ({ config: { wide_screen_mode: true, update_multi: true },
+    elements: [{ tag: 'div', text: { tag: 'plain_text', content: text } }] });
+  // A Connector that gives every delivery its own message id, so a card sent
+  // earlier is told apart from what came after it.
+  const deliveryIds = () => {
+    let count = 0;
+    return () => ({ message_id: `om_card${String(count += 1).padStart(9, '0')}` });
+  };
+  const outboxActions = (store) => store.db.prepare('SELECT action FROM outbox ORDER BY id').all().map((row) => row.action);
+
+  it('is offered only where the connector updates cards', (t) => {
+    const names = (ids) => setup(t, { ids }).service.tools().map((tool) => tool.name);
+    assert.ok(names(['lark']).includes('update_card'));
+    assert.ok(!names(['weixin']).includes('update_card'));
+    assert.ok(!names(['slack']).includes('update_card'));
+  });
+
+  it('replaces a card this daemon sent, and is neither a delivery nor a decision', async (t) => {
+    const { store, service, call, connectors, inbound } = setup(t, { run: deliveryIds() });
+    const tools = service.tools();
+    const update = tools.find((tool) => tool.name === 'update_card');
+    assert.deepEqual(Object.keys(update.inputSchema.properties), ['source', 'message_id', 'card', 'decision_id', 'decision_instance']);
+    assert.deepEqual(update.inputSchema.required, ['message_id', 'card', 'decision_id']);
+
+    inbound({ messageId: 'om_askProgress1', chatId: 'oc_progress12345' });
+    const sent = await call('send_message', { chat_id: 'oc_progress12345', card: card('任务 1：进行中'),
+      decision_id: 'message:om_askProgress1' });
+    const cardId = sent.data.message_id;
+    assert.equal(cardId, 'om_card000000001');
+
+    // A later request moves the same card; the id it was sent with is enough to
+    // find it, and no source has to be passed.
+    inbound({ messageId: 'om_askNewer12345', chatId: 'oc_progress12345' });
+    const updated = await call('update_card', { message_id: cardId, card: card('任务 1：完成'),
+      decision_id: 'message:om_askNewer12345' });
+    assert.match(updated.text, /^Updated card message_id=om_card000000001 in place\. This is not a delivery of an answer/);
+    assert.deepEqual(connectors.calls.map((item) => [item.connector, item.action]), [['lark', 'message.send'], ['lark', 'card.update']]);
+    assert.deepEqual(connectors.calls[1].input.message_id, cardId);
+    assert.deepEqual(connectors.calls[1].input.card, card('任务 1：完成'));
+    assert.deepEqual(outboxActions(store), ['message.send', 'card.update']);
+
+    // Nothing is recorded for the input the update was made on, so it is still
+    // waiting for its own answer.
+    assert.equal(store.decisionFor('lark', 'message:om_askNewer12345'), null);
+    await call('reply_message', { message_id: 'om_askNewer12345', markdown: '改好了',
+      decision_id: 'message:om_askNewer12345' });
+    assert.equal(store.decisionFor('lark', 'message:om_askNewer12345').outcome, 'delivered');
+
+    // The same card content again changes nothing and reaches no Connector.
+    const again = await call('update_card', { message_id: cardId, card: card('任务 1：完成'),
+      decision_id: 'message:om_askNewer12345' });
+    assert.match(again.text, /^Already updated with this content: card message_id=om_card000000001 says that already/);
+    assert.equal(again.data.updated, false);
+    assert.equal(connectors.calls.length, 3);
+  });
+
+  it('patches the card through the Lark CLI, as the bot', async (t) => {
+    let sent = 0;
+    const lark = larkConnectors({ tempDir: os.tmpdir(), run: async (_bin, args) => {
+      if (args.includes('patch')) return larkSuccess({ message_id: 'om_patched123456' });
+      sent += 1;
+      return larkSuccess({ message_id: `om_larkCard${String(sent).padStart(6, '0')}` });
+    } });
+    const { call, inbound } = setup(t, { connectors: lark });
+    inbound({ messageId: 'om_cliAsk12345678', chatId: 'oc_cliCard1234567' });
+    const delivered = await call('send_message', { chat_id: 'oc_cliCard1234567', card: card('v1'),
+      decision_id: 'message:om_cliAsk12345678' });
+    const updated = await call('update_card', { message_id: delivered.data.message_id, card: card('v2'),
+      decision_id: 'message:om_cliAsk12345678' });
+    assert.match(updated.text, /^Updated card message_id=om_larkCard000001 in place/);
+    const args = lark.calls.at(-1).args;
+    assert.deepEqual(args.slice(args.indexOf('im'), args.indexOf('im') + 7),
+      ['im', 'messages', 'patch', '--as', 'bot', '--message-id', 'om_larkCard000001']);
+    assert.equal(args[args.indexOf('--data') + 1], JSON.stringify({ content: JSON.stringify(card('v2')) }));
+  });
+
+  it('refuses anything that is not a card this daemon delivered', async (t) => {
+    const { call, connectors, inbound } = setup(t, { run: deliveryIds() });
+    inbound({ messageId: 'om_askCard123456', chatId: 'oc_cardRefus1234' });
+    const plain = await call('send_message', { chat_id: 'oc_cardRefus1234', markdown: 'plain text',
+      decision_id: 'message:om_askCard123456' });
+    const decision = 'message:om_askCard123456';
+    const refused = (messageId, extra = {}) => call('update_card', { message_id: messageId, card: card('x'), decision_id: decision, ...extra });
+
+    // A message this bot sent, but not a card.
+    await assert.rejects(() => refused(plain.data.message_id), (error) => error.code === 'invalid_target');
+    // Someone else's message, and an id this daemon never sent.
+    await assert.rejects(() => refused('om_askCard123456'), (error) => error.code === 'invalid_target');
+    await assert.rejects(() => refused('om_neverSent1234567'), (error) => error.code === 'invalid_target');
+    assert.equal(connectors.calls.length, 1, 'refusals stop before the Connector');
+  });
+
+  it('keeps finding the card after an update row names the same message', async (t) => {
+    // The platform answers a patch with the patched message id, so the update's
+    // own ledger row carries it; the card's delivery stays the one that counts.
+    const { call, connectors, inbound } = setup(t, {
+      run: async () => ({ message_id: 'om_cardEcho123456' }),
+    });
+    inbound({ messageId: 'om_echoAsk1234567', chatId: 'oc_echoCard123456' });
+    await call('send_message', { chat_id: 'oc_echoCard123456', card: card('a'), decision_id: 'message:om_echoAsk1234567' });
+    await call('update_card', { message_id: 'om_cardEcho123456', card: card('b'), decision_id: 'message:om_echoAsk1234567' });
+    await call('update_card', { message_id: 'om_cardEcho123456', card: card('c'), decision_id: 'message:om_echoAsk1234567' });
+    assert.deepEqual(connectors.calls.map((item) => item.action), ['message.send', 'card.update', 'card.update']);
+  });
+
+  it('checks the card body and the freshness fence before any update', async (t) => {
+    const { call, connectors, inbound } = setup(t, { run: deliveryIds() });
+    inbound({ messageId: 'om_askBody123456', chatId: 'oc_cardBody12345' });
+    const sent = await call('send_message', { chat_id: 'oc_cardBody12345', card: card('v1'),
+      decision_id: 'message:om_askBody123456' });
+    const cardId = sent.data.message_id;
+    const base = { message_id: cardId, decision_id: 'message:om_askBody123456' };
+
+    await assert.rejects(() => call('update_card', { ...base, card: card('x'.repeat(31 * 1024)) }),
+      (error) => error.code === 'invalid_content' && /card exceeds 30 KiB/.test(error.message));
+    await assert.rejects(() => call('update_card', { ...base, card: card('x'), card_images: { cover: 'a.png' } }),
+      (error) => error.code === 'invalid_input' && /unknown field: card_images/.test(error.message));
+    await assert.rejects(() => call('update_card', { ...base, card: card('x'), markdown: 'x' }),
+      (error) => error.code === 'invalid_input' && /unknown field: markdown/.test(error.message));
+    assert.equal(connectors.calls.length, 1, 'a refused body never reaches the Connector');
+
+    // A newer input where the card lives blocks it, as for every delivery.
+    inbound({ messageId: 'om_askNewerCard1', chatId: 'oc_cardBody12345' });
+    await assert.rejects(() => call('update_card', { ...base, card: card('v2') }),
+      (error) => error.code === 'stale_decision' && /newer authenticated input/.test(error.message));
+    // Taken on the newest input, it goes through.
+    await call('update_card', { message_id: cardId, card: card('v2'), decision_id: 'message:om_askNewerCard1' });
+    assert.deepEqual(connectors.calls.map((item) => item.action), ['message.send', 'card.update']);
   });
 });

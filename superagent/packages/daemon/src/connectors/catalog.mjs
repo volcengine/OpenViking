@@ -84,6 +84,10 @@ const MANIFESTS = Object.freeze({
         conversations: { [DOC_COMMENT_CONVERSATION]: LARK_DOC_COMMENT } },
       'message.react': {},
       'message.retract': {},
+      // Replaces one card this app sent, in place. Lark has no idempotency key
+      // for it, but the same card content twice leaves the same card, so an
+      // uncertain attempt may be retried.
+      'card.update': { content: ['card'], idempotent: true },
     },
     queries: ['chat.list', 'chat.messages', 'message.search', 'thread.messages', 'message.media'],
     auth_schema: EMPTY_SCHEMA,

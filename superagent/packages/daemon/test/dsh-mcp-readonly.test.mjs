@@ -36,7 +36,7 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 // The default withheld set, spelled out here so that shrinking it fails this
 // test instead of silently widening what a scoped child agent can do.
 const DEFAULT_WRITE_TOOLS = [
-  'send_message', 'notify_owner', 'reply_message', 'react_to_message', 'retract_message',
+  'send_message', 'notify_owner', 'reply_message', 'react_to_message', 'retract_message', 'update_card',
   'stay_silent', 'create_timer', 'cancel_timer', 'finish_timer_occurrence', 'read_meeting_inbox',
 ];
 

@@ -19,7 +19,7 @@ const MAX_REQUEST_BYTES = 1_000_000;
 // past, while a policy check inside a shared process cannot even tell which
 // agent called.
 const DEFAULT_WRITE_TOOLS = Object.freeze([
-  'send_message', 'notify_owner', 'reply_message', 'react_to_message', 'retract_message',
+  'send_message', 'notify_owner', 'reply_message', 'react_to_message', 'retract_message', 'update_card',
   'stay_silent', 'create_timer', 'cancel_timer', 'finish_timer_occurrence', 'read_meeting_inbox',
 ]);
 
