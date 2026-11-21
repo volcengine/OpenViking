@@ -10,11 +10,13 @@ const { ComposerFooter, ComposerAttachments, resolveVikingBotLabels } =
     pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'bot-composer-tools.js'))
   );
 
-async function hover(element) {
+async function showHint(element, interaction = 'hover') {
   await act(async () => {
-    element.dispatchEvent(
-      new window.MouseEvent('mouseover', { bubbles: true }),
-    );
+    if (interaction === 'focus') element.focus();
+    else
+      element.dispatchEvent(
+        new window.MouseEvent('mouseover', { bubbles: true }),
+      );
     await new Promise((resolve) => setTimeout(resolve, 350));
   });
 }
@@ -84,7 +86,7 @@ for (const [locale, limit, hint, attach, remove] of [
       let button = findButton();
       assert.ok(button, 'the real composer footer renders its add-file button');
       assert.equal(button.disabled, true);
-      await hover(button.parentElement);
+      await showHint(button.parentElement, limit === 10 ? 'focus' : 'hover');
       assert.equal(
         document.querySelector('[role="tooltip"]')?.textContent,
         hint,
@@ -103,7 +105,7 @@ for (const [locale, limit, hint, attach, remove] of [
       );
       button = findButton();
       assert.equal(button.disabled, false);
-      await hover(button);
+      await showHint(button);
       assert.equal(
         document.querySelector('[role="tooltip"]')?.textContent,
         attach,
@@ -138,7 +140,7 @@ test('the attachment limit hint accepts a host label formatter', async () => {
     const button = view.container.querySelector(
       'button[aria-label="Add resources"]',
     );
-    await hover(button.parentElement);
+    await showHint(button.parentElement);
     assert.equal(
       document.querySelector('[role="tooltip"]')?.textContent,
       'Maximum 2 files',
@@ -146,5 +148,54 @@ test('the attachment limit hint accepts a host label formatter', async () => {
     assert.equal(button.disabled, true);
   } finally {
     await view.unmount();
+  }
+});
+
+test('an open attachment hint stays anchored when removing a file', async () => {
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.isConnected &&
+      (this.matches('.ov-viking-bot__attach, .ov-viking-bot__attach-trigger') ||
+        this.getAttribute('role') === 'tooltip')
+      ? {
+          x: 100,
+          y: 100,
+          top: 100,
+          left: 100,
+          right: 132,
+          bottom: 132,
+          width: 32,
+          height: 32,
+        }
+      : originalRect.call(this);
+  };
+  const view = await renderTools({ locale: 'zh-CN', limit: 10 });
+  try {
+    const button = view.container.querySelector(
+      'button[aria-label="添加资源"]',
+    );
+    const trigger = button.parentElement;
+    await showHint(trigger);
+    const tooltip = () => document.querySelector('[role="tooltip"]');
+    assert.equal(tooltip().style.top, '62px');
+    assert.equal(trigger.getAttribute('aria-describedby'), tooltip().id);
+    await act(() =>
+      view.container
+        .querySelector('button[aria-label="移除附件: document-0.txt"]')
+        .click(),
+    );
+    await act(() => window.dispatchEvent(new window.Event('scroll')));
+    assert.equal(tooltip().textContent, '添加资源');
+    assert.equal(tooltip().style.top, '62px');
+    assert.equal(tooltip().style.left, '100px');
+    await act(() =>
+      document.dispatchEvent(
+        new window.KeyboardEvent('keydown', { key: 'Escape' }),
+      ),
+    );
+    assert.equal(tooltip(), null);
+  } finally {
+    await view.unmount();
+    HTMLElement.prototype.getBoundingClientRect = originalRect;
   }
 });

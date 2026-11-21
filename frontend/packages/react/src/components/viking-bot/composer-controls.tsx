@@ -103,21 +103,18 @@ export function VikingBotAttach({
       <AttachSvg aria-hidden="true" focusable="false" />
     </Button>
   );
+  // Keep the tooltip anchor mounted while attachment capacity changes.
   return (
     <Tooltip content={tip ?? label}>
-      {!hasDisabledHint ? (
-        button
-      ) : (
-        <span
-          className="ov-viking-bot__attach-trigger"
-          role="button"
-          aria-disabled="true"
-          aria-label={label}
-          tabIndex={0}
-        >
-          {button}
-        </span>
-      )}
+      <span
+        className="ov-viking-bot__attach-trigger"
+        role={hasDisabledHint ? 'button' : undefined}
+        aria-disabled={hasDisabledHint || undefined}
+        aria-label={hasDisabledHint ? label : undefined}
+        tabIndex={hasDisabledHint ? 0 : undefined}
+      >
+        {button}
+      </span>
     </Tooltip>
   );
 }
