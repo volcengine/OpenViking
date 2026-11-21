@@ -4,7 +4,7 @@
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Dict, Optional
 
@@ -19,7 +19,7 @@ class TokenUsage:
     completion_tokens: int = 0
     total_tokens: int = 0
     call_count: int = 0
-    last_updated: datetime = field(default_factory=datetime.now)
+    last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def update(self, prompt_tokens: int, completion_tokens: int) -> None:
         """Update token usage
@@ -32,7 +32,7 @@ class TokenUsage:
         self.completion_tokens += completion_tokens
         self.total_tokens = self.prompt_tokens + self.completion_tokens
         self.call_count += 1
-        self.last_updated = datetime.now()
+        self.last_updated = datetime.now(timezone.utc)
 
     def reset(self) -> None:
         """Reset token usage statistics"""
@@ -40,7 +40,7 @@ class TokenUsage:
         self.completion_tokens = 0
         self.total_tokens = 0
         self.call_count = 0
-        self.last_updated = datetime.now()
+        self.last_updated = datetime.now(timezone.utc)
 
     def to_dict(self) -> Dict:
         """Convert to dictionary format
@@ -258,9 +258,7 @@ class TokenUsageTracker:
                     usage = TokenUsage(
                         **{
                             **counts,
-                            "last_updated": parse_iso_datetime(counts["last_updated"]).replace(
-                                tzinfo=None
-                            ),
+                            "last_updated": parse_iso_datetime(counts["last_updated"]),
                         }
                     )
                     provider = model.usage_by_provider.setdefault(provider_name, TokenUsage())
