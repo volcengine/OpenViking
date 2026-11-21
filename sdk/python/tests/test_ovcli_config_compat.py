@@ -10,7 +10,10 @@ import pytest
 from openviking_sdk import AsyncHTTPClient
 
 
-def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize("user", ["config-user", "中文用户"])
+def test_async_http_client_loads_connection_fields_from_ovcli_config(
+    tmp_path, monkeypatch, user
+):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(
         json.dumps(
@@ -19,10 +22,12 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
                 "api_key": "config-key",
                 "gateway_token": "gateway-secret",
                 "account": "config-account",
-                "user": "config-user",
+                "user": user,
                 "timeout": 12.5,
-            }
-        )
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
     )
     monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
     monkeypatch.delenv("OPENVIKING_URL", raising=False)
@@ -35,7 +40,7 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
     assert client._gateway_token == "gateway-secret"
     assert "X-Gateway-Token" not in client._extra_headers
     assert client._account == "config-account"
-    assert client._user_id == "config-user"
+    assert client._user_id == user
     assert client._timeout == 12.5
 
 
