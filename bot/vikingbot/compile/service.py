@@ -61,6 +61,7 @@ from vikingbot.compile.models import (
 )
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import agent_runner as pipeline_agent_runner
+from vikingbot.compile.pipeline_io import completed_jobs
 from vikingbot.compile.renderer import (
     RenderedBundle,
     WikiRenderer,
@@ -1136,6 +1137,7 @@ class BotCompileService:
             if source_files is not None
             else await self._list_pipeline_source_files(client, request)
         )
+        pipeline.source_order = {uri: index for index, uri in enumerate(dict.fromkeys(ordered))}
         await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
         source_limits = self.limits.model_copy(
@@ -1143,29 +1145,25 @@ class BotCompileService:
         )
 
         async def source_batches():
-            """Retain at most one read batch of source bodies while seeding task shards."""
-            for start in range(0, len(ordered), 8):
-                uris = ordered[start : start + 8]
-                contents = await asyncio.gather(
-                    *(read_source(client, uri) for uri in uris),
-                    return_exceptions=True,
-                )
-                readable = []
-                for uri, content in zip(uris, contents, strict=True):
+            """Refill completed reads while retaining at most the existing eight source slots."""
+            reads = completed_jobs(ordered, lambda uri: read_source(client, uri), concurrency=8)
+            async with aclosing(reads):
+                async for index, content in reads:
+                    uri = ordered[index]
                     if isinstance(content, Exception):
                         manifest = await pipeline.files.get("inputs")
                         manifest[uri] = "failed"
                         await pipeline.files.put("inputs", manifest)
                         pipeline.failures.append(f"Source read failed: {uri}: {str(content)[:400]}")
-                    elif isinstance(content, BaseException):
-                        raise content
                     else:
-                        readable.append((uri, content))
-                for batch in pack_source_batches(readable, source_limits):
-                    yield batch
+                        for batch in pack_source_batches([(uri, content)], source_limits):
+                            yield batch
+                    # Release an original body before starting its replacement.
+                    del content
 
         try:
-            rendered = await pipeline.run(source_batches())
+            async with aclosing(source_batches()) as batches:
+                rendered = await pipeline.run(batches)
             # Cancellation must stop recovery before any write, including a queued cancel.
             current = await self.store.get(task_id)
             if current.status in TERMINAL_STATUSES or current.status == "cancelling":
