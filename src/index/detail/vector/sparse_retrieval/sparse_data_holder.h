@@ -235,7 +235,7 @@ class SparseDataHolder {
         query_values.push_back(static_cast<float>(v));
       }
 
-      sparse_holder_.index_by_terms(hash_terms, query_values, indices, values);
+      sparse_holder_.lookup_by_terms(hash_terms, query_values, indices, values);
       *sparse_view = std::make_shared<SparseDatapointView>(
           indices.data(), values.data(), indices.size());
     } else {
