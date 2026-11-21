@@ -53,6 +53,7 @@
       "explicitSilence": true,
       "stagedReplies": false,
       "naturalWriting": true,
+      "scheduler": "workers",
       "model": "codex"
     },
     {
@@ -70,6 +71,7 @@
       "stagedReplies": false,
       "soulUri": "viking://~/memories/research-soul.md",
       "naturalWriting": false,
+      "scheduler": "legacy",
       "model": "dsh:deepseek/deepseek-chat",
       "dshHomeMode": "shared",
       "dshSkillRoots": ["workspace-dsh", "project-agents", "host-agents", "host-dsh"]
