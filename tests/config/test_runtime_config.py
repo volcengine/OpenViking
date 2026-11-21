@@ -770,7 +770,16 @@ async def test_account_runtime_binding_and_updates_are_isolated():
             await manager.patch_account(
                 "a", {"vlm": {"credentials": [{"provider": "openai", "api_ky": "typo"}]}}
             )
+        endpoint_only = {"provider": "openai", "api_base": credential["api_base"]}
+        with pytest.raises(ValueError, match="requires 'api_key'"):
+            await manager.patch_account("a", {"vlm": {"credentials": [endpoint_only]}})
         assert await source.load(ConfigScope.account("a")) == before
+        await manager.patch_account("a", {"embedding": {"dense": {"credentials": [endpoint_only]}}})
+        dense = (await resolver.resolve("a")).embedding.dense
+        assert dense is not None
+        local_binding = dense.credentials[0]
+        assert local_binding.api_base == "https://account.invalid/v1"
+        assert local_binding.api_key is None
         await manager.patch_account(
             "a", {"embedding": {"dense": {"credentials": [{**credential, "api_key": "rotated"}]}}}
         )
@@ -1161,6 +1170,98 @@ def test_file_source_cluster_scope_path_and_load():
         assert await source.load(scope) == {"memory": {"extraction_enabled": False}}
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("section", ["vlm", "query_planner", "embedding"])
+@pytest.mark.parametrize("binding_style", ["legacy", "credential-array"])
+async def test_file_backed_account_model_selection_reuses_cluster_credentials(
+    section, binding_style
+):
+    import json
+    from typing import cast
+
+    from openviking.config.binding import build_runtime_config_manager
+    from openviking.config.vector import AccountVectorConfigResolver
+    from openviking.config.vlm import AccountVLMProvider
+    from openviking.pyagfs import AsyncAGFSClient
+    from openviking_cli.utils.config import set_openviking_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    def cluster_binding(name):
+        connection = {
+            "provider": "openai",
+            "api_key": f"{name}-key",
+            "api_base": f"https://{name}.invalid/v1",
+        }
+        binding = {"model": f"{name}-model"}
+        if binding_style == "credential-array":
+            return {**binding, "credentials": [{**connection, "model": f"{name}-deployment"}]}
+        return {**binding, **connection}
+
+    cluster = OpenVikingConfig.from_dict(
+        {
+            "vlm": cluster_binding("vlm"),
+            "query_planner": cluster_binding("query-planner"),
+            "embedding": {"dense": {**cluster_binding("embedding"), "dimension": 4}},
+        }
+    )
+    override = {"model": "account-model"}
+    settings: dict = {section: override}
+    if section == "embedding":
+        settings = {section: {"dense": {**override, "dimension": 4}}}
+    agfs = _FakeAGFS()
+    path = "/local/ov-a/_system/setting.json"
+    agfs.files[path] = json.dumps(settings).encode()
+    set_openviking_config(cluster)
+    manager = build_runtime_config_manager(cast(AsyncAGFSClient, agfs), base_config=cluster)
+    vlms = AccountVLMProvider(manager)
+    try:
+        await manager.initialize()
+        if section == "embedding":
+            vectors = AccountVectorConfigResolver(manager)
+            effective = await vectors.resolve("ov-a")
+            embedder = effective.embedding.get_embedder()
+            try:
+                assert embedder.model_name == "account-model"
+                assert embedder.inner.api_key == "embedding-key"
+                assert embedder.inner.api_base == "https://embedding.invalid/v1"
+            finally:
+                embedder.close()
+            default_dense = (await vectors.resolve("ov-b")).embedding.dense
+            assert default_dense is not None
+            assert default_dense.model == "embedding-model"
+            if binding_style == "credential-array":
+                assert default_dense.credentials[0].model == "embedding-deployment"
+        elif section == "query_planner":
+            planner = await vlms.get_query_planner("ov-a")
+            assert planner.model == "account-model"
+            assert planner.credentials[0].model is None
+            assert planner.credentials[0].api_key == "query-planner-key"
+            assert planner.credentials[0].api_base == "https://query-planner.invalid/v1"
+        else:
+            vlm_config = await vlms.effective_vlm_config("ov-a")
+            backend = vlm_config.get_vlm_instance()
+            try:
+                assert backend.model == "account-model"
+                assert backend.api_key == "vlm-key"
+                assert backend.api_base == "https://vlm.invalid/v1"
+            finally:
+                vlm_config.close()
+            default_vlm = await vlms.effective_vlm_config("ov-b")
+            assert default_vlm.model == "vlm-model"
+            if binding_style == "credential-array":
+                assert default_vlm.credentials[0].model == "vlm-deployment"
+        await manager.patch_account("ov-a", {"output_language_override": "en"})
+        assert json.loads(agfs.files[path]) == {**settings, "output_language_override": "en"}
+        assert (await manager.get_settings(ConfigScope.account("ov-a")))[section] == settings[
+            section
+        ]
+    finally:
+        await vlms.close()
+        OpenVikingConfigSingleton.reset_instance()
 
 
 def test_file_source_reuses_outer_account_tree_lease():

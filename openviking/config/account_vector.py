@@ -44,7 +44,9 @@ class AccountEmbeddingModelConfig(BaseModel):
     version: Optional[str] = RuntimeField(default=None, dynamic=False)
 
     # Provider bindings may rotate without changing the declared vector space.
-    credentials: List[AccountEmbeddingCredential] = RuntimeField(min_length=1)
+    credentials: Optional[List[AccountEmbeddingCredential]] = RuntimeField(
+        default=None, min_length=1
+    )
     failback_timeout_seconds: Optional[float] = RuntimeField(default=None, gt=0)
     failback_request_count: Optional[int] = RuntimeField(default=None, ge=1)
 
@@ -53,7 +55,7 @@ class AccountEmbeddingModelConfig(BaseModel):
         """Validate each Account-owned provider binding without Cluster fallback."""
         from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
 
-        for credential in self.credentials:
+        for credential in self.credentials or ():
             values = {
                 "model": credential.model or self.model,
                 "dimension": self.dimension,
@@ -89,9 +91,9 @@ class AccountEmbeddingCircuitBreakerConfig(BaseModel):
 class AccountEmbeddingConfig(BaseModel):
     """Embedding settings an Account may own.
 
-    A section may contain only Account runtime policy, but every declared model
-    mode is a complete Account-owned binding. Cluster binding is used only when
-    no Account-owned model mode is declared.
+    A section may contain only Account runtime policy. Declared model modes
+    can supply a complete Account binding or use the corresponding Cluster
+    binding by omitting credentials.
     """
 
     dense: Optional[AccountEmbeddingModelConfig] = RuntimeField(default=None)

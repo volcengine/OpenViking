@@ -490,7 +490,7 @@ PATCH 为三态语义：字段缺失表示不修改，`null` 表示删除当前�
 这些配置均可动态修改。Account 的
 `vlm`、`query_planner`、`embedding`、`vectordb` 和 `parser_api` 仅 ROOT 可读写，ADMIN 的读取
 响应过滤这些配置，写入请求在读取配置前拒绝。每段已配置的 `vlm` 或
-`query_planner` 都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选。
+`query_planner` 都必须包含 `model`。非空 `credentials` 数组与 `timeout` 均可选。
 Account `memory` 仅开放 `extraction_enabled`。
 Account `parser_api` 必须包含非空白 `api_key`；ADMIN 修改该段（包括 `null`）均被拒绝。
 `vectordb` 只能随 Account 创建时的 `settings` 提交，创建后包括 ROOT 在内均不可
@@ -507,7 +507,8 @@ cuVS 调优和自定义适配器参数。
 
 存量 Account 可 PATCH 完整的模型凭证与部署绑定、重试、并发、故障回切和熔断参数。
 将 `max_retries` 等可选运行参数设为 `null`，会从 Account 配置删除该值，
-随后由向量配置解析器应用 Cluster 默认值；已配置模型模式中的必需凭证不能删除。
+随后由向量配置解析器应用 Cluster 默认值。将模型模式的 `credentials` 设为
+`null` 时使用对应的 Cluster 绑定。
 外层模型身份、模式、`dimension`、`input`、`query_param`、`document_param`、
 `version`、`text_source` 和 `max_input_tokens` 为创建期字段。
 `credentials` 之外的 provider 字段、`batch_size`、`encoding_format`、`extra_body`、
@@ -537,9 +538,9 @@ Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`�
 Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
 
 VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
-模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
-配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
-的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+使用 Account 模型。省略或重置 `credentials` 时使用 Cluster 绑定，也可提供完整
+数组指定 Account 绑定。Account 设置 `timeout` 时覆盖 Cluster 的值。
+Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
 Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
 
 PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
@@ -811,7 +812,7 @@ curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
 | 路径 | 类型和约束 | 含义 |
 | --- | --- | --- |
 | `*.model` | 非空 string，必填 | 默认模型名 |
-| `*.credentials` | 非空 array，必填，整体替换 | 按数组顺序使用的 provider/failover binding |
+| `*.credentials` | 非空 array，可选，整体替换 | 按数组顺序使用的 provider/failover binding；省略时使用 Cluster 绑定 |
 | `*.timeout` | number，`> 0`，可选 | Account 请求超时秒数；删除后使用 Cluster timeout |
 | `*.credentials[].id` | string，可选 | credential 标识 |
 | `*.credentials[].provider` | string，必填 | `volcengine`、`openai`、`azure`、`kimi`、`glm`、`litellm` 或 `openai-codex` |
@@ -826,10 +827,8 @@ curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
 | `*.credentials[].keepalive_expiry` | number，`>= 0`，可选 | HTTP 空闲连接存活秒数 |
 | `*.credentials[].max_tokens` | integer，`> 0`，可选 | 覆盖外层输出 token 上限 |
 
-Account 未配置 `vlm` 时使用 Cluster VLM。配置 Account `vlm` 后，模型、provider、
-endpoint 与凭据只取 Account 值；Cluster 仅提供未归属 Account 的通用运行行为。
-Query Planner 优先级为 Account `query_planner`、Account `vlm`、Cluster
-`query_planner`、Cluster `vlm`。
+继承绑定时，每组凭证都使用 Account 模型。Account `query_planner` 未提供凭证时，
+优先使用 Cluster Query Planner 绑定，其次使用 Cluster VLM 绑定。
 
 `extra_headers` 与 `extra_request_body` 的 key 不由 OpenViking 枚举，必须遵循目标
 provider 的 API 契约。它们仅属于该 credential，不会与 Cluster 同名 object 或其他
@@ -838,8 +837,8 @@ credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 Open
 
 **Account Embedding 字段**
 
-未设置的字段不写入 Account；向量解析器在运行时按需使用 Cluster 的相应值。若 Account
-创建时声明 `dense`、`sparse` 或 `hybrid`，该 mode 必须是完整的 Account binding。
+未设置的字段不写入 Account；向量解析器在运行时按需使用 Cluster 的相应值。
+Account 模型模式未提供凭证时，Cluster 必须配置相同模式。每组继承的凭证都使用 Account 模型。
 `hybrid` 不能与 `dense` 或 `sparse` 同时出现。
 
 | 路径 | 生命周期 | 类型和约束 | 含义 |
@@ -857,7 +856,7 @@ credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 Open
 | `embedding.*.input` | 创建期 | `text` / `multimodal`，可选 | 输入模式 |
 | `embedding.*.query_param` / `document_param` | 创建期 | string，可选 | 非对称检索的 query/document 参数 |
 | `embedding.*.version` | 创建期 | string，可选 | 模型版本 |
-| `embedding.*.credentials` | 动态 | 非空 array，整体替换 | Account provider/failover binding |
+| `embedding.*.credentials` | 动态 | 非空 array，可选，整体替换 | Account provider/failover binding；省略时使用对应的 Cluster 绑定 |
 | `embedding.*.failback_timeout_seconds` | 动态 | number，`> 0` | 回切主 credential 前的等待秒数 |
 | `embedding.*.failback_request_count` | 动态 | integer，`>= 1` | 使用备用 credential 后尝试回切的请求数 |
 

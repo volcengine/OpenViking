@@ -586,9 +586,9 @@ switch value in the response.
 The Cluster runtime surface currently contains `agent_evolution`. The Account
 surface contains `output_language_override`, `memory`, `feishu`, `parser_api`, `agent_evolution`, `github`, `acl`, `vlm`, and
 `query_planner`, all of which are dynamic. Account `vlm` and `query_planner`
-are visible and writable only to ROOT. Each configured section is complete:
-`model` and a non-empty `credentials` array are required, while `timeout` is
-optional. ADMIN responses omit both sections, and ADMIN PATCH requests
+are visible and writable only to ROOT. Each configured section requires
+`model`. A non-empty `credentials` array and `timeout` are optional.
+ADMIN responses omit both sections, and ADMIN PATCH requests
 containing either section are rejected. Account `memory` exposes only
 `extraction_enabled`. Account `embedding` and `vectordb` are also ROOT-only, including reads.
 Account `parser_api` is ROOT-only and requires a nonblank `api_key`. ADMIN responses
@@ -610,8 +610,9 @@ VectorDB does not expose local paths, cuVS tuning, or custom adapter parameters.
 Existing Accounts may PATCH complete embedding credential/deployment bindings,
 retry/concurrency, failback and circuit-breaker settings. Setting an optional
 runtime field such as `max_retries` to `null` removes the Account value, after
-which the vector resolver applies its Cluster default. Required credentials
-cannot be removed from a configured model mode. Outer model identity, mode, dimension, input, query/document parameters,
+which the vector resolver applies its Cluster default. Resetting a mode's
+`credentials` to `null` selects the matching Cluster binding. Outer model identity,
+mode, dimension, input, query/document parameters,
 version, text source and input token limit are create-only. Provider fields outside
 `credentials`, batch size, encoding format, extra body, local model paths,
 fusion/video settings and metadata override are not on the Account API surface.
@@ -645,10 +646,9 @@ Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
 VLM business resolution uses Cluster VLM when an Account has no VLM section.
-Once the Account section exists, its model-service identity fields come
-exclusively from Account settings, while selected runtime behavior is composed
-with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
-omitting or resetting it uses Cluster `timeout`. Query Planner precedence is
+A configured Account section uses its own model. Omit or reset `credentials`
+to select the Cluster binding, or supply an Account binding as a complete
+array. Account `timeout` overrides Cluster `timeout` when set. Query Planner precedence is
 Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
 These are VLM business rules, not generic configuration inheritance.
 
@@ -947,7 +947,7 @@ existing object.
 | Path | Type and constraints | Meaning |
 | --- | --- | --- |
 | `*.model` | Non-empty string, required | Default model name |
-| `*.credentials` | Non-empty array, required; replaces as a whole | Provider/failover bindings in call order |
+| `*.credentials` | Non-empty array, optional; replaces as a whole | Provider/failover bindings in call order; omit to use Cluster bindings |
 | `*.timeout` | Number, `> 0`, optional | Account request timeout in seconds; reset it to use Cluster timeout |
 | `*.credentials[].id` | String, optional | Credential identifier |
 | `*.credentials[].provider` | String, required | `volcengine`, `openai`, `azure`, `kimi`, `glm`, `litellm`, or `openai-codex` |
@@ -962,11 +962,9 @@ existing object.
 | `*.credentials[].keepalive_expiry` | Number, `>= 0`, optional | Idle HTTP connection lifetime in seconds |
 | `*.credentials[].max_tokens` | Integer, `> 0`, optional | Overrides the outer completion token limit |
 
-When an Account has no `vlm`, it uses the Cluster VLM. Once `vlm` is configured,
-the model, provider, endpoint, and credentials come exclusively from Account
-settings; Cluster provides only general runtime behavior not owned by the
-Account. Query Planner precedence is Account `query_planner`, Account `vlm`,
-Cluster `query_planner`, then Cluster `vlm`.
+With inherited bindings, each credential uses the Account model. A configured
+Account `query_planner` without credentials uses the Cluster Query Planner
+binding when configured, and otherwise the Cluster VLM binding.
 
 The keys inside `extra_headers` and `extra_request_body` are not enumerated by
 OpenViking; they must follow the target provider's API contract. They belong
@@ -977,9 +975,9 @@ OpenViking VLM APIs return complete responses only.
 **Account Embedding Fields**
 
 Unset values are not persisted on the Account. At runtime, the vector resolver
-uses the corresponding Cluster value. If Account creation declares `dense`,
-`sparse`, or `hybrid`, that mode must be a complete Account binding. `hybrid`
-cannot be combined with `dense` or `sparse`.
+uses the corresponding Cluster value. An Account mode with no credentials
+requires the same mode in Cluster configuration. Each inherited credential uses
+the Account model. `hybrid` cannot be combined with `dense` or `sparse`.
 
 | Path | Lifecycle | Type and constraints | Meaning |
 | --- | --- | --- | --- |
@@ -996,7 +994,7 @@ cannot be combined with `dense` or `sparse`.
 | `embedding.*.input` | Create-only | `text` / `multimodal`, optional | Input mode |
 | `embedding.*.query_param` / `document_param` | Create-only | String, optional | Query/document parameters for asymmetric retrieval |
 | `embedding.*.version` | Create-only | String, optional | Model version |
-| `embedding.*.credentials` | Dynamic | Non-empty array; replaces as a whole | Account provider/failover binding |
+| `embedding.*.credentials` | Dynamic | Non-empty array, optional; replaces as a whole | Account provider/failover binding; omit to use the matching Cluster binding |
 | `embedding.*.failback_timeout_seconds` | Dynamic | Number, `> 0` | Wait before trying to fail back to the primary credential |
 | `embedding.*.failback_request_count` | Dynamic | Integer, `>= 1` | Backup requests before attempting failback |
 

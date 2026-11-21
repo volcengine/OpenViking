@@ -76,10 +76,9 @@ class AccountFeishuConfig(BaseModel):
 class AccountVLMConfig(BaseModel):
     """Account-owned VLM settings consumed by the VLM business resolver.
 
-    ``to_vlm_config`` explicitly composes selected Cluster runtime behavior
-    with Account-owned model-service identity. This is a VLM rule, not generic
-    configuration inheritance. New endpoint or credential fields must be added
-    to the exclusion set when they are introduced.
+    An omitted credential array uses the Cluster provider binding with the
+    Account model. An explicit array owns the entire binding. Add new endpoint
+    or credential fields to the exclusion set to preserve that isolation.
     """
 
     _ACCOUNT_OWNED_MODEL_SERVICE_FIELDS: ClassVar[frozenset[str]] = frozenset(
@@ -101,13 +100,17 @@ class AccountVLMConfig(BaseModel):
     )
 
     model: str = RuntimeField(min_length=1)
-    credentials: List[VLMCredential] = RuntimeField(min_length=1)
+    credentials: Optional[List[VLMCredential]] = RuntimeField(default=None, min_length=1)
     timeout: Optional[float] = RuntimeField(default=None, gt=0)
 
     def to_vlm_config(self, cluster_vlm: Optional[VLMConfig] = None) -> VLMConfig:
-        """Build an isolated VLM config with Cluster-owned runtime behavior."""
+        """Build a detached VLM config with the selected provider binding."""
         values = {}
-        if cluster_vlm is not None:
+        if self.credentials is None:
+            if cluster_vlm is None or not cluster_vlm._has_any_config():
+                raise ValueError("Account VLM without credentials requires a Cluster VLM binding")
+            values = cluster_vlm.model_dump(exclude={"credentials": {"__all__": {"model"}}})
+        elif cluster_vlm is not None:
             values.update(
                 cluster_vlm.model_dump(
                     mode="python",
@@ -119,9 +122,11 @@ class AccountVLMConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_model_service(self) -> "AccountVLMConfig":
-        """Reject incomplete credentials without consulting Cluster config."""
+        """Validate explicit bindings independently of Cluster settings."""
         if not self.model.strip():
             raise ValueError("model is required for Account VLM")
+        if self.credentials is None:
+            return self
         for index, credential in enumerate(self.credentials):
             provider = credential.provider.strip().lower() if credential.provider else ""
             if not provider:
@@ -144,8 +149,8 @@ class AccountConfig(BaseModel):
 
     Optional sections are simply not configured for that Account. When a
     section is present, its Pydantic model validates the smallest Account-owned
-    configuration needed for that section; business resolvers may use Cluster
-    configuration only when the corresponding Account section is absent.
+    configuration needed for that section. Business resolvers choose any
+    Cluster defaults, including bindings for Account model selections.
     The few ``fallback`` declarations below are legacy whole-section
     compatibility behavior and should not be copied to new fields. New Account
     creation should materialize defaults instead of introducing new runtime
