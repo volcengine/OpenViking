@@ -174,9 +174,9 @@ def _build_chat_completion_like_response(final_response: Any, model: str) -> Any
     usage = None
     if usage_raw is not None:
         usage = SimpleNamespace(
-            prompt_tokens=getattr(usage_raw, "input_tokens", 0),
-            completion_tokens=getattr(usage_raw, "output_tokens", 0),
-            total_tokens=getattr(usage_raw, "total_tokens", 0),
+            prompt_tokens=getattr(usage_raw, "input_tokens", None),
+            completion_tokens=getattr(usage_raw, "output_tokens", None),
+            total_tokens=getattr(usage_raw, "total_tokens", None),
         )
     message = SimpleNamespace(
         role="assistant",

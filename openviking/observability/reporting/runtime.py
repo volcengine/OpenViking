@@ -24,7 +24,7 @@ _NAMES = {
     "embedding.call": "embedding_call",
 }
 _FIELDS = frozenset(
-    "task_id source_task_ids task_type mode uri old_uri skill_uri operation change_type is_dir is_new_file scope output_role visibility_scope owner_user_id context_type level memory_type memory_group template_id peer_id source_type usage_purpose cost_bearer status created_at updated_at model_name provider prompt_tokens completion_tokens error_code".split()
+    "task_id source_task_ids task_type mode uri old_uri skill_uri operation change_type is_dir is_new_file scope output_role visibility_scope owner_user_id context_type level memory_type memory_group template_id peer_id source_type usage_purpose cost_bearer status created_at updated_at model_name provider prompt_tokens completion_tokens prompt_cached_tokens completion_reasoning_tokens attempt_id api outcome observation_scope usage_quality usage_complete usage_known_fields usage_provenance error_code".split()
 )
 
 

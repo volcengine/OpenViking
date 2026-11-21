@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -284,14 +283,14 @@ async def _attempt(
         if vlm.extra_request_body:
             request["extra_body"] = dict(vlm.extra_request_body)
 
-        started = time.monotonic()
-        response = await client.responses.create(**request)
+        with vlm.observe_attempt(api="responses") as attempt:
+            response = await client.responses.create(**request)
+            attempt.observe_response(response)
         if getattr(response, "status", None) != "completed":
             raise RuntimeError("Ark media response did not complete")
         text = _extract_response_text(response)
         if not text:
             raise RuntimeError("Ark media response contained no output text")
-        _record_usage(vlm, response, time.monotonic() - started)
         return text
     finally:
         if file_id:
@@ -349,16 +348,20 @@ def _record_usage(
 ) -> None:
     try:
         usage = getattr(response, "usage", None)
-        input_details = getattr(usage, "input_tokens_details", None)
-        output_details = getattr(usage, "output_tokens_details", None)
+        from openviking.metrics.datasources.model_usage import (
+            reported_token_count,
+            response_usage_subsets,
+        )
+
+        prompt = reported_token_count(getattr(usage, "input_tokens", None))
+        completion = reported_token_count(getattr(usage, "output_tokens", None))
         vlm.update_token_usage(
             model_name=vlm.model,
             provider=vlm.provider,
-            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            prompt_tokens=prompt,
+            completion_tokens=completion,
             duration_seconds=duration_seconds,
-            prompt_cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
-            completion_reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
+            **response_usage_subsets(usage, prompt, completion),
         )
     except Exception as error:
         _log_sanitized_exception("usage", error, logging.INFO)

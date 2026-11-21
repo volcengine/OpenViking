@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from openviking.metrics.collectors.base import EventMetricCollector
 from openviking.metrics.collectors.cache import CacheCollector
 from openviking.metrics.collectors.embedding import EmbeddingCollector
@@ -521,3 +523,122 @@ def test_retrieval_collector_negative_result_count_is_bucketed_as_zero_result(
         text,
     )
     assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)
+
+
+@pytest.mark.parametrize("value", [None, -1, 11, 1.5, "5", True, float("nan")])
+def test_vlm_invalid_or_unknown_subset_does_not_claim_reporting(registry, render_prometheus, value):
+    VLMCollector().receive(
+        "vlm.call",
+        {
+            "provider": "synthetic",
+            "model_name": "synthetic",
+            "duration_seconds": 0.1,
+            "prompt_tokens": 10,
+            "completion_tokens": 3,
+            "prompt_cached_tokens": value,
+        },
+        registry,
+    )
+    text = render_prometheus(registry)
+    assert "openviking_vlm_usage_subset" not in text
+    assert re.search(r"openviking_vlm_tokens_total\{[^}]*\} 13(?:\.0)?", text)
+
+
+def test_vlm_subset_ratios_use_only_the_reporting_population(registry, render_prometheus):
+    collector = VLMCollector()
+    for cached, reasoning, prompt, output in [(None, None, 100, 20), (0, 0, 10, 3), (5, 2, 10, 3)]:
+        collector.receive(
+            "vlm.call",
+            {
+                "provider": "synthetic",
+                "model_name": "synthetic",
+                "duration_seconds": 0.1,
+                "prompt_tokens": prompt,
+                "completion_tokens": output,
+                "prompt_cached_tokens": cached,
+                "completion_reasoning_tokens": reasoning,
+            },
+            registry,
+        )
+    text = render_prometheus(registry)
+    # 5/20 among reporting calls, rather than 5/120 including unknown-cache calls.
+    for metric, amount in [("tokens", 5), ("parent_tokens", 20), ("reports", 2)]:
+        assert re.search(
+            r"openviking_vlm_usage_subset_"
+            + metric
+            + r'_total\{[^}]*subset="cached_prompt"[^}]*\} '
+            + str(amount)
+            + r"(?:\.0)?",
+            text,
+        )
+    assert re.search(r"openviking_vlm_tokens_total\{[^}]*\} 146(?:\.0)?", text)
+
+
+def test_failed_vlm_call_cannot_create_subset_usage(registry, render_prometheus):
+    VLMCollector().receive(
+        "vlm.call",
+        {
+            "provider": "synthetic",
+            "model_name": "synthetic",
+            "duration_seconds": 0.1,
+            "prompt_tokens": 10,
+            "completion_tokens": 3,
+            "prompt_cached_tokens": 5,
+            "completion_reasoning_tokens": 2,
+            "error_code": "503",
+        },
+        registry,
+    )
+    assert "openviking_vlm_usage_subset" not in render_prometheus(registry)
+
+
+def test_vlm_subset_metrics_follow_account_dimension(
+    registry, render_prometheus, configure_account_dimension
+):
+    configure_account_dimension(enabled=True, metric_allowlist=["openviking_vlm_*"])
+    VLMCollector().receive(
+        "vlm.call",
+        {
+            "provider": "synthetic",
+            "model_name": "synthetic",
+            "duration_seconds": 0.1,
+            "prompt_tokens": 10,
+            "completion_tokens": 3,
+            "prompt_cached_tokens": 5,
+            "completion_reasoning_tokens": 2,
+            "account_id": "account-one",
+        },
+        registry,
+    )
+    text = render_prometheus(registry)
+    lines = [line for line in text.splitlines() if line.startswith("openviking_vlm_usage_subset")]
+    assert len(lines) == 6
+    assert all('account_id="account-one"' in line for line in lines)
+
+
+def test_vlm_explicit_zero_input_and_output_still_report_subset_presence(
+    registry, render_prometheus
+):
+    VLMCollector().receive(
+        "vlm.call",
+        {
+            "provider": "synthetic",
+            "model_name": "synthetic",
+            "duration_seconds": 0.1,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "prompt_cached_tokens": 0,
+            "completion_reasoning_tokens": 0,
+        },
+        registry,
+    )
+    text = render_prometheus(registry)
+    for subset in ("cached_prompt", "reasoning_completion"):
+        assert re.search(
+            r'openviking_vlm_usage_subset_reports_total\{[^}]*subset="'
+            + subset
+            + r'"[^}]*\} 1(?:\.0)?',
+            text,
+        )
+    assert "openviking_vlm_usage_subset_tokens_total" not in text
+    assert "openviking_vlm_tokens_total" not in text

@@ -10,7 +10,7 @@ import re
 import time
 import traceback
 from collections.abc import AsyncIterator, Mapping
-from contextlib import aclosing
+from contextlib import aclosing, nullcontext
 from typing import Any
 
 from loguru import logger
@@ -497,49 +497,61 @@ class VLMProviderAdapter(LLMProvider):
         usage: dict[str, int] = {}
         start_time = time.perf_counter()
 
-        client = vlm.get_async_client()
-        response = (
-            await vlm._create_chat_completion(client, **kwargs)
-            if getattr(vlm, "provider", None) == "volcengine"
-            and getattr(vlm, "temperature", temperature) is None
-            else await client.chat.completions.create(**kwargs)
+        observe = getattr(vlm, "observe_attempt", None)
+        context = (
+            observe(api="chat.completions.stream", model_name=kwargs.get("model"))
+            if callable(observe)
+            else nullcontext(None)
         )
-        async with response as stream:
-            async for chunk in stream:
-                chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
-                if chunk_usage:
-                    usage = chunk_usage
+        with context as attempt:
+            client = vlm.get_async_client()
+            response = (
+                await vlm._create_chat_completion(client, **kwargs)
+                if getattr(vlm, "provider", None) == "volcengine"
+                and getattr(vlm, "temperature", temperature) is None
+                else await client.chat.completions.create(**kwargs)
+            )
+            async with response as stream:
+                async for chunk in stream:
+                    raw_usage = getattr(chunk, "usage", None)
+                    if attempt is not None:
+                        attempt.observe_usage(raw_usage)
+                    chunk_usage = self._parse_usage(raw_usage)
+                    if chunk_usage:
+                        usage = chunk_usage
 
-                choices = getattr(chunk, "choices", None) or []
-                if not choices:
-                    continue
-                choice = choices[0]
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason or finish_reason
-                delta = getattr(choice, "delta", None)
-                if delta is None:
-                    continue
+                    choices = getattr(chunk, "choices", None) or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    if getattr(choice, "finish_reason", None):
+                        finish_reason = choice.finish_reason or finish_reason
+                        if attempt is not None and finish_reason == "content_filter":
+                            attempt.outcome, attempt.error_code = "refused", "content_safety"
+                    delta = getattr(choice, "delta", None)
+                    if delta is None:
+                        continue
 
-                reasoning_delta = stream_delta_value(delta, "reasoning_content")
-                if reasoning_delta:
-                    reasoning_parts.append(reasoning_delta)
-                    yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+                    reasoning_delta = stream_delta_value(delta, "reasoning_content")
+                    if reasoning_delta:
+                        reasoning_parts.append(reasoning_delta)
+                        yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
 
-                content_delta = stream_delta_value(delta, "content")
-                if content_delta:
-                    content_parts.append(content_delta)
-                    yield LLMStreamEvent(type="content_delta", content=content_delta)
+                    content_delta = stream_delta_value(delta, "content")
+                    if content_delta:
+                        content_parts.append(content_delta)
+                        yield LLMStreamEvent(type="content_delta", content=content_delta)
 
-                for fallback_index, delta_tool_call in enumerate(
-                    getattr(delta, "tool_calls", None) or []
-                ):
-                    merge_stream_tool_call_delta(
-                        tool_calls,
-                        delta_tool_call,
-                        fallback_index=fallback_index,
-                    )
+                    for fallback_index, delta_tool_call in enumerate(
+                        getattr(delta, "tool_calls", None) or []
+                    ):
+                        merge_stream_tool_call_delta(
+                            tool_calls,
+                            delta_tool_call,
+                            fallback_index=fallback_index,
+                        )
 
-        if usage:
+        if attempt is None and usage:
             self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
 
         yield LLMStreamEvent(
@@ -619,40 +631,30 @@ class VLMProviderAdapter(LLMProvider):
             kwargs[token_key] = effective_max_tokens
         return kwargs
 
-    @staticmethod
-    def _usage_value(usage: Any, name: str) -> int:
-        if isinstance(usage, dict):
-            return int(usage.get(name, 0) or 0)
-        return int(getattr(usage, name, 0) or 0)
-
     @classmethod
     def _parse_usage(cls, raw_usage: Any) -> dict[str, int]:
-        if not raw_usage:
-            return {}
+        from openviking.metrics.datasources.model_usage import (
+            reported_token_count,
+            response_usage_subsets,
+        )
+        from openviking.models.vlm.attempt import field
 
+        if raw_usage is None:
+            return {}
         usage = {
-            "prompt_tokens": cls._usage_value(raw_usage, "prompt_tokens"),
-            "completion_tokens": cls._usage_value(raw_usage, "completion_tokens"),
-            "total_tokens": cls._usage_value(raw_usage, "total_tokens"),
+            key: value
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            if (value := reported_token_count(field(raw_usage, key))) is not None
         }
-        prompt_details = (
-            raw_usage.get("prompt_tokens_details")
-            if isinstance(raw_usage, dict)
-            else getattr(raw_usage, "prompt_tokens_details", None)
+        if "total_tokens" not in usage and {"prompt_tokens", "completion_tokens"}.issubset(usage):
+            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        subsets = response_usage_subsets(
+            raw_usage, usage.get("prompt_tokens"), usage.get("completion_tokens")
         )
-        completion_details = (
-            raw_usage.get("completion_tokens_details")
-            if isinstance(raw_usage, dict)
-            else getattr(raw_usage, "completion_tokens_details", None)
-        )
-        cached = cls._usage_value(prompt_details, "cached_tokens") if prompt_details else 0
-        reasoning = (
-            cls._usage_value(completion_details, "reasoning_tokens") if completion_details else 0
-        )
-        if cached:
-            usage["cache_read_input_tokens"] = cached
-        if reasoning:
-            usage["reasoning_tokens"] = reasoning
+        if subsets["prompt_cached_tokens"] is not None:
+            usage["cache_read_input_tokens"] = subsets["prompt_cached_tokens"]
+        if subsets["completion_reasoning_tokens"] is not None:
+            usage["reasoning_tokens"] = subsets["completion_reasoning_tokens"]
         return usage
 
     def _record_vlm_usage(
@@ -668,11 +670,11 @@ class VLMProviderAdapter(LLMProvider):
             update_token_usage(
                 model_name=getattr(vlm, "model", None) or self._default_model,
                 provider=getattr(vlm, "provider", None) or "unknown",
-                prompt_tokens=usage.get("prompt_tokens", 0),
-                completion_tokens=usage.get("completion_tokens", 0),
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
                 duration_seconds=duration_seconds,
-                prompt_cached_tokens=usage.get("cache_read_input_tokens", 0),
-                completion_reasoning_tokens=usage.get("reasoning_tokens", 0),
+                prompt_cached_tokens=usage.get("cache_read_input_tokens"),
+                completion_reasoning_tokens=usage.get("reasoning_tokens"),
             )
         except Exception as e:
             logger.debug(f"[VLM] Failed to record stream token usage: {e}")
@@ -700,7 +702,7 @@ class VLMProviderAdapter(LLMProvider):
             usage={
                 k: v
                 for k, v in (result.usage if isinstance(result.usage, dict) else {}).items()
-                if isinstance(v, int)
+                if type(v) is int and v >= 0
             }
             | self._parse_usage(result.usage),
             reasoning_content=result.reasoning_content,
