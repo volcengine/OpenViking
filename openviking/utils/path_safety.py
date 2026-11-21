@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared helpers for safe user-supplied path handling."""
 
+import logging
 import re
 from urllib.parse import unquote
 
 from openviking_cli.utils.uri import VikingURI
+
+logger = logging.getLogger(__name__)
 
 _UNSAFE_REL_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -66,11 +69,27 @@ def validate_safe_viking_uri_path(uri: str) -> str:
 
 
 def normalize_storage_target_uri(uri: str) -> str:
-    """Return a safe Viking URI with whitespace-bearing path segments sanitized."""
+    """Return a safe Viking URI with whitespace-bearing path segments sanitized.
+
+    Extraction-side naming (``openviking.session.memory.utils.uri``) treats
+    interior spaces as portable and keeps them, while this sanitization
+    rewrites them, so a whitespace-bearing target can be stored under a
+    different URI than the one requested. Log a warning whenever that
+    rewrite happens so the divergence is observable instead of a silent
+    success (#6521).
+    """
     normalized = validate_safe_viking_uri_path(uri)
     prefix = f"{VikingURI.SCHEME}://"
     path = normalized[len(prefix) :]
-    return f"{prefix}{_normalize_storage_segments(path)}"
+    sanitized = _normalize_storage_segments(path)
+    if sanitized != path:
+        logger.warning(
+            "Storage target URI sanitized to a different path than requested: "
+            "%s -> %s",
+            normalized,
+            f"{prefix}{sanitized}",
+        )
+    return f"{prefix}{sanitized}"
 
 
 def safe_join_viking_uri(base_uri: str, rel_path: str) -> str:
