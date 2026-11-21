@@ -18,6 +18,8 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.expr import In
+from openviking.storage.scope_filter import merge_filters
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
     _ensure_non_empty_search_query,
@@ -27,6 +29,7 @@ from openviking.storage.viking_fs._base import (
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
+from openviking.utils.search_filters import extract_context_types
 from openviking.utils.time_decay import parse_duration_ms
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
@@ -390,6 +393,7 @@ class _SemanticMixin:
             session_info: Session information
             limit: Return count
             filter: Metadata filter
+            context_types: Allowed context types
             args: Advanced keyword-search options passed through to the engine
 
         Returns:
@@ -460,6 +464,22 @@ class _SemanticMixin:
                 )
             ]
         elif retrieval_config.enable_intent and (session_summary or current_messages):
+            allowed_context_types = set(context_types) if context_types else None
+            for constraint in (
+                retrieval_targets.explicit_context_types,
+                extract_context_types(filter),
+            ):
+                if constraint is not None:
+                    allowed_context_types = (
+                        constraint
+                        if allowed_context_types is None
+                        else allowed_context_types & constraint
+                    )
+            planner_context_type = (
+                next(iter(allowed_context_types))
+                if allowed_context_types and len(allowed_context_types) == 1
+                else None
+            )
             try:
                 if self._vlm_resolver is None:
                     raise RuntimeError(
@@ -475,9 +495,7 @@ class _SemanticMixin:
                             compression_summary=session_summary or "",
                             messages=current_messages or [],
                             current_message=query,
-                            context_type=context_types[0]
-                            if context_types and len(context_types) == 1
-                            else None,
+                            context_type=planner_context_type,
                             target_abstract=target_abstract,
                         ),
                         timeout=retrieval_config.recall_intent_timeout_s,
@@ -493,12 +511,21 @@ class _SemanticMixin:
                 for tq in typed_queries:
                     tq.target_directories = retrieval_targets.target_directories
                     # Caller scope is authoritative even when the planner ignores its prompt.
-                    if context_types and len(context_types) == 1:
-                        tq.context_type = context_types[0]
-                    elif context_types and tq.context_type not in context_types:
-                        # The existing scope filter searches only the caller's allowed types.
+                    if planner_context_type is not None:
+                        tq.context_type = planner_context_type
+                    elif (
+                        allowed_context_types is not None
+                        and tq.context_type not in allowed_context_types
+                    ):
                         tq.context_type = None
         telemetry.set("search.typed_queries_count", len(typed_queries))
+
+        # Caller-supplied types still apply when the plan has no usable type.
+        scope_dsl = (
+            merge_filters(filter, In("context_type", [kind.value for kind in context_types]))
+            if context_types
+            else filter
+        )
 
         # Concurrent execution
         storage = self._get_vector_store()
@@ -522,7 +549,7 @@ class _SemanticMixin:
                 limit=limit,
                 score_threshold=score_threshold,
                 has_explicit_target=bool(retrieval_targets.first_explicit_directory),
-                scope_dsl=filter,
+                scope_dsl=scope_dsl,
                 level=level,
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,

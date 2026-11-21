@@ -1,12 +1,68 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import extract_context_types, merge_time_filter
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.retrieve import ContextType
+
+RESOURCE = {"op": "must", "field": "context_type", "conds": ["resource"]}
+MEMORY = {"op": "must", "field": "context_type", "conds": ["memory"]}
+MEMORY_OR_RESOURCE = {"op": "must", "field": "context_type", "conds": ["memory", "resource"]}
+RESOURCE_OR_TAG = {
+    "op": "or",
+    "conds": [RESOURCE, {"op": "must", "field": "tags", "conds": ["oauth"]}],
+}
+NOT_MEMORY = {"op": "must_not", "field": "context_type", "conds": ["memory"]}
+UNKNOWN = {"op": "unknown", "conds": [RESOURCE]}
+
+
+@pytest.mark.parametrize(
+    ("dsl", "expected"),
+    [
+        (RESOURCE, {ContextType.RESOURCE}),
+        (MEMORY_OR_RESOURCE, {ContextType.MEMORY, ContextType.RESOURCE}),
+        (
+            {"op": "and", "conds": [MEMORY_OR_RESOURCE, {"op": "and", "conds": [RESOURCE]}]},
+            {ContextType.RESOURCE},
+        ),
+        (RESOURCE_OR_TAG, None),
+        (NOT_MEMORY, None),
+        (UNKNOWN, None),
+        (
+            {"op": "and", "conds": [MEMORY, RESOURCE_OR_TAG, NOT_MEMORY, UNKNOWN]},
+            {ContextType.MEMORY},
+        ),
+        ({"op": "and", "conds": [MEMORY, RESOURCE]}, set()),
+        ({"op": "and", "ignore_empty_condition": True, "conds": [RESOURCE]}, None),
+        (
+            {
+                "op": "and",
+                "conds": [
+                    MEMORY,
+                    {"op": "and", "ignore_empty_condition": True, "conds": [RESOURCE]},
+                ],
+            },
+            {ContextType.MEMORY},
+        ),
+        ({"op": "must", "field": "context_type", "conds": ["resource", "Memory"]}, None),
+        ({"op": "must", "field": "context_type", "conds": ["memory,resource"]}, None),
+        ({"op": "must", "field": "context_type", "conds": [" resource "]}, None),
+        ({"op": "must", "field": "context_type", "conds": "resource"}, None),
+        ({"op": "must", "field": "context_type", "conds": []}, None),
+        ({"op": "and", "conds": [None, "unknown"]}, None),
+        (None, None),
+    ],
+)
+def test_extract_context_types_preserves_original_filter(dsl, expected):
+    original = deepcopy(dsl)
+
+    assert extract_context_types(dsl) == expected
+    assert dsl == original
 
 
 def test_merge_time_filter_builds_relative_range():
