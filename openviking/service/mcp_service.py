@@ -29,6 +29,7 @@ from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
 from openviking.server.identity import RequestContext
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
@@ -363,6 +364,13 @@ class MCPService:
         headers: dict[str, str],
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> AsyncIterator[ClientSession]:
+        # The registry is a user-writable document (and shared registries may
+        # predate validation), so the outbound endpoint is checked at this
+        # single choke point used by discovery and tool invocation. This is the
+        # same public-target guard applied to remote resources and git imports:
+        # loopback, link-local, metadata and non-public destinations are
+        # rejected unless allow_private_networks permits private ranges.
+        await asyncio.to_thread(ensure_public_remote_target, str(server.get("url") or ""))
         timeout = httpx.Timeout(timeout_seconds, read=timeout_seconds)
         try:
             async with httpx.AsyncClient(headers=headers, timeout=timeout) as http_client:
