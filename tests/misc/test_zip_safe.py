@@ -412,3 +412,62 @@ class TestSafeExtractZipSymlink:
                 assert target.is_relative_to(dest.resolve()), (
                     f"Symlink {item} points outside dest: {target}"
                 )
+
+
+class TestSafeExtractZipBombGuard:
+    """Verify decompression-bomb guards reject oversized archives."""
+
+    def test_decompression_bomb_rejected(self, tmp_path: Path) -> None:
+        """A highly-compressed archive is rejected before extraction.
+
+        A 1 MiB payload compressed with bzip2 expands past the default
+        compression-ratio cap (and would, on a real bomb, exhaust disk).
+        On an unguarded build the member extracts to disk; the default guard
+        rejects it from infolist metadata before any byte is written.
+        """
+        dest = tmp_path / "out"
+        dest.mkdir()
+        payload = b"\x00" * (1024 * 1024)  # bzip2 compresses this to ~45 bytes
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_BZIP2) as zf:
+            zf.writestr("bomb.bin", payload)
+        buf.seek(0)
+        with zipfile.ZipFile(buf, "r") as zf:
+            with pytest.raises(ValueError, match="compression ratio"):
+                safe_extract_zip(zf, dest)
+        assert not (dest / "bomb.bin").exists()
+
+    def test_zip_member_count_limit(self, tmp_path: Path) -> None:
+        """Archives with more members than the cap are rejected."""
+        from openviking.utils.zip_safe import ZipExtractionLimit
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        entries = {f"file_{i}.txt": "x" for i in range(20)}
+        data = _make_zip_bytes(entries)
+        limits = ZipExtractionLimit(max_member_count=10)
+        with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+            with pytest.raises(ValueError, match="member count"):
+                safe_extract_zip(zf, dest, limits=limits)
+        assert list(dest.iterdir()) == []
+
+    def test_per_file_size_limit(self, tmp_path: Path) -> None:
+        """A single member larger than the per-file cap is rejected mid-loop.
+
+        Aggregate caps (count/total/ratio) are sized to pass so the per-file
+        check inside the extraction loop is what rejects the member.
+        """
+        from openviking.utils.zip_safe import ZipExtractionLimit
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        data = _make_zip_bytes({"big.txt": "A" * 2048})  # 2 KiB, stored
+        limits = ZipExtractionLimit(
+            max_total_bytes=1024 * 1024,
+            max_per_file_bytes=1024,
+            max_compression_ratio=100_000,
+        )
+        with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+            with pytest.raises(ValueError, match="per-file"):
+                safe_extract_zip(zf, dest, limits=limits)
+        assert not (dest / "big.txt").exists()
