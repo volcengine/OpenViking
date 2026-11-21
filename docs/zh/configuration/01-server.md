@@ -599,6 +599,53 @@ SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](h
 | `upload_signed_ttl_seconds` | integer | `600` | 签名上传、下载 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
 
+### 共享传输令牌（显式启用）
+
+MCP 的 `download`、本地文件 `add_resource` 和本地文件 `add_skill` 会生成单次使用的
+URL。默认令牌保存在签发进程内存中，无法由另一个 Worker 或重启后的进程兑换。
+需要共享这段握手时，在**所有** Worker 的 `ov.conf` 合并如下配置：
+
+```json
+{
+  "service_name": "example-service",
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "standalone",
+      "endpoints": ["redis://localhost:6379"],
+      "command_timeout_ms": 1000,
+      "password_env": "EXAMPLE_REDIS_PASSWORD"
+    }
+  },
+  "server": {
+    "transfer_tokens": {"backend": "redis", "key_prefix": "transfer-token"}
+  }
+}
+```
+
+`server.transfer_tokens.backend` 默认为 `"memory"`。`key_prefix` 默认为
+`"transfer-token"`，允许 1–64 个 ASCII 字母、数字、`_` 或 `-`。键格式为
+`ov:<规范化 service_name>:<key_prefix>:v1:<purpose>:<token>`，上传与下载分开存储。
+同一部署的 Worker 必须使用相同命名空间、Redis 数据库、凭据及身份权限后端；不同
+部署应使用不同命名空间。凭据和 TLS 复用顶层 Redis cache 配置；启动前设置示例中
+引用的密码环境变量，无密码认证时可省略该项。
+
+首版仅支持**单主 standalone Redis**，需要可选 Python 依赖
+`pip install 'redis>=5.3.1,<7'` 和大于零的 `command_timeout_ms`；不支持的拓扑在启动时
+报错。不保证 Redis 故障切换或备份恢复后的持久单次性：恢复已消费记录可能恢复令牌。
+签发、基于 Redis 时钟的过期和原子消费使用 Redis 命令；后端错误返回不可用，不降级到
+进程内存。断连或取消时操作可能已经提交，因此不自动重试消费。文件操作失败也不会
+恢复已消费令牌，需要重新申请 URL。
+
+身份、actor 范围、OAuth 来源、ACL 和导入参数仍在签发时绑定；已有 API Key 优先级、
+兑换时用户/角色和文件访问校验保持原样。有效期仍由 `upload_signed_ttl_seconds` 控制，
+默认 600 秒；每条记录上限为 64 KiB。上传**文件内容**仍由 `server.temp_upload` 和存储
+配置独立负责，启用令牌共享不会共享本地文件或其他账户状态。
+
+已有内存令牌不会迁移。启用或关闭时应安排协调窗口，等待旧 URL 过期后再统一切换；
+握手窗口内不支持同一负载均衡同时运行旧版/内存与 Redis Worker。修改配置后需重启。
+关闭服务只释放连接，已有 Redis 记录自然过期，不扫描或清空部署令牌命名空间。
+
 ### 文件加密与 API Key 哈希
 
 文件加密和 API Key 哈希在顶层 `encryption` 中配置，不属于 `server`：

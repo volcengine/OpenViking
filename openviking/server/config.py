@@ -437,6 +437,11 @@ class AccountStoreConfig(BaseModel):
         return normalized
 
 
+class TransferTokenConfig(BaseModel):
+    backend: Literal["memory", "redis"] = "memory"
+    key_prefix: str = Field(default="transfer-token", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -475,6 +480,7 @@ class ServerConfig(BaseModel):
     # Poll interval; each check only stats registry files and reads fully on change.
     api_key_watch_interval_seconds: float = 30.0
     account_store: AccountStoreConfig = Field(default_factory=AccountStoreConfig)
+    transfer_tokens: TransferTokenConfig = Field(default_factory=lambda: TransferTokenConfig())
     # Trusted-mode identity registration is batched in memory; 0 disables it.
     trusted_identity_flush_interval_seconds: float = Field(300.0, ge=0)
     trusted_identity_pending_max_size: int = Field(10_000, gt=0)
