@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import threading
 from pathlib import Path
 
+import httpx
 import pytest
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import AsyncHTTPClient, SyncHTTPClient, _utils
 from openviking_sdk._utils import _path_is_relative_to, run_async
 from openviking_sdk.options import FindOptions
 
@@ -47,3 +49,55 @@ async def test_run_async_preserves_cancelled_error():
 
     with pytest.raises(asyncio.CancelledError, match="cancelled by caller"):
         run_async(cancel())
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_interrupted_sync_read_cancels_background_request(monkeypatch, interruption):
+    started = threading.Event()
+    cancelled = threading.Event()
+    submitted = []
+    client = SyncHTTPClient(url="http://localhost:1933")
+
+    async def handle_request(request):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def setup():
+        client._async_client._http = httpx.AsyncClient(
+            base_url="http://localhost:1933", transport=httpx.MockTransport(handle_request)
+        )
+
+    run_async(setup())
+    original_submit = asyncio.run_coroutine_threadsafe
+
+    class InterruptedWait:
+        def __init__(self, future):
+            self.future = future
+
+        def result(self):
+            assert started.wait(5), "read did not reach the HTTP transport"
+            raise interruption("caller interrupted")
+
+        def cancel(self):
+            return self.future.cancel()
+
+    def submit(coro, loop):
+        # Keep the real worker task; interrupt only its synchronous waiter.
+        future = original_submit(coro, loop)
+        submitted.append(future)
+        return InterruptedWait(future)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(_utils.asyncio, "run_coroutine_threadsafe", submit)
+            with pytest.raises(interruption, match="caller interrupted"):
+                client.read("viking://resources/test.txt")
+            assert cancelled.wait(2), "request kept running after the sync caller returned"
+        assert run_async(asyncio.sleep(0, result="worker reusable")) == "worker reusable"
+    finally:
+        for future in submitted:
+            future.cancel()
+        client.close()

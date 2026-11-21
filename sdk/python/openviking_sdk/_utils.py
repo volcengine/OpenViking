@@ -73,7 +73,11 @@ def run_async(coro: Coroutine[Any, Any, Any]) -> Any:
         coro.close()
         raise RuntimeError("run_async cannot be called from its worker event loop")
     future = asyncio.run_coroutine_threadsafe(_capture_result(coro), worker_loop)
-    succeeded, value = future.result()
+    try:
+        succeeded, value = future.result()
+    except BaseException:
+        future.cancel()
+        raise
     if succeeded:
         return value
     raise value
