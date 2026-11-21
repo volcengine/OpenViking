@@ -1222,8 +1222,8 @@ def test_removed_volcengine_api_key_backend_name_is_rejected():
         assert "volcengine_api_key" in str(e)
 
 
-@pytest.mark.parametrize("backend", ["qdrant"])
-def test_removed_third_party_vectordb_backends_are_rejected(backend):
+def test_unknown_vectordb_backend_is_rejected():
+    backend = "unsupported"
     with pytest.raises(ValueError) as exc_info:
         VectorDBBackendConfig(backend=backend)
 
@@ -1232,6 +1232,22 @@ def test_removed_third_party_vectordb_backends_are_rejected(backend):
     assert "local" in message
     assert "volcengine" in message
     assert "vikingdb" in message
+
+
+def test_qdrant_vectordb_backend_is_accepted():
+    config = VectorDBBackendConfig(
+        backend="qdrant",
+        qdrant={"url": "http://127.0.0.1:6333"},
+    )
+
+    assert config.backend == "qdrant"
+    assert config.qdrant is not None
+    assert config.qdrant.url == "http://127.0.0.1:6333"
+
+
+def test_qdrant_vectordb_backend_requires_endpoint():
+    with pytest.raises(ValueError, match="qdrant.url or url"):
+        VectorDBBackendConfig(backend="qdrant")
 
 
 def test_opengauss_backend_is_accepted_with_defaults():
@@ -1472,7 +1488,7 @@ def _mysql_watch_store_config(watch_params):
 
 def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
     assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
-    with pytest.raises(ValueError, match="'file' or 'mysql'"):
+    with pytest.raises(ValueError, match="'file', 'mysql' or 'postgres'"):
         OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "sqlite"}}})
 
 
