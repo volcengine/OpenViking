@@ -4,8 +4,8 @@ import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 export function createSessionInject({ config, sessionManager }) {
   const injectedSessions = new Set()
 
-  async function buildSessionContext(input) {
-    if (config.noAutoInject) return false
+  async function buildSessionContext(input, { signal } = {}) {
+    if (config.noAutoInject || signal?.aborted) return false
     const sessionID = input.sessionID
     const messageID = input.messageID
     if (!sessionID || !messageID || injectedSessions.has(sessionID)) return false
@@ -15,7 +15,7 @@ export function createSessionInject({ config, sessionManager }) {
 
     const actorPeerId = effectivePeerId(config)
     const clientFetch = (endpoint, init = {}, options = {}) =>
-      fetchJSON(config, endpoint, init, { ...options, actorPeerId, timeoutMs: 10000 })
+      signal?.aborted ? { ok: false } : fetchJSON(config, endpoint, { ...init, signal: signal ?? init.signal }, { ...options, actorPeerId, timeoutMs: 10000 })
 
     const parts = []
     const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId, config)
@@ -25,6 +25,7 @@ export function createSessionInject({ config, sessionManager }) {
       ? await fetchArchiveBlock(clientFetch, ovSessionId, config.resumeContextBudget)
       : ""
     if (archive) parts.push(archive)
+    if (signal?.aborted) return undefined
 
     if (parts.length === 0) {
       injectedSessions.add(sessionID)
