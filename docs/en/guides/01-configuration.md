@@ -1401,7 +1401,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
-| `watch_store` | object | Watch store: `file` (single node), `mysql` or `postgres` (shared) | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1506,6 +1506,40 @@ across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
 
 #### watch_store
+
+For durable local Watch metadata, install `openviking[sqlite]` and select
+`sqlite`. The database and tables are created automatically. By default the
+database is `{storage.workspace}/_system/watch/watch.db`; `params.path` can
+override it with an absolute path on local disk. `params.table` defaults to
+`ov_watch_tasks` and `params.busy_timeout_ms` to `5000` (a positive integer).
+SQLite acquires its writer lock before reading transaction state.
+Transactions are serialized, including reads, so this backend is intended for
+local deployments with modest Watch traffic. Multiple processes on the same
+host can share the database and `service_name`; different service names isolate
+their rows. Do not put the SQLite database on NFS/EFS or share it across hosts.
+Selecting SQLite does not change the Task store or PathLock backend; configure
+shared coordination and target locks separately if multiple processes run the
+scheduler. SQLite does not automatically select Redis coordination.
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+Like MySQL, SQLite requires `params.credential_encryption_key` (base64-encoded
+32 bytes) to encrypt private `auth_state` and `connector_states` with AES-GCM.
+Keep the key across restarts and use the same key for processes sharing rows.
+Reservations, Task associations, deleted-but-running Watches and checkpoint
+versions survive restart and retain the existing missing-Task grace period.
+Existing file-provider Watches are not imported automatically.
 
 The default `file` provider keeps Watch tasks in the internal control file
 `viking://resources/.watch_tasks.json`, as earlier releases did; it belongs to
