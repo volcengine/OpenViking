@@ -5,14 +5,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
+from openviking_cli.utils import get_logger
 
 from .base import CollectionAdapter
+
+logger = get_logger(__name__)
 
 
 class LocalCollectionAdapter(CollectionAdapter):
@@ -81,6 +85,83 @@ class LocalCollectionAdapter(CollectionAdapter):
             path=collection_path,
             config=self._collection_config,
         )
+
+    def create_collection(
+        self,
+        name: str,
+        schema: Dict[str, Any],
+        *,
+        distance: str,
+        sparse_weight: float,
+        index_name: str,
+    ) -> bool:
+        """Create the collection and discard storage written by a failed attempt.
+
+        The local backend writes ``collection_meta.json`` during construction.
+        Leaving that metadata behind after a failed ``create_index`` makes the
+        next startup load an indexless collection whose searches silently
+        return no results.
+
+        Only storage created by this attempt may be removed. The base method
+        first loads an existing collection; if that load fails (for example
+        because another process holds the native store lock), ``_collection``
+        is still ``None`` and the persisted data must be left untouched.
+        """
+        collection_path = self._collection_path()
+        meta_path = os.path.join(collection_path, "collection_meta.json") if collection_path else ""
+        existing_meta = bool(meta_path) and os.path.exists(meta_path)
+        existing_dir = bool(collection_path) and os.path.isdir(collection_path)
+        try:
+            return super().create_collection(
+                name,
+                schema,
+                distance=distance,
+                sparse_weight=sparse_weight,
+                index_name=index_name,
+            )
+        except Exception:
+            if existing_meta:
+                # The failure happened while discovering an already persisted
+                # collection; nothing here was created by this attempt.
+                raise
+            partial_collection = self._collection
+            self._collection = None
+            if partial_collection is not None:
+                try:
+                    if existing_dir:
+                        # The directory predates this attempt. The native
+                        # collection's drop() deletes its whole directory, so
+                        # only close the handle here and leave existing files
+                        # untouched.
+                        partial_collection.close()
+                    else:
+                        partial_collection.drop()
+                except Exception:
+                    logger.exception(
+                        "local_adapter: failed to close partially created collection %s", name
+                    )
+            if collection_path and not existing_dir and os.path.isdir(collection_path):
+                try:
+                    shutil.rmtree(collection_path)
+                except OSError:
+                    logger.exception(
+                        "local_adapter: failed to remove partially created collection %s", name
+                    )
+                    # Without its metadata the collection cannot be adopted later,
+                    # even if a locked file kept the directory in place.
+                    try:
+                        os.remove(meta_path)
+                    except OSError:
+                        pass
+            elif existing_dir and meta_path:
+                # Keep the pre-existing directory and its contents, but remove
+                # the metadata this attempt wrote so the broken collection can
+                # never be adopted later.
+                try:
+                    os.remove(meta_path)
+                except OSError:
+                    pass
+            raise
 
     def update_data(self, data_list: List[Dict[str, Any]]):
         collection = self.get_collection()
