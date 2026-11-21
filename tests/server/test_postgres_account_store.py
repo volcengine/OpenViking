@@ -447,3 +447,72 @@ async def test_pg_auth_cancelled_query_returns_connection(pg_database):
     await assert_auth_cancelled_query_returns_connection(
         store, "SELECT pg_sleep(30)", query_running
     )
+
+
+async def test_pg_auth_autocommit_restores_pool_write_rollback(pg_database):
+    from sqlalchemy import event, insert
+
+    params, _, _, _ = pg_database
+    store = PostgresAccountStore(
+        service_name="autocommit-" + uuid4().hex, params={**params, "maxsize": 1}
+    )
+    await store.load()
+    observed = []
+
+    def inspect_auth(conn, cursor, statement, parameters, context, executemany):
+        if "ov_accounts_credentials" in statement and "lookup_digest" in statement:
+            observed.append(conn.connection.dbapi_connection.autocommit)
+
+    engine = store._engine.sync_engine
+    event.listen(engine, "before_cursor_execute", inspect_auth)
+    try:
+        assert await store.get_auth_snapshot("unknown") is None
+        assert observed == [True]
+
+        async def aborted_write():
+            async with store._session_factory() as session:
+                async with session.begin():
+                    connection = await session.connection()
+                    raw = await connection.get_raw_connection()
+                    assert raw.driver_connection.autocommit is False
+                    assert await connection.get_isolation_level() == "READ COMMITTED"
+                    await session.execute(
+                        insert(Account).values(
+                            service_name=store._service_name, account_id="aborted"
+                        )
+                    )
+                    raise RuntimeError("abort after insert")
+
+        with pytest.raises(RuntimeError, match="abort after insert"):
+            await store._sql_runtime.run(aborted_write)
+        assert await store.get_account("aborted") is None
+        assert await store.get_auth_snapshot("unknown") is None
+        await store.create_account("committed", "admin")
+        assert await store.get_account("committed") is not None
+    finally:
+        event.remove(engine, "before_cursor_execute", inspect_auth)
+        await store.close()
+
+
+async def test_pg_auth_autocommit_pre_ping_recovers_dead_connection(pg_database):
+    params, admin, _, _ = pg_database
+    store = PostgresAccountStore(
+        service_name="autocommit-recovery-" + uuid4().hex, params={**params, "maxsize": 1}
+    )
+    await store.load()
+    try:
+        assert await store.get_auth_snapshot("unknown") is None
+
+        async def backend_pid():
+            async with store._engine.connect() as connection:
+                return await connection.scalar(text("SELECT pg_backend_pid()"))
+
+        before = await store._sql_runtime.run(backend_pid)
+        assert admin.execute("SELECT pg_terminate_backend(%s)", (before,)).fetchone()[0]
+        assert await asyncio.wait_for(store.get_auth_snapshot("unknown"), 5) is None
+        after = await store._sql_runtime.run(backend_pid)
+        assert after != before
+        await store.create_account("recovered", "admin")
+        assert await store.get_account("recovered") is not None
+    finally:
+        await store.close()
