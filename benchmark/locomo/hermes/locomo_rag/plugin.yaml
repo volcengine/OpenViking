@@ -1,0 +1,5 @@
+name: locomo-rag
+version: "1.0"
+description: Read-only vector retrieval over raw LoCoMo conversation history.
+provides_tools:
+  - search_locomo_history

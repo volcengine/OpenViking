@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -15,9 +16,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from uuid import uuid4
 
 import httpx
 import requests
+
+from locomo_rag import TOOL_NAME, read_index
 
 try:
     from dotenv import load_dotenv
@@ -66,8 +70,8 @@ def openviking_headers() -> dict[str, str]:
 
 
 def require_suite(value: str) -> str:
-    if value not in {"baseline", "e2e", "preingest"}:
-        raise argparse.ArgumentTypeError("suite must be one of: baseline, e2e, preingest")
+    if value not in {"baseline", "e2e", "preingest", "agentic-rag"}:
+        raise argparse.ArgumentTypeError("suite must be one of: baseline, e2e, preingest, agentic-rag")
     return value
 
 
@@ -76,6 +80,8 @@ def result_dir_name(suite: str) -> str:
         return "result_baseline"
     if suite == "e2e":
         return "result_e2e"
+    if suite == "agentic-rag":
+        return "result_agentic_rag"
     return "result_preingest"
 
 
@@ -84,6 +90,8 @@ def conversation_prefix(suite: str) -> str:
         return "locomo-native-qa-"
     if suite == "e2e":
         return "locomo-e2e-qa-"
+    if suite == "agentic-rag":
+        return "locomo-agentic-rag-qa-"
     return "locomo-ovpreingest-qa-"
 
 
@@ -203,6 +211,45 @@ def extract_tool_trace(body: dict) -> list[dict]:
     return trace
 
 
+def rag_search_trace(body: dict, scope: str, chunk_ids: set[str]) -> list[dict]:
+    trace = []
+    calls = set()
+    results = set()
+    for item in body.get("output", []):
+        call_id = item.get("call_id")
+        if item.get("type") == "function_call":
+            if item.get("name") != TOOL_NAME or item.get("was_blocked"):
+                raise ValueError("Unexpected tool in the isolated RAG suite")
+            arguments = item["arguments"]
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if arguments.get("scope") != scope:
+                raise ValueError("RAG tool call used a different history scope")
+            calls.add(call_id)
+            trace.append({"type": "call", "call_id": call_id, "query": arguments["query"]})
+        elif item.get("type") == "function_call_output":
+            result = item["output"]
+            if isinstance(result, str):
+                result = json.loads(result)
+            if call_id not in calls or result.get("scope") != scope:
+                raise ValueError("RAG tool produced an unsuccessful or unscoped result")
+            hits = [hit["id"] for hit in result["hits"]]
+            if not set(hits).issubset(chunk_ids):
+                raise ValueError("RAG tool returned chunks outside the assigned index")
+            results.add(call_id)
+            trace.append(
+                {
+                    "type": "result",
+                    "call_id": call_id,
+                    "chunk_ids": hits,
+                    "embedding_tokens": result.get("embedding_tokens"),
+                }
+            )
+    if not calls or calls != results:
+        raise ValueError("Expected a completed history search from the Hermes RAG plugin")
+    return trace
+
+
 def send_gateway_request(
     base_url: str,
     token: str,
@@ -282,7 +329,19 @@ def process_single_question(
     question_time = get_sample_question_time(item)
     conversation = f"{args.conversation_prefix}{sample_id}-q{question_index}"
 
-    if args.suite == "baseline":
+    instructions = QA_INSTRUCTIONS
+    scope = None
+    search_trace = []
+    if args.suite == "agentic-rag":
+        scope = args.rag_samples[sample_id]["scope"]
+        conversation = f"{conversation}-{uuid4().hex}"
+        instructions = (
+            f"{QA_INSTRUCTIONS} Use {TOOL_NAME} with history scope {scope} before answering. "
+            "Write your own search query, inspect the returned conversation excerpts, and search "
+            "again with a refined query if you need more evidence."
+        )
+        mode = "agentic RAG over raw history"
+    elif args.suite == "baseline":
         mode = "native DB, session_search"
     elif args.suite == "e2e":
         mode = "mixed memory E2E"
@@ -302,12 +361,15 @@ def process_single_question(
                 question_time,
                 sample_id,
             ),
+            instructions=instructions,
             timeout=args.timeout,
         )
         qa_usage = normalize_usage(body.get("usage"))
         response = extract_response_text(body)
         tool_trace = extract_tool_trace(body)
         tool_names = [item["requested_name"] for item in tool_trace]
+        if scope is not None:
+            search_trace = rag_search_trace(body, scope, args.rag_samples[sample_id]["chunk_ids"])
     except requests.HTTPError as e:
         response = f"[ERROR] HTTP {e.response.status_code}: {e.response.text}"
         qa_usage = normalize_usage({})
@@ -353,6 +415,10 @@ def process_single_question(
         "result": "",
         "reasoning": "",
     }
+
+    if scope is not None:
+        record["rag_scope"] = scope
+        record["rag_search_trace"] = json.dumps(search_trace, ensure_ascii=False)
 
     with csv_lock:
         save_record_to_csv(csv_path, record)
@@ -444,6 +510,8 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
         "result",
         "reasoning",
     ]
+    if "rag_search_trace" in record:
+        fieldnames.extend(["rag_scope", "rag_search_trace"])
     expected_header = ",".join(fieldnames)
     should_write_header = not os.path.exists(csv_path)
 
@@ -727,6 +795,27 @@ def run_eval(args: argparse.Namespace) -> None:
 
     samples = load_locomo_data(args.input, args.sample)
 
+    if args.suite == "agentic-rag":
+        index = read_index(Path(args.rag_index))
+        if index["dataset_sha256"] != hashlib.sha256(Path(args.input).read_bytes()).hexdigest():
+            raise SystemExit("The RAG index was built from a different LoCoMo dataset")
+        args.rag_samples = {
+            sample_id: {
+                "scope": sample["scope"],
+                "chunk_ids": {chunk["id"] for chunk in sample["chunks"]},
+            }
+            for sample_id, sample in index["samples"].items()
+        }
+        if not args.force and Path(args.output).is_file():
+            with open(args.output, encoding="utf-8", newline="") as existing:
+                for row in csv.DictReader(existing):
+                    current = args.rag_samples.get(row["sample_id"])
+                    if not current or row.get("rag_scope") != current["scope"]:
+                        raise SystemExit(
+                            "Existing QA rows use a different suite or index. "
+                            "Use --force or a new output."
+                        )
+
     if args.force:
         reset_generated_file(args.output, "QA CSV")
         reset_generated_file(
@@ -776,6 +865,8 @@ def run_eval(args: argparse.Namespace) -> None:
 
     print(f"Done. Results written to {args.output}", file=sys.stderr)
 
+    if args.suite == "agentic-rag" and error_count:
+        raise SystemExit(f"{error_count} RAG question(s) failed after retries. See {args.output}.")
     if args.suite in {"e2e", "preingest"}:
         true_token_file = Path(args.output).parent / "eval_true_tokens.csv"
         asyncio.run(
@@ -815,7 +906,10 @@ def main() -> None:
     parser.add_argument(
         "--openviking-url", default=DEFAULT_OPENVIKING_URL, help="OpenViking service URL"
     )
+    parser.add_argument("--rag-index", default=os.getenv("LOCOMO_RAG_INDEX"))
     args = parser.parse_args()
+    if args.suite == "agentic-rag" and not args.rag_index:
+        parser.error("--rag-index or LOCOMO_RAG_INDEX is required for agentic-rag")
 
     if args.output is None:
         args.output = str(script_dir / result_dir_name(args.suite) / "qa_results.csv")
