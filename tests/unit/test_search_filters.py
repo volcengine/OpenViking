@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import merge_time_filter, resolve_time_bounds
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -95,6 +95,38 @@ def test_merge_time_filter_rejects_inverted_mixed_range():
 def test_merge_time_filter_rejects_invalid_time_value():
     with pytest.raises(ValueError):
         merge_time_filter(None, since="not-a-time")
+
+
+@pytest.mark.parametrize(
+    ("value", "label"),
+    [
+        ("1000000000d", "since"),
+        ("999999999d", "since"),
+        ("9999-12-31T23:59:59-12:00", "since"),
+        ("1000000000d", "until"),
+        ("9999-12-31T23:59:59-12:00", "until"),
+    ],
+)
+def test_merge_time_filter_rejects_out_of_range_time_value(value, label):
+    now = datetime(2026, 3, 11, tzinfo=timezone.utc)
+    kwargs = {label: value}
+
+    # OverflowError is not a ValueError, so this also proves the range error is
+    # reported as invalid input rather than escaping as an internal failure.
+    with pytest.raises(ValueError, match=f"{label} is out of range") as excinfo:
+        merge_time_filter(None, now=now, **kwargs)
+
+    assert not isinstance(excinfo.value, OverflowError)
+
+
+def test_resolve_time_bounds_uses_the_caller_labels_for_range_errors():
+    now = datetime(2026, 3, 11, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="lower is out of range"):
+        resolve_time_bounds(since="1000000000d", now=now, lower_label="lower")
+
+    with pytest.raises(ValueError, match="upper is out of range"):
+        resolve_time_bounds(until="1000000000d", now=now, upper_label="upper")
 
 
 def test_merge_time_filter_rejects_invalid_time_field():
