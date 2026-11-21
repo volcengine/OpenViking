@@ -128,7 +128,8 @@ async function card($: EngineInterface, e: ResolveInput, turn: Turn) {
         lookups.map((l) => (
           <Text key={`ov-lookup-${l.id}`} wrap="wrap">
             {"  "}
-            {l.query !== null ? `⌕ Searched “${l.query}” · ${l.found.length} results` : ""}
+            {/* A Code Mode script's call (`repl_` id) comes back as an empty row: its count is unknown. */}
+            {l.query !== null ? `⌕ Searched “${l.query}”${l.id.startsWith("repl_") ? "" : ` · ${l.found.length} results`}` : ""}
             {l.query !== null && l.opened.length ? " · " : ""}
             {l.opened.length ? `▤ Read ${l.opened.map(titleOf).join(", ")}` : ""}
             {l.isError && <Text color="red"> · failed</Text>}
@@ -179,30 +180,52 @@ export const register: Register = (on) => {
     return res;
   });
 
-  // Claude's own OpenViking reads and searches, through MCP or the `ov` CLI.
-  on("tool.call", async ($, e, next) => {
-    const found = await safely($, "classify tool call", async () => {
-      const call = classifyCall(e.tool, { ...e } as Record<string, unknown>);
-      const turn = call ? await lastTurn($) : undefined;
-      return call && turn ? { call, turn } : undefined;
+  // Claude's own OpenViking reads and searches, through MCP or the `ov` CLI, read
+  // from the rows the conversation keeps, one door each: a `tool.call` hook, or a
+  // `session.append` hook on every door, keeps Code Mode off. A lookup opens with
+  // its tool_use block and is recorded at its tool_result.
+  const pending = new Map<string, { call: { opened: string[]; query: string | null }; n: number }>();
+  on("session.append", { door: "response" }, async ($, e, next) => {
+    const res = await next(e);
+    if (res.deny !== undefined) return res;
+    await safely($, "classify tool call", async () => {
+      for (const b of (res.message.content ?? []) as Record<string, unknown>[]) {
+        if (b?.type !== "tool_use" || typeof b.id !== "string" || typeof b.name !== "string") continue;
+        const call = classifyCall(b.name, (b.input ?? {}) as Record<string, unknown>);
+        const turn = call ? await lastTurn($) : undefined;
+        if (call && turn) pending.set(b.id, { call, n: turn.n });
+      }
     });
-    if (!found) return next(e);
-    const { call, turn } = found;
-    const ran = await next(e);
+    return res;
+  });
+  on("session.append", { door: "tool-result" }, async ($, e, next) => {
+    const res = await next(e);
+    if (res.deny !== undefined) return res;
     await safely($, "record lookup", async () => {
-      const text = "text" in ran && typeof ran.text === "string" ? ran.text : "";
-      const lookup: Lookup = {
-        id: e.tool_use_id,
-        query: call.query,
-        opened: call.opened,
-        found: call.query !== null ? urisIn(text).filter((u) => !call.opened.includes(u)) : [],
-        isError: ran.deny !== undefined || ran.isError === true,
-      };
-      await editTurns($, (list) =>
-        list.map((t) => (t.n === turn.n ? { ...t, lookups: [...t.lookups, lookup] } : t)),
-      );
+      for (const b of (res.message.content ?? []) as Record<string, unknown>[]) {
+        const open = typeof b?.tool_use_id === "string" ? pending.get(b.tool_use_id) : undefined;
+        if (b?.type !== "tool_result" || !open) continue;
+        pending.delete(b.tool_use_id as string);
+        const { call, n } = open;
+        const text =
+          typeof b.content === "string"
+            ? b.content
+            : Array.isArray(b.content)
+              ? b.content.map((c) => (c?.type === "text" && typeof c.text === "string" ? c.text : "")).join("\n")
+              : "";
+        const lookup: Lookup = {
+          id: b.tool_use_id as string,
+          query: call.query,
+          opened: call.opened,
+          found: call.query !== null ? urisIn(text).filter((u) => !call.opened.includes(u)) : [],
+          isError: b.is_error === true,
+        };
+        await editTurns($, (list) =>
+          list.map((t) => (t.n === n ? { ...t, lookups: [...t.lookups, lookup] } : t)),
+        );
+      }
     });
-    return ran;
+    return res;
   });
 
   // The last text row of an answer carries its card.
