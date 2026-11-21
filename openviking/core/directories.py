@@ -490,9 +490,17 @@ class DirectoryInitializer:
             emb_msg = EmbeddingMsgConverter.from_context(context)
             if emb_msg:
                 messages.append(emb_msg)
-        await asyncio.gather(
-            *(self.vikingdb.enqueue_embedding_msg(message) for message in messages)
+        # An enqueue failure must not let other directory enqueues outlive
+        # the initialization call and its workspace lease.
+        results = await asyncio.gather(
+            *(self.vikingdb.enqueue_embedding_msg(message) for message in messages),
+            return_exceptions=True,
         )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        if any(result is False for result in results):
+            raise RuntimeError("Failed to enqueue preset directory index records")
 
     @staticmethod
     def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:
