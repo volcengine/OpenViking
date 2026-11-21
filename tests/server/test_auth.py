@@ -15,7 +15,12 @@ from starlette.requests import Request
 
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
-from openviking.server.auth import get_request_context, resolve_identity
+from openviking.server.auth import (
+    get_download_request_context,
+    get_request_context,
+    get_upload_request_context,
+    resolve_identity,
+)
 from openviking.server.auth.plugins.api_key import _api_key_root_can_access_path
 from openviking.server.auth.registry import get_registry
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
@@ -1645,3 +1650,98 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
     assert response.json()["result"]["role"] == "root"
     assert response.json()["result"]["account_id"] == "trusted"
     assert response.json()["result"]["user_id"] == "trusted"
+
+
+@pytest.mark.parametrize(
+    "values,status",
+    [
+        (["legacy-peer"], 400),
+        (["", "legacy-peer"], 400),
+        (["legacy-peer", ""], 400),
+        (["", "   "], 200),
+    ],
+)
+async def test_legacy_agent_header_rejected_via_rest(values, status):
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/fs/ls", headers=[("X-OpenViking-Agent", value) for value in values]
+        )
+    assert response.status_code == status
+    if status == 400:
+        assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+        assert "X-OpenViking-Actor-Peer" in response.text
+
+
+async def test_legacy_agent_header_rejected_before_auth_plugin():
+    request = _make_request("/api/v1/fs/ls", headers={"X-OpenViking-Agent": "legacy-peer"})
+    request.app.state.auth_plugin = None
+    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Actor-Peer"):
+        await resolve_identity(request)
+
+
+async def test_legacy_agent_header_is_not_exposed_in_openapi():
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False)
+    parameters = app.openapi()["paths"]["/api/v1/fs/ls"]["get"]["parameters"]
+    names = {parameter["name"] for parameter in parameters}
+    assert "X-OpenViking-Agent" not in names
+    assert "X-OpenViking-Actor-Peer" in names
+
+
+async def test_legacy_agent_header_rejected_via_mcp():
+    from starlette.routing import Route
+
+    from openviking.server.mcp_endpoint import _IdentityASGIMiddleware
+
+    async def downstream(scope, receive, send):
+        raise AssertionError("legacy header reached MCP downstream")
+
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False)
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/mcp", headers=[("X-OpenViking-Agent", ""), ("X-OpenViking-Agent", "legacy-peer")]
+        )
+    assert response.status_code == 400
+    assert "X-OpenViking-Actor-Peer" in response.text
+
+
+@pytest.mark.parametrize("direction", ["upload", "download"])
+async def test_legacy_agent_header_rejected_before_token_consumption(direction):
+    from openviking.server.upload_token_store import download_token_store, upload_token_store
+
+    store = upload_token_store if direction == "upload" else download_token_store
+    dependency = (
+        get_upload_request_context if direction == "upload" else get_download_request_context
+    )
+    token, _ = store.issue(
+        "acct", "alice", 60, role=Role.parse(Role.USER), actor_peer_id="bound-peer"
+    )
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False)
+
+    @app.get("/transfer")
+    async def transfer(ctx=Depends(dependency)):
+        return {"actor_peer_id": ctx.actor_peer_id, "user_id": ctx.user.user_id}
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            rejected = await client.get(
+                "/transfer",
+                params={"token": token},
+                headers=[("X-OpenViking-Agent", ""), ("X-OpenViking-Agent", "legacy-peer")],
+            )
+            assert rejected.status_code == 400
+            assert store.peek(token) is not None
+            accepted = await client.get("/transfer", params={"token": token})
+        assert accepted.status_code == 200
+        assert accepted.json() == {"actor_peer_id": "bound-peer", "user_id": "alice"}
+        assert store.peek(token) is None
+    finally:
+        if store.peek(token) is not None:
+            store.consume(token)
