@@ -56,8 +56,24 @@ def _maybe_offer_init() -> None:
         sys.exit(code or 1)
 
 
+def _force_utf8_stdio() -> None:
+    """Force UTF-8 stdio on Windows (same guard as vikingbot, see #6929).
+
+    The setup wizard prints "✓" (U+2713); on Chinese Windows (code page
+    936/gbk) a redirected stdout/stderr cannot encode it, so ``init`` crashes
+    with UnicodeEncodeError before the configuration is written. Interactive
+    consoles are unaffected (PEP 528 forces UTF-8 there).
+    """
+    if sys.platform == "win32":
+        for _stream in (sys.stdout, sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8")
+
+
 def main():
     """Bootstrap the server while binding a stable execution-level log trace ID."""
+    _force_utf8_stdio()
+
     # Pre-parse --config from sys.argv before any openviking imports,
     # so the env var is visible when the config singleton first initialises.
     # This is done for all subcommands (init, doctor, server) to ensure
