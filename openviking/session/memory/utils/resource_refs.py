@@ -34,7 +34,7 @@ _TRAILING_URI_PUNCTUATION = ".,;:!?，。；：！？、）】》"
 _SENTENCE_BOUNDARIES = "。！？.!?\n"
 _MAX_LINKIFIED_SENTENCE_CHARS = 160
 _MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
-    r" {0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)"
+    r"[ \t]*(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)"
 )
 _MARKDOWN_HEADING_PREFIX_RE = re.compile(r" {0,3}#{1,6}(?:[ \t]+|$)")
 
