@@ -686,6 +686,8 @@ def create_app(
         logger.info("Bot API proxy disabled (use --with-bot to enable)")
 
     # Register routers
+    # Starlette scans routes in order; prioritize the frequently used content API.
+    app.include_router(content_router)
     app.include_router(system_router)
     app.include_router(acl_router)
     app.include_router(admin_router)
@@ -695,7 +697,6 @@ def create_app(
     app.include_router(rules_router)
     app.include_router(filesystem_router)
     app.include_router(mcps_router)
-    app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
     app.include_router(privacy_configs_router)
