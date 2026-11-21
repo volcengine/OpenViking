@@ -192,6 +192,7 @@ async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) ->
     temp_path = await asyncio.to_thread(_create_temp_file, prefix="ov_http_upload_", suffix=suffix)
     total = 0
     f = None
+    delete = False
     try:
         f = await asyncio.to_thread(_open_binary_for_write, temp_path)
         while True:
@@ -207,12 +208,18 @@ async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) ->
             await asyncio.to_thread(f.write, chunk)
         return temp_path, total
     except Exception:
-        with suppress(FileNotFoundError):
-            await asyncio.to_thread(os.unlink, temp_path)
+        delete = True
         raise
     finally:
         if f is not None:
             await asyncio.to_thread(_close_file, f)
+        if delete:
+            # Unlink only after the handle is closed: Windows refuses to delete an
+            # open file, so unlinking earlier raises PermissionError, which both
+            # masks the original upload error and leaks the partial file. Cleanup
+            # failures must not outrank the error being reported either.
+            with suppress(OSError):
+                await asyncio.to_thread(os.unlink, temp_path)
 
 
 class TempUploadStore:
@@ -298,6 +305,7 @@ class TempUploadStore:
 
         total = 0
         f = await asyncio.to_thread(_open_binary_for_write, temp_file_path)
+        delete = False
         try:
             while True:
                 chunk = await upload_file.read(_CHUNK_SIZE)
@@ -305,14 +313,26 @@ class TempUploadStore:
                     break
                 total += len(chunk)
                 if total > self.temp_cfg.shared_max_size_bytes:
-                    with suppress(FileNotFoundError):
-                        await asyncio.to_thread(temp_file_path.unlink)
                     raise InvalidArgumentError(
                         f"Upload exceeds size limit ({self.temp_cfg.shared_max_size_bytes} bytes)."
                     )
                 await asyncio.to_thread(f.write, chunk)
+        except Exception:
+            # A failed upload (size limit, aborted read) must not leave the
+            # partial file behind — matching the shared path, which deletes on
+            # every error.
+            delete = True
+            raise
         finally:
             await asyncio.to_thread(_close_file, f)
+            if delete:
+                # Unlink only after the handle is closed: Windows refuses to
+                # delete an open file, so unlinking earlier raises
+                # PermissionError, which masks the size-limit error and leaks
+                # the partial file. Cleanup failures must not outrank the
+                # error being reported either.
+                with suppress(OSError):
+                    await asyncio.to_thread(temp_file_path.unlink)
 
         if upload_file.filename:
             meta_path = temp_dir / f"{temp_filename}.ov_upload.meta"

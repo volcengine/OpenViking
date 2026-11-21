@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Event-loop safety and cleanup-throttle tests for temporary HTTP uploads."""
 
+import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -10,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.server import temp_upload_store
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 class _UploadFile:
@@ -598,4 +601,73 @@ async def test_read_shared_meta_uses_flat_path_for_legacy_id(monkeypatch: pytest
     assert meta["temp_file_id"] == f"shared_{legacy_id}"
 
 
+class _AbortedUploadFile:
+    """An upload stream that dies mid-transfer (client abort)."""
 
+    filename = "aborted.bin"
+
+    async def read(self, _size: int) -> bytes:
+        raise RuntimeError("client aborted mid-upload")
+
+
+def _local_store_config(tmp_path: Path, max_size: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        storage=SimpleNamespace(get_upload_temp_dir=lambda: tmp_path),
+        temp_upload=SimpleNamespace(ttl_seconds=3600, shared_max_size_bytes=max_size),
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_local_oversize_raises_invalid_argument_and_removes_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Over-size local upload: the size-limit error must reach the caller.
+
+    On unmodified main (Windows) the unlink inside the error path targets the
+    still-open file, so PermissionError replaces InvalidArgumentError and the
+    partial file survives both.
+    """
+    config = _local_store_config(tmp_path, max_size=10)
+    monkeypatch.setattr(temp_upload_store, "get_openviking_config", lambda: config)
+    store = temp_upload_store.TempUploadStore(config)
+
+    with pytest.raises(InvalidArgumentError, match="exceeds size limit"):
+        await store.save_upload(_UploadFile([b"x" * 100]), "local", object())
+
+    assert list(tmp_path.glob("upload_*")) == []
+
+
+@pytest.mark.asyncio
+async def test_save_local_aborted_read_removes_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """An aborted local upload must not leak its partial file (all platforms)."""
+    config = _local_store_config(tmp_path, max_size=1024)
+    monkeypatch.setattr(temp_upload_store, "get_openviking_config", lambda: config)
+    store = temp_upload_store.TempUploadStore(config)
+
+    with pytest.raises(RuntimeError, match="client aborted"):
+        await store.save_upload(_AbortedUploadFile(), "local", object())
+
+    assert list(tmp_path.glob("upload_*")) == []
+
+
+@pytest.mark.asyncio
+async def test_stream_upload_oversize_removes_temp_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Over-size shared-path staging file: same close-before-unlink contract."""
+    created: list[str] = []
+
+    def _create_temp_in_tmp(*, prefix: str, suffix: str) -> str:
+        fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=tmp_path)
+        os.close(fd)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr(temp_upload_store, "_create_temp_file", _create_temp_in_tmp)
+
+    with pytest.raises(InvalidArgumentError, match="exceeds size limit"):
+        await temp_upload_store._stream_upload_to_local_temp(_UploadFile([b"x" * 100]), 10)
+
+    assert created and not Path(created[0]).exists()
