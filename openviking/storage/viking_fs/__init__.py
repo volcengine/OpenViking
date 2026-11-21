@@ -26,6 +26,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.core.context import ContextLevel
@@ -188,37 +189,20 @@ class VikingFS(
 
 VikingFS.__module__ = __name__
 
-# Provide _instance on the package module that transparently proxies to
-# _base._instance so that test fixtures (conftest.py) can save/restore the
-# singleton across init_viking_fs boundaries.  PEP 562 only gives us
-# __getattr__; we also need to intercept writes so that assigning to
-# ``openviking.storage.viking_fs._instance`` updates the real singleton in
-# ``_base`` where ``get_viking_fs``/``init_viking_fs`` read/write it.
+
+# Preserve the real module namespace while forwarding singleton access to the
+# base module, where get_viking_fs and init_viking_fs manage its lifecycle.
+class _VikingFSModule(ModuleType):
+    @property
+    def _instance(self) -> Optional[VikingFS]:
+        return _base_mod._instance
+
+    @_instance.setter
+    def _instance(self, value: Optional[VikingFS]) -> None:
+        _base_mod._instance = value
 
 
-class _ModuleProxy:  # pragma: no cover - trivial proxy
-    def __init__(self, wrapped):
-        object.__setattr__(self, "_wrapped", wrapped)
-
-    def __getattr__(self, name):
-        if name == "_instance":
-            return _base_mod._instance
-        return getattr(object.__getattribute__(self, "_wrapped"), name)
-
-    def __setattr__(self, name, value):
-        if name == "_instance":
-            _base_mod._instance = value
-            return
-        setattr(object.__getattribute__(self, "_wrapped"), name, value)
-
-    def __delattr__(self, name):
-        delattr(object.__getattribute__(self, "_wrapped"), name)
-
-    def __dir__(self):
-        return dir(object.__getattribute__(self, "_wrapped"))
-
-
-_sys.modules[__name__] = _ModuleProxy(_sys.modules[__name__])  # type: ignore[assignment]
+_sys.modules[__name__].__class__ = _VikingFSModule
 
 __all__ = [
     "LS_ALL_NODES",
