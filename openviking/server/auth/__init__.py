@@ -286,19 +286,21 @@ async def get_upload_request_context(
 
     When an API key (``X-API-Key`` / ``Authorization: Bearer``) is present, resolve identity
     normally — an authenticated caller is never downgraded to the token path. Otherwise, if a
-    ``?token=`` is present, consume it (single-use) and rebuild the bound identity/business
-    params. In API-key mode the issuing role is retained only while the account user
-    exists and has not been downgraded. Other auth modes retain their USER token context.
-    Spoofed identity headers are ignored. The consumed token is stashed on
+    ``?token=`` is present, validate it and rebuild the bound identity/business params;
+    the handler consumes it (single-use) only after the request has been validated. In
+    API-key mode the issuing role is retained only while the account user exists and has
+    not been downgraded. Other auth modes retain their USER token context. Spoofed
+    identity headers are ignored. The validated token is stashed on
     ``request.state.signed_upload`` so the handler can finish ingestion.
     """
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
         try:
-            consumed = upload_token_store.consume(token)
+            consumed = upload_token_store.validate(token)
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_upload = consumed
+        request.state.upload_token = token
         return await _context_from_signed_token(request, consumed)
 
     identity = await resolve_identity(

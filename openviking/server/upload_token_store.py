@@ -167,6 +167,25 @@ class UploadTokenStore:
         info = self._store.pop(token, None)
         if info is None:
             raise UploadTokenError("unknown or already-consumed upload token")
+        return self._consume_info(info)
+
+    def validate(self, token: str) -> ConsumedUploadToken:
+        """Validate a token without consuming it.
+
+        The auth dependency runs before FastAPI reports request-body errors, so
+        popping there would let a malformed request burn the single-use
+        capability. The handler consumes the token once the request is
+        accepted.
+        """
+        if not token:
+            raise UploadTokenError("missing upload token")
+        info = self._store.get(token)
+        if info is None:
+            raise UploadTokenError("unknown or already-consumed upload token")
+        return self._consume_info(info)
+
+    @staticmethod
+    def _consume_info(info: _TokenInfo) -> ConsumedUploadToken:
         if info.expires_at < time.time():
             raise UploadTokenError("upload token expired")
         return ConsumedUploadToken(

@@ -26,6 +26,7 @@ from openviking.server.routers.filesystem import rm as remove_filesystem_entry
 from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -154,6 +155,17 @@ async def temp_upload(
     dependency.
     """
     signed = getattr(request.state, "signed_upload", None)
+    if signed is not None:
+        # Dependencies run before FastAPI reports multipart-body errors, so the
+        # token is consumed only here: a malformed request must not burn the
+        # single-use capability. Consumption is still atomic, so two racing
+        # requests cannot both proceed.
+        token = getattr(request.state, "upload_token", None)
+        if token:
+            try:
+                upload_token_store.consume(token)
+            except UploadTokenError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
     effective_upload_mode = upload_mode or request.app.state.config.temp_upload.default_mode
 
     async def _upload() -> dict[str, Any]:
