@@ -109,23 +109,25 @@ def _load_rust_module():
         import ragfs_python as rust_module
 
         return rust_module
-    except ImportError:
-        pass
+    except ImportError as exc:
+        installed_error = exc
 
-    # Fallback: vendored .so in openviking/lib/
+    # A broken installed package must not prevent a valid vendored fallback.
+    so_path = _find_ragfs_so()
+    if not so_path:
+        raise ImportError(
+            "Rust binding not available: no compatible vendored native extension "
+            f"found in {_LIB_DIR}; installed import failed: {installed_error}"
+        ) from installed_error
     try:
-        so_path = _find_ragfs_so()
-        if so_path:
-            spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Unable to load Rust binding spec from {so_path}")
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
-    except Exception:
-        pass
-
-    raise ImportError("Rust binding not available")
+        spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Unable to load Rust binding spec from {so_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as exc:
+        raise ImportError(f"Rust binding not available: failed to load {so_path}: {exc}") from exc
 
 
 def _load_rust_binding():
