@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 import re
-import threading
 import time
 from collections import OrderedDict
 from typing import Any
@@ -113,7 +112,7 @@ class FeishuChannel(BaseChannel):
         self._bot_config = bot_config
         self._client: Any = None
         self._ws_client: Any = None
-        self._ws_thread: threading.Thread | None = None
+        self._connection_task: asyncio.Task | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tenant_access_token: str | None = None
@@ -325,70 +324,32 @@ class FeishuChannel(BaseChannel):
             logger.exception("Feishu app_id and app_secret not configured")
             return
 
-        self._running = True
-        self._loop = asyncio.get_running_loop()
-
-        # Create Lark client for sending messages
-        self._client = (
-            lark.Client.builder()
-            .app_id(self.config.app_id)
-            .app_secret(self.config.app_secret)
-            .domain(self.config.domain)
-            .log_level(lark.LogLevel.INFO)
-            .build()
-        )
-
-        # Create event handler (only register message receive, ignore other events)
-        event_handler = (
-            lark.EventDispatcherHandler.builder(
-                self.config.encrypt_key or "",
-                self.config.verification_token or "",
-            )
-            .register_p2_im_message_receive_v1(self._on_message_sync)
-            .build()
-        )
-
-        # Create WebSocket client for long connection
-        self._ws_client = lark.ws.Client(
-            self.config.app_id,
-            self.config.app_secret,
-            event_handler=event_handler,
-            domain=self.config.domain,
-            log_level=lark.LogLevel.INFO,
-        )
-
-        # Start WebSocket client in a separate thread with reconnect loop
-        def run_ws():
-            while self._running:
-                try:
-                    self._ws_client.start()
-                except Exception as e:
-                    logger.exception(f"Feishu WebSocket error: {e}")
-                if self._running:
-                    import time
-
-                    time.sleep(5)
-
-        self._ws_thread = threading.Thread(target=run_ws, daemon=True)
-        self._ws_thread.start()
-
         logger.info("Feishu bot started with WebSocket long connection")
         logger.info("No public IP required - using WebSocket to receive events")
+        from vikingbot.studio.providers.feishu.transport import run_connection
 
-        # Keep running until stopped
-        while self._running:
-            await asyncio.sleep(1)
+        self._connection_task = asyncio.current_task()
+        try:
+            await run_connection(self)
+        except asyncio.CancelledError:
+            if self._running:
+                raise
+        finally:
+            self._connection_task = None
 
     async def stop(self) -> None:
         """Stop the Feishu bot."""
         self._running = False
-        if self._ws_client:
-            try:
-                # Try to close the WebSocket connection gracefully
-                if hasattr(self._ws_client, "close"):
-                    self._ws_client.close()
-            except Exception as e:
-                logger.debug(f"Error closing WebSocket client: {e}")
+        socket = getattr(self._ws_client, "_conn", None)
+        task = self._connection_task
+        try:
+            if socket is not None:
+                await socket.close()
+        except Exception as exc:
+            logger.debug("Error closing Feishu WebSocket: {}", type(exc).__name__)
+        finally:
+            if task is not None and task is not asyncio.current_task() and not task.done():
+                task.cancel()
         logger.info("Feishu bot stopped")
 
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
@@ -714,8 +675,8 @@ class FeishuChannel(BaseChannel):
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
-        Sync handler for incoming messages (called from WebSocket thread).
-        Schedules async handling in the main event loop.
+        Sync SDK callback for incoming messages.
+        Schedules async handling in the channel event loop.
         """
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
