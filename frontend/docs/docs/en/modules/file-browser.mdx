@@ -390,6 +390,7 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | noSchedule         | The "no scheduled update" option                                      | `string`                     | `'Do not update'`                                                                    |
 | daily              | The "daily" option                                                    | `string`                     | `'Daily'`                                                                            |
 | weekly             | The "weekly" option                                                   | `string`                     | `'Weekly'`                                                                           |
+| weeklySchedule     | Formats the recurring weekly update summary                           | `(day: string) => string`    | e.g. `Every Thursday`, following locale                                              |
 | time               | Label of the run time field                                           | `string`                     | `'Run time (Beijing time)'`                                                          |
 | weekday            | Label of the day of week select                                       | `string`                     | `'Day of week'`                                                                      |
 | frequency          | Frequency radio group label                                           | `string`                     | `'Update frequency'`                                                                 |

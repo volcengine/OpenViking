@@ -83,6 +83,7 @@ export default {
   noSchedule: 'Do not update',
   daily: 'Daily',
   weekly: 'Weekly',
+  weeklySchedule: (weekday: string) => `Every ${weekday}`,
   time: 'Run time (Beijing time)',
   weekday: 'Day of week',
 } satisfies FileBrowserWorkflowLabels;
