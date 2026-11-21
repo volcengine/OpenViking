@@ -20,6 +20,14 @@ def test_message_estimated_tokens_is_cjk_aware():
     assert estimate_text_tokens("\U0001f600") == 2
 
 
+def test_estimate_text_tokens_counts_astral_cjk_once():
+    assert estimate_text_tokens("\U0001ffff" * 4) == 8
+    assert estimate_text_tokens("\U00020000" * 4) == 6
+    assert estimate_text_tokens("\U0002ebef" * 4) == 6
+    assert estimate_text_tokens("\U0002ebf0" * 4) == 8
+    assert estimate_text_tokens("a\u00e9\u5b57\U00020000\U0001f600") == 6
+
+
 def test_truncate_text_to_token_budget_preserves_head_and_tail():
     text = "summary-start " + ("填充内容" * 100) + " relevant-tail"
 

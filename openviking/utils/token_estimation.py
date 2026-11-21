@@ -8,6 +8,29 @@ from __future__ import annotations
 from typing import Any
 
 
+def _build_token_unit_table() -> bytes:
+    """Map each Unicode code point to its weight in quarter-token units."""
+    units = bytearray(b"\x01") * 0x10000
+    units.extend(b"\x08" * (0x110000 - 0x10000))
+    for start, end in (
+        (0x1100, 0x11FF),
+        (0x3000, 0x30FF),
+        (0x3130, 0x318F),
+        (0x31F0, 0x31FF),
+        (0x3400, 0x4DBF),
+        (0x4E00, 0x9FFF),
+        (0xAC00, 0xD7AF),
+        (0xF900, 0xFAFF),
+        (0xFF00, 0xFFEF),
+        (0x20000, 0x2EBEF),
+    ):
+        units[start : end + 1] = b"\x06" * (end - start + 1)
+    return bytes(units)
+
+
+_TOKEN_UNIT_TABLE = _build_token_unit_table()
+
+
 def estimate_text_tokens(text: str | None) -> int:
     """Estimate tokens with a CJK-aware fallback."""
     if not text:
@@ -15,32 +38,8 @@ def estimate_text_tokens(text: str | None) -> int:
     if text.isascii():
         return (len(text) + 3) // 4
 
-    # Count quarter-token units to avoid a float sum and helper calls for every
-    # character. The weights remain exactly the same: ordinary BMP characters
-    # are 1 unit, CJK characters are 6, and other astral characters are 8.
-    units = 0
-    for char in text:
-        code_point = ord(char)
-        if 0x4E00 <= code_point <= 0x9FFF:
-            units += 6
-        elif code_point < 0x1100:
-            units += 1
-        elif (
-            code_point <= 0x11FF
-            or 0x3000 <= code_point <= 0x30FF
-            or 0x3130 <= code_point <= 0x318F
-            or 0x31F0 <= code_point <= 0x31FF
-            or 0x3400 <= code_point <= 0x4DBF
-            or 0xAC00 <= code_point <= 0xD7AF
-            or 0xF900 <= code_point <= 0xFAFF
-            or 0xFF00 <= code_point <= 0xFFEF
-            or 0x20000 <= code_point <= 0x2EBEF
-        ):
-            units += 6
-        elif code_point > 0xFFFF:
-            units += 8
-        else:
-            units += 1
+    # The translated string holds each character's numeric weight as a code point.
+    units = sum(map(ord, text.translate(_TOKEN_UNIT_TABLE)))
     return (units + 3) // 4
 
 
