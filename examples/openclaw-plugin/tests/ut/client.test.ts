@@ -575,6 +575,32 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(routingDebugLog).toHaveBeenCalledWith(expect.stringContaining('"query_expansion":"auto"'));
   });
 
+  it("forwards eventsDecayProtection as events_time_decay_protection on the context search body", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ entries: [], rendered: "", stats: {} }));
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    await client.searchContext("deployment preferences", { eventsDecayProtection: "7d" });
+
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ events_time_decay_protection: "7d" });
+  });
+
+  it("omits events_time_decay_protection when no decay window is configured", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ entries: [], rendered: "", stats: {} }));
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    await client.searchContext("deployment preferences");
+
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).not.toHaveProperty("events_time_decay_protection");
+  });
+
   it("normalizes context entries through the shared response contract", async () => {
     const transport = vi.fn().mockResolvedValue(okResponse({
       entries: [{
