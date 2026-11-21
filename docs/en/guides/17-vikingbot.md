@@ -79,6 +79,27 @@ Restart VikingBot or OpenViking Server after changing the configuration.
 
 The three scenarios are different runtime entry points and can share the same `ov.conf`.
 
+## Understand the Agent Topology
+
+One VikingBot Gateway runs one main Agent. Every configured channel, including
+multiple instances of the same channel type, sends work to that Agent.
+`bot.agents` configures its model, credentials, and runtime limits; despite the
+plural field name, it does not define a declarative team. Conversations remain
+isolated by `type + channel_id + chat_id`, but they use the same main Agent.
+
+The `spawn` tool provides bounded task parallelism inside a conversation. It
+creates short-lived background subagents that share the model and corresponding
+workspace, receive a restricted tool set, and report results to the main session.
+The main Agent remains responsible for identity-sensitive actions and final
+delivery. A subagent is not an independently addressable Telegram, Slack, or
+Discord Agent.
+
+For several long-lived Agents with separate roles or identities, run separate
+VikingBot deployments. Give each process its own `OPENVIKING_CONFIG_FILE`,
+`storage.workspace`, and `bot.gateway.port`. The deployments can connect to one
+OpenViking Server through separate user identities, but VikingBot does not
+coordinate them as an Agent team.
+
 ## Scenario A: Start OpenViking and the Bot Together
 
 This is the recommended option for a complete local experience. OpenViking Server and VikingBot Gateway start together:
