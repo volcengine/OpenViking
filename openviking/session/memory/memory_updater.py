@@ -1786,6 +1786,7 @@ class MemoryUpdater:
                         metadata[key] = val
 
             metadata["version"] = next_memory_version(old_content)
+            metadata["memory_type"] = memory_type
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
