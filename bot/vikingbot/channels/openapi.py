@@ -43,6 +43,7 @@ from vikingbot.config.schema import (
 )
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
+from vikingbot.openviking_mount.session_state import is_studio_session_id
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 
@@ -392,6 +393,7 @@ class OpenAPIChannel(BaseChannel):
             return HealthResponse(
                 status="healthy" if channel._running else "unhealthy",
                 version=__version__,
+                studio_session_persistence=channel._supports_studio_session_persistence(),
             )
 
         @router.post("/chat", response_model=ChatResponse)
@@ -677,6 +679,13 @@ class OpenAPIChannel(BaseChannel):
     def _ov_server_url(self) -> str:
         ov_server = self._ov_server_config()
         return str(getattr(ov_server, "server_url", "") or "").strip().rstrip("/")
+
+    def _supports_studio_session_persistence(self) -> bool:
+        return bool(
+            self._global_config
+            and self._ov_server_auth_mode() == "api_key"
+            and self._global_config.agents.session_context_enabled
+        )
 
     def _ov_server_auth_mode(self) -> str:
         ov_server = self._ov_server_config()
@@ -1130,6 +1139,10 @@ class OpenAPIChannel(BaseChannel):
         chat_request: ChatRequest,
         auth: GatewayRequestAuth,
     ) -> None:
+        if is_studio_session_id(chat_request.session_id or "") and not (
+            self._supports_studio_session_persistence()
+        ):
+            raise HTTPException(status_code=409, detail="Studio session persistence is unavailable")
         if chat_request.openviking_connection is not None:
             if not auth.can_trust_forwarded_connection:
                 raise HTTPException(

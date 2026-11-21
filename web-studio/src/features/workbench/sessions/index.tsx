@@ -1,6 +1,6 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
 import { ArrowLeftIcon, CompassIcon } from 'lucide-react'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
@@ -9,6 +9,7 @@ import { Thread } from '#/features/workbench/sessions/components/thread'
 import { ThreadList } from '#/features/workbench/sessions/components/thread-list'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import { useCreateSession } from '#/features/workbench/sessions/lib/use-sessions'
+import { createVikingBotWebSessionId } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 
@@ -24,6 +25,15 @@ export function SessionsPage() {
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const createSession = useCreateSession()
+  const [draft, setDraft] = useState<{
+    id: string
+    from: string
+    scope: string
+  }>()
+  const draftId =
+    draft?.from === activeSessionId && draft?.scope === identityScopeKey
+      ? draft.id
+      : undefined
   const { setTitle } = useSessionTitles(identityScopeKey)
 
   const handleNewSession = useCallback(async () => {
@@ -76,7 +86,22 @@ export function SessionsPage() {
               </Button>
             </div>
             <div className="min-h-0 flex-1">
-              <Thread sessionId={activeSessionId} />
+              <Thread
+                sessionId={draftId ?? activeSessionId}
+                draft={Boolean(draftId)}
+                onNewConversation={() =>
+                  setDraft({
+                    id: createVikingBotWebSessionId(true),
+                    from: activeSessionId,
+                    scope: identityScopeKey,
+                  })
+                }
+                onPersisted={() => {
+                  if (!draftId) return
+                  void navigate({ to: '/sessions', search: { s: draftId } })
+                  setDraft(undefined)
+                }}
+              />
             </div>
           </>
         ) : (

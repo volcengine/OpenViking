@@ -11,6 +11,7 @@ from openviking.core.namespace import uri_parts
 from openviking.core.peer_id import normalize_peer_id
 from openviking_cli.exceptions import InvalidArgumentError
 from vikingbot.config.loader import load_config
+from vikingbot.openviking_mount.session_state import is_studio_session_id
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import Config
@@ -1204,9 +1205,11 @@ class VikingClient:
                     )
 
             if ov_role == "user" and content:
+                if message.get("experience_reminder") and is_studio_session_id(session_id or ""):
+                    ov_role = "system"
                 normalized.append(
                     build_payload(
-                        "user",
+                        ov_role,
                         [{"type": "text", "text": content}],
                         created_at,
                         safe_message_peer_id,
@@ -1269,19 +1272,21 @@ class VikingClient:
         return "not found" in str(exc).lower()
 
     async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
-        await self.ensure_session(session_id, user_id=user_id)
+        if not is_studio_session_id(session_id):
+            await self.ensure_session(session_id, user_id=user_id)
         client = await self._session_client_for_user(user_id)
         return await client.get_session(session_id)
 
     async def get_session_context(
         self, session_id: str, token_budget: int, user_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        await self.ensure_session(session_id, user_id=user_id)
         client = await self._session_client_for_user(user_id)
-        return await client.get_session_context(
-            session_id,
-            token_budget=token_budget,
-        )
+        try:
+            return await client.get_session_context(session_id, token_budget=token_budget)
+        except Exception as exc:
+            if self._is_not_found_error(exc):
+                return {"messages": []}
+            raise
 
     async def append_messages(
         self,
@@ -1290,7 +1295,6 @@ class VikingClient:
         default_user_peer_id: Optional[str] = None,
         session_user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        await self.ensure_session(session_id, user_id=session_user_id)
         batch = self._normalize_session_messages(
             messages,
             default_user_peer_id=default_user_peer_id,

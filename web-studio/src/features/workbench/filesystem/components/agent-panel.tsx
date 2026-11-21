@@ -25,8 +25,10 @@ import {
 } from '#/features/workbench/sessions/lib/use-sessions'
 import {
   createVikingBotWebSessionId,
+  isBotOwnedWebSession,
   isVikingBotWebSession,
 } from '#/features/workbench/sessions/lib/vikingbot-sessions'
+import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import { cn } from '#/shared/lib/utils'
 import { Button } from '#/shared/ui/button'
 import {
@@ -57,9 +59,7 @@ export function AgentPanel({
 }) {
   const { t } = useTranslation('filesystem')
   const { identityScopeKey } = useAppConnection()
-  const [sessionId, setSessionId] = useState(
-    initialSessionId ?? createVikingBotWebSessionId(),
-  )
+  const [draftUuid, setDraftUuid] = useState(createRandomUuid)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
@@ -74,6 +74,13 @@ export function AgentPanel({
     [],
   )
   const botHealth = useBotHealth()
+  const sessionId =
+    persistedSessionId ??
+    createVikingBotWebSessionId(
+      botHealth.data?.studio_session_persistence,
+      draftUuid,
+    )
+  const botOwned = isBotOwnedWebSession(sessionId)
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
     useSessionListByRecency()
@@ -91,8 +98,15 @@ export function AgentPanel({
   const chat = useChat({
     identityScopeKey,
     initialMessages: historyMessages,
-    persistMessages: true,
+    persistMessages: !botOwned,
     sessionId,
+    onBotSessionAvailable:
+      botOwned && !persistedSessionId
+        ? () => {
+            setPersistedSessionId(sessionId)
+            onSessionChange(sessionId)
+          }
+        : undefined,
   })
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -106,7 +120,7 @@ export function AgentPanel({
     setSessionError(null)
     setHistorySessionId(undefined)
     setPersistedSessionId(undefined)
-    setSessionId(createVikingBotWebSessionId())
+    setDraftUuid(createRandomUuid())
     onSessionChange('')
     setHistoryOpen(false)
   }, [chat, isCreatingSession, onSessionChange])
@@ -123,7 +137,6 @@ export function AgentPanel({
       )
       setHistorySessionId(nextSessionId)
       setPersistedSessionId(nextSessionId)
-      setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
       setHistoryOpen(false)
     },
@@ -151,8 +164,17 @@ export function AgentPanel({
 
   const send = useCallback(
     async (message: string) => {
-      if (creationStartedRef.current) return false
-      if (!persistedSessionId) {
+      if (
+        creationStartedRef.current ||
+        (!persistedSessionId && botHealth.isLoading)
+      ) {
+        return false
+      }
+      if (botOwned && message.toLowerCase() === '/new') {
+        handleNewSession()
+        return true
+      }
+      if (!persistedSessionId && !botOwned) {
         const generation = ++creationGenerationRef.current
         creationStartedRef.current = true
         setIsCreatingSession(true)
@@ -180,7 +202,16 @@ export function AgentPanel({
       }
       return true
     },
-    [chat, createSession, onSessionChange, persistedSessionId, sessionId],
+    [
+      botOwned,
+      botHealth.isLoading,
+      chat,
+      createSession,
+      handleNewSession,
+      onSessionChange,
+      persistedSessionId,
+      sessionId,
+    ],
   )
 
   const isStreaming = chat.status === 'streaming'
@@ -349,7 +380,7 @@ export function AgentPanel({
                             setSessionError(null)
                             setHistorySessionId(undefined)
                             setPersistedSessionId(undefined)
-                            setSessionId(createVikingBotWebSessionId())
+                            setDraftUuid(createRandomUuid())
                             onSessionChange('')
                             setHistoryOpen(false)
                           }

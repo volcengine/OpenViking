@@ -1,4 +1,5 @@
 export type ChatStreamEventType =
+  | 'error'
   | 'response'
   | 'interrupt'
   | 'tool_call'

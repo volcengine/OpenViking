@@ -313,6 +313,7 @@ class HealthResponse(BaseModel):
 
     status: str = Field(default="healthy", description="Service status")
     version: Optional[str] = Field(default=None, description="API version")
+    studio_session_persistence: bool = False
     timestamp: datetime = Field(default_factory=datetime.now, description="Check timestamp")
 
 

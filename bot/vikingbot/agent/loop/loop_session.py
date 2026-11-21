@@ -23,6 +23,7 @@ from vikingbot.openviking_mount.session_state import (
     get_unsynced_messages,
     parse_local_index,
     reset_openviking_state,
+    studio_session_id,
 )
 from vikingbot.session.manager import Session
 from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_content
@@ -386,10 +387,14 @@ class LoopSessionMixin:
             if not isinstance(message, dict):
                 continue
             role = str(message.get("role") or "").strip().lower()
-            if role not in {"user", "assistant"}:
-                continue
             text = self._flatten_ov_message_text(message)
-            if not text:
+            if (
+                role == "system"
+                and text.startswith("[Experience Reminder]\n")
+                and studio_session_id(session.key.safe_name())
+            ):
+                role = "user"
+            if role not in {"user", "assistant"} or not text:
                 continue
             raw_messages.append(
                 {
@@ -1092,6 +1097,13 @@ Respond with ONLY valid JSON, no markdown fences."""
                     metadata=msg.metadata,
                 )
 
+            if studio_session_id(session.key.safe_name()):
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="Use New Chat in Studio to start a fresh conversation.",
+                    metadata=msg.metadata,
+                )
+
             await self.sessions.update_session(
                 msg.session_key,
                 self._get_session_policy().reset_session,
@@ -1485,6 +1497,8 @@ Respond with ONLY valid JSON, no markdown fences."""
             return_exceptions=True,
         )
         accepted_steers.clear()
+        if studio_session_id(session.key.safe_name()):
+            await self._get_session_policy().after_turn(session, msg.openviking_connection)
         return OutboundMessage(
             session_key=msg.session_key,
             content="",
