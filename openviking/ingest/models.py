@@ -17,9 +17,12 @@ from typing import Any, Dict, List, Optional
 
 def iso_from_epoch_ms(value: Any) -> Optional[str]:
     """Best-effort ISO-8601 from an epoch-millisecond integer (used by SQLite/JSONL adapters)."""
+    # bool is an int subclass; True would become 1970-01-01T00:00:00.001+00:00.
+    if isinstance(value, bool):
+        return None
     try:
         ms = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if ms <= 0:
         return None
