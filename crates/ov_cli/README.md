@@ -104,6 +104,10 @@ SSL_CERT_FILE=/path/to/company-ca.pem ov health
 
 On Unix, `SSL_CERT_DIR` can instead name a colon-separated list of certificate directories. TLS certificate verification remains enabled.
 
+### HTTP and SOCKS proxies
+
+`ov` honors standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, as well as lowercase variants) across `http://`, `https://`, `socks4://`, `socks4a://`, `socks5://`, and `socks5h://` schemes. To reach a LAN or localhost server directly while a global proxy is exported, list its host in `NO_PROXY`.
+
 For more setup details, see [docs/en/getting-started/05-cli-setup.md](../../docs/en/getting-started/05-cli-setup.md).
 
 ## Quick Start

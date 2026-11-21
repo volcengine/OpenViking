@@ -104,6 +104,10 @@ SSL_CERT_FILE=/path/to/company-ca.pem ov health
 
 在 Unix 上，也可以通过 `SSL_CERT_DIR` 指定以冒号分隔的证书目录列表。TLS 证书校验仍然保持启用。
 
+### HTTP 与 SOCKS 代理
+
+`ov` 支持标准代理环境变量（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及其小写形式），支持 `http://`、`https://`、`socks4://`、`socks4a://`、`socks5://` 与 `socks5h://` 协议。当环境中配置了全局代理但目标服务位于局域网或本机时，可将目标主机加入 `NO_PROXY` 以直连访问。
+
 更完整的配置说明见 [docs/zh/getting-started/05-cli-setup.md](../../docs/zh/getting-started/05-cli-setup.md)。
 
 ## 快速开始

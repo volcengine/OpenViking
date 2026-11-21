@@ -155,6 +155,9 @@ pub(crate) fn render_validate_failure_with_language(
         "  {}",
         theme::error(classification.message(language))
     ));
+    for extra in connection_issue_notes(error, Some(&config.url), language) {
+        lines.push(format!("  {}", theme::muted(extra)));
+    }
     lines.push(String::new());
     lines.push(section(copy(language, "Try", "可以尝试")));
     lines.push(action_line(
@@ -275,21 +278,61 @@ pub(crate) fn render_switch_success(name: &str) -> String {
 pub(crate) fn render_switch_validation_failure(name: &str, error: &Error) -> String {
     let language = Language::current();
     let classification = ValidationFailureKind::from_error(error);
+    let mut issue_lines = vec![
+        format!(
+            "  {}",
+            theme::error(copy_target_validation_failed(language, name))
+        ),
+        format!("  {}", theme::muted(classification.message(language))),
+    ];
+    for extra in connection_issue_notes(error, None, language) {
+        issue_lines.push(format!("  {}", theme::muted(extra)));
+    }
     format!(
-        "{}\n\n{}\n  {}\n  {}\n\n{}",
+        "{}\n\n{}\n{}\n\n{}",
         title(copy(
             language,
             "OPENVIKING CONFIG SWITCH",
             "OPENVIKING 配置切换"
         )),
         section(copy(language, "Issue", "问题")),
-        theme::error(copy_target_validation_failed(language, name)),
-        theme::muted(classification.message(language)),
+        issue_lines.join("\n"),
         action_line(
             "ov config",
             copy(language, "Edit this config", "编辑这个配置")
         )
     )
+}
+
+fn connection_issue_notes(
+    error: &Error,
+    target_url: Option<&str>,
+    language: Language,
+) -> Vec<String> {
+    let raw = match error {
+        Error::Network(msg) if !msg.contains("unhealthy") => {
+            Some((Some(msg.as_str()), msg.as_str()))
+        }
+        Error::Timeout(msg) => Some((Some(msg.as_str()), msg.as_str())),
+        _ => None,
+    };
+    let Some((detail, raw_for_hint)) = raw else {
+        return Vec::new();
+    };
+    let mut notes = Vec::new();
+    if let Some(detail) = detail {
+        let clean = crate::error::single_line_detail(detail);
+        if !clean.is_empty() {
+            notes.push(match language {
+                Language::En => format!("Detail: {clean}"),
+                Language::ZhCn => format!("详情：{clean}"),
+            });
+        }
+    }
+    if let Some(hint) = crate::error::proxy_hint_for_error(language, target_url, raw_for_hint) {
+        notes.push(hint);
+    }
+    notes
 }
 
 fn unknown(language: Language) -> &'static str {
@@ -498,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_failure_rendering_hides_raw_error_and_suggests_recovery() {
+    fn validate_failure_rendering_shows_network_detail_and_suggests_recovery() {
         let config = sample_config();
         let error = Error::Network("connection refused at 127.0.0.1:1933".to_string());
 
@@ -509,8 +552,8 @@ mod tests {
         assert!(plain.contains("Server        unreachable"));
         assert!(plain.contains("Auth          not checked"));
         assert!(plain.contains("Could not reach the configured OpenViking server."));
+        assert!(plain.contains("Detail: connection refused at 127.0.0.1:1933"));
         assert!(plain.contains("ov health                 Quick server probe"));
-        assert!(!plain.contains("connection refused"));
     }
 
     #[test]
