@@ -172,7 +172,7 @@ ov observer vikingdb
 
 #### 1. API 实现介绍
 
-获取当前账号的 VLM、Embedding 配置和 token 用量信息。观察器解析账号模型信息时未发生错误，`is_healthy` 才为 true；它不会逐一探测提供者是否可达。Embedding 连通性可查看 `/ready`，其他模型应结合实际请求错误排查。
+获取当前账号的 VLM、Embedding 配置和 token 用量信息。观察器解析账号模型信息时未发生错误，`is_healthy` 才为 true；它不会逐一探测提供者是否可达。`/ready` 中的 Embedding 检查只报告 provider 初始化状态，不发起 Embedding 请求；模型连通性问题应结合实际请求错误排查。
 
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_models` - HTTP 路由
