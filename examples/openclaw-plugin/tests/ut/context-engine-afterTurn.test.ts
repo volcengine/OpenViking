@@ -561,9 +561,19 @@ describe("context-engine afterTurn()", () => {
       { role: "assistant", content: [
         { type: "text", text: "calling tools" },
         { type: "toolUse", name: "read", input: { path: "a.txt" } },
+        { type: "toolCall", id: "call_write", name: "write", arguments: { path: "b.txt" } },
+        { type: "toolCall", id: "call_sync", name: "sync", arguments: { path: "b.txt" } },
       ] },
       { role: "toolResult", toolName: "read", content: "content of a" },
-      { role: "toolResult", toolName: "write", content: "ok" },
+      {
+        role: "toolResult",
+        toolCallId: "call_write",
+        toolName: "write",
+        content: [{ type: "text", text: "" }],
+        isError: false,
+      },
+      { role: "toolResult", toolCallId: "call_sync", toolName: "sync", content: [], isError: true },
+      { role: "toolResult", toolName: "unidentified", content: [] },
       { role: "assistant", content: "all done" },
     ];
 
@@ -577,10 +587,25 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
-    const toolParts = client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>;
-    expect(toolParts).toHaveLength(2);
-    expect(toolParts[0]?.tool_output).toContain("content of a");
-    expect(toolParts[1]?.tool_output).toContain("ok");
+    expect(client.addSessionMessage.mock.calls[1][2]).toMatchObject([
+      { type: "tool", tool_name: "read", tool_output: "content of a", tool_status: "completed" },
+      {
+        type: "tool",
+        tool_id: "call_write",
+        tool_name: "write",
+        tool_input: { path: "b.txt" },
+        tool_output: "",
+        tool_status: "completed",
+      },
+      {
+        type: "tool",
+        tool_id: "call_sync",
+        tool_name: "sync",
+        tool_input: { path: "b.txt" },
+        tool_output: "",
+        tool_status: "error",
+      },
+    ]);
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 

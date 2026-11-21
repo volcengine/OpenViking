@@ -402,7 +402,7 @@ export function extractNewTurnMessages(
         : (typeof msg.toolInput === "object" && msg.toolInput !== null
           ? msg.toolInput as Record<string, unknown>
           : undefined);
-      if (output) {
+      if (output || (typeof toolCallId === "string" && toolCallId)) {
         result.push({
           role: "assistant",
           parts: [{
