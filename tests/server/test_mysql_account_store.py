@@ -301,3 +301,30 @@ def test_mysql_account_runtime_across_caller_event_loops(mysql_params):
                 cursor.execute(
                     "DELETE FROM ov_accounts WHERE service_name=%s", (store._service_name,)
                 )
+
+
+async def test_mysql_auth_admission_cancellation_and_runtime_reload(mysql_accounts):
+    from openviking.storage.sql_runtime import SQLRuntime
+    from tests.server.auth_admission_test_helpers import (
+        assert_auth_admission_cancellation_and_reload,
+    )
+
+    manager = await mysql_accounts()
+    await manager.close()
+    store = manager._store
+    store._engine_options["pool_size"] = 1
+    store._sql_runtime = SQLRuntime()
+    await assert_auth_admission_cancellation_and_reload(store)
+
+
+async def test_mysql_auth_admission_unlimited_pool(mysql_accounts):
+    manager = await mysql_accounts()
+    await manager.close()
+    store = manager._store
+    store._engine_options["pool_size"] = 0
+    await store.load()
+    try:
+        assert await asyncio.wait_for(store.get_auth_snapshot("unknown"), timeout=5) is None
+        assert store._auth_admission is None
+    finally:
+        await store.close()

@@ -425,3 +425,17 @@ async def test_pg_missing_schema_fails_without_ddl_or_runtime_lease(pg_database)
         await store.load()
     assert store._engine is None and not store._sql_lease
     await store.close()
+
+
+async def test_pg_auth_admission_cancellation_and_runtime_reload(pg_database):
+    from tests.server.auth_admission_test_helpers import (
+        assert_auth_admission_cancellation_and_reload,
+    )
+
+    params, _, _, _ = pg_database
+    store = PostgresAccountStore(
+        service_name="admission-" + uuid4().hex,
+        params={**params, "maxsize": 1},
+        runtime=sql_runtime.SQLRuntime(),
+    )
+    await assert_auth_admission_cancellation_and_reload(store)
