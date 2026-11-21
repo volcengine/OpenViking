@@ -119,3 +119,17 @@ def test_merge_time_filter_date_only_uses_now_timezone():
 
     assert result["gte"].endswith("Z")
     assert result["lte"].endswith("Z")
+
+
+def test_merge_time_filter_rejects_out_of_range_relative_value():
+    now = datetime(2026, 3, 11, 18, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="since is out of range"):
+        merge_time_filter(None, since="1000000000d", now=now)
+    with pytest.raises(ValueError, match="until is out of range"):
+        merge_time_filter(None, until="999999999w", now=now)
+
+
+def test_merge_time_filter_rejects_out_of_range_absolute_value():
+    with pytest.raises(ValueError, match="since is out of range"):
+        merge_time_filter(None, since="9999-12-31T23:59:59-12:00")
