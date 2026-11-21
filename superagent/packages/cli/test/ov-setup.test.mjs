@@ -69,6 +69,7 @@ test('setup warns only when the selected OV version is known to update soul thro
     const result = await configureOpenViking({ ...h.options, fetchImpl: fetchOV({ version }) });
     assert.equal(result.version, version);
     assert.equal(h.text().includes('memory extraction pipeline may update the soul'), warning, `version: ${version}`);
+    assert.equal(h.text().includes('set a custom soulUri for this instance'), warning, `version: ${version}`);
   }
 });
 
