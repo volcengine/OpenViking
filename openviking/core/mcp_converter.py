@@ -2,7 +2,40 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MCP to Skill converter."""
 
+import json
 from typing import Any, Dict
+
+_MODEL_FACING_CONSTRAINTS = (
+    "minimum",
+    "maximum",
+    "default",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+)
+
+
+def _format_constraints(schema: Dict[str, Any]) -> str:
+    """Format common JSON Schema constraints for model-facing Skill text."""
+    constraints = []
+    for key in _MODEL_FACING_CONSTRAINTS:
+        if key not in schema:
+            continue
+        try:
+            value = json.dumps(
+                schema[key],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            continue
+        constraints.append(f"{key}: {value}")
+    return "; ".join(constraints)
 
 
 def mcp_to_skill(mcp_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -37,7 +70,11 @@ def mcp_to_skill(mcp_config: Dict[str, Any]) -> Dict[str, Any]:
             is_required = param_name in required
 
             required_str = " (required)" if is_required else " (optional)"
-            body_parts.append(f"- **{param_name}** ({param_type}){required_str}: {param_desc}\n")
+            details = param_desc
+            constraints = _format_constraints(param_info)
+            if constraints:
+                details += (" " if details else "") + f"Constraints: {constraints}."
+            body_parts.append(f"- **{param_name}** ({param_type}){required_str}: {details}\n")
 
     # Add usage section
     body_parts.append("\n## Usage\n\n")
