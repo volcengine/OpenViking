@@ -1,4 +1,4 @@
-"""Private file-tool workers; successful natural completion exposes their output directory."""
+"""Private file-tool workers; natural completion returns their validated Markdown files."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import uuid
 from collections import Counter
 from copy import copy
 
+from vikingbot.agent.loop import _PlainTextDelivered, _PlainTextFinal
 from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -14,6 +15,7 @@ from vikingbot.compile import file_ops
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
 from vikingbot.compile.pipeline_io import retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.results import Document, IncompleteWorkerOutput, InvalidWorkerOutput
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.providers.base import LLMProvider
 
@@ -86,8 +88,8 @@ class TargetReader(Tool):
 def agent_runner(loop, session_key, connection, limits):
     """Bind metered AgentLoops with isolated file tools and no submission protocol."""
 
-    async def run(system, data, model, *, stage, runtime):
-        """Return a private output root only after natural completion; failures expose no files."""
+    async def run(system, data, model, *, stage, runtime) -> list[Document]:
+        """Return validated files only after natural completion; failures expose no files."""
         child_id = uuid.uuid4().hex
         root = f"{COMPILE_DRAFT_ROOT}/{child_id}"
         output_root = f"{root}/output"
@@ -131,6 +133,32 @@ def agent_runner(loop, session_key, connection, limits):
         child = copy(loop)
         child.provider = ChildProvider(model, stage)
         child._preview_tool_result = complete_tool_result
+
+        completed_outputs: list[Document] | None = None
+        validation_error: InvalidWorkerOutput | None = None
+        completion_error: Exception | None = None
+
+        async def check_completion(context):
+            nonlocal completed_outputs, validation_error, completion_error
+            try:
+                completed_outputs = await runtime.collect_outputs(output_root, stage)
+            except InvalidWorkerOutput as error:
+                validation_error = error
+                messages = child.context.add_assistant_message(context.messages, context.text, [])
+                return _PlainTextDelivered(
+                    messages=messages,
+                    tools_used=[],
+                    next_prompt=(
+                        f"Fix only this output issue: {error}. Keep valid Markdown and its facts. "
+                        "Once fixed, reply Done."
+                    ),
+                )
+            except Exception as error:
+                # AgentLoop swallows callback exceptions for ordinary chat replies.
+                # Let the pipeline handle unusable outputs and infrastructure failures.
+                completion_error = error
+            return _PlainTextFinal()
+
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {
@@ -155,13 +183,19 @@ def agent_runner(loop, session_key, connection, limits):
             openviking_connection=connection,
             allow_final_fallback=False,
             require_natural_completion=True,
+            on_plain_text=check_completion,
             inject_write_experience=False,
             agent_id=child_id,
             context_compact_budget=None,
             max_iterations=limits.subagent_iterations,
         )
-        if final is None:
-            raise ValueError("Compile worker exhausted its tool rounds before completion")
-        return output_root
+        if completion_error is not None:
+            raise completion_error
+        if final is None or completed_outputs is None:
+            message = "Compile worker exhausted its tool rounds before completion"
+            if validation_error is not None:
+                message += f". Last output validation error: {validation_error}"
+            raise IncompleteWorkerOutput(message) from validation_error
+        return completed_outputs
 
     return run

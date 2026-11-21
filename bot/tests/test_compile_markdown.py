@@ -20,6 +20,7 @@ from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS
 from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
 from vikingbot.compile.results import Document, Group, RouteResponse
 from vikingbot.compile.service import BotCompileService
@@ -178,7 +179,7 @@ async def configure_pipeline(pipeline, merge=False, fail_second=False):
         )
         if fail_second and len(calls) == 2:
             raise ValueError("Worker stopped after a partial write")
-        return root
+        return await pipeline.collect_outputs(root, stage)
 
     pipeline.model.agent_runner = worker
     return calls
@@ -241,7 +242,9 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
                 ],
             ),
         )
-    if ending != "budget":
+    if ending == "budget":
+        replies *= MAX_JOB_ATTEMPTS
+    else:
         replies.extend(
             [
                 LLMResponse(
@@ -531,7 +534,7 @@ async def test_file_collection_rejects_missing_empty_nonmarkdown_and_invalid_utf
     async def worker(*args, **kwargs):
         if path is not None:
             await pipeline.files.sandbox.write_file_bytes(root + "/" + path, content)
-        return root
+        return await pipeline.collect_outputs(root, "invalid")
 
     pipeline.model.agent_runner = worker
     with pytest.raises(ValueError):
