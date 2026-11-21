@@ -63,6 +63,7 @@ container must be a directory.
 | uri | str | Yes | - | File or directory Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
+| level_limit | int | No | 3 | HTTP only: maximum depth when `recursive=true` |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Maximum returned abstract length |
 | include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
@@ -175,6 +176,8 @@ respectively.
 GET /api/v1/fs/ls?uri={uri}&offset={int}&limit={int}
 ```
 
+Recursive HTTP listings default to three levels. Set `level_limit` explicitly for deeper layouts, such as `events/YYYY/MM/DD/<file>.md` under a memories root. `has_more` reports node pagination within the requested depth; it does not signal deeper entries beyond `level_limit`.
+
 ```bash
 # Basic listing
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
@@ -190,8 +193,8 @@ curl -G "http://localhost:1933/api/v1/fs/ls" \
   --data-urlencode "output=original" \
   -H "X-API-Key: your-key"
 
-# Recursive listing
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
+# Recursive listing up to ten levels deep
+curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true&level_limit=10" \
   -H "X-API-Key: your-key"
 ```
 
