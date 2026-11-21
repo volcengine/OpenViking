@@ -133,6 +133,9 @@ export function useFileBrowserAcl({
   const level =
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
+  // Pending saves may finish after the host changes its locale or labels.
+  const currentText = useRef(text);
+  currentText.current = text;
   const openManager = useAclManager({
     key,
     uri,
@@ -186,6 +189,7 @@ export function useFileBrowserAcl({
             onClose={() => setOpened(undefined)}
             onPermissionDenied={permissionDenied}
             onUpdated={(report) => {
+              toast.success({ content: currentText.current.saved });
               // Keep the Modal mounted while the manager probe refreshes; a downgrade
               // will remove the panel as soon as the authoritative check returns.
               setGeneration((value) => value + 1);

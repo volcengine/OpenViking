@@ -34,7 +34,6 @@ export function useAclReport({
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [error, setError] = useState<Error>();
   const [phase, setPhase] = useState<'loading' | 'ready' | 'saving'>('loading');
-  const [saved, setSaved] = useState(false);
   const [generation, setGeneration] = useState(0);
   const denied = useRef(onPermissionDenied);
   denied.current = onPermissionDenied;
@@ -52,7 +51,6 @@ export function useAclReport({
     setReport(undefined);
     setError(undefined);
     setConfirmation(undefined);
-    setSaved(false);
     const { client, requestOptions } = context;
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
@@ -97,7 +95,6 @@ export function useAclReport({
     pending.current = true;
     setPhase('saving');
     setError(undefined);
-    setSaved(false);
     const { client, requestOptions } = context;
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
@@ -116,7 +113,6 @@ export function useAclReport({
       event?.success();
       setReport(value);
       setConfirmation(undefined);
-      setSaved(true);
       onUpdated(value);
     } catch (cause) {
       if (!signal.aborted) {
@@ -134,7 +130,6 @@ export function useAclReport({
   function change(entries: FileBrowserAclEntry[]) {
     if (!report || pending.current || readOnly) return;
     const plan = planChange(report, normalizeEntries(entries));
-    setSaved(false);
     setError(undefined);
     if (plan.confirmation)
       setConfirmation({ kind: 'restrict', entries: plan.entries });
@@ -146,7 +141,6 @@ export function useAclReport({
     confirmation,
     error,
     phase,
-    saved,
     retry: () => setGeneration((value) => value + 1),
     change,
     restore: () => {
