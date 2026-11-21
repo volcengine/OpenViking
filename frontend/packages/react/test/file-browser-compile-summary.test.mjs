@@ -65,7 +65,7 @@ for (const [rule, english, chinese] of [
         assert.equal(fetch.calls.length, calls);
       }
       await click(workflow().querySelector('[aria-label="关闭弹窗"]'));
-      assert.equal(workflow(), null);
+      assert.equal(workflow() === null, true);
     } finally {
       await view.unmount();
     }
