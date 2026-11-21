@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -780,7 +781,17 @@ def main():
         raise ValueError("Use either --sample or --samples, not both")
 
     # 确保输出目录存在
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    output_dir = os.path.dirname(args.output)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    if args.input == default_input and not os.path.exists(args.input):
+        print(
+            f"Error: default data file not found: {args.input}\n"
+            "Place locomo10.json under benchmark/locomo/data/ or pass --input <path>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # 加载无效题目集合（按问题内容匹配，因为 errors.json 索引可能与数据不匹配）
     invalid_questions = set()
