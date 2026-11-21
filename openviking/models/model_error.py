@@ -69,6 +69,8 @@ _CODE_KINDS = {
     "MODELACCOUNTRPMRATELIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "MODELACCOUNTTPMRATELIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "MODELACCOUNTTOTALTOKENRATELIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
+    # Responses API failures carry provider codes in SSE events, without HTTP status.
+    "SERVERERROR": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
     # Request shape and model capabilities.
     "CONTEXTLENGTHEXCEEDED": ModelErrorKind.INPUT_TOO_LARGE,
     "INPUTTEXTEXCEEDSLIMIT": ModelErrorKind.INPUT_TOO_LARGE,
@@ -221,9 +223,9 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
         kind = _kind_from_code(error)
-        if kind is None and _status_code(error) == 500:
+        if kind in {None, ModelErrorKind.TRANSIENT_SERVICE_ERROR} and _status_code(error) == 500:
             # llama.cpp reports inputs above its physical batch capacity as
-            # HTTP 500 without a business code. Retrying the same input cannot help.
+            # HTTP 500 with a generic server_error code. Retrying cannot help.
             message = _body(error).get("message")
             if isinstance(message, str) and re.fullmatch(
                 r"input \(\d+ tokens\) is too large to process\. "
@@ -301,13 +303,13 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
 
 
 def model_error_from_status(
-    status_code: int,
+    status_code: int | None,
     message: str,
     *,
     provider: str,
     code: str | None = None,
 ) -> ModelError:
-    """Build a model error from a structured HTTP or provider status."""
+    """Build a model error from an HTTP status and/or structured provider code."""
     normalized = _normalized_code(code)
     kind = _CODE_KINDS.get(normalized) if normalized else None
     return ModelError(

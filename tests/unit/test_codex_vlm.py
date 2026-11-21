@@ -8,12 +8,14 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
 from openviking.models.vlm.backends.codex_responses_adapter import (
     _convert_message_for_responses,
 )
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
+from openviking.models.vlm.retry_vlm import RetryVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -184,7 +186,7 @@ async def test_codex_async_client_defers_runtime_credential_resolution(
 @pytest.mark.asyncio
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
 @patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
-async def test_codex_async_stream_uses_text_deltas_when_completed_output_is_none(
+async def test_codex_stream_requires_completion_and_accounts_failed_attempts(
     mock_resolve,
     mock_openai_class,
 ):
@@ -204,17 +206,66 @@ async def test_codex_async_stream_uses_text_deltas_when_completed_output_is_none
         ]
     )
     mock_real_client = MagicMock()
-    mock_real_client.responses.create.return_value = mock_stream
+    failed_stream = _MockResponsesEventStream(
+        [
+            SimpleNamespace(type="response.output_text.delta", delta="partial"),
+            SimpleNamespace(
+                type="response.failed",
+                response=SimpleNamespace(
+                    output=[],
+                    usage=final_response.usage,
+                    error=SimpleNamespace(code="server_error", message="temporarily unavailable"),
+                ),
+            ),
+        ]
+    )
+    incomplete_stream = _MockResponsesEventStream(
+        [
+            SimpleNamespace(type="response.output_text.delta", delta="filtered partial"),
+            SimpleNamespace(
+                type="response.incomplete",
+                response=SimpleNamespace(
+                    output=[],
+                    usage=final_response.usage,
+                    incomplete_details=SimpleNamespace(reason="content_filter"),
+                ),
+            ),
+        ]
+    )
+    unterminated_stream = _MockResponsesEventStream(
+        [
+            SimpleNamespace(type="response.output_text.delta", delta="unterminated partial"),
+        ]
+    )
+    mock_real_client.responses.create.side_effect = [
+        failed_stream,
+        mock_stream,
+        incomplete_stream,
+        unterminated_stream,
+    ]
     mock_openai_class.return_value = mock_real_client
 
-    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
-    response = await vlm.get_completion_async("summarize")
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex", "max_retries": 1})
+    retrying = RetryVLM(vlm)
+    with patch("openviking.utils.model_retry.asyncio.sleep"):
+        response = await retrying.get_completion_async("summarize")
 
     assert response == "overview ready"
-    assert mock_stream.closed is True
-    call_kwargs = mock_real_client.responses.create.call_args.kwargs
-    assert call_kwargs["stream"] is True
-    mock_real_client.responses.stream.assert_not_called()
+    assert failed_stream.closed and mock_stream.closed
+    assert vlm.get_token_usage()["total_usage"]["total_tokens"] == 36
+
+    with pytest.raises(ModelError, match="content_filter") as caught:
+        await retrying.get_completion_async("summarize", tools=[])
+    assert caught.value.kind == ModelErrorKind.CONTENT_SAFETY
+    assert caught.value.code == "content_filter"
+    assert incomplete_stream.closed
+    assert mock_real_client.responses.create.call_count == 3
+    assert vlm.get_token_usage()["total_usage"]["total_tokens"] == 54
+
+    with pytest.raises(ModelError, match="EOF"):
+        await vlm.get_completion_async("summarize", tools=[])
+    assert unterminated_stream.closed
+    assert vlm.get_token_usage()["total_usage"]["total_tokens"] == 54
 
 
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
