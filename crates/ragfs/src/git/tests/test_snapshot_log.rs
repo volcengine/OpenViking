@@ -91,30 +91,43 @@ async fn test_snapshot_log_file_replacing_directory_indexes_descendant_deletes()
 /// Verify filtered pages across a fixed SQLite boundary and reject unrepresentable offsets.
 #[tokio::test]
 async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
-    let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_snapshot_tail");
+    let dir = tempfile::tempdir().unwrap();
+    let account = "acct_snapshot_tail";
+    let object_store = Arc::new(GetSpyObjectStore {
+        inner: LocalObjectStore::new(dir.path()),
+        gets: std::sync::Mutex::new(Vec::new()),
+    });
+    let vfs = MockVfs::new(account);
+    let svc = GitService::new(
+        vfs.clone(),
+        object_store.clone(),
+        Arc::new(LocalRefStore::new(dir.path())),
+    );
     let store = make_snapshot_log_store().await;
     let mut svc = svc.with_snapshot_log(Some(store.clone()));
     vfs.put("resources/a.md", b"v1");
-    let c1 = make_commit(&svc, "acct_snapshot_tail", "main", "first").await;
+    let c1 = make_commit(&svc, account, "main", "first").await;
     vfs.put("resources/a.md", b"v2");
-    let c2 = make_commit(&svc, "acct_snapshot_tail", "main", "second").await;
-
+    let c2 = make_commit(&svc, account, "main", "second").await;
     svc.snapshot_log_store = None;
     vfs.put("resources/other.md", b"other-v1");
-    make_commit(&svc, "acct_snapshot_tail", "main", "unrelated").await;
+    make_commit(&svc, account, "main", "unrelated").await;
     vfs.put("resources/a.md", b"v3");
-    let c3 = make_commit(&svc, "acct_snapshot_tail", "main", "third").await;
+    let c3 = make_commit(&svc, account, "main", "third").await;
     vfs.put("resources/other.md", b"other-v2");
-    make_commit(&svc, "acct_snapshot_tail", "main", "unrelated again").await;
+    make_commit(&svc, account, "main", "unrelated again").await;
     vfs.put("resources/a.md", b"v4");
-    let c4 = make_commit(&svc, "acct_snapshot_tail", "main", "fourth").await;
+    let c4 = make_commit(&svc, account, "main", "fourth").await;
+    let shared_tree = commit_tree(object_store.as_ref(), account, c3).await;
     svc.snapshot_log_store = Some(store);
-    // Keep the indexed boundary at c2 while verifying each page.
-    svc.snapshot_log_backfills.lock().unwrap()
-        .insert(("acct_snapshot_tail".into(), "main".into()));
+    // Keep the indexed boundary at c2 while counting reads for each page.
+    svc.snapshot_log_backfills
+        .lock()
+        .unwrap()
+        .insert((account.into(), "main".into()));
 
     let request = LogRequest {
-        account: "acct_snapshot_tail".into(),
+        account: account.into(),
         branch: "main".into(),
         limit: 2,
         offset: 0,
@@ -127,14 +140,27 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
         (3, vec![c1]),
         (4, vec![]),
     ] {
-        let log = svc.log(LogRequest { offset, ..request.clone() }).await.unwrap();
+        object_store.reset();
+        let log = svc
+            .log(LogRequest {
+                offset,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
         let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
         assert_eq!(oids, expected, "offset={offset}");
+        assert_eq!(object_store.count_gets(&shared_tree), 1, "offset={offset}");
     }
     #[cfg(target_pointer_width = "64")]
     {
-        let err = svc.log(LogRequest { offset: i64::MAX as usize + 1, ..request })
-            .await.unwrap_err();
+        let err = svc
+            .log(LogRequest {
+                offset: i64::MAX as usize + 1,
+                ..request
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, GitError::InvalidLogOffset(_)));
     }
 }
