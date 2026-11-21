@@ -33,6 +33,49 @@ SELECT extversion FROM pg_extension WHERE extname = 'vector';
 export OV_POSTGRES_DSN='host=127.0.0.1 port=5432 dbname=openviking user=ov password=CHANGE_ME'
 ```
 
+DSN 模式是默认的连接方式（`dsn_env` 默认值 `"OV_POSTGRES_DSN"`）。密码含
+特殊符号（`@`、`:`、`/`、空格、单引号等）时，需按 PostgreSQL DSN 规范
+自行在 DSN 字符串内转义或 percent-encode。
+
+### 分离字段模式（推荐）
+
+pgvector 也支持分离字段配置连接参数，与 openGauss 后端一致。密码通过
+配置字段传递，原样到达 PostgreSQL，无需任何转义或编码。配置文件中的
+字符串值（如 `password`）可使用 `${ENV_VAR}` 引用环境变量，加载时自动
+展开，适合 K8s/容器化部署（每个字段单独一个 Secret 环境变量）。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "pgvector",
+      "name": "context",
+      "dimension": 4096,
+      "distance_metric": "cosine",
+      "pgvector": {
+        "host": "${OV_PG_HOST}",
+        "port": 5432,
+        "user": "${OV_PG_USER}",
+        "password": "${OV_PG_PASSWORD}",
+        "db_name": "openviking",
+        "sslmode": "require",
+        "index_type": "flat"
+      }
+    }
+  }
+}
+```
+
+分离字段与 `dsn_env` 互斥：两者不能同时显式配置。未提供分离字段时默认
+走 DSN 模式，向后完全兼容。
+
+| 维度 | DSN 模式 | 分离字段模式 |
+| --- | --- | --- |
+| 密码载体 | DSN 字符串内 | `password` 字段 |
+| 特殊符号密码 | 需自行转义/编码 | 原样传递，无需编码 |
+| 环境变量展开 | 不支持（DSN 在 env 里） | 支持 `${VAR}`（配置文件加载时） |
+| `sslmode` | DSN 字符串内配置 | `sslmode` 字段 |
+
 将下面片段合并到现有配置，向量维度需与 embedding 模型输出一致：
 
 ```json
@@ -61,7 +104,13 @@ export OV_POSTGRES_DSN='host=127.0.0.1 port=5432 dbname=openviking user=ov passw
 
 | `pgvector` 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `dsn_env` | `OV_POSTGRES_DSN` | 保存连接 DSN 的环境变量名称 |
+| `dsn_env` | `OV_POSTGRES_DSN` | 保存连接 DSN 的环境变量名称（DSN 模式） |
+| `host` | `127.0.0.1` | PostgreSQL 主机地址（分离字段模式） |
+| `port` | `5432` | PostgreSQL 端口 |
+| `user` | `postgres` | 数据库用户名 |
+| `password` | `""` | 数据库密码，原样传递，支持 `${ENV_VAR}` 展开 |
+| `db_name` | `openviking` | 数据库名称 |
+| `sslmode` | `None` | libpq SSL 模式（`disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full`） |
 | `index_type` | `flat` | 精确 dense 检索，或原生 `hnsw` ANN |
 | `connection_pool_min_size` | `1` | 每个 adapter 的最小连接数 |
 | `connection_pool_max_size` | `10` | 每个 adapter 的最大连接数，不能小于最小值 |

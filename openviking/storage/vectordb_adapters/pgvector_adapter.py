@@ -264,22 +264,40 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
         self._connect()
 
     def _connect(self):
-        dsn = os.environ.get(self._config.dsn_env)
-        if not dsn:
-            raise ValueError(f"Set PostgreSQL DSN environment variable {self._config.dsn_env}")
         try:
             driver = _import_psycopg2()
         except ImportError as error:
             raise ImportError(
                 'Install the PostgreSQL driver: pip install "openviking[pgvector]"'
             ) from error
-        self._pool = driver.pool.ThreadedConnectionPool(
-            self._config.connection_pool_min_size,
-            self._config.connection_pool_max_size,
-            dsn=dsn,
-            connect_timeout=10,
-            options="-c client_encoding=UTF8 -c search_path=public",
-        )
+        if "dsn_env" in self._config.model_fields_set:
+            dsn = os.environ.get(self._config.dsn_env)
+            if not dsn:
+                raise ValueError(f"Set PostgreSQL DSN environment variable {self._config.dsn_env}")
+            self._pool = driver.pool.ThreadedConnectionPool(
+                self._config.connection_pool_min_size,
+                self._config.connection_pool_max_size,
+                dsn=dsn,
+                connect_timeout=10,
+                options="-c client_encoding=UTF8 -c search_path=public",
+            )
+        else:
+            kwargs = dict(
+                host=self._config.host,
+                port=self._config.port,
+                user=self._config.user,
+                password=self._config.password,
+                dbname=self._config.db_name,
+                options="-c client_encoding=UTF8 -c search_path=public",
+                connect_timeout=10,
+            )
+            if self._config.sslmode is not None:
+                kwargs["sslmode"] = self._config.sslmode
+            self._pool = driver.pool.ThreadedConnectionPool(
+                self._config.connection_pool_min_size,
+                self._config.connection_pool_max_size,
+                **kwargs,
+            )
         self._conn = None
         try:
             self._conn = _PooledConnectionProxy(self._pool)

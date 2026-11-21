@@ -395,9 +395,18 @@ class CuVSConfig(BaseModel):
 
 
 class PgvectorConfig(BaseModel):
-    """PostgreSQL + pgvector. Credentials are resolved from a DSN environment variable."""
+    """PostgreSQL + pgvector. Supports split-field connection parameters or a DSN environment variable."""
 
     dsn_env: str = Field(default="OV_POSTGRES_DSN", min_length=1)
+    host: str = Field(default="127.0.0.1", description="PostgreSQL host address")
+    port: int = Field(default=5432, ge=1, le=65535, description="PostgreSQL port")
+    user: str = Field(default="postgres", description="Database user")
+    password: str = Field(default="", description="Database password", repr=False)
+    db_name: str = Field(default="openviking", description="Database name")
+    sslmode: Optional[str] = Field(
+        default=None,
+        description="libpq SSL mode (disable/allow/prefer/require/verify-ca/verify-full)",
+    )
     index_type: Literal["flat", "hnsw"] = "flat"
     connection_pool_min_size: int = Field(default=1, ge=1)
     connection_pool_max_size: int = Field(default=10, ge=1)
@@ -412,6 +421,17 @@ class PgvectorConfig(BaseModel):
             raise ValueError("pgvector pool minimum must not exceed maximum")
         if self.ef_construction < 2 * self.m:
             raise ValueError("pgvector ef_construction must be at least twice m")
+        return self
+
+    @model_validator(mode="after")
+    def validate_connection_mode(self):
+        split_fields = {"host", "port", "user", "password", "db_name", "sslmode"}
+        explicit_dsn = "dsn_env" in self.model_fields_set
+        explicit_split = split_fields & self.model_fields_set
+        if explicit_dsn and explicit_split:
+            raise ValueError(
+                "pgvector split-field connection parameters and dsn_env cannot both be configured"
+            )
         return self
 
     model_config = {"extra": "forbid"}
