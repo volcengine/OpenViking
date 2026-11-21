@@ -8,7 +8,10 @@ from typing import Any, Dict, List
 
 import json_repair
 
-from openviking.session.memory.utils.memory_fields import MEMORY_FIELDS_COMMENT_RE
+from openviking.session.memory.utils.memory_fields import (
+    MEMORY_FIELDS_COMMENT_RE,
+    find_memory_fields_trailer,
+)
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages
 from openviking_cli.utils import get_logger
@@ -25,8 +28,8 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
     """
     Parse memory file content with optional MEMORY_FIELDS HTML comment.
 
-    Extracts fields from <!-- MEMORY_FIELDS { ... } --> comment and returns
-    the fields merged at top level with the content.
+    Prefer the trailing metadata comment and return its fields alongside the body.
+    Files without a trailer can use an older inline metadata comment.
 
     Args:
         content: Raw file content string
@@ -37,7 +40,8 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
     if not content:
         return {"content": ""}
 
-    match = MEMORY_FIELDS_COMMENT_RE.search(content)
+    trailer = find_memory_fields_trailer(content)
+    match = trailer or MEMORY_FIELDS_COMMENT_RE.search(content)
 
     result = {}
 
@@ -58,8 +62,10 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
                     extra={"degraded": True, "error_type": type(e).__name__},
                 )
 
-    # Remove the comment from content
-    content_without_comment = MEMORY_FIELDS_COMMENT_RE.sub("", content).strip()
-    result["content"] = content_without_comment
+    if trailer:
+        content = content[: trailer.start()]
+    elif match:
+        content = MEMORY_FIELDS_COMMENT_RE.sub("", content)
+    result["content"] = content.strip()
 
     return result
