@@ -2039,7 +2039,7 @@ fn localized_help_item_description<'a>(
         "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
         "--account <account>" => "覆盖本次命令的 X-OpenViking-Account。",
         "--user <user>" => "覆盖本次命令的 X-OpenViking-User。",
-        "--sudo" => "使用 root API Key 执行支持的管理和任务查询命令。",
+        "--sudo" => "使用 root API Key 执行支持的管理和任务查询命令。reindex 仅限 trusted 模式。",
         _ => description,
     }
 }
@@ -2265,7 +2265,9 @@ fn localized_global_option_description<'a>(
         "compact" => "紧凑输出",
         "account" => "覆盖账户",
         "user" => "覆盖用户",
-        "sudo" => "admin、system、reindex、task status/list 使用 root API Key",
+        "sudo" => {
+            "admin、system、task status/list 和 reindex（仅限 trusted 模式）使用 root API Key"
+        }
         _ => description,
     }
 }
@@ -2787,9 +2789,8 @@ mod tests {
         assert!(rendered.contains("ov status"));
         assert!(rendered.contains("ov tui"));
         assert!(rendered.contains("-c, --compact <true|false>"));
-        assert!(
-            rendered.contains("Use root API key for admin, system, reindex, and task status/list")
-        );
+        assert!(rendered.contains("Use root API key for admin, system, task status/list"));
+        assert!(rendered.contains("reindex (trusted mode only)"));
     }
 
     #[test]
@@ -3008,6 +3009,7 @@ mod tests {
         assert!(rendered.contains("--force"));
         assert!(rendered.contains("--recursive <true|false>"));
         assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
+        assert!(rendered.contains("reindex (trusted mode only)"));
     }
 
     #[test]
