@@ -8,52 +8,66 @@ import {
 import type { SourceTrajectoryLink } from '#/features/workbench/agent-experience/lib/experience'
 import {
   DEFAULT_TRAJECTORY_PAGE_SIZE,
-  normalizeExperienceFiles,
+  normalizeExperienceFile,
   normalizeOutcomeDistribution,
   normalizeSourceTrajectoryLinks,
   normalizeTrajectoryPage,
 } from '#/features/workbench/agent-experience/lib/experience'
 import type {
+  ExperienceFileItem,
   ExperiencePage,
   OutcomeDistribution,
   TimeRange,
   TrajectoryPage,
 } from '#/features/workbench/agent-experience/lib/types'
 
-/** Fetch one page; the extra raw entry determines whether another page exists. */
+/** Collect one page of files from the raw directory listing. */
 export async function fetchExperiences(options: {
   experiencesUri: string
-  page: number
+  offset: number
   pageSize: number
   signal?: AbortSignal
 }): Promise<ExperiencePage> {
-  const { experiencesUri, page, pageSize, signal } = options
+  const { experiencesUri, offset, pageSize, signal } = options
+  const items: ExperienceFileItem[] = []
+  const limit = pageSize + 1
+  let rawOffset = offset
+  let batchSize: number
   try {
-    const result = await getOvResult<unknown>(
-      ovClient.client.get({
-        query: {
-          limit: pageSize + 1,
-          offset: (page - 1) * pageSize,
-          output: 'original',
-          sort_by: 'mtime',
-          sort_order: 'desc',
-          uri: experiencesUri,
-        },
-        signal,
-        url: '/api/v1/fs/ls',
-      }),
-    )
-    if (!Array.isArray(result))
-      throw new Error(i18n.t('studio:errors.invalidDirectoryResponse'))
-    return {
-      items: normalizeExperienceFiles(result.slice(0, pageSize)),
-      hasMore: result.length > pageSize,
-      page,
-      pageSize,
-    }
+    do {
+      const result = await getOvResult<unknown>(
+        ovClient.client.get({
+          query: {
+            limit,
+            offset: rawOffset,
+            output: 'original',
+            sort_by: 'mtime',
+            sort_order: 'desc',
+            uri: experiencesUri,
+          },
+          signal,
+          url: '/api/v1/fs/ls',
+        }),
+      )
+      if (!Array.isArray(result))
+        throw new Error(i18n.t('studio:errors.invalidDirectoryResponse'))
+
+      for (const [index, entry] of result.entries()) {
+        const item = normalizeExperienceFile(entry)
+        if (!item) continue
+        // The next page starts at the first file we haven't displayed.
+        if (items.length === pageSize)
+          return { items, nextOffset: rawOffset + index }
+        items.push(item)
+      }
+
+      batchSize = result.length
+      rawOffset += batchSize
+    } while (batchSize >= limit)
+    return { items }
   } catch (error) {
     if (isOvClientError(error) && error.statusCode === 404) {
-      return { items: [], hasMore: false, page, pageSize }
+      return { items: [] }
     }
     throw error
   }
@@ -99,7 +113,7 @@ export async function searchExperiences(options: {
           : []
       })
     : []
-  return { items, hasMore: false, page: 1, pageSize: items.length }
+  return { items }
 }
 
 export async function fetchContent(

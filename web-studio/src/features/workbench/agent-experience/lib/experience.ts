@@ -50,24 +50,19 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined
 }
 
-export function normalizeExperienceFiles(value: unknown): ExperienceFileItem[] {
-  if (!Array.isArray(value)) return []
-
-  return value.flatMap((raw) => {
-    const entry = isRecord(raw) ? raw : null
-    if (!entry || entry.isDir === true) return []
-    const name = readString(entry.name)
-    const uri = readString(entry.uri)
-    if (!name || !uri) return []
-    return [
-      {
-        name,
-        uri,
-        modTime: readString(entry.modTime),
-        size: typeof entry.size === 'number' ? entry.size : undefined,
-      } satisfies ExperienceFileItem,
-    ]
-  })
+export function normalizeExperienceFile(
+  entry: unknown,
+): ExperienceFileItem | undefined {
+  if (!isRecord(entry) || entry.isDir === true) return undefined
+  const name = readString(entry.name)
+  const uri = readString(entry.uri)
+  if (!name || !uri) return undefined
+  return {
+    name,
+    uri,
+    modTime: readString(entry.modTime),
+    size: typeof entry.size === 'number' ? entry.size : undefined,
+  }
 }
 
 /** Normalize `GET /api/v1/agent-evolution/experiences/trajectories` result. */
