@@ -2221,7 +2221,7 @@ upgrading; mixed old/new writers are unsupported. Optional, non-destructive
 retains legacy rows and does not re-embed data.
 
 Collections created before PR `#3872` cannot be adopted by the current adapter.
-Run the [pre-`#3872` migration runbook](../../../scripts/maintenance/README.md)
+Run the [pre-`#3872` migration runbook](https://github.com/n0rmanc/OpenViking/blob/main/scripts/maintenance/README.md#migrate-a-pre-3872-collection)
 or re-ingest the data before cutting configuration over to the current target
 collection. Keep the source collection and legacy metadata sidecar for the
 rollback window.

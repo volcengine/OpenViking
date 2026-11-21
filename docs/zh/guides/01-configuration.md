@@ -2182,7 +2182,7 @@ vector 前读回验证。旧的 term-keyed dictionary 只读保留，不覆写�
 
 PR `#3872` 之前建立的 collection 不能由当前 adapter 直接接管。切换配置到
 当前 target collection 前，请先执行
-[pre-`#3872` migration runbook](../../../scripts/maintenance/README.md)，或
+[pre-`#3872` migration runbook](https://github.com/n0rmanc/OpenViking/blob/main/scripts/maintenance/README.md#migrate-a-pre-3872-collection)，或
 重新导入数据。请在回滚窗口内保留 source collection 和旧 metadata sidecar。
 
 在线迁移时，`data_collection_name` 和 `metadata_collection_name` 是不可变的
