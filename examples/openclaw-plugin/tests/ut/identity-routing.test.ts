@@ -51,6 +51,38 @@ describe("identity routing registry", () => {
     })).toBe("sender-42");
   });
 
+  it("routes both roles to the assistant peer so the peer subtree stays writable", () => {
+    // OpenViking resolves peer ownership from user-role messages only
+    // (memory_isolation_handler._is_peer_owner_message), so the user turn is
+    // the one that makes peers/<peer_id>/memories a write target.
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "assistant",
+      role: "user",
+      assistantPeerId: "main",
+    })).toBe("main");
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "assistant",
+      role: "assistant",
+      assistantPeerId: "main",
+    })).toBe("main");
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "assistant",
+      role: "user",
+    })).toBeUndefined();
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "none",
+      role: "user",
+      assistantPeerId: "main",
+    })).toBeUndefined();
+    // memory_store forwards its role from a tool argument, so an unmodeled role
+    // must not pick up the peer.
+    expect(resolveOpenVikingMessagePeerId({
+      peerRole: "assistant",
+      role: "system",
+      assistantPeerId: "main",
+    })).toBeUndefined();
+  });
+
   it("widens to the unscoped request with a warning when the sender is missing", () => {
     const warn = vi.fn();
     expect(resolveOpenVikingActorPeerId({ peerRole: "sender", warn })).toBeUndefined();
