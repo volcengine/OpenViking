@@ -1076,20 +1076,84 @@ class _SingleAccountBackend:
         cursor: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-        """Return an updated_at-ordered page and propagate backend failures."""
-        offset = int(cursor) if cursor else 0
+        """Return an updated_at-ordered page via a keyset cursor.
+
+        The local engine's scalar sorter honors ordering but not offset pages —
+        every offset returns the same first ``limit`` records, so a numeric
+        cursor loops forever and fail-closed scans report "records missing"
+        that actually never left page one (#7468). Pagination therefore keys
+        off the last record's ``updated_at`` (an indexed date-time field on
+        every context collection).
+
+        Records sharing an ``updated_at`` (e.g. the directory producer enqueues
+        L0 and L1 with one resolved timestamp — ``vectorize_directory_meta``)
+        are ordered non-deterministically inside the tie and the native filter
+        cannot express ``gt(ts) OR (eq(ts) AND id > …)``, so a strict-gt cursor
+        can strand the rest of a tie block. Each page therefore emits its last
+        timestamp's whole tie block: when a page fills up on a tie, the
+        remaining members are fetched and appended (the page may exceed
+        ``limit``), and the cursor lands on a fully-emitted timestamp — the
+        next page continues strictly after it and no record is skipped or
+        duplicated (review finding 2 on #7471).
+        """
+        page_filter: Any = filter
+        if cursor:
+            keyset = Range(field="updated_at", gt=cursor)
+            page_filter = And([filter, keyset]) if filter is not None else keyset
+        fields = list(output_fields) if output_fields else None
+        added_sort_field = False
+        if fields is not None and "updated_at" not in fields:
+            fields.append("updated_at")
+            added_sort_field = True
+
+        def _strip(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            if not added_sort_field:
+                return records
+            for record in records:
+                if isinstance(record, dict):
+                    record.pop("updated_at", None)
+            return records
+
         records = await self.strict_query(
-            filter=filter,
+            filter=page_filter,
             limit=limit,
-            offset=offset,
-            output_fields=output_fields,
-            # The local engine's scalar sorter does not return records for
-            # path/string fields. ``updated_at`` is an indexed date-time field
-            # on every context collection and provides stable offset pages.
+            output_fields=fields,
             order_by="updated_at",
             order_desc=False,
         )
-        next_cursor = str(offset + len(records)) if len(records) == limit else None
+        next_cursor: Optional[str] = None
+        if len(records) == limit and records:
+            last_updated_at = records[-1].get("updated_at")
+            if last_updated_at is not None:
+                # Complete the tie block: records outside this page that share
+                # the page's last timestamp must be emitted before the walk
+                # advances past it, or a strict-gt next page strands them.
+                tie_filter = Eq(field="updated_at", value=last_updated_at)
+                tie_page_filter = (
+                    And([filter, tie_filter]) if filter is not None else tie_filter
+                )
+                tie = await self.strict_query(
+                    filter=tie_page_filter,
+                    limit=limit,
+                    output_fields=fields,
+                    order_by="updated_at",
+                    order_desc=False,
+                )
+                if len(tie) == limit:
+                    # Tie as large as the page limit: re-read without a page cap
+                    # so the block is complete before the cursor lands on it.
+                    tie = await self.strict_query(
+                        filter=tie_page_filter,
+                        limit=max(limit, await self.strict_count(filter=tie_page_filter)),
+                        output_fields=fields,
+                        order_by="updated_at",
+                        order_desc=False,
+                    )
+                emitted = {r.get("id") for r in records if isinstance(r, dict)}
+                records.extend(r for r in tie if r.get("id") not in emitted)
+                next_cursor = str(last_updated_at)
+        if added_sort_field:
+            _strip(records)
         return records, next_cursor
 
     @_backend_operation
