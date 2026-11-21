@@ -319,6 +319,64 @@ describe('OV timer storage', () => {
     assert.equal(repository.needsRefresh, true);
   });
 
+  it('reapplies a conflicting write onto the current state instead of retrying a stale snapshot', async (context) => {
+    const { client, repository } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    let conflicted = false;
+    client.json = async (route, body) => {
+      if (body && !conflicted) {
+        conflicted = true;
+        // A concurrent writer commits another timer between our read and write.
+        await json(route, { ...body, content: JSON.stringify({
+          ...JSON.parse(body.content),
+          timers: [...JSON.parse(body.content).timers, { ...input, timerId: 'tm_concurrent', createdFromEventId: 'evt-concurrent' }],
+        }) });
+        throw Object.assign(new Error('OpenViking request failed (HTTP 409)'), { httpStatus: 409 });
+      }
+      return json(route, body);
+    };
+    repository.retryDelayMs = 1;
+    await repository.create({ ...input, timerId: 'tm_second', createdFromEventId: 'evt-second' });
+    const restored = await new OVTimerRepository(client, 'primary').load();
+    assert.deepEqual(restored.listActive().map((timer) => timer.timerId).sort(), ['tm_concurrent', 'tm_second', 'tm_test']);
+  });
+
+  it('reports 409 to its caller when every retry conflicts', async (context) => {
+    const { client, repository } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    let writes = 0;
+    client.json = async (route, body) => {
+      if (body) {
+        writes += 1;
+        throw Object.assign(new Error('OpenViking request failed (HTTP 409)'), { httpStatus: 409 });
+      }
+      return json(route, body);
+    };
+    repository.retryDelayMs = 1;
+    await assert.rejects(repository.cancel(input.timerId), /HTTP 409/);
+    assert.equal(writes, 3);
+    assert.equal(repository.needsRefresh, true);
+  });
+
+  it('does not re-read state before retrying a write whose response was lost', async (context) => {
+    const { client, repository } = await setup(context);
+    await repository.create(input);
+    const json = client.json.bind(client);
+    let writes = 0;
+    client.json = async (route, body) => {
+      if (body) {
+        writes += 1;
+        await json(route, body);
+        throw new Error('Write response lost');
+      }
+      return json(route, body);
+    };
+    await assert.rejects(repository.cancel(input.timerId), /Write response lost/);
+    assert.equal(writes, 3);
+  });
+
   it('retries an uncommitted write internally and bounds persistent failures', async (context) => {
     const { client, repository } = await setup(context);
     const json = client.json.bind(client);
