@@ -104,6 +104,10 @@ class IngestPoller:
                 messages, new_cursor = source.read_messages(ref, cursor, DEFAULT_READ_LIMIT)
             except Exception:  # noqa: BLE001
                 logger.exception("[ingest:%s] read failed for %s", name, ref.native_session_id)
+                if appended:
+                    self._dirty[(name, ref.native_session_id)] = _Dirty(
+                        name, cfg, source, ref, time.monotonic()
+                    )
                 return
             if not messages:
                 from_value = (cursor or Cursor.zero(source.cursor_kind)).value
