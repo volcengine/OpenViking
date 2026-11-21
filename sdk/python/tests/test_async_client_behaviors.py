@@ -134,6 +134,47 @@ async def test_async_http_client_initialize_forwards_event_hooks():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+async def test_initialize_is_idempotent_and_can_reinitialize_after_close(client_type):
+    clients = [
+        SimpleNamespace(aclose=AsyncMock()) for _ in range(2)
+    ]
+    with patch(
+        "openviking_sdk.client.httpx.AsyncClient", side_effect=clients
+    ) as mock_async_client:
+        client = client_type(url="http://localhost:1933")
+        async_client = client if client_type is AsyncHTTPClient else client._async_client
+
+        async def initialize():
+            result = client.initialize()
+            if client_type is AsyncHTTPClient:
+                await result
+
+        async def close():
+            result = client.close()
+            if client_type is AsyncHTTPClient:
+                await result
+
+        await initialize()
+        first = async_client._http
+        await initialize()
+
+        assert mock_async_client.call_count == 1
+        assert async_client._http is first
+
+        await close()
+        clients[0].aclose.assert_awaited_once_with()
+        assert async_client._http is None
+
+        await initialize()
+        assert mock_async_client.call_count == 2
+        assert async_client._http is clients[1]
+
+        await close()
+        clients[1].aclose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_posts_batch_payload():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
