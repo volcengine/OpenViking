@@ -135,6 +135,13 @@ jobs:
             --cache-control "${STATIC_CACHE_CONTROL}" \
             --only-show-errors
 
+          # Retire only the two proprietary Chinese font families after the new
+          # assets are uploaded. Keep unrelated historical hashed assets intact.
+          aws s3 rm "s3://${TOS_BUCKET}/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive --exclude "*" --include "assets/TsangerJinKai02-*.ttf" \
+            --only-show-errors
+
       - name: Report TOS deployment failure
         if: steps.setup_python.outcome == 'failure' || steps.install_aws_cli.outcome == 'failure' || steps.upload_tos.outcome == 'failure'
         run: |
