@@ -1928,11 +1928,20 @@ class SQLTaskWorkStore(TaskWorkStore):
         user_id: str,
     ) -> Optional[TaskStatus]:
         Task = self._models.Task
-        async with self._session_factory() as session:
-            status = await session.scalar(
-                select(Task.status).where(*self._task_query(Task, task_id, account_id, user_id))
-            )
-            return TaskStatus(status) if status is not None else None
+        sessions = self._session_factory
+        statement = select(Task.status).where(*self._task_query(Task, task_id, account_id, user_id))
+        if self._url.drivername == "postgresql+psycopg":
+            assert self._engine is not None
+            connection = await self._engine.connect()
+            try:
+                await connection.execution_options(isolation_level="AUTOCOMMIT")
+                status = await connection.scalar(statement)
+            finally:
+                await wait_sql_cleanup(connection.close())
+        else:
+            async with sessions() as session:
+                status = await session.scalar(statement)
+        return TaskStatus(status) if status is not None else None
 
     async def has_open_work(
         self,
