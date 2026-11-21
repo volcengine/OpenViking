@@ -212,6 +212,10 @@ class _FakeListDocumentBlockRequestBuilder:
         self._request.document_id = document_id
         return self
 
+    def page_token(self, page_token):
+        self._request.page_token = page_token
+        return self
+
     def page_size(self, _page_size):
         return self
 
@@ -1847,3 +1851,57 @@ def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
         assert resource.meta["original_filename"] == "API Docs_Overview"
     finally:
         resource.cleanup()
+
+
+def test_block_pagination_rejects_missing_page_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    calls = []
+
+    def list_blocks(request, option):
+        calls.append(request)
+        if len(calls) > 5:
+            raise AssertionError("block pagination did not stop")
+        return _SuccessResponse(
+            SimpleNamespace(items=[SimpleNamespace()], has_more=True, page_token=None)
+        )
+
+    accessor = FeishuAccessor()
+    _use_fake_client(
+        monkeypatch,
+        accessor,
+        SimpleNamespace(
+            docx=SimpleNamespace(
+                v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks))
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="without a page token"):
+        accessor._fetch_all_blocks("doc_token", feishu_access_token="u-test")
+
+
+def test_block_pagination_rejects_repeated_page_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    calls = []
+
+    def list_blocks(request, option):
+        calls.append(request)
+        if len(calls) > 5:
+            raise AssertionError("block pagination did not stop")
+        return _SuccessResponse(
+            SimpleNamespace(items=[SimpleNamespace()], has_more=True, page_token="same-token")
+        )
+
+    accessor = FeishuAccessor()
+    _use_fake_client(
+        monkeypatch,
+        accessor,
+        SimpleNamespace(
+            docx=SimpleNamespace(
+                v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks))
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="repeated page token"):
+        accessor._fetch_all_blocks("doc_token", feishu_access_token="u-test")
