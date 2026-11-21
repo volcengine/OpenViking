@@ -837,3 +837,59 @@ def test_codex_auth_invalid_exp_claim_is_treated_as_expiring():
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_codex_cancellation_waits_for_sync_sdk_stream_to_close(monkeypatch):
+    import asyncio
+    import threading
+
+    import httpx
+    import openai
+
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    closed = threading.Event()
+    release = threading.Event()
+    requests = []
+
+    class HeldResponse(httpx.SyncByteStream):
+        def __iter__(self):
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(5):
+                raise TimeoutError("test did not release SDK stream")
+            yield b"data: [DONE]\n\n"
+
+        def close(self):
+            closed.set()
+
+    def handle(request):
+        requests.append(request.url.path)
+        return httpx.Response(
+            200, stream=HeldResponse(), headers={"content-type": "text/event-stream"}
+        )
+
+    with openai.OpenAI(
+        api_key="synthetic",
+        base_url="https://model.example.test/v1",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+    ) as client:
+        model = CodexVLM({"api_key": "synthetic", "model": "synthetic"})
+        monkeypatch.setattr(model, "_build_responses_client", lambda *_: client)
+        task = asyncio.create_task(model.get_completion_async("synthetic input"))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=3)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=0.05)
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            closed_on_return = closed.is_set()
+            assert await asyncio.to_thread(closed.wait, 3)
+        assert not done
+        assert closed_on_return
+        assert requests == ["/v1/responses"]
