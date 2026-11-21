@@ -1024,8 +1024,8 @@ class BotCompileService:
             preserve_workspace = preserve_workspace or bool(warnings)
             if output_file_count == 0:
                 warnings.append("No reliable output was produced from the supplied materials.")
-            result = CompileResult(
-                **{
+            result = CompileResult.model_validate(
+                {
                     "from": request.from_,
                     "to": request.to,
                     "skill": request.skill,
@@ -1200,6 +1200,10 @@ class BotCompileService:
                 ]
             )
             await pipeline.write_coverage(published)
+            counts = (await pipeline.files.get("coverage") or {}).get("counts", {})
+            partial = bool(pipeline.failures or conflicts) or any(
+                counts.get(state, 0) for state in ("failed", "pending", "unreferenced", "prepared")
+            )
             summary = await pipeline.files.get("summary")
             summary["committed"] = True
             summary["warnings"] = pipeline.warnings
@@ -1223,6 +1227,7 @@ class BotCompileService:
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
+                completion_status="partial" if partial else None,
             )
 
             def complete(task):

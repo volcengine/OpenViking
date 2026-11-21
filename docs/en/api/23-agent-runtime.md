@@ -202,6 +202,11 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 
 No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Execution plans and necessary recovery checkpoints remain private Task state; public configuration, runs and tasks never expose execution credentials.
 
+VikingBot reports `result.completion_status: "partial"` when known source, worker or write
+failures remain after execution. Confirmed output is retained, and a named Compile keeps
+its previous source baseline so unchanged missed inputs remain eligible for the next run.
+The marker is omitted otherwise; its absence does not prove semantic coverage or successful indexing.
+
 The only Compile business files are:
 
 ```text

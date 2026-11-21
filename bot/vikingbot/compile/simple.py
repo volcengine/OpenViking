@@ -247,16 +247,26 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     result.page_count = len(writer.outcomes)
     inspected_source = False
     write_error = ""
+    unresolved: dict[tuple[str, str], str] = {}
     for call in calls:
         name = call["tool_name"]
+        args = call["resolved_args"]
+        resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
+        tracked = [
+            (name, str(resource))
+            for resource in resources
+            if name in {writer.name, CompileDiffTool.name}
+            or any(resource == root or str(resource).startswith(root + "/") for root in sources)
+        ]
+        for key in tracked:
+            unresolved.pop(key, None)
         if not call["execute_success"]:
             warning = str(call["result"])[:300]
             result.warnings.append(warning)
-            if name == writer.name and not write_error:
+            unresolved.update(dict.fromkeys(tracked, warning))
+            if name == writer.name:
                 write_error = warning
             continue
-        args = call["resolved_args"]
-        resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
         for resource in resources:
             if name == CompileDiffTool.name or (
                 name in {"openviking_multi_read", "openviking_list"}
@@ -270,19 +280,21 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     incomplete = final and final.lstrip().startswith("INCOMPLETE:")
     if incomplete:
         result.warnings.append(final[:600])
-    if not count and (writer.unconfirmed or incomplete):
-        raise CompileFailure("COMPILE_INCOMPLETE", result.warnings[0], stage="agent")
+    if final is not None and not count and (writer.unconfirmed or incomplete or unresolved):
+        message = next(reversed(unresolved.values()), result.warnings[0])
+        raise CompileFailure("COMPILE_INCOMPLETE", message, stage="agent")
     if final is None:
         if not count:
+            message = "Iteration limit reached without confirmed output."
+            if write_error:
+                message += f" Last write error: {write_error}"
             raise CompileFailure(
                 "COMPILE_INCOMPLETE",
-                "Iteration limit reached without confirmed output.",
+                message,
                 stage="agent",
             )
         result.warnings.append(
-            f"Partial compilation: iteration limit reached after writing {count} target file(s). "
-            "Incremental compilation may skip unprocessed, unchanged sources. "
-            "Request full compilation to scan all sources again."
+            f"Partial compilation: iteration limit reached after writing {count} target file(s)."
         )
     elif not writer.outcomes and not (incremental and inspected_source):
         raise CompileFailure(
@@ -290,4 +302,6 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
+    if writer.unconfirmed or incomplete or final is None or unresolved:
+        result.completion_status = "partial"
     return result

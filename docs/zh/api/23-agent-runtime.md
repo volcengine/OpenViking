@@ -202,6 +202,10 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
 
+VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
+已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。
+其他结果省略该标记；没有标记不代表语义覆盖完整或索引成功。
+
 Compile 业务文件仅有：
 
 ```text
