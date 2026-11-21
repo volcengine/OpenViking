@@ -5,6 +5,7 @@
 Provides observability API for monitoring component status.
 Mirrors SDK's client.observer API:
 - /api/v1/observer/queue - Queue status
+- /api/v1/observer/session-archives - Persisted archive marker counts
 - /api/v1/observer/vikingdb - VikingDB status
 - /api/v1/observer/models - Models status (VLM, Embedding, Rerank)
 - /api/v1/observer/system - System overall status
@@ -55,6 +56,15 @@ async def observer_queue(
     service = get_service()
     component = await service.debug.observer.get_queue_status_async(format=format)
     return Response(status="ok", result=_component_to_dict(component))
+
+
+@router.get("/session-archives")
+async def observer_session_archives(
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Count persisted session archive outcomes in the caller's user scope."""
+    result = await get_service().sessions.summarize_archives(ctx)
+    return Response(status="ok", result=result)
 
 
 @router.get("/vikingdb")
