@@ -529,8 +529,8 @@ async def test_resolver_marks_removed_content_vectors_as_obsolete():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("digest, matches_canonical", [("old", True), ("new", False)])
-async def test_resolver_index_state_uses_canonical_duplicate_record(digest, matches_canonical):
+@pytest.mark.parametrize("matches_canonical", [True, False])
+async def test_resolver_index_state_uses_canonical_duplicate_record(matches_canonical):
     from openviking.storage.context_update_plan import ContentState, IndexState
     from openviking.storage.resource_rnfv import (
         FormalEntry,
@@ -542,11 +542,14 @@ async def test_resolver_index_state_uses_canonical_duplicate_record(digest, matc
         VectorIndexSnapshot,
         VectorRecordSnapshot,
     )
+    from openviking.utils.content_hash import content_md5
 
+    old, new = content_md5(b"old"), content_md5(b"new")
+    digest = old if matches_canonical else new
     root = "viking://resources/repo"
     records = {
-        "z-new": VectorRecordSnapshot("z-new", f"{root}/a.py", "a.py", 2, {"md5": "new"}),
-        "a-old": VectorRecordSnapshot("a-old", f"{root}/a.py", "a.py", 2, {"md5": "old"}),
+        "z-new": VectorRecordSnapshot("z-new", f"{root}/a.py", "a.py", 2, {"md5": new}),
+        "a-old": VectorRecordSnapshot("a-old", f"{root}/a.py", "a.py", 2, {"md5": old}),
     }
     snapshot = RNFVSnapshot(
         RequestIntent(root, "semantic_and_vectors"),
@@ -555,8 +558,10 @@ async def test_resolver_index_state_uses_canonical_duplicate_record(digest, matc
         VectorIndexSnapshot(records, frozenset({"id", "uri", "level", "md5"})),
     )
 
+    target = AsyncMock()
+    target.read_file.return_value = b"old"
     result = await resource_diff.resolve_resource_diff(
-        snapshot, store=AsyncMock(), artifact_ref=object(), target=AsyncMock()
+        snapshot, store=AsyncMock(), artifact_ref=object(), target=target, concurrency=2
     )
 
     entry = result.entries["a.py"]
@@ -564,6 +569,9 @@ async def test_resolver_index_state_uses_canonical_duplicate_record(digest, matc
     assert entry.content_state is expected_state
     if matches_canonical:
         assert entry.index_state is IndexState.COMPLETE
+        target.read_file.assert_awaited_once_with("a.py")
+    else:
+        target.read_file.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -579,19 +587,21 @@ async def test_resolver_log_separates_files_directories_and_logical_root(monkeyp
         VectorIndexSnapshot,
         VectorRecordSnapshot,
     )
+    from openviking.utils.content_hash import content_md5
 
+    digest = content_md5(b"same")
     root = "viking://resources/repo"
     records = {
         "root-l0": VectorRecordSnapshot("root-l0", root, "", 0),
         "root-l1": VectorRecordSnapshot("root-l1", root, "", 1),
-        "file-l2": VectorRecordSnapshot("file-l2", f"{root}/a.py", "a.py", 2, {"md5": "same"}),
+        "file-l2": VectorRecordSnapshot("file-l2", f"{root}/a.py", "a.py", 2, {"md5": digest}),
         "sub-l0": VectorRecordSnapshot("sub-l0", f"{root}/sub", "sub", 0),
         "sub-l1": VectorRecordSnapshot("sub-l1", f"{root}/sub", "sub", 1),
     }
     snapshot = RNFVSnapshot(
         RequestIntent(root, "semantic_and_vectors"),
         NewArtifactSnapshot(
-            {"": NewEntry(is_dir=True), "a.py": NewEntry(md5="same"), "sub": NewEntry(is_dir=True)}
+            {"": NewEntry(is_dir=True), "a.py": NewEntry(md5=digest), "sub": NewEntry(is_dir=True)}
         ),
         FormalTreeSnapshot(
             {"": FormalEntry(is_dir=True), "a.py": FormalEntry(), "sub": FormalEntry(is_dir=True)}
@@ -601,19 +611,22 @@ async def test_resolver_log_separates_files_directories_and_logical_root(monkeyp
 
     log_info = Mock()
     monkeypatch.setattr(resource_diff.logger, "debug", log_info)
+    target = AsyncMock()
+    target.read_file.return_value = b"same"
     await resource_diff.resolve_resource_diff(
         snapshot,
         store=AsyncMock(),
         artifact_ref=object(),
-        target=AsyncMock(),
+        target=target,
+        concurrency=2,
     )
 
     message = log_info.call_args.args[0] % log_info.call_args.args[1:]
-    fixed_fields = "n_files=1 n_dirs=1 f_files=1 f_dirs=1 logical_root=true v_records=5 root_state=unchanged root_index=complete md5_fast_path=1 body_compared=0 new_files_hashed=0"
+    fixed_fields = "n_files=1 n_dirs=1 f_files=1 f_dirs=1 logical_root=true v_records=5 root_state=unchanged root_index=complete md5_fast_path=0 body_compared=1 new_files_hashed=0"
     assert fixed_fields in message
     assert "states={file:{'unchanged': 1},dir:{'unchanged': 1}}" in message
     assert "index={file:{'complete': 1},dir:{'complete': 1}}" in message
-    assert message.index("md5_fast_path=1") < message.index("states=")
+    assert message.index("md5_fast_path=0") < message.index("states=")
     assert "n_entries=" not in message
 
 
@@ -903,8 +916,10 @@ async def test_healthy_rnfv_clear_request_produces_scalar_only_update():
         VectorIndexSnapshot,
         VectorRecordSnapshot,
     )
+    from openviking.utils.content_hash import content_md5
     from openviking.utils.ingest_options import IngestOptions
 
+    digest = content_md5(b"same")
     uri = "viking://resources/repo/a.txt"
     ingest_options = IngestOptions.from_search_tags(None, mode="clear")
     request = RequestIntent.from_ingest_options(
@@ -914,7 +929,7 @@ async def test_healthy_rnfv_clear_request_produces_scalar_only_update():
     )
     snapshot = RNFVSnapshot(
         request,
-        NewArtifactSnapshot({"": NewEntry(md5="same")}),
+        NewArtifactSnapshot({"": NewEntry(md5=digest)}),
         FormalTreeSnapshot({"": FormalEntry()}),
         VectorIndexSnapshot(
             {
@@ -923,7 +938,7 @@ async def test_healthy_rnfv_clear_request_produces_scalar_only_update():
                     uri,
                     "",
                     2,
-                    {"md5": "same", "search_tags": ["scope=old"]},
+                    {"md5": digest, "search_tags": ["scope=old"]},
                 )
             },
             request.required_vector_fields(),
@@ -934,7 +949,7 @@ async def test_healthy_rnfv_clear_request_produces_scalar_only_update():
         snapshot=snapshot,
         store=AsyncMock(),
         artifact_ref=object(),
-        target=AsyncMock(),
+        target=SimpleNamespace(read_file=AsyncMock(return_value=b"same")),
         vikingdb=AsyncMock(),
         context_type="resource",
         is_code_repo=False,
@@ -962,7 +977,7 @@ async def test_healthy_rnfv_clear_request_produces_scalar_only_update():
             "uri": uri,
             "account_id": "acc",
             "level": 2,
-            "md5": "same",
+            "md5": digest,
             "search_tags": [],
         },
     )
@@ -981,8 +996,10 @@ async def test_healthy_rnfv_empty_replace_request_is_noop():
         VectorIndexSnapshot,
         VectorRecordSnapshot,
     )
+    from openviking.utils.content_hash import content_md5
     from openviking.utils.ingest_options import IngestOptions
 
+    digest = content_md5(b"same")
     uri = "viking://resources/repo/a.txt"
     ingest_options = IngestOptions.from_search_tags([], mode="replace")
     request = RequestIntent.from_ingest_options(
@@ -992,7 +1009,7 @@ async def test_healthy_rnfv_empty_replace_request_is_noop():
     )
     snapshot = RNFVSnapshot(
         request,
-        NewArtifactSnapshot({"": NewEntry(md5="same")}),
+        NewArtifactSnapshot({"": NewEntry(md5=digest)}),
         FormalTreeSnapshot({"": FormalEntry()}),
         VectorIndexSnapshot(
             {
@@ -1001,7 +1018,7 @@ async def test_healthy_rnfv_empty_replace_request_is_noop():
                     uri,
                     "",
                     2,
-                    {"md5": "same", "search_tags": ["scope=old"]},
+                    {"md5": digest, "search_tags": ["scope=old"]},
                 )
             },
             request.required_vector_fields(),
@@ -1012,7 +1029,7 @@ async def test_healthy_rnfv_empty_replace_request_is_noop():
         snapshot=snapshot,
         store=AsyncMock(),
         artifact_ref=object(),
-        target=AsyncMock(),
+        target=SimpleNamespace(read_file=AsyncMock(return_value=b"same")),
         vikingdb=AsyncMock(),
         context_type="resource",
         is_code_repo=False,
@@ -1278,7 +1295,7 @@ async def test_vectorize_disabled_plan_ignores_stale_vectors_and_compares_formal
 
 
 @pytest.mark.asyncio
-async def test_vectorize_enabled_keeps_md5_noop_without_formal_content_reads():
+async def test_vectorize_enabled_keeps_md5_noop_without_artifact_reads():
     from openviking.storage.context_update_plan import ContentState
     from openviking.storage.resource_diff import resolve_resource_diff
     from openviking.storage.resource_rnfv import (
@@ -1291,19 +1308,22 @@ async def test_vectorize_enabled_keeps_md5_noop_without_formal_content_reads():
         VectorIndexSnapshot,
         VectorRecordSnapshot,
     )
+    from openviking.utils.content_hash import content_md5
 
+    digest = content_md5(b"same")
     root = "viking://resources/repo"
     snapshot = RNFVSnapshot(
         RequestIntent(root, "semantic_and_vectors", vectorize=True),
-        NewArtifactSnapshot({"a.txt": NewEntry(md5="same")}),
+        NewArtifactSnapshot({"a.txt": NewEntry(md5=digest)}),
         FormalTreeSnapshot({"a.txt": FormalEntry()}),
         VectorIndexSnapshot(
-            {"a-l2": VectorRecordSnapshot("a-l2", root + "/a.txt", "a.txt", 2, {"md5": "same"})},
+            {"a-l2": VectorRecordSnapshot("a-l2", root + "/a.txt", "a.txt", 2, {"md5": digest})},
             frozenset({"id", "uri", "level", "md5"}),
         ),
     )
     store = AsyncMock()
     target = AsyncMock()
+    target.read_file.return_value = b"same"
 
     diff = await resolve_resource_diff(
         snapshot,
@@ -1315,7 +1335,7 @@ async def test_vectorize_enabled_keeps_md5_noop_without_formal_content_reads():
 
     assert diff.entries["a.txt"].content_state is ContentState.UNCHANGED
     store.read_bytes.assert_not_awaited()
-    target.read_file.assert_not_awaited()
+    target.read_file.assert_awaited_once_with("a.txt")
 
 
 @pytest.mark.asyncio
@@ -2203,14 +2223,16 @@ async def test_file_root_plan_refreshes_missing_abstract_when_content_is_indexed
         VectorIndexSnapshot,
         VectorRecordSnapshot,
     )
+    from openviking.utils.content_hash import content_md5
 
+    digest = content_md5(b"same")
     root = "viking://resources/report.md"
     snapshot = RNFVSnapshot(
         RequestIntent(root, "semantic_and_vectors"),
-        NewArtifactSnapshot({"": NewEntry(md5="same")}),
+        NewArtifactSnapshot({"": NewEntry(md5=digest)}),
         FormalTreeSnapshot({"": FormalEntry()}),
         VectorIndexSnapshot(
-            {"report-l2": VectorRecordSnapshot("report-l2", root, "", 2, {"md5": "same"})},
+            {"report-l2": VectorRecordSnapshot("report-l2", root, "", 2, {"md5": digest})},
             frozenset({"id", "uri", "level", "md5", "abstract"}),
         ),
     )
@@ -2219,7 +2241,7 @@ async def test_file_root_plan_refreshes_missing_abstract_when_content_is_indexed
         snapshot=snapshot,
         store=AsyncMock(),
         artifact_ref=object(),
-        target=AsyncMock(),
+        target=SimpleNamespace(read_file=AsyncMock(return_value=b"same")),
         vikingdb=AsyncMock(),
         context_type="resource",
         is_code_repo=False,
@@ -2234,7 +2256,7 @@ async def test_file_root_plan_refreshes_missing_abstract_when_content_is_indexed
     assert plan.direct_index_actions == ()
     assert plan.semantic_plan is None
     assert plan.file_refresh is not None
-    assert plan.file_refresh.md5 == "same"
+    assert plan.file_refresh.md5 == digest
 
 
 @pytest.mark.asyncio
