@@ -4,12 +4,14 @@ import type { FileBrowserAclLevel } from '../acl-types.js';
 /** Revalidate the active resource before opening its permission manager. */
 export function useAclManager({
   key,
+  revision,
   uri,
   loadPermission,
   onLevel,
   onError,
 }: {
   key: string;
+  revision: number;
   uri: string | null;
   loadPermission: (
     uri: string,
@@ -19,14 +21,14 @@ export function useAclManager({
   onError: () => void;
 }) {
   const pending = useRef<AbortController | null>(null);
-  // The probe outlives its click. Abort on resource/request scope changes or
-  // unmount so an old account cannot open a manager in the new scope.
+  // The probe outlives its click. Abort on a new server-permission revision,
+  // resource/request scope change or unmount so stale access cannot reopen it.
   useEffect(
     () => () => {
       pending.current?.abort();
       pending.current = null;
     },
-    [key, loadPermission],
+    [key, revision, loadPermission],
   );
   return async () => {
     if (!uri || pending.current) return;
