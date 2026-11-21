@@ -161,22 +161,33 @@ class TestRewriteRelativeLinks:
         assert out == "[x](../目录甲/目录乙/目录丙/文档/文档.md?v=1)"
 
     async def test_large_file_anchor_located(self, tmp_path: Path):
-        # Large target is split into section files; the anchor is located via an
-        # in-memory parse → link points at the specific section file + keeps anchor.
-        kb = self._make_tree(tmp_path)
-        big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
-        body = "".join(
-            f"## 第{i}章 {name}\n\n" + ("正文内容。" * 400) + "\n\n"
-            for i, name in [(1, "部署"), (2, "监控"), (3, "排查")]
+        kb = tmp_path / "knowledge"
+        kb.mkdir()
+        manual = kb / "manual.md"
+        manual.write_text(
+            "\n\n".join(
+                f"## {title}\n\n" + "Configuration instructions. " * 60
+                for title in ["Getting Started", "Terms & Conditions", "Appendix"]
+            ),
+            encoding="utf-8",
         )
-        big.write_text(body, encoding="utf-8")
-        out = await self._rewrite(
-            self._parser(),
-            kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#第3章-排查)",
+        (kb / "guide.md").write_text(
+            "[Read the terms](manual.md#terms--conditions)", encoding="utf-8"
         )
-        assert out.startswith("[x](../目录甲/目录乙/目录丙/big/")
-        assert out.endswith(".md#第3章-排查)")  # points at a file, anchor kept
+        artifacts = tmp_path / "artifacts"
+        await DirectoryParser().parse(kb, parse_output_store=LocalParseOutputStore(str(artifacts)))
+
+        [guide] = list(artifacts.rglob("guide.md"))
+        sections = list((guide.parent.parent / "manual").glob("*.md"))
+        assert len(sections) > 1
+        [terms] = [
+            section
+            for section in sections
+            if "## Terms & Conditions" in section.read_text(encoding="utf-8")
+        ]
+        assert guide.read_text(encoding="utf-8") == (
+            f"[Read the terms](../manual/{terms.name}#terms--conditions)"
+        )
 
     async def test_large_file_unlocatable_anchor_falls_back_to_dir(self, tmp_path: Path):
         # Anchor matches no heading in the (large) target → drop suffix, point at dir.

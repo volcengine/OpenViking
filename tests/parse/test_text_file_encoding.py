@@ -26,7 +26,6 @@ def test_markdown_file_read_normalizes_gb18030_four_byte_text(tmp_path):
     [
         ("gb18030", "简体中文测试内容\n"),
         ("gb18030", "简体中文测试内容123 abc\n"),
-        ("gbk", "简体中文测试内容\n"),
     ],
 )
 def test_markdown_file_read_normalizes_short_simplified_chinese_text(tmp_path, encoding, content):

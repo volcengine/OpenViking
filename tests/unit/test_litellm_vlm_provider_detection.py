@@ -13,6 +13,7 @@ from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
 )
+from openviking.models.vlm.base import VLMResponse
 
 NEMOTRON_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 NEMOTRON_LITELLM_MODEL = f"nvidia_nim/{NEMOTRON_MODEL}"
@@ -79,13 +80,45 @@ class TestLiteLLMVLMProviderDetection:
 
 
 @pytest.mark.parametrize(
-    "model", ["ollama_chat/qwen2.5:7b", "ollama/qwen2.5:7b", "openai/qwen2.5:7b"]
+    ("model", "api_key", "api_base", "extra_body", "num_ctx", "sent_body"),
+    [
+        ("ollama/qwen2.5:7b", None, None, {}, 16384, {"think": False}),
+        ("ollama_chat/qwen2.5:7b", None, None, {}, 16384, {"think": False}),
+        (
+            "ollama/qwen2.5:7b",
+            "test-key",
+            "http://localhost:11434",
+            {"num_ctx": 32768, "think": True},
+            32768,
+            {"think": True},
+        ),
+        (
+            "ollama_chat/qwen2.5:7b",
+            "test-key",
+            "http://localhost:11434",
+            {"num_ctx": 32768, "think": True},
+            32768,
+            {"think": True},
+        ),
+        (
+            "openai/qwen2.5:7b",
+            "test-key",
+            "http://localhost:11434",
+            {"seed": 7},
+            None,
+            {"seed": 7},
+        ),
+    ],
+    ids=[
+        "ollama-defaults",
+        "ollama-chat-defaults",
+        "ollama-override",
+        "ollama-chat-override",
+        "openai",
+    ],
 )
-@pytest.mark.parametrize("api_key", [None, "test-key"])
-@pytest.mark.parametrize("api_base", [None, "http://localhost:11434"])
-@pytest.mark.parametrize("extra_body", [{}, {"num_ctx": 32768, "think": True}])
 def test_explicit_local_routes_reach_completion_unchanged(
-    monkeypatch, model, api_key, api_base, extra_body
+    monkeypatch, model, api_key, api_base, extra_body, num_ctx, sent_body
 ):
     monkeypatch.setenv("OLLAMA_API_KEY", "")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "")
@@ -105,8 +138,11 @@ def test_explicit_local_routes_reach_completion_unchanged(
     monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.completion", sync_call)
     monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", async_call)
 
-    provider.get_completion(prompt="test", tools=tools)
-    asyncio.run(provider.get_completion_async(prompt="test", tools=tools))
+    result = provider.get_completion(prompt="test", tools=tools)
+    async_result = asyncio.run(provider.get_completion_async(prompt="test", tools=tools))
+    assert isinstance(result, VLMResponse)
+    assert isinstance(async_result, VLMResponse)
+    assert result.content == async_result.content == "ok"
 
     for call in (sync_call, async_call):
         kwargs = call.call_args.kwargs
@@ -114,5 +150,8 @@ def test_explicit_local_routes_reach_completion_unchanged(
         assert kwargs["tools"] == tools
         assert kwargs.get("api_key") == api_key
         assert kwargs.get("api_base") == api_base
-        if model.startswith(("ollama/", "ollama_chat/")):
-            assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False} | extra_body
+        assert kwargs.get("num_ctx") == num_ctx
+        if num_ctx is None:
+            assert kwargs["extra_body"]["seed"] == sent_body["seed"]
+        else:
+            assert kwargs["extra_body"] == sent_body

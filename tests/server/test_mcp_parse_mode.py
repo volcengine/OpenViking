@@ -49,6 +49,7 @@ async def test_mcp_add_resource_schema_exposes_parse_mode_only_through_args(mcp_
 async def test_mcp_remote_add_forwards_no_split(
     monkeypatch: pytest.MonkeyPatch,
     mcp_context,
+    public_resource_dns,
 ):
     monkeypatch.setattr(mcp_endpoint, "_maybe_sitemap_hint", AsyncMock(return_value=""))
 

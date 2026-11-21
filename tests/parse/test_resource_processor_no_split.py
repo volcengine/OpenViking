@@ -3,80 +3,51 @@
 """Tests for routing parsed resources through no-split mode."""
 
 from pathlib import Path
-from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
-from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parser_router import ParserRouter
+from openviking.config.vlm import VLMHandle
+from openviking.parse.output import LocalParseOutputStore
+from openviking.parse.vlm import VLMProcessor
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 
 
-class _AccessorRegistry:
-    def __init__(self, resource: LocalResource) -> None:
-        self.resource = resource
-
-    async def access(self, _source: str, **_kwargs: Any) -> LocalResource:
-        return self.resource
-
-
-class _RecordingParserRouter:
-    def __init__(self) -> None:
-        self.kwargs: dict[str, Any] | None = None
-
-    async def parse(self, resource: LocalResource, **kwargs: Any):
-        self.kwargs = kwargs
-        return create_parse_result(
-            root=ResourceNode(type=NodeType.ROOT, title=resource.path.stem),
-            source_path=str(resource.path),
-            source_format="markdown",
-            parser_name="RecordingParser",
-        )
+@pytest.fixture
+def processor() -> UnifiedResourceProcessor:
+    vlm = Mock(spec=VLMHandle)
+    vlm.is_available.return_value = False
+    return UnifiedResourceProcessor(vlm_processor=VLMProcessor(vlm=vlm))
 
 
-class _UnusedRegistry:
-    async def parse(self, _source: Any, **_kwargs: Any):
-        raise AssertionError("internal parser must not run when Understanding is selected")
-
-
-def _local_resource(path: Path) -> LocalResource:
-    return LocalResource(
-        path=path,
-        source_type=SourceType.LOCAL,
-        original_source=str(path),
-        is_temporary=False,
-    )
-
-
-@pytest.mark.asyncio
-async def test_unified_processor_no_split_still_uses_parser_router(
-    tmp_path: Path,
+async def test_unified_processor_preserves_markdown_in_no_split_mode(
+    tmp_path: Path, processor: UnifiedResourceProcessor
 ) -> None:
     source = tmp_path / "guide.md"
-    source.write_text("# guide", encoding="utf-8")
-    router = _RecordingParserRouter()
-    processor = UnifiedResourceProcessor(vlm_processor=object())
-    processor._accessor_registry = _AccessorRegistry(_local_resource(source))
-    processor._parser_router = router
+    content = "\n\n".join(
+        f"# Section {i}\n\n" + "Configuration instructions. " * 40 for i in range(1, 4)
+    )
+    source.write_text(content, encoding="utf-8")
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
 
-    result = await processor.process(str(source), parse_mode="no_split")
+    default = await processor.process(str(source), parse_output_store=store)
+    assert default.artifact_ref is not None
+    default_root = Path(default.artifact_ref.root) / default.artifact_ref.resource_rel
+    assert len(list(default_root.glob("*.md"))) > 1
 
-    assert result.parser_name == "RecordingParser"
-    assert router.kwargs is not None
-    assert router.kwargs["split_content"] is False
+    result = await processor.process(str(source), parse_mode="no_split", parse_output_store=store)
+
+    assert result.artifact_ref is not None
+    root = Path(result.artifact_ref.root) / result.artifact_ref.resource_rel
+    assert {file.name: file.read_text() for file in root.glob("*.md")} == {"guide.md": content}
 
 
-@pytest.mark.asyncio
 async def test_parser_router_rejects_no_split_for_understanding_backend(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: Path, processor: UnifiedResourceProcessor
 ) -> None:
     source = tmp_path / "manual.pdf"
     source.write_bytes(b"%PDF-fixture")
-    router = ParserRouter(_UnusedRegistry())  # type: ignore[arg-type]
-    monkeypatch.setattr(router, "should_use_understanding_api", lambda *_args, **_kwargs: True)
 
     with pytest.raises(InvalidArgumentError, match="no_split.*Understanding"):
-        await router.parse(_local_resource(source), split_content=False)
+        await processor.process(str(source), parse_mode="no_split", parser_backend="understanding")

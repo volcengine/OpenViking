@@ -50,6 +50,14 @@ class _FailingLocalStore(LocalParseOutputStore):
 @pytest.mark.asyncio
 async def test_code_parse_writes_to_local_store(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    for directory in (".idea", "__pycache__", "node_modules"):
+        (repo / directory).mkdir()
+        (repo / directory / "ignored.py").write_text("print('ignored')")
+    (repo / ".gitignore").write_text("generated.py\n")
+    (repo / "generated.py").write_text("print('generated')")
+    for name in ("module.pyc", "video.mp4", "audio.wav", "cover.jpg"):
+        (repo / name).write_bytes(b"ignored")
+
     store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
 
     parser = CodeRepositoryParser()
@@ -69,7 +77,11 @@ async def test_code_parse_writes_to_local_store(tmp_path, monkeypatch):
     # Files landed in the store under repository/... and match source bytes.
     ref = result.artifact_ref
     names = {e.rel_path for e in await store.list(ref, "repository")}
-    assert "repository/README.md" in names
+    assert names == {"repository/README.md", "repository/src"}
+    assert {entry.rel_path for entry in await store.list(ref, "repository/src")} == {
+        "repository/src/main.py"
+    }
+    assert await store.read_bytes(ref, "repository/README.md") == b"# demo"
     assert await store.read_bytes(ref, "repository/src/main.py") == b"print('hi')"
 
 

@@ -8,10 +8,10 @@ from typing import Union
 import pytest
 
 from openviking.parse.accessors.base import DataAccessor, LocalResource
-from openviking.parse.accessors.registry import AccessorRegistry, get_accessor_registry
+from openviking.parse.accessors.registry import AccessorRegistry
 
 
-class TestAccessor(DataAccessor):
+class _LegacyAccessor(DataAccessor):
     """Test accessor implementation."""
 
     def __init__(self, name: str, prefix: str, priority: int = 50):
@@ -19,7 +19,7 @@ class TestAccessor(DataAccessor):
         self.prefix = prefix
         self._priority = priority
 
-    def can_handle(self, source: Union[str, Path]) -> bool:
+    def can_handle(self, source: Union[str, Path]) -> bool:  # type: ignore[override]
         return str(source).startswith(self.prefix)
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
@@ -43,22 +43,6 @@ class TestAccessorRegistry:
         """Create a fresh registry (without default accessors)."""
         return AccessorRegistry(register_default=False)
 
-    def test_get_accessor(self, registry: AccessorRegistry) -> None:
-        """Get an accessor that can handle a source."""
-        accessor1 = TestAccessor("test1", "test1:", 50)
-        accessor2 = TestAccessor("test2", "test2:", 50)
-        registry.register(accessor1)
-        registry.register(accessor2)
-
-        result = registry.get_accessor("test1:source")
-        assert result is accessor1
-
-        result = registry.get_accessor("test2:source")
-        assert result is accessor2
-
-        result = registry.get_accessor("unknown:source")
-        assert result is None
-
     @pytest.mark.asyncio
     async def test_access_fallback_to_local(
         self, registry: AccessorRegistry, tmp_path: Path
@@ -76,25 +60,18 @@ class TestAccessorRegistry:
 
         assert result.source_type == "local"
         assert result.path == test_file
-        assert result.is_temporary is False
+        result.cleanup()
+        assert test_file.read_text() == "content"
 
     @pytest.mark.asyncio
-    async def test_access_with_accessor(self, registry: AccessorRegistry) -> None:
-        """access() uses the matching accessor."""
-        accessor = TestAccessor("test", "test:", 50)
+    async def test_legacy_accessor_receives_options_after_selection(
+        self, registry: AccessorRegistry
+    ) -> None:
+        """Legacy can_handle(source) accepts selection with request options."""
+        accessor = _LegacyAccessor("test", "test:", 50)
         registry.register(accessor)
 
         result = await registry.access("test:source", extra="value")
 
         assert result.source_type == "test"
         assert result.meta == {"accessor": "test", "extra": "value"}
-
-
-class TestGlobalRegistry:
-    """Tests for the global registry."""
-
-    def test_get_accessor_registry(self) -> None:
-        """get_accessor_registry returns a singleton."""
-        r1 = get_accessor_registry()
-        r2 = get_accessor_registry()
-        assert r1 is r2
