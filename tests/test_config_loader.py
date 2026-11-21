@@ -447,6 +447,28 @@ def test_openviking_config_ignores_unknown_fields(monkeypatch, caplog):
     assert "test-secret" not in caplog.text
 
 
+def test_top_level_memory_policy_logs_explicit_redirect(monkeypatch, caplog):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+    logger = logging.getLogger("openviking_cli.utils.config.open_viking_config")
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
+    caplog.set_level(logging.ERROR, logger=logger.name)
+
+    config = OpenVikingConfig.from_dict(
+        {
+            "default_user": "alice",
+            "memory_policy": {"working_memory": {"enabled": True}},
+        }
+    )
+
+    # The misplaced key must not become part of the parsed config.
+    assert not hasattr(config, "memory_policy")
+    # The misplacement must be surfaced at ERROR level, not silently ignored.
+    assert (
+        "Config field 'memory_policy' is not valid at the top level and is ignored" in caplog.text
+    )
+    assert "server.user_config_defaults.memory_policy" in caplog.text
+
+
 def test_memory_extraction_output_format_defaults_to_python_and_accepts_json(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
