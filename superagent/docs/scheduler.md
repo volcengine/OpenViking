@@ -2,12 +2,16 @@
 
 How accepted inputs reach the model. Set per instance with `agents[].scheduler`
 in `config.json` (`OV_SUPERAGENT_SCHEDULER` in the daemon env), read once at start.
+`ov-superagent setup` writes it for a new instance: `workers` on Pi, Codex,
+TraeX or Claude Code, `legacy` on other runtimes. An instance without it runs
+`legacy`, and editing an instance in setup keeps what it has; to change it,
+edit `config.json` and restart the instance.
 
 | Value | Behaviour |
 |---|---|
 | `legacy` (default) | Every input goes into the running turn as soon as it arrives (Codex/TraeX `turn/steer`, Pi `steer`, ...); an idle runtime starts a turn with it. Group lines that arrive within 400 ms start one turn together. |
 | `inbox` | While the model works, inputs wait and the model is told they are there; it reads them at a checkpoint. |
-| `workers` | The inbox, and the main session becomes a router: it hands longer work to worker sessions on the same runtime and relays their results. |
+| `workers` | The inbox, and the main session becomes a router: it hands longer work to worker sessions (on the router's runtime unless `/workers` sets another) and relays their results. |
 
 With `legacy`, the prompt, the tool list, the policyHash and the database schema
 are exactly what they were before the setting existed.

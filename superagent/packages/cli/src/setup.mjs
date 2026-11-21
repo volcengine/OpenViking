@@ -30,6 +30,7 @@ import {
   collectDshModelDraft, dshSettingsDocument, validateDshModelDraft, writeDshModelDraft,
 } from './dsh-model-wizard.mjs';
 import { resolveRuntimeModelTarget } from '../../daemon/src/runtime-catalog.mjs';
+import { WORKER_RUNTIMES } from '../../daemon/src/worker-executor.mjs';
 import {
   DSH_HOME_SHARED, defaultDshSkillRoots, dshHomePath, dshSkillDirectories, dshSkillRootChoices,
 } from '../../daemon/src/dsh-config.mjs';
@@ -1938,6 +1939,11 @@ async function setupFlow({
     delete agent.ovRecallScope;
     delete agent.ovRemember;
     Object.assign(agent, state.switches);
+    // How inputs reach the model (agents[].scheduler), chosen once, for a new
+    // instance: workers on a runtime workers run on, legacy elsewhere. An edit
+    // keeps what the instance has, set here or by hand. The manifest's own
+    // default stays legacy, so an instance set up before is never switched.
+    if (!current) agent.scheduler = WORKER_RUNTIMES.includes(state.runtime?.id) ? 'workers' : 'legacy';
     if (emailAccounts.length) agent.emailAccounts = emailAccounts;
     else delete agent.emailAccounts;
     return withDefaultTempDir(agent, { OV_SUPERAGENT_TEMP_DIR: env.OV_SUPERAGENT_TEMP_DIR ?? manifest?.env?.OV_SUPERAGENT_TEMP_DIR });

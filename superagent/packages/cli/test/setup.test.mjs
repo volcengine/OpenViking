@@ -141,6 +141,8 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     explicitSilence: true,
     // The first AI colleague on Feishu stores the owner's meeting notes.
     meetingNotes: true,
+    // A new instance on a runtime workers run on hands longer work to them.
+    scheduler: 'workers',
     model: 'codex:',
   }]);
   // Under an API key the key is the instance's identity; the copy names no peer.
