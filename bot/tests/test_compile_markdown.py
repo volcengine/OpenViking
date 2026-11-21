@@ -687,6 +687,169 @@ async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
     pipeline.client.write.assert_not_awaited()
 
 
+async def test_simple_compile_incremental_fails_when_write_is_rejected_after_source_inspection(
+    pipeline, agent_loop
+):
+    loop, session_key, _ = agent_loop
+    pipeline.client.write = AsyncMock()
+    pipeline.client.diff_paths = AsyncMock(
+        return_value={
+            "added": ["viking://resources/source/a.md"],
+            "modified": [],
+            "deleted": [],
+            "next_offset": None,
+        }
+    )
+    request = pipeline.request.model_copy(
+        update={
+            "changes": {
+                "execution": {"mode": "incremental"},
+                "base": "snap-1",
+                "head": "snap-2",
+                "full_dirs": [],
+                "diff_dirs": ["viking://resources/source"],
+            }
+        }
+    )
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest("diff", "openviking_diff_paths", {}, 0)],
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "openviking_write",
+                        {
+                            "path": "selection-rules.md",
+                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(content="Done"),
+        ]
+    )
+
+    with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
+        await simple.run(
+            loop,
+            pipeline.client,
+            request,
+            request.from_,
+            pipeline.skill,
+            session_key,
+            None,
+            AsyncMock(),
+            {},
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
+
+
+async def test_simple_compile_reports_latest_rejected_write_error_after_retry(pipeline, agent_loop):
+    loop, session_key, _ = agent_loop
+    pipeline.client.write = AsyncMock()
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write-1",
+                        "openviking_write",
+                        {
+                            "path": "first.md",
+                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write-2",
+                        "openviking_write",
+                        {
+                            "path": "second.md",
+                            "content": "---\n type: concept\ntitle: Rules\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            ),
+            LLMResponse(content="Done"),
+        ]
+    )
+
+    with pytest.raises(CompileFailure, match=r"second\.md.*line 3, column 1") as caught:
+        await simple.run(
+            loop,
+            pipeline.client,
+            pipeline.request,
+            pipeline.request.from_,
+            pipeline.skill,
+            session_key,
+            None,
+            AsyncMock(),
+            {},
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    assert "first.md" not in str(caught.value)
+    pipeline.client.write.assert_not_awaited()
+
+
+async def test_simple_compile_iteration_limit_includes_last_write_error(pipeline, agent_loop):
+    loop, session_key, _ = agent_loop
+    loop.max_iterations = 1
+    pipeline.client.write = AsyncMock()
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write",
+                        "openviking_write",
+                        {
+                            "path": "selection-rules.md",
+                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
+                        },
+                        0,
+                    )
+                ],
+            )
+        ]
+    )
+
+    with pytest.raises(
+        CompileFailure,
+        match=r"Iteration limit reached without confirmed output\..*selection-rules\.md",
+    ) as caught:
+        await simple.run(
+            loop,
+            pipeline.client,
+            pipeline.request,
+            pipeline.request.from_,
+            pipeline.skill,
+            session_key,
+            None,
+            AsyncMock(),
+            {},
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
+
+
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
     pipeline.evidence["input"] = {"uri": "viking://resources/source/a.md"}
     pipeline.status["input"] = "prepared"
