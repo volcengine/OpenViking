@@ -186,6 +186,28 @@ async def test_auth_code_concurrent_consume_race(store):
 
 
 @pytest.mark.asyncio
+async def test_pending_delete_is_a_one_shot_claim(store):
+    """The authorize status poll claims a pending row by deleting it once.
+
+    A second delete must report that the row was already gone, so overlapping
+    polls can never both believe they own the consent.
+    """
+    pending_id = await store.create_pending_authorization(
+        client_id="client-x",
+        redirect_uri="https://example.com/cb",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="challenge-xyz",
+        scopes=["mcp"],
+        resource=None,
+        state=None,
+        display_code="ABC123",
+    )
+    assert await store.delete_pending_authorization(pending_id) is True
+    assert await store.load_pending_authorization(pending_id) is None
+    assert await store.delete_pending_authorization(pending_id) is False
+
+
+@pytest.mark.asyncio
 async def test_auth_code_expired_rejected(store):
     code = "stale-code"
     await _insert_code(store, code, ttl_seconds=60)

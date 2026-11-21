@@ -740,16 +740,24 @@ class OAuthStore:
         async with self._lock:
             return await asyncio.to_thread(_u)
 
-    async def delete_pending_authorization(self, pending_id: str) -> None:
-        def _del() -> None:
+    async def delete_pending_authorization(self, pending_id: str) -> bool:
+        """Delete a pending row and report whether this call removed it.
+
+        Callers that mint a credential from the row (the authorize page status
+        poll) treat a True return as a one-shot claim: two overlapping polls
+        must not both mint a code from a single consent.
+        """
+
+        def _del() -> bool:
             assert self._conn is not None
-            self._conn.execute(
+            cur = self._conn.execute(
                 "DELETE FROM oauth_pending_authorizations WHERE pending_id = ?",
                 (pending_id,),
             )
+            return cur.rowcount > 0
 
         async with self._lock:
-            await asyncio.to_thread(_del)
+            return await asyncio.to_thread(_del)
 
     # ---- Maintenance ----
 
