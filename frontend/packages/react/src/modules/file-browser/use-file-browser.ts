@@ -300,6 +300,7 @@ export function useFileBrowser({
     previewFooter: preview.footer,
     previewUpdatedAt: preview.updatedAt,
     refreshing,
+    refreshGeneration,
     actions,
   };
 }
