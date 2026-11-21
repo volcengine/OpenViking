@@ -20,7 +20,7 @@ from openviking_cli.utils.config.storage_config import StorageConfig
 
 
 def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch, capsys):
-    config = ServerConfig(host="127.0.0.1", port=1933)
+    config = ServerConfig(host="127.0.0.1", port=1933, event_loop="uvloop")
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -68,6 +68,7 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch, capsys):
 
     bootstrap.main()
 
+    assert captured["loop"] == "uvloop"
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 1933
     assert "OpenViking HTTP Server is running on 127.0.0.1:1933" in capsys.readouterr().out
@@ -180,7 +181,7 @@ def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
 
 
 def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
-    config = ServerConfig(host="127.0.0.1", port=1933)
+    config = ServerConfig(host="127.0.0.1", port=1933, event_loop="uvloop")
     captured = {}
     original_parse_args = bootstrap.argparse.ArgumentParser.parse_args
 
@@ -219,6 +220,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
 
         bootstrap.main()
 
+        assert captured["loop"] == "uvloop"
         assert captured["with_bot"] is True
         assert captured["app"] == "openviking.server.app:create_worker_app"
         assert os.environ[app_module.WORKER_HOST_ENV] == config.host
@@ -290,13 +292,15 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "create_app",
-        lambda worker_config, config_path: captured.update(
-            {
-                "app_config": worker_config,
-                "app_config_path": config_path,
-            }
-        )
-        or worker_config,
+        lambda worker_config, config_path: (
+            captured.update(
+                {
+                    "app_config": worker_config,
+                    "app_config_path": config_path,
+                }
+            )
+            or worker_config
+        ),
     )
 
     worker_config = app_module.create_worker_app()

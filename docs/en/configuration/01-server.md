@@ -792,3 +792,9 @@ Provider-, parser-, storage-, and encryption-specific fields are documented in [
   }
 }
 ```
+
+## Event-loop selection
+
+`server.event_loop` accepts `"auto"` (default), `"asyncio"`, or `"uvloop"` and controls Uvicorn for both single-worker and multi-worker startup. Install `openviking[gateway-fast]` for uvloop on supported non-Windows systems. Uvicorn auto selects uvloop when installed.
+
+SQL stores use a separate private event loop. Set the process environment `OPENVIKING_SQL_LOOP=uvloop` before starting the server to opt into uvloop for that loop as well. Its default remains `asyncio`; no global loop policy is changed. Windows always uses the psycopg-compatible SelectorEventLoop for SQL, including when this environment variable is uvloop. Invalid values and a missing explicitly requested uvloop fail before the SQL thread starts. Restart after changing either selection. For a full fallback, set `server.event_loop` to `"asyncio"` and `OPENVIKING_SQL_LOOP=asyncio`. Embedded applications must configure their own HTTP runner. Validate driver cancellation, shutdown and platform compatibility before adoption.

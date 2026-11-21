@@ -526,6 +526,7 @@ def _main(recovery):
                     host=config.host,
                     port=config.port,
                     workers=workers,
+                    loop=config.event_loop,
                     timeout_keep_alive=config.timeout_keep_alive,
                     log_config=None,
                     access_log=False,
@@ -534,6 +535,7 @@ def _main(recovery):
                 restart_requested = _run_restartable_server(
                     app,
                     recovery=recovery,
+                    loop=config.event_loop,
                     host=config.host,
                     port=config.port,
                     timeout_keep_alive=config.timeout_keep_alive,
