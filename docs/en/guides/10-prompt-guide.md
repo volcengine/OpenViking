@@ -142,6 +142,8 @@ Field meanings:
 - `peer_enabled`
   - Whether this memory type is stored separately under peer directories when `peer_id` or message ranges identify a peer. The default is `true`; set `false` for memories that must stay under the current user space.
 
+OpenViking renders the top-level `description` and each `fields[].description` when building the extraction schema. `language` is the only variable supplied to descriptions. The storage templates `directory` and `filename_template` receive `user_space`. In descriptions, refer to storage locations in plain text, such as “Search existing entity memories for a matching category.”
+
 When writing a memory schema, focus on:
 
 - whether the field granularity is stable
@@ -653,6 +655,7 @@ Symptoms and first things to check:
 |---------|----------------------|
 | Results do not change at all after modification | The custom directory is not active, or the file path does not match |
 | The model reports missing variables | Template variable names do not match what callers provide |
+| Memory extraction reports `unknown_variable` in a description while building its schema | Use the memory type, field, and variable shown in the error to locate the affected description. If the message only shows `description: unknown_variable (line N)`, check the top-level and field descriptions in your custom memory schemas. The line number is relative to the description text. |
 | Returned content format is broken | The prompt output format changed, but downstream parsing still expects the old structure |
 | A new memory type never appears | `memory.custom_templates_dir` is not active, or the schema was not loaded correctly |
 | Retrieval quality gets worse | The `retrieval`, `semantic`, or `compression` prompt was changed too aggressively |
