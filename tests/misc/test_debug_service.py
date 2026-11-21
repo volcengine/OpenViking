@@ -7,12 +7,14 @@ Tests for DebugService and ObserverService.
 import asyncio
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import (
     ComponentStatus,
     DebugService,
     ObserverService,
     SystemStatus,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestComponentStatus:
@@ -393,7 +395,9 @@ class TestObserverService:
     def test_queue_json_status_without_dependency_is_structured(self):
         """Test queue json format returns a structured payload when uninitialized."""
         service = ObserverService()
-        with patch("openviking.service.debug_service.get_queue_manager", side_effect=RuntimeError()):
+        with patch(
+            "openviking.service.debug_service.get_queue_manager", side_effect=RuntimeError()
+        ):
             status = service.get_queue_status(format="json")
         assert isinstance(status, ComponentStatus)
         assert status.name == "queue"
@@ -524,6 +528,95 @@ class TestObserverService:
         mock_config.vlm.get_vlm_instance.return_value = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         assert service.is_healthy() is False
+
+    @patch("openviking.service.debug_service.ModelsObserver")
+    @patch("openviking.models.rerank.RerankClient")
+    def test_account_models_passes_rerank_instance_when_configured(
+        self, mock_rerank_client_cls, mock_observer_cls
+    ):
+        """Test account_models wires a RerankClient into ModelsObserver when rerank is available.
+
+        Regression for #5489: account_models() previously constructed ModelsObserver without
+        rerank_instance, so the account-scope /api/v1/observer/models endpoint never rendered
+        a Rerank Models section even when rerank was configured.
+        """
+        mock_rerank_instance = MagicMock(name="RerankClient.from_config.return_value")
+        mock_rerank_client_cls.from_config.return_value = mock_rerank_instance
+
+        mock_config = MagicMock()
+        mock_config.rerank.is_available.return_value = True
+
+        mock_vlm_instance = MagicMock(name="vlm")
+        mock_embedding_bound = MagicMock(name="embedding.bind")
+
+        mock_observer = MagicMock()
+        mock_observer.is_healthy.return_value = True
+        mock_observer.has_errors.return_value = False
+        mock_observer.get_status_table.return_value = "Models Status Table"
+        mock_observer_cls.return_value = mock_observer
+
+        service = ObserverService(config=mock_config)
+        service._embedding_provider = MagicMock()
+        service._embedding_provider.get_status = AsyncMock(return_value=MagicMock(dimension=1024))
+        service._embedding_provider.bind = MagicMock(return_value=mock_embedding_bound)
+        service._vlm_resolver = MagicMock()
+        service._vlm_resolver.get_vlm = AsyncMock(return_value=mock_vlm_instance)
+
+        ctx = RequestContext(
+            user=UserIdentifier.the_default_user(),
+            role=Role.USER,
+        )
+        status = asyncio.run(service.account_models(ctx))
+
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "models"
+        assert status.is_healthy is True
+        assert status.has_errors is False
+        mock_rerank_client_cls.from_config.assert_called_once_with(mock_config.rerank)
+        mock_observer_cls.assert_called_once_with(
+            vlm_instance=mock_vlm_instance,
+            embedding_instance=mock_embedding_bound,
+            rerank_instance=mock_rerank_instance,
+        )
+
+    @patch("openviking.service.debug_service.ModelsObserver")
+    def test_account_models_leaves_rerank_instance_none_when_not_available(self, mock_observer_cls):
+        """Test account_models leaves rerank_instance=None when rerank config is unavailable.
+
+        Regression-fence for #5489: ensures the new branch does not silently start passing a
+        non-None value when rerank is not configured.
+        """
+        mock_config = MagicMock()
+        mock_config.rerank.is_available.return_value = False
+
+        mock_vlm_instance = MagicMock(name="vlm")
+        mock_embedding_bound = MagicMock(name="embedding.bind")
+
+        mock_observer = MagicMock()
+        mock_observer.is_healthy.return_value = True
+        mock_observer.has_errors.return_value = False
+        mock_observer.get_status_table.return_value = "Models Status Table"
+        mock_observer_cls.return_value = mock_observer
+
+        service = ObserverService(config=mock_config)
+        service._embedding_provider = MagicMock()
+        service._embedding_provider.get_status = AsyncMock(return_value=MagicMock(dimension=1024))
+        service._embedding_provider.bind = MagicMock(return_value=mock_embedding_bound)
+        service._vlm_resolver = MagicMock()
+        service._vlm_resolver.get_vlm = AsyncMock(return_value=mock_vlm_instance)
+
+        ctx = RequestContext(
+            user=UserIdentifier.the_default_user(),
+            role=Role.USER,
+        )
+        status = asyncio.run(service.account_models(ctx))
+
+        assert status.is_healthy is True
+        mock_observer_cls.assert_called_once_with(
+            vlm_instance=mock_vlm_instance,
+            embedding_instance=mock_embedding_bound,
+            rerank_instance=None,
+        )
 
 
 class TestDebugService:
