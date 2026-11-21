@@ -117,6 +117,7 @@ class VolcEngineVLM(OpenAIVLM):
         if isinstance(response, str):
             return VLMResponse(content=response) if has_tools else response
 
+        self._raise_if_content_rejected(response)
         choice = response.choices[0]
         message = choice.message
         if hasattr(message, "tool_calls") and message.tool_calls:
