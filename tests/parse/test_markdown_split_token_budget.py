@@ -43,6 +43,21 @@ async def test_heading_merges_stay_within_character_budget():
     assert sum(op.content.count("文") for op in writes) == 9000
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "indent, has_section", [(0, True), (1, True), (2, True), (3, True), (4, False)]
+)
+async def test_layout_recognizes_indented_headings(indent, has_section):
+    content = (
+        "# Guide\n\n" + " " * indent + "## Install\n\n" + "a" * 1200 + "\n\n## Run\n\n" + "b" * 1200
+    )
+    layout = await MarkdownParser()._compute_layout(
+        content, "viking://temp/test", resource_name="guide"
+    )
+    filenames = [op.uri.rsplit("/", 1)[-1] for op in layout.ops if op.kind == "write"]
+    assert any(name.startswith("Install") for name in filenames) is has_section
+
+
 @pytest.mark.parametrize("leading_row", ["", "| short |\n"])
 def test_oversized_table_row_remains_intact_with_header(leading_row):
     parser = MarkdownParser()
