@@ -203,7 +203,7 @@ RETRYABLE_RATE_LIMIT_MARKERS = (
 
 _RATE_LIMIT_STATUS_RE = re.compile(
     r"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
-    r"\s*[:=]?\s*429(?!\w)|(?<![\w-])429(?![\w-]))",
+    r"\s*[:=]?\s*429(?!\w)|(?<![\w:-])429(?![\w-]))",
     re.IGNORECASE,
 )
 _RATE_LIMIT_ERROR_CLASSES: tuple[type[BaseException], ...] = ()
@@ -220,7 +220,7 @@ def _get_numeric_pattern_re(pattern: str) -> re.Pattern:
         escaped = re.escape(pattern)
         _NUMERIC_PATTERN_RE[pattern] = re.compile(
             rf"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
-            rf"\s*[:=]?\s*{escaped}(?!\w)|(?<![\w-]){escaped}(?![\w-]))"
+            rf"\s*[:=]?\s*{escaped}(?!\w)|(?<![\w:-]){escaped}(?![\w-]))"
         )
     return _NUMERIC_PATTERN_RE[pattern]
 
@@ -229,7 +229,8 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
     """Check if pattern matches in text, using token-aware matching for numeric patterns.
 
     Numeric-only patterns (e.g. ``"413"``) must look like HTTP status codes, not
-    request ID fragments. Non-numeric patterns use plain substring matching as before.
+    request ID, host-port, or file-line fragments. Non-numeric patterns use plain
+    substring matching as before.
     """
     if pattern.isdigit():
         return bool(_get_numeric_pattern_re(pattern).search(text_lower)) or bool(
