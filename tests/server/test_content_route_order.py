@@ -46,7 +46,8 @@ async def test_content_first_preserves_public_dispatch_and_openapi(monkeypatch):
             {
                 "endpoint": self.endpoint.__module__ + "." + self.endpoint.__qualname__,
                 "params": scope.get("path_params", {}),
-            }
+            },
+            status_code=200 if scope["method"] in (self.methods or ()) else 405,
         )
         await response(scope, receive, send)
 
