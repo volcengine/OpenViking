@@ -84,6 +84,8 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 
 插件还提供手动 slash command：`/add-resource`、`/add-skill`、`/ov-search`、`/ov-recall-trace`。Agent 可见的 `add_resource` 工具默认禁用（`enableAddResourceTool=false`），避免搜索/检索阶段误触发资源导入；如确实要允许 Agent 导入资源，可显式设置 `enableAddResourceTool=true`，否则使用手动 `/add-resource`。
 
+设置 `recallExcludeUris`（逗号分隔的子树 URI）可以把 `viking://user/memories/skills`、`viking://agent/skills` 这类生成的目录文件挡在自动召回之外：它们会作为 `exclude_uris` 发给 context search，避免样板内容白白消耗召回配额。
+
 ## 数据流与隐私
 
 - **发送内容**：每轮 user/assistant 消息文本（已剥离注入的记忆块和元数据噪音）。

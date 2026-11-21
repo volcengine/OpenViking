@@ -389,6 +389,33 @@ describe("buildAutoRecallContext trace", () => {
     expect(recorded.searches.map((search) => search.resourceType)).toEqual(["user"]);
   });
 
+  it("forwards configured recallExcludeUris to the context search", async () => {
+    const cfg = makeCfg({ recallExcludeUris: "viking://user/memories/skills,viking://agent/skills" });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      searchContext: vi.fn().mockResolvedValue({
+        entries: [],
+        rendered: "",
+        stats: { candidates: 0, used_tokens: 0 },
+      }),
+      find: vi.fn(),
+      read: vi.fn(),
+    };
+
+    await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "where are the project docs?",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(client.searchContext).toHaveBeenCalledTimes(1);
+    expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
+      excludeUris: ["viking://user/memories/skills", "viking://agent/skills"],
+    });
+  });
+
   it("uses configured autoRecallTimeoutMs for both the request and outer budget", async () => {
     vi.useFakeTimers();
     try {
