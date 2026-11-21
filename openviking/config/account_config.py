@@ -96,6 +96,7 @@ class AccountVLMConfig(BaseModel):
             "api_version",
             "extra_headers",
             "extra_request_body",
+            "thinking_extra_request_body",
             "credentials",
         }
     )
