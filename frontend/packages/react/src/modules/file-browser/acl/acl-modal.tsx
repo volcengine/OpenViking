@@ -129,9 +129,7 @@ export function AclModal({
           ? text.saving
           : model.phase === 'loading'
             ? text.loading
-            : model.saved
-              ? text.saved
-              : ''}
+            : ''}
       </div>
       {model.confirmation ? (
         <AclConfirmation model={model} text={text} />

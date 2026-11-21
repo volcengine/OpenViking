@@ -1,4 +1,5 @@
 import { Button } from '../../shared/primitives/button/button.js';
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useOvClient,
@@ -130,6 +131,10 @@ export function useFileBrowserAcl({
   const level =
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
+  // Pending saves may finish after the host changes its locale or labels.
+  const currentText = useRef(text);
+  currentText.current = text;
+  const [toast, toastHolder] = useToast({ locale });
   return {
     checkWrite,
     canDelete: !enabled || level === 'manage',
@@ -155,33 +160,38 @@ export function useFileBrowserAcl({
           onManage={() => setOpened(key)}
         />
       ) : null,
-    drawer:
-      enabled && uri && context && level === 'manage' ? (
-        <AclModal
-          key={key}
-          uri={uri}
-          open={opened === key}
-          text={text}
-          locale={locale}
-          triggerRef={triggerRef}
-          context={context}
-          accountId={identity.accountId}
-          userId={identity.userId}
-          options={options}
-          onClose={() => setOpened(undefined)}
-          onUpdated={(report) => {
-            // Keep the Modal mounted while the manager probe refreshes; a downgrade
-            // will remove the panel as soon as the authoritative check returns.
-            setGeneration((value) => value + 1);
-            void refresh();
-            try {
-              options?.onChange?.(report);
-            } catch {
-              // A host notification cannot undo a successful server mutation.
-              return;
-            }
-          }}
-        />
-      ) : null,
+    drawer: (
+      <>
+        {toastHolder}
+        {enabled && uri && context && level === 'manage' ? (
+          <AclModal
+            key={key}
+            uri={uri}
+            open={opened === key}
+            text={text}
+            locale={locale}
+            triggerRef={triggerRef}
+            context={context}
+            accountId={identity.accountId}
+            userId={identity.userId}
+            options={options}
+            onClose={() => setOpened(undefined)}
+            onUpdated={(report) => {
+              toast.success({ content: currentText.current.saved });
+              // Keep the Modal mounted while the manager probe refreshes; a downgrade
+              // will remove the panel as soon as the authoritative check returns.
+              setGeneration((value) => value + 1);
+              void refresh();
+              try {
+                options?.onChange?.(report);
+              } catch {
+                // A host notification cannot undo a successful server mutation.
+                return;
+              }
+            }}
+          />
+        ) : null}
+      </>
+    ),
   };
 }
