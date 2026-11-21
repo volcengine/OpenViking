@@ -4,6 +4,7 @@ import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
 import { log } from "./utils.mjs"
+import { createSkillExperience } from "./skill-experience.mjs"
 
 const METADATA_KEY = "openviking"
 const CURSOR_KEY_PREFIX = "capture-cursor/"
@@ -37,6 +38,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     return task
   }
   const directory = ctx?.location?.project?.directory || ctx?.location?.directory
+  const skillExperience = createSkillExperience({ config, directory })
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
@@ -72,6 +74,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       try {
         await runtime.ready
         await noticeV2Tool(event, vikingUriNotice)
+        await skillExperience.after(event)
       } catch (error) {
         logHookError("tool.execute.after", error)
       }
@@ -121,6 +124,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       const sessionID = event?.data?.sessionID ?? event?.data?.sessionId
       if (!LIFECYCLE_EVENTS.has(event?.type) || !sessionID) return
       if (!(await ownsSession(ctx, sessionOwnership, event, sessionID))) return
+      if (event.type === "session.deleted" || event.type === "session.execution.interrupted") skillExperience.forget(sessionID)
       await serializeSession(async () => {
         await runtime.ready
         if (event.type === "session.execution.failed") {
@@ -151,6 +155,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   }
 
   return async () => {
+    skillExperience.dispose()
     controller.abort()
     try {
       await eventTask
