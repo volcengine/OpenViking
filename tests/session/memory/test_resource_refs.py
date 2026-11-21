@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
+
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile
@@ -215,3 +217,174 @@ def test_unlink_resource_references_removes_bare_uri_but_keeps_sentence():
     assert changed is True
     assert mf.content == "用户保存了越前龙马照片。"
     assert "resource_refs" not in mf.extra_fields
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"ref": "viking://resources/demo"}',
+        '{"outer": {"ref": "viking://resources/demo"}, "n": 2}',
+        '[{"ref": "viking://resources/demo"}]',
+        '{\n  "source": "viking://user/alice/resources/demo",\n  "note": "keep"\n}',
+    ],
+)
+def test_sync_memory_resource_refs_leaves_json_bodies_parseable(body):
+    mf = MemoryFile(content=body, extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == body
+    assert json.loads(mf.content) == json.loads(body)
+    refs = mf.extra_fields["resource_refs"]
+    assert [ref["resource_uri"] for ref in refs] == [extract_resource_uris(body)[0]]
+    assert "match_text" not in refs[0]
+
+
+def test_sync_memory_resource_refs_is_idempotent_for_json_bodies():
+    mf = MemoryFile(content='{"ref": "viking://resources/demo"}', extra_fields={})
+
+    assert sync_memory_resource_refs(mf, source="content.write")
+    assert not sync_memory_resource_refs(mf, source="content.write")
+
+
+def test_sync_memory_resource_refs_still_linkifies_prose_around_braces():
+    mf = MemoryFile(content="config {a: 1} see viking://resources/a", extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == "[config {a: 1} see](viking://resources/a)"
+
+
+def test_sync_memory_resource_refs_records_json_refs_for_resource_memory_link():
+    resource_uri = "viking://resources/demo"
+    mf = MemoryFile(content=f'{{"ref": "{resource_uri}"}}', extra_fields={"resource_refs": []})
+
+    sync_memory_resource_refs(mf, source="session.commit")
+
+    assert content_references_resource(mf.content, resource_uri)
+    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == resource_uri
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_uri"),
+    [
+        ('"Saved at viking://resources/demo.md"', "viking://resources/demo.md"),
+        ('"viking://resources/demo"', "viking://resources/demo"),
+    ],
+)
+def test_sync_memory_resource_refs_leaves_top_level_json_strings_parseable(body, expected_uri):
+    mf = MemoryFile(content=body, extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == body
+    assert json.loads(mf.content) == json.loads(body)
+    refs = mf.extra_fields["resource_refs"]
+    assert [ref["resource_uri"] for ref in refs] == [expected_uri]
+
+
+def test_unlink_resource_references_removes_escaped_json_uri():
+    # A URI spelled with \\u escapes in the serialized body is the same URI once
+    # decoded, so cleanup has to match it the same way the write path collected
+    # it. Matching the raw text left the reference behind and every later
+    # resource linkify turned the escaped spelling into a Markdown link.
+    resource_uri = "viking://resources/café-lifecycle.md"
+    body = json.dumps({"ref": resource_uri})
+    assert "\\u00e9" in body
+    mf = MemoryFile(content=body, extra_fields={"resource_refs": [{"resource_uri": resource_uri}]})
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {"ref": ""}
+    assert json.loads(mf.content) is not None
+    assert "resource_refs" not in mf.extra_fields
+
+
+def test_unlink_resource_references_keeps_unrelated_escaped_json_uris():
+    target_uri = "viking://resources/café-lifecycle.md"
+    kept_uri = "viking://resources/café-other.md"
+    body = json.dumps({"ref": target_uri, "keep": kept_uri})
+
+    mf = MemoryFile(content=body, extra_fields={})
+    sync_memory_resource_refs(mf, source="content.write")
+
+    changed = unlink_resource_references_from_memory(mf, target_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {"ref": "", "keep": kept_uri}
+    assert [
+        ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]
+    ] == [kept_uri]
+
+
+def test_unlink_resource_references_removes_markdown_link_in_json_string():
+    # A Markdown link inside a JSON string value records its decoded target, so
+    # unlinking has to remove the link the same way the prose path does. Removing
+    # only bare URIs left it in place, and the next sync recorded the resource
+    # again, which made unlink invisible to the caller.
+    resource_uri = "viking://resources/my file.md"
+    body = '{"ref": "[saved](viking://resources/my%20file.md)"}'
+
+    mf = MemoryFile(content=body, extra_fields={})
+    sync_memory_resource_refs(mf, source="content.write")
+    assert [ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]] == [resource_uri]
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {"ref": "saved"}
+    assert "resource_refs" not in mf.extra_fields
+
+    sync_memory_resource_refs(mf, source="content.write")
+    assert "resource_refs" not in mf.extra_fields
+
+
+def test_unlink_resource_references_keeps_unrelated_markdown_link_in_json_string():
+    target_uri = "viking://resources/my file.md"
+    kept_uri = "viking://resources/other%20file.md"
+    body = json.dumps(
+        {
+            "target": "[saved](viking://resources/my%20file.md)",
+            "keep": "[other](viking://resources/other%20file.md)",
+        }
+    )
+
+    mf = MemoryFile(content=body, extra_fields={})
+    sync_memory_resource_refs(mf, source="content.write")
+    assert sorted(ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]) == sorted(
+        [target_uri, kept_uri.replace("%20", " ")]
+    )
+
+    changed = unlink_resource_references_from_memory(mf, target_uri)
+
+    assert changed is True
+    assert json.loads(mf.content) == {
+        "target": "saved",
+        "keep": "[other](viking://resources/other%20file.md)",
+    }
+    assert [ref["resource_uri"] for ref in mf.extra_fields["resource_refs"]] == [
+        kept_uri.replace("%20", " ")
+    ]
+
+
+def test_content_references_resource_decodes_json_bodies():
+    resource_uri = "viking://resources/café-lifecycle.md"
+    body = json.dumps({"ref": resource_uri})
+    assert "\\u00e9" in body
+
+    assert content_references_resource(body, resource_uri) is True
+    assert content_references_resource(body, "viking://resources/other.md") is False
+
+
+def test_sync_memory_resource_refs_decodes_escaped_json_string_values():
+    resource_uri = "viking://resources/café.md"
+    body = json.dumps({"ref": resource_uri})
+    assert "\\u00e9" in body
+
+    mf = MemoryFile(content=body, extra_fields={})
+
+    sync_memory_resource_refs(mf, source="content.write")
+
+    assert mf.content == body
+    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == resource_uri

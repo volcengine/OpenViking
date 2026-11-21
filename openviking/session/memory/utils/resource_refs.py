@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -50,18 +51,27 @@ def sync_memory_resource_refs(
     before_content = mf.content
     before_refs = _coerce_resource_refs(mf.extra_fields.get("resource_refs"))
 
-    code_spans = _protected_code_spans(mf.content)
-    markdown_refs, markdown_spans = _extract_markdown_resource_refs(
-        mf.content,
-        code_spans,
-    )
-    mf.content, bare_refs = _linkify_bare_resource_uris(
-        mf.content,
-        code_spans + markdown_spans,
-    )
+    is_json, json_value = _json_document(mf.content)
+    if is_json:
+        # A JSON body has no Markdown prose to linkify, and rewriting it would
+        # turn a string value into a link, leaving the body unparsable. The URIs
+        # are still literal once the strings are decoded, so record them without
+        # touching the text.
+        refs = [{"resource_uri": uri} for uri in _json_resource_uris(json_value)]
+    else:
+        code_spans = _protected_code_spans(mf.content)
+        markdown_refs, markdown_spans = _extract_markdown_resource_refs(
+            mf.content,
+            code_spans,
+        )
+        mf.content, bare_refs = _linkify_bare_resource_uris(
+            mf.content,
+            code_spans + markdown_spans,
+        )
+        refs = markdown_refs + bare_refs
     _merge_resource_refs(
         mf,
-        markdown_refs + bare_refs,
+        refs,
         source=source,
         reason=reason,
         created_at=created_at,
@@ -87,6 +97,9 @@ def content_references_resource(
     recursive: bool = False,
 ) -> bool:
     """Return whether visible memory content references a resource URI."""
+    is_json, json_value = _json_document(content)
+    if is_json:
+        return _json_references_resource(json_value, resource_uri, recursive=recursive)
     return any(
         resource_ref_matches(uri, resource_uri, recursive=recursive)
         for uri in extract_resource_uris(content)
@@ -94,7 +107,10 @@ def content_references_resource(
 
 
 def extract_resource_uris(content: str) -> List[str]:
-    """Extract literal storage URIs, decoding Markdown destinations only."""
+    """Extract literal storage URIs, decoding Markdown destinations and JSON string values."""
+    is_json, json_value = _json_document(content)
+    if is_json:
+        return _json_resource_uris(json_value)
     refs, markdown_spans = _extract_markdown_resource_refs(content, ())
     uris = [ref["resource_uri"] for ref in refs]
     for match in _RESOURCE_URI_RE.finditer(content or ""):
@@ -141,6 +157,14 @@ def unlink_resource_references_from_content(
     recursive: bool = False,
 ) -> str:
     """Turn matching resource links into plain text and remove bare resource URIs."""
+    is_json, json_value = _json_document(content)
+    if is_json and _json_references_resource(json_value, resource_uri, recursive=recursive):
+        # A JSON body is scanned for references through its decoded strings, so
+        # the removal has to work on the same values: a URI spelled `caf\u00e9`
+        # in the text is the same URI once decoded.
+        return json.dumps(
+            _json_unlink_value(json_value, resource_uri, recursive=recursive)
+        )
     text = content or ""
     text = _unlink_matching_markdown_resource_links(text, resource_uri, recursive=recursive)
     text = _remove_matching_bare_resource_uris(text, resource_uri, recursive=recursive)
@@ -230,9 +254,100 @@ def _remove_matching_bare_resource_uris(
     return text
 
 
+def _json_document(content: str) -> tuple[bool, Any]:
+    """Return whether the whole body is one JSON value, and that decoded value."""
+    text = (content or "").strip()
+    if not text or text[0] not in '{["':
+        return False, None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return False, None
+    return isinstance(value, (dict, list, str)), value
+
+
+def _json_references_resource(
+    value: Any,
+    resource_uri: str,
+    *,
+    recursive: bool,
+) -> bool:
+    return any(
+        resource_ref_matches(uri, resource_uri, recursive=recursive)
+        for uri in _json_resource_uris(value)
+    )
+
+
+def _json_unlink_value(
+    value: Any,
+    resource_uri: str,
+    *,
+    recursive: bool,
+) -> Any:
+    if isinstance(value, str):
+        return _unlink_json_string(value, resource_uri, recursive=recursive)
+    if isinstance(value, dict):
+        return {
+            key: _json_unlink_value(item, resource_uri, recursive=recursive)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _json_unlink_value(item, resource_uri, recursive=recursive)
+            for item in value
+        ]
+    return value
+
+
+def _json_resource_uris(value: Any) -> List[str]:
+    found: List[str] = []
+    for text in _json_string_values(value):
+        found.extend(extract_resource_uris(text))
+    return list(dict.fromkeys(found))
+
+
+def _json_string_values(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _json_string_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _json_string_values(item)
+
+
+def _unlink_json_string(
+    value: str,
+    resource_uri: str,
+    *,
+    recursive: bool,
+) -> str:
+    """Remove matching URIs from one decoded JSON string, keeping it JSON-safe."""
+    if not content_references_resource(value, resource_uri, recursive=recursive):
+        return value
+    # A JSON string value can carry the same Markdown link a prose body does, and
+    # `_json_resource_uris` records its decoded target. Removing only bare URIs
+    # left the link behind, so the next sync recorded the resource again.
+    updated = _unlink_matching_markdown_resource_links(
+        value,
+        resource_uri,
+        recursive=recursive,
+    )
+    updated = _remove_matching_bare_resource_uris(
+        updated,
+        resource_uri,
+        recursive=recursive,
+    )
+    return _normalize_unlinked_reference_text(updated)
+
+
 def _linkify_bare_resource_uris(
     content: str,
     protected_spans: Sequence[tuple[int, int]],
+    *,
+    resource_uri: Optional[str] = None,
+    recursive: bool = False,
 ) -> tuple[str, List[Dict[str, Any]]]:
     refs: List[Dict[str, Any]] = []
     updated = content or ""
@@ -240,15 +355,24 @@ def _linkify_bare_resource_uris(
 
     matches = list(_RESOURCE_URI_RE.finditer(updated))
     for match in reversed(matches):
-        resource_uri = _trim_resource_uri(match.group(0))
-        if not resource_uri:
+        matched_uri = _trim_resource_uri(match.group(0))
+        if not matched_uri:
             continue
         start = match.start()
-        end = start + len(resource_uri)
+        end = start + len(matched_uri)
         if _overlaps_spans(start, end, protected_spans):
             continue
+        if resource_uri is not None and not resource_ref_matches(
+            matched_uri, resource_uri, recursive=recursive
+        ):
+            continue
 
-        refs.append({"resource_uri": resource_uri})
+        refs.append({"resource_uri": matched_uri})
+        if resource_uri is not None:
+            # Unlinking removes the reference instead of turning it into a link.
+            updated = updated[:start] + updated[end:]
+            covered_start = start
+            continue
         sentence_span = _previous_sentence_span(updated, start)
         if not sentence_span:
             continue
@@ -261,7 +385,7 @@ def _linkify_bare_resource_uris(
         if contains_resource_uri(anchor) or "](" in anchor:
             continue
         refs[-1]["match_text"] = anchor
-        replacement = f"[{anchor}]({LinkRenderer.encode_markdown_target(resource_uri)})"
+        replacement = f"[{anchor}]({LinkRenderer.encode_markdown_target(matched_uri)})"
         updated = updated[:anchor_start] + replacement + updated[end:]
         covered_start = anchor_start
 
