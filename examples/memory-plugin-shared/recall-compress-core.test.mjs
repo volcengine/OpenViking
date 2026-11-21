@@ -7,6 +7,8 @@ import {
   compressRecallContext,
   normalizeCompressedContext,
   repairDigestUris,
+  skipsCompressionForShortPrompt,
+  userTypedPromptLength,
 } from "./lib/recall-compress-core.mjs";
 
 async function tempPath(name) {
@@ -56,6 +58,60 @@ test("short compression input returns the caller's bounded context", async () =>
 
   assert.deepEqual(result, { status: "ok", context: "bounded display context" });
   assert.equal(called, false);
+});
+
+test("the prompt threshold measures only what the user typed", () => {
+  const reminder = `<system-reminder>${"context ".repeat(200)}</system-reminder>`;
+  assert.equal(userTypedPromptLength(`${reminder}\n\nyes`), 3);
+  assert.equal(userTypedPromptLength(`${reminder}\n${reminder}\nproceed`), 7);
+  assert.equal(userTypedPromptLength("yes"), 3);
+  // Below the threshold, at it, and above it, with the injected blocks present.
+  assert.equal(skipsCompressionForShortPrompt({ recallCompressMinPromptChars: 120 }, `${reminder}\nyes`), true);
+  assert.equal(
+    skipsCompressionForShortPrompt({ recallCompressMinPromptChars: 3 }, `${reminder}\nyes`),
+    false,
+  );
+  assert.equal(
+    skipsCompressionForShortPrompt({ recallCompressMinPromptChars: 120 }, `${reminder}\n${"x".repeat(120)}`),
+    false,
+  );
+  // 0 is the default and keeps compression unconditional, as before.
+  assert.equal(skipsCompressionForShortPrompt({}, "yes"), false);
+  assert.equal(skipsCompressionForShortPrompt({ recallCompressMinPromptChars: 0 }, "yes"), false);
+});
+
+test("a short prompt skips the compressor and keeps the raw context", async () => {
+  let called = false;
+  const result = await compressRecallContext({
+    query: "yes",
+    rendered: "full compressor input that is longer than the input threshold",
+    shortContext: "raw recall block",
+    cfg: { recallCompressMinInputChars: 0, recallCompressMinPromptChars: 120 },
+    runCompressor: async () => {
+      called = true;
+      return "- compressed fact 来源：viking://user/u/a.md";
+    },
+  });
+
+  assert.deepEqual(result, { status: "ok", context: "raw recall block" });
+  assert.equal(called, false);
+});
+
+test("a long prompt still compresses when a prompt threshold is set", async () => {
+  let called = 0;
+  const result = await compressRecallContext({
+    query: "explain how the retrieval pipeline ranks skills against memories",
+    rendered: "full compressor input",
+    shortContext: "raw recall block",
+    cfg: { recallCompressMinInputChars: 0, recallCompressMinPromptChars: 20 },
+    runCompressor: async () => {
+      called += 1;
+      return "- compressed fact 来源：viking://user/u/a.md";
+    },
+  });
+
+  assert.equal(called, 1);
+  assert.match(result.context, /compressed fact/);
 });
 
 test("compression cache is reused only for the same request", async () => {

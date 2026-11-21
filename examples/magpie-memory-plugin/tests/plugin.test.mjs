@@ -324,6 +324,16 @@ for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
   });
 }
 
+test("a short prompt drops the server rewrite and a long one keeps it", async (t) => {
+  const f = await fixture(t);
+  await f.save({ plugin: { magpie: { recallCompress: "server", recallCompressMinPromptChars: 8 } } });
+  await recallRequest({ ...body(), messages: [{ role: "user", content: "yes" }] }, context({ query: "yes" }), f.env);
+  assert.equal(f.calls[0].body.rewrite, undefined);
+  const long = "describe the deployment topology";
+  await recallRequest({ ...body(), messages: [{ role: "user", content: long }] }, context({ query: long }), f.env);
+  assert.equal(f.calls[1].body.rewrite, true);
+});
+
 test("unsupported shapes and disabled/empty recall keep the request", async (t) => {
   assert.equal(injectContext({}, "unsupported", "memory"), undefined);
   assert.equal(injectContext({ instructions: [] }, "responses", "memory"), undefined);

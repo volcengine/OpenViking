@@ -9,6 +9,26 @@ const COMPRESS_OK = "ok";
 const COMPRESS_EMPTY = "empty";
 const COMPRESS_FAILED = "failed";
 
+// Hosts front-load machine-authored context into the prompt field: the Claude
+// desktop app puts <system-reminder> blocks there, so a raw length check would
+// never see a short reply as short. Only the blocks the host owns are removed —
+// anything the user typed stays and counts toward the threshold.
+export function userTypedPromptLength(query = "") {
+  return String(query || "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, " ")
+    .trim()
+    .length;
+}
+
+/**
+ * True when the prompt is short enough that a digest adds little over the raw
+ * recall block while still costing a host model round trip.
+ */
+export function skipsCompressionForShortPrompt(cfg = {}, query = "") {
+  const minPromptChars = Math.max(0, Number(cfg.recallCompressMinPromptChars ?? 0) || 0);
+  return minPromptChars > 0 && userTypedPromptLength(query) < minPromptChars;
+}
+
 // Medium-constraint prompt: state the goal and two structural floors, but no hard
 // bullet-length contract. Hard per-bullet limits pin the digest to headline
 // density; leaving it unconstrained lets small models rewrite long URIs into dead
@@ -170,6 +190,9 @@ export async function compressRecallContext({
 }) {
   const input = String(rendered || "").trim();
   if (!input) return { status: COMPRESS_EMPTY, context: "" };
+  if (skipsCompressionForShortPrompt(cfg, query)) {
+    return { status: COMPRESS_OK, context: String(shortContext ?? input).trim() };
+  }
   const minChars = Math.max(0, Number(cfg.recallCompressMinInputChars ?? 1500));
   if (input.length < minChars) {
     return { status: COMPRESS_OK, context: String(shortContext ?? input).trim() };
