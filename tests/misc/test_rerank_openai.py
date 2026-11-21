@@ -33,9 +33,8 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("test query", ["doc1", "doc2", "doc3"])
 
         assert scores == [0.9, 0.3, 0.7]
@@ -55,9 +54,8 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("test query", ["doc1", "doc2", "doc3"])
 
         assert scores == [0.9, 0.3, 0.7]
@@ -73,9 +71,8 @@ class TestOpenAIRerankClient:
         mock_response.json.return_value = {"unexpected": "format"}
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -93,9 +90,11 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ), patch("openviking.models.rerank.openai_rerank.logger.warning") as warning:
+        with (
+            patch.object(client, "_session") as mock_session,
+            patch("openviking.models.rerank.openai_rerank.logger.warning") as warning,
+        ):
+            mock_session.post.return_value = mock_response
             result = client.rerank_batch("query", ["doc1", "doc2", "doc3"])
 
         assert result == [0.9, 0.0, 0.7]
@@ -116,9 +115,8 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -136,9 +134,8 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -146,10 +143,8 @@ class TestOpenAIRerankClient:
     def test_rerank_batch_http_error_returns_none(self):
         client = self._make_client()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post",
-            side_effect=Exception("connection error"),
-        ):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.side_effect = Exception("connection error")
             result = client.rerank_batch("query", ["doc1"])
 
         assert result is None
@@ -162,12 +157,11 @@ class TestOpenAIRerankClient:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ) as mock_post:
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             client.rerank_batch("my query", ["doc1"])
 
-        call_kwargs = mock_post.call_args
+        call_kwargs = mock_session.post.call_args
         assert call_kwargs.kwargs["url"] == "https://dashscope.aliyuncs.com/api/v1/services/rerank"
         assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer test-key"
         body = call_kwargs.kwargs["json"]
