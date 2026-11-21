@@ -39,6 +39,12 @@ hermes
 Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和运行环境
 升级说明见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
 
+要为单个 profile 关闭基于对话历史的查询规划，可设置
+`memory.openviking.session_aware_search: false`，或在该 profile 的环境中设置
+`OPENVIKING_SESSION_AWARE_SEARCH=false`；默认值为 `true`，环境变量优先。
+自动召回和 deep 搜索会保留已配置的 rerank；已启用的召回压缩仍可能调用模型。
+详见[会话查询规划设置](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#session-aware-search)。
+
 ## 查看状态
 
 ```bash

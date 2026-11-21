@@ -353,6 +353,28 @@ strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
 resource and directory cleanup.
 
 
+### Session-aware search
+
+By default, automatic recall and `viking_search` in `deep` mode use conversation
+history for query planning when it is enabled on the server. To disable that
+planning for one Hermes profile, set this in its `config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    session_aware_search: false
+```
+
+`OPENVIKING_SESSION_AWARE_SEARCH` overrides YAML using the bound profile's
+environment. The default is `true`; invalid values use that default.
+Configured reranking is preserved, and the tool's fast/deep modes keep their
+existing retrieval behavior apart from session-aware planning.
+
+When session-aware search is disabled with `recall_compress: server` or `auto`,
+query expansion is disabled but the session remains available for recall
+deduplication. Compression can still call a model. This setting does not replace
+the server-wide `retrieval.enable_intent` policy.
+
 ### Cloud recall compression
 
 Set `OPENVIKING_RECALL_COMPRESS=server` to enable cloud recall compression, or
