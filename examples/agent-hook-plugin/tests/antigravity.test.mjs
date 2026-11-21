@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,7 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     OPENVIKING_HOOK_STATE_DIR: join(root, "state"),
     OPENVIKING_MEMORY_ENABLED: "1",
     OPENVIKING_WRITE_PATH_ASYNC: "0",
+    OPENVIKING_COMMIT_TURN_THRESHOLD: "1",
   };
   try {
     const base = { conversationId: "conv-1", cwd: "/workspace", transcriptPath };
@@ -218,6 +219,203 @@ test("Antigravity reads transcript_full.jsonl in place of the truncated transcri
     assert.equal(antigravityTranscriptPath(other), other);
     assert.equal(antigravityTranscriptPath(undefined), "");
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity batches commits, defers mid-turn background yields, skips subagents, and sweeps idle tails", async () => {
+  const messagesBySession = new Map();
+  const commits = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      const url = request.url || "";
+      if (url === "/api/v1/search/search" || url === "/api/v1/search/recall") {
+        response.end(JSON.stringify({ result: { rendered: "", entries: [], stats: {} } }));
+      } else if (url.includes("/messages")) {
+        const sid = decodeURIComponent(url.split("/sessions/")[1].split("/")[0]);
+        const parsed = JSON.parse(body);
+        const list = messagesBySession.get(sid) || [];
+        list.push(...(parsed.messages ?? [parsed]));
+        messagesBySession.set(sid, list);
+        response.end(JSON.stringify({ result: { ok: true } }));
+      } else if (url.endsWith("/commit")) {
+        const sid = decodeURIComponent(url.split("/sessions/")[1].split("/")[0]);
+        commits.push(sid);
+        response.end(JSON.stringify({ result: { ok: true } }));
+      } else {
+        response.end(JSON.stringify({ result: {} }));
+      }
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+
+  const root = mkdtempSync(join(tmpdir(), "openviking-antigravity-batch-"));
+  const stateDir = join(root, "state");
+  const env = {
+    HOME: root,
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+    OPENVIKING_HOOK_STATE_DIR: stateDir,
+    OPENVIKING_MEMORY_ENABLED: "1",
+    OPENVIKING_WRITE_PATH_ASYNC: "0",
+    OPENVIKING_IDLE_TTL_MS: "1000",
+    OPENVIKING_COMMITTED_TTL_MS: "5000",
+  };
+  const say = (index, question, answer) => step(index, {
+    source: "USER_EXPLICIT",
+    type: "USER_INPUT",
+    content: `<USER_REQUEST>\n${question}\n</USER_REQUEST>`,
+  }) + step(index + 1, {
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    content: answer,
+  });
+  const readState = (id) => JSON.parse(readFileSync(join(stateDir, "antigravity", `${id}.json`), "utf8"));
+  const ageSession = (id, transcriptPath, ageMs) => {
+    const past = Date.now() - ageMs;
+    const stateFile = join(stateDir, "antigravity", `${id}.json`);
+    const current = JSON.parse(readFileSync(stateFile, "utf8"));
+    writeFileSync(stateFile, `${JSON.stringify({
+      ...current,
+      lastActivityAt: past,
+      lastSessionStartAt: past,
+      promptAt: current.promptAt ? past : undefined,
+    }, null, 2)}\n`);
+    const secs = past / 1000;
+    utimesSync(stateFile, secs, secs);
+    if (transcriptPath && existsSync(transcriptPath)) utimesSync(transcriptPath, secs, secs);
+  };
+
+  try {
+    // 1. Subagent transcript (no USER_EXPLICIT step): SessionStart runs, Stop
+    //    neither creates nor commits an OpenViking session, and idle sweep retires state.
+    const subPath = join(root, "subagent_transcript.jsonl");
+    writeFileSync(subPath, step(0, { source: "SYSTEM", type: "SYSTEM_MESSAGE", content: "Delegate research task." })
+      + step(1, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Subagent finished investigating the module." }));
+    const subBase = { conversationId: "conv-sub", workspacePaths: ["/workspace"], transcriptPath: subPath };
+    await runHook("session-start", subBase, env);
+    await runHook("stop", { ...subBase, fullyIdle: true }, env);
+    assert.equal(messagesBySession.has("ag-conv-sub"), false);
+    assert.equal(commits.includes("ag-conv-sub"), false);
+
+    // 2. Main session batches behind commitTurnThreshold (default 8) and defers
+    //    committing on a mid-turn `fullyIdle: false` yield until convergence.
+    const mainPath = join(root, "main_transcript.jsonl");
+    const mainBase = { conversationId: "conv-main", cwd: "/workspace", transcriptPath: mainPath };
+    writeFileSync(mainPath, say(0, "What is the first architectural constraint?", "The first constraint keeps state local.")
+      + say(2, "What is the second architectural constraint?", "The second constraint serializes writes.")
+      + say(4, "What is the third architectural constraint?", "The third constraint preserves the cursor."));
+    await runHook("stop", { ...mainBase, fullyIdle: true }, env);
+    assert.equal(messagesBySession.get("ag-conv-main")?.length, 6);
+    assert.equal(commits.length, 0);
+    assert.equal(readState("conv-main").capturedSinceCommit, 6);
+
+    // Turn 4 yields to a subagent after sending prompt + interim note (total 8 >= 8),
+    // with `fullyIdle: false`: messages land, commit holds until `fullyIdle: true`.
+    appendFileSync(mainPath, step(6, {
+      source: "USER_EXPLICIT",
+      type: "USER_INPUT",
+      content: "<USER_REQUEST>\nCheck the subagent findings before answering.\n</USER_REQUEST>",
+    }) + step(7, {
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      content: "Dispatching a research subagent now and waiting for its report.",
+    }));
+    await runHook("stop", { ...mainBase, fullyIdle: false }, env);
+    assert.equal(messagesBySession.get("ag-conv-main")?.length, 8);
+    assert.equal(commits.length, 0, "mid-turn background yield defers commit");
+    assert.equal(readState("conv-main").capturedSinceCommit, 8);
+
+    appendFileSync(mainPath, step(8, {
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      content: "The subagent confirmed all three invariants hold.",
+    }));
+    await runHook("stop", { ...mainBase, fullyIdle: true }, env);
+    assert.equal(messagesBySession.get("ag-conv-main")?.length, 9);
+    assert.deepEqual(commits, ["ag-conv-main"]);
+    assert.equal(readState("conv-main").capturedSinceCommit, 0);
+
+    // Daemon fallback: if `fullyIdle` stays false (e.g. a dev server is running),
+    // reaching 2x threshold still commits so long sessions are not starved.
+    const daemonEnv = { ...env, OPENVIKING_COMMIT_TURN_THRESHOLD: "2" };
+    const daemonPath = join(root, "daemon_transcript.jsonl");
+    const daemonBase = { conversationId: "conv-daemon", cwd: "/workspace", transcriptPath: daemonPath, fullyIdle: false };
+    writeFileSync(daemonPath, say(0, "Start the dev server and check port.", "Dev server is running in daemon mode."));
+    await runHook("stop", daemonBase, daemonEnv);
+    assert.equal(commits.includes("ag-conv-daemon"), false);
+    appendFileSync(daemonPath, say(2, "Now verify the health endpoint.", "The health endpoint returned status ok."));
+    await runHook("stop", daemonBase, daemonEnv);
+    assert.equal(commits.includes("ag-conv-daemon"), true);
+
+    // 3. Tail below threshold + unsent crash step recovered by SessionStart sweep.
+    appendFileSync(mainPath, say(9, "One short follow-up before closing.", "Captured on Stop below threshold."));
+    await runHook("stop", { ...mainBase, fullyIdle: true }, env);
+    assert.equal(readState("conv-main").capturedSinceCommit, 2);
+    // Simulate a final turn written to disk whose Stop never ran before exit.
+    appendFileSync(mainPath, say(11, "Final turn before window closed.", "Recovered by the idle sweep before commit."));
+
+    // Freshly active session is NOT swept when another conversation starts.
+    await runHook("session-start", { conversationId: "conv-other-1", cwd: "/workspace" }, env);
+    assert.equal(commits.filter((id) => id === "ag-conv-main").length, 1);
+
+    // Held per-session lock prevents the sweep from racing an in-flight Stop worker.
+    ageSession("conv-main", mainPath, 2500);
+    const mainLock = join(stateDir, "antigravity", "conv-main.json.lock");
+    mkdirSync(mainLock);
+    await runHook("session-start", { conversationId: "conv-other-2", cwd: "/workspace" }, env);
+    assert.equal(commits.filter((id) => id === "ag-conv-main").length, 1, "locked session is skipped");
+    rmSync(mainLock, { recursive: true, force: true });
+
+    // Unreadable transcript (directory at transcript path -> EISDIR) blocks premature commit.
+    const unreadableDir = join(root, "unreadable_dir");
+    mkdirSync(unreadableDir);
+    const currentMain = readState("conv-main");
+    writeFileSync(join(stateDir, "antigravity", "conv-main.json"), `${JSON.stringify({
+      ...currentMain,
+      transcriptPath: unreadableDir,
+    }, null, 2)}\n`);
+    ageSession("conv-main", unreadableDir, 2500);
+    await runHook("session-start", { conversationId: "conv-other-3", cwd: "/workspace" }, env);
+    assert.equal(commits.filter((id) => id === "ag-conv-main").length, 1, "unreadable transcript preserves uncommitted tail");
+    assert.equal(readState("conv-main").transcriptUnreadable, true);
+
+    // Restore transcriptPath and age both conv-main and conv-sub past IDLE_TTL_MS:
+    // detached async SessionStart sweep catches up steps 11-12, commits conv-main,
+    // preserves conv-main's cursor (< COMMITTED_TTL_MS), and retires conv-sub.
+    writeFileSync(join(stateDir, "antigravity", "conv-main.json"), `${JSON.stringify({
+      ...readState("conv-main"),
+      transcriptPath: mainPath,
+    }, null, 2)}\n`);
+    ageSession("conv-main", mainPath, 2500);
+    ageSession("conv-sub", subPath, 2500);
+    await runHook("session-start", { conversationId: "conv-async-trigger", cwd: "/workspace" }, {
+      ...env,
+      OPENVIKING_WRITE_PATH_ASYNC: "1",
+    });
+    const subStateFile = join(stateDir, "antigravity", "conv-sub.json");
+    const deadline = Date.now() + 3000;
+    while (
+      (commits.filter((id) => id === "ag-conv-main").length < 2
+        || readState("conv-main").capturedSinceCommit !== 0
+        || existsSync(subStateFile))
+      && Date.now() < deadline
+    ) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(commits.filter((id) => id === "ag-conv-main").length, 2, "detached sweep commits idle tail");
+    assert.equal(messagesBySession.get("ag-conv-main")?.length, 13, "sweep caught up unsent tail before commit");
+    assert.equal(readState("conv-main").capturedSinceCommit, 0);
+    assert.equal(readState("conv-main").lastStep, 12);
+    assert.equal(existsSync(subStateFile), false, "cursorless subagent state retired");
+
+    // Once past COMMITTED_TTL_MS with nothing uncommitted, the cursor state is retired too.
+    ageSession("conv-main", mainPath, 7000);
+    await runHook("session-start", { conversationId: "conv-retire-trigger", cwd: "/workspace" }, env);
+    assert.equal(existsSync(join(stateDir, "antigravity", "conv-main.json")), false, "expired cursor retired");
+  } finally {
+    server.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
