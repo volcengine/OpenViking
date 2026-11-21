@@ -26,26 +26,29 @@ def truncate_embedding_input(
     # Quarter-token units preserve the original estimate without rounding each
     # run. No prefix longer than 4 * max_tokens can fit, even with only ASCII.
     max_units = max_tokens * 4
+    if len(suffix) >= max_units:
+        suffix = ""
+    room = max_units - len(suffix)
     if text.isascii():
-        return text if len(text) <= max_units else text[:max_units].rstrip() + suffix
+        return text if len(text) <= max_units else text[:room].rstrip() + suffix
     scan_end = min(len(text), max_units + 1)
     units = position = 0
     for match in _CJK_RUN.finditer(text, 0, scan_end):
         start, end = match.span()
         # Ordinary characters preceding the CJK run cost one unit each.
         if units + start - position > max_units:
-            prefix_end = position + max_units - units
+            prefix_end = min(position + max_units - units, room)
             return text[:prefix_end].rstrip() + suffix
         units += start - position
         if units + (end - start) * 4 > max_units:
-            prefix_end = start + (max_units - units) // 4
+            prefix_end = min(start + (max_units - units) // 4, room)
             return text[:prefix_end].rstrip() + suffix
         units += (end - start) * 4
         position = end
 
     if units + scan_end - position <= max_units:
         return text
-    prefix_end = position + max_units - units
+    prefix_end = min(position + max_units - units, room)
     return text[:prefix_end].rstrip() + suffix
 
 
