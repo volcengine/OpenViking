@@ -294,7 +294,13 @@ async def authorize_page_status(request: Request, pending: str = "") -> JSONResp
     if not record["verified"]:
         return JSONResponse({"status": "pending"}, headers={"Cache-Control": "no-store"})
 
-    # Verified — mint auth code and tear down pending row.
+    # Verified — claim the pending row before minting. The claim is one-shot:
+    # two overlapping polls (a duplicated tab, a retried request) must not each
+    # mint a valid authorization code from a single consent, so only the poll
+    # that removes the row proceeds; the loser reports the row as expired.
+    if not await store.delete_pending_authorization(pending):
+        return JSONResponse({"status": "expired"}, status_code=410)
+
     auth_code = provider.mint_authorization_code()
     scope_str = " ".join(record["scopes"]) if record.get("scopes") else None
     await store.insert_auth_code(
@@ -313,7 +319,6 @@ async def authorize_page_status(request: Request, pending: str = "") -> JSONResp
         authorizing_key_fp=record.get("verified_key_fp") or "",
         ttl_seconds=provider.code_ttl_seconds,
     )
-    await store.delete_pending_authorization(pending)
 
     params: dict[str, str] = {"code": auth_code}
     if record.get("state"):
