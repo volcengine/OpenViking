@@ -37,9 +37,12 @@ from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import bind_task_context, get_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import (
+    ABSTRACT_NOT_READY_SUFFIX,
     ABSTRACT_OVERVIEW_FILENAMES,
+    OVERVIEW_NOT_READY_SUFFIX,
     body_for_preview,
     embedding_text_for_body,
+    is_directory_summary_placeholder,
 )
 from openviking.storage.errors import LockError
 from openviking.storage.internal_names import is_storage_internal_name
@@ -75,30 +78,6 @@ _MEMORY_NON_SOURCE_FILENAMES = ABSTRACT_OVERVIEW_FILENAMES | {
     ".relations.json",
     ".ovgitignore",
 }
-
-
-# Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
-# (see openviking/storage/viking_fs.py). The rendered value is a placeholder, not semantic
-# content, and must never be embedded as an ABSTRACT (L0) / OVERVIEW (L1) vector (issue #2434).
-_ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
-_OVERVIEW_NOT_READY_SUFFIX = "[Directory overview is not ready]"
-
-
-def _is_not_ready_sentinel(text: str, suffix: str) -> bool:
-    """Return True if *text* is a VikingFS not-ready directory placeholder.
-
-    VikingFS renders these as a single ``# <uri>`` header followed only by the not-ready marker.
-    Match that exact shape (a ``#`` header with no substantive body before the trailing marker)
-    so the check is uri-agnostic yet never drops real directory content that merely ends with,
-    or mentions, the user-facing marker phrase.
-    """
-    if not text:
-        return False
-    head = text.rstrip()
-    if not head.endswith(suffix):
-        return False
-    head = head[: -len(suffix)].strip()
-    return head.startswith("#") and "\n" not in head
 
 
 @dataclass
@@ -2096,9 +2075,9 @@ class ReindexExecutor:
             return _SourceRead(exists=True, error=exc)
         try:
             text = body_for_preview(raw).strip()
-            if _is_not_ready_sentinel(text, _ABSTRACT_NOT_READY_SUFFIX) or _is_not_ready_sentinel(
-                text, _OVERVIEW_NOT_READY_SUFFIX
-            ):
+            if is_directory_summary_placeholder(
+                text, ABSTRACT_NOT_READY_SUFFIX
+            ) or is_directory_summary_placeholder(text, OVERVIEW_NOT_READY_SUFFIX):
                 text = ""
             return _SourceRead(exists=True, text=text)
         except Exception as exc:
@@ -2109,14 +2088,14 @@ class ReindexExecutor:
             value = await get_viking_fs().abstract(uri, ctx=ctx)
         except Exception:
             return ""
-        return "" if _is_not_ready_sentinel(value, _ABSTRACT_NOT_READY_SUFFIX) else value
+        return "" if is_directory_summary_placeholder(value, ABSTRACT_NOT_READY_SUFFIX) else value
 
     async def _read_directory_overview(self, uri: str, *, ctx: RequestContext) -> str:
         try:
             value = await get_viking_fs().overview(uri, ctx=ctx)
         except Exception:
             return ""
-        return "" if _is_not_ready_sentinel(value, _OVERVIEW_NOT_READY_SUFFIX) else value
+        return "" if is_directory_summary_placeholder(value, OVERVIEW_NOT_READY_SUFFIX) else value
 
     async def _upsert_context(
         self,
