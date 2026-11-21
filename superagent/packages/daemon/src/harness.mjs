@@ -267,17 +267,27 @@ export class Harness {
   redeliverUndecided(row, { seq = null, undecided = true } = {}) {
     return this.enqueueIngress(async () => {
       await this.runtime.prepareInputContext?.();
-      const owner = this.isOwner(row);
-      const mention = this.mentionTarget(row);
-      this.route(eventDeliveryItem(row, seq, {
+      const { item, meta } = this.redelivery(row, { seq, undecided });
+      this.route(item, meta);
+    });
+  }
+
+  // An accepted line shown again, as redeliverUndecided routes it; a runtime
+  // switch hands these to its target itself (AgentRuntime._resumeCut).
+  redelivery(row, { seq = null, undecided = true } = {}) {
+    const owner = this.isOwner(row);
+    const mention = this.mentionTarget(row);
+    return {
+      item: eventDeliveryItem(row, seq, {
         text: formatInboundLine(row, null, {
           owner,
           mention,
           replyTo: row.messageType === 'card_action' ? { kind: 'me' } : resolveReplyTarget(this.store, row),
           undecided,
         }),
-      }), inputMeta(row, { owner, mention }));
-    });
+      }),
+      meta: inputMeta(row, { owner, mention }),
+    };
   }
 
   // A slash command and every later accepted message share one global order.

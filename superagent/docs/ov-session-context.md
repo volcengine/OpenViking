@@ -2,7 +2,10 @@
 
 Native sessions retain provider-owned transcripts and compaction. A fresh native
 session (including a hard runtime switch) receives OpenViking's recent raw
-messages on the first real inbound turn. Older history stays in OV archives,
+messages on the first real inbound turn. After a `/runtime` that interrupted
+work, that first turn is the interrupted inputs themselves, handed on by the
+switch: the history ends before the first of them, and what the stopped turn
+sent after it is quoted in the switch notice instead (usage reference). Older history stays in OV archives,
 which the model reads on demand with `read_openviking_session_context`. There
 is no SQLite history fallback and no local summary generator. Whether the
 handoff carries enough history is not checked here; a fuller cross-runtime
