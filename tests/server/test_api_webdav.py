@@ -169,6 +169,61 @@ async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncCl
     assert get_resp.headers["content-length"] == str(len(get_resp.content))
 
 
+async def _webdav_get(monkeypatch, headers: dict[str, str], method: str = "GET"):
+    class FakeFS:
+        async def stat(self, uri: str, ctx=None, skip_count: bool = False):
+            return {"isDir": False, "name": "range.md", "size": 10, "modTime": ""}
+
+        async def read_file_bytes(self, uri: str, ctx=None):
+            return b"0123456789"
+
+    class FakeService:
+        fs = FakeFS()
+
+    monkeypatch.setattr(webdav_router, "get_service", lambda: FakeService())
+    request = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/webdav/resources/scratch/range.md",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+        }
+    )
+    return await webdav_router.get_or_head(request, "scratch/range.md", None)
+
+
+async def test_webdav_get_supports_single_byte_range(monkeypatch):
+    full = await _webdav_get(monkeypatch, {})
+    assert full.status_code == 200
+    assert full.headers["accept-ranges"] == "bytes"
+    head = await _webdav_get(monkeypatch, {}, method="HEAD")
+    assert head.headers["accept-ranges"] == "bytes"
+
+    for header, expected, content_range in [
+        ("bytes=2-5", b"2345", "bytes 2-5/10"),
+        ("bytes=7-", b"789", "bytes 7-9/10"),
+        ("bytes=-3", b"789", "bytes 7-9/10"),
+        ("bytes=8-100", b"89", "bytes 8-9/10"),
+    ]:
+        resp = await _webdav_get(monkeypatch, {"Range": header})
+        assert resp.status_code == 206, header
+        assert resp.body == expected, header
+        assert resp.headers["content-range"] == content_range, header
+        assert resp.headers["content-length"] == str(len(expected)), header
+
+
+async def test_webdav_get_range_edge_cases(monkeypatch):
+    unsatisfiable = await _webdav_get(monkeypatch, {"Range": "bytes=10-"})
+    assert unsatisfiable.status_code == 416
+    assert unsatisfiable.headers["content-range"] == "bytes */10"
+
+    # Multi-range, other units and malformed headers fall back to the full body.
+    for header in ["bytes=0-1,4-5", "items=0-1", "bytes=5-2", "bytes=abc", "bytes=-"]:
+        resp = await _webdav_get(monkeypatch, {"Range": header})
+        assert resp.status_code == 200, header
+        assert resp.body == b"0123456789", header
+
+
 async def test_webdav_put_replace_reuses_direct_write_path(
     client: httpx.AsyncClient,
     service,

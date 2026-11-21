@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import mimetypes
+import re
 import xml.etree.ElementTree as ET
 from datetime import timezone
 from email.utils import format_datetime
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/webdav/resources", tags=["webdav"])
 _DAV_NAMESPACE = "DAV:"
 _WEBDAV_METHODS = "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE"
 _TEXT_MEDIA_FALLBACK = "text/plain; charset=utf-8"
+_BYTE_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 
 
 def _webdav_headers() -> dict[str, str]:
@@ -36,6 +38,29 @@ def _webdav_headers() -> dict[str, str]:
         "DAV": "1",
         "MS-Author-Via": "DAV",
     }
+
+
+def _parse_byte_range(header: str, size: int) -> Optional[tuple[int, int]]:
+    """Return the inclusive (start, end) of a single byte range.
+
+    Returns None when the header is not a single ``bytes`` range, so the caller
+    serves the full body as RFC 9110 allows. Raises ValueError when the range
+    cannot be satisfied.
+    """
+    match = _BYTE_RANGE_RE.fullmatch(header.strip())
+    if not match or not any(match.groups()):
+        return None
+    first, last = match.groups()
+    if not first:  # suffix range: the last N bytes
+        if int(last) == 0 or size == 0:
+            raise ValueError(header)
+        return max(size - int(last), 0), size - 1
+    start = int(first)
+    if last and int(last) < start:  # invalid range: ignore the header
+        return None
+    if start >= size:
+        raise ValueError(header)
+    return start, min(int(last), size - 1) if last else size - 1
 
 
 def _error(status_code: int, message: str) -> PlainTextResponse:
@@ -283,13 +308,32 @@ async def get_or_head(
     is_head = request.method == "HEAD"
     body = b"" if is_head else await service.fs.read_file_bytes(uri, ctx=_ctx)
     headers = _webdav_headers()
-    headers["Content-Length"] = str(int(stat.get("size", 0) or 0) if is_head else len(body))
+    headers["Accept-Ranges"] = "bytes"
+    status_code = 200
+    content_length = int(stat.get("size", 0) or 0) if is_head else len(body)
+    range_header = request.headers.get("range")
+    if range_header and not is_head:
+        try:
+            byte_range = _parse_byte_range(range_header, len(body))
+        except ValueError:
+            return FastAPIResponse(
+                status_code=416,
+                headers={**_webdav_headers(), "Content-Range": f"bytes */{len(body)}"},
+            )
+        if byte_range:
+            start, end = byte_range
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(body)}"
+            body = body[start : end + 1]
+            content_length = len(body)
+            status_code = 206
+    headers["Content-Length"] = str(content_length)
     last_modified = _http_last_modified(str(stat.get("modTime", "") or ""))
     if last_modified:
         headers["Last-Modified"] = last_modified
 
     return FastAPIResponse(
         content=body,
+        status_code=status_code,
         media_type=_content_type_for_name(str(stat.get("name", "")), is_dir=False),
         headers=headers,
     )
