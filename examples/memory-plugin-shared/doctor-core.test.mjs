@@ -358,7 +358,7 @@ test("the hook hosts' doctor reports no hook-budget overrun at any request timeo
       .map((finding) => `${finding.title} → ${finding.fix}`);
   };
   try {
-    for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
+    for (const client of ["antigravity", "cursor", "trae", "trae-cn", "zcode"]) {
       assert.deepEqual(budgetWarnings(client), [], client);
       assert.deepEqual(budgetWarnings(client, { OPENVIKING_TIMEOUT_MS: "35000" }), [], client);
     }
