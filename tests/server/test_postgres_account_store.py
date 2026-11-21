@@ -425,3 +425,25 @@ async def test_pg_missing_schema_fails_without_ddl_or_runtime_lease(pg_database)
         await store.load()
     assert store._engine is None and not store._sql_lease
     await store.close()
+
+
+async def test_pg_auth_cancelled_query_returns_connection(pg_database):
+    from tests.server.auth_connection_test_helpers import (
+        assert_auth_cancelled_query_returns_connection,
+    )
+
+    params, admin, _, role = pg_database
+    store = PostgresAccountStore(
+        service_name="connection-" + uuid4().hex, params={**params, "maxsize": 1}
+    )
+
+    def query_running():
+        return admin.execute(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+            "WHERE usename = %s AND state = 'active' AND query = 'SELECT pg_sleep(30)')",
+            (role,),
+        ).fetchone()[0]
+
+    await assert_auth_cancelled_query_returns_connection(
+        store, "SELECT pg_sleep(30)", query_running
+    )
