@@ -5,7 +5,7 @@ import { createSessionInject } from "./session-inject.mjs"
 import { createVikingUriGuard, createVikingUriNotice } from "./viking-uri-guard.mjs"
 import { loadConfig, resolveDataDir } from "./config.mjs"
 import { initializeRuntime } from "./runtime.mjs"
-import { initLogger, log } from "./utils.mjs"
+import { initLogger, log, makeToast } from "./utils.mjs"
 
 export function createOpenVikingRuntime({ client, directory, pluginRoot }) {
   const config = loadConfig(pluginRoot, directory)
@@ -19,7 +19,7 @@ export function createOpenVikingRuntime({ client, directory, pluginRoot }) {
 
   const repoContext = createRepoContext({ config })
   const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
-  const recall = createMemoryRecall({ config, sessionManager })
+  const recall = createMemoryRecall({ config, sessionManager, notify: makeToast(client) })
   const sessionInject = createSessionInject({ config, sessionManager })
   const vikingUriGuard = createVikingUriGuard()
   const vikingUriNotice = createVikingUriNotice()
