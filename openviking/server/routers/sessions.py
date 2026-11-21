@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
+from openviking.session import history
 from openviking.session.auto_commit_policy import validate_idle_timeout_input
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
@@ -541,6 +542,64 @@ async def get_session_archive(
     except NotFoundError:
         return error_response(code="NOT_FOUND", message=f"Archive {archive_id} not found")
     return Response(status="ok", result=_to_jsonable(result))
+
+
+_HISTORY_TEXT = Field(default="", max_length=10_000)
+
+
+class SessionHistoryRequest(BaseModel):
+    """Request body for POST /sessions/{id}/history (same fields as the MCP tool).
+
+    The length bounds here are a hard stop; tighter limits are answered as text.
+    """
+
+    action: str = Field(..., max_length=10_000, description='"search", "read" or "overview"')
+    sessions: List[Annotated[str, Field(max_length=10_000)]] = Field(
+        default_factory=list,
+        max_length=history.MAX_SESSIONS - 1,
+        description="More session ids, newest first, searched after the path session",
+    )
+    query: str = _HISTORY_TEXT
+    role: str = _HISTORY_TEXT
+    tool: str = _HISTORY_TEXT
+    from_id: str = _HISTORY_TEXT
+    to_id: str = _HISTORY_TEXT
+    id: str = _HISTORY_TEXT
+    before: Optional[int] = None
+    after: Optional[int] = None
+    offset: int = 0
+    limit: int = 10
+
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/{session_id}/history")
+async def session_history(
+    request: SessionHistoryRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Read-only lookup over a session's saved history (archives, live tail, tool outputs).
+
+    Problems such as an unknown session or a bad id are answered in ``text``.
+    """
+    result = await history.session_history(
+        get_service(),
+        _ctx,
+        action=request.action,
+        sessions=[session_id, *request.sessions],
+        query=request.query,
+        role=request.role,
+        tool=request.tool,
+        from_id=request.from_id,
+        to_id=request.to_id,
+        id=request.id,
+        before=request.before,
+        after=request.after,
+        offset=request.offset,
+        limit=request.limit,
+    )
+    return Response(status="ok", result=result.to_dict())
 
 
 @router.delete("/{session_id}")
