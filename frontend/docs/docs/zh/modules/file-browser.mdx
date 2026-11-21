@@ -158,18 +158,18 @@ import '@openviking/react/modules/file-browser/style.css';
 
 每一项默认在当前资源支持该操作时显示。设为 `false` 隐藏，设为 `true` 不会增加资源本来没有的能力。
 
-| 参数        | 说明                                                                                                                                          | 类型      | 默认值 |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------ |
-| copyPath    | 「复制路径」按钮，位于面包屑旁；预览有路径时显示                                                                                              | `boolean` | `true` |
-| viewSwitch  | 「预览 / 源码」切换；编辑时隐藏；只在同时支持两种视图的格式上显示，图片、视频和 `viking://system` 下的目录不支持                              | `boolean` | `true` |
-| edit        | 编辑按钮；只在可写且格式可编辑的文件上显示，经验文件、`viking://system` 下的资源和 L0/L1 摘要不可编辑                                         | `boolean` | `true` |
-| copyContent | 「复制内容」操作，复制当前预览的文本或目录摘要，超过预览行数上限时只复制已显示的部分；二进制媒体和 `viking://system` 下的目录不显示           | `boolean` | `true` |
-| download    | 「下载」操作，下载文件的原始内容；只在文件上显示                                                                                              | `boolean` | `true` |
-| history     | 「查看历史版本」操作；在 Wiki 产物、Wiki 目录和非资源文本文件上显示                                                                           | `boolean` | `true` |
-| configure   | 「编译配置」操作；只在 Wiki 编译目标的根目录上显示，只读时仍可查看                                                                            | `boolean` | `true` |
-| importPack  | 「导入 .ovpack」操作；只在可写的目录上显示，且目录位于 `viking://user`（含 `viking://~`）或 `viking://resources` 下                           | `boolean` | `true` |
-| exportPack  | 「导出 .ovpack」操作；在 `viking://user`（含 `viking://~`）或 `viking://resources` 下的文件和目录上显示，`.relations.json` 等内部控制文件除外 | `boolean` | `true` |
-| delete      | 「删除文档」操作；只在可管理的文件上显示，目录、`viking://system` 下的文件和 L0/L1 摘要不可删除                                               | `boolean` | `true` |
+| 参数        | 说明                                                                                                                                      | 类型      | 默认值 |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------ |
+| copyPath    | 「复制路径」按钮，位于面包屑旁；预览有路径时显示                                                                                          | `boolean` | `true` |
+| viewSwitch  | 「预览 / 源码」切换；编辑时隐藏；只在同时支持两种视图的格式上显示，图片、视频和 `viking://system` 下的目录不支持                          | `boolean` | `true` |
+| edit        | 编辑按钮；只在可写且格式可编辑的文件上显示，经验文件、`viking://system` 下的资源和 L0/L1 摘要不可编辑                                     | `boolean` | `true` |
+| copyContent | 「复制内容」操作，复制当前预览的文本或目录摘要，超过预览行数上限时只复制已显示的部分；二进制媒体和 `viking://system` 下的目录不显示       | `boolean` | `true` |
+| download    | 「下载」操作，下载文件的原始内容；只在文件上显示                                                                                          | `boolean` | `true` |
+| history     | 「查看历史版本」操作；在 Wiki 产物、Wiki 目录和非资源文本文件上显示                                                                       | `boolean` | `true` |
+| configure   | 「编译配置」操作；只在 Wiki 编译目标的根目录上显示，只读时仍可查看                                                                        | `boolean` | `true` |
+| importPack  | 「导入 .ovpack」操作；只在可写的目录上显示，且目录位于 `viking://user`（含 `viking://~`）或 `viking://resources` 下                       | `boolean` | `true` |
+| exportPack  | 「导出 .ovpack」操作；只在 `viking://user`（含 `viking://~`）或 `viking://resources` 下的目录上显示，`.relations.json` 等内部控制文件除外 | `boolean` | `true` |
+| delete      | 「删除文档」操作；只在可管理的文件上显示，目录、`viking://system` 下的文件和 L0/L1 摘要不可删除                                           | `boolean` | `true` |
 
 ### FileBrowserPreviewSlots
 
@@ -589,7 +589,7 @@ await browserRef.current?.openResource(directoryUri);
 - 原生 `/diff` 支持 UTF-8 文本，每侧输入最多 10 MiB、100,000 行，生成的差异最多 20 MiB。回退流程无法确认删除时，历史视图显示读取错误。
 - 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存源目录、Skill 和更新计划，目标目录只读，已有指令和其他执行参数保持不变。同一目录关联多个配置时通过页签切换查看和修改，默认展示首个配置；只有一个配置时不显示页签；查询和更新通过 `compile_name` 定位。当前用户没有关联配置时展示空状态。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
-- 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
+- 导出 .ovpack：仅目录可用，调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
 - 删除：确认后调用 `DELETE /api/v1/fs?uri=...&wait=true`；失败时保留确认框并允许重试，成功后选中父目录并刷新目录树。只能删除文件，不能删除目录。
 - 操作进行中不会重复提交，切换账号或资源、卸载组件时会中止进行中的请求。
 
