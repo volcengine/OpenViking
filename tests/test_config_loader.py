@@ -459,16 +459,23 @@ def test_memory_extraction_output_format_defaults_to_python_and_accepts_json(mon
         OpenVikingConfig.from_dict({"memory": {"extraction_output_format": "yaml"}})
 
 
-def test_memory_maintenance_review_tokens_defaults_and_validates(monkeypatch):
+@pytest.mark.parametrize(
+    ("field", "default", "custom", "invalid"),
+    [
+        ("maintenance_review_tokens", 1000, 4096, 0),
+        ("event_chatlog_max_chars", 0, 2000, -1),
+    ],
+)
+def test_memory_content_limits_default_and_validate(monkeypatch, field, default, custom, invalid):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     default_config = OpenVikingConfig.from_dict({})
-    custom_config = OpenVikingConfig.from_dict({"memory": {"maintenance_review_tokens": 4096}})
+    custom_config = OpenVikingConfig.from_dict({"memory": {field: custom}})
 
-    assert default_config.memory.maintenance_review_tokens == 1000
-    assert custom_config.memory.maintenance_review_tokens == 4096
+    assert getattr(default_config.memory, field) == default
+    assert custom_config.to_dict()["memory"][field] == custom
     with pytest.raises(ValueError):
-        OpenVikingConfig.from_dict({"memory": {"maintenance_review_tokens": 0}})
+        OpenVikingConfig.from_dict({"memory": {field: invalid}})
 
 
 def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
