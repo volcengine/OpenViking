@@ -9,8 +9,11 @@ from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
+
+from openviking.service.task_tracker_concurrency import run_to_completion
 
 
 @dataclass(frozen=True)
@@ -197,11 +200,25 @@ class SandboxBackend(ABC):
         max_bytes: int | None,
     ) -> int:
         """Write a remote byte stream locally while retaining only one chunk in memory."""
-        await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
         total = 0
-        output_stream = None
+        output_stream: BinaryIO | None = None
+
+        def open_destination() -> BinaryIO:
+            nonlocal output_stream
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # Retain the handle even when the caller is cancelled during open.
+            output_stream = destination.open("wb")
+            return output_stream
+
+        def discard_partial() -> None:
+            if output_stream is not None:
+                try:
+                    output_stream.close()
+                finally:
+                    destination.unlink(missing_ok=True)
+
         try:
-            output_stream = await asyncio.to_thread(destination.open, "wb")
+            output = await run_to_completion(lambda: asyncio.to_thread(open_destination))
             async for chunk in stream:
                 if not isinstance(chunk, (bytes, bytearray, memoryview)):
                     raise IOError(f"Sandbox returned invalid file bytes: {original_path}")
@@ -210,19 +227,15 @@ class SandboxBackend(ABC):
                     raise ValueError(
                         f"File exceeds the {max_bytes}-byte export limit: {original_path}"
                     )
-                await asyncio.to_thread(output_stream.write, chunk)
+                await run_to_completion(partial(asyncio.to_thread, output.write, chunk))
+            await run_to_completion(lambda: asyncio.to_thread(output.close))
         except BaseException:
-            if output_stream is not None:
-                await asyncio.to_thread(output_stream.close)
-                output_stream = None
-            await asyncio.to_thread(destination.unlink, missing_ok=True)
+            await run_to_completion(lambda: asyncio.to_thread(discard_partial))
             raise
         finally:
-            if output_stream is not None:
-                await asyncio.to_thread(output_stream.close)
             close = getattr(stream, "aclose", None)
             if close is not None:
-                await close()
+                await run_to_completion(close)
         return total
 
     def local_file_path(self, path: str) -> Path | None:
