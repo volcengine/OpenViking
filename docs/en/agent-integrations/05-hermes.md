@@ -46,6 +46,13 @@ Quick Local keeps its server running after Hermes exits. See the
 [plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
 for model support, server controls and runtime upgrade instructions.
 
+To disable conversation-history query planning for one profile, set
+`memory.openviking.session_aware_search: false` or
+`OPENVIKING_SESSION_AWARE_SEARCH=false` in that profile's environment; the
+default is `true`, and the environment value takes precedence. Automatic recall
+and deep search preserve configured reranking; enabled recall compression may
+still call a model. See [Session-aware search](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#session-aware-search).
+
 ## Check status
 
 ```bash
