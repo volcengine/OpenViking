@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.models.embedder import OpenAIDenseEmbedder
+from openviking.models.openrouter import OPENROUTER_ATTRIBUTION_HEADERS
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -59,6 +60,28 @@ class TestExtraHeadersDirectConstruction:
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
         assert "default_headers" not in call_kwargs
+
+    @pytest.mark.parametrize(
+        ("extra_headers", "expected"),
+        [
+            (None, OPENROUTER_ATTRIBUTION_HEADERS),
+            ({"X-Custom": "v"}, {**OPENROUTER_ATTRIBUTION_HEADERS, "X-Custom": "v"}),
+            ({"x-title": "My App"}, {"x-title": "My App"}),
+        ],
+    )
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_openrouter_attribution_headers(self, mock_openai_class, extra_headers, expected):
+        """OpenRouter requests get OpenViking attribution unless the user set their own."""
+        mock_openai_class.return_value = _make_mock_client()
+
+        OpenAIDenseEmbedder(
+            model_name="qwen/qwen3-embedding-8b",
+            api_key="sk-test",
+            api_base="https://openrouter.ai/api/v1",
+            extra_headers=extra_headers,
+        )
+
+        assert mock_openai_class.call_args[1]["default_headers"] == expected
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_sdk_retries_disabled(self, mock_openai_class):
