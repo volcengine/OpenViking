@@ -31,6 +31,7 @@ export function createMemoryRecall({ config, sessionManager }) {
         // The mapped OV session is what turns on server-side query expansion
         // and the cross-turn dedup ledger.
         sessionId: sessionID ? sessionManager.getMappedSessionId(sessionID) : "",
+        excludeUris: config.recallExcludeUris,
         log: (stage, data) => log("DEBUG", "recall", stage, data),
       },
     )
