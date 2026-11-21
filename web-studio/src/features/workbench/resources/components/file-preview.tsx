@@ -381,7 +381,7 @@ function resolveMarkdownAssetTarget(
     return { kind: 'raw', value: trimmed }
   }
 
-  if (/^(https?:|data:|blob:|mailto:|tel:)/i.test(trimmed)) {
+  if (/^(https?:|data:|blob:|mailto:|tel:|\/\/)/i.test(trimmed)) {
     return { kind: 'external', value: trimmed }
   }
 
@@ -423,7 +423,7 @@ function MarkdownLink({
       ? target.value
       : resolveMarkdownAssetUrl(target)
     : ''
-  const isExternal = /^(https?:|mailto:|tel:)/i.test(resolvedHref)
+  const isExternal = /^(https?:|mailto:|tel:|\/\/)/i.test(resolvedHref)
 
   return (
     <a
