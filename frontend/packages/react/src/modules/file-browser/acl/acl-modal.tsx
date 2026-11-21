@@ -31,6 +31,7 @@ export function AclModal({
   options,
   onClose,
   onUpdated,
+  onPermissionDenied,
 }: {
   uri: string;
   open: boolean;
@@ -42,6 +43,7 @@ export function AclModal({
   userId?: OvIdentityValue;
   options?: FileBrowserAclOptions;
   onClose: () => void;
+  onPermissionDenied: () => void;
   onUpdated: (report: FileBrowserAclReport) => void;
 }) {
   const exposure = useExposure(
@@ -58,6 +60,7 @@ export function AclModal({
     open,
     readOnly: Boolean(options?.readOnly),
     onUpdated,
+    onPermissionDenied,
   });
   const disabled = Boolean(options?.readOnly) || model.phase !== 'ready';
   const entries = model.report?.effective_entries ?? [];
