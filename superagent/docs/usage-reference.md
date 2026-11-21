@@ -37,6 +37,31 @@ Use the pinned command in [install.md](../install.md), then `ov-superagent setup
 
 ## Chat channels and email
 
+### Following Codex account changes
+
+The Codex runtime follows the local file-backed sign-in at
+`$CODEX_HOME/auth.json` (by default `~/.codex/auth.json`). After `codex login`
+or a desktop sign-in updates that same file, Core detects a change of user or
+ChatGPT workspace and restarts only its Codex app-server. It waits for the
+current turn to end, queues later input instead of steering it to the old
+account, and resumes the local native thread. Normal token refreshes do not
+restart the process. Logout pauses new turns until a subsequent login.
+
+`/status` shows the account reported by Codex, with a masked email and plan
+when available, and indicates a pending account switch. Account detection does
+not perform a login, change the selected model or effort, or change IM bindings.
+After switching, `/model` queries the replacement process's catalog; a selected
+model still needs to be available to the new account. The catalog may be cached
+by Codex, so listing a model does not guarantee inference access.
+
+Automatic external-change detection currently covers file-backed credentials.
+It does not inspect the OS credential store or follow a desktop account whose
+credentials are stored elsewhere. For those setups, restart the instance after
+signing in. Older app-servers without `account/read` can still reload the auth
+file, but cannot display account details. Account queries run independently of
+thread startup and have a bounded timeout. No tokens, full email addresses, or
+raw account IDs are included in status or account-change activities.
+
 Channel setup and supported behavior follow. [Attachments and cards](#attachments-and-cards) are described separately.
 
 ### WeChat direct messages
