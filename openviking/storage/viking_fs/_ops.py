@@ -262,9 +262,9 @@ class _OpsMixin:
         operation (e.g. semantic processing).
 
         Set ``no_vector`` only when the caller guarantees the target subtree
-        has no vector/context records. This skips vector cleanup and directory traversal
-        unless descendant ACL checks require it. Namespace permission checks
-        and path locking still apply.
+        has no vector/context records. This skips vector cleanup. Descendant
+        ACL checks use the context index, without listing filesystem entries.
+        Namespace permission checks and path locking still apply.
 
         When ``auto_pathlock`` is False and no outer ``lease_ref`` is supplied,
         the VikingFS-level tree/exact lease is skipped and the underlying AGFS
@@ -273,8 +273,8 @@ class _OpsMixin:
         cleanup that only deletes already-expired directories).
 
         Returns:
-            Dict with 'estimated_deleted_count' indicating the estimated number
-            of nodes deleted from vector index.
+            Dict with 'estimated_deleted_count' indicating the number of vector
+            records submitted for deletion, without waiting for index visibility.
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
@@ -284,32 +284,18 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
-        async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
-            """Estimate number of nodes to be deleted using vector index."""
+        async def _delete_vectors() -> int:
+            """Delete the target scope without enumerating filesystem entries."""
             vector_store = self._get_vector_store()
-            if not vector_store:
+            if no_vector or vector_store is None:
                 return 0
-            try:
-                target_canonical_uri = self._path_to_uri(target_path, ctx=real_ctx)
-                filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
-                return await vector_store.count(filter=filter_expr, ctx=real_ctx)
-            except Exception as e:
-                logger.info("Failed to count nodes before delete: %s", type(e).__name__)
-                return 0
+            return await vector_store.delete_uris(
+                self._ctx_or_default(ctx), [target_uri], recursive=recursive
+            )
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
-            if no_vector:
-                return {"estimated_deleted_count": 0}
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
-            uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
-            estimated_count = await _estimate_deleted_count(path, real_ctx)
-            vector_store = self._get_vector_store()
-            if recursive and vector_store is not None:
-                await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
-            else:
-                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            estimated_count = await _delete_vectors()
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
@@ -362,34 +348,10 @@ class _OpsMixin:
                         raise mapped from exc
                     raise
 
-            check_descendant_acl = (
-                is_dir
-                and (not no_vector or is_acl_uri(target_uri))
-                and not self._ctx_or_default(ctx).bypass_acl
-                and await self._acl_enabled(ctx)
-            )
-            uris_to_delete = (
-                await self._collect_uris(
-                    path,
-                    recursive,
-                    ctx=ctx,
-                    strict=check_descendant_acl,
-                )
-                if is_dir and (not no_vector or check_descendant_acl)
-                else []
-            )
-            uris_to_delete.append(target_uri)
             if is_dir:
-                await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
-            estimated_count = 0
-            if not no_vector:
-                real_ctx = self._ctx_or_default(ctx)
-                estimated_count = await _estimate_deleted_count(path, real_ctx)
-                vector_store = self._get_vector_store()
-                if recursive and vector_store is not None:
-                    await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
-                else:
-                    await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
+                await self._ensure_descendant_access(target_uri, ctx, action=AclAction.MANAGE)
+            estimated_count = await _delete_vectors()
             try:
                 result = await self._async_agfs.rm(
                     path,
@@ -1954,42 +1916,6 @@ class _OpsMixin:
             )
             result.append(new_entry)
         return result
-
-    # ========== Vector Sync Helper Methods ==========
-
-    async def _collect_uris(
-        self,
-        path: str,
-        recursive: bool,
-        ctx: Optional[RequestContext] = None,
-        *,
-        strict: bool = False,
-    ) -> List[str]:
-        """Recursively collect all URIs (for rm/mv), including directories."""
-        uris = []
-
-        async def _collect(p: str):
-            try:
-                entries = await self._ls_entries(p, ctx=ctx)
-            except Exception as exc:
-                if is_not_found_error(exc) and not strict:
-                    return
-                raise
-
-            for entry in entries:
-                name = entry.get("name", "")
-                if name in [".", ".."]:
-                    continue
-                full_path = f"{p}/{name}".replace("//", "/")
-                if entry.get("isDir"):
-                    uris.append(self._path_to_uri(full_path, ctx=ctx))
-                    if recursive:
-                        await _collect(full_path)
-                else:
-                    uris.append(self._path_to_uri(full_path, ctx=ctx))
-
-        await _collect(path)
-        return uris
 
     # ========== Parent Directory Creation ==========
 

@@ -99,13 +99,12 @@ class TestVikingFSURITraversalGuard:
     @pytest.mark.asyncio
     async def test_rm_rejects_traversal_before_side_effects(self) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
 
         with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.rm("viking://resources/../../other_account/_system/users.json")
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
@@ -122,13 +121,12 @@ class TestVikingFSURITraversalGuard:
     )
     async def test_rm_rejects_protected_namespace_roots_before_side_effects(self, uri: str) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
 
         with pytest.raises(PermissionDeniedError, match="Deleting viking://"):
             await fs.rm(uri, recursive=True)
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
@@ -148,13 +146,12 @@ class TestVikingFSURITraversalGuard:
         self, uri: str, role: Role
     ) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
 
         with pytest.raises(PermissionDeniedError, match="namespace root"):
             await fs.rm(uri, recursive=True, ctx=_user_ctx(role=role))
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
@@ -200,13 +197,12 @@ class TestVikingFSURITraversalGuard:
     @pytest.mark.asyncio
     async def test_rm_rejects_temp_root_for_non_root_before_side_effects(self) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
 
         with pytest.raises(PermissionDeniedError, match="Temp root is read-only"):
             await fs.rm("viking://temp", recursive=True, ctx=_user_ctx())
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
@@ -223,14 +219,13 @@ class TestVikingFSURITraversalGuard:
         self, old_uri: str, new_uri: str
     ) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._update_vector_store_uris = AsyncMock()
         fs._delete_from_vector_store = AsyncMock()
 
         with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.mv(old_uri, new_uri)
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._update_vector_store_uris.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.mv.assert_not_called()
@@ -252,14 +247,13 @@ class TestVikingFSURITraversalGuard:
         self, source_uri: str, match: str
     ) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._update_vector_store_uris = AsyncMock()
         fs._delete_from_vector_store = AsyncMock()
 
         with pytest.raises(PermissionDeniedError, match=match):
             await fs.mv(source_uri, "viking://temp/dst")
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._update_vector_store_uris.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.stat.assert_not_called()
@@ -275,7 +269,6 @@ class TestVikingFSURITraversalGuard:
         self, source_uri: str
     ) -> None:
         fs = _make_viking_fs()
-        fs._collect_uris = AsyncMock(return_value=[])
         fs._update_vector_store_uris = AsyncMock()
         fs._delete_from_vector_store = AsyncMock()
 
@@ -286,7 +279,7 @@ class TestVikingFSURITraversalGuard:
                 ctx=_user_ctx(),
             )
 
-        fs._collect_uris.assert_not_called()
+        fs.agfs.ls.assert_not_called()
         fs._update_vector_store_uris.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
         fs.agfs.stat.assert_not_called()
