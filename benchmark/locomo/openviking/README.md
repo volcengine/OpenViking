@@ -84,6 +84,11 @@ python benchmark/locomo/openviking/run_eval.py "$DATA" \
 Set `--single-search-rerank-limit 0` to disable rerank. Set
 `--single-search-max-context-chars 0` to disable the character budget.
 
+Every planned non-adversarial QA is written with an explicit `status`:
+`completed` for a generated response or `failed` with an `error` message. The
+command exits non-zero if any planned QA failed or if planned and recorded QA
+identities/counts do not match.
+
 ## Judge And Stat
 
 ```bash
@@ -98,5 +103,8 @@ python benchmark/locomo/openviking/stat_judge_result.py \
 The judge writes `result` values back into the same CSV. Use `--force` to
 re-grade rows that already have a result. Use `--strict-prompt` when you want the
 stricter LoCoMo judge prompt instead of the default lenient prompt.
+Rows with `status=failed` are not sent to the judge. Statistics report expected,
+failed, ungraded, correct, and wrong rows separately, including both accuracy
+among graded rows and accuracy over the expected-row denominator.
 
 Category 5 adversarial questions are skipped by the LoCoMo judge/stat flow.
