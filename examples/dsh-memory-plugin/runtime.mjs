@@ -108,19 +108,21 @@ export class OpenVikingRuntime {
       await this.replayPendingQueue();
     }
     await this.refreshPendingState(state);
-    const profile = await buildProfileBlock(
-      (path, init, options) => this.client.fetchJSON(path, init, options),
-      state.config.profileTokenBudget,
-      state.config.peerId,
-      state.config,
-    );
-    state.profileBlock = profile?.block
-      ? [
-          '<openviking-context source="profile">',
-          profile.block,
-          "</openviking-context>",
-        ].join("\n")
-      : "";
+    if (!state.config.noAutoInject) {
+      const profile = await buildProfileBlock(
+        (path, init, options) => this.client.fetchJSON(path, init, options),
+        state.config.profileTokenBudget,
+        state.config.peerId,
+        state.config,
+      );
+      state.profileBlock = profile?.block
+        ? [
+            '<openviking-context source="profile">',
+            profile.block,
+            "</openviking-context>",
+          ].join("\n")
+        : "";
+    }
     state.ready = true;
     return state;
   }
