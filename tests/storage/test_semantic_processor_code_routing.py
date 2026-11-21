@@ -14,6 +14,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.parse.parsers.media.utils import get_media_type
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 def _config(vlm_available: bool = True):
@@ -115,6 +116,53 @@ async def test_missing_skeleton_without_vlm_returns_empty_summary():
     result, config = await _generate(extraction, vlm_available=False)
     assert result["summary"] == ""
     config.vlm.get_completion_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [None, True, False], ids=["default", "enabled", "disabled"])
+@pytest.mark.parametrize("cached_content", [False, True], ids=["filesystem", "cached"])
+@pytest.mark.parametrize(
+    ("file_name", "content", "summary_kind"),
+    [
+        ("empty.py", "", "fallback"),
+        ("imports.py", "import os\n", "fallback"),
+        ("sample.json", '{"key": 1}', "fallback"),
+        ("sample.py", "def run():\n    return 1\n", "skeleton"),
+        ("README.md", "# Documentation\nSome content", "document"),
+        ("notes.txt", "Some plain text", "document"),
+    ],
+    ids=["empty", "imports", "unsupported", "skeleton", "markdown", "text"],
+)
+async def test_code_summary_llm_policy(enabled, cached_content, file_name, content, summary_kind):
+    semantic = {} if enabled is None else {"code_summary_llm_enabled": enabled}
+    config = OpenVikingConfig.from_dict({"semantic": semantic})
+    vlm = _config().vlm
+    fs = MagicMock()
+    fs.read_file = AsyncMock(return_value=content.encode())
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+            return_value=config,
+        ),
+        patch("openviking.storage.queuefs.semantic_processor.get_viking_fs", return_value=fs),
+    ):
+        result = await SemanticProcessor(
+            vlm_resolver=MagicMock(get_vlm=AsyncMock(return_value=vlm))
+        )._generate_single_file_summary(
+            f"viking://resources/{file_name}",
+            file_content=content.encode() if cached_content else None,
+        )
+
+    assert result["name"] == file_name
+    if summary_kind == "skeleton":
+        assert "def run()" in result["summary"]
+        vlm.get_completion_async.assert_not_awaited()
+    elif summary_kind == "fallback" and enabled is False:
+        assert result["summary"] == ""
+        vlm.get_completion_async.assert_not_awaited()
+    else:
+        assert result["summary"] == "LLM summary"
+        vlm.get_completion_async.assert_awaited_once()
 
 
 def test_cuda_extensions_are_dispatched_as_code():

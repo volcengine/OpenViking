@@ -699,6 +699,9 @@ class SemanticConfig:
     max_skeleton_chars: int = 12000
     """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
 
+    code_summary_llm_enabled: bool = True
+    """Use LLM fallback when code skeleton extraction produces no useful result."""
+
     max_overview_prompt_chars: int = 60000
     """Maximum characters allowed in the overview generation prompt.
     If exceeded, file summaries are batched and merged."""
