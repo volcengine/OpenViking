@@ -1,6 +1,8 @@
 //! Privacy configuration arguments.
 
 use clap::Subcommand;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub(crate) enum PrivacyCommands {
@@ -53,6 +55,18 @@ pub(crate) enum PrivacyCommands {
         /// Field in current values (category form only)
         #[arg(value_name = "field")]
         field: Option<String>,
+    },
+    /// Run a local program with resolved {{ov_privacy:...}} references and mask stdout/stderr
+    Run {
+        /// Set NAME in child env from an owner-bound {{ov_privacy:...}} reference (repeatable)
+        #[arg(long = "env", value_name = "NAME=reference")]
+        env: Vec<String>,
+        /// Load NAME={{ov_privacy:...}} entries from a file into child env (repeatable)
+        #[arg(long = "env-file", value_name = "path")]
+        env_file: Vec<PathBuf>,
+        /// External program and arguments to run; {{ov_privacy:...}} references in args are resolved unless OPENVIKING_PRIVACY_RUN_STRICT=1
+        #[arg(value_name = "command", required = true, trailing_var_arg = true)]
+        command: Vec<OsString>,
     },
     /// Upsert privacy config values
     Upsert {
