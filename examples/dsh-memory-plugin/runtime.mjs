@@ -83,6 +83,11 @@ export class OpenVikingRuntime {
 
   async initializeState(state) {
     state.initializationRetryable = false;
+    // A workspace that writes `enabled: false` ends memory for its sessions
+    // before the first request: no health probe, no session, no profile. The
+    // state stays unready, and every later gate reads the same flag, so recall,
+    // capture and commit stay silent as well.
+    if (state.config.enabled === false) return state;
     const health = await this.client.healthResult();
     this.reportWriteResult(state, "health", health, "/health");
     if (!health.ok) {

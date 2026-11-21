@@ -312,6 +312,7 @@ The older size settings apply to fallback recall, not the primary context reques
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
 - `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
+- `enabled: false`, written in the workspace file (see below), takes a whole directory out of memory: no OpenViking session is created, no profile or recall is injected, nothing new is captured or committed, and no automatic request carries that workspace's sessions while the switch is off. Writes queued before it was switched off are still replayed by the background drainer — they were captured while memory was on. It resolves per session from `session.header.cwd`, so other workspaces on the same runtime keep their full behavior, and `OPENVIKING_MEMORY_ENABLED=1` still outranks the file. The bridged `mcp__openviking__*` tools stay mounted: an explicit request to remember something is a tool call, not background traffic.
 - `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
 - Retryable failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
 - Non-retryable capture, commit, and initialization failures emit a warning once per session and stage, with the HTTP status, a bounded error code, and an endpoint template. Success resets that stage’s warning. Unexpected write exceptions also warn once until a write completes. Warnings omit message payloads and error text. Permanent failures are not queued for replay.
@@ -320,7 +321,7 @@ The older size settings apply to fallback recall, not the primary context reques
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. IDs that contain Windows-invalid path characters are normalized to a readable underscore form plus a stable hash, so two native IDs cannot collapse onto the same OpenViking session; already-portable IDs keep their existing mapping. Existing sessions whose native IDs require normalization start a new OpenViking session after this upgrade. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. With the default peer settings, no peer is sent outside a git repository, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 
-Workspace settings (peer, `recall.*`, `capture.*`) are loaded from `session.header.cwd` when the session first uses memory, not from the directory DSH was launched in. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
+Workspace settings (peer, `recall.*`, `capture.*`, and the `enabled` master switch) are loaded from `session.header.cwd` when the session first uses memory, not from the directory DSH was launched in. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
 
 ```json
 {
@@ -328,6 +329,17 @@ Workspace settings (peer, `recall.*`, `capture.*`) are loaded from `session.head
   "peer": { "id": "my-project" }
 }
 ```
+
+A repository that must not be remembered at all opts out in the same file:
+
+```json
+{
+  "version": 1,
+  "enabled": false
+}
+```
+
+That one key ends memory for every session started in that directory — no session, no profile, no recall, no capture, no commit — while sessions elsewhere on the same runtime are unaffected.
 
 The shared loader also applies `config.local.json` and machine registry overrides. Explicit host `peerId`, environment overrides and pinned `ovcli.conf` credentials retain their existing precedence. The resolved peer stays fixed for the session's runtime state; new sessions load the current workspace settings. A session without a cwd falls back to the process's working directory.
 
