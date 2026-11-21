@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -31,6 +33,22 @@ except ImportError:
     CallbackMessage = None  # type: ignore[assignment,misc]
     AckMessage = None  # type: ignore[assignment,misc]
     ChatbotMessage = None  # type: ignore[assignment,misc]
+
+
+_DINGTALK_MEDIA_UPLOAD_URL = "https://oapi.dingtalk.com/media/upload"
+_DINGTALK_MESSAGE_URL = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
+_DINGTALK_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+_DINGTALK_IMAGE_MEDIA_TYPES = {
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+}
+_SEND_IMAGE_RE = re.compile(
+    r"send://(?P<filename>[^\s<>()]+\.(?:bmp|gif|jpe?g|png))(?=$|[\s<>()])",
+    re.IGNORECASE,
+)
 
 
 class NanobotDingTalkHandler(CallbackHandler):
@@ -197,36 +215,129 @@ class DingTalkChannel(BaseChannel):
         if not token:
             return
 
-        # oToMessages/batchSend: sends to individual users (private chat)
-        # https://open.dingtalk.com/document/orgapp/robot-batch-send-messages
-        url = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
-
-        headers = {"x-acs-dingtalk-access-token": token}
-
-        data = {
-            "robotCode": self.config.client_id,
-            "userIds": [msg.session_key.chat_id],  # chat_id is the user's staffId
-            "msgKey": "sampleMarkdown",
-            "msgParam": json.dumps(
-                {
-                    "text": msg.content,
-                    "title": "Nanobot Reply",
-                }
-            ),
-        }
-
         if not self._http:
             logger.warning("DingTalk HTTP client not initialized, cannot send")
             return
 
+        content, images = await self._extract_generated_images(msg.content)
+        uploaded: list[tuple[str, str]] = []
+        failed: list[str] = []
+        for filename, image, media_type in images:
+            media_id = await self._upload_image(token, filename, image, media_type)
+            if media_id:
+                uploaded.append((filename, media_id))
+            else:
+                failed.append(filename)
+
+        if failed:
+            unavailable = "\n".join(f"[image unavailable: {name}]" for name in failed)
+            content = f"{content}\n{unavailable}".strip()
+
+        if content:
+            await self._send_robot_message(
+                token,
+                msg.session_key.chat_id,
+                "sampleMarkdown",
+                {"text": content, "title": "Nanobot Reply"},
+            )
+
+        for filename, media_id in uploaded:
+            sent = await self._send_robot_message(
+                token,
+                msg.session_key.chat_id,
+                "sampleImageMsg",
+                {"photoURL": media_id},
+            )
+            if not sent:
+                await self._send_robot_message(
+                    token,
+                    msg.session_key.chat_id,
+                    "sampleMarkdown",
+                    {
+                        "text": f"[image unavailable: {filename}]",
+                        "title": "Nanobot Reply",
+                    },
+                )
+
+    async def _extract_generated_images(
+        self, content: str
+    ) -> tuple[str, list[tuple[str, bytes, str]]]:
+        """Resolve safe generated-image URIs and remove only successful matches."""
+        images: list[tuple[str, bytes, str]] = []
+        spans: list[tuple[int, int]] = []
+        for match in _SEND_IMAGE_RE.finditer(content):
+            filename = match.group("filename")
+            try:
+                is_content, image = await self._parse_data_uri(match.group(0))
+                if is_content or not self._is_image_data(image):
+                    raise ValueError("generated file is not a supported image")
+                if len(image) > _DINGTALK_MAX_IMAGE_BYTES:
+                    raise ValueError("generated image exceeds DingTalk's 20 MB limit")
+            except (OSError, ValueError) as exc:
+                logger.warning(f"Failed to prepare DingTalk image {filename}: {exc}")
+                continue
+            images.append(
+                (filename, image, _DINGTALK_IMAGE_MEDIA_TYPES[Path(filename).suffix.lower()])
+            )
+            spans.append(match.span())
+
+        if not spans:
+            return content, images
+
+        for start, end in reversed(spans):
+            content = content[:start] + content[end:]
+        return re.sub(r"\n{3,}", "\n\n", content).strip(), images
+
+    async def _upload_image(
+        self, token: str, filename: str, image: bytes, media_type: str
+    ) -> str | None:
+        """Upload one image and return its DingTalk media ID."""
+        client = self._http
+        if not client:
+            return None
         try:
-            resp = await self._http.post(url, json=data, headers=headers)
+            resp = await client.post(
+                _DINGTALK_MEDIA_UPLOAD_URL,
+                params={"access_token": token, "type": "image"},
+                files={"media": (filename, image, media_type)},
+            )
+            data = resp.json()
+            media_id = data.get("media_id")
+            if resp.status_code == 200 and data.get("errcode") == 0 and media_id:
+                return str(media_id)
+            logger.warning(
+                f"DingTalk image upload failed: HTTP {resp.status_code}, "
+                f"code={data.get('errcode')}, error={data.get('errmsg')}"
+            )
+        except Exception as exc:
+            # The access token is a query parameter, so do not log the request URL.
+            logger.warning(f"DingTalk image upload failed: {type(exc).__name__}")
+        return None
+
+    async def _send_robot_message(
+        self, token: str, user_id: str, msg_key: str, msg_param: dict[str, str]
+    ) -> bool:
+        """Send one private robot message to the exact inbound staff ID."""
+        client = self._http
+        if not client:
+            return False
+        data = {
+            "robotCode": self.config.client_id,
+            "userIds": [user_id],
+            "msgKey": msg_key,
+            "msgParam": json.dumps(msg_param),
+        }
+        headers = {"x-acs-dingtalk-access-token": token}
+        try:
+            resp = await client.post(_DINGTALK_MESSAGE_URL, json=data, headers=headers)
             if resp.status_code != 200:
                 logger.exception(f"DingTalk send failed: {resp.text}")
-            else:
-                logger.debug(f"DingTalk message sent to {msg.session_key.chat_id}")
+                return False
+            logger.debug(f"DingTalk {msg_key} message sent to {user_id}")
+            return True
         except Exception as e:
             logger.exception(f"Error sending DingTalk message: {e}")
+            return False
 
     async def _on_message(self, content: str, sender_id: str, sender_name: str) -> None:
         """Handle incoming message (called by NanobotDingTalkHandler).
