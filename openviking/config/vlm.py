@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, Protocol
 
 from openviking.config.account_config import AccountConfig
-from openviking.config.manager import ConfigChangeEvent, RuntimeConfigManager
+from openviking.config.manager import (
+    AccountCandidateContext,
+    ConfigChangeEvent,
+    RuntimeConfigManager,
+)
 from openviking.config.scope import ScopeKind
 from openviking.models.vlm.token_usage import TokenUsageTracker
 from openviking_cli.utils.config import get_openviking_config
@@ -21,6 +25,18 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 VLMRole = Literal["vlm", "query_planner"]
 _RequestKey = tuple[str, VLMRole]
 _ResourceKey = tuple[str, ...]
+
+
+def validate_account_vlm_candidate(
+    context: AccountCandidateContext[OpenVikingConfig, AccountConfig],
+) -> None:
+    """Check that inherited model bindings can resolve before publication."""
+    view = context.new_view
+    vlm, planner = view.account.vlm, view.account.query_planner
+    if vlm is not None and vlm.credentials is None:
+        vlm.to_vlm_config(view.cluster.vlm)
+    if planner is not None and planner.credentials is None:
+        planner.to_vlm_config(view.cluster.get_query_planner())
 
 
 class VLMHandle(Protocol):

@@ -63,7 +63,7 @@ def _overlay(base: dict, override: dict) -> dict:
 
 
 def resolve_effective_embedding(cluster: EmbeddingConfig, account: Any) -> EmbeddingConfig:
-    """Merge ordinary fields, replacing provider bindings as complete units."""
+    """Compose model settings, selecting provider bindings as complete units."""
     if isinstance(account, dict):
         account = AccountEmbeddingConfig.model_validate(account)
     override = _account_values(account)
@@ -111,6 +111,12 @@ def resolve_effective_embedding(cluster: EmbeddingConfig, account: Any) -> Embed
                     "model", independent.get("model")
                 )
                 EmbeddingModelConfig.model_validate(independent)
+        elif section is None:
+            raise ValueError(f"embedding.{mode} without credentials requires a Cluster binding")
+        else:
+            # The Account model is used on each inherited connection.
+            for credential in base[mode].get("credentials", []):
+                credential.pop("model", None)
     return EmbeddingConfig.model_validate(_overlay(base, override))
 
 
