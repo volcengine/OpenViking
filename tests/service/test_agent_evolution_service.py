@@ -22,7 +22,14 @@ def _ctx() -> RequestContext:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("filename", ["exchange.md", "vikingdb_fe_repo_workflows.md"])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "exchange.md",
+        "vikingdb_fe_repo_workflows.md",
+        pytest.param("abort出口#24诊断覆盖规则.md", id="literal_hash"),
+    ],
+)
 async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagination(filename):
     experience_uri = f"viking://user/alice/memories/experiences/{filename}"
     viking_fs = Mock()

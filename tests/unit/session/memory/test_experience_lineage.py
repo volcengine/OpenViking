@@ -23,6 +23,45 @@ def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier("account", "alice"), role=Role.USER)
 
 
+@pytest.mark.parametrize("root", ["viking://user/alice", "viking://~"])
+@pytest.mark.parametrize("filename", ["abort出口#24诊断覆盖规则.md", "example.md#section"])
+def test_literal_hash_read_creates_trajectory_lineage(root, filename):
+    uri = f"viking://user/alice/memories/experiences/{filename}"
+    messages = [
+        Message(
+            id="hash-read",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="hash-read-1",
+                    tool_name="read",
+                    tool_input={"uri": f"{root}/memories/experiences/{filename}"},
+                    tool_status="completed",
+                    tool_output="Experience body.",
+                )
+            ],
+        )
+    ]
+
+    source_uris = collect_read_experience_uris(messages, ctx=_ctx())
+    assert source_uris == [uri]
+    trajectory_uri = "viking://user/alice/memories/trajectories/hash-read.md"
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_fields={"outcome": "success"},
+                memory_type="trajectories",
+                uris=[trajectory_uri],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    assert _trajectory_search_tags_by_uri(operations, source_uris) == {
+        trajectory_uri: [f"{uri}=1", "trajectory_outcome=success"]
+    }
+
+
 def test_collect_read_experience_uris_supports_generic_openviking_reads():
     uri = "viking://user/alice/memories/experiences/order-exchange.md"
     opencode_uri = "viking://user/alice/memories/experiences/opencode.md"
@@ -96,7 +135,7 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
                             "viking://~/memories/experiences/.abstract.md",
                             "viking://~/memories/experiences/../other.md",
                             "viking://~/memories/experiences/example.md?offset=1",
-                            "viking://~/memories/experiences/example.md#section",
+                            "viking://~/memories/experiences/example#24.md?offset=1",
                         ]
                     },
                     tool_status="completed",
