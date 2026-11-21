@@ -258,9 +258,24 @@ export function createOpenVikingMcpProxy({
     // strict private-gateway upstreams (tenant/vault names, region hints)
     // without letting a stray env var override authentication or session
     // negotiation.
+    //
+    // HTTP header names are case-insensitive, so the precedence must be too:
+    // the object spread below is exact-case, and an extra spelled in a
+    // different case than a proxy-set header (e.g. `x-openviking-account` vs
+    // the proxy's `X-OpenViking-Account`) would otherwise survive as a second
+    // key and reach the upstream joined with the proxy's value by a comma
+    // ("obsolete, account-a"). Drop the case-variant collisions so an extra
+    // can only fill a gap, never duplicate a header the proxy already set.
     const opExtras = proxyConfig.extraHeaders;
     if (opExtras && typeof opExtras === "object") {
-      return { ...opExtras, ...built };
+      const proxyHeaderNames = new Set(
+        Object.keys(built).map((name) => name.toLowerCase()),
+      );
+      const extras = {};
+      for (const [name, value] of Object.entries(opExtras)) {
+        if (!proxyHeaderNames.has(name.toLowerCase())) extras[name] = value;
+      }
+      return { ...extras, ...built };
     }
     return built;
   }
