@@ -66,6 +66,7 @@ function runInstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
     "--yes",
   ]);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return result;
 }
 
 function runUninstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
@@ -911,6 +912,24 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
       assert.ok(command.includes(join(runtime, "scripts", "hook.mjs")), command);
       assert.doesNotMatch(command, /__OPENVIKING_/);
     }
+    // The plugin carries its own MCP server and skills, so the user's global
+    // mcp_config.json is never written.
+    const mcp = JSON.parse(readFileSync(join(pluginDir, "mcp_config.json"), "utf8")).mcpServers.openviking;
+    assert.ok(existsSync(mcp.command), mcp.command);
+    assert.deepEqual(mcp.args, [join(runtime, "servers", "mcp-proxy.mjs")]);
+    assert.ok(existsSync(mcp.args[0]));
+    assert.equal(mcp.env.OPENVIKING_HOOK_SOURCE, "antigravity");
+    assert.equal(mcp.env.OPENVIKING_INTEGRATION_ID, "openviking-memory");
+    assert.equal(existsSync(join(home, ".gemini", "config", "mcp_config.json")), false);
+    for (const skill of ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search"]) {
+      assert.ok(existsSync(join(pluginDir, "skills", skill, "SKILL.md")), skill);
+    }
+    const version = JSON.parse(readFileSync(join(checkout, "examples", "agent-hook-plugin", "plugin.json"), "utf8")).version;
+    assert.equal(JSON.parse(readFileSync(join(pluginDir, "plugin.json"), "utf8")).version, version);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).capabilities,
+      ["hooks", "mcp", "skills"],
+    );
     const sessionStart = spawnSync("sh", ["-c", hooks["openviking-memory"].SessionStart[0].command], {
       env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
       input: "{}",
@@ -958,6 +977,36 @@ test("Antigravity installs and validates under a home path containing an apostro
     assert.equal(existsSync(pluginDir), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Users who followed the earlier manual guide already have an 'openviking'
+// server in the global file; a plugin copy would list every tool twice.
+test("Antigravity keeps a global 'openviking' MCP server and adds no plugin copy", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-global-mcp-"));
+  const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
+  const globalMcp = join(home, ".gemini", "config", "mcp_config.json");
+  const runtime = join(home, ".openviking", "agent-integrations", "antigravity");
+  try {
+    writeJson(globalMcp, { mcpServers: { openviking: { serverUrl: "http://127.0.0.1:1933/mcp" }, other: { command: "x" } } });
+    const before = readFileSync(globalMcp, "utf8");
+    const install = runInstall(home, "antigravity");
+    assert.match(install.stdout, /kept the 'openviking' server already in/);
+    assert.equal(existsSync(join(pluginDir, "mcp_config.json")), false);
+    assert.ok(existsSync(join(pluginDir, "skills", "openviking-memory", "SKILL.md")));
+    assert.equal(readFileSync(globalMcp, "utf8"), before);
+    assert.deepEqual(JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).capabilities, ["hooks", "skills"]);
+
+    // Once the global entry is gone, the next install ships the plugin copy.
+    writeJson(globalMcp, { mcpServers: { other: { command: "x" } } });
+    runInstall(home, "antigravity");
+    assert.ok(existsSync(join(pluginDir, "mcp_config.json")));
+
+    runUninstall(home, "antigravity");
+    assert.equal(existsSync(pluginDir), false);
+    assert.deepEqual(JSON.parse(readFileSync(globalMcp, "utf8")), { mcpServers: { other: { command: "x" } } });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

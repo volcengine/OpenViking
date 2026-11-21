@@ -118,6 +118,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "antigravity", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -161,6 +166,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "antigravity", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -180,7 +190,7 @@ export const SKILL_TARGETS = [
     committed: true,
   },
   // The harnesses that ship the experience workflow today. Where capture sends
-  // no tool parts (agent-plugins, Cursor; dsh with captureToolResults off),
+  // no tool parts (agent-plugins, Cursor, Antigravity; dsh with captureToolResults off),
   // the copy only retrieves and applies Experience, and its reads feed no
   // trajectory back to the server.
   {
@@ -220,6 +230,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "antigravity", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -241,6 +256,7 @@ export const SKILL_TARGETS = [
     ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "antigravity", "skills"],
     ["examples", "dsh-memory-plugin", "skills"],
     ["examples", "pi-coding-agent-extension", "skills"],
     ["examples", "opencode-plugin", "skills"],

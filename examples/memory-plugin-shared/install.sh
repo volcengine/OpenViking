@@ -2953,8 +2953,10 @@ install_zcode() {
 }
 
 # Antigravity loads plugins from directories, each a plugin.json and a
-# hooks.json whose top-level keys name the hooks. The directory is the
-# installer's alone, so it is written whole instead of merged into user files.
+# hooks.json whose top-level keys name the hooks, plus an optional
+# mcp_config.json and skills/. The directory is the installer's alone, so it is
+# written whole instead of merged into user files; the user's global
+# mcp_config.json is only read, never written.
 install_antigravity() {
   step_heading "$(t 'Antigravity integration' 'Antigravity 集成')"
   local root plugin_dir lib
@@ -2989,14 +2991,46 @@ const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) =
   Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event,
     handlers.map((handler) => ({ ...handler, command: render(handler.command) }))])),
 ]));
+// The plugin carries its own MCP server, active while the plugin is enabled,
+// unless the user's global mcp_config.json already names one: a second copy
+// would list every tool twice. A global file that does not parse is no
+// evidence of one, so the plugin copy is kept.
+const globalMcp = path.join(path.dirname(path.dirname(pluginDir)), "mcp_config.json");
+let globalServer = false;
+try {
+  globalServer = Boolean(readJson(globalMcp).mcpServers?.openviking);
+} catch {
+  globalServer = false;
+}
+const mcpTemplate = readJson(path.join(hostDir, "mcp_config.json")).mcpServers?.openviking;
+if (!mcpTemplate || typeof mcpTemplate !== "object" || Array.isArray(mcpTemplate)) {
+  throw new Error("Invalid Antigravity MCP template");
+}
+const mcp = { mcpServers: { openviking: {
+  ...mcpTemplate,
+  command: nodeBin,
+  args: [path.join(root, "servers", "mcp-proxy.mjs")],
+  env: {
+    ...(mcpTemplate.env || {}),
+    OPENVIKING_INTEGRATION_ID: "openviking-memory",
+    OPENVIKING_INTEGRATION_VERSION: String(version),
+    OPENVIKING_HOOK_SOURCE: "antigravity",
+  },
+} } };
 // Stage beside plugins/, not in it, so an interrupted run leaves no second
 // plugin for Antigravity to load; the config directory keeps the rename on
 // one filesystem.
 const tmp = path.join(path.dirname(path.dirname(pluginDir)), `.openviking-memory.${process.pid}.tmp`);
 fs.rmSync(tmp, { recursive: true, force: true });
 fs.mkdirSync(tmp, { recursive: true });
-fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
+// The version lets Antigravity's plugin list show which release is installed.
+fs.writeFileSync(path.join(tmp, "plugin.json"),
+  JSON.stringify({ ...readJson(path.join(hostDir, "plugin.json")), version }, null, 2) + "\n");
 fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
+if (!globalServer) {
+  fs.writeFileSync(path.join(tmp, "mcp_config.json"), JSON.stringify(mcp, null, 2) + "\n", { mode: 0o600 });
+}
+fs.cpSync(path.join(hostDir, "skills"), path.join(tmp, "skills"), { recursive: true });
 fs.rmSync(pluginDir, { recursive: true, force: true });
 fs.mkdirSync(path.dirname(pluginDir), { recursive: true });
 fs.renameSync(tmp, pluginDir);
@@ -3010,13 +3044,17 @@ fs.writeFileSync(manifestPath, JSON.stringify({
   client: "antigravity",
   installMode: "managed-native",
   source: sourceMode,
-  capabilities: ["hooks"],
+  capabilities: globalServer ? ["hooks", "skills"] : ["hooks", "mcp", "skills"],
   hooksConfig: path.join(pluginDir, "hooks.json"),
+  ...(globalServer ? {} : { mcpConfig: path.join(pluginDir, "mcp_config.json") }),
   installedAt: previous.installedAt || now,
   updatedAt: now,
 }, null, 2) + "\n");
 NODE
   info "$(t 'Antigravity plugin installed:' 'Antigravity 插件已安装：') $plugin_dir"
+  if [ ! -f "$plugin_dir/mcp_config.json" ]; then
+    info "$(t "Antigravity MCP: kept the 'openviking' server already in $(short_path "$(antigravity_config_dir)/mcp_config.json"); the plugin adds none." "Antigravity MCP：沿用 $(short_path "$(antigravity_config_dir)/mcp_config.json") 中已有的 'openviking' 服务，插件不再另加。")"
+  fi
 }
 
 install_kimicode() {
@@ -3498,7 +3536,11 @@ process.stdout.write(command);
         warn "antigravity: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
       else
-        info "antigravity: $(t 'plugin installed (Hooks)' '插件已安装（Hooks）')"
+        if [ -f "$(antigravity_plugin_dir)/mcp_config.json" ]; then
+          info "antigravity: $(t 'plugin installed (Hooks + MCP + skills)' '插件已安装（Hooks + MCP + skills）')"
+        else
+          info "antigravity: $(t 'plugin installed (Hooks + skills; MCP from the global mcp_config.json)' '插件已安装（Hooks + skills，MCP 用全局 mcp_config.json）')"
+        fi
       fi
     else
       warn "antigravity: $(t 'plugin installation is incomplete' '插件安装不完整')"

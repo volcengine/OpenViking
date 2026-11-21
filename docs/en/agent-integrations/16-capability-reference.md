@@ -36,7 +36,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [Kimi Code](#kimi-code) | Kimi Code plugin with hooks and an MCP proxy | Server MCP tools |
 | [CodeBuddy Code](#codebuddy-code) | Plugin with hooks and an MCP proxy, installed by the unified installer | Server MCP tools |
 | [Qoder CLI](#qoder-cli) | Plugin with hooks and an MCP proxy, installed by the unified installer | Server MCP tools |
-| [Antigravity](#antigravity) | Plugin with hooks only, installed by the unified installer | None; the installer adds no MCP server |
+| [Antigravity](#antigravity) | Plugin with hooks and an MCP proxy, installed by the unified installer | Server MCP tools |
 | [OpenCode](#opencode) | npm plugin that adds an MCP entry | Server MCP tools, named `openviking_<tool>` |
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
@@ -122,7 +122,7 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 | Integration | Registered tool |
 |---|---|
-| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
+| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Antigravity, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
 | DSH / Desktop | `mcp__openviking__rule_search` |
 | OpenCode, pi, VikingBot | `openviking_rule_search` |
 | VikingBot through MCP | `mcp_<server_name>_rule_search` |
@@ -133,8 +133,8 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
 Native REST adapters require the updated plugin. The shared `openviking-rule-search`
-skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, Qoder CLI, OpenCode, DSH,
-pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
+skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, Qoder CLI, Antigravity, OpenCode,
+DSH, pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
 Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint;
 it does not install an automatic per-turn check or enforcement hook.
 
@@ -605,7 +605,7 @@ Settings that apply only to some integrations:
 | DSH | No | None | The same four as Cursor | No |
 | CodeBuddy Code | No | None | The same four as Cursor | No |
 | Qoder CLI | No | None | The same four as Cursor | No |
-| Antigravity | No | None | None | Installer menu |
+| Antigravity | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search` | Installer menu |
 | pi | Yes | `/viking`, `/viking commit` | The same four as Cursor, unless `mcpEnabled` is `false` | Yes |
 | OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Four plugin skills, including `openviking-rule-search` | Yes; checks the key's role and version compatibility |
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
@@ -705,12 +705,13 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Antigravity
 
-[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 3 hooks (`SessionStart`, `PreInvocation`, `Stop`) and no MCP server, skills, or URI guard, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
+[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 3 hooks (`SessionStart`, `PreInvocation`, `Stop`), an MCP proxy and the shared OpenViking skills `openviking-memory`, `openviking-skills`, `ov-experience-memory` and `openviking-rule-search`, and no URI guard, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
 
 - `PreInvocation` runs before every model call, including each call in a tool loop (`invocationNum` above 0) and each reactive wakeup for a background task, subagent message, or `Stop` continuation. Recall runs only when `invocationNum` is 0 and no `MODEL` step has run since the latest `USER_INPUT` step in `transcriptPath`, so a turn injects once. A `lastUserInput` that differs from that step's request is a new turn the transcript has not recorded yet, and recalls too.
 - Antigravity hooks use their own `hooks.json` format, with each top-level key naming a hook. Context goes back as a `systemMessage` step in `injectSteps`, which stays in the conversation.
 - `Stop` carries no message text. Capture reads the finished steps of `transcriptPath` after the last captured step, preferring the untruncated `transcript_full.jsonl` beside it, in a detached worker, then commits. A step still in progress is read again by the next `Stop`; when a write is lost, the cursor stays so the next `Stop` resends it.
-- To let the agent call OpenViking tools, add the OpenViking MCP server to `~/.gemini/config/mcp_config.json` yourself.
+- The MCP server lives in the plugin's own `mcp_config.json`, which Antigravity loads only while the plugin is enabled. The global `~/.gemini/config/mcp_config.json` is never written. When it already names an `openviking` server, the installer keeps that one and ships no plugin copy, so the tools are not listed twice.
+- Capture sends no tool parts, so `ov-experience-memory` only finds and applies Experience, as on Cursor.
 - If `~/.gemini/config/plugins/openviking-memory` exists and OpenViking did not write it, the installer stops and `--uninstall` leaves it in place.
 
 ### OpenCode

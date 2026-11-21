@@ -36,7 +36,7 @@
 | [Kimi Code](#kimi-code) | Kimi Code 插件：hook + MCP 代理 | 服务端 MCP 工具 |
 | [CodeBuddy Code](#codebuddy-code) | 插件：hook + MCP 代理，由统一安装器安装 | 服务端 MCP 工具 |
 | [Qoder CLI](#qoder-cli) | 插件：hook + MCP 代理，由统一安装器安装 | 服务端 MCP 工具 |
-| [Antigravity](#antigravity) | 插件：仅 hook，由统一安装器安装 | 无；安装器不添加 MCP 服务 |
+| [Antigravity](#antigravity) | 插件：hook 加 MCP 代理，由统一安装器安装 | 服务端 MCP 工具 |
 | [OpenCode](#opencode) | npm 插件，自动添加 MCP 条目 | 服务端 MCP 工具，名为 `openviking_<tool>` |
 | [DSH](#dsh) | 同进程 Cordis 插件 + MCP 代理 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
 | [pi](#pi) | 原生扩展，内置 MCP 客户端 | 服务端 MCP 工具；MCP 握手成功后注册为 `openviking_<tool>` |
@@ -121,7 +121,7 @@ Rule Search 是执行受约束的操作或回复前，由模型按需调用的�
 
 | 集成 | 注册的工具名 |
 |---|---|
-| Claude Code、Codex、TraeCode CLI、Cursor、TRAE/CN、ZCode、Kimi Code、CodeBuddy、Qoder CLI、Agent Plugins、其他 MCP 客户端 | 服务端 `rule_search`，带宿主的 MCP 命名空间 |
+| Claude Code、Codex、TraeCode CLI、Cursor、TRAE/CN、ZCode、Kimi Code、CodeBuddy、Qoder CLI、Antigravity、Agent Plugins、其他 MCP 客户端 | 服务端 `rule_search`，带宿主的 MCP 命名空间 |
 | DSH / Desktop | `mcp__openviking__rule_search` |
 | OpenCode、pi、VikingBot | `openviking_rule_search` |
 | VikingBot 通过 MCP | `mcp_<server_name>_rule_search` |
@@ -132,8 +132,8 @@ Rule Search 是执行受约束的操作或回复前，由模型按需调用的�
 
 先升级到会发布 `rule_search` 的服务端版本，再重连 MCP 客户端。
 使用独立 REST 工具的接入端需要升级插件。共享 `openviking-rule-search` skill 随
-Claude Code、Codex/TraeCode CLI、Cursor、CodeBuddy、Qoder CLI、OpenCode、DSH、pi、
-OpenClaw 和 Agent Plugins 分发；没有附带 skill 的宿主仍可发现工具。
+Claude Code、Codex/TraeCode CLI、Cursor、CodeBuddy、Qoder CLI、Antigravity、OpenCode、DSH、
+pi、OpenClaw 和 Agent Plugins 分发；没有附带 skill 的宿主仍可发现工具。
 沿用现有 MCP 开关与工具白名单。新增的是按需查询入口，没有增加每轮自动检查或强制拦截 hook。
 
 Hermes 的 catalog 安装固定在指定 commit，需要更新 catalog pin 才能收到新插件；
@@ -603,7 +603,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | DSH | 无 | 无 | 与 Cursor 相同的四个 | 无 |
 | CodeBuddy Code | 无 | 无 | 与 Cursor 相同的四个 | 无 |
 | Qoder CLI | 无 | 无 | 与 Cursor 相同的四个 | 无 |
-| Antigravity | 无 | 无 | 无 | 安装器菜单 |
+| Antigravity | 无 | 无 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` | 安装器菜单 |
 | pi | 有 | `/viking`、`/viking commit` | 与 Cursor 相同的四个，`mcpEnabled` 为 `false` 时不提供 | 有 |
 | OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 四个插件 skill，含 `openviking-rule-search` | 有；检查 key 的角色和版本兼容性 |
 | Hermes（内置） | 无 | 无 | 无 | 有；`hermes memory status` 列出环境变量覆盖项 |
@@ -703,12 +703,13 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、D
 
 ### Antigravity
 
-[社区插件：Antigravity](./08-community-plugins.md#antigravity-记忆集成)。带 3 个 hook（`SessionStart`、`PreInvocation`、`Stop`）的插件，没有 MCP 服务、skill 和 URI guard，由统一安装器安装；与 ZCode 一样是 `agent-hook-plugin` 的宿主适配器。Antigravity 桌面应用和 `agy` CLI 从 `~/.gemini/config/plugins/openviking-memory` 加载同一个插件。
+[社区插件：Antigravity](./08-community-plugins.md#antigravity-记忆集成)。带 3 个 hook（`SessionStart`、`PreInvocation`、`Stop`）、一个 MCP 代理和 OpenViking 共享 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`）的插件，没有 URI guard，由统一安装器安装；与 ZCode 一样是 `agent-hook-plugin` 的宿主适配器。Antigravity 桌面应用和 `agy` CLI 从 `~/.gemini/config/plugins/openviking-memory` 加载同一个插件。
 
 - `PreInvocation` 在每次模型调用前运行，包括工具循环中的每次调用（`invocationNum` 大于 0），以及后台任务、子代理消息或 `Stop` 续跑引起的每次被动唤醒。只有 `invocationNum` 为 0、且 `transcriptPath` 中最近一个 `USER_INPUT` step 之后还没有 `MODEL` step 运行时才召回，所以每轮只注入一次。`lastUserInput` 与该 step 的请求不同时，说明是 transcript 尚未记下的新一轮，同样召回。
 - Antigravity 的 hook 使用自己的 `hooks.json` 格式，每个顶层 key 是一个 hook 的名字。上下文以 `injectSteps` 中的 `systemMessage` step 返回，会留在对话中。
 - `Stop` 不携带消息文本。捕获在分离的 worker 中读取 `transcriptPath` 里上次捕获之后已完成的 step，旁边有未截断的 `transcript_full.jsonl` 时优先读它，然后提交。仍在进行中的 step 由下一个 `Stop` 重新读取；写入丢失时游标不动，下一个 `Stop` 会重发。
-- 想让 Agent 自己调用 OpenViking 工具，需要自行把 OpenViking MCP 服务加到 `~/.gemini/config/mcp_config.json`。
+- MCP 服务写在插件自己的 `mcp_config.json` 里，Antigravity 只在插件启用时加载它。全局的 `~/.gemini/config/mcp_config.json` 不会被改写。如果其中已经有 `openviking` 服务，安装器沿用它，不再带插件那一份，工具不会重复出现。
+- 捕获不发送 tool part，所以 `ov-experience-memory` 和 Cursor 上一样，只能查找和应用 Experience。
 - 如果 `~/.gemini/config/plugins/openviking-memory` 已存在且不是 OpenViking 写入的，安装器会停止，`--uninstall` 也会保留它。
 
 ### OpenCode

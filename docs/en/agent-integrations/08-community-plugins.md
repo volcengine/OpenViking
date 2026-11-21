@@ -99,7 +99,7 @@ Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The installer does not add an MCP server; add the OpenViking MCP server in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The plugin also carries the OpenViking MCP server (`mcp_config.json`, active while the plugin is enabled) and the `openviking-memory`, `openviking-skills`, `ov-experience-memory` and `openviking-rule-search` skills, so the agent can search, read and write memory itself. Your global `~/.gemini/config/mcp_config.json` is never written: when it already has an `openviking` server, the installer keeps that one and the plugin adds no second copy.
 
 Restart the Antigravity app or start a new `agy` session, then verify that:
 
