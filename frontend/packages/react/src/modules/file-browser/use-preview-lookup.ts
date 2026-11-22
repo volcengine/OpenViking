@@ -49,11 +49,10 @@ export function usePreviewLookup({
   }, [listedUpdatedAt]);
 
   return useMemo(() => {
+    const canCacheBody = (target: string) =>
+      isMemoryUri(target) && /\.md$/i.test(target) && cacheableIdentity;
     const bodyCacheFor = (target: string, updatedAt?: string) =>
-      isMemoryUri(target) &&
-      /\.md$/i.test(target) &&
-      updatedAt !== undefined &&
-      cacheableIdentity
+      canCacheBody(target) && updatedAt !== undefined
         ? cache.body.forFile(target, updatedAt)
         : undefined;
     return {
@@ -74,12 +73,14 @@ export function usePreviewLookup({
           previous.scope === cache.scope &&
           (previous.generation !== cache.generation ||
             previous.saveGeneration !== cache.saveGeneration);
+        const metadata =
+          unknownType || reload || !updatedAt
+            ? readPreviewStat(api, target, options)
+            : undefined;
+        const bodyCache = bodyCacheFor(target, updatedAt);
         return {
-          metadata:
-            unknownType || reload || !updatedAt
-              ? readPreviewStat(api, target, options)
-              : undefined,
-          bodyCache: bodyCacheFor(target, updatedAt),
+          metadata,
+          bodyCache,
         };
       },
     };

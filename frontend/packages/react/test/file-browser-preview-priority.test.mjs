@@ -120,6 +120,36 @@ test('a controlled deep link reads its preview while the root tree is pending', 
   }
 });
 
+test('a listed file reads its body while optional stat metadata is pending', async () => {
+  const root = 'viking://resources';
+  const uri = `${root}/chapter.md`;
+  const stat = deferred();
+  const fetch = recordingFetch(({ path }) => {
+    if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
+    if (path.endsWith('/fs/stat')) return stat.promise;
+    if (path.endsWith('/content/read')) return ok('Chapter text');
+    return ok({});
+  });
+  let browser;
+  function Probe() {
+    browser = useFileBrowser({
+      rootUri: root,
+      controlled: true,
+      currentUri: uri,
+    });
+    return null;
+  }
+  const view = await mount(h(OpenVikingProvider, { fetch }, h(Probe)));
+  try {
+    assert.equal(fetch.countOf('/api/v1/fs/stat') > 0, true);
+    assert.equal(fetch.countOf('/api/v1/content/read'), 1);
+    assert.equal(browser.previewTabs?.[0]?.source?.content, 'Chapter text');
+    await act(async () => stat.resolve(await ok({ isDir: false })));
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('a listed Markdown file reads its body while Wiki attrs are pending', async () => {
   const root = 'viking://resources';
   const uri = `${root}/chapter.md`;
