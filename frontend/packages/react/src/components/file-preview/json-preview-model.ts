@@ -15,9 +15,16 @@ export interface JsonPreviewModel {
 
 export const MAX_FORMATTED_JSON_PREVIEW_LENGTH = 1_000_000;
 
+interface JsonPreviewFormatResult {
+  foldable: boolean;
+  text: string;
+}
+
 /** Format JSON without parsing numbers back through JavaScript and losing source tokens. */
-export function formatJsonPreviewContent(content: string) {
-  if (!content.trim()) return '';
+function formatJsonPreview(
+  content: string,
+): JsonPreviewFormatResult | undefined {
+  if (!content.trim()) return { foldable: true, text: '' };
   try {
     JSON.parse(content);
   } catch {
@@ -39,7 +46,7 @@ export function formatJsonPreviewContent(content: string) {
   for (let index = 0; index < content.length; index += 1) {
     const character = content[index]!;
     if (inString) {
-      if (!append(character)) return content;
+      if (!append(character)) return { foldable: false, text: content };
       if (escaped) escaped = false;
       else if (character === '\\') escaped = true;
       else if (character === '"') inString = false;
@@ -47,7 +54,7 @@ export function formatJsonPreviewContent(content: string) {
     }
     if (character === '"') {
       inString = true;
-      if (!append(character)) return content;
+      if (!append(character)) return { foldable: false, text: content };
       continue;
     }
     if (/\s/.test(character)) continue;
@@ -56,34 +63,44 @@ export function formatJsonPreviewContent(content: string) {
       while (next < content.length && /\s/.test(content[next]!)) next += 1;
       const closing = character === '{' ? '}' : ']';
       if (content[next] === closing) {
-        if (!append(`${character}${closing}`)) return content;
+        if (!append(`${character}${closing}`))
+          return { foldable: false, text: content };
         index = next;
       } else {
         depth += 1;
-        if (!append(`${character}\n${indent()}`)) return content;
+        if (!append(`${character}\n${indent()}`))
+          return { foldable: false, text: content };
       }
       continue;
     }
     if (character === '}' || character === ']') {
       depth -= 1;
-      if (!append(`\n${indent()}${character}`)) return content;
+      if (!append(`\n${indent()}${character}`))
+        return { foldable: false, text: content };
       continue;
     }
     if (character === ',') {
-      if (!append(`,\n${indent()}`)) return content;
+      if (!append(`,\n${indent()}`)) return { foldable: false, text: content };
       continue;
     }
-    if (!append(character === ':' ? ': ' : character)) return content;
+    if (!append(character === ':' ? ': ' : character))
+      return { foldable: false, text: content };
   }
-  return formatted;
+  return { foldable: true, text: formatted };
+}
+
+export function formatJsonPreviewContent(content: string) {
+  const result = formatJsonPreview(content);
+  return result?.text;
 }
 
 export function createJsonPreviewModel(
   content: string,
   defaultExpandDepth = 4,
 ): JsonPreviewModel | undefined {
-  const text = formatJsonPreviewContent(content);
-  if (text === undefined) return undefined;
+  const formatted = formatJsonPreview(content);
+  if (formatted === undefined) return undefined;
+  const { foldable, text } = formatted;
   const lines: JsonPreviewLine[] = [];
   const openLines: number[] = [];
   const defaultCollapsed = new Set<number>();
@@ -100,7 +117,7 @@ export function createJsonPreviewModel(
     };
     lines.push(line);
 
-    if (closes) {
+    if (foldable && closes) {
       const opening = openLines.pop();
       if (opening !== undefined) {
         const openLine = lines[opening]!;
@@ -109,7 +126,7 @@ export function createJsonPreviewModel(
       }
       continue;
     }
-    if (/[{[]$/.test(trimmed)) {
+    if (foldable && /[{[]$/.test(trimmed)) {
       if (line.depth >= defaultExpandDepth) defaultCollapsed.add(index);
       openLines.push(index);
     }

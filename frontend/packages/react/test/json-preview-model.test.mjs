@@ -58,3 +58,19 @@ test('falls back to the original text when formatting would exceed the preview l
   assert.equal(formatJsonPreviewContent(content), content);
   assert.equal(createJsonPreviewModel(content).text, content);
 });
+
+test('disables folding when a multiline preview falls back to source text', () => {
+  const deep = `${'['.repeat(2_000)}0${']'.repeat(2_000)}`;
+  const content = `{\n  "a": ${deep},\n  "c": 2\n}`;
+  const model = createJsonPreviewModel(content);
+  assert.ok(model);
+  assert.equal(model.text, content);
+  assert.equal(
+    model.lines.some((line) => line.closeLine !== undefined),
+    false,
+  );
+  assert.equal(
+    model.lines.some((line) => line.text.includes('"c"')),
+    true,
+  );
+});
