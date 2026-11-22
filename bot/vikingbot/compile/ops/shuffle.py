@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from threading import Event
 
 import httpx
+from markdown_it import MarkdownIt
 
 from openviking.core.namespace import relative_uri_path
 from openviking_cli.exceptions import OpenVikingError
@@ -37,6 +38,27 @@ def service_unavailable(error: Exception) -> bool:
         and error.code
         in {"UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED", "EMBEDDING_FAILED"}
     )
+
+
+def ranking_text(markdown: str) -> str:
+    """Exclude a reserved trailing Wiki comment without changing the stored draft."""
+    if "CONFLICTS_CONTENT" not in markdown:
+        return markdown
+    tokens = MarkdownIt("commonmark").parse(markdown)
+    if not tokens:
+        return markdown
+    last = tokens[-1]
+    if last.type != "html_block" or not last.map:
+        return markdown
+    if not re.match(r"\s*<!--\s*CONFLICTS_CONTENT\b", last.content):
+        return markdown
+    _, closed, trailing = last.content.partition("-->")
+    if not closed or trailing.strip():
+        return markdown
+    lines = markdown.splitlines(keepends=True)
+    if "".join(lines[last.map[1] :]).strip():
+        return markdown
+    return "".join(lines[: last.map[0]])
 
 
 def text_terms(text: str) -> set[str]:
@@ -309,7 +331,7 @@ class Shuffle:
             for d in documents
         ]
         # shortcut: candidate ranking uses Markdown prefixes; use chunked embeddings if long drafts miss matches.
-        texts = [body[:8000] for body in bodies]
+        texts = [(body if r.skill_target else ranking_text(body))[:8000] for body in bodies]
         histories = (
             await bounded_jobs(
                 texts, self.candidates, concurrency=r.limits.shuffle_concurrency, metrics=r.metrics

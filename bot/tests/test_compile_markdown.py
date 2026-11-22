@@ -722,3 +722,26 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert empty_bundle.operations == []
     assert len(pipeline.warnings) == 1
     assert "selection-rules.md" in pipeline.warnings[0]
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+async def test_shuffle_ranks_visible_wiki_text(pipeline, monkeypatch, fenced):
+    pipeline.contract = contract(True)
+    trailer = '<!-- CONFLICTS_CONTENT\n{"state":"unfixed","match_text":"A fact"}\n-->\n'
+    body = "# A fact\n\n"
+    content = body + (f"```markdown\n{trailer}```\n" if fenced else trailer)
+    doc = Document("wiki.md", "drafts/wiki.md")
+    await pipeline.files.sandbox.write_file(doc.workspace_path, content)
+    vectors = AsyncMock(return_value=[[1.0, 0.0]])
+    monkeypatch.setattr(Shuffle, "vectors", vectors)
+
+    async def ask(stage, system, data, schema, validate, **kwargs):
+        response = RouteResponse(decisions=[{"document": doc.workspace_path}])
+        validate(response)
+        return response
+
+    pipeline.model.ask = ask
+    node = parse_plan(MERGE, pipeline.contract)[1]
+    await Shuffle(pipeline).run(node, [doc])
+    vectors.assert_awaited_once_with([content if fenced else body])
+    assert await pipeline.files.sandbox.read_file(doc.workspace_path) == content
