@@ -58,7 +58,7 @@ export interface UseFsPreviewOptions {
    */
   resourceType?: 'directory' | 'file' | 'unknown';
   readDashboardHint?: ReadDashboardHint;
-  contentKind?: 'plain' | 'wiki' | 'pending';
+  listedUpdatedAt?: string;
   activeLevelKey?: string;
   onActiveLevelChange?: (key: string) => void;
   /** 目录两级摘要的标题。Titles of the two summary levels. */

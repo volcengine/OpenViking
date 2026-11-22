@@ -2,7 +2,7 @@ import {
   beginWorkflow,
   type Workflow,
 } from '../../shared/monitoring/workflow.js';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type {
   FilePreviewDirectoryTab,
@@ -18,9 +18,10 @@ import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 import { createPreviewImageResolver as previewImages } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
-import { abortError, readPreviewStat, toPreviewError } from './fs-stat.js';
+import { abortError, toPreviewError } from './fs-stat.js';
 import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
 import type { UseFsPreviewOptions } from './preview-types.js';
+import { usePreviewLookup } from './use-preview-lookup.js';
 
 /**
  * 当前资源的预览页签。切换资源时旧请求被取消，已产出的页签不会覆盖新资源。
@@ -38,7 +39,7 @@ export function useFsPreview({
   client,
   uri,
   resourceType: treeType = 'file',
-  contentKind = 'plain',
+  listedUpdatedAt,
   readDashboardHint,
   activeLevelKey = 'l0',
   onActiveLevelChange,
@@ -67,10 +68,15 @@ export function useFsPreview({
     uri,
     requestOptions,
   );
-  const lookup = useMemo(
-    () => ({ client, uri, generation, saveGeneration, wikiSave }),
-    [client, uri, generation, saveGeneration, wikiSave],
-  );
+  const lookup = usePreviewLookup({
+    client,
+    uri,
+    requestOptions,
+    generation,
+    saveGeneration,
+    wikiSave,
+    listedUpdatedAt,
+  });
   const [statType, setStatType] = useState<{
     lookup: typeof lookup;
     type: 'directory' | 'file';
@@ -107,7 +113,6 @@ export function useFsPreview({
     setTabs([loadingTab(uri, resourceType)]);
     const { options, onStatus } = wikiSave.bind(controller.signal);
     const { signal } = options;
-    if (contentKind === 'pending') return () => controller.abort();
     const operation = beginWorkflow(
       client,
       'file_browser_preview_load',
@@ -116,8 +121,13 @@ export function useFsPreview({
     if (operation) operation.identity = uri;
     setMonitoring(operation);
     const api = operation?.client(client) ?? client;
-    const metadata = readPreviewStat(api, uri, options);
-    void metadata.then((result) => {
+    const { metadata, bodyCache } = lookup.prepareFileRead(
+      api,
+      uri,
+      options,
+      resourceType === 'unknown',
+    );
+    void metadata?.then((result) => {
       if (!signal.aborted && result?.updatedAt)
         setStat({ uri, updatedAt: result.updatedAt });
     });
@@ -155,9 +165,9 @@ export function useFsPreview({
         () => {
           if (!signal.aborted) setSaveGeneration((value) => value + 1);
         },
-        contentKind === 'wiki',
         onStatus,
         readDashboardHint,
+        bodyCache,
       );
     })();
 
@@ -207,7 +217,7 @@ export function useFsPreview({
     );
 
     return () => controller.abort();
-  }, [lookup, resourceType, contentKind, readDashboardHint, openParent]);
+  }, [lookup, resourceType, readDashboardHint, openParent]);
 
   const directoryTab =
     directory?.uri === uri
@@ -235,7 +245,7 @@ export function useFsPreview({
     hasDirectorySummary: Boolean(level?.hasSummary),
     isCompileOutput: current?.key === uri && Boolean(current.compileOutput),
     footer: count === undefined ? undefined : formatCharacterCount(count),
-    updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
+    updatedAt: stat?.uri === uri ? stat.updatedAt : listedUpdatedAt,
     setActiveKey,
   };
 }

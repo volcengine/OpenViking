@@ -10,7 +10,7 @@ interface StatResult {
   updateTime?: string | number;
 }
 
-function isoTimestamp(value: string | number | undefined) {
+export function isoTimestamp(value: string | number | undefined) {
   if (value == null || (typeof value === 'string' && !value.trim())) return;
   const numeric = Number(value);
   if (numeric === 0) return;
