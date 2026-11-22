@@ -1,16 +1,20 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import DataAccessScope, RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.scope_filter import merge_filters
+from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -705,3 +709,253 @@ async def test_search_by_random_reuses_account_filter_for_raw_dsl():
     await backend.search_by_random(filter=raw_filter)
 
     assert adapter.filter == And([Eq("account_id", "acct"), RawDSL(raw_filter)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["count", "scroll", "search_by_random", "search_by_keywords"])
+@pytest.mark.parametrize("acl_enabled", [False, True])
+async def test_scoped_reads_share_visibility_specialization(method, acl_enabled):
+    ctx = _ctx()
+    request = And(
+        [
+            PathScope("uri", "viking://resources/docs", depth=1),
+            Eq("level", 2),
+            RawDSL({"op": "must", "field": "search_tags", "conds": ["team=one"]}),
+        ]
+    )
+    result = {"count": 4, "scroll": ([], None)}.get(method, [])
+    call = AsyncMock(return_value=result)
+    backend = object.__new__(VikingVectorIndexBackend)
+    acl_read = AsyncMock(return_value=acl_enabled)
+    with (
+        patch.object(backend, "_acl_enabled", acl_read),
+        patch.object(
+            backend,
+            "_get_backend_for_context",
+            AsyncMock(return_value=SimpleNamespace(**{method: call})),
+        ),
+    ):
+        assert await getattr(backend, method)(filter=request, ctx=ctx) == result
+
+    tenant: FilterExpr = Eq("account_id", "acct")
+    if acl_enabled:
+        tenant = And([tenant, acl_filter(ctx, AclAction.READ)])
+    assert call.await_args is not None
+    assert call.await_args.kwargs["filter"] == And([request, tenant])
+    assert call.await_args.kwargs["filter"].conds[0] is request
+    acl_read.assert_awaited_once_with(ctx)
+
+
+@pytest.mark.parametrize("acl_enabled", [False, True])
+def test_compiled_scoped_dsl_keeps_request_and_acl_without_broad_paths(acl_enabled):
+    backend = object.__new__(VikingVectorIndexBackend)
+    ctx = _ctx()
+    request = And(
+        [
+            PathScope("uri", "viking://resources/docs", depth=1),
+            Eq("level", 2),
+            RawDSL({"op": "must", "field": "search_tags", "conds": ["team=one"]}),
+        ]
+    )
+    adapter = LocalCollectionAdapter("context", "", "default")
+    before = adapter._compile_filter(
+        merge_filters(request, backend._tenant_filter(ctx, acl_enabled=acl_enabled))
+    )
+    after = adapter._compile_filter(
+        merge_filters(request, backend._scoped_tenant_filter(ctx, request, acl_enabled=acl_enabled))
+    )
+    account = Eq("account_id", "acct")
+    expected = And([account, acl_filter(ctx, AclAction.READ)]) if acl_enabled else account
+    assert after == {
+        "op": "and",
+        "conds": [adapter._compile_filter(request), adapter._compile_filter(expected)],
+    }
+    assert before["conds"][0] == after["conds"][0]
+
+
+@pytest.mark.parametrize("acl_enabled", [False, True])
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+def test_scoped_tenant_filter_preserves_existing_role_rules(acl_enabled, role):
+    ctx = _ctx(role=role)
+    backend = object.__new__(VikingVectorIndexBackend)
+    request = And([PathScope("uri", "viking://resources/docs"), Eq("level", 2)])
+    account = Eq("account_id", "acct")
+    expected: FilterExpr | None = None if role == Role.ROOT else account
+    if acl_enabled and role == Role.USER:
+        expected = And([account, acl_filter(ctx, AclAction.READ)])
+    assert backend._scoped_tenant_filter(ctx, request, acl_enabled=acl_enabled) == expected
+
+
+def test_scope_fallback_preserves_delegated_mixed_and_unknown_access():
+    backend = object.__new__(VikingVectorIndexBackend)
+    ctx = _ctx()
+    mixed = Or(
+        [
+            PathScope("uri", "viking://resources/docs"),
+            PathScope("uri", "viking://user/alice/memories"),
+        ]
+    )
+    assert backend._scoped_tenant_filter(ctx, mixed, acl_enabled=True) == _tenant_filter(
+        ctx, acl_enabled=True
+    )
+    assert backend._scoped_tenant_filter(ctx, mixed, acl_enabled=False) == Eq("account_id", "acct")
+    for request in (
+        None,
+        Eq("context_type", "memory"),
+        Or([PathScope("uri", "viking://resources/docs"), Eq("level", 2)]),
+        PathScope("uri", "viking://user"),
+        PathScope("uri", "viking://resources-other/docs"),
+        PathScope("uri", "viking://user/bob/memories"),
+        RawDSL({"op": "must", "field": "uri", "conds": ["/resources/docs"]}),
+    ):
+        assert backend._scoped_tenant_filter(ctx, request, acl_enabled=False) == _tenant_filter(ctx)
+    access = SimpleNamespace(
+        operation=AclAction.READ,
+        effective_targets=("viking://user/bob/memories",),
+        query_filter=lambda: RawDSL({"op": "must", "field": "owner", "conds": ["bob"]}),
+    )
+    delegated = replace(ctx, role=Role(Role.GLOBAL), data_access=cast(DataAccessScope, access))
+    request = PathScope("uri", "viking://user/bob/memories")
+    assert backend._scoped_tenant_filter(delegated, request, acl_enabled=False) == _tenant_filter(
+        delegated
+    )
+    bypass = replace(ctx, bypass_acl=True)
+    assert backend._scoped_tenant_filter(bypass, request, acl_enabled=True) == Eq(
+        "account_id", "acct"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["count", "scroll", "search_by_random", "search_by_keywords"])
+async def test_scope_optimization_does_not_suppress_acl_configuration_errors(method):
+    adapter_call = AsyncMock()
+    backend = object.__new__(VikingVectorIndexBackend)
+    with (
+        patch.object(
+            backend,
+            "_get_backend_for_context",
+            AsyncMock(return_value=SimpleNamespace(**{method: adapter_call})),
+        ),
+        patch.object(
+            backend,
+            "_acl_enabled",
+            AsyncMock(side_effect=RuntimeError("ACL configuration unavailable")),
+        ),
+        pytest.raises(RuntimeError, match="ACL configuration unavailable"),
+    ):
+        await getattr(backend, method)(
+            filter=PathScope("uri", "viking://resources/docs"), ctx=_ctx()
+        )
+    adapter_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN])
+@pytest.mark.parametrize("scope_kind", ["subtree", "finite", "exact", "multiple"])
+async def test_scoped_count_and_scroll_match_original_acl_result_sets(
+    vector_backend_factory, tmp_path, role, scope_kind
+):
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
+        )
+    )
+    config = _AclConfigReader(False)
+    backend.acl_manager = AclManager(backend, config)
+    target = "viking://resources/docs"
+    ctx = replace(_ctx(role=role), group_ids=("finance",))
+    common: dict[str, Any] = {
+        "account_id": "acct",
+        "context_type": "resource",
+        "level": 2,
+        "updated_at": "2026-01-01T00:00:00Z",
+        "vector": [1.0, 0.0, 0.0, 0.0],
+        "search_tags": ["team=one"],
+    }
+    rows: list[dict[str, Any]] = [
+        {"id": "public", "uri": target + "/public.md"},
+        {
+            "id": "direct",
+            "uri": target + "/direct.md",
+            "acl_mode": "restricted",
+            "acl_direct_grants": ["1:user:alice"],
+        },
+        {
+            "id": "inherited",
+            "uri": target + "/nested/inherited.md",
+            "acl_mode": "inherit",
+            "acl_inherited_grants": ["1:user:alice"],
+        },
+        {
+            "id": "denied",
+            "uri": target + "/nested/denied.md",
+            "acl_mode": "restricted",
+            "acl_direct_grants": ["1:user:bob"],
+        },
+        {
+            "id": "group",
+            "uri": target + "/group.md",
+            "acl_mode": "restricted",
+            "acl_direct_grants": ["1:group:finance"],
+        },
+        {"id": "abstract", "uri": target, "level": 0},
+        {"id": "overview", "uri": target, "level": 1},
+        {"id": "outside", "uri": "viking://resources/elsewhere/a.md"},
+        {"id": "other-tag", "uri": target + "/other.md", "search_tags": ["team=other"]},
+        {"id": "own", "uri": "viking://user/alice/memories/a.md"},
+        {"id": "other-user", "uri": "viking://user/bob/memories/a.md"},
+        {"id": "foreign-account", "uri": target + "/foreign.md", "account_id": "other"},
+    ]
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        for row in rows:
+            payload = {**common, **row}
+            record_ctx = RequestContext(
+                user=UserIdentifier(payload["account_id"], "alice"), role=Role(Role.ROOT)
+            )
+            await backend._upsert_many_raw([payload], ctx=record_ctx)
+        scopes: dict[str, FilterExpr] = {
+            "subtree": PathScope("uri", target),
+            "finite": PathScope("uri", target, depth=1),
+            "exact": Eq("uri", target + "/direct.md"),
+            "multiple": Or(
+                [PathScope("uri", target + "/nested"), Eq("uri", target + "/direct.md")]
+            ),
+        }
+        candidates = {
+            "subtree": {"public", "direct", "inherited", "denied", "group"},
+            "finite": {"public", "direct", "group"},
+            "exact": {"direct"},
+            "multiple": {"direct", "inherited", "denied"},
+        }
+        request = And([scopes[scope_kind], Eq("level", 2), Eq("search_tags", "team=one")])
+        for enabled in (False, True, False):
+            config.enabled = enabled
+            raw_backend = await backend._get_backend_for_context(ctx)
+            original = merge_filters(request, backend._tenant_filter(ctx, acl_enabled=enabled))
+            before, _ = await raw_backend.scroll(filter=original, limit=100)
+            after, cursor = await backend.scroll(filter=request, limit=100, ctx=ctx)
+            expected = candidates[scope_kind].copy()
+            if enabled and role == Role.USER:
+                expected.discard("denied")
+            assert {row["id"] for row in before} == {row["id"] for row in after} == expected
+            assert (
+                await backend.count(filter=request, ctx=ctx)
+                == await raw_backend.count(filter=original)
+                == len(expected)
+            )
+            assert cursor is None
+        config.enabled = True
+        expected = candidates[scope_kind].copy()
+        if role == Role.USER:
+            expected.discard("denied")
+        first_page, cursor = await backend.scroll(filter=request, limit=1, ctx=ctx)
+        second_page = []
+        if cursor is not None:
+            second_page, _ = await backend.scroll(filter=request, limit=100, cursor=cursor, ctx=ctx)
+        assert {row["id"] for row in first_page}.isdisjoint(row["id"] for row in second_page)
+        assert {row["id"] for row in first_page + second_page} == expected
+    finally:
+        await backend.close()
