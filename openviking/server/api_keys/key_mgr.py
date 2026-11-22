@@ -271,6 +271,15 @@ class APIKeyManager:
     async def finish_deletion(self, account_id, user_id, task_id):
         return await self._store.finish_deletion(account_id, user_id, task_id)
 
+    async def is_creation_blocked(self, account_id: str, user_id: str) -> bool:
+        """Use a store's combined check when available, preserving legacy stores."""
+        check = getattr(self._store, "is_creation_blocked", None)
+        if check is not None:
+            return await check(account_id, user_id)
+        if await self.get_deletion(account_id, user_id) is not None:
+            return True
+        return await self.get_user(account_id, user_id) is None
+
     async def get_deletion(self, account_id, user_id=None):
         return await self._store.get_deletion(account_id, user_id)
 
