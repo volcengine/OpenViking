@@ -222,18 +222,28 @@ class NamedQueue:
             )
 
     async def _ack(self, ctx: AckContext) -> None:
-        await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
+        body = self._encode_settlement(ctx.message_id, ctx.message)
+        await self._async_agfs.write(f"{self.path}/ack", body)
         ctx.committed = True
 
-    async def retry(self, msg_id: str) -> None:
+    async def retry(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
         """Return the original delivery to pending after its Work is persisted."""
         if msg_id:
-            await self._async_agfs.write(f"{self.path}/retry", msg_id.encode("utf-8"))
+            body = self._encode_settlement(msg_id, message)
+            await self._async_agfs.write(f"{self.path}/retry", body)
+
+    @staticmethod
+    def _encode_settlement(msg_id: str, message: Optional[Dict[str, Any]]) -> bytes:
+        if message is not None and "delivery_receipt" in message:
+            return json.dumps(
+                {"id": msg_id, "delivery_receipt": message["delivery_receipt"]}
+            ).encode("utf-8")
+        return msg_id.encode("utf-8")
 
     async def settle_dequeued(self, message: Dict[str, Any], result: ProcessResult) -> None:
         msg_id = message.get("id", "")
         if result.outcome is ProcessOutcome.RETRY:
-            await self.retry(msg_id)
+            await self.retry(msg_id, message)
         else:
             await self.ack(msg_id, message)
 

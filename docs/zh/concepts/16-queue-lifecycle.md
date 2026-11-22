@@ -117,8 +117,8 @@ QueueFS 控制文件名属于保留路径段，队列名不能以 `enqueue`、`e
 SQLite 自动补齐可空 `serial_key` 列与索引，旧消息该列为 `NULL`；
 补齐 `schedule_seq` 调度序号并按原行 ID 初始化，替换原 status 索引。
 存量消息的 ID、payload 和原始顺序保持不变。
-Redis 布局与旧版不兼容：升级前须排空 service 下共享队列、统一升级生产者与消费者，
-不支持新旧版本混用或自动迁移积压。
+使用 Redis 后端时，如果旧版 QueueFS 尚未支持按消息键调度，升级前应先排空共享队列，
+再统一升级生产者与消费者。
 
 扩展入队使用 `QFSE` v1 大端帧（固定头、TLV、原始 payload），header 上限 64 KiB。
 `group_key` / `serial_key` 的 TLV type 为 `2` / `3`，flags 为 `1`，
@@ -126,10 +126,22 @@ key 长度为 1–4096 UTF-8 bytes；拒绝互斥字段并存、重复或无效 
 跳过未知可选字段。完整帧定义见源码树中的
 `crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs`。
 
-旧 `/enqueue` 仍接收原始 payload；dequeue、peek、messages 和 ACK 格式不变。
+旧 `/enqueue` 仍接收原始 payload。
 无可投递消息时 `/dequeue` 返回 `{}`，即使 pending 非零。扩展 write 返回字节数，
 UUID 由调用方持有；同队列尚存 ID 重复入队返回 `AlreadyExists`，ACK 后不保留去重记录。
-`clear` 和删除队列同时清理调度状态。业务处理、合并及写回结束后才 ACK。
+`clear` 和删除队列同时清理调度状态与在途凭证。业务处理、合并及写回结束后才 ACK。
+
+Redis QueueFS 每次成功读取 `/dequeue` 都会签发新的 `delivery_receipt`。
+向 `/ack` 或 `/retry` 写入 `{"id":"<消息 ID>","delivery_receipt":"<领取凭证>"}` 时，
+使用此次领取返回的 ID 和凭证。Memory 和 SQLite 仍接收原始消息 ID。
+`/peek`、`/messages` 和 `/status` 格式保持不变。Redis 结算缺凭证、只传原始 ID
+或请求格式非法时返回 `InvalidOperation`。格式正确但凭证已失效或不匹配时，包括重复结算，
+消息、队列计数和分组占用均保持不变。心跳恢复和 RETRY 使旧凭证失效，重新领取时会签发新凭证。
+业务处理仍遵循至少一次投递。
+
+从已支持按消息键调度的 Redis 版本升级到领取凭证时，先停止所有旧消费者并等待旧的结算请求结束，
+再启用使用配套 Python 代码和原生扩展的新消费者。同一 `service_name` 下的消费者须统一版本。
+待处理消息可继续保留，旧的在途消息由心跳恢复重新置为待处理，下次领取时签发凭证。
 
 Python `enqueue(..., serial_key=..., group_key=...)` 在注册 Work 前校验 key，
 扩展入队返回实际 UUID；无 key 时保持旧路径。ExternalTask 使用账号、任务类型和

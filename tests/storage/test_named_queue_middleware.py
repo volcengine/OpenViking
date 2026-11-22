@@ -4,7 +4,7 @@
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import pytest
@@ -116,6 +116,33 @@ async def test_middleware_constructor_order_and_commit(transport, operation):
         assert await queue.clear()
         transport.write.assert_awaited_once_with("/queue/Test/clear", b"")
     assert events == [("outer", "enter"), ("inner", "enter"), ("inner", "exit"), ("outer", "exit")]
+
+
+@pytest.mark.parametrize("operation", ["ack", "retry"])
+@pytest.mark.parametrize("delivery_receipt", [None, "original-receipt"])
+async def test_dequeue_settles_original_delivery(transport, operation, delivery_receipt):
+    message = {"id": "message-1", "data": "{}"}
+    if delivery_receipt is not None:
+        message["delivery_receipt"] = delivery_receipt
+    transport.read.return_value = json.dumps(message).encode("utf-8")
+
+    class HandlerWithResult(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            assert data == message
+            if operation == "retry":
+                return ProcessResult.retry()
+            return ProcessResult.success({"id": "result-id", "delivery_receipt": "result-receipt"})
+
+    queue = NamedQueue(Mock(), "/queue", "Test", dequeue_handler=HandlerWithResult())
+    await queue.dequeue()
+
+    path, body = transport.write.call_args.args
+    transport.write.assert_awaited_once()
+    assert path == f"/queue/Test/{operation}"
+    if delivery_receipt is None:
+        assert body == b"message-1"
+    else:
+        assert json.loads(body) == {"id": "message-1", "delivery_receipt": delivery_receipt}
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("write failed"), asyncio.CancelledError()])

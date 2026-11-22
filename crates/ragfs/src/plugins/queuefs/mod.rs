@@ -10,8 +10,11 @@
 //! - `/queue_name/status` - Read pending and processing message counts
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
-//! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
+//! - `/queue_name/ack` - Acknowledge and delete a processing message
 //! - `/queue_name/retry` - Return a processing message to pending without changing its identity
+//!
+//! ACK and RETRY take a raw message ID for local backends or a JSON object with
+//! `id` and `delivery_receipt` for Redis.
 
 mod backend;
 #[cfg(feature = "cache")]
@@ -87,13 +90,62 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
     },
 ];
 
-/// Dequeue response format (matches Go libagfsbinding format)
+/// Queue file response format (matches Go libagfsbinding format)
 #[derive(Debug, Serialize)]
 struct QueueMessage {
     id: String,
     data: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivery_receipt: Option<String>,
+}
+
+impl QueueMessage {
+    fn new(message: Message, delivery_receipt: Option<String>) -> Self {
+        let timestamp = queue_message_timestamp(&message);
+        Self {
+            id: message.id,
+            data: String::from_utf8_lossy(&message.data).into_owned(),
+            timestamp,
+            delivery_receipt,
+        }
+    }
+}
+
+struct DequeuedMessage {
+    message: Message,
+    delivery_receipt: Option<String>,
+}
+
+enum Settlement {
+    Ack,
+    Retry,
+}
+
+#[cfg(feature = "cache")]
+#[derive(serde::Deserialize)]
+struct RedisSettlement {
+    id: String,
+    delivery_receipt: String,
+}
+
+#[cfg(feature = "cache")]
+impl RedisSettlement {
+    fn decode(data: &[u8]) -> Result<Self> {
+        // Serde also accepts positional arrays for structs. The file takes an object.
+        if data.trim_ascii_start().starts_with(b"{") {
+            if let Ok(request) = serde_json::from_slice::<Self>(data) {
+                if !request.id.trim().is_empty() && !request.delivery_receipt.trim().is_empty() {
+                    return Ok(request);
+                }
+            }
+        }
+        Err(Error::InvalidOperation(
+            "Redis settlement requires JSON with nonempty id and delivery_receipt strings"
+                .to_string(),
+        ))
+    }
 }
 
 fn queue_message_timestamp(msg: &Message) -> Option<f64> {
@@ -186,9 +238,15 @@ impl QueueStorage {
         }
     }
 
-    async fn dequeue(&self, queue_name: &str) -> Result<Option<Message>> {
+    async fn dequeue(&self, queue_name: &str) -> Result<Option<DequeuedMessage>> {
         match self {
-            Self::Local(backend) => backend.lock().await.dequeue(queue_name),
+            Self::Local(backend) => {
+                let message = backend.lock().await.dequeue(queue_name)?;
+                Ok(message.map(|message| DequeuedMessage {
+                    message,
+                    delivery_receipt: None,
+                }))
+            }
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.dequeue(queue_name).await,
         }
@@ -234,19 +292,28 @@ impl QueueStorage {
         }
     }
 
-    async fn ack(&self, queue_name: &str, message_id: &str) -> Result<bool> {
+    async fn settle(&self, queue_name: &str, settlement: Settlement, data: &[u8]) -> Result<bool> {
         match self {
-            Self::Local(backend) => backend.lock().await.ack(queue_name, message_id),
+            Self::Local(backend) => {
+                let id = String::from_utf8_lossy(data);
+                let mut backend = backend.lock().await;
+                match settlement {
+                    Settlement::Ack => backend.ack(queue_name, id.trim()),
+                    Settlement::Retry => backend.retry(queue_name, id.trim()),
+                }
+            }
             #[cfg(feature = "cache")]
-            Self::Cache(storage) => storage.ack(queue_name, message_id).await,
-        }
-    }
-
-    async fn retry(&self, queue_name: &str, message_id: &str) -> Result<bool> {
-        match self {
-            Self::Local(backend) => backend.lock().await.retry(queue_name, message_id),
-            #[cfg(feature = "cache")]
-            Self::Cache(storage) => storage.retry(queue_name, message_id).await,
+            Self::Cache(storage) => {
+                let request = RedisSettlement::decode(data)?;
+                storage
+                    .settle(
+                        queue_name,
+                        settlement,
+                        &request.id,
+                        &request.delivery_receipt,
+                    )
+                    .await
+            }
         }
     }
 }
@@ -403,30 +470,17 @@ impl FileSystem for QueueFileSystem {
 
         match operation.as_str() {
             "dequeue" => {
-                let Some(msg) = self.storage.dequeue(&queue_name).await? else {
+                let Some(delivery) = self.storage.dequeue(&queue_name).await? else {
                     return Ok(b"{}".to_vec());
                 };
-                // Return in Go libagfsbinding format: {"id": "...", "data": "..."}
-                let data_str = String::from_utf8_lossy(&msg.data).to_string();
-                let timestamp = queue_message_timestamp(&msg);
-                let response = QueueMessage {
-                    id: msg.id,
-                    data: data_str,
-                    timestamp,
-                };
+                let response = QueueMessage::new(delivery.message, delivery.delivery_receipt);
                 Ok(serde_json::to_vec(&response)?)
             }
             "peek" => {
                 let Some(msg) = self.storage.peek(&queue_name).await? else {
                     return Ok(b"{}".to_vec());
                 };
-                // Return in Go libagfsbinding format: {"id": "...", "data": "..."}
-                let data_str = String::from_utf8_lossy(&msg.data).to_string();
-                let response = QueueMessage {
-                    id: msg.id.clone(),
-                    data: data_str,
-                    timestamp: queue_message_timestamp(&msg),
-                };
+                let response = QueueMessage::new(msg, None);
                 Ok(serde_json::to_vec(&response)?)
             }
             "size" => {
@@ -443,14 +497,7 @@ impl FileSystem for QueueFileSystem {
                     .list_unacked(&queue_name)
                     .await?
                     .into_iter()
-                    .map(|msg| {
-                        let timestamp = queue_message_timestamp(&msg);
-                        QueueMessage {
-                            id: msg.id,
-                            data: String::from_utf8_lossy(&msg.data).to_string(),
-                            timestamp,
-                        }
-                    })
+                    .map(|msg| QueueMessage::new(msg, None))
                     .collect::<Vec<_>>();
                 Ok(serde_json::to_vec(&messages)?)
             }
@@ -488,13 +535,15 @@ impl FileSystem for QueueFileSystem {
                 Ok(0)
             }
             "ack" => {
-                let msg_id = String::from_utf8_lossy(data).trim().to_string();
-                self.storage.ack(&queue_name, &msg_id).await?;
+                self.storage
+                    .settle(&queue_name, Settlement::Ack, data)
+                    .await?;
                 Ok(0)
             }
             "retry" => {
-                let msg_id = String::from_utf8_lossy(data).trim().to_string();
-                self.storage.retry(&queue_name, &msg_id).await?;
+                self.storage
+                    .settle(&queue_name, Settlement::Retry, data)
+                    .await?;
                 Ok(0)
             }
             _ => Err(Error::InvalidOperation(format!(
@@ -906,7 +955,7 @@ impl ServicePlugin for QueueFSPlugin {
          6. Clear queue:\n\
             echo '' > /queuefs/Embedding/clear\n\
          \n\
-         7. Ack a message:\n\
+         7. Ack a message on Memory or SQLite:\n\
             echo '<message_id>' > /queuefs/Embedding/ack\n\
          \n\
          Control files per queue:\n\
@@ -917,8 +966,9 @@ impl ServicePlugin for QueueFSPlugin {
          - size: Read to get the current queue size\n\
          - status: Read pending and processing message counts\n\
          - clear: Write to clear all messages from the queue\n\
-         - ack: Write message id to acknowledge and delete it\n\
-         - retry: Write processing message id to return it to pending, retaining serial priority\n\
+         - ack: Acknowledge and delete a processing message\n\
+         - retry: Return a processing message to pending, retaining serial priority\n\
+         - ack/retry input: Raw message ID for local backends; JSON with id and delivery_receipt for Redis\n\
          \n\
          Supports nested queues:\n\
             mkdir /queuefs/logs/errors\n\
@@ -989,6 +1039,7 @@ mod tests {
         id: String,
         data: String,
         timestamp: Option<f64>,
+        delivery_receipt: Option<String>,
     }
 
     #[test]
@@ -997,9 +1048,11 @@ mod tests {
             id: "legacy".to_string(),
             data: "payload".to_string(),
             timestamp: None,
+            delivery_receipt: None,
         };
         let value = serde_json::to_value(response).unwrap();
         assert!(value.get("timestamp").is_none());
+        assert!(value.get("delivery_receipt").is_none());
     }
 
     /// Create a queue filesystem with one initialized queue.
@@ -1007,32 +1060,47 @@ mod tests {
         fs.mkdir("/retry-jobs", 0o755).await.unwrap();
         let first = enqueue_serial(fs, "retry-jobs", "A", b"original").await;
         let original = dequeue_msg(fs, "retry-jobs").await;
+        assert_eq!(original.id, first);
         let later = enqueue_serial(fs, "retry-jobs", "A", b"follower").await;
         let cold = enqueue_serial(fs, "retry-jobs", "B", b"cold").await;
         for _ in 0..2 {
-            fs.write("/retry-jobs/retry", first.as_bytes(), 0, WriteFlag::None)
-                .await
-                .unwrap();
+            settle_message(fs, "retry-jobs", "retry", &original).await;
         }
-        ack_message(fs, "retry-jobs", &first).await; // Pending ACK must be a no-op.
+        ack_delivery(fs, "retry-jobs", &original).await; // Pending ACK must be a no-op.
         assert_eq!(queue_size(fs, "retry-jobs").await, 3);
         let one = dequeue_msg(fs, "retry-jobs").await;
         let two = dequeue_msg(fs, "retry-jobs").await;
         assert!(one.id == first || two.id == first);
         assert!(one.id == cold || two.id == cold);
-        let replay = if one.id == first { &one } else { &two };
+        let (replay, other) = if one.id == first {
+            (&one, &two)
+        } else {
+            (&two, &one)
+        };
         assert_eq!(replay.data, original.data);
         assert_eq!(replay.timestamp, original.timestamp);
         assert_eq!(fs.read("/retry-jobs/dequeue", 0, 0).await.unwrap(), b"{}");
-        ack_message(fs, "retry-jobs", &cold).await;
-        fs.write("/retry-jobs/retry", first.as_bytes(), 0, WriteFlag::None)
-            .await
-            .unwrap();
-        assert_eq!(dequeue_msg(fs, "retry-jobs").await.id, first);
+        if let Some(original_receipt) = &original.delivery_receipt {
+            let replay_receipt = replay.delivery_receipt.as_ref().unwrap();
+            assert_ne!(original_receipt, replay_receipt);
+            assert_settlement_is_noop(fs, "retry-jobs", &original).await;
+            let wrong_pair = TestQueueMessage {
+                delivery_receipt: other.delivery_receipt.clone(),
+                ..original
+            };
+            assert_settlement_is_noop(fs, "retry-jobs", &wrong_pair).await;
+        } else {
+            assert!(replay.delivery_receipt.is_none());
+        }
+        ack_delivery(fs, "retry-jobs", other).await;
+        settle_message(fs, "retry-jobs", "retry", replay).await;
+        let current = dequeue_msg(fs, "retry-jobs").await;
+        assert_eq!(current.id, first);
         assert_eq!(fs.read("/retry-jobs/dequeue", 0, 0).await.unwrap(), b"{}");
-        ack_message(fs, "retry-jobs", &first).await;
-        assert_eq!(dequeue_msg(fs, "retry-jobs").await.id, later);
-        ack_message(fs, "retry-jobs", &later).await;
+        ack_delivery(fs, "retry-jobs", &current).await;
+        let follower = dequeue_msg(fs, "retry-jobs").await;
+        assert_eq!(follower.id, later);
+        ack_delivery(fs, "retry-jobs", &follower).await;
         assert_eq!(
             fs.read("/retry-jobs/status", 0, 0).await.unwrap(),
             br#"{"pending":0,"processing":0}"#
@@ -1085,24 +1153,22 @@ mod tests {
         let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
             .await
             .unwrap();
-        let peer = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix)
+        let peer = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
             .await
             .unwrap();
         retry_contract(&first).await;
         first.mkdir("/node-retry", 0o755).await.unwrap();
         let n1 = enqueue_group(&first, "node-retry", "N", b"one").await;
         let n2 = enqueue_group(&first, "node-retry", "N", b"two").await;
-        assert_eq!(dequeue_msg(&first, "node-retry").await.id, n1);
-        assert_eq!(dequeue_msg(&first, "node-retry").await.id, n2);
-        first
-            .write("/node-retry/retry", n1.as_bytes(), 0, WriteFlag::None)
-            .await
-            .unwrap();
+        let delivery_one = dequeue_msg(&first, "node-retry").await;
+        let delivery_two = dequeue_msg(&first, "node-retry").await;
+        assert_eq!(delivery_one.id, n1);
+        assert_eq!(delivery_two.id, n2);
+        settle_message(&first, "node-retry", "retry", &delivery_one).await;
+        let receipts = cache_protocol::QueueKeys::new(&prefix, "node-retry").delivery_receipts;
+        assert!(runtime.hget(&receipts, &n1).await.unwrap().is_none());
         assert_eq!(peer.read("/node-retry/dequeue", 0, 0).await.unwrap(), b"{}");
-        first
-            .write("/node-retry/retry", n2.as_bytes(), 0, WriteFlag::None)
-            .await
-            .unwrap();
+        settle_message(&first, "node-retry", "retry", &delivery_two).await;
         assert_eq!(dequeue_msg(&peer, "node-retry").await.id, n1);
         assert_eq!(dequeue_msg(&peer, "node-retry").await.id, n2);
         first.remove_all("/node-retry").await.unwrap();
@@ -1194,6 +1260,43 @@ mod tests {
         fs.write(&format!("/{queue}/ack"), id.as_bytes(), 0, WriteFlag::None)
             .await
             .unwrap();
+    }
+
+    async fn settle_message(
+        fs: &QueueFileSystem,
+        queue: &str,
+        op: &str,
+        message: &TestQueueMessage,
+    ) {
+        let body = match &message.delivery_receipt {
+            Some(receipt) => serde_json::to_vec(&serde_json::json!({
+                "id": message.id,
+                "delivery_receipt": receipt,
+            }))
+            .unwrap(),
+            None => message.id.as_bytes().to_vec(),
+        };
+        fs.write(&format!("/{queue}/{op}"), &body, 0, WriteFlag::None)
+            .await
+            .unwrap();
+    }
+
+    async fn ack_delivery(fs: &QueueFileSystem, queue: &str, message: &TestQueueMessage) {
+        settle_message(fs, queue, "ack", message).await;
+    }
+
+    async fn assert_settlement_is_noop(
+        fs: &QueueFileSystem,
+        queue: &str,
+        message: &TestQueueMessage,
+    ) {
+        let status = format!("/{queue}/status");
+        let before = fs.read(&status, 0, 0).await.unwrap();
+        for op in ["ack", "retry"] {
+            settle_message(fs, queue, op, message).await;
+            assert_eq!(fs.read(&status, 0, 0).await.unwrap(), before);
+            assert!(maybe_dequeue(fs, queue).await.is_none());
+        }
     }
 
     async fn maybe_dequeue(fs: &QueueFileSystem, queue: &str) -> Option<TestQueueMessage> {
@@ -1384,32 +1487,36 @@ mod tests {
         let group = enqueue_group(&first, "mixed", "用户:A", b"g1").await;
         let group_two = enqueue_group(&first, "mixed", "用户:A", b"g2").await;
         enqueue(&first, "mixed", b"plain").await;
-        let mut ids = Vec::new();
+        let mut deliveries = HashMap::new();
         for _ in 0..4 {
-            ids.push(dequeue_msg(&first, "mixed").await.id);
+            let delivery = dequeue_msg(&first, "mixed").await;
+            deliveries.insert(delivery.id.clone(), delivery);
         }
-        assert!(ids.contains(&serial) && ids.contains(&group) && ids.contains(&group_two));
-        assert!(!ids.contains(&later));
+        assert!(deliveries.contains_key(&serial));
+        assert!(deliveries.contains_key(&group) && deliveries.contains_key(&group_two));
+        assert!(!deliveries.contains_key(&later));
         assert!(maybe_dequeue(&peer, "mixed").await.is_none());
         let group_three = enqueue_group(&peer, "mixed", "用户:A", b"g3").await;
         enqueue(&peer, "mixed", b"another plain").await;
         assert_eq!(dequeue_msg(&peer, "mixed").await.data, "another plain");
         assert!(maybe_dequeue(&peer, "mixed").await.is_none());
-        assert_eq!(dequeue_msg(&first, "mixed").await.id, group_three);
-        ack_message(&first, "mixed", &serial).await;
-        assert_eq!(dequeue_msg(&peer, "mixed").await.id, later);
+        let third_group_delivery = dequeue_msg(&first, "mixed").await;
+        assert_eq!(third_group_delivery.id, group_three);
+        ack_delivery(&first, "mixed", &deliveries[&serial]).await;
+        let later_delivery = dequeue_msg(&peer, "mixed").await;
+        assert_eq!(later_delivery.id, later);
         let last_serial = enqueue_serial(&first, "mixed", "用户:A", b"s3").await;
-        ack_message(&first, "mixed", &serial).await;
+        ack_delivery(&first, "mixed", &deliveries[&serial]).await;
         assert!(maybe_dequeue(&peer, "mixed").await.is_none());
         for id in [&group, &group_two] {
-            ack_message(&first, "mixed", id).await;
+            ack_delivery(&first, "mixed", &deliveries[id]).await;
         }
         let last_group = enqueue_group(&peer, "mixed", "用户:A", b"g4").await;
         assert!(maybe_dequeue(&peer, "mixed").await.is_none());
-        ack_message(&first, "mixed", &group_three).await;
+        ack_delivery(&first, "mixed", &third_group_delivery).await;
         assert_eq!(dequeue_msg(&peer, "mixed").await.id, last_group);
         assert!(maybe_dequeue(&first, "mixed").await.is_none());
-        ack_message(&peer, "mixed", &later).await;
+        ack_delivery(&peer, "mixed", &later_delivery).await;
         assert_eq!(dequeue_msg(&first, "mixed").await.id, last_serial);
         first
             .write("/mixed/clear", b"", 0, WriteFlag::None)
@@ -1490,23 +1597,27 @@ mod tests {
         } else {
             (&second, &first)
         };
-        assert_eq!(one.or(two).unwrap().id, s1);
+        let original = one.or(two).unwrap();
+        assert_eq!(original.id, s1);
         let independent = enqueue_serial(owner, "serial", "B", b"other key").await;
         assert_eq!(dequeue_msg(peer, "serial").await.id, independent);
         assert!(maybe_dequeue(owner, "serial").await.is_none());
         let n1 = enqueue_group(owner, "node", "A", b"node one").await;
         let n2 = enqueue_group(owner, "node", "A", b"node two").await;
         let n3 = enqueue_group(owner, "node", "A", b"node three").await;
-        assert_eq!(dequeue_msg(owner, "node").await.id, n1);
-        assert_eq!(dequeue_msg(owner, "node").await.id, n2);
+        let first_node = dequeue_msg(owner, "node").await;
+        let second_node = dequeue_msg(owner, "node").await;
+        assert_eq!(first_node.id, n1);
+        assert_eq!(second_node.id, n2);
         assert!(maybe_dequeue(peer, "node").await.is_none());
-        ack_message(owner, "node", &n1).await;
-        ack_message(owner, "node", &n1).await;
+        ack_delivery(owner, "node", &first_node).await;
+        assert_settlement_is_noop(peer, "node", &first_node).await;
         assert!(maybe_dequeue(peer, "node").await.is_none());
-        ack_message(owner, "node", &n2).await;
+        ack_delivery(owner, "node", &second_node).await;
         // All in-flight messages ACKed: pending messages may choose a new owner.
-        assert_eq!(dequeue_msg(peer, "node").await.id, n3);
-        ack_message(peer, "node", &n3).await;
+        let third_node = dequeue_msg(peer, "node").await;
+        assert_eq!(third_node.id, n3);
+        ack_delivery(peer, "node", &third_node).await;
         let r1 = enqueue_group(owner, "node", "R", b"recover one").await;
         let r2 = enqueue_group(owner, "node", "R", b"recover two").await;
         let r3 = enqueue_group(owner, "node", "R", b"pending").await;
@@ -1526,13 +1637,19 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(recovered.id, s1);
+        assert_eq!(recovered.data, original.data);
+        assert_eq!(recovered.timestamp, original.timestamp);
+        assert!(recovered.delivery_receipt.is_some());
+        assert_ne!(recovered.delivery_receipt, original.delivery_receipt);
+        assert_settlement_is_noop(peer, "serial", &original).await;
         assert!(maybe_dequeue(&third, "serial").await.is_none());
-        ack_message(peer, "serial", &s1).await;
-        assert_eq!(dequeue_msg(&third, "serial").await.id, s2);
-        ack_message(peer, "serial", &s1).await;
+        ack_delivery(peer, "serial", &recovered).await;
+        let follower = dequeue_msg(&third, "serial").await;
+        assert_eq!(follower.id, s2);
+        ack_delivery(peer, "serial", &recovered).await;
         let s3 = enqueue_serial(peer, "serial", "A", b"still blocked").await;
         assert!(maybe_dequeue(peer, "serial").await.is_none());
-        ack_message(&third, "serial", &s2).await;
+        ack_delivery(&third, "serial", &follower).await;
         assert_eq!(dequeue_msg(peer, "serial").await.id, s3);
         // Each queue recovers atomically, but the background sweep visits them separately.
         tokio::time::timeout(std::time::Duration::from_secs(12), async {
@@ -1548,6 +1665,9 @@ mod tests {
         })
         .await
         .unwrap();
+        let receipts = cache_protocol::QueueKeys::new(&prefix, "node").delivery_receipts;
+        assert!(runtime.hget(&receipts, &r1).await.unwrap().is_none());
+        assert!(runtime.hget(&receipts, &r2).await.unwrap().is_none());
         let (one, two) = tokio::join!(maybe_dequeue(peer, "node"), maybe_dequeue(&third, "node"));
         assert_ne!(one.is_some(), two.is_some());
         let (new_owner, other) = if one.is_some() {
@@ -1555,26 +1675,33 @@ mod tests {
         } else {
             (&third, peer)
         };
-        let mut recovered_ids = vec![one.or(two).unwrap().id];
-        recovered_ids.push(dequeue_msg(new_owner, "node").await.id);
-        recovered_ids.push(dequeue_msg(new_owner, "node").await.id);
+        let recovered_deliveries = [
+            one.or(two).unwrap(),
+            dequeue_msg(new_owner, "node").await,
+            dequeue_msg(new_owner, "node").await,
+        ];
+        let mut recovered_ids: Vec<_> = recovered_deliveries.iter().map(|msg| &msg.id).collect();
         recovered_ids.sort();
-        let mut expected = vec![r1, r2, r3];
+        let mut expected = vec![&r1, &r2, &r3];
         expected.sort();
         assert_eq!(recovered_ids, expected);
-        for id in &recovered_ids[..2] {
-            ack_message(new_owner, "node", id).await;
+        for delivery in &recovered_deliveries[..2] {
+            ack_delivery(new_owner, "node", delivery).await;
         }
         let next = enqueue_group(peer, "node", "R", b"next").await;
         assert!(maybe_dequeue(other, "node").await.is_none());
-        ack_message(new_owner, "node", &recovered_ids[2]).await;
+        ack_delivery(new_owner, "node", &recovered_deliveries[2]).await;
         assert_eq!(dequeue_msg(other, "node").await.id, next);
+        assert!(runtime.hget(&receipts, &next).await.unwrap().is_some());
         peer.write("/node/clear", b"", 0, WriteFlag::None)
             .await
             .unwrap();
+        assert!(runtime.hget(&receipts, &next).await.unwrap().is_none());
         let fresh = enqueue_group(peer, "node", "R", b"fresh").await;
         assert_eq!(dequeue_msg(peer, "node").await.id, fresh);
+        assert!(runtime.hget(&receipts, &fresh).await.unwrap().is_some());
         peer.remove_all("/node").await.unwrap();
+        assert!(runtime.hget(&receipts, &fresh).await.unwrap().is_none());
         peer.mkdir("/node", 0o755).await.unwrap();
         assert!(peer.read("/node/config", 0, 0).await.is_err());
         peer.remove_all("/node").await.unwrap();
@@ -1894,7 +2021,7 @@ mod tests {
             .await
             .unwrap();
         let queue_prefix = format!("queuefs-runtime-test-{}", uuid::Uuid::new_v4());
-        let fs = QueueFileSystem::with_cache_runtime(runtime.clone(), queue_prefix)
+        let fs = QueueFileSystem::with_cache_runtime(runtime.clone(), queue_prefix.clone())
             .await
             .unwrap();
 
@@ -1903,16 +2030,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fs.read("/Semantic/size", 0, 0).await.unwrap(), b"1");
-        let dequeued: TestQueueMessage =
-            serde_json::from_slice(&fs.read("/Semantic/dequeue", 0, 0).await.unwrap()).unwrap();
+        let peeked: serde_json::Value =
+            serde_json::from_slice(&fs.read("/Semantic/peek", 0, 0).await.unwrap()).unwrap();
+        assert!(peeked.get("delivery_receipt").is_none());
+        let dequeued = dequeue_msg(&fs, "Semantic").await;
         assert_eq!(dequeued.data, "payload");
-        assert_eq!(
-            fs.read("/Semantic/status", 0, 0).await.unwrap(),
-            br#"{"pending":0,"processing":1}"#
-        );
-        fs.write("/Semantic/ack", dequeued.id.as_bytes(), 0, WriteFlag::None)
+        let receipt = dequeued.delivery_receipt.as_deref().unwrap();
+        assert_eq!(uuid::Uuid::parse_str(receipt).unwrap().get_version_num(), 4);
+        let messages: Vec<serde_json::Value> =
+            serde_json::from_slice(&fs.read("/Semantic/messages", 0, 0).await.unwrap()).unwrap();
+        assert_eq!(messages, vec![peeked]);
+        let before = br#"{"pending":0,"processing":1}"#;
+        assert_eq!(fs.read("/Semantic/status", 0, 0).await.unwrap(), before);
+        let missing = serde_json::to_vec(&serde_json::json!({"id": dequeued.id})).unwrap();
+        let positional = serde_json::to_vec(&[dequeued.id.as_str(), receipt]).unwrap();
+        for op in ["ack", "retry"] {
+            for invalid in [
+                dequeued.id.as_bytes(),
+                missing.as_slice(),
+                positional.as_slice(),
+                br#"{"id":"message","delivery_receipt":null}"#,
+                br#"{"id":"message","delivery_receipt":""}"#,
+                b"{",
+            ] {
+                assert!(matches!(
+                    fs.write(&format!("/Semantic/{op}"), invalid, 0, WriteFlag::None)
+                        .await,
+                    Err(Error::InvalidOperation(_))
+                ));
+                assert_eq!(fs.read("/Semantic/status", 0, 0).await.unwrap(), before);
+            }
+        }
+        ack_delivery(&fs, "Semantic", &dequeued).await;
+        let receipts = cache_protocol::QueueKeys::new(&queue_prefix, "Semantic").delivery_receipts;
+        assert!(runtime
+            .hget(&receipts, &dequeued.id)
             .await
-            .unwrap();
+            .unwrap()
+            .is_none());
         assert_eq!(
             fs.read("/Semantic/status", 0, 0).await.unwrap(),
             br#"{"pending":0,"processing":0}"#
