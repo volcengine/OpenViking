@@ -166,7 +166,6 @@ class _PreparedVectorTransfer:
     batches: int
     affected_target_ids: tuple[str, ...] = ()
     target_acl_fields: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    orphan_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -3170,15 +3169,27 @@ class VikingVectorIndexBackend:
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
         source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> _PreparedVectorTransfer:
-        """Read and validate a transfer without modifying files or vectors."""
+        """Read and validate a transfer without modifying files or vectors.
+
+        ``source_uris`` selects entries; an explicit empty list is a no-op.
+        Expected levels only guide inventory recovery for selected entries.
+        """
         source_uri = resolve_uri(source_uri).uri
         target_uri = resolve_uri(target_uri).uri
         self._validate_uri_transfer_scopes(source_uri, target_uri)
-        orphan_ids: List[str] = []
         selected_source_uris = {
             resolve_uri(uri).uri
             for uri in (source_uris if source_uris is not None else [source_uri])
         }
+        if source_uris is not None and not selected_source_uris:
+            return _PreparedVectorTransfer(
+                account_id=ctx.account_id,
+                source_uri=source_uri,
+                target_uri=target_uri,
+                recursive=recursive,
+                source_records=(),
+                batches=0,
+            )
         use_entry_queries = source_uris is not None or not recursive
         use_manifest_scan = recursive and source_uris is not None
         if source_expected_levels is not None:
@@ -3222,15 +3233,6 @@ class VikingVectorIndexBackend:
                         ],
                     )
                 )
-                inventory = refreshed
-            if source_expected_levels is not None:
-                # Only filesystem callers provide a complete manifest; chunks of real files stay.
-                orphan_ids = [
-                    str(record["id"])
-                    for record in inventory
-                    if self._vector_entry_uri(record["uri"], selected_source_uris)
-                    not in selected_source_uris
-                ]
             # Keep the filesystem API's existing per-entry diagnostic count.
             batches = len(selected_source_uris)
         elif not use_entry_queries:
@@ -3254,7 +3256,6 @@ class VikingVectorIndexBackend:
                 recursive=recursive,
                 source_records=(),
                 batches=batches,
-                orphan_ids=tuple(orphan_ids),
             )
         replacement_source_uris = {
             self._vector_entry_uri(str(record["uri"]), selected_source_uris)
@@ -3377,33 +3378,7 @@ class VikingVectorIndexBackend:
             batches=batches,
             affected_target_ids=tuple(affected_target_ids),
             target_acl_fields=target_acl_fields,
-            orphan_ids=tuple(orphan_ids),
         )
-
-    async def _cleanup_transfer_orphans(
-        self,
-        ctx: RequestContext,
-        ids: tuple[str, ...],
-        *,
-        written_ids: Iterable[str] = (),
-    ) -> None:
-        if not ids:
-            return
-        # Legacy IDs can have been replaced by this transfer's destination upserts.
-        protected = set(written_ids)
-        orphan_ids = [record_id for record_id in ids if record_id not in protected]
-        for start in range(0, len(orphan_ids), 100):
-            chunk = orphan_ids[start : start + 100]
-            try:
-                await self._strict_transfer_delete(ctx, chunk)
-            except Exception as exc:
-                # Optional cleanup must not trigger filesystem target rollback.
-                logger.info(
-                    "Vector transfer orphan cleanup failed records=%d error_type=%s",
-                    len(chunk),
-                    type(exc).__name__,
-                    extra={"degraded": True},
-                )
 
     async def copy_uri_mapping(
         self,
@@ -3460,7 +3435,6 @@ class VikingVectorIndexBackend:
                     payload.update(acl_fields)
 
         if not target_payloads:
-            await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
             return result
 
         attempted_target_ids: List[str] = []
@@ -3495,9 +3469,6 @@ class VikingVectorIndexBackend:
                     residual_count=residual_count,
                 ) from transfer_error
             raise
-        await self._cleanup_transfer_orphans(
-            ctx, prepared.orphan_ids, written_ids=attempted_target_ids
-        )
         return result
 
     async def update_uri_mapping(
@@ -3552,7 +3523,6 @@ class VikingVectorIndexBackend:
         if restore_acl is not None:
             target_acl_fields.update(restore_acl)
         if not source_records:
-            await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
             return result
 
         timestamp = get_current_timestamp()
@@ -3639,7 +3609,6 @@ class VikingVectorIndexBackend:
                     residual_count=len(source_records),
                 ) from transfer_error
             raise
-        await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids, written_ids=target_ids)
         return result
 
     def _build_scope_filter(

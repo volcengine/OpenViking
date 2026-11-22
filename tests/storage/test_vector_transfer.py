@@ -222,7 +222,6 @@ async def test_vector_transfer_prepare_has_no_mutations():
     assert backend.delete_calls == backend.upsert_calls == 0
     assert [record["id"] for record in prepared.source_records] == ["source"]
     assert prepared.affected_target_ids == ("old-target",)
-    assert prepared.orphan_ids == ("orphan",)
     assert prepared.account_id == "acct"
     assert prepared.batches == 2
 
@@ -245,7 +244,7 @@ async def test_prepared_transfer_rejects_another_account_before_mutation(method)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["_copy_prepared_uri_mapping", "_move_prepared_uri_mapping"])
-async def test_empty_prepared_transfer_cleans_orphans_and_keeps_old_target(method):
+async def test_empty_prepared_transfer_keeps_unselected_and_old_target(method):
     source, target = "viking://resources/source", "viking://resources/target"
     backend = _MemoryTransferBackend(
         [
@@ -265,7 +264,45 @@ async def test_empty_prepared_transfer_cleans_orphans_and_keeps_old_target(metho
     assert "orphan" in backend.records
     result = await getattr(backend, method)(_ctx(), prepared)
     assert result.scanned == result.written == 0
-    assert set(backend.records) == {"old-target"}
+    assert set(backend.records) == {"orphan", "old-target"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("expected_levels", [None, {}])
+async def test_explicit_empty_selection_does_not_query_or_mutate(
+    method, recursive, expected_levels
+):
+    source, target = "viking://resources/source", "viking://resources/target"
+    records = [_record("source", source + "/a.md"), _record("target", target + "/a.md")]
+    backend = _MemoryTransferBackend(records)
+    backend._query = AsyncMock(side_effect=TimeoutError("backend unavailable"))
+    result = await getattr(backend, method)(
+        _ctx(),
+        source,
+        target,
+        recursive=recursive,
+        source_uris=[],
+        source_expected_levels=expected_levels,
+    )
+    assert result.scanned == result.written == result.deleted == result.batches == 0
+    assert backend.records == {record["id"]: record for record in records}
+    assert backend.delete_calls == backend.upsert_calls == 0
+    backend._query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_empty_selection_still_rejects_overlapping_transfer_scopes():
+    backend = _MemoryTransferBackend([])
+    with pytest.raises(InvalidArgumentError, match="overlap|contain|equal"):
+        await backend.copy_uri_mapping(
+            _ctx(),
+            "viking://resources/source",
+            "viking://resources/source/target",
+            recursive=True,
+            source_uris=[],
+        )
 
 
 @pytest.mark.asyncio
@@ -2440,7 +2477,7 @@ async def test_changed_source_timestamp_recovers_hidden_id_without_repeated_fetc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_orphan_cleanup_runs_after_pagination_without_rechecking(monkeypatch, operation):
+async def test_manifest_transfer_skips_unselected_records_after_pagination(monkeypatch, operation):
     source, target = "viking://resources/source", "viking://resources/target"
     records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
     backend = _MemoryTransferBackend(
@@ -2480,7 +2517,7 @@ async def test_orphan_cleanup_runs_after_pagination_without_rechecking(monkeypat
     assert result.written == 101
     assert fetched.count("unobserved") == 1
     assert "unselected" not in fetched
-    assert "unselected" not in backend.records
+    assert "unselected" in backend.records
     if operation == "update_uri_mapping":
         assert "unobserved" not in backend.records
 

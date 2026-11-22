@@ -297,43 +297,39 @@ async def test_file_only_transfer_modes_do_not_prepare_vectors(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
-async def test_orphan_cleanup_preserves_new_target_with_colliding_legacy_id(indexed_fs, operation):
+@pytest.mark.parametrize("with_levels", [False, True])
+async def test_partial_vector_selection_preserves_unselected_real_file(
+    indexed_fs, operation, with_levels
+):
     fs, backend = indexed_fs
     ctx = root_ctx()
     source, target = "viking://resources/source", "viking://resources/archive"
-    source_file, target_file = source + "/a.md", target + "/a.md"
-    await fs.write_file_bytes(source_file, b"new", ctx=ctx)
-    await seed_vector(backend, source_file, "new")
-    target_id = vector_record_id(ctx.account_id, target_file, 2)
-    await backend._upsert_many_raw(
-        [
-            {
-                "id": target_id,
-                "uri": source + "/gone.md",
-                "level": 2,
-                "vector": [0.9] * 4,
-                "account_id": ctx.account_id,
-            }
-        ],
-        ctx=ctx,
+    a, b = source + "/a.md", source + "/b.md"
+    source_ids = []
+    for uri in (a, b):
+        await fs.write_file_bytes(uri, b"valid file", ctx=ctx)
+        source_ids.append(await seed_vector(backend, uri, uri))
+    before = await backend.get([source_ids[1]], ctx=ctx)
+    method = "copy_uri_mapping" if operation == "cp" else "update_uri_mapping"
+    result = await getattr(backend, method)(
+        ctx,
+        source,
+        target,
+        recursive=True,
+        source_uris=[a],
+        **({"source_expected_levels": {a: {2}}} if with_levels else {}),
     )
-    assert (await backend.get([target_id], ctx=ctx))[0]["uri"] == source + "/gone.md"
-    result = await getattr(fs, operation)(
-        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
-    )
-    records = await backend.get([target_id], ctx=ctx)
-    assert result["vectors"]["written"] == 1
-    assert len(records) == 1
-    assert records[0]["uri"] == target_file and records[0]["abstract"] == "new"
-    assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
+    assert result.written == 1
+    assert await backend.get([source_ids[1]], ctx=ctx) == before
+    assert await fs.read_file_bytes(b, ctx=ctx) == b"valid file"
+    assert await backend.get_context_by_uri(target + "/a.md", ctx=ctx)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("orphan_count", [1, 205])
-@pytest.mark.parametrize("cleanup_fails", [False, True])
-async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_target(
-    indexed_fs, monkeypatch, operation, orphan_count, cleanup_fails
+async def test_directory_transfer_ignores_unselected_vectors(
+    indexed_fs, monkeypatch, operation, orphan_count
 ):
     from openviking.storage.expr import Eq
 
@@ -349,7 +345,7 @@ async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_ta
         await seed_vector(backend, uri, uri)
     account_backend = await backend._get_backend_for_context(ctx)
     query, delete = account_backend.strict_query, backend._strict_transfer_delete
-    cleanup_batches = []
+    unselected_deletes = []
 
     def is_orphan_query(expr):
         if isinstance(expr, Eq):
@@ -363,9 +359,8 @@ async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_ta
 
     async def delete_orphans(ctx, ids):
         if set(ids).intersection(orphans):
-            cleanup_batches.append(ids)
-            if cleanup_fails:
-                raise TimeoutError("orphan cleanup unavailable")
+            unselected_deletes.extend(ids)
+            raise AssertionError("transfer must not delete unselected vectors")
         return await delete(ctx, ids)
 
     monkeypatch.setattr(account_backend, "strict_query", query_without_orphan_recheck)
@@ -375,9 +370,9 @@ async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_ta
     )
 
     assert result["vectors"]["written"] == 1
-    assert cleanup_batches and all(len(batch) <= 100 for batch in cleanup_batches)
+    assert not unselected_deletes
     remaining = await backend.get(orphans, ctx=ctx)
-    assert len(remaining) == (orphan_count if cleanup_fails else 0)
+    assert len(remaining) == orphan_count
     assert await fs.read_file_bytes(keep, ctx=ctx) == b"keep original"
     assert await backend.get_context_by_uri(keep, ctx=ctx)
     assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
@@ -644,10 +639,7 @@ async def test_directory_transfer_reads_all_exact_entries_with_native_storage(
     target_ids = [vector_record_id(ctx.account_id, uri, 2) for uri in old_targets]
     assert {record["uri"] for record in await backend.get(target_ids, ctx=ctx)} == set(old_targets)
     assert not await backend.get(old_targets, ctx=ctx)
-    assert not await backend.get([untouched[0]], ctx=ctx)
-    assert {record["uri"] for record in await backend.get(untouched[1:], ctx=ctx)} == set(
-        untouched[1:]
-    )
+    assert {record["uri"] for record in await backend.get(untouched, ctx=ctx)} == set(untouched)
     assert len(await backend.get(source_uris, ctx=ctx)) == (len(names) if operation == "cp" else 0)
     assert await fs.read_file_bytes(f"{target}/keep.md", ctx=ctx) == b"keep"
     assert await fs.read_file_bytes(f"{target}/literal.md#chunk_0001", ctx=ctx) == b"new"
