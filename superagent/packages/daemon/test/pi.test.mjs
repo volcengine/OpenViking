@@ -757,7 +757,6 @@ describe('PiAgent persistent rpc runtime', () => {
 });
 
 it('Pi uses the platform shell: PowerShell on Windows, bash elsewhere', () => {
-  assert.deepEqual(piToolArgs('win32'), ['--tools', '+powershell,-bash']);
-  assert.deepEqual(piToolArgs('linux'), []);
-  assert.deepEqual(piToolArgs('darwin'), []);
+  assert.deepEqual(piToolArgs('powershell'), ['--tools', '+powershell,-bash']);
+  assert.deepEqual(piToolArgs('bash'), []);
 });
