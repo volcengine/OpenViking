@@ -320,6 +320,9 @@ class Shuffle:
         by_id = {doc.workspace_path: doc for doc in documents}
         if rule.mode == "all":
             return [Group("all", documents, sorted({h["uri"] for hits in histories for h in hits}))]
+        if len(documents) == 1 and not node.against_target:
+            # Neither draft links nor target links can be selected in this case.
+            return [Group(digest(list(by_id))[:24], documents)]
         stop = Event()
         try:
             try:

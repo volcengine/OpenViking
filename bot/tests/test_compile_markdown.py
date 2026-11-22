@@ -722,3 +722,41 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert empty_bundle.operations == []
     assert len(pipeline.warnings) == 1
     assert "selection-rules.md" in pipeline.warnings[0]
+
+
+@pytest.mark.parametrize("against_target", [False, True])
+async def test_single_draft_routes_only_when_target_recall_is_requested(pipeline, against_target):
+    pipeline.contract = contract(True)
+    doc = Document("rule.md", "drafts/rule.md", ["source-a"])
+    await pipeline.files.sandbox.write_file(doc.workspace_path, "# Rule")
+    uri = pipeline.target + "/existing.md"
+    pipeline.client.find = AsyncMock(
+        return_value={"resources": [{"uri": uri, "abstract": "Existing rule"}]}
+    )
+    pipeline.client.stat = AsyncMock(return_value={"isDir": False})
+    pipeline.client.compile_embeddings = AsyncMock(
+        side_effect=lambda texts, **_: {"model": "synthetic", "vectors": [[1.0, 0.0]] * len(texts)}
+    )
+
+    async def decide(stage, system, data, schema, validate, **kwargs):
+        (entry,) = data["assignments"]
+        response = RouteResponse(
+            decisions=[
+                {"document": entry["document"], "history": [h["uri"] for h in entry["history"]]}
+            ]
+        )
+        validate(response)
+        return response
+
+    pipeline.model.ask = AsyncMock(side_effect=decide)
+    program = (
+        MERGE.replace("by=contract.routing", "by=contract.routing, against=target")
+        if against_target
+        else MERGE
+    )
+    groups = await Shuffle(pipeline).run(parse_plan(program, pipeline.contract)[1], [doc])
+    assert len(groups) == 1 and groups[0].documents == [doc]
+    assert groups[0].target_uris == ([uri] if against_target else [])
+    assert pipeline.client.find.await_count == int(against_target)
+    assert pipeline.client.compile_embeddings.await_count == (2 if against_target else 0)
+    assert pipeline.model.ask.await_count == int(against_target)
