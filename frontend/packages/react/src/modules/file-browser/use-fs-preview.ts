@@ -90,7 +90,7 @@ export function useFsPreview({
 
   // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
   // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
-  // 依赖变化与卸载中止请求并忽略过期结果；摘要层级与文案仅影响展示。
+  // 依赖变化与卸载中止请求并忽略过期结果。
   useEffect(() => {
     const { client, uri, wikiSave } = lookup;
     if (resourceType !== 'unknown') setStatType(undefined);
@@ -167,7 +167,7 @@ export function useFsPreview({
         },
         onStatus,
         readDashboardHint,
-        bodyCache,
+        bodyCache ?? lookup.bodyCacheFor(uri, (await metadata)?.updatedAt),
       );
     })();
 
