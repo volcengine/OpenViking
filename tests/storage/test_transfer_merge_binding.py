@@ -297,6 +297,39 @@ async def test_file_only_transfer_modes_do_not_prepare_vectors(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_orphan_cleanup_preserves_new_target_with_colliding_legacy_id(indexed_fs, operation):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    source, target = "viking://resources/source", "viking://resources/archive"
+    source_file, target_file = source + "/a.md", target + "/a.md"
+    await fs.write_file_bytes(source_file, b"new", ctx=ctx)
+    await seed_vector(backend, source_file, "new")
+    target_id = vector_record_id(ctx.account_id, target_file, 2)
+    await backend._upsert_many_raw(
+        [
+            {
+                "id": target_id,
+                "uri": source + "/gone.md",
+                "level": 2,
+                "vector": [0.9] * 4,
+                "account_id": ctx.account_id,
+            }
+        ],
+        ctx=ctx,
+    )
+    assert (await backend.get([target_id], ctx=ctx))[0]["uri"] == source + "/gone.md"
+    result = await getattr(fs, operation)(
+        source, target, ctx=ctx, **({"recursive": True} if operation == "cp" else {})
+    )
+    records = await backend.get([target_id], ctx=ctx)
+    assert result["vectors"]["written"] == 1
+    assert len(records) == 1
+    assert records[0]["uri"] == target_file and records[0]["abstract"] == "new"
+    assert await fs.read_file_bytes(target_file, ctx=ctx) == b"new"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
 @pytest.mark.parametrize("orphan_count", [1, 205])
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 async def test_directory_transfer_cleans_orphans_without_rechecking_or_losing_target(

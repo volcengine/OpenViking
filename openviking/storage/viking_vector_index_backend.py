@@ -3380,9 +3380,20 @@ class VikingVectorIndexBackend:
             orphan_ids=tuple(orphan_ids),
         )
 
-    async def _cleanup_transfer_orphans(self, ctx: RequestContext, ids: tuple[str, ...]) -> None:
-        for start in range(0, len(ids), 100):
-            chunk = list(ids[start : start + 100])
+    async def _cleanup_transfer_orphans(
+        self,
+        ctx: RequestContext,
+        ids: tuple[str, ...],
+        *,
+        written_ids: Iterable[str] = (),
+    ) -> None:
+        if not ids:
+            return
+        # Legacy IDs can have been replaced by this transfer's destination upserts.
+        protected = set(written_ids)
+        orphan_ids = [record_id for record_id in ids if record_id not in protected]
+        for start in range(0, len(orphan_ids), 100):
+            chunk = orphan_ids[start : start + 100]
             try:
                 await self._strict_transfer_delete(ctx, chunk)
             except Exception as exc:
@@ -3484,7 +3495,9 @@ class VikingVectorIndexBackend:
                     residual_count=residual_count,
                 ) from transfer_error
             raise
-        await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
+        await self._cleanup_transfer_orphans(
+            ctx, prepared.orphan_ids, written_ids=attempted_target_ids
+        )
         return result
 
     async def update_uri_mapping(
@@ -3626,7 +3639,7 @@ class VikingVectorIndexBackend:
                     residual_count=len(source_records),
                 ) from transfer_error
             raise
-        await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
+        await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids, written_ids=target_ids)
         return result
 
     def _build_scope_filter(
