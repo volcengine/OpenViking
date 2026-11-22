@@ -3268,12 +3268,9 @@ class VikingVectorIndexBackend:
     ) -> Optional[FilterExpr]:
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
         request_filter = build_scope_filter(
-            context_type=context_type,
             target_directories=targets,
-            target_depth=-1,
             wrap_single_target=True,
             extra_filter=extra_filter,
-            level=level,
         )
         tenant_filter = self._scoped_tenant_filter(ctx, request_filter, acl_enabled=acl_enabled)
         return build_scope_filter(
@@ -3299,31 +3296,15 @@ class VikingVectorIndexBackend:
         scopes = infer_uri_scopes(request_filter)
         if scopes is None:
             return tenant_filter
-        targets = [scope.path for scope in scopes]
-        if not self._targets_within_visible_roots(ctx, targets):
-            return tenant_filter
+        targets = [tuple(uri_parts(scope.path)) for scope in scopes]
+        roots = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
         if acl_enabled:
-            target_parts = [tuple(uri_parts(target)) for target in targets]
-            if not any(
-                all(parts[: len(root)] == root for parts in target_parts)
-                for root in (tuple(uri_parts(uri)) for uri in visible_roots(ctx))
-            ):
-                return tenant_filter
+            covered = any(all(target[: len(root)] == root for target in targets) for root in roots)
+        else:
+            covered = all(any(target[: len(root)] == root for root in roots) for target in targets)
+        if not covered:
+            return tenant_filter
         return specialize_visibility_filter(tenant_filter, scopes)
-
-    @staticmethod
-    def _targets_within_visible_roots(ctx: RequestContext, targets: List[str]) -> bool:
-        if not targets:
-            return False
-
-        root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
-        return all(
-            any(
-                len(target_parts) >= len(root) and target_parts[: len(root)] == root
-                for root in root_parts
-            )
-            for target_parts in (tuple(uri_parts(target)) for target in targets)
-        )
 
     def _tenant_filter(
         self,
