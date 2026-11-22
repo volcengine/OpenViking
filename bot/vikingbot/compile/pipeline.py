@@ -61,6 +61,7 @@ class Pipeline:
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False
+        self.source_order: dict[str, int] | None = None
 
     @property
     def output_format(self):
@@ -401,4 +402,10 @@ class Pipeline:
             if pending:
                 await flush()
             await self.files.put("inputs", manifest)
+        source_order = self.source_order
+        if source_order is not None:
+            # A stable sort keeps each source's ranges and trailing notices in order.
+            result.sort(
+                key=lambda source: source_order.get(source.metadata["uri"], len(source_order))
+            )
         return result
