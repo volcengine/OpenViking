@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { after, describe, it } from 'node:test';
-import { managedPiBin, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
+import { managedPiBin, piToolArgs, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
 import { assembleConversationPolicy } from '../src/conversation-policy.mjs';
 import {
   PI_EFFORTS,
@@ -754,4 +754,10 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.equal(environment.SESSION_ID, undefined);
     assert.equal(environment.LARKSUITE_CLI_PROFILE, 'fixed-profile');
   });
+});
+
+it('Pi uses the platform shell: PowerShell on Windows, bash elsewhere', () => {
+  assert.deepEqual(piToolArgs('win32'), ['--tools', '+powershell,-bash']);
+  assert.deepEqual(piToolArgs('linux'), []);
+  assert.deepEqual(piToolArgs('darwin'), []);
 });
