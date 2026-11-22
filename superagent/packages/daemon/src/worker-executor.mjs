@@ -12,7 +12,7 @@ import { sanitizePiEnv } from './pi.mjs';
 import { sanitizeClaudeEnv } from './claude.mjs';
 import { sanitizeCodexEnv } from './codex.mjs';
 import { sanitizeTraexEnv } from './traex.mjs';
-import { PI_MCP_EXTENSION, PI_SHELL_MAX_S, piCommand, piShellTimeoutEnv } from './pi-runtime.mjs';
+import { PI_MCP_EXTENSION, PI_SHELL_MAX_S, piCommand, piShellTimeoutEnv, piToolArgs } from './pi-runtime.mjs';
 import { claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs, traexConfigFile } from './ov-isolation.mjs';
 import { safeError } from './logger.mjs';
 import { TASK_INPUT_EVENTS, taskInputHookCommand } from './task-input-hook.mjs';

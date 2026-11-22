@@ -15,7 +15,7 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
-import { assertPiVersion, piCommand, piShellTimeoutEnv, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
+import { assertPiVersion, piCommand, piShellTimeoutEnv, piToolArgs, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
 import { piIsolationArgs } from './ov-isolation.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';

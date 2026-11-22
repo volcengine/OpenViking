@@ -40,6 +40,14 @@ export function piCommand(piBin, args) {
     : { command: piBin, args };
 }
 
+// Pi enables the bash tool by default; on Windows that resolves to the System32
+// WSL launcher and fails when WSL is not installed. The powershell tool is Pi's
+// Windows equivalent (it prefers pwsh 7), so every session this daemon starts
+// selects it and drops bash. The +/- form keeps the other default tools.
+export function piToolArgs(platform = process.platform) {
+  return platform === 'win32' ? ['--tools', '+powershell,-bash'] : [];
+}
+
 export function assertPiVersion(output) {
   if (String(output).trim() !== PI_VERSION) {
     throw new Error(`Pi ${PI_VERSION} is required by this release; run npm ci and remove PI_BIN to use the managed version, or point PI_BIN at Pi ${PI_VERSION}`);
