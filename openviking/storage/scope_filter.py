@@ -6,9 +6,118 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from openviking.core.namespace import uri_parts
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 
 FilterInput = Optional[FilterExpr | Dict[str, Any]]
+
+
+def _canonical_uri_parts(value: Any) -> tuple[str, ...] | None:
+    if not isinstance(value, str) or not value.startswith("viking://"):
+        return None
+    if "?" in value or "#" in value or "\\" in value:
+        return None
+    suffix = value[len("viking://") :].rstrip("/")
+    if suffix and any(part in {"", ".", ".."} for part in suffix.split("/")):
+        return None
+    return tuple(uri_parts(value))
+
+
+def infer_uri_scopes(filter: FilterInput) -> tuple[PathScope, ...] | None:
+    """Find a conservative URI bound using only positive typed predicates.
+
+    Every match must be inside the returned scopes. Raw DSL is opaque: an AND
+    can still use another typed condition, but every OR branch needs a bound.
+    The original predicates, including finite depths, remain in the request.
+    """
+    if isinstance(filter, PathScope):
+        if (
+            filter.field == "uri"
+            and type(filter.depth) is int
+            and filter.depth >= -1
+            and _canonical_uri_parts(filter.path) is not None
+        ):
+            return (filter,)
+    elif isinstance(filter, Eq):
+        if filter.field == "uri" and _canonical_uri_parts(filter.value) is not None:
+            return (PathScope("uri", filter.value, depth=0),)
+    elif isinstance(filter, And):
+        for child in filter.conds:
+            scopes = infer_uri_scopes(child)
+            if scopes is not None:
+                return scopes
+    elif isinstance(filter, Or) and filter.conds:
+        union: list[PathScope] = []
+        for child in filter.conds:
+            scopes = infer_uri_scopes(child)
+            if scopes is None:
+                return None
+            union.extend(scopes)
+        return tuple(dict.fromkeys(union))
+    return None
+
+
+def specialize_visibility_filter(
+    tenant_filter: FilterExpr | None, scopes: tuple[PathScope, ...] | None
+) -> FilterExpr | None:
+    """Simplify generated visibility paths under a proven request URI bound.
+
+    Account and ACL predicates are opaque. Truth values exist only during
+    rewriting; a false result falls back rather than becoming an empty filter.
+    """
+    if tenant_filter is None or not scopes:
+        return tenant_filter
+    targets = [_canonical_uri_parts(scope.path) for scope in scopes]
+    if any(target is None for target in targets):
+        return tenant_filter
+
+    def within(path: tuple[str, ...], root: tuple[str, ...]) -> bool:
+        return path[: len(root)] == root
+
+    def root_parts(expr: FilterExpr) -> tuple[str, ...] | None:
+        if isinstance(expr, PathScope) and expr.field == "uri" and expr.depth == -1:
+            return _canonical_uri_parts(expr.path)
+        return None
+
+    def rewrite(expr: FilterExpr) -> FilterExpr | bool:
+        root = root_parts(expr)
+        if root is not None:
+            if all(within(target, root) for target in targets):
+                return True
+            if all(not within(target, root) and not within(root, target) for target in targets):
+                return False
+            return expr
+        if not isinstance(expr, (And, Or)) or not expr.conds:
+            return expr
+        if isinstance(expr, Or):
+            roots = [root_parts(child) for child in expr.conds]
+            if all(root is not None for root in roots) and all(
+                any(within(target, root) for root in roots) for target in targets
+            ):
+                return True
+        children = [rewrite(child) for child in expr.conds]
+        if isinstance(expr, And):
+            if any(child is False for child in children):
+                return False
+            remaining = [child for child in children if child is not True]
+            identity = True
+        else:
+            if any(child is True for child in children):
+                return True
+            remaining = [child for child in children if child is not False]
+            identity = False
+        if not remaining:
+            return identity
+        if len(remaining) == len(expr.conds) and all(
+            child is original for child, original in zip(remaining, expr.conds, strict=True)
+        ):
+            return expr
+        return remaining[0] if len(remaining) == 1 else type(expr)(remaining)
+
+    result = rewrite(tenant_filter)
+    if result is False:
+        return tenant_filter
+    return None if result is True else result
 
 
 def merge_filters(*filters: FilterInput) -> Optional[FilterExpr]:
