@@ -187,6 +187,16 @@ ov-superagent login onebot [instance]
 
 Use this to change the address or token, or to rebind the owner. A failed or cancelled login keeps the previous account.
 
+### DingTalk group setup
+
+Enable a Stream-mode robot on an internal DingTalk application and publish it in the test organization. For a dedicated OpenViking SuperAgent deployment entry, set `channel` to `dingtalk`, `connectors` to `["dingtalk"]`, and supply its own `dataDir`, `workspace`, `port`, and `ovConfig`.
+
+In the instance's `dataDir`, create a private `dingtalk.json` with the app's `clientId` (AppKey), `clientSecret` (AppSecret), and optional `robotCode` (defaults to the Client ID). Restrict the file to the daemon's account. Use the normal source daemon startup with that deployment manifest and instance id.
+
+Keep `dataDir` on persistent storage. The connector saves accepted events to `dingtalk/receive.sqlite3` before acknowledging DingTalk. It retries failed local handoffs with backoff, even without new callbacks. A successful write to the connector output marks the start of a 24-hour restart replay window. The connector protocol does not confirm Core persistence. Core deduplicates replays by connector instance and event ID and still applies its configured message-age limit.
+
+The connector accepts group text that mentions the bot. Add the published robot to the test group and mention it in a text message. A reply is posted to the originating group. A timer uses native SuperAgent scheduling and the DingTalk proactive send API, with the group target recorded in the timer.
+
 ## Managing instances with setup
 
 The runtime list always includes Codex, Claude Code, Pi, Durable, TraeX, OpenCode, Antigravity and DSH, including runtimes that are not currently usable. Selecting one reports whether it is not installed, not logged in, protocol-incompatible or missing a usable model, then exits without saving. For DSH, setup also chooses isolated/shared configuration and checks the skill roots to enable. Ctrl+C cancels setup directly; the Windows launcher exits with the CLI's status rather than asking to terminate a batch job.

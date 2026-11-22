@@ -31,6 +31,14 @@ const LARK_DOC_COMMENT = Object.freeze({
 const WEIXIN_CONTENT = ['markdown', 'file'];
 
 const MANIFESTS = Object.freeze({
+  dingtalk: connectorManifest({
+    name: 'dingtalk', version: 'stream-openapi-v1', capabilities: ['events', 'actions'],
+    actions: {
+      'message.send': { content: ['markdown'] },
+      'message.reply': { content: ['markdown'], reply_target: 'chat' },
+    },
+    auth_schema: EMPTY_SCHEMA, config_schema: EMPTY_SCHEMA,
+  }),
   qq: connectorManifest({
     name: 'qq', version: QQ_VERSION, capabilities: ['events', 'actions'],
     actions: {

@@ -71,10 +71,16 @@ function workerLogger(level = 'info', base = {}) {
 }
 
 const logger = workerLogger(config.logLevel);
+if (connectorId === 'dingtalk') {
+  // Keep SDK output off the NDJSON channel and avoid logging provider payloads.
+  console.info = () => logger.debug('dingtalk_sdk_status');
+  console.warn = console.error = () => logger.warn('dingtalk_sdk_transport_warning');
+}
 // Provider subprocesses stay in the worker's process group. Killing a failed
 // Connector therefore also reaps lark-cli and any short-lived command child.
 const registry = new ProcessRegistry(logger, { detached: false });
-const Client = { weixin: WeixinClient, email: EmailClient, telegram: TelegramClient, slack: SlackClient, qq: QQClient,
+const Client = connectorId === 'dingtalk' ? (await import('./dingtalk.mjs')).DingTalkClient
+  : { weixin: WeixinClient, email: EmailClient, telegram: TelegramClient, slack: SlackClient, qq: QQClient,
   onebot: OneBotClient }[connectorId] ?? LarkClient;
 const client = new Client(config, registry, logger);
 // The Lark Connector of the instance that stores meeting notes scans for
@@ -115,23 +121,32 @@ async function handleRequest(message) {
       if (!checked) throw new Error('connector must pass check before start');
       if (started) throw new Error('connector is already started');
       started = true;
-      client.startSubscription((line) => {
-        try {
-          const raw = JSON.parse(line);
-          if (connectorId === 'lark' && isDocCommentEvent(raw)) emitDocComment(raw);
-          else write(connectorId === 'lark' ? normalizeLarkEvent(raw) : parseProtocolLine(line));
-        } catch (error) {
-          logger.warn('connector_event_rejected', { error: safeError(error) });
-        }
-      }, (exit) => {
-        if (stopping) return;
-        write(statusMessage(connectorId, 'failed', {
-          code: exit.code ?? null,
-          signal: exit.signal ?? null,
-          error: String(exit.stderr ?? '').slice(-2_000),
-        }));
-        setImmediate(() => process.exit(1));
-      });
+      try {
+        const subscription = client.startSubscription((line) => {
+          try {
+            const raw = JSON.parse(line);
+            if (connectorId === 'lark' && isDocCommentEvent(raw)) emitDocComment(raw);
+            else write(connectorId === 'lark' ? normalizeLarkEvent(raw) : parseProtocolLine(line));
+          } catch (error) {
+            logger.warn('connector_event_rejected', { error: safeError(error) });
+            if (connectorId === 'dingtalk') throw error;
+          }
+        }, (exit) => {
+          if (stopping) return;
+          write(statusMessage(connectorId, 'failed', {
+            code: exit.code ?? null,
+            signal: exit.signal ?? null,
+            error: String(exit.stderr ?? '').slice(-2_000),
+          }));
+          setImmediate(() => process.exit(1));
+        });
+        // DingTalk returns its handshake. Some long-running receivers return
+        // their entire receive loop, which must not delay the start response.
+        if (connectorId === 'dingtalk') await subscription;
+      } catch (error) {
+        started = false;
+        throw error;
+      }
       notes?.start();
       result = { started: true };
     } else if (message.operation === 'action') {

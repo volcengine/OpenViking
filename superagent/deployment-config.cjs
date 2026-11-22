@@ -284,16 +284,16 @@ function parseAgent(value, index, ignored) {
       manifestString(connector, `${label}.connectors[${connectorIndex}]`, { maxLength: 64 })
     )))];
     if (connectors.length !== value.connectors.length
-      || connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot'].includes(connector))) {
-      throw new Error(`${label}.connectors must contain unique lark, weixin, email, telegram, slack, qq or onebot values`);
+      || connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk'].includes(connector))) {
+      throw new Error(`${label}.connectors must contain unique lark, weixin, email, telegram, slack, qq, onebot or dingtalk values`);
     }
   }
   // The primary IM: where notices to the owner go. A mailbox is never one.
   const channel = value.channel === undefined
     ? (connectors?.find((connector) => connector !== 'email') ?? 'lark')
     : manifestString(value.channel, `${label}.channel`);
-  if (!['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot'].includes(channel)) {
-    throw new Error(`${label}.channel must be lark, weixin, telegram, slack, qq or onebot`);
+  if (!['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk'].includes(channel)) {
+    throw new Error(`${label}.channel must be lark, weixin, telegram, slack, qq, onebot or dingtalk`);
   }
   connectors ??= [channel];
   if (!connectors.includes(channel)) {
