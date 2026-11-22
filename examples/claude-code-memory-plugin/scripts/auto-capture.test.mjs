@@ -66,6 +66,45 @@ async function writeTranscript(path) {
   );
 }
 
+test("Stop reports a capture cursor ahead of the transcript without advancing it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-cursor-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const sessionId = "capture-cursor";
+  const cursorDir = join(root, "openviking-cc-capture-state");
+  const cursorFile = join(cursorDir, `${sessionId}.json`);
+  const input = { session_id: sessionId, transcript_path: transcriptPath, cwd: root };
+  let requests = 0;
+
+  try {
+    await writeTranscript(transcriptPath);
+    await mkdir(cursorDir);
+    await withMockOpenViking((req, res) => {
+      requests++;
+      writeJson(res, { status: "ok", result: { healthy: true } });
+    }, async (baseUrl) => {
+      const env = hookEnv(root, baseUrl);
+      for (const count of [2, 3]) {
+        const saved = JSON.stringify({ capturedTurnCount: count });
+        await writeFile(cursorFile, saved);
+        const { stdout } = await runAutoCapture(input, env);
+        const output = JSON.parse(stdout);
+        assert.equal(output.decision, "approve");
+        if (count === 3) assert.match(output.systemMessage, /saved capture cursor is ahead/);
+        else assert.equal(output.systemMessage, undefined);
+        assert.equal(await readFile(cursorFile, "utf-8"), saved);
+      }
+      assert.equal(requests, 0);
+
+      const status = await runHook("statusline.mjs", input, env);
+      assert.match(status.stdout, /capture cursor ahead/);
+      const other = await runHook("statusline.mjs", { ...input, session_id: "another-session" }, env);
+      assert.doesNotMatch(other.stdout, /capture cursor ahead/);
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("failed non-retryable capture keeps the cursor for a later retry", async () => {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-retry-"));
   const transcriptPath = join(root, "transcript.jsonl");

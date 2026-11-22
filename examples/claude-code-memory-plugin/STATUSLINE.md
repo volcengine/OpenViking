@@ -45,6 +45,7 @@ The default composition runs left to right, joined by ` │ `. Segments are cond
 | Capture       | `✎ 573/20k · 2 arch`   | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
 |               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
 |               | `✎ 2 arch`             | dim    | nothing pending, but archives already exist this session                                                              |
+|               | `✎ capture cursor ahead` | yellow | the last capture skipped because the saved cursor exceeded the number of decoded transcript turns                     |
 | Failures      | `✗ 1 dropped`          | red    | auto-capture failed N turns this batch — overwrites every Stop, so transient single-turn failures self-clear          |
 | Session event | `🔗 resumed`           | cyan   | SessionStart hook fired with `source: resume` within the last minute (1 min TTL)                                      |
 |               | `🔗 compact`           | cyan   | same, with `source: compact`                                                                                          |
@@ -142,6 +143,7 @@ For an assistant adding a segment that consumes existing state. All files live u
   "committed": false,                // true on the turn a commit happened
   "commit_count": 2,                 // total archives in this session
   "total_message_count": 412,
+  "cursor_ahead": true,              // optional, present when the saved cursor is ahead of the transcript
   "ov_session_id": "cc-62e5af67...",
   "cc_session_id": "ff875009-...",   // statusline filters by exact match
   "ts": 1778139288759
