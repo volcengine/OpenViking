@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import { PassThrough } from 'node:stream';
 import { inflateSync, crc32 } from 'node:zlib';
 import test from 'node:test';
@@ -95,8 +96,8 @@ test('a code too big for the window says what it needs and where its private ima
   const s = screen();
   const scan = showScan(s.prompter, { url: FEISHU, title: '创建飞书', env: { TERM_PROGRAM: 'vscode' } });
   t.after(() => scan.stop());
-  assert.equal(fs.statSync(scan.imagePath).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(scan.imagePath.slice(0, scan.imagePath.lastIndexOf('/'))).mode & 0o777, 0o700);
+  if (supportsFileModes) assert.equal(fs.statSync(scan.imagePath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(scan.imagePath.slice(0, scan.imagePath.lastIndexOf('/'))).mode & 0o777, 0o700);
   assert.match(s.text(), /终端放不下这个二维码（要 \d+×\d+，现在 100×40）[\s\S]*也可以打开图片 \S+scan\.png/);
   assert.doesNotMatch(s.text(), /[▀▄█]/);
   Object.assign(s.output, { columns: 200, rows: 120 }); s.output.emit('resize');

@@ -10,6 +10,7 @@ import test from 'node:test';
 import { loginCommand } from '../src/login.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { larkScopes } from '../src/setup.mjs';
+import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
 
 function agent(home, id, overrides = {}) {
   return {
@@ -136,10 +137,9 @@ test('failed Telegram verification resumes the existing instance and reports the
 // A lark-cli that answers as an app with a few of permission.json's scopes, until
 // `updated` is written next to it; it records what it is asked.
 function fakeLarkCli(dir) {
-  const bin = path.join(dir, 'lark-cli');
   const { tenant, user } = larkScopes();
   const few = { tenant: tenant.slice(0, 3), user: user.slice(0, 2) };
-  fs.writeFileSync(bin, `#!${process.execPath}
+  const bin = installNodeCommand(dir, 'lark-cli', { commonjs: true, body: `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
 const here = path.dirname(process.argv[1]);
@@ -164,7 +164,7 @@ if (at >= 0) {
 } else if (args.includes('--no-wait')) {
   out({ verification_uri_complete: 'https://accounts.feishu.cn/oauth?code=1', device_code: 'dc' });
 }
-`, { mode: 0o755 });
+` });
   const calls = () => fs.readFileSync(path.join(dir, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   return { bin, few, calls };
 }

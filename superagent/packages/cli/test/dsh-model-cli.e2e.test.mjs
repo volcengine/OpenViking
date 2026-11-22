@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import {
@@ -180,7 +181,7 @@ describe('ov-superagent dsh model through the real CLI entry point', { skip }, (
     const credentials = fixture.credentials('qa');
     assert.ok(credentials.text, 'the credentials document must exist');
     assert.equal(credentials.refs.get('DEEPSEEK_API_KEY'), 'super-secret-value');
-    assert.equal(credentials.mode, 0o600, 'a credentials document is owner-only');
+    if (supportsFileModes) assert.equal(credentials.mode, 0o600, 'a credentials document is owner-only');
     // Written through the bridge, never by the CLI directly.
     assert.ok(fixture.requests('superagent/credentials/set').length >= 1);
     const set = fixture.requests('superagent/credentials/set').at(-1);

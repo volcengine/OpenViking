@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -330,7 +331,7 @@ test('choosing a new user on the current admin connection writes a new config an
   assert.deepEqual(registrations, [{ url: `${remote}/api/v1/admin/accounts/team/users`,
     body: { user_id: 'boss.fresh', role: 'user' }, key: 'admin-key' }]);
   assert.deepEqual(JSON.parse(fs.readFileSync(prepared, 'utf8')), { url: remote, api_key: 'new-key', user: 'boss.fresh' });
-  assert.equal(fs.statSync(prepared).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(prepared).mode & 0o777, 0o600);
   assert.deepEqual([...pending], [prepared]);
   assert.equal(fs.readFileSync(current, 'utf8'), original);
   // Keeping the existing key still reuses the connection without registration.
@@ -364,7 +365,7 @@ test('a typed connection is kept privately for the next instance; a file new ins
     url: remote, api_key: 'test-secret', account: 'team', user: 'owner', actor_peer_id: 'primary', agent_id: 'old',
   } }, h.options);
   assert.equal(saved, savedOVConfigPath(h.home));
-  assert.equal(fs.statSync(saved).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(saved).mode & 0o777, 0o600);
   assert.deepEqual(JSON.parse(fs.readFileSync(saved, 'utf8')), { url: remote, api_key: 'test-secret', account: 'team', user: 'owner' });
   const detected = await detectOpenViking({ env: h.options.env, homeDir: h.home, fetchImpl: fetchOV() });
   assert.equal(detected.configPath, saved);

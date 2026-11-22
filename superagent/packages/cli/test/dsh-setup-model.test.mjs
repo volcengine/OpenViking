@@ -15,6 +15,8 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { DEFAULT_RUNTIME_ID, resolveRuntimeModelTarget } from '../../daemon/src/runtime-catalog.mjs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
+import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { setupCommand } from '../src/setup.mjs';
 import { validateDshModelDraft, writeDshModelDraft } from '../src/dsh-model-wizard.mjs';
@@ -212,7 +214,7 @@ test('choosing DSH with no usable route offers the add-model step and writes it 
   assert.deepEqual(profile.models.map((model) => model.id), ['deepseek-chat']);
   const credentials = path.join(h.dataDir, 'dsh', 'home', '.credentials.yaml');
   assert.match(fs.readFileSync(credentials, 'utf8'), /^version: 1\nrefs:\n {2}DEEPSEEK_API_KEY: "sk-test-only"\n$/);
-  assert.equal(fs.statSync(credentials).mode & 0o777, 0o600, 'the credential document is private');
+  if (supportsFileModes) assert.equal(fs.statSync(credentials).mode & 0o777, 0o600, 'the credential document is private');
 
   // The draft was checked in a throwaway home before anything was written.
   const validation = h.calls.find((call) => call[0] === 'validate');
@@ -261,7 +263,9 @@ test('without a terminal, setup prints the hint and refuses to save a model-less
     answers: ['小V', '', '', '1', '1', '', '2', 'y'],
   });
   await assert.rejects(setupCommand(h.options), /DeepSeek Harness has no usable model; nothing was saved/);
-  assert.match(h.written(), /ov-superagent dsh model --instance/);
+  // On Windows the command is the batch launcher, so the hint names
+  // `ov-superagent.cmd`; the arguments after it are the same.
+  assert.match(h.written(), /ov-superagent(?:\.cmd)? dsh model --instance/);
   assert.doesNotMatch(h.written(), /ov-superagent dsh model add /);
   assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
 });
@@ -433,8 +437,10 @@ test('a fresh DSH home is seeded with both documents, and only the route it was 
   });
   assert.equal(written.via, 'file');
   assert.equal(written.keyRef, 'OTHER_KEY');
-  assert.equal(fs.statSync(written.settings).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(written.credentials).mode & 0o777, 0o600);
+  if (supportsFileModes) {
+    assert.equal(fs.statSync(written.settings).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(written.credentials).mode & 0o777, 0o600);
+  }
   const document = JSON.parse(fs.readFileSync(written.settings, 'utf8'));
   assert.deepEqual(Object.keys(document[0].config.providers), ['deepseek']);
 });
@@ -452,9 +458,7 @@ test('an instance home that already has a settings document keeps every other ro
     id: 'llm-pi-ai',
     config: { providers: { existing: { api: 'openai-completions', baseURL: 'http://127.0.0.1:8/v1', apiKeyEnv: 'EXISTING_API_KEY', models: [{ id: 'kept-model' }] } } },
   }])}\n`, { mode: 0o600 });
-  const bin = path.join(dataDir, 'fake-dsh.mjs');
-  fs.copyFileSync(FAKE_DSH, bin);
-  fs.chmodSync(bin, 0o755);
+  const bin = installNodeCommand(dataDir, 'fake-dsh', { file: FAKE_DSH });
 
   const written = await writeDshModelDraft({
     dataDir,

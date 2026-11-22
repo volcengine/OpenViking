@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -504,7 +505,7 @@ test('adding OneBot to an existing instance connects only it, next to nothing el
   assert.match(h.written(), /接入QQ（OneBot）（需要 WebSocket 地址、access token 和私聊口令）/);
   assert.match(h.written(), /接下来接入：QQ（OneBot） WebSocket 地址 \+ access token \+ 私聊口令绑定/);
   assert.match(h.written(), /主渠道：飞书 → QQ（OneBot）/);
-  assert.ok(h.written().includes('它会跟进所在的每个群，在 ~/.ov-superagent/data/asd/onebot/config.json 里可以把群改成 "mention" 或 "off"'));
+  assert.match(h.written(), /它会跟进所在的每个群，在 ~[\\/]\.ov-superagent[\\/]data[\\/]asd[\\/]onebot[\\/]config\.json 里可以把群改成 "mention" 或 "off"/);
 });
 
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
@@ -579,7 +580,7 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
     [{ id: 'email-gmail', config: file('email-gmail') }, { id: 'email-qq', config: file('email-qq') }]]);
   assert.deepEqual(taken, [[], ['alice.example@gmail.com']]);
   assert.equal(JSON.parse(fs.readFileSync(file('email-qq'), 'utf8')).address, '10001@qq.com');
-  assert.equal(fs.statSync(file('email-gmail')).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(file('email-gmail')).mode & 0o777, 0o600);
   assert.match(h.written(), /邮箱\s+alice\.example@gmail\.com、10001@qq\.com\n/);
   assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'email', 'weixin', 'start', 'restart', ...(capabilities.updater ? ['start'] : [])]);
 
@@ -656,7 +657,7 @@ test('changing an instance lists every setting; only the ones opened change', as
   const [after] = h.manifest().agents;
   assert.deepEqual(after, { ...before, connectors: ['lark', 'weixin'], channel: 'weixin' });
   // The list shows every value; what was changed is marked.
-  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+保持现在的 soul\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.ov-superagent\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
+  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+保持现在的 soul\n  3\) 工作目录\s+~[\\/]ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~[\\/]\.ov-superagent[\\/]ov[\\/]asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
   assert.match(h.written(), /5\) 接入的 IM\s+飞书、微信（已改）[\s\S]*7\) 主渠道\s+微信（已改）\n[\s\S]*11\) 保存（2 项改动）/);
   assert.match(h.written(), /将修改 ASD（asd）：\n  接入微信（需要扫码）\n  主渠道：飞书 → 微信\n/);
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['weixin', before.dataDir], ['restart', 'asd']]);
@@ -1724,7 +1725,7 @@ test('English setup offers OneBot as a QQ of its own, last in the list, and says
   assert.doesNotMatch(h.written(), /[一-鿿]|undefined/);
   assert.match(h.written(), /QQ \(OneBot\).*an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange/);
   assert.match(h.written(), /Next, connecting: QQ \(OneBot\) WebSocket address \+ access token \+ a code in a private message/);
-  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; it follows every group it is in, and \S+\/onebot\/config\.json can set a group to "mention" or "off"/);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; it follows every group it is in, and \S+[\\/]onebot[\\/]config\.json can set a group to "mention" or "off"/);
 });
 
 test('setup says what an existing OneBot policy file decides instead of the default', async (t) => {
@@ -1735,7 +1736,7 @@ test('setup says what an existing OneBot policy file decides instead of the defa
     fs.writeFileSync(path.join(plan.dataDir, 'onebot', 'config.json'), '{"groups": {"*": "off"}}\n');
   };
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; groups \S+\/onebot\/config\.json does not name are "off", and a group it names follows its own entry/);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; groups \S+[\\/]onebot[\\/]config\.json does not name are "off", and a group it names follows its own entry/);
   assert.doesNotMatch(h.written(), /follows every group/);
 });
 
@@ -1793,7 +1794,7 @@ test('in English, changing an instance: the list, what a setting says, the chang
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], channel: 'weixin' }]);
   const text = h.written();
   assert.doesNotMatch(text, /[一-鿿]/);
-  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+Keep the current soul\n  3\) Workspace\s+~\/ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
+  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+Keep the current soul\n  3\) Workspace\s+~[\\/]ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
   // What a setting says shows above the list drawn after it.
   assert.doesNotMatch(text, /No OpenViking found|Stop using it/);
   assert.match(text, /11\) Save \(2 changes\)/);
