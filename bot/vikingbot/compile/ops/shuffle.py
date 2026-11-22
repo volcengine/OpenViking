@@ -40,27 +40,6 @@ def service_unavailable(error: Exception) -> bool:
     )
 
 
-def ranking_text(markdown: str) -> str:
-    """Exclude a reserved trailing Wiki comment without changing the stored draft."""
-    if "CONFLICTS_CONTENT" not in markdown:
-        return markdown
-    tokens = MarkdownIt("commonmark").parse(markdown)
-    if not tokens:
-        return markdown
-    last = tokens[-1]
-    if last.type != "html_block" or not last.map:
-        return markdown
-    if not re.match(r"\s*<!--\s*CONFLICTS_CONTENT\b", last.content):
-        return markdown
-    _, closed, trailing = last.content.partition("-->")
-    if not closed or trailing.strip():
-        return markdown
-    lines = markdown.splitlines(keepends=True)
-    if "".join(lines[last.map[1] :]).strip():
-        return markdown
-    return "".join(lines[: last.map[0]])
-
-
 def text_terms(text: str) -> set[str]:
     """Extract case-folded words and adjacent Chinese characters for candidate ranking."""
     terms = set()
@@ -171,6 +150,27 @@ def group_related_documents(keys, links):
         else:
             groups.append([key])
     return groups
+
+
+def ranking_text(markdown: str) -> str:
+    """Exclude a reserved trailing Wiki comment without changing the stored draft."""
+    if "CONFLICTS_CONTENT" not in markdown:
+        return markdown
+    tokens = MarkdownIt("commonmark").parse(markdown)
+    if not tokens:
+        return markdown
+    last = tokens[-1]
+    if last.type != "html_block" or not last.map:
+        return markdown
+    if not re.match(r"\s*<!--\s*CONFLICTS_CONTENT\b", last.content):
+        return markdown
+    _, closed, trailing = last.content.partition("-->")
+    if not closed or trailing.strip():
+        return markdown
+    lines = markdown.splitlines(keepends=True)
+    if "".join(lines[last.map[1] :]).strip():
+        return markdown
+    return "".join(lines[: last.map[0]])
 
 
 class Shuffle:
