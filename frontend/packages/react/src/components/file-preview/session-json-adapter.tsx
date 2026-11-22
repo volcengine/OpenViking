@@ -59,9 +59,12 @@ export function sessionJsonAdapter(enabled: boolean): Adapter {
             ) : props.viewMode !== 'source' &&
               !enabled &&
               props.fileType === 'json' &&
-              props.fileName?.toLowerCase().endsWith('.json') === true &&
               props.prepared?.preview ? (
-              <JsonPreview {...props} model={props.prepared.preview} />
+              <JsonPreview
+                key={props.prepared.preview.identity}
+                {...props}
+                model={props.prepared.preview}
+              />
             ) : (
               <Json {...props} prepared={props.prepared?.original} />
             ),

@@ -58,7 +58,7 @@
 
 .ov-file-preview__json-toggle:focus-visible {
   border-radius: 3px;
-  outline: 2px solid var(--ov-ui-color-primary, #1664ff);
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: -2px;
 }
 

@@ -17,6 +17,9 @@ test('ordinary JSON uses formatted line numbers and preserves nested fold state'
     await waitFor(() =>
       document.querySelector('#json-preview [data-file-preview-json]'),
     );
+    await waitFor(() =>
+      document.querySelector('#json-explicit [data-file-preview-json]'),
+    );
     const structured = document.querySelector(
       '#json-preview [data-file-preview-json]',
     );
@@ -26,6 +29,14 @@ test('ordinary JSON uses formatted line numbers and preserves nested fold state'
         Number(line.dataset.line),
       ),
       [1, 2, 3, 4, 5, 6, 7, 8],
+    );
+    assert.deepEqual(
+      [
+        ...document.querySelectorAll(
+          '#json-explicit [data-file-preview-json] [data-line]',
+        ),
+      ].map((line) => Number(line.dataset.line)),
+      [1, 2, 3, 4, 5],
     );
     const toggle = (label) =>
       [...structured.querySelectorAll('button')].find(

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ContentRendererProps } from '@ark-design/ui/file-viewer/core';
+import { resolveJsonPreviewLabels } from './file-preview-labels.js';
 import {
   visibleJsonPreviewLines,
   type JsonPreviewModel,
@@ -25,7 +26,9 @@ export function JsonPreview({
   const [collapsed, setCollapsed] = useState(
     () => new Set(model.defaultCollapsed),
   );
-  useEffect(() => setCollapsed(new Set(model.defaultCollapsed)), [model]);
+  // useEffect 必要性：自定义渲染器需在 DOM 提交后把就绪状态和空句柄同步给 Ark FileViewer；
+  // 渲染阶段调用会更新父组件，且没有可替代的声明式接口。回调不建立订阅或资源，依赖变化时
+  // 重新上报即可，卸载时无需清理。
   useEffect(() => {
     onLoadingChange?.(null);
     onViewerStateChange({ viewMode: 'preview' });
@@ -35,10 +38,9 @@ export function JsonPreview({
     () => visibleJsonPreviewLines(model, collapsed),
     [collapsed, model],
   );
+  const labels = resolveJsonPreviewLabels(locale);
   const action = (expanded: boolean, lineNumber: number) =>
-    locale === 'zh-CN'
-      ? `${expanded ? '折叠' : '展开'}第 ${lineNumber} 行`
-      : `${expanded ? 'Collapse' : 'Expand'} line ${lineNumber}`;
+    expanded ? labels.collapseLine(lineNumber) : labels.expandLine(lineNumber);
 
   return (
     <div

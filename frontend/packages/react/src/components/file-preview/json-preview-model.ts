@@ -9,11 +9,21 @@ export interface JsonPreviewLine {
 
 export interface JsonPreviewModel {
   defaultCollapsed: ReadonlySet<number>;
+  identity: string;
   lines: readonly JsonPreviewLine[];
   text: string;
 }
 
 export const MAX_FORMATTED_JSON_PREVIEW_LENGTH = 1_000_000;
+
+function jsonPreviewIdentity(content: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < content.length; index += 1) {
+    hash ^= content.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `${content.length}:${hash >>> 0}`;
+}
 
 interface JsonPreviewFormatResult {
   foldable: boolean;
@@ -132,7 +142,12 @@ export function createJsonPreviewModel(
     }
   }
 
-  return { defaultCollapsed, lines, text };
+  return {
+    defaultCollapsed,
+    identity: jsonPreviewIdentity(content),
+    lines,
+    text,
+  };
 }
 
 export function visibleJsonPreviewLines(
