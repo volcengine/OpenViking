@@ -138,14 +138,36 @@ export function onShutdown(handler) {
     });
   });
 }
+// Signal 0 tests for a running process on every host: Windows returns ESRCH for a
+// pid that is not one. Anything else (EPERM on a live process we may not inspect)
+// counts as alive, so an inconclusive check keeps the taskkill path.
+function hasLivePid(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
 export function terminateProcessTree(child, signal = 'SIGTERM') {
   if (!child?.pid || child.exitCode != null || child.signalCode != null) return;
+  // taskkill needs a live pid. For one that is already gone (a child that exited
+  // before the caller noticed, or a fake fixture) it reports the failure one
+  // spawn later, and the handle fallback then lands after the caller's
+  // escalation window: an escalation that times out faster than that spawn sends
+  // SIGKILL without ever sending SIGTERM. There is no tree left to walk, so
+  // signal the handle in this tick instead of through a process that cannot act.
+  if (!hasLivePid(child.pid)) {
+    try { child.kill(signal); } catch {}
+    return;
+  }
   const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
   killer.on('error', () => { try { child.kill(signal); } catch {} });
-  // taskkill exits non-zero when the pid is already gone or belongs to a fake
-  // fixture; fall back to the handle so callers still observe an exit. This
-  // reaches the direct child only, which is all a pid that taskkill refused can
-  // be expected to leave behind.
+  // taskkill also exits non-zero when it refuses a pid that still exists (access
+  // denied, or the process went away while it started); fall back to the handle
+  // so callers still observe an exit. This reaches the direct child only, which
+  // is all a pid that taskkill refused can be expected to leave behind.
   killer.once('exit', (code) => { if (code !== 0) { try { child.kill(signal); } catch {} } });
   killer.unref();
 }
