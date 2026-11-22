@@ -191,6 +191,9 @@ class Pipeline:
                 data[node.name] = outputs
                 await self.files.put(f"stages/{node.name}", [asdict(item) for item in outputs])
                 position += 1
+                # Reduce has consumed the groups; the only legal next operation is Finalize.
+                if node.op == "reduce":
+                    continue
                 statements = ast.parse(program).body
                 remaining = "\n".join(ast.unparse(s) for s in statements[position:])
                 accepted = await review_stage(
