@@ -222,6 +222,7 @@ const RUNTIMES = {
         '--approve',
         ...isolation,
         '--extension', PI_MCP_EXTENSION,
+        ...piToolArgs(),
         ...(model ? ['--model', model] : []),
         prompt,
       ];

@@ -340,6 +340,7 @@ export class PiAgent {
         '--approve',
         ...isolationArgs,
         '--extension', PI_MCP_EXTENSION,
+        ...piToolArgs(),
       ];
       if (model) args.push('--model', model);
 
