@@ -39,6 +39,23 @@ def service_unavailable(error: Exception) -> bool:
     )
 
 
+def embedding_unavailable(error: Exception) -> bool:
+    """Allow a local fallback only for transport or identifiable provider outages."""
+    if not isinstance(error, OpenVikingError):
+        return service_unavailable(error)
+    source = error.details.get("upstream_error_type")
+    status = error.details.get("upstream_status_code")
+    outage = error.code in {"UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED"}
+    if source == "AllCredentialsFailedError":
+        # The provider chain has already excluded request-level refusals.
+        return outage or error.code == "CONFLICT"
+    return (
+        bool(source)
+        and outage
+        and (status in (402, 408, 429) or isinstance(status, int) and 500 <= status < 600)
+    )
+
+
 def text_terms(text: str) -> set[str]:
     """Extract case-folded words and adjacent Chinese characters for candidate ranking."""
     terms = set()
@@ -50,11 +67,12 @@ def text_terms(text: str) -> set[str]:
     return terms
 
 
-def text_candidates(texts, stop):
+def text_candidates(texts, stop, rows):
     """Rank positive Markdown term overlap, retaining five candidates per draft in stable order."""
     terms = [text_terms(text) for text in texts]
     result = []
-    for index, row in enumerate(terms):
+    for index in rows:
+        row = terms[index]
         if stop.is_set():
             raise ValueError("Similarity calculation cancelled")
         scores = (
@@ -165,10 +183,17 @@ class Shuffle:
             texts, target_uri=self.r.target, expected_model=expected_model
         )
 
-    async def vectors(self, texts: list[str]) -> list[array]:
+    async def vectors(self, texts: list[str]) -> list[array | None]:
         """Return compact vectors in document order using bounded, model-scoped cached batches."""
         r = self.r
-        metadata = await self.embeddings([])
+        try:
+            metadata = await self.embeddings([])
+        except Exception as exc:
+            if asyncio.current_task().cancelling():
+                raise asyncio.CancelledError() from exc
+            if not embedding_unavailable(exc):
+                raise
+            return [None] * len(texts)
         self.model_id = metadata["model"]
         vectors = {}
         missing = []
@@ -181,17 +206,20 @@ class Shuffle:
             else:
                 missing.append(text)
 
-        unavailable = None
+        fatal_error = None
 
         async def embed(batch):
             """Use the shared provider limits and retain compact float32 routing vectors."""
-            nonlocal unavailable
-            if unavailable is not None:
+            nonlocal fatal_error
+            if fatal_error is not None:
                 return
             try:
                 result = await self.embeddings(batch, expected_model=self.model_id)
             except Exception as exc:
-                unavailable = exc
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError() from exc
+                if not embedding_unavailable(exc):
+                    fatal_error = exc
                 return
             if result["model"] != self.model_id or len(result["vectors"]) != len(batch):
                 raise ValueError("Embedding batch/model mismatch")
@@ -206,9 +234,9 @@ class Shuffle:
             concurrency=r.limits.shuffle_concurrency,
             metrics=r.metrics,
         )
-        if unavailable is not None:
-            raise unavailable
-        return [vectors[text] for text in texts]
+        if fatal_error is not None:
+            raise fatal_error
+        return [vectors.get(text) for text in texts]
 
     async def candidates(self, text: str, stable_uri=None) -> list[dict]:
         """Recall only inside to; coalesce section/derived hits to visible parent files.
@@ -322,15 +350,22 @@ class Shuffle:
             return [Group("all", documents, sorted({h["uri"] for hits in histories for h in hits}))]
         stop = Event()
         try:
-            try:
-                vectors = await self.vectors(texts)
-                neighbours = await asyncio.to_thread(top_candidates, vectors, 5, stop)
-            except Exception:
-                if asyncio.current_task().cancelling():
-                    raise asyncio.CancelledError()
-                neighbours = await asyncio.to_thread(text_candidates, texts, stop)
+            vectors = await self.vectors(texts)
+            present = [i for i, vector in enumerate(vectors) if vector is not None]
+            missing = [i for i, vector in enumerate(vectors) if vector is None]
+            semantic = await asyncio.to_thread(
+                top_candidates, [vectors[i] for i in present], 5, stop
+            )
+            neighbours = [[] for _ in texts]
+            for i, indices in zip(present, semantic, strict=True):
+                neighbours[i] = [present[j] for j in indices]
+            if missing:
+                lexical = await asyncio.to_thread(text_candidates, texts, stop, missing)
+                for i, indices in zip(missing, lexical, strict=True):
+                    neighbours[i] = indices
                 r.warnings.append(
-                    "Routing uses Markdown text overlap; related content may remain unmerged."
+                    "Routing uses Markdown text overlap for drafts without vectors; "
+                    "related content may remain unmerged."
                 )
         finally:
             stop.set()
