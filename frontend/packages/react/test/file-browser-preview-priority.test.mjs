@@ -12,7 +12,6 @@ import {
   recordingFetch,
   settle,
 } from './helpers/module-dom.mjs';
-import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 test('listed memory Markdown reads once, reuses the body and invalidates on refresh, save and scope changes', async () => {
   const root = 'viking://user/alice/memories';
@@ -96,14 +95,21 @@ test('a listed Markdown file reads its body while Wiki attrs are pending', async
     if (path.endsWith('/content/read')) return ok('Chapter text');
     return ok({});
   });
-  const view = await mount(
-    h(OpenVikingProvider, { fetch }, h(FileBrowser, { rootUri: root, uri })),
-  );
+  let browser;
+  function Probe() {
+    browser = useFileBrowser({
+      rootUri: root,
+      controlled: true,
+      currentUri: uri,
+    });
+    return null;
+  }
+  const view = await mount(h(OpenVikingProvider, { fetch }, h(Probe)));
+  const body = () => browser.previewTabs?.[0]?.source?.content;
   try {
-    const meta = () =>
-      view.container.querySelector('.ov-file-browser__preview-meta');
-    assert.match(meta()?.textContent ?? '', /12 characters/);
-    assert.equal(meta()?.querySelector('time')?.dateTime, fileTime);
+    assert.equal(fetch.countOf('/api/v1/fs/attrs'), 1);
+    assert.equal(body(), 'Chapter text');
+    assert.equal(browser.previewUpdatedAt, fileTime);
     assert.equal(fetch.countOf('/api/v1/fs/stat'), 0);
     await act(async () =>
       attrs.resolve(
@@ -112,7 +118,7 @@ test('a listed Markdown file reads its body while Wiki attrs are pending', async
     );
     await settle();
     assert.equal(fetch.countOf('/api/v1/content/read'), 1);
-    assert.match(meta()?.textContent ?? '', /12 characters/);
+    assert.equal(body(), 'Chapter text');
   } finally {
     await view.unmount();
   }
