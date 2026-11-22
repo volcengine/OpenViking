@@ -187,6 +187,23 @@ return {pending_count(), redis.call('ZCARD', processing)}
 "#
 );
 
+pub(super) const STATUS_SNAPSHOT_SCRIPT: &str = r#"
+local names = KEYS[1]
+if redis.call('SCARD', names) ~= #ARGV then
+    return nil
+end
+for _, name in ipairs(ARGV) do
+    if redis.call('SISMEMBER', names, name) == 0 then
+        return nil
+    end
+end
+local statuses = {}
+for i = 1, #ARGV do
+    statuses[i] = {redis.call('ZCARD', KEYS[2 * i]), redis.call('ZCARD', KEYS[2 * i + 1])}
+end
+return statuses
+"#;
+
 pub(super) const PENDING_IDS_SCRIPT: &str = queue_script!(
     r#"
 return pending_ids()
@@ -380,6 +397,16 @@ pub(super) fn queue_names_key(key_prefix: &str) -> String {
     format!("{}names", queue_key_prefix(key_prefix))
 }
 
+pub(super) fn status_snapshot_keys(key_prefix: &str, names: &[String]) -> Vec<String> {
+    let mut keys = Vec::with_capacity(1 + 2 * names.len());
+    keys.push(queue_names_key(key_prefix));
+    for name in names {
+        let queue = QueueKeys::new(key_prefix, name);
+        keys.extend([queue.pending, queue.processing]);
+    }
+    keys
+}
+
 pub(super) fn queue_key_prefix(key_prefix: &str) -> String {
     format!("{{{key_prefix}}}:ov:queue:")
 }
@@ -414,4 +441,20 @@ pub(super) fn last_enqueue_time_from_pending_payloads(payloads: &[String]) -> Re
             latest
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redis_status_snapshot_keys_share_the_cluster_slot() {
+        let names = ["Embedding".to_string(), "team/{Semantic}".to_string()];
+        let keys = status_snapshot_keys("cluster-test", &names);
+        assert_eq!(keys.len(), 5);
+        let slot = fred::util::redis_keyslot(keys[0].as_bytes());
+        assert!(keys
+            .iter()
+            .all(|key| fred::util::redis_keyslot(key.as_bytes()) == slot));
+    }
 }

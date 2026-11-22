@@ -4,8 +4,10 @@
 """Tests for resource management endpoints."""
 
 import asyncio
+import json
 import zipfile
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -837,6 +839,76 @@ async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+
+
+async def test_wait_processed_waits_through_semantic_to_embedding_handoff(
+    client: httpx.AsyncClient, tmp_path, monkeypatch
+):
+    from openviking.pyagfs import AsyncAGFSClient
+    from openviking.storage.queuefs import queue_manager
+    from openviking.storage.queuefs.named_queue import NamedQueue
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config.agfs_config import AGFSConfig, QueueFSConfig
+
+    agfs = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(path=str(tmp_path), queuefs=QueueFSConfig(backend="memory"))
+        )
+    )
+    manager = queue_manager.QueueManager(agfs)
+    # A sequential read observes Embedding before Semantic.
+    embedding = manager.get_queue(manager.EMBEDDING, allow_create=True)
+    semantic = manager.get_queue(manager.SEMANTIC, allow_create=True)
+    monkeypatch.setattr(queue_manager, "_instance", manager)
+
+    first_sample = asyncio.Event()
+    handoff_done = asyncio.Event()
+    sampled_pending_child = asyncio.Event()
+    read = AsyncAGFSClient.read
+
+    async def read_at_handoff(self, path, *args, **kwargs):
+        content = await read(self, path, *args, **kwargs)
+        if path in ("/queue/status", "/queue/Embedding/status") and not first_sample.is_set():
+            first_sample.set()
+            await handoff_done.wait()
+        elif path == "/queue/status" and json.loads(content)["Embedding"]["pending"] == 1:
+            sampled_pending_child.set()
+        return content
+
+    monkeypatch.setattr(AsyncAGFSClient, "read", read_at_handoff)
+    tasks: list[asyncio.Task[Any]] = []
+    try:
+        await NamedQueue.enqueue(semantic, {"kind": "parent"})
+        parent = await semantic.dequeue_raw()
+        assert parent is not None
+        request = asyncio.create_task(client.post("/api/v1/system/wait", json={}))
+        tasks.append(request)
+
+        await asyncio.wait_for(first_sample.wait(), timeout=5)
+        await NamedQueue.enqueue(embedding, {"kind": "child"})
+        await semantic.ack(parent["id"], parent)
+        handoff_done.set()
+
+        observed_child = asyncio.create_task(sampled_pending_child.wait())
+        tasks.append(observed_child)
+        done, _ = await asyncio.wait(tasks, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        assert done == {observed_child}, "wait must read the pending child before returning"
+
+        child = await embedding.dequeue_raw()
+        assert child is not None
+        await embedding.ack(child["id"], child)
+        response = await asyncio.wait_for(request, timeout=5)
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "ok"
+        assert response.json()["result"] == {
+            name: {"processed": 0, "requeue_count": 0, "error_count": 0, "errors": []}
+            for name in ("Embedding", "Semantic")
+        }
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        agfs.close()
 
 
 async def test_wait_processed_after_add(

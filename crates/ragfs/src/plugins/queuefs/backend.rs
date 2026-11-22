@@ -215,6 +215,9 @@ pub trait QueueBackend: Send + Sync {
     /// Get pending and processing message counts from one backend snapshot
     fn status(&self, queue_name: &str) -> Result<QueueState>;
 
+    /// Read all queue counts from one backend snapshot.
+    fn status_snapshot(&self) -> Result<HashMap<String, QueueState>>;
+
     /// List every unacknowledged message without changing queue state
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>>;
 
@@ -265,6 +268,13 @@ impl Queue {
             unacked_ids: HashSet::new(),
             retry_serial: HashMap::new(),
             last_enqueue_time: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn status(&self) -> QueueState {
+        QueueState {
+            pending: self.messages.len(),
+            processing: self.processing.len(),
         }
     }
 }
@@ -386,10 +396,15 @@ impl QueueBackend for MemoryBackend {
             .queues
             .get(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
-        Ok(QueueState {
-            pending: queue.messages.len(),
-            processing: queue.processing.len(),
-        })
+        Ok(queue.status())
+    }
+
+    fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
+        Ok(self
+            .queues
+            .iter()
+            .map(|(name, queue)| (name.clone(), queue.status()))
+            .collect())
     }
 
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
@@ -909,6 +924,34 @@ impl QueueBackend for SQLiteQueueBackend {
             pending: pending as usize,
             processing: processing as usize,
         })
+    }
+
+    fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {e}")))?;
+        conn.prepare(
+            "SELECT queues.queue_name,
+                    COUNT(CASE WHEN messages.status = 'pending' THEN 1 END),
+                    COUNT(CASE WHEN messages.status = 'processing' THEN 1 END)
+             FROM queue_metadata AS queues
+             LEFT JOIN queue_messages AS messages ON messages.queue_name = queues.queue_name
+             GROUP BY queues.queue_name",
+        )
+        .and_then(|mut statement| {
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    QueueState {
+                        pending: row.get::<_, i64>(1)? as usize,
+                        processing: row.get::<_, i64>(2)? as usize,
+                    },
+                ))
+            })?;
+            rows.collect()
+        })
+        .map_err(|e| Error::internal(format!("sqlite status snapshot query error: {e}")))
     }
 
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {

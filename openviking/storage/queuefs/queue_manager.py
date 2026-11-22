@@ -11,11 +11,12 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
 from openviking.observability.log_safety import safe_path_for_log, short_hash
+from openviking.pyagfs import AsyncAGFSClient
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
-from .named_queue import DequeueHandlerBase, NamedQueue, QueueStatus
+from .named_queue import DequeueHandlerBase, NamedQueue, QueueStatus, _decode_status_response
 from .queue_middleware import QueueMiddleware
 from .semantic_queue import SemanticQueue
 
@@ -42,6 +43,7 @@ def init_queue_manager(
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     max_concurrent_external_task: int = 10,
     *,
+    queuefs_root: Optional[str] = None,
     middlewares: Sequence[QueueMiddleware] = (),
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
@@ -49,7 +51,8 @@ def init_queue_manager(
     Args:
         agfs: Pre-initialized AGFS client (HTTP or Binding).
         timeout: Request timeout in seconds.
-        mount_point: Path where QueueFS is mounted.
+        mount_point: Directory for this manager's queues.
+        queuefs_root: QueueFS plugin mount when the manager uses a subdirectory.
         max_concurrent_embedding: Max concurrent embedding tasks.
         max_concurrent_semantic: Max concurrent semantic node work.
         max_concurrent_external_parse: Max concurrent ExternalParse tasks.
@@ -70,6 +73,7 @@ def init_queue_manager(
         max_concurrent_reindex=max_concurrent_reindex,
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
+        queuefs_root=queuefs_root,
         middlewares=middlewares,
     )
     return _instance
@@ -118,12 +122,15 @@ class QueueManager:
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
         max_concurrent_external_task: int = 10,
         *,
+        queuefs_root: Optional[str] = None,
         middlewares: Sequence[QueueMiddleware] = (),
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
+        self._async_agfs = AsyncAGFSClient(agfs)
         self.timeout = timeout
         self.mount_point = mount_point
+        self._queuefs_root = (queuefs_root or mount_point).rstrip("/")
         self._max_concurrent_embedding = max_concurrent_embedding
         self._max_concurrent_semantic = max_concurrent_semantic
         self._max_concurrent_external_parse = max_concurrent_external_parse
@@ -587,7 +594,26 @@ class QueueManager:
             if queue_name not in self._queues:
                 return {}
             return {queue_name: await self._queues[queue_name].get_status()}
-        return {name: await q.get_status() for name, q in self._queues.items()}
+
+        root_prefix = f"{self._queuefs_root}/"
+        while True:
+            queues = self._queues.copy()
+            if not queues:
+                return {}
+            for queue in queues.values():
+                await queue._ensure_initialized()
+            content = await self._async_agfs.read(f"{root_prefix}status")
+            if queues != self._queues:
+                continue
+            snapshot = _decode_status_response(content)
+            if not isinstance(snapshot, dict):
+                raise ValueError("Invalid QueueFS status snapshot")
+            return {
+                name: queue._status_from_backend(
+                    snapshot[queue.path.removeprefix(root_prefix).lstrip("/")]
+                )
+                for name, queue in queues.items()
+            }
 
     def has_errors(self, queue_name: Optional[str] = None) -> bool:
         """Check if there are errors."""
@@ -604,6 +630,8 @@ class QueueManager:
 
     async def wait_complete(self) -> Dict[str, QueueStatus]:
         """Wait for all queues to complete and return their final status."""
-        while not await self.is_all_complete():
+        while True:
+            statuses = await self.check_status()
+            if all(status.is_complete for status in statuses.values()):
+                return statuses
             await asyncio.sleep(0.5)
-        return await self.check_status()

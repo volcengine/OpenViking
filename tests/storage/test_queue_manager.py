@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -257,6 +257,108 @@ async def test_status_waits_for_processing_messages_from_other_workers(monkeypat
     assert status.pending == 0
     assert status.in_progress == 1
     assert not status.is_complete
+
+
+async def test_wait_complete_returns_the_snapshot_that_showed_registered_queues_drained():
+    agfs = Mock()
+    agfs.read.side_effect = [
+        b'{"Registered":{"pending":0,"processing":1}}',
+        b'{"Registered":{"pending":0,"processing":0},"Unregistered":{"pending":1,"processing":0}}',
+    ]
+    manager = QueueManager(agfs, mount_point="/jobs")
+    handler = AsyncMock(spec=DequeueHandlerBase)
+    handler.on_dequeue.return_value = ProcessResult.failed("previous delivery failed")
+    queue = manager.get_queue("Registered", dequeue_handler=handler, allow_create=True)
+    await queue.process_dequeued({})
+
+    statuses = await asyncio.wait_for(manager.wait_complete(), timeout=5)
+
+    assert list(statuses) == ["Registered"]
+    assert statuses["Registered"].is_complete
+    assert statuses["Registered"].error_count == 1
+    assert [error.message for error in statuses["Registered"].errors] == [
+        "previous delivery failed"
+    ]
+    assert [call.args[0] for call in agfs.read.call_args_list] == ["/jobs/status"] * 2
+    assert agfs.mkdir.call_args.args[0] == "/jobs/Registered"
+
+
+async def test_check_status_resamples_when_a_queue_is_registered_during_read():
+    agfs = Mock()
+    manager = QueueManager(agfs)
+    manager.get_queue("First", allow_create=True)
+
+    first = b'{"First":{"pending":0,"processing":0}}'
+    second = b'{"First":{"pending":0,"processing":0},"Second":{"pending":1,"processing":0}}'
+
+    def read_status(path, **kwargs):
+        assert path == "/queue/status"
+        if agfs.read.call_count > 1:
+            return second
+        manager.get_queue("Second", allow_create=True)
+        return first
+
+    agfs.read.side_effect = read_status
+    assert not await manager.is_all_complete()
+    assert {call.args[0] for call in agfs.mkdir.call_args_list} == {"/queue/First", "/queue/Second"}
+
+
+async def test_check_status_limits_a_worker_manager_to_its_registered_queue_paths(tmp_path):
+    from openviking.utils.agfs_utils import QUEUEFS_ROOT, RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config.agfs_config import AGFSConfig, QueueFSConfig
+
+    client = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(path=str(tmp_path), queuefs=QueueFSConfig(backend="memory"))
+        )
+    )
+    try:
+        manager = QueueManager(client, mount_point="/queue/worker-1", queuefs_root=QUEUEFS_ROOT)
+        manager.get_queue("Test", allow_create=True)
+        peer = QueueManager(client, mount_point="/queue/worker-2", queuefs_root=QUEUEFS_ROOT)
+        await peer.get_queue("Test", allow_create=True).enqueue({"kind": "peer"})
+
+        statuses = await manager.check_status()
+        assert list(statuses) == ["Test"]
+        assert statuses["Test"].is_complete
+        assert (await manager.check_status("Test")) == statuses
+        assert (await peer.check_status())["Test"].pending == 1
+    finally:
+        client.close()
+
+
+async def test_empty_queue_registry_needs_no_backend_read():
+    agfs = Mock()
+    manager = QueueManager(agfs)
+
+    assert await manager.check_status() == {}
+    assert await manager.is_all_complete()
+    assert await manager.wait_complete() == {}
+    agfs.read.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (b"{}", KeyError),
+        (b'{"Registered":{"pending":0}}', KeyError),
+        (b'{"Registered":{"pending":false,"processing":0}}', ValueError),
+        (b'{"Registered":{"pending":0,"processing":-1}}', ValueError),
+        (b"[]", ValueError),
+        (FileNotFoundError("snapshot operation unavailable"), FileNotFoundError),
+        (OSError("backend unavailable"), OSError),
+    ],
+)
+async def test_wait_complete_propagates_invalid_or_unavailable_backend_snapshots(response, error):
+    agfs = Mock()
+    agfs.read.side_effect = [response]
+    manager = QueueManager(agfs)
+    manager.get_queue("Registered", allow_create=True)
+
+    with pytest.raises(error):
+        await manager.wait_complete()
+
+    assert [call.args[0] for call in agfs.read.call_args_list] == ["/queue/status"]
 
 
 @pytest.fixture

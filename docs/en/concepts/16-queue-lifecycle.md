@@ -99,9 +99,16 @@ Backend requirements:
 - **Memory:** maintain a processing collection; dequeue moves a message into it and
   ACK removes the message from it.
 
-`NamedQueue.get_status()` consumes this backend snapshot. `wait_complete()` and
-`is_all_complete()` use only the backend-owned `pending` and `processing`
-values.
+`NamedQueue.get_status()` reads `/<queue>/status`, which captures the two counts
+for one queue. For a global check, `QueueManager` reads the internal `/status`
+operation at the QueueFS mount root. The backend captures counts for every
+queue at one point in time, and the manager considers only its registered
+queues.
+
+`wait_complete()` returns the first snapshot in which all those queues have zero
+`pending` and zero `processing`. This keeps work visible during a handoff from
+one queue to another. New work can arrive after the snapshot. A failed
+snapshot read fails the wait.
 
 ## Grouped Scheduling in the Kernel
 

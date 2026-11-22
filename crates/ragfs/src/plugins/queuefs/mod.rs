@@ -8,6 +8,7 @@
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
 //! - `/queue_name/status` - Read pending and processing message counts
+//! - `/status` - Read a single snapshot of message counts across all queues
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
@@ -27,11 +28,12 @@ use crate::core::{
     types::{ConfigParameter, FileInfo, PluginConfig, WriteFlag},
 };
 use async_trait::async_trait;
-use backend::{MemoryBackend, Message, QueueBackend, SQLiteQueueBackend, SQLiteQueueOptions};
+use backend::{
+    MemoryBackend, Message, QueueBackend, QueueState, SQLiteQueueBackend, SQLiteQueueOptions,
+};
 #[cfg(feature = "cache")]
 use cache_backend::CacheQueueStorage;
 use serde::Serialize;
-#[cfg(feature = "cache")]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -210,11 +212,19 @@ impl QueueStorage {
         }
     }
 
-    async fn status(&self, queue_name: &str) -> Result<backend::QueueState> {
+    async fn status(&self, queue_name: &str) -> Result<QueueState> {
         match self {
             Self::Local(backend) => backend.lock().await.status(queue_name),
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.status(queue_name).await,
+        }
+    }
+
+    async fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
+        match self {
+            Self::Local(backend) => backend.lock().await.status_snapshot(),
+            #[cfg(feature = "cache")]
+            Self::Cache(storage) => storage.status_snapshot().await,
         }
     }
 
@@ -392,6 +402,10 @@ impl FileSystem for QueueFileSystem {
     }
 
     async fn read(&self, path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
+        if path.trim_start_matches('/') == "status" {
+            let snapshot = self.storage.status_snapshot().await?;
+            return Ok(serde_json::to_vec(&snapshot)?);
+        }
         let parsed = Self::parse_queue_path(path)?;
 
         let queue_name = parsed
@@ -982,6 +996,63 @@ impl ServicePlugin for QueueFSPlugin {
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    async fn populate_status_snapshot(fs: &QueueFileSystem) {
+        for name in ["pending", "processing", "team/empty"] {
+            fs.mkdir(&format!("/{name}"), 0o755).await.unwrap();
+        }
+        for name in ["pending", "processing"] {
+            fs.write(&format!("/{name}/enqueue"), b"payload", 0, WriteFlag::None)
+                .await
+                .unwrap();
+        }
+        fs.read("/processing/dequeue", 0, 0).await.unwrap();
+    }
+
+    async fn assert_status_snapshot(fs: &QueueFileSystem) {
+        let raw = fs.read("/status", 0, 0).await.unwrap();
+        let snapshot: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(
+            snapshot,
+            serde_json::json!({
+                "pending": {"pending": 1, "processing": 0},
+                "processing": {"pending": 0, "processing": 1},
+                "team/empty": {"pending": 0, "processing": 0}
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_status_snapshot_is_an_internal_root_read() {
+        let fs = QueueFileSystem::new();
+        assert_eq!(fs.read("/status", 0, 0).await.unwrap(), b"{}");
+        populate_status_snapshot(&fs).await;
+        assert_status_snapshot(&fs).await;
+        assert_eq!(
+            fs.read("/team/empty/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":0}"#
+        );
+        assert!(fs.create("/status").await.is_err());
+        assert!(fs.stat("/status").await.is_err());
+        let entries = fs.read_dir("/", None, None, None, None).await.unwrap();
+        assert!(!entries.iter().any(|entry| entry.name == "status"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_status_snapshot_sees_work_from_another_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("queues.db");
+        let open = || {
+            QueueFileSystem::with_backend(Box::new(
+                SQLiteQueueBackend::open(path.to_str().unwrap(), SQLiteQueueOptions::default())
+                    .unwrap(),
+            ))
+        };
+        let writer = open();
+        let reader = open();
+        populate_status_snapshot(&writer).await;
+        assert_status_snapshot(&reader).await;
+    }
 
     /// Helper struct to deserialize queue messages in tests
     #[derive(Debug, Deserialize)]

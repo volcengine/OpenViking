@@ -91,8 +91,13 @@ QueueFS 控制文件名属于保留路径段，队列名不能以 `enqueue`、`e
 - **Memory：** 维护 processing 集合；dequeue 将消息移入该集合，ACK 从该集合
   删除消息。
 
-`NamedQueue.get_status()` 只消费 backend 返回的状态快照。`wait_complete()` 和
-`is_all_complete()` 只使用 backend 维护的 `pending` 与 `processing` 判断完成。
+`NamedQueue.get_status()` 通过 `/<queue>/status` 读取单个队列的两个计数。全局检查时，
+`QueueManager` 读取 QueueFS 挂载根的内部操作 `/status`。后端在同一时点采集所有队列的计数，
+管理器只检查自己注册的队列。
+
+当这些队列的 `pending` 和 `processing` 首次在同一份快照中全部为零时，
+`wait_complete()` 返回该快照。在队列间交接的工作会在快照中保持可见。采样后仍可接收新任务。
+快照读取失败时，等待也会失败。
 
 ## 内核分组调度
 

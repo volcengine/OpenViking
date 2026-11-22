@@ -1,17 +1,19 @@
 use super::backend::{Message, QueueState, StoredMessage};
 use super::cache_protocol::{
     encoded_group_key, heartbeat_key, instance_key_prefix, last_enqueue_time_from_pending_payloads,
-    queue_key_prefix, queue_names_key, recovery_leader_key, unix_secs, QueueKeys, ACK_SCRIPT,
-    ACQUIRE_RECOVERY_LEADER_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT, DEQUEUE_SCRIPT,
-    ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS, LIST_UNACKED_SCRIPT, PEEK_SCRIPT,
-    PENDING_IDS_SCRIPT, RECOVERY_INTERVAL_SECS, RECOVERY_LEADER_TTL_SECS, RECOVER_STALE_SCRIPT,
-    RELEASE_RECOVERY_LEADER_SCRIPT, REMOVE_QUEUE_SCRIPT, RETRY_SCRIPT, STATUS_SCRIPT,
+    queue_key_prefix, queue_names_key, recovery_leader_key, status_snapshot_keys, unix_secs,
+    QueueKeys, ACK_SCRIPT, ACQUIRE_RECOVERY_LEADER_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT,
+    DEQUEUE_SCRIPT, ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS,
+    LIST_UNACKED_SCRIPT, PEEK_SCRIPT, PENDING_IDS_SCRIPT, RECOVERY_INTERVAL_SECS,
+    RECOVERY_LEADER_TTL_SECS, RECOVER_STALE_SCRIPT, RELEASE_RECOVERY_LEADER_SCRIPT,
+    REMOVE_QUEUE_SCRIPT, RETRY_SCRIPT, STATUS_SCRIPT, STATUS_SNAPSHOT_SCRIPT,
 };
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheRuntime, Expiration, ScriptRequest, ScriptValue, SetOptions,
 };
 use crate::core::errors::{Error, Result};
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,6 +27,7 @@ const ENQUEUE_ID: &str = "queuefs.enqueue.v4";
 const DEQUEUE_ID: &str = "queuefs.dequeue.v4";
 const PEEK_ID: &str = "queuefs.peek.v2";
 const STATUS_ID: &str = "queuefs.status.v2";
+const STATUS_SNAPSHOT_ID: &str = "queuefs.status_snapshot.v1";
 const PENDING_IDS_ID: &str = "queuefs.pending_ids.v1";
 const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v2";
 const ACK_ID: &str = "queuefs.ack.v4";
@@ -42,6 +45,7 @@ const SCRIPT_DEFINITIONS: &[(&str, &str)] = &[
     (DEQUEUE_ID, DEQUEUE_SCRIPT),
     (PEEK_ID, PEEK_SCRIPT),
     (STATUS_ID, STATUS_SCRIPT),
+    (STATUS_SNAPSHOT_ID, STATUS_SNAPSHOT_SCRIPT),
     (LIST_UNACKED_ID, LIST_UNACKED_SCRIPT),
     (PENDING_IDS_ID, PENDING_IDS_SCRIPT),
     (ACK_ID, ACK_SCRIPT),
@@ -362,20 +366,48 @@ impl CacheQueueStorage {
         if matches!(value, ScriptValue::Null) {
             return Err(Error::NotFound(format!("queue '{}' not found", queue_name)));
         }
-        let ScriptValue::Array(values) = value else {
-            return Err(invalid_result("queue status", value));
-        };
-        if values.len() != 2 {
-            return Err(Error::internal(
-                "redis queue status returned an invalid value",
-            ));
+        decode_queue_status(value)
+    }
+
+    pub(super) async fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
+        self.status_snapshot_from(self.list_queues("").await?).await
+    }
+
+    async fn status_snapshot_from(
+        &self,
+        mut names: Vec<String>,
+    ) -> Result<HashMap<String, QueueState>> {
+        let mut retried = false;
+        loop {
+            let value = self
+                .execute(
+                    "status_snapshot",
+                    STATUS_SNAPSHOT_ID,
+                    status_snapshot_keys(&self.key_prefix, &names),
+                    names.iter().map(bytes).collect(),
+                )
+                .await?;
+            match value {
+                ScriptValue::Array(values) if values.len() == names.len() => {
+                    return names
+                        .into_iter()
+                        .zip(values)
+                        .map(|(name, value)| Ok((name, decode_queue_status(value)?)))
+                        .collect();
+                }
+                // Queue creation or removal raced with preparation of the script keys.
+                ScriptValue::Null if !retried => {
+                    names = self.list_queues("").await?;
+                    retried = true;
+                }
+                ScriptValue::Null => {
+                    return Err(Error::internal(
+                        "redis queue names changed twice during status snapshot",
+                    ));
+                }
+                other => return Err(invalid_result("queue status snapshot", other)),
+            }
         }
-        Ok(QueueState {
-            pending: usize::try_from(integer(values[0].clone())?)
-                .map_err(|_| Error::internal("redis pending count is invalid"))?,
-            processing: usize::try_from(integer(values[1].clone())?)
-                .map_err(|_| Error::internal("redis processing count is invalid"))?,
-        })
     }
 
     pub(super) async fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
@@ -735,6 +767,20 @@ fn bytes_array_to_strings(values: Vec<Bytes>) -> Result<Vec<String>> {
         .collect()
 }
 
+fn decode_queue_status(value: ScriptValue) -> Result<QueueState> {
+    let ScriptValue::Array(values) = value else {
+        return Err(invalid_result("queue status", value));
+    };
+    let [pending, processing] = <[ScriptValue; 2]>::try_from(values)
+        .map_err(|_| Error::internal("redis queue status returned an invalid value"))?;
+    Ok(QueueState {
+        pending: usize::try_from(integer(pending)?)
+            .map_err(|_| Error::internal("redis pending count is invalid"))?,
+        processing: usize::try_from(integer(processing)?)
+            .map_err(|_| Error::internal("redis processing count is invalid"))?,
+    })
+}
+
 fn invalid_result(expected: &str, value: ScriptValue) -> Error {
     Error::internal(format!(
         "cache script returned {value:?}, expected {expected}"
@@ -753,6 +799,80 @@ fn cache_error(operation: &str, error: CacheError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn redis_status_snapshot_resamples_changed_queue_names() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let config = crate::cache_runtime::RedisProviderConfig {
+            endpoints: vec![endpoint],
+            connect_timeout_ms: 5_000,
+            command_timeout_ms: 1_000,
+            ..Default::default()
+        };
+        let writer_runtime = CacheRuntime::redis(config.clone()).await.unwrap();
+        let reader_runtime = CacheRuntime::redis(config).await.unwrap();
+        let prefix = format!("queuefs-status-snapshot-test:{}", Uuid::new_v4());
+        let writer = CacheQueueStorage::open(Arc::clone(&writer_runtime), prefix.clone())
+            .await
+            .unwrap();
+        let reader = CacheQueueStorage::open(Arc::clone(&reader_runtime), prefix)
+            .await
+            .unwrap();
+        assert!(reader.status_snapshot().await.unwrap().is_empty());
+
+        for name in ["pending", "processing", "old"] {
+            writer.create_queue(name).await.unwrap();
+        }
+        for name in ["pending", "processing"] {
+            writer
+                .enqueue(name, Message::new(b"payload".to_vec()))
+                .await
+                .unwrap();
+        }
+        assert!(writer.dequeue("processing").await.unwrap().is_some());
+        let stale_names = reader.list_queues("").await.unwrap();
+        writer.remove_queue("old").await.unwrap();
+        writer.create_queue("team/empty").await.unwrap();
+
+        let expected = HashMap::from([
+            (
+                "pending".to_string(),
+                QueueState {
+                    pending: 1,
+                    processing: 0,
+                },
+            ),
+            (
+                "processing".to_string(),
+                QueueState {
+                    pending: 0,
+                    processing: 1,
+                },
+            ),
+            (
+                "team/empty".to_string(),
+                QueueState {
+                    pending: 0,
+                    processing: 0,
+                },
+            ),
+        ]);
+        assert_eq!(
+            reader.status_snapshot_from(stale_names).await.unwrap(),
+            expected
+        );
+        assert_eq!(reader.status_snapshot().await.unwrap(), expected);
+
+        for name in expected.keys() {
+            writer.remove_queue(name).await.unwrap();
+        }
+        reader.shutdown().await.unwrap();
+        writer.shutdown().await.unwrap();
+        reader_runtime.close().await.unwrap();
+        writer_runtime.close().await.unwrap();
+    }
 
     fn lifecycle_test_runtime() -> Arc<CacheRuntime> {
         let provider = Arc::new(

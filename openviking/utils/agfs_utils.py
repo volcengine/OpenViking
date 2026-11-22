@@ -24,6 +24,8 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+QUEUEFS_ROOT = "/queue"
+
 
 @dataclass(frozen=True)
 class RagfsBindingConfig:
@@ -433,8 +435,8 @@ def resolve_queuefs_mount_point(config: Any = None) -> str:
             worker_id = str(identity[0] - 1)
         else:
             worker_id = str(os.getpid())
-        return f"/queue/worker-{worker_id}"
-    return "/queue"
+        return f"{QUEUEFS_ROOT}/worker-{worker_id}"
+    return QUEUEFS_ROOT
 
 
 def _build_queuefs_plugin_config(
@@ -489,7 +491,7 @@ def _generate_plugin_config(
         },
         "queuefs": {
             "enabled": True,
-            "path": "/queue",
+            "path": QUEUEFS_ROOT,
             "config": _build_queuefs_plugin_config(agfs_config, data_path, service_name),
         },
     }

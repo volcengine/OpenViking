@@ -31,6 +31,10 @@ _ContextT = TypeVar("_ContextT")
 _ResultT = TypeVar("_ResultT")
 
 
+def _decode_status_response(content: Any) -> Any:
+    return json.loads(getattr(content, "content", content))
+
+
 @dataclass
 class QueueError:
     """Error record."""
@@ -142,11 +146,21 @@ class NamedQueue:
 
     async def get_status(self) -> QueueStatus:
         """Get queue status."""
-        backend_status = await self._read_backend_status()
+        await self._ensure_initialized()
+        content = await self._async_agfs.read(f"{self.path}/status")
+        return self._status_from_backend(_decode_status_response(content))
+
+    def _status_from_backend(self, status: Any) -> QueueStatus:
+        if not isinstance(status, dict):
+            raise ValueError(f"Invalid backend status for queue {self.name}")
+        pending = status["pending"]
+        processing = status["processing"]
+        if any(type(count) is not int or count < 0 for count in (pending, processing)):
+            raise ValueError(f"Invalid backend counts for queue {self.name}")
         with self._lock:
             return QueueStatus(
-                pending=backend_status["pending"],
-                in_progress=backend_status["processing"],
+                pending=pending,
+                in_progress=processing,
                 processed=self._processed,
                 requeue_count=self._requeue_count,
                 error_count=self._error_count,
@@ -393,19 +407,6 @@ class NamedQueue:
             return int(text) if text else 0
         except (AGFSNotFoundError, FileNotFoundError):
             return 0
-
-    async def _read_backend_status(self) -> Dict[str, int]:
-        await self._ensure_initialized()
-        content = await self._async_agfs.read(f"{self.path}/status")
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-        elif hasattr(content, "content") and content.content is not None:
-            content = content.content.decode("utf-8")
-        status = json.loads(content)
-        return {
-            "pending": int(status["pending"]),
-            "processing": int(status["processing"]),
-        }
 
     async def snapshot(self) -> List[Dict[str, Any]]:
         """Return all unacknowledged messages without changing queue state."""
