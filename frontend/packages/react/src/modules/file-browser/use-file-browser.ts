@@ -178,6 +178,7 @@ export function useFileBrowser({
     uri: blocked ? null : activeUri,
     resourceType,
     ...previewLevel,
+    listedUpdatedAt: tree.listedUpdatedAtOf(activeUri),
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
