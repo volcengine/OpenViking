@@ -668,7 +668,8 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false
+    "link_enabled": false,
+    "timezone": "UTC"
   }
 }
 ```
@@ -684,6 +685,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
+| `timezone` | IANA timezone name | `"UTC"` | Timezone used for event archive directories, ChatLog dates, and extraction prompt times. Stored timestamps remain UTC; blank means UTC. Applies to future archives only. |
 
 Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
 

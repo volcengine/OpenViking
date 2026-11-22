@@ -2185,7 +2185,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
-    "custom_templates_dir": "/path/to/custom-memory"
+    "custom_templates_dir": "/path/to/custom-memory",
+    "timezone": "UTC"
   }
 }
 ```
@@ -2193,6 +2194,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `version` | Deprecated and ignored. OpenViking always uses the v3 memory extraction pipeline; existing configs that set this field still load without error. | `"v3"` |
+| `timezone` | IANA timezone used for event archive directories, ChatLog dates, and extraction prompt times. Stored timestamps remain UTC; blank means UTC. Applies to future archives only; existing files are not moved. | `"UTC"` |
 | `custom_templates_dir` | Custom memory schema directory. Later definitions replace the same `memory_type`; new types are added. See the [Prompt Guide](10-prompt-guide.md). | `""` |
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |

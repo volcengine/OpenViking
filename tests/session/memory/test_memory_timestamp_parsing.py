@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from datetime import timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -73,6 +75,127 @@ def test_message_range_accepts_extended_fractional_seconds():
 
     assert msg_range._first_message_time() == "2026-04-17"
     assert msg_range._first_message_time_with_weekday() == "2026-04-17 (Friday)"
+
+
+def test_extract_context_uses_configured_timezone_for_archive_dates():
+    context = ExtractContext(
+        [_message(created_at="2026-11-21T18:18:09.765Z")],
+        timezone=ZoneInfo("Asia/Shanghai"),
+    )
+
+    assert context.get_first_message_time_from_ranges("0") == "2026-11-22"
+    assert context.get_first_message_time_with_weekday_from_ranges("0") == "2026-11-22 (Sunday)"
+    assert (
+        context.get_year("0"),
+        context.get_month("0"),
+        context.get_day("0"),
+    ) == ("2026", "11", "22")
+    assert context.get_timestamp_from_ranges("0") == "20261122021809"
+    assert context.get_session_timestamp() == "20261122021809"
+
+
+def test_extract_context_timezone_crosses_month_and_year_boundaries():
+    month_context = ExtractContext(
+        [_message(created_at="2026-11-30T17:00:00Z")],
+        timezone=ZoneInfo("Asia/Shanghai"),
+    )
+    assert (
+        month_context.get_year("0"),
+        month_context.get_month("0"),
+        month_context.get_day("0"),
+    ) == ("2026", "12", "01")
+
+    year_context = ExtractContext(
+        [_message(created_at="2026-12-31T16:30:00Z")],
+        timezone=ZoneInfo("Asia/Shanghai"),
+    )
+    assert (
+        year_context.get_year("0"),
+        year_context.get_month("0"),
+        year_context.get_day("0"),
+    ) == ("2027", "01", "01")
+
+
+def test_extract_context_timestamp_uses_selected_range_message():
+    context = ExtractContext(
+        [
+            _message(created_at="2026-11-21T18:18:09.765Z", text="first"),
+            _message(
+                created_at="2026-11-22T03:04:05.000Z",
+                role="assistant",
+                text="second",
+            ),
+        ],
+        timezone=ZoneInfo("Asia/Shanghai"),
+    )
+
+    assert context.get_timestamp_from_ranges("1") == "20261122110405"
+
+
+def test_extract_context_archive_dates_default_to_utc():
+    context = ExtractContext(
+        [_message(created_at="2026-11-21T18:18:09.765Z")],
+        timezone=timezone.utc,
+    )
+
+    assert context.get_first_message_time_from_ranges("0") == "2026-11-21"
+    assert context.get_day("0") == "21"
+    assert context.get_timestamp_from_ranges("0") == "20261121181809"
+
+
+def test_extract_context_defaults_to_configured_memory_timezone(monkeypatch):
+    config = SimpleNamespace(memory=SimpleNamespace(timezone="Asia/Shanghai"))
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: config)
+
+    context = ExtractContext([_message(created_at="2026-11-21T18:18:09.765Z")])
+
+    assert context.timezone == ZoneInfo("Asia/Shanghai")
+    assert context.get_day("0") == "22"
+
+
+def test_extract_context_without_config_defaults_to_utc(monkeypatch):
+    def raise_missing_config():
+        raise FileNotFoundError("no ov.conf")
+
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", raise_missing_config)
+
+    context = ExtractContext([])
+
+    assert context.timezone == timezone.utc
+
+
+def test_conversation_message_uses_configured_timezone(monkeypatch):
+    config = SimpleNamespace(
+        output_language_override=None,
+        memory=SimpleNamespace(
+            eager_prefetch=False,
+            prefetch_search_topn=5,
+            link_enabled=True,
+            timezone="Asia/Shanghai",
+        ),
+        language_fallback="en",
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
+
+    provider = SessionExtractContextProvider(
+        messages=[
+            _message(created_at="2026-11-21T18:18:09.765Z", text="first"),
+            _message(
+                created_at="2026-11-21T18:31:09.000Z",
+                role="assistant",
+                text="second",
+            ),
+        ]
+    )
+
+    message = provider._build_conversation_message()
+
+    assert "Session Time:** 2026-11-22 02:18 - 2026-11-22 02:31" in message["content"]
+    assert "(Sunday)" in message["content"]
+    assert provider.get_extract_context().get_day("0") == "22"
 
 
 def test_extraction_context_chunks_long_text_and_preserves_decimal_numbers(stub_provider_config):

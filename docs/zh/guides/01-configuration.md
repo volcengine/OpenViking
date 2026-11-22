@@ -2146,7 +2146,8 @@ openviking-server --config /path/to/ov.conf
 ```json
 {
   "memory": {
-    "custom_templates_dir": "/path/to/custom-memory"
+    "custom_templates_dir": "/path/to/custom-memory",
+    "timezone": "UTC"
   }
 }
 ```
@@ -2154,6 +2155,7 @@ openviking-server --config /path/to/ov.conf
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
 | `version` | 已废弃且会被忽略。OpenViking 始终使用 v3 记忆抽取链路；已有配置中保留该字段仍可正常加载，不会报错。 | `"v3"` |
+| `timezone` | 事件归档目录、ChatLog 日期和记忆抽取提示词使用的 IANA 时区。底层时间戳仍按 UTC 存储；留空等同 UTC。仅影响后续归档，不迁移已有文件。 | `"UTC"` |
 | `custom_templates_dir` | 自定义 memory schema 目录。后加载的同名 `memory_type` 会覆盖内置定义，新类型会追加；详见 [Prompt 指南](10-prompt-guide.md)。 | `""` |
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
