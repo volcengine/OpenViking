@@ -3,7 +3,7 @@ import {
   beginWorkflow,
   type Workflow,
 } from '../../shared/monitoring/workflow.js';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type {
   FilePreviewDirectoryTab,
@@ -82,7 +82,7 @@ export interface UseFsPreviewOptions {
 export function useFsPreview({
   client,
   uri,
-  resourceType = 'file',
+  resourceType: treeType = 'file',
   contentKind = 'plain',
   readDashboardHint,
   activeLevelKey = 'l0',
@@ -112,11 +112,26 @@ export function useFsPreview({
     uri,
     requestOptions,
   );
+  const lookup = useMemo(
+    () => ({ client, uri, generation, saveGeneration, wikiSave }),
+    [client, uri, generation, saveGeneration, wikiSave],
+  );
+  const [statType, setStatType] = useState<{
+    lookup: typeof lookup;
+    type: 'directory' | 'file';
+  }>();
+  // A late tree listing that confirms fs/stat should keep the original request
+  // running. A conflicting type or a new lookup still starts a fresh preview.
+  const resourceType =
+    statType?.lookup === lookup && statType.type === treeType
+      ? 'unknown'
+      : treeType;
 
   // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
   // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
   // 依赖变化与卸载中止请求并忽略过期结果；摘要层级与文案仅影响展示。
   useEffect(() => {
+    if (resourceType !== 'unknown') setStatType(undefined);
     setDirectory(null);
     setStat(undefined);
     wikiSave.reset();
@@ -167,8 +182,11 @@ export function useFsPreview({
           ? (await metadata)?.isDirectory
           : resourceType === 'directory';
       if (signal.aborted) throw abortError();
-      if (resourceType === 'unknown' && isDir !== undefined)
-        setTabs([loadingTab(uri, isDir ? 'directory' : 'file')]);
+      if (resourceType === 'unknown' && isDir !== undefined) {
+        const type = isDir ? 'directory' : 'file';
+        setStatType({ lookup, type });
+        setTabs([loadingTab(uri, type)]);
+      }
       if (isDir)
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
@@ -243,6 +261,7 @@ export function useFsPreview({
     generation,
     saveGeneration,
     wikiSave,
+    lookup,
   ]);
 
   const directoryTab =
