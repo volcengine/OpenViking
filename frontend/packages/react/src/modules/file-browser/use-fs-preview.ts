@@ -90,7 +90,7 @@ export function useFsPreview({
 
   // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
   // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
-  // 依赖变化与卸载中止请求并忽略过期结果；摘要层级与文案仅影响展示。
+  // 依赖变化与卸载中止请求并忽略过期结果。
   useEffect(() => {
     const { client, uri, wikiSave } = lookup;
     if (resourceType !== 'unknown') setStatType(undefined);
@@ -136,17 +136,14 @@ export function useFsPreview({
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
     // 于是目录会被读成正文、丢掉 L0/L1 摘要。缺失的是元数据，不是「它是文件」的
     // 证据，因此先查再决定。
-    //
     // An unknown type is resolved with one `fs/stat` call first. Treating "not in the
     // known directory set" as a file is wrong: the set only covers loaded levels, so a
     // directory URI the host passes directly, before it was ever expanded, is simply
     // absent — and the directory would be read as content and lose its L0/L1 summary.
     // What is missing is metadata, not evidence that it is a file.
     const read = (async () => {
-      const isDir =
-        resourceType === 'unknown'
-          ? (await metadata)?.isDirectory
-          : resourceType === 'directory';
+      const stat = resourceType === 'unknown' ? await metadata : undefined;
+      const isDir = stat?.isDirectory ?? resourceType === 'directory';
       if (signal.aborted) throw abortError();
       if (resourceType === 'unknown' && isDir !== undefined) {
         const type = isDir ? 'directory' : 'file';
@@ -167,7 +164,7 @@ export function useFsPreview({
         },
         onStatus,
         readDashboardHint,
-        bodyCache,
+        bodyCache ?? lookup.bodyCacheFor(uri, stat?.updatedAt),
       );
     })();
 

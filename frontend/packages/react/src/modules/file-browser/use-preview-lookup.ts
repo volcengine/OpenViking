@@ -48,11 +48,18 @@ export function usePreviewLookup({
     listed.current = listedUpdatedAt;
   }, [listedUpdatedAt]);
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const canCacheBody = (target: string) =>
+      isMemoryUri(target) && /\.md$/i.test(target) && cacheableIdentity;
+    const bodyCacheFor = (target: string, updatedAt?: string) =>
+      canCacheBody(target) && updatedAt !== undefined
+        ? cache.body.forFile(target, updatedAt)
+        : undefined;
+    return {
       client,
       uri,
       wikiSave,
+      bodyCacheFor,
       prepareFileRead(
         api: OvClient,
         target: string,
@@ -66,21 +73,16 @@ export function usePreviewLookup({
           previous.scope === cache.scope &&
           (previous.generation !== cache.generation ||
             previous.saveGeneration !== cache.saveGeneration);
+        const metadata =
+          unknownType || reload || !updatedAt
+            ? readPreviewStat(api, target, options)
+            : undefined;
+        const bodyCache = bodyCacheFor(target, updatedAt);
         return {
-          metadata:
-            unknownType || reload || !updatedAt
-              ? readPreviewStat(api, target, options)
-              : undefined,
-          bodyCache:
-            isMemoryUri(target) &&
-            /\.md$/i.test(target) &&
-            updatedAt !== undefined &&
-            cacheableIdentity
-              ? cache.body.forFile(target, updatedAt)
-              : undefined,
+          metadata,
+          bodyCache,
         };
       },
-    }),
-    [client, uri, wikiSave, cache, cacheableIdentity],
-  );
+    };
+  }, [client, uri, wikiSave, cache, cacheableIdentity]);
 }
