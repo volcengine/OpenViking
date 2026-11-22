@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
 # OpenViking SuperAgent installer for Windows x64. The steps and the words are scripts/install.sh's:
@@ -485,6 +485,44 @@ function Assert-SameRelease([string]$stageDir, [string]$existing) {
     }
 }
 
+# Reinstalling the same build must not look hung. The build writes the exact
+# commit into windows-preview.json, and extracting it twice produces the same
+# file count and byte size, so those two cheap checks identify the same release.
+# Hashing all 24k files twice (Assert-SameRelease) took minutes and printed
+# nothing; keep it for a tree whose metadata or shape differs.
+function Release-Identity([string]$dir) {
+    $meta = Join-Path $dir 'windows-preview.json'
+    if (-not (Test-Path -LiteralPath $meta -PathType Leaf)) { return $null }
+    try {
+        $json = Get-Content -LiteralPath $meta -Raw | ConvertFrom-Json
+        return "$($json.version)|$($json.commit)|$($json.node)"
+    } catch { return $null }
+}
+function Release-Shape([string]$root) {
+    $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+    if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Not a plain release directory: $root"
+    }
+    $count = 0
+    $bytes = 0L
+    $stack = New-Object 'System.Collections.Generic.Stack[string]'
+    $stack.Push($root)
+    while ($stack.Count) {
+        $directory = $stack.Pop()
+        foreach ($item in Get-ChildItem -LiteralPath $directory -Force) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Linked release entry: $($item.FullName)" }
+            if ($item.PSIsContainer) { $stack.Push($item.FullName) }
+            else { $count++; $bytes += $item.Length }
+        }
+    }
+    return "$count|$bytes"
+}
+function Test-SameRelease([string]$stageDir, [string]$existing) {
+    $identity = Release-Identity $stageDir
+    return [bool]$identity -and $identity -eq (Release-Identity $existing) -and
+        (Release-Shape $stageDir) -eq (Release-Shape $existing)
+}
+
 # ---- Install --------------------------------------------------------------
 function Install-Release([string]$stageDir, [string]$version) {
     $releasesRoot = Join-Path $SuperAgentHome 'releases'
@@ -493,9 +531,13 @@ function Install-Release([string]$stageDir, [string]$version) {
     $current = Join-Path $SuperAgentHome 'current'
     $previous = Get-Link $current
     if (Test-Path -LiteralPath $place) {
+        # A same-version reinstall used to hash both 24k-file trees without
+        # printing anything, which looked like a hang. The identity and shape
+        # check below is quick; name it so the wait is visible.
+        Note (M "核对已安装的 $version" "Checking the installed $version")
         # Compare complete file contents, not merely an untrusted version string.
         # Refuse any links in an existing tree before descending into it.
-        Assert-SameRelease $stageDir $place
+        if (-not (Test-SameRelease $stageDir $place)) { Assert-SameRelease $stageDir $place }
         Remove-Item -LiteralPath $stageDir -Recurse -Force
         $InstallerState.Stage = ''
         if ($previous -and ([IO.Path]::GetFullPath($previous) -eq $place)) {
@@ -659,6 +701,7 @@ if ($Isolated) {
     } catch { Die (M "写不了 $(Short $SuperAgentHome)：$($_.Exception.Message)" "cannot write $(Short $SuperAgentHome)`: $($_.Exception.Message)") }
 }
 
+Note (M '解压安装包' 'Unpacking the package')
 try { Expand-Package $archive $InstallerState.Stage }
 catch { $detail = $_.Exception.Message; Die ((M '解压失败：' 'unpacking failed: ') + $detail) }
 
