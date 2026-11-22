@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createJsonPreviewModel,
+  formatJsonPreviewContent,
   visibleJsonPreviewLines,
 } from '../src/components/file-preview/json-preview-model.ts';
 
@@ -50,4 +51,10 @@ test('folding a parent preserves the nested fold state when reopened', () => {
       ?.collapsedText?.includes('}'),
     true,
   );
+});
+
+test('falls back to the original text when formatting would exceed the preview limit', () => {
+  const content = `${'['.repeat(2_000)}0${']'.repeat(2_000)}`;
+  assert.equal(formatJsonPreviewContent(content), content);
+  assert.equal(createJsonPreviewModel(content).text, content);
 });

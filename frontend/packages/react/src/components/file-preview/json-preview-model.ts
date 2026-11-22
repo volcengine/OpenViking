@@ -13,6 +13,8 @@ export interface JsonPreviewModel {
   text: string;
 }
 
+export const MAX_FORMATTED_JSON_PREVIEW_LENGTH = 1_000_000;
+
 /** Format JSON without parsing numbers back through JavaScript and losing source tokens. */
 export function formatJsonPreviewContent(content: string) {
   if (!content.trim()) return '';
@@ -27,11 +29,17 @@ export function formatJsonPreviewContent(content: string) {
   let inString = false;
   let escaped = false;
   const indent = () => '  '.repeat(depth);
+  const append = (value: string) => {
+    if (formatted.length + value.length > MAX_FORMATTED_JSON_PREVIEW_LENGTH)
+      return false;
+    formatted += value;
+    return true;
+  };
 
   for (let index = 0; index < content.length; index += 1) {
     const character = content[index]!;
     if (inString) {
-      formatted += character;
+      if (!append(character)) return content;
       if (escaped) escaped = false;
       else if (character === '\\') escaped = true;
       else if (character === '"') inString = false;
@@ -39,7 +47,7 @@ export function formatJsonPreviewContent(content: string) {
     }
     if (character === '"') {
       inString = true;
-      formatted += character;
+      if (!append(character)) return content;
       continue;
     }
     if (/\s/.test(character)) continue;
@@ -48,24 +56,24 @@ export function formatJsonPreviewContent(content: string) {
       while (next < content.length && /\s/.test(content[next]!)) next += 1;
       const closing = character === '{' ? '}' : ']';
       if (content[next] === closing) {
-        formatted += `${character}${closing}`;
+        if (!append(`${character}${closing}`)) return content;
         index = next;
       } else {
         depth += 1;
-        formatted += `${character}\n${indent()}`;
+        if (!append(`${character}\n${indent()}`)) return content;
       }
       continue;
     }
     if (character === '}' || character === ']') {
       depth -= 1;
-      formatted += `\n${indent()}${character}`;
+      if (!append(`\n${indent()}${character}`)) return content;
       continue;
     }
     if (character === ',') {
-      formatted += `,\n${indent()}`;
+      if (!append(`,\n${indent()}`)) return content;
       continue;
     }
-    formatted += character === ':' ? ': ' : character;
+    if (!append(character === ':' ? ': ' : character)) return content;
   }
   return formatted;
 }
