@@ -247,6 +247,7 @@ def _viking_fs(monkeypatch, agfs: _CopyAGFS) -> VikingFS:
     fs._async_agfs = agfs
     fs.vector_store = None
     fs.acl_manager = None
+    monkeypatch.setattr(fs, "_prepare_vector_store_uris", AsyncMock(return_value=object()))
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
@@ -323,10 +324,14 @@ async def test_cp_file_uses_exact_locks_agfs_copy_then_vector_copy(monkeypatch):
         False,
     )
     assert copy_event[4]["lease_ref"] == "copy-operation"
-    vector_copy.assert_awaited_once_with(
+    fs._prepare_vector_store_uris.assert_awaited_once_with(
         "viking://resources/source.md",
         "viking://resources/target.md",
         recursive=False,
+        ctx=replace(_ctx(), bypass_acl=True),
+    )
+    vector_copy.assert_awaited_once_with(
+        fs._prepare_vector_store_uris.return_value,
         ctx=replace(_ctx(), bypass_acl=True),
     )
     assert agfs.events[-1] == ("release", agfs.operation_lease)
@@ -371,7 +376,7 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
     assert agfs.files["/local/acct/resources/target/.hidden"] == b"hidden"
     assert agfs.files["/local/acct/resources/target/data.bin"] == b"\x00\xff"
     assert agfs.exact_leases == []
-    vector_copy.assert_awaited_once_with(
+    fs._prepare_vector_store_uris.assert_awaited_once_with(
         "viking://resources/source",
         "viking://resources/target",
         recursive=True,
@@ -388,6 +393,10 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
             "viking://resources/source/data.bin": {2},
             "viking://resources/source/empty": {0, 1},
         },
+    )
+    vector_copy.assert_awaited_once_with(
+        fs._prepare_vector_store_uris.return_value,
+        ctx=replace(_ctx(), bypass_acl=True),
     )
 
 
@@ -612,10 +621,7 @@ async def test_mv_keeps_target_when_source_delete_fails(monkeypatch):
     assert [event[1:3] for event in agfs.events if event[0] == "cp"] == [
         ("/local/acct/resources/source.md", "/local/acct/resources/target.md")
     ]
-    assert vector_move.await_args_list[0].args == (
-        "viking://resources/source.md",
-        "viking://resources/target.md",
-    )
+    assert vector_move.await_args_list[0].args == (fs._prepare_vector_store_uris.return_value,)
     assert vector_move.await_count == 1
 
 

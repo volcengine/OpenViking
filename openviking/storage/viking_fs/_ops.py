@@ -528,6 +528,25 @@ class _OpsMixin:
             manifest = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
             )
+            prepared_vectors = None
+            if maintain_vectors:
+                prepared_vectors = await self._prepare_vector_store_uris(
+                    old_uri,
+                    new_uri,
+                    recursive=is_dir,
+                    ctx=copy_ctx,
+                    **(
+                        {
+                            "source_uris": [entry.source_uri for entry in manifest],
+                            "source_expected_levels": {
+                                entry.source_uri: {0, 1} if entry.is_dir else {2}
+                                for entry in manifest
+                            },
+                        }
+                        if is_dir
+                        else {}
+                    ),
+                )
             files_created = await self._copy_agfs_entry(
                 old_path,
                 new_path,
@@ -540,24 +559,11 @@ class _OpsMixin:
                 manifest=manifest,
             )
             vector_result = None
-            if maintain_vectors:
+            if prepared_vectors is not None:
                 try:
                     vector_result = await self._copy_vector_store_uris(
-                        old_uri,
-                        new_uri,
-                        recursive=is_dir,
+                        prepared_vectors,
                         ctx=copy_ctx,
-                        **(
-                            {
-                                "source_uris": [entry.source_uri for entry in manifest],
-                                "source_expected_levels": {
-                                    entry.source_uri: {0, 1} if entry.is_dir else {2}
-                                    for entry in manifest
-                                },
-                            }
-                            if is_dir
-                            else {}
-                        ),
                     )
                 except Exception:
                     try:
@@ -878,6 +884,25 @@ class _OpsMixin:
                 old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
             )
             uris_to_move = [entry.source_uri for entry in manifest]
+            prepared_vectors = None
+            if vector_mode == "transfer":
+                prepared_vectors = await self._prepare_vector_store_uris(
+                    old_uri,
+                    new_uri,
+                    recursive=is_dir,
+                    ctx=ctx,
+                    **(
+                        {
+                            "source_uris": uris_to_move,
+                            "source_expected_levels": {
+                                entry.source_uri: {0, 1} if entry.is_dir else {2}
+                                for entry in manifest
+                            },
+                        }
+                        if is_dir
+                        else {}
+                    ),
+                )
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -920,24 +945,12 @@ class _OpsMixin:
             try:
                 vector_result = None
                 if vector_mode == "transfer":
-                    vector_result = await self._update_vector_store_uris(
-                        old_uri,
-                        new_uri,
-                        recursive=is_dir,
-                        ctx=ctx,
-                        **(
-                            {
-                                "source_uris": uris_to_move,
-                                "source_expected_levels": {
-                                    entry.source_uri: {0, 1} if entry.is_dir else {2}
-                                    for entry in manifest
-                                },
-                            }
-                            if is_dir
-                            else {}
-                        ),
-                        **({"restore_acl": restore_acl} if restore_acl is not None else {}),
-                    )
+                    if prepared_vectors is not None:
+                        vector_result = await self._update_vector_store_uris(
+                            prepared_vectors,
+                            ctx=ctx,
+                            **({"restore_acl": restore_acl} if restore_acl is not None else {}),
+                        )
                 elif vector_mode == "delete_source":
                     await self._delete_from_vector_store(uris_to_move, ctx=ctx)
                 elif vector_mode != "none":
