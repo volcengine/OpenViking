@@ -43,17 +43,16 @@ def embedding_unavailable(error: Exception) -> bool:
     """Allow a local fallback only for transport or identifiable provider outages."""
     if not isinstance(error, OpenVikingError):
         return service_unavailable(error)
-    source = error.details.get("upstream_error_type")
-    status = error.details.get("upstream_status_code")
-    outage = error.code in {"UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED"}
-    if source == "AllCredentialsFailedError":
-        # The provider chain has already excluded request-level refusals.
-        return outage or error.code == "CONFLICT"
-    return (
-        bool(source)
-        and outage
-        and (status in (402, 408, 429) or isinstance(status, int) and 500 <= status < 600)
-    )
+    # A bare HTTP status can hide a provider's request-level refusal.
+    # The credential chain only aggregates failures eligible for failover.
+    return error.details.get(
+        "upstream_error_type"
+    ) == "AllCredentialsFailedError" and error.code in {
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "RESOURCE_EXHAUSTED",
+        "CONFLICT",
+    }
 
 
 def text_terms(text: str) -> set[str]:

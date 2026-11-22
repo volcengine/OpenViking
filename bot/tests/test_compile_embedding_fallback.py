@@ -9,7 +9,7 @@ from bot.tests.test_compile_markdown import pipeline as pipeline
 from openviking_cli.exceptions import OpenVikingError
 
 
-@pytest.mark.parametrize("status", [503, 451])
+@pytest.mark.parametrize("status", [None, 451, 429, 503])
 async def test_shuffle_keeps_ranking_after_provider_chain_failure(pipeline, status):
     pipeline.contract = contract(True)
     texts = ["orchard seeds", "river depth", "orchard seeds warning"] + [
@@ -22,8 +22,12 @@ async def test_shuffle_keeps_ranking_after_provider_chain_failure(pipeline, stat
         await pipeline.files.put(f"embeddings/{digest(['m', text])}", [1.0, 0.0])
     unavailable = OpenVikingError(
         "Synthetic upstream failure",
-        code="UNAVAILABLE" if status == 503 else "INVALID_ARGUMENT",
-        details={"upstream_status_code": status, "upstream_error_type": "ModelError"},
+        code={451: "INVALID_ARGUMENT", 429: "RESOURCE_EXHAUSTED"}.get(status, "UNAVAILABLE"),
+        details=(
+            {"upstream_status_code": status, "upstream_error_type": "ModelError"}
+            if status is not None
+            else {"upstream_error_type": "AllCredentialsFailedError"}
+        ),
     )
     batches = []
 
@@ -49,7 +53,7 @@ async def test_shuffle_keeps_ranking_after_provider_chain_failure(pipeline, stat
     pipeline.model.ask = ask
     node = parse_plan(MERGE, pipeline.contract)[1]
     shuffle = Shuffle(pipeline)
-    if status == 451:
+    if status is not None:
         with pytest.raises(OpenVikingError) as caught:
             await shuffle.run(node, docs)
         assert caught.value is unavailable
