@@ -133,6 +133,30 @@ test('npm shim entrypoints remain private while invocation validates standard sh
   }
 });
 
+test('a DeepSeek Harness Desktop dsh.cmd launches its Electron CLI directly', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-desktop-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, 'DeepSeek Harness.exe');
+  const entrypoint = path.join(root, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai',
+    'dsh-desktop-host', 'lib', 'cli.js');
+  const shim = path.join(root, 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd');
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.mkdirSync(path.dirname(shim), { recursive: true });
+  fs.writeFileSync(executable, '');
+  fs.writeFileSync(entrypoint, '// fixture');
+  fs.writeFileSync(shim, String.raw`@echo off
+setlocal DisableDelayedExpansion
+set "ELECTRON_RUN_AS_NODE=1"
+"%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" %*
+exit /b %errorlevel%`);
+  const args = ['--version', 'a b'];
+  assert.deepEqual(windows.executableInvocation(shim, args), {
+    command: executable,
+    args: ['--expose-internals', entrypoint, ...args],
+    env: { ELECTRON_RUN_AS_NODE: '1' },
+  });
+});
+
 test('a release bin\\pm2.cmd runs that release\'s pm2 with that release\'s Node', t => {
   const release = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-release-shim-'));
   t.after(() => fs.rmSync(release, { recursive: true, force: true }));

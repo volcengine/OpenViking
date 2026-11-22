@@ -65,6 +65,26 @@ function releaseShimInvocation(resolved, args) {
   return { command: node, args: [entrypoint, ...args] };
 }
 
+// DeepSeek Harness Desktop installs its CLI as an Electron launcher:
+//   "%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" %*
+// It is not an npm shim, but the layout is fixed and both files it names exist
+// next to the shim. Launch them directly with ELECTRON_RUN_AS_NODE, so model and
+// user arguments still never pass through cmd.exe.
+function desktopCliInvocation(resolved, args) {
+  let shim;
+  try { shim = fs.readFileSync(resolved, 'utf8'); } catch { return null; }
+  if (!shim.includes('--expose-internals')) return null;
+  const match = shim.match(/"([^"\r\n]*%~dp0[^"\r\n]*DeepSeek Harness\.exe)"\s+--expose-internals\s+"([^"\r\n]*%~dp0[^"\r\n]*app\.asar[\\/]dsh[\\/]node_modules[\\/]@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]cli\.js)"/i);
+  if (!match) return null;
+  const absolute = (token) => path.resolve(path.dirname(resolved), token.replace(/^%~dp0/i, ''));
+  const executable = absolute(match[1]);
+  const entrypoint = absolute(match[2]);
+  // The entrypoint lives inside app.asar, which is a file on disk: Electron
+  // mounts it, so only the executable can be checked with fs here.
+  if (!fs.existsSync(executable)) return null;
+  return { command: executable, args: ['--expose-internals', entrypoint, ...args], env: { ELECTRON_RUN_AS_NODE: '1' } };
+}
+
 // Run npm's Node entrypoint directly. Never interpolate model/user arguments
 // into cmd.exe: its expansion rules differ from CreateProcess argument quoting.
 export function executableInvocation(command, args, { env = process.env } = {}) {
@@ -72,6 +92,8 @@ export function executableInvocation(command, args, { env = process.env } = {}) 
   if (/\.(?:cmd|bat)$/i.test(resolved)) {
     const release = releaseShimInvocation(resolved, args);
     if (release) return release;
+    const desktop = desktopCliInvocation(resolved, args);
+    if (desktop) return desktop;
     const shim = fs.readFileSync(resolved, 'utf8');
     const relativeEntrypoint = npmShimEntrypoint(shim);
     if (!relativeEntrypoint) throw new Error(`Unsupported Windows command shim: ${resolved}. Configure the native .exe or Node entrypoint.`);
@@ -92,7 +114,8 @@ export function executableInvocation(command, args, { env = process.env } = {}) 
 export function spawn(command, args = [], options = {}) {
   if (!Array.isArray(args)) { options = args ?? {}; args = []; }
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
+  const env = invocation.env ? { ...(options?.env ?? process.env), ...invocation.env } : options?.env;
+  return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) });
 }
 
 export function execFile(command, args, options, callback) {
@@ -100,7 +123,8 @@ export function execFile(command, args, options, callback) {
   else if (!Array.isArray(args)) { callback = typeof options === 'function' ? options : callback; options = args ?? options ?? {}; args = []; }
   if (typeof options === 'function') { callback = options; options = {}; }
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) }, callback);
+  const env = invocation.env ? { ...(options?.env ?? process.env), ...invocation.env } : options?.env;
+  return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) }, callback);
 }
 
 // Random for each daemon process: only the returned endpoint is passed to clients.
