@@ -148,7 +148,6 @@ class ActiveRemoteSkill:
     description: str
     root_uri: str
     skill_md_uri: str
-    # Model-safe bytes from the verified read snapshot of this package revision.
     content: str
     source: str
     files: dict[str, RemoteSkillFile]
@@ -208,17 +207,6 @@ def _iter_resource_slots(
 
 def _normalize_uri(uri: str) -> str:
     return str(uri or "").strip().rstrip("/")
-
-
-def _coerce_line_number(value: object) -> int | None:
-    """Accept integer tool arguments and their JSON-string spellings."""
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        stripped = value.strip()
-        if re.fullmatch(r"-?\d+", stripped):
-            return int(stripped)
-    return None
 
 
 def _skill_identity_from_uri(uri: str) -> tuple[str, str, str, str]:
@@ -310,6 +298,7 @@ def _manifest_signature(result: Mapping[str, Any]) -> str:
     payload = {
         "root_uri": result.get("root_uri") or result.get("uri"),
         "revision": result.get("revision"),
+        "visible_content_sha256": result.get("visible_content_sha256"),
         "files": sorted(files, key=lambda item: str(item.get("path") or "")),
     }
     return hashlib.sha256(
@@ -458,9 +447,16 @@ class SkillRuntimeContext:
     def is_activation_call(self, tool_name: str, params: Mapping[str, Any]) -> bool:
         if tool_name != "openviking_multi_read" or params.get("with_revision"):
             return False
-        offset = _coerce_line_number(params.get("offset", 0))
-        limit = _coerce_line_number(params.get("limit", -1))
-        if offset != 0 or limit != -1:
+        offset = params.get("offset", 0)
+        limit = params.get("limit", -1)
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or offset != 0
+            or limit != -1
+        ):
             return False
         return any(self.is_skill_definition_uri(str(uri)) for uri in params.get("uris") or [])
 
@@ -478,15 +474,7 @@ class SkillRuntimeContext:
         return True
 
     async def activate_from_read(self, uri: str, content: str) -> ActiveRemoteSkill | None:
-        """Activate a Skill after an OpenViking read reaches its SKILL.md.
-
-        Privacy handling can make the detail content differ from the bytes read
-        by the transport. In that case the initial read is bound to the current
-        visible snapshot, while the stored bytes are bound to both the server's
-        snapshot hash and the file manifest. The verified initial read remains
-        the model-facing and materialized definition so read-time masks,
-        resolved Privacy values, and Privacy notices never leave the Bot.
-        """
+        """Activate a Skill after the existing multi-read tool reads SKILL.md."""
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
             return None
@@ -498,7 +486,17 @@ class SkillRuntimeContext:
         async with lock:
             existing = self.active_skills.get(root_uri)
             if existing is not None:
+                if existing.content != content:
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Remote SKILL.md changed after activation; read it again in a new turn",
+                    )
                 return existing
+            definition_bytes = content.encode("utf-8")
+            if len(definition_bytes) > self.settings.max_file_bytes:
+                raise SkillRuntimeError(
+                    "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
+                )
 
             client = await self._get_client()
             try:
@@ -526,11 +524,6 @@ class SkillRuntimeContext:
                 )
             canonical_bytes = canonical_content.encode("utf-8")
             content_differs_from_read = canonical_content != content
-            if len(canonical_bytes) > self.settings.max_file_bytes:
-                if not content_differs_from_read:
-                    raise SkillRuntimeError(
-                        "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
-                    )
             content_checksum = str(result.get("content_sha256") or "").strip()
             if not content_checksum:
                 raise SkillRuntimeError(
@@ -601,19 +594,25 @@ class SkillRuntimeContext:
                     "SKILL_INVALID", "OpenViking Skill manifest is missing SKILL.md"
                 )
             definition_content = content
-            if content_differs_from_read:
+            if content_differs_from_read or "visible_content_sha256" in result:
                 visible_content_checksum = str(result.get("visible_content_sha256") or "").strip()
                 if re.fullmatch(r"[0-9a-f]{64}", visible_content_checksum) is None:
                     raise SkillRuntimeError(
                         "SKILL_INTEGRITY_UNAVAILABLE",
                         "OpenViking did not return a visible SKILL.md content checksum",
                     )
-                read_checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                read_checksum = (
+                    hashlib.sha256(definition_bytes).hexdigest()
+                    if content_differs_from_read
+                    else content_checksum
+                )
                 if read_checksum != visible_content_checksum:
                     raise SkillRuntimeError(
                         "SKILL_REVISION_CHANGED",
-                        "Initial SKILL.md read does not match the current stored snapshot",
+                        "Initial SKILL.md read does not match the current visible content",
                     )
+
+            if content_differs_from_read:
                 stored_content_checksum = str(result.get("stored_content_sha256") or "").strip()
                 if re.fullmatch(r"[0-9a-f]{64}", stored_content_checksum) is None:
                     raise SkillRuntimeError(
@@ -638,7 +637,7 @@ class SkillRuntimeContext:
                         "Stored SKILL.md does not match the snapshot integrity metadata",
                     )
             else:
-                self._validate_downloaded_file(definition, content.encode("utf-8"))
+                self._validate_downloaded_file(definition, canonical_bytes)
 
             try:
                 parsed = SkillLoader.parse(definition_content, source_path=skill_md_uri)

@@ -5,7 +5,6 @@ import base64
 import hashlib
 import itertools
 import json
-import re
 import tempfile
 import time
 from abc import ABC
@@ -1101,16 +1100,6 @@ class VikingMultiReadTool(OVFileTool):
             return "video"
         return None
 
-    @staticmethod
-    def _normalize_line_number(value: object, field_name: str) -> int:
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            stripped = value.strip()
-            if re.fullmatch(r"-?\d+", stripped):
-                return int(stripped)
-        raise ValueError(f"{field_name} must be an integer")
-
     @property
     def name(self) -> str:
         return "openviking_multi_read"
@@ -1229,8 +1218,6 @@ class VikingMultiReadTool(OVFileTool):
         level = "read"  # 默认获取完整内容
         client = None
         try:
-            offset = self._normalize_line_number(offset, "offset")
-            limit = self._normalize_line_number(limit, "limit")
             if not uris:
                 return "Error: No URIs provided."
 
