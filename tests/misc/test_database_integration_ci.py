@@ -22,16 +22,23 @@ def test_schema_parser_ignores_commented_migration_template():
 
 def report(tmp_path, *, skipped=None, omitted=None):
     suite = ET.Element("testsuite")
-    cases = [("tests.server.test_account_services", name) for name in sorted(ci.ACCOUNT_CASES)] + [
-        ("tests.server.test_redis_mysql_account_store", "test_auth[encrypted]"),
-        ("tests.service.test_task_work_contract", "test_history[mysql-stage]"),
-        ("tests.service.test_task_work_contract", "test_history[postgres-stage]"),
-        ("tests.resource.test_watch_store", "test_watch[mysql]"),
-        ("tests.resource.test_watch_store", "test_watch[postgres]"),
-        ("tests.resource.test_watch_main_integration", "test_refresh[mysql]"),
-        ("tests.resource.test_watch_process", "test_claim[mysql]"),
-        ("tests.resource.test_watch_process", "test_claim[postgres]"),
-    ]
+    cases = (
+        [("tests.server.test_account_services", name) for name in sorted(ci.ACCOUNT_CASES)]
+        + [
+            ("tests.server.test_creation_identity_check", name)
+            for name in sorted(ci.CREATION_IDENTITY_CASES)
+        ]
+        + [
+            ("tests.server.test_redis_mysql_account_store", "test_auth[encrypted]"),
+            ("tests.service.test_task_work_contract", "test_history[mysql-stage]"),
+            ("tests.service.test_task_work_contract", "test_history[postgres-stage]"),
+            ("tests.resource.test_watch_store", "test_watch[mysql]"),
+            ("tests.resource.test_watch_store", "test_watch[postgres]"),
+            ("tests.resource.test_watch_main_integration", "test_refresh[mysql]"),
+            ("tests.resource.test_watch_process", "test_claim[mysql]"),
+            ("tests.resource.test_watch_process", "test_claim[postgres]"),
+        ]
+    )
     for module, name in cases:
         if name == omitted:
             continue
@@ -54,6 +61,7 @@ def report(tmp_path, *, skipped=None, omitted=None):
 def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
     assert ci.verify(report(tmp_path)) == {
         "accounts": 2,
+        "creation_identity_postgres": 3,
         "redis_mysql": 1,
         "task_work_mysql": 1,
         "task_work_postgres": 1,
@@ -69,6 +77,7 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
     "name",
     [
         *sorted(ci.ACCOUNT_CASES),
+        *sorted(ci.CREATION_IDENTITY_CASES),
         "test_auth[encrypted]",
         "test_history[mysql-stage]",
         "test_history[postgres-stage]",

@@ -11,12 +11,13 @@ import hmac
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timezone
+from functools import lru_cache
 from typing import AsyncGenerator
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy import and_, bindparam, case, delete, func, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -149,6 +150,27 @@ def _utc_isoformat(value) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+@lru_cache(maxsize=1)
+def _creation_identity_statement():
+    """Read registration and both deletion fences in one database snapshot."""
+    return (
+        select(Account.deletion_task_id, User.user_pk, User.deletion_task_id)
+        .select_from(Account)
+        .outerjoin(
+            User,
+            and_(
+                User.service_name == Account.service_name,
+                User.account_pk == Account.account_pk,
+                User.user_id == bindparam("creation_user_id"),
+            ),
+        )
+        .where(
+            Account.service_name == bindparam("creation_service_name"),
+            Account.account_id == bindparam("creation_account_id"),
+        )
+    )
 
 
 @sql_runtime_store
@@ -851,6 +873,33 @@ class SQLAccountStore(AccountStore):
                 return False
             await session.delete(user)
             return True
+
+    async def is_creation_blocked(self, account_id: str, user_id: str) -> bool:
+        """Reject missing identities or a live account/user deletion fence."""
+        if self._url.drivername != "postgresql+psycopg":
+            if await self.get_deletion(account_id, user_id) is not None:
+                return True
+            return await self.get_user(account_id, user_id) is None
+        _ = self._session_factory
+        assert self._engine is not None
+        connection = await self._engine.connect()
+        try:
+            # This single SELECT needs no transaction; subsequent writes retain
+            # their normal transaction isolation when the pool returns it.
+            await connection.execution_options(isolation_level="AUTOCOMMIT")
+            row = (
+                await connection.execute(
+                    _creation_identity_statement(),
+                    {
+                        "creation_service_name": self._service_name,
+                        "creation_account_id": account_id,
+                        "creation_user_id": user_id,
+                    },
+                )
+            ).one_or_none()
+        finally:
+            await wait_sql_cleanup(connection.close())
+        return row is None or row[0] is not None or row[1] is None or row[2] is not None
 
     async def get_deletion(
         self, account_id: str, user_id: str | None = None

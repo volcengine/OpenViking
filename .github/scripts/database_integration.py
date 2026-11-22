@@ -11,8 +11,14 @@ ACCOUNT_CASES = {
     "test_mysql_load_creates_default_account",
     "test_distributed_authentication_state_is_shared_and_service_scoped",
 }
+CREATION_IDENTITY_CASES = {
+    "test_creation_identity_live_services_registration_and_deletion",
+    "test_creation_identity_task_postcommit_fence_and_withdrawal[postgres]",
+    "test_creation_identity_pool_rollback_cancel_and_disconnect",
+}
 GROUPS = (
     "accounts",
+    "creation_identity_postgres",
     "redis_mysql",
     "task_work_mysql",
     "task_work_postgres",
@@ -93,6 +99,8 @@ def database_group(case):
     name = case.get("name", "")
     if module == "tests.server.test_account_services" and name in ACCOUNT_CASES:
         return "accounts"
+    if module == "tests.server.test_creation_identity_check" and name in CREATION_IDENTITY_CASES:
+        return "creation_identity_postgres"
     if module == "tests.server.test_redis_mysql_account_store":
         return "redis_mysql"
     # Parameter IDs also contain secondary parameters, e.g. [mysql-stage].
@@ -124,6 +132,7 @@ def database_group(case):
 def verify(report):
     counts = dict.fromkeys(GROUPS, 0)
     accounts = set()
+    creation_identities = set()
     problems = []
     for case in ET.parse(report).iter("testcase"):
         group = database_group(case)
@@ -136,11 +145,15 @@ def verify(report):
         counts[group] += 1
         if group == "accounts":
             accounts.add(name)
+        if group == "creation_identity_postgres":
+            creation_identities.add(name)
     for group, count in counts.items():
         if not count:
             problems.append(f"No passing database cases in {group}")
     for name in sorted(ACCOUNT_CASES - accounts):
         problems.append(f"Required account contract missing: {name}")
+    for name in sorted(CREATION_IDENTITY_CASES - creation_identities):
+        problems.append(f"Required PostgreSQL creation identity contract missing: {name}")
     summary = "\n".join(
         f"- {group}: {count} database cases passed" for group, count in counts.items()
     )
