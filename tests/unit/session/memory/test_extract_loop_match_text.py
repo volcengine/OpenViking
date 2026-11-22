@@ -239,6 +239,11 @@ class TestResolveOperations:
         assert raw_links == []
         assert operations.delete_file_contents == []
         assert operations.delete_replacements == {}
+        assert len(operations.skipped_deletes) == 1
+        skipped = operations.skipped_deletes[0]
+        assert skipped.page_id == 2
+        assert skipped.memory_type == "entities"
+        assert skipped.reason_code == MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH
 
         await loop.finalize_operations(operations, raw_links)
         assert operations.resolved_links == []

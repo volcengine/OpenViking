@@ -803,6 +803,8 @@ class SessionCompressorV3:
         )
 
         result = update_result.apply_result
+        # The shared updater has already scoped its results to this request.
+        result.skipped_operations.extend(operations.skipped_deletes)
         patch_operations = update_result.operations
         _report_extraction_telemetry(result, patch_operations)
         if strict_extract_errors and result.errors:

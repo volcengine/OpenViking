@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -643,6 +644,8 @@ async def test_train_from_extracted_cases_skips_experience_updates_when_not_allo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("apply_error", [False, True, "links"])
 async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, apply_error):
+    archive_uri = "viking://user/u/sessions/s1/history/archive_001"
+    write_file = AsyncMock()
     applied_operations = []
     trained_cases = []
     uri = _case_operation().uris[0]
@@ -661,6 +664,14 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
                     delete_file_contents=[],
                     errors=[],
                     resolved_links=[link] if apply_error == "links" else [],
+                    skipped_deletes=[
+                        SkippedMemoryOperation(
+                            memory_type="entities",
+                            page_id=2,
+                            reason_code=MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
+                            reason="Delete replacement page_id 1 belongs to another memory type",
+                        )
+                    ],
                 ),
                 [],
             )
@@ -690,7 +701,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
 
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_viking_fs",
-        lambda: SimpleNamespace(write_file=AsyncMock()),
+        lambda: SimpleNamespace(write_file=write_file),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_default_registry",
@@ -709,6 +720,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
+        archive_uri=archive_uri,
         strict_extract_errors=True,
     )
     if apply_error:
@@ -722,6 +734,13 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
     assert applied_operations[0].upsert_operations[0].memory_type == "cases"
     assert [case.name for case in trained_cases] == ["重复预订处理"]
     assert contexts[0].uri.endswith("重复预订处理.md")
+    write_file.assert_awaited_once()
+    assert write_file.await_args.kwargs["uri"] == f"{archive_uri}/memory_diff.json"
+    diff = json.loads(write_file.await_args.kwargs["content"])
+    assert diff["summary"]["total_deletes"] == 0
+    assert diff["summary"]["total_skipped"] == 1
+    assert diff["skipped_operations"][0]["page_id"] == 2
+    assert diff["skipped_operations"][0]["reason_code"] == "page_id_type_mismatch"
 
 
 @pytest.mark.asyncio

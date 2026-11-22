@@ -23,6 +23,7 @@ from openviking.session.memory.dataclass import (
     MemoryOperationSkipCode,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
     WikiLink,
 )
@@ -997,6 +998,7 @@ class ExtractLoop:
                 upsert_operations.append(resolved_op)
 
         delete_replacements: dict[str, str] = {}
+        skipped_deletes: list[SkippedMemoryOperation] = []
         delete_ids = self._normalize_delete_ids(getattr(operations, "delete_ids", []) or [])
         for delete_id in delete_ids:
             if delete_id.delete_page_id is None or page_id_map is None:
@@ -1017,6 +1019,17 @@ class ExtractLoop:
             replacement_uri = None
             if replacement_page_id is not None:
                 if replacement_page_id in invalid_reference_page_ids:
+                    skipped_deletes.append(
+                        SkippedMemoryOperation(
+                            memory_type=self._memory_type_for_uri(delete_uri) or "unknown",
+                            page_id=delete_id.delete_page_id,
+                            reason_code=MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
+                            reason=(
+                                f"Delete replacement page_id {replacement_page_id} "
+                                "belongs to another memory type"
+                            ),
+                        )
+                    )
                     logger.info(
                         "memory delete replacement type mismatch; skipping page_hash=%s replacement_hash=%s",
                         short_hash(str(delete_id.delete_page_id)),
@@ -1086,6 +1099,7 @@ class ExtractLoop:
             delete_file_contents=delete_file_contents,
             errors=errors,
             delete_replacements=delete_replacements,
+            skipped_deletes=skipped_deletes,
         )
 
         for op in upsert_operations:
