@@ -86,7 +86,7 @@ class TargetReader(Tool):
 def agent_runner(loop, session_key, connection, limits):
     """Bind metered AgentLoops with isolated file tools and no submission protocol."""
 
-    async def run(system, data, model, *, stage, runtime):
+    async def run(system, data, model, *, stage, runtime, map_worker=False):
         """Return a private output root only after natural completion; failures expose no files."""
         child_id = uuid.uuid4().hex
         root = f"{COMPILE_DRAFT_ROOT}/{child_id}"
@@ -131,17 +131,21 @@ def agent_runner(loop, session_key, connection, limits):
         child = copy(loop)
         child.provider = ChildProvider(model, stage)
         child._preview_tool_result = complete_tool_result
+        file_rules = (
+            "Read assignment.json with read_file. "
+            "Read all assigned materials. assignment.json and assigned inputs/ paths "
+            "are read-only. Use write_file and edit_file for deliverable Markdown, "
+            "with paths relative to the publication destination. Read and edit your "
+            "outputs using the same paths. Write only deliverables, without scratch files. "
+            "Finish with a brief completion message after all writes succeed. "
+            "A completion message alone does not produce files."
+        )
+        prompt = f"{file_rules}\n{system}" if map_worker else f"{system}\n{file_rules}"
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {
                     "role": "system",
-                    "content": system + "\nRead assignment.json with read_file. "
-                    "Read all assigned materials. assignment.json and assigned inputs/ paths "
-                    "are read-only. Use write_file and edit_file for deliverable Markdown, "
-                    "with paths relative to the publication destination. Read and edit your "
-                    "outputs using the same paths. Write only deliverables, without scratch files. "
-                    "Finish with a brief completion message after all writes succeed. "
-                    "A completion message alone does not produce files.",
+                    "content": prompt,
                 },
                 {
                     "role": "user",

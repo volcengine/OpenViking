@@ -164,7 +164,7 @@ async def configure_pipeline(pipeline, merge=False, fail_second=False):
     pipeline.model.provider.chat = AsyncMock(side_effect=chat)
     calls = []
 
-    async def worker(system, data, model, *, stage, runtime):
+    async def worker(system, data, model, *, stage, runtime, map_worker=False):
         calls.append(stage)
         root = f"__compile_staging__/drafts/{stage}/output"
         name = "topic.md" if merge or len(calls) == 1 else "independent.md"
@@ -277,6 +277,47 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
         names = {t["function"]["name"] for t in call.kwargs["tools"]}
         assert {"read_file", "write_file", "edit_file"} <= names
         assert "emit" not in names
+
+
+@pytest.mark.parametrize("map_worker", [True, False])
+async def test_file_worker_keeps_shared_rules_before_task_instructions(
+    pipeline, agent_loop, map_worker
+):
+    loop, key, _ = agent_loop
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        "write", "write_file", {"path": "rule.md", "content": "# Rule"}, 0
+                    )
+                ],
+            ),
+            LLMResponse(content="Complete"),
+        ]
+        * 2
+    )
+    first_request = pipeline.request
+    prompts = []
+    for task in ("First task", "Second task"):
+        pipeline.request = first_request.model_copy(update={"instruction": task})
+        documents = await pipeline.generate(
+            "map" if map_worker else "reduce",
+            "Extract the facts.",
+            {},
+            ["source-a"],
+            map_worker=map_worker,
+        )
+        assert documents[0].path == "rule.md" and documents[0].source_refs == ["source-a"]
+        prompts.append(pipeline.model.provider.chat.await_args_list[-2].kwargs["messages"][0])
+
+    left, right = [prompt["content"].split("\nUser instruction:\n", 1)[0] for prompt in prompts]
+    assert left == right
+    assert ("Read assignment.json with read_file." in left) is map_worker
+    assert ("File-tool output paths are relative to request.to." in left) is map_worker
+    assert all(prompt["role"] == "system" for prompt in prompts)
 
 
 @pytest.mark.parametrize("input_path", ["assignment.json", "inputs/0.md"])
