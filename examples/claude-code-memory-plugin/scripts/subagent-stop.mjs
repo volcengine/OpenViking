@@ -93,7 +93,8 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let failed = 0;
   let enqueueFailed = 0;
   const payloads = [];
-  for (const turn of turns) {
+  const payloadTurnIndexes = [];
+  for (const [index, turn] of turns.entries()) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
     // Sanitize injected context before applying the configured filters.
@@ -107,6 +108,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
       else enqueueFailed++;
     } else {
       payloads.push(payload);
+      payloadTurnIndexes.push(index);
     }
   }
   if (!enqueueOnly) {
@@ -138,6 +140,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
     queued,
     failed,
     enqueueFailed,
+    firstRejectedTurn: failed > 0 ? payloadTurnIndexes[ok + queued] : undefined,
     committed,
     commitQueued,
     commit_trace_id: commitTraceId || undefined,
@@ -226,7 +229,14 @@ async function main() {
       return;
     }
 
-    await saveState(subagentId, { ...state, ovSessionId, capturedTurnCount: turns.length });
+    // The sender accounts for a contiguous prefix of payloads. Translate its
+    // first rejected payload back to a transcript index, including filtered turns.
+    const nextTurnCount = result.firstRejectedTurn === undefined
+      ? turns.length
+      : capturedTurnCount + result.firstRejectedTurn;
+    if (nextTurnCount > capturedTurnCount) {
+      await saveState(subagentId, { ...state, ovSessionId, capturedTurnCount: nextTurnCount });
+    }
   });
 }
 
