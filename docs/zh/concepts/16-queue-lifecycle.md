@@ -118,7 +118,7 @@ SQLite 自动补齐可空 `serial_key` 列与索引，旧消息该列为 `NULL`�
 补齐 `schedule_seq` 调度序号并按原行 ID 初始化，替换原 status 索引。
 存量消息的 ID、payload 和原始顺序保持不变。
 使用 Redis 后端时，如果旧版 QueueFS 尚未支持按消息键调度，升级前应先排空共享队列，
-再统一升级生产者与消费者。
+再按下文步骤统一升级。
 
 扩展入队使用 `QFSE` v1 大端帧（固定头、TLV、原始 payload），header 上限 64 KiB。
 `group_key` / `serial_key` 的 TLV type 为 `2` / `3`，flags 为 `1`，
@@ -139,9 +139,16 @@ Redis QueueFS 每次成功读取 `/dequeue` 都会签发新的 `delivery_receipt
 消息、队列计数和分组占用均保持不变。心跳恢复和 RETRY 使旧凭证失效，重新领取时会签发新凭证。
 业务处理仍遵循至少一次投递。
 
-从已支持按消息键调度的 Redis 版本升级到领取凭证时，先停止所有旧消费者并等待旧的结算请求结束，
-再启用使用配套 Python 代码和原生扩展的新消费者。同一 `service_name` 下的消费者须统一版本。
-待处理消息可继续保留，旧的在途消息由心跳恢复重新置为待处理，下次领取时签发凭证。
+在 Python 中使用 `NamedQueue.dequeue_raw()` 手动领取消息时，请保留返回的 delivery。
+处理完成后，将 `await queue.ack(delivery["id"])` 改为
+`await queue.ack(delivery["id"], message=delivery)`。Redis ACK 缺少领取凭证时，
+调用方会收到 `AGFSInvalidOperationError`，消息仍处于 processing 状态。
+
+从已支持按消息键调度的 Redis 版本升级到领取凭证时，先停止同一 `service_name` 下所有挂载旧版
+Redis QueueFS 的进程，包括消费者、只负责入队的生产端和管理端。等待这些进程的在途请求全部结束后，
+再启用使用配套 Python 代码和原生扩展的新版 QueueFS。每次挂载 Redis QueueFS 都会启动心跳恢复，
+`clear` 和删除队列等管理操作也会修改共享 Redis 状态。待处理消息可继续保留，旧的在途消息由心跳恢复
+重新置为待处理，下次领取时签发凭证。
 
 Python `enqueue(..., serial_key=..., group_key=...)` 在注册 Work 前校验 key，
 扩展入队返回实际 UUID；无 key 时保持旧路径。ExternalTask 使用账号、任务类型和
@@ -155,9 +162,9 @@ admission busy 或本地 finalization 未完成时返回 `ProcessResult.retry()`
 旧 `ProcessResult.requeued()` 仍表示 handler 已发布替代消息，原消息照常 ACK。
 External 业务结果保存最多尝试三次；向外传播的执行、清理及
 Task/Work 保存异常均不 ACK，已处理的业务失败在 Work 结算后 ACK。
-取消沿用通用 Task middleware 契约；ACK 沿用通用队列行为，写入失败记录
-warning，消息留待恢复，消费继续。本版本 ExternalTaskService 保留基线的目标
-占用和执行保护，并在 worker 启动前恢复占用，以兼容未携带 key 的旧消息；
+取消沿用通用 Task middleware 契约。worker 记录 ACK 错误后继续轮询，未确认的消息留待恢复。
+本版本 ExternalTaskService 保留基线的目标占用和执行保护，并在 worker 启动前恢复占用，
+以兼容未携带 key 的旧消息；
 这些过渡保护计划在下个版本移除。
 
 SessionCommit 的首次提交和恢复入队均按账号/用户生成 `group_key`，

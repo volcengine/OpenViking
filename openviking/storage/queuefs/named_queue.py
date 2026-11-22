@@ -200,26 +200,15 @@ class NamedQueue:
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
-        """Acknowledge successful processing of a message (deletes it from persistent storage).
+        """Acknowledge a message after processing and propagate settlement errors.
 
-        Must be called after the dequeue handler finishes processing a message.
+        For Redis, pass the original delivery from dequeue_raw() as message so
+        the ACK includes its delivery receipt. Memory and SQLite accept the ID alone.
         Middleware can provisionally settle application state before deletion.
-        If not called (e.g. process crashes), the message will be automatically
-        re-queued on the next startup via RecoverStale.
         """
         if not msg_id:
             return
-        try:
-            await self._run_middleware("ack", AckContext(self.name, msg_id, message), self._ack)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.info(
-                "Ack failed for %s msg_id=%s: %s",
-                short_hash(str(self.name)),
-                short_hash(str(msg_id)),
-                type(e).__name__,
-            )
+        await self._run_middleware("ack", AckContext(self.name, msg_id, message), self._ack)
 
     async def _ack(self, ctx: AckContext) -> None:
         body = self._encode_settlement(ctx.message_id, ctx.message)
@@ -295,7 +284,7 @@ class NamedQueue:
             return None
 
     async def dequeue_raw(self) -> Optional[Dict[str, Any]]:
-        """Get and remove message from queue without invoking the handler."""
+        """Claim a message without invoking the handler. Keep the delivery for ACK."""
         await self._ensure_initialized()
         try:
             return await self._read_queue_message()

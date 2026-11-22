@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs.exceptions import AGFSInvalidOperationError
 from openviking.storage.queuefs.named_queue import (
     DequeueHandlerBase,
     NamedQueue,
@@ -51,7 +52,7 @@ async def test_keyed_enqueue_native_receipt_and_payload(key):
         concurrent = await queue.dequeue_raw()
         if key == "serial_key":
             assert concurrent is None
-            await queue.ack(receipt, message)
+            await queue.ack(receipt)
             concurrent = await queue.dequeue_raw()
         assert concurrent["id"] == second
     finally:
@@ -143,6 +144,25 @@ async def test_dequeue_settles_original_delivery(transport, operation, delivery_
         assert body == b"message-1"
     else:
         assert json.loads(body) == {"id": "message-1", "delivery_receipt": delivery_receipt}
+
+
+async def test_manual_ack_requires_original_redis_delivery(transport):
+    message = {"id": "message-1", "data": "{}", "delivery_receipt": "original-receipt"}
+    transport.read.return_value = json.dumps(message).encode("utf-8")
+    transport.write.side_effect = [AGFSInvalidOperationError("delivery_receipt required"), 0]
+    queue = NamedQueue(Mock(), "/queue", "Test")
+
+    delivery = await queue.dequeue_raw()
+    assert delivery == message
+    with pytest.raises(AGFSInvalidOperationError, match="delivery_receipt required"):
+        await queue.ack(delivery["id"])
+    transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
+
+    await queue.ack(delivery["id"], message=delivery)
+    assert transport.write.await_count == 2
+    path, body = transport.write.call_args.args
+    assert path == "/queue/Test/ack"
+    assert json.loads(body) == {"id": "message-1", "delivery_receipt": "original-receipt"}
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("write failed"), asyncio.CancelledError()])
