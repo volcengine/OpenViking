@@ -16,6 +16,7 @@ import {
   PiAgent,
   sanitizePiEnv,
 } from '../src/pi.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -35,7 +36,7 @@ const baseConfig = {
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: path.join(root, 'data', 'actions.sock'),
+  actionSocketPath: localSocketPath(path.join(root, 'data')),
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -491,7 +492,12 @@ describe('PiAgent persistent rpc runtime', () => {
     await agent.stop();
   });
 
-  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', async () => {
+  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', {
+    // The second half proves the child was terminated after a line it needed
+    // was too large. Windows terminates a tree through taskkill, which a fake
+    // pid cannot exercise, so the exit state is only observable on POSIX.
+    skip: process.platform === 'win32' ? 'a fake child cannot be terminated through taskkill' : false,
+  }, async () => {
     // A get_message_media result with a large image, echoed on one stdout line
     // and delivered in pipe-sized chunks.
     const emitLine = (child, value) => {

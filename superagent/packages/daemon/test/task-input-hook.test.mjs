@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { TASK_INPUT_HOOK, taskInputHookOutput } from '../src/task-input-hook.mjs';
 
 const INPUTS = 'New inputs for your task, oldest first:\n[chat=oc_a msg=om_2 event=e2] 只看上周';
@@ -34,7 +35,9 @@ describe('task input hook (Claude Code / Codex workers)', () => {
     // The daemon's action socket, in its own process: spawnSync blocks this one.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    const socketPath = path.join(dir, 'a.sock');
+    // A named pipe on Windows, where a socket path in the filesystem is not
+    // something an AF_UNIX listener can bind.
+    const socketPath = localSocketPath(dir, 'hook');
     const serverScript = path.join(dir, 'server.mjs');
     fs.writeFileSync(serverScript, `import http from 'node:http'; import fs from 'node:fs';
       http.createServer((q, s) => { let b = ''; q.on('data', (c) => { b += c; }); q.on('end', () => {

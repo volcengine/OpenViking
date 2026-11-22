@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { writeManifest } from '../src/deployment-manifest.mjs';
 import { runtimeManifestSelector, updateRuntimePreference } from '../src/runtime-preference.mjs';
 
@@ -69,7 +70,7 @@ test('a live runtime switch updates only its instance and survives config reload
   const env = {};
   applyDeploymentAgentEnv(env, loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: f.manifestPath }), 'second');
   assert.equal(env.OV_SUPERAGENT_MODEL, 'pi');
-  assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
 });
 
 test('a repeated runtime selection does not rewrite the manifest', (t) => {

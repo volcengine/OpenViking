@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { WebSocketServer } from 'ws';
 import { OneBotError, OneBotSocket, ONEBOT_VERSION, validToken, validUrl } from '../src/onebot/api.mjs';
 import { OneBotState } from '../src/onebot/state.mjs';
@@ -28,6 +29,7 @@ import { formatInboundLine, mentionTarget } from '../src/runtime-input.mjs';
 import { Store } from '../src/store.mjs';
 import { Harness } from '../src/harness.mjs';
 import { ActionService } from '../src/actions/service.mjs';
+import { fileLink } from './symlink-fixture.mjs';
 
 const URL_ = 'ws://127.0.0.1:3001/';
 const TOKEN = 'napcat-Secret_123';
@@ -407,8 +409,8 @@ test('oversize, binary and non-JSON frames are dropped without logging their con
 
 test('state keeps its modes, the pending order and context bounds, and another account clears what belonged to the old one', (t) => {
   const { dir, state } = fixture(t);
-  assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
+  if (supportsFileModes) assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
   assert.equal(state.directory, path.join(dir, 'onebot'));
   assert.ok(fs.statSync(state.mediaDirectory).isDirectory());
   assert.equal(state.account(), null);
@@ -1843,8 +1845,9 @@ test('client mentions only people seen in the chat, quotes the target of a reply
   assert.deepEqual(image, [{ type: 'reply', data: { id: '1' } }, { type: 'image', data: { file: `base64://${PNG.toString('base64')}` } }]);
   assert.deepEqual(file, [{ type: 'file', data: { file: `base64://${Buffer.from('numbers').toString('base64')}`, name: 'Q3 report.txt' } }]);
   const link = path.join(dir, 'link.txt');
-  fs.symlinkSync(report, link);
-  await assert.rejects(c.sendMessage({ chat_id: chat, content: { type: 'file', path: link } }), /ELOOP|symbolic/);
+  if (fileLink(report, link)) {
+    await assert.rejects(c.sendMessage({ chat_id: chat, content: { type: 'file', path: link } }), /ELOOP|symbolic/);
+  }
   fs.writeFileSync(path.join(dir, 'empty.txt'), '');
   await assert.rejects(c.sendMessage({ chat_id: chat, content: { type: 'file', path: path.join(dir, 'empty.txt') } }), /nonempty regular file/);
   assert.equal(sent('send_group_msg').length, 6);
@@ -1922,7 +1925,7 @@ test('client media prefers the implementation copy, falls back to the event addr
   assert.deepEqual(fs.readFileSync(media[0].path), PNG);
   assert.equal(fs.readFileSync(media[1].path, 'utf8'), 'from-the-event');
   assert.equal(fs.readFileSync(media[3].path, 'utf8'), 'Alice: see this\nBob: line one\n  line two\n');
-  assert.ok(media.every((item) => (fs.statSync(item.path).mode & 0o777) === 0o600 && item.path.startsWith(c.state.mediaDirectory)));
+  if (supportsFileModes) assert.ok(media.every((item) => (fs.statSync(item.path).mode & 0o777) === 0o600 && item.path.startsWith(c.state.mediaDirectory)));
   // The implementation's local paths are never read; its address wins over the event's.
   assert.deepEqual(fetched, [['https://multimedia.nt.qq.com.cn/download?rkey=K2', 'error'], ['https://napcat.local/fresh.pdf', 'error']]);
   assert.deepEqual(sent('get_file')[0].params, { file_id: '/uuid' });

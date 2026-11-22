@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { Harness } from '../src/harness.mjs';
@@ -88,7 +89,7 @@ test('every IM switches live through ingress/outbox and survive config reload wi
     assert.equal(sent.connector, source);
     assert.equal(sent.input.chat_id, f.owners[source].target.chat_id);
   }
-  assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
 });
 
 test('a repeated selection and a duplicate event do not rewrite the manifest or send another reply', async (t) => {

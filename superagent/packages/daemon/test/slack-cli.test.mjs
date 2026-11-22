@@ -10,13 +10,14 @@ import { execFileSync } from 'node:child_process';
 import { SlackCli } from '../src/slack/cli.mjs';
 import { ProcessRegistry } from '../src/process-utils.mjs';
 import { extractSlackCliBinary, installSlackCliBinary } from '../../../scripts/release/slack-cli.mjs';
+import { supportsFileModes } from '../src/platform/index.mjs';
+import { installNodeCommand } from './fake-executable.mjs';
 
 const token = 'xoxb-1111-2222-test-credential';
 function executable(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'slack-cli-test-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const bin = path.join(directory, 'slack');
-  fs.writeFileSync(bin, `#!${process.execPath}
+  const bin = installNodeCommand(directory, 'slack', { body: `#!${process.execPath}
     import fs from 'node:fs';
     const args = process.argv.slice(2);
     const params = Object.fromEntries(new URLSearchParams(args[args.indexOf('--data') + 1]));
@@ -39,7 +40,7 @@ function executable(t) {
         unwanted: Object.keys(process.env).filter(key => /^(SLACK_USER_TOKEN|SLACK_API_HOST|LARK_SECRET|NODE_OPTIONS)$/.test(key)),
         configFiles: fs.readdirSync(process.cwd()) }));
     }
-  `, { mode: 0o755 });
+  ` });
   return bin;
 }
 
@@ -119,7 +120,7 @@ test('Slack CLI extraction supports Linux and macOS archive layouts without an e
     execFileSync('tar', ['-czf', archive, '-C', source, entry]);
     extractSlackCliBinary(archive, output);
     assert.equal(fs.readFileSync(path.join(output, 'bin', 'slack'), 'utf8'), 'executable fixture');
-    assert.ok(fs.statSync(path.join(output, 'bin', 'slack')).mode & 0o111);
+    if (supportsFileModes) assert.ok(fs.statSync(path.join(output, 'bin', 'slack')).mode & 0o111);
   }
   fs.writeFileSync(path.join(source, 'unexpected'), 'wrong archive');
   const wrong = path.join(root, 'wrong.tar.gz');

@@ -13,6 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
 import { moveToTrash, scanDir } from '../src/task-dirs.mjs';
+import { directoryLink } from './symlink-fixture.mjs';
 
 // A worker that finishes when the test says so, after doing what the test
 // scripted for that turn (a report, an input arriving mid-turn, ...).
@@ -366,7 +367,7 @@ describe('TaskManager', () => {
     const brief = executor.turns[1].prompt;
     assert.match(brief, /^\[task t2\] 写手册\n/);
     assert.match(brief, /This task follows t1 "查 X" \(done\), earlier work it builds on\. Its request:\n\| \[chat=oc_a msg=om_\d+ event=e\d+\] 查一下 X/);
-    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks\/t1\n/);
+    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks[\\/]t1\n/);
     assert.match(tasks.list()[0], /^t2 \[running\] "写手册" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
   });
 
@@ -387,7 +388,7 @@ describe('TaskManager', () => {
     const kept = [['repo', 'src', 'a.js'], ['repo', 'target', 'notes.md'], ['repo', '.git', 'node_modules', 'pack'], ['rust', 'Cargo.toml'],
       ['repo', 'src', 'constructor', 'index.js'], ['repo', 'src', 'hasOwnProperty', 'index.js']].map((parts) => path.join(dir, ...parts));
     for (const file of [...gone, ...kept, path.join(dir, 'repo', 'env', 'pyvenv.cfg'), path.join(dataDir, 'workers', 't1', 'session.jsonl')]) write(file);
-    fs.symlinkSync(path.dirname(outside), path.join(dir, 'repo', 'src', 'node_modules'));
+    directoryLink(path.dirname(outside), path.join(dir, 'repo', 'src', 'node_modules'));
     await tasks.sweepDirs();
     assert.ok(gone.every((file) => fs.existsSync(file)), 'nothing of a live task');
     tasks.report('t1', { state: 'done', draft: 'a' });
@@ -450,14 +451,14 @@ describe('TaskManager', () => {
     // A scan found repo/node_modules; then repo became a link to a directory outside.
     const scan = await scanDir(dir);
     fs.rmSync(path.join(dir, 'repo'), { recursive: true });
-    fs.symlinkSync(outside, path.join(dir, 'repo'));
+    directoryLink(outside, path.join(dir, 'repo'));
     tasks.config.taskDirBudgetGb = 1e-12;
     const result = tasks.cleanDirs(new Map([[dir, scan]]));
     assert.deepEqual([result.pruned, result.removed], [[], ['t1']], 'the directory goes, with the link in it');
     // A trash that is a link: nothing is moved into it, and it goes as a link.
     const trash = path.join(workspace, 'tasks', '.trash');
     fs.rmSync(trash, { recursive: true, force: true });
-    fs.symlinkSync(outside, trash);
+    directoryLink(outside, trash);
     const kept = path.join(workspace, 'tasks', 'kept');
     fs.mkdirSync(kept);
     assert.throws(() => moveToTrash(kept, trash), /not a directory of its own/);

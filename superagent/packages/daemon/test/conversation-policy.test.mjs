@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { CodexAgent } from '../src/codex.mjs';
+import { supportsShellScripts } from '../src/platform/index.mjs';
 import {
   DEFAULT_PROMPT_DIR,
   assembleConversationPolicy,
@@ -238,7 +239,11 @@ describe('conversation policy assemble', () => {
     assert.ok(assembleWorkerPolicy({}).includes(never(cliCommandCode(packageDir))));
   });
 
-  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
+  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', {
+    // The fenced commands run through /bin/sh with a POSIX PATH and $HOME, which
+    // is what the rendered policy is for; the quoting is asserted on POSIX.
+    skip: supportsShellScripts ? false : 'runs the rendered command through /bin/sh',
+  }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'workspace');

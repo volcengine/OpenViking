@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { WebSocketServer } from 'ws';
 import { QQApi, QQError, MEDIA_BYTES, REPLY_WINDOW_MS } from '../src/qq/api.mjs';
 import { QQState } from '../src/qq/state.mjs';
@@ -23,6 +24,7 @@ import { Harness } from '../src/harness.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { invokeOperation } from '../src/connectors/operations.mjs';
 import { chatEvent, mailEvent } from './event-fixture.mjs';
+import { fileLink } from './symlink-fixture.mjs';
 
 const account = { appId: '123456', appSecret: 'secret_that_must_never_be_logged', ownerId: 'OWNER_OPENID', activatedAt: 0 };
 const logger = { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } };
@@ -121,8 +123,8 @@ test('binding accepts only fresh C2C proof; strangers/groups/wrong challenges ca
   assert.equal(result.ownerId, account.ownerId);
   assert.equal(state.account().appSecret, account.appSecret);
   assert.equal(state.account().activatedAt, 0);
-  assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
+  if (supportsFileModes) assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
   state.acquire(); state.release();
 });
 
@@ -248,8 +250,8 @@ test('uploads validate file snapshots and use base64 with srv_send_msg=false for
   assert.equal(Buffer.from(calls[0].body.file_data, 'base64').toString(), 'png');
   fs.truncateSync(file, MEDIA_BYTES + 1);
   assert.throws(() => uploadContent({ path: file }), /20 MiB/);
-  const symlink = path.join(dir, 'link'); fs.symlinkSync(file, symlink);
-  assert.throws(() => uploadContent({ path: symlink }));
+  const symlink = path.join(dir, 'link');
+  if (fileLink(file, symlink)) assert.throws(() => uploadContent({ path: symlink }));
   assert.throws(() => uploadContent({ path: dir }), /regular file/);
 });
 
@@ -317,7 +319,7 @@ test('downloads restrict hosts, omit authorization, bound streams and store priv
   const media = { url: 'http://multimedia.nt.qq.com/file?sig=secret', name: '../../a.txt', kind: 'file', size: 4 };
   const got = await downloadFile(api, media, state.mediaDirectory, AbortSignal.timeout(1000));
   assert.equal(got.name, 'a.txt'); assert.equal(fs.readFileSync(got.path, 'utf8'), 'data');
-  assert.equal(fs.statSync(got.path).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(got.path).mode & 0o777, 0o600);
   for (const url of ['https://localhost/file', 'https://evil.qq.com/file', 'https://multimedia.nt.qq.com.evil.example/file',
     'https://u:p@multimedia.nt.qq.com/file', 'https://multimedia.nt.qq.com:444/file', 'file:///tmp/private']) {
     await assert.rejects(downloadFile(api, { ...media, url }, state.mediaDirectory, AbortSignal.timeout(1000)), /host/);

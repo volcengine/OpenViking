@@ -11,6 +11,7 @@ import test from 'node:test';
 import { parseUniqueJson } from '../src/unique-json.mjs';
 import { serveMcp } from '../src/actions/mcp.mjs';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 
 const duplicate = '{"card_images":{"cover":"a.png","co\\u0076er":"b.png"}}';
 
@@ -31,7 +32,7 @@ test('MCP rejects duplicate aliases before forwarding a tool call', async () => 
 
 test('Core HTTP API rejects duplicate aliases before authority or delivery handling', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unique-json-'));
-  const socketPath = path.join(root, 'api.sock');
+  const socketPath = localSocketPath(root, 'api');
   let calls = 0;
   const server = await startActionApi({ socketPath, service: { call() { calls++; } }, logger: {} });
   t.after(async () => { await stopActionApi(server); fs.rmSync(root, { recursive: true, force: true }); });

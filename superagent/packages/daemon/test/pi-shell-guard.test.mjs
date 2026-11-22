@@ -8,6 +8,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import personalAgentMcp, { WORKER_CWD } from '../src/pi-mcp-extension.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 
 // The extension's handlers, as Pi would register them.
 function load(env) {
@@ -96,7 +97,7 @@ describe('Pi worker task inputs', () => {
   // A daemon action socket that answers task_check with what the test queued.
   async function actionSocket(t, answers) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-task-'));
-    const socketPath = path.join(dir, 'actions.sock');
+    const socketPath = localSocketPath(dir, 'actions');
     const calls = [];
     const server = http.createServer((request, response) => {
       let body = '';

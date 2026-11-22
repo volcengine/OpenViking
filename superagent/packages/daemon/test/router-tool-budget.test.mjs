@@ -11,6 +11,7 @@ import { routerToolHookOutput } from '../src/router-tool-hook.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
 import { requestAction } from '../src/actions/client.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 
 it('shares the six-call budget across native work tools, leaving routing and transport usable', () => {
   const budget = new RouterToolBudget();
@@ -36,7 +37,7 @@ it('serializes parallel hook processes, resets at turn end and authority change,
   const service = new ActionService({ config: { scheduler: 'workers' },
     store: { getCognitionState: () => ({ authorityToken: authority }) }, logger: { warn() {} } });
   service.tasks = { workerFor: (token) => token === 'worker' ? 't1' : null };
-  const socketPath = path.join(dir, 'actions.sock');
+  const socketPath = localSocketPath(dir, 'actions');
   const server = await startActionApi({ socketPath, service });
   t.after(async () => { await stopActionApi(server); fs.rmSync(dir, { recursive: true, force: true }); });
   const check = (token = authority, tool = 'Bash') => requestAction({ socketPath, authority: token, client: 'hook' },

@@ -15,6 +15,7 @@ import { normalizeLarkMessage, normalizeLarkEvent } from '../src/connectors/lark
 import { resolveCardAction, settledChoiceCard } from '../src/card-messages.mjs';
 import { fakeConnectors, larkConnectors, larkSuccess as success } from './action-fixture.mjs';
 import { chatEvent } from './event-fixture.mjs';
+import { fileLink } from './symlink-fixture.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 const profile = 'test-profile';
@@ -98,11 +99,11 @@ it('sends a document snapshot from the workspace into the original thread and cl
 it('rejects traversal, URLs, escaped symlinks, directories, oversized files, and mixed bodies before sending', async (t) => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.directory, 'outside.pdf'), 'private');
-  fs.symlinkSync(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
+  const linked = fileLink(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
   fs.mkdirSync(path.join(f.workspace, 'folder'));
   const fd = fs.openSync(path.join(f.workspace, 'large.pdf'), 'w');
   fs.ftruncateSync(fd, MAX_FILE_BYTES + 1); fs.closeSync(fd);
-  for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', 'link.pdf', 'folder', 'large.pdf']) {
+  for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', ...(linked ? ['link.pdf'] : []), 'folder', 'large.pdf']) {
     await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, file_path }));
   }
   await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent,

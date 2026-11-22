@@ -98,8 +98,8 @@ describe('module boundaries', () => {
       ['superagent-alpha', 'superagent-beta', 'superagent-web', ...(capabilities.updater ? ['superagent-updater'] : [])],
     );
     const [alpha, beta, web, updater] = ecosystem.apps;
-    assert.match(alpha.script, /packages\/daemon\/src\/main\.mjs$/);
-    assert.match(web.script, /packages\/web\/src\/main\.mjs$/);
+    assert.match(alpha.script, /packages[\\/]daemon[\\/]src[\\/]main\.mjs$/);
+    assert.match(web.script, /packages[\\/]web[\\/]src[\\/]main\.mjs$/);
     assert.equal(alpha.env.OV_SUPERAGENT_PORT, '3738');
     assert.equal(alpha.env.OV_SUPERAGENT_TEMP_DIR, '/tmp/superagent-alpha');
     assert.equal(beta.env.OV_SUPERAGENT_TEMP_DIR, '/tmp/superagent-default');
@@ -148,7 +148,7 @@ describe('module boundaries', () => {
       ],
     );
     if (capabilities.updater) {
-      assert.match(updater.script, /packages\/updater\/src\/main\.mjs$/);
+      assert.match(updater.script, /packages[\\/]updater[\\/]src[\\/]main\.mjs$/);
       assert.match(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, /updater\.sock$/);
       assert.equal(updater.env.OV_SUPERAGENT_CONFIG, manifestPath);
       assert.equal(updater.env.OV_SUPERAGENT_LOG_LEVEL, 'debug');
