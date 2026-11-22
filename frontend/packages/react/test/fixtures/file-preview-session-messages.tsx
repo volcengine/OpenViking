@@ -81,5 +81,21 @@ createRoot(document.getElementById('root')!).render(
         />
       </section>
     ))}
+    <section id="json-preview" style={{ height: 500 }}>
+      <FilePreview
+        locale="en-US"
+        tabs={[
+          {
+            kind: 'file',
+            key: 'json-preview',
+            source: {
+              content: '{"outer":{"child":{"value":1},"sibling":2}}',
+              fileName: 'data.json',
+              path: 'viking://resources/data.json',
+            },
+          },
+        ]}
+      />
+    </section>
   </>,
 );

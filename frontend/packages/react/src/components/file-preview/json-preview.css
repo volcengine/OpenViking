@@ -1,0 +1,67 @@
+.ov-file-preview__json {
+  box-sizing: border-box;
+  block-size: 100%;
+  min-block-size: 0;
+  overflow: auto;
+  padding-block: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    monospace;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-file-preview__json-line {
+  display: flex;
+  min-inline-size: max-content;
+  padding-inline-end: 20px;
+  white-space: pre;
+}
+
+.ov-file-preview__json-gutter {
+  box-sizing: border-box;
+  inline-size: 48px;
+  flex: 0 0 48px;
+  padding-inline-end: 10px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  text-align: end;
+  user-select: none;
+}
+
+.ov-file-preview__json-toggle,
+.ov-file-preview__json-toggle-spacer {
+  box-sizing: border-box;
+  inline-size: 20px;
+  block-size: 22px;
+  flex: 0 0 20px;
+}
+
+.ov-file-preview__json-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  cursor: pointer;
+}
+
+.ov-file-preview__json-toggle > span {
+  display: inline-block;
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+
+.ov-file-preview__json-toggle[aria-expanded='false'] > span {
+  transform: rotate(0deg);
+}
+
+.ov-file-preview__json-toggle:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--ov-ui-color-primary, #1664ff);
+  outline-offset: -2px;
+}
+
+.ov-file-preview__json-code {
+  font: inherit;
+}

@@ -190,4 +190,32 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
         .querySelector('#unsupported')
         .textContent.includes('Unsupported future content'),
     );
+
+    await waitFor(() =>
+      document.querySelector('#json-preview [data-file-preview-json]'),
+    );
+    const structured = document.querySelector(
+      '#json-preview [data-file-preview-json]',
+    );
+    assert.ok(structured);
+    assert.deepEqual(
+      [...structured.querySelectorAll('[data-line]')].map((line) =>
+        Number(line.dataset.line),
+      ),
+      [1, 2, 3, 4, 5, 6, 7, 8],
+    );
+    const toggle = (label) =>
+      [...structured.querySelectorAll('button')].find(
+        (button) => button.getAttribute('aria-label') === label,
+      );
+    toggle('Collapse line 3').click();
+    await waitFor(() => toggle('Expand line 3'));
+    toggle('Collapse line 2').click();
+    await waitFor(() => toggle('Expand line 2'));
+    toggle('Expand line 2').click();
+    await waitFor(
+      () =>
+        structured.textContent.includes('"sibling"') &&
+        !structured.textContent.includes('"value"'),
+    );
   }));
