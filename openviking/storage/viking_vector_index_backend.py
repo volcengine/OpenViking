@@ -64,7 +64,7 @@ from openviking.utils.tags import (
 )
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -152,6 +152,21 @@ class UpsertOptions:
     partial_update: bool = False
     search_tag_mode: str = "replace"
     acl_update: AclUpdate | None = None
+
+
+@dataclass(frozen=True)
+class _PreparedVectorTransfer:
+    """Read-only transfer data used within one request's filesystem lease."""
+
+    account_id: str
+    source_uri: str
+    target_uri: str
+    recursive: bool
+    source_records: tuple[Dict[str, Any], ...]
+    batches: int
+    affected_target_ids: tuple[str, ...] = ()
+    target_acl_fields: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    orphan_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -3154,8 +3169,12 @@ class VikingVectorIndexBackend:
         source_uris: List[str] | None,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
         source_expected_levels: Mapping[str, set[int]] | None = None,
-    ) -> tuple[List[Dict[str, Any]], int, Dict[str, Dict[str, Any]]]:
-        """Read selected source records and remove affected target records."""
+    ) -> _PreparedVectorTransfer:
+        """Read and validate a transfer without modifying files or vectors."""
+        source_uri = resolve_uri(source_uri).uri
+        target_uri = resolve_uri(target_uri).uri
+        self._validate_uri_transfer_scopes(source_uri, target_uri)
+        orphan_ids: List[str] = []
         selected_source_uris = {
             resolve_uri(uri).uri
             for uri in (source_uris if source_uris is not None else [source_uri])
@@ -3212,18 +3231,6 @@ class VikingVectorIndexBackend:
                     if self._vector_entry_uri(record["uri"], selected_source_uris)
                     not in selected_source_uris
                 ]
-                for start in range(0, len(orphan_ids), 100):
-                    chunk = orphan_ids[start : start + 100]
-                    try:
-                        await self._strict_transfer_delete(ctx, chunk)
-                    except Exception as exc:
-                        # Optional cleanup must not trigger filesystem target rollback.
-                        logger.info(
-                            "Vector transfer orphan cleanup failed records=%d error_type=%s",
-                            len(chunk),
-                            type(exc).__name__,
-                            extra={"degraded": True},
-                        )
             # Keep the filesystem API's existing per-entry diagnostic count.
             batches = len(selected_source_uris)
         elif not use_entry_queries:
@@ -3240,7 +3247,15 @@ class VikingVectorIndexBackend:
 
         # Match legacy mv: unindexed source entries leave old target records intact.
         if not source_records:
-            return source_records, batches, {}
+            return _PreparedVectorTransfer(
+                account_id=ctx.account_id,
+                source_uri=source_uri,
+                target_uri=target_uri,
+                recursive=recursive,
+                source_records=(),
+                batches=batches,
+                orphan_ids=tuple(orphan_ids),
+            )
         replacement_source_uris = {
             self._vector_entry_uri(str(record["uri"]), selected_source_uris)
             for record in source_records
@@ -3353,9 +3368,31 @@ class VikingVectorIndexBackend:
                     await self.acl_manager.resolve_many(acl_target_uris, ctx)
                 ).items()
             }
-        if affected_target_ids:
-            await self._delete_vector_transfer_ids(ctx, affected_target_ids)
-        return source_records, batches, target_acl_fields
+        return _PreparedVectorTransfer(
+            account_id=ctx.account_id,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            recursive=recursive,
+            source_records=tuple(source_records),
+            batches=batches,
+            affected_target_ids=tuple(affected_target_ids),
+            target_acl_fields=target_acl_fields,
+            orphan_ids=tuple(orphan_ids),
+        )
+
+    async def _cleanup_transfer_orphans(self, ctx: RequestContext, ids: tuple[str, ...]) -> None:
+        for start in range(0, len(ids), 100):
+            chunk = list(ids[start : start + 100])
+            try:
+                await self._strict_transfer_delete(ctx, chunk)
+            except Exception as exc:
+                # Optional cleanup must not trigger filesystem target rollback.
+                logger.info(
+                    "Vector transfer orphan cleanup failed records=%d error_type=%s",
+                    len(chunk),
+                    type(exc).__name__,
+                    extra={"degraded": True},
+                )
 
     async def copy_uri_mapping(
         self,
@@ -3369,10 +3406,7 @@ class VikingVectorIndexBackend:
         source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> VectorTransferResult:
         """Copy every vector record in a URI scope without regenerating embeddings."""
-        source_uri = resolve_uri(source_uri).uri
-        target_uri = resolve_uri(target_uri).uri
-        self._validate_uri_transfer_scopes(source_uri, target_uri)
-        source_records, batches, target_acl_fields = await self._prepare_uri_transfer(
+        prepared = await self._prepare_uri_transfer(
             ctx,
             source_uri,
             target_uri,
@@ -3381,7 +3415,19 @@ class VikingVectorIndexBackend:
             target_entry_exists=target_entry_exists,
             source_expected_levels=source_expected_levels,
         )
-        result = VectorTransferResult(scanned=len(source_records), batches=batches)
+        return await self._copy_prepared_uri_mapping(ctx, prepared)
+
+    async def _copy_prepared_uri_mapping(
+        self, ctx: RequestContext, prepared: _PreparedVectorTransfer
+    ) -> VectorTransferResult:
+        if prepared.account_id != ctx.account_id:
+            raise PermissionDeniedError("prepared vector transfer belongs to another account")
+        source_uri, target_uri = prepared.source_uri, prepared.target_uri
+        source_records = prepared.source_records
+        target_acl_fields = prepared.target_acl_fields
+        if prepared.affected_target_ids:
+            await self._delete_vector_transfer_ids(ctx, list(prepared.affected_target_ids))
+        result = VectorTransferResult(scanned=len(source_records), batches=prepared.batches)
         timestamp = get_current_timestamp()
         target_payloads = [
             rewrite_vector_record(
@@ -3403,6 +3449,7 @@ class VikingVectorIndexBackend:
                     payload.update(acl_fields)
 
         if not target_payloads:
+            await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
             return result
 
         attempted_target_ids: List[str] = []
@@ -3437,6 +3484,7 @@ class VikingVectorIndexBackend:
                     residual_count=residual_count,
                 ) from transfer_error
             raise
+        await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
         return result
 
     async def update_uri_mapping(
@@ -3452,10 +3500,7 @@ class VikingVectorIndexBackend:
         source_expected_levels: Mapping[str, set[int]] | None = None,
     ) -> VectorTransferResult:
         """Move every vector record in a URI scope with compensating rollback."""
-        source_uri = resolve_uri(source_uri).uri
-        target_uri = resolve_uri(target_uri).uri
-        self._validate_uri_transfer_scopes(source_uri, target_uri)
-        source_records, batches, target_acl_fields = await self._prepare_uri_transfer(
+        prepared = await self._prepare_uri_transfer(
             ctx,
             source_uri,
             target_uri,
@@ -3464,9 +3509,25 @@ class VikingVectorIndexBackend:
             target_entry_exists=target_entry_exists,
             source_expected_levels=source_expected_levels,
         )
+        return await self._move_prepared_uri_mapping(ctx, prepared, restore_acl=restore_acl)
+
+    async def _move_prepared_uri_mapping(
+        self,
+        ctx: RequestContext,
+        prepared: _PreparedVectorTransfer,
+        *,
+        restore_acl: Dict[str, Dict[str, Any]] | None = None,
+    ) -> VectorTransferResult:
+        if prepared.account_id != ctx.account_id:
+            raise PermissionDeniedError("prepared vector transfer belongs to another account")
+        source_uri, target_uri = prepared.source_uri, prepared.target_uri
+        source_records = prepared.source_records
+        target_acl_fields = dict(prepared.target_acl_fields)
+        if prepared.affected_target_ids:
+            await self._delete_vector_transfer_ids(ctx, list(prepared.affected_target_ids))
         result = VectorTransferResult(
             scanned=len(source_records),
-            batches=batches,
+            batches=prepared.batches,
             # Keep the original ACL only for a failed move's compensation.
             source_acl={
                 str(record["uri"]): {
@@ -3478,6 +3539,7 @@ class VikingVectorIndexBackend:
         if restore_acl is not None:
             target_acl_fields.update(restore_acl)
         if not source_records:
+            await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
             return result
 
         timestamp = get_current_timestamp()
@@ -3544,7 +3606,7 @@ class VikingVectorIndexBackend:
         except Exception as transfer_error:
             rollback_errors: List[Exception] = []
             try:
-                restored_ids = await self._upsert_many_raw(source_records, ctx=ctx)
+                restored_ids = await self._upsert_many_raw(list(source_records), ctx=ctx)
                 result.restored = len(restored_ids)
                 if result.restored != len(source_records):
                     raise RuntimeError(
@@ -3564,6 +3626,7 @@ class VikingVectorIndexBackend:
                     residual_count=len(source_records),
                 ) from transfer_error
             raise
+        await self._cleanup_transfer_orphans(ctx, prepared.orphan_ids)
         return result
 
     def _build_scope_filter(

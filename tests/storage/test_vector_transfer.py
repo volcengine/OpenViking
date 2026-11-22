@@ -30,7 +30,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 
@@ -197,6 +197,91 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
 
     async def _strict_transfer_delete(self, ctx, ids):
         return await self.delete(ids, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_vector_transfer_prepare_has_no_mutations():
+    source, target = "viking://resources/source", "viking://resources/target"
+    records = [
+        _record("source", source + "/a.md"),
+        _record("orphan", source + "/gone.md"),
+        _record("old-target", target + "/a.md"),
+        _record("keep", target + "/keep.md"),
+    ]
+    backend = _MemoryTransferBackend(records)
+    prepared = await backend._prepare_uri_transfer(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[source, source + "/a.md"],
+        source_expected_levels={source + "/a.md": {2}},
+    )
+
+    assert backend.records == {record["id"]: record for record in records}
+    assert backend.delete_calls == backend.upsert_calls == 0
+    assert [record["id"] for record in prepared.source_records] == ["source"]
+    assert prepared.affected_target_ids == ("old-target",)
+    assert prepared.orphan_ids == ("orphan",)
+    assert prepared.account_id == "acct"
+    assert prepared.batches == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["_copy_prepared_uri_mapping", "_move_prepared_uri_mapping"])
+async def test_prepared_transfer_rejects_another_account_before_mutation(method):
+    source, target = "viking://resources/source", "viking://resources/target"
+    records = [_record("source", source), _record("old-target", target)]
+    backend = _MemoryTransferBackend(records)
+    prepared = await backend._prepare_uri_transfer(
+        _ctx(), source, target, recursive=False, source_uris=None
+    )
+    other = RequestContext(user=UserIdentifier("other", "alice"), role=Role.USER)
+    with pytest.raises(PermissionDeniedError, match="another account"):
+        await getattr(backend, method)(other, prepared)
+    assert backend.records == {record["id"]: record for record in records}
+    assert backend.delete_calls == backend.upsert_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["_copy_prepared_uri_mapping", "_move_prepared_uri_mapping"])
+async def test_empty_prepared_transfer_cleans_orphans_and_keeps_old_target(method):
+    source, target = "viking://resources/source", "viking://resources/target"
+    backend = _MemoryTransferBackend(
+        [
+            _record("orphan", source + "/gone.md"),
+            _record("old-target", target + "/a.md"),
+        ]
+    )
+    prepared = await backend._prepare_uri_transfer(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[source, source + "/a.md"],
+        source_expected_levels={source + "/a.md": {2}},
+    )
+    assert prepared.source_records == () and prepared.affected_target_ids == ()
+    assert "orphan" in backend.records
+    result = await getattr(backend, method)(_ctx(), prepared)
+    assert result.scanned == result.written == 0
+    assert set(backend.records) == {"old-target"}
+
+
+@pytest.mark.asyncio
+async def test_prepared_move_restore_acl_does_not_modify_prepared_fields():
+    source, target = "viking://resources/source", "viking://resources/target"
+    backend = _MemoryTransferBackend([_record("source", source)])
+    prepared = await backend._prepare_uri_transfer(
+        _ctx(), source, target, recursive=False, source_uris=None
+    )
+    original = dict(prepared.source_records[0])
+    await backend._move_prepared_uri_mapping(
+        _ctx(), prepared, restore_acl={target: {"acl_mode": "restricted"}}
+    )
+    assert prepared.target_acl_fields == {}
+    assert prepared.source_records[0] == original
+    assert next(iter(backend.records.values()))["acl_mode"] == "restricted"
 
 
 def _matches_filter(expr, record: dict[str, Any]) -> bool:
@@ -2491,15 +2576,18 @@ async def test_cloud_transfer_keeps_timestamp_prefix_scan_and_batched_fetch(
         raise AssertionError(f"Expected scalar inventory or ID fetch, got {path}")
 
     monkeypatch.setattr(collection, "_data_post", data_post)
-    records, batches, _ = await backend._prepare_uri_transfer(
+    prepared = await backend._prepare_uri_transfer(
         _ctx(),
         "viking://resources/source",
         "viking://resources/target",
         recursive=True,
         source_uris=["viking://resources/source/a.md"],
     )
-    assert batches == 1
-    assert [(record["id"], record["vector"]) for record in records] == [("file", [0.1, 0.2])]
+    assert prepared.batches == 1
+    assert [(record["id"], record["vector"]) for record in prepared.source_records] == [
+        ("file", [0.1, 0.2])
+    ]
+    assert prepared.affected_target_ids == ()
     assert paths == [
         "/api/vikingdb/data/search/scalar",
         "/api/vikingdb/data/fetch_in_collection",
