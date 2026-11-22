@@ -143,8 +143,10 @@ export function terminateProcessTree(child, signal = 'SIGTERM') {
   const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
   killer.on('error', () => { try { child.kill(signal); } catch {} });
   // taskkill exits non-zero when the pid is already gone or belongs to a fake
-  // fixture; fall back to the handle so callers still observe an exit.
-  killer.on('exit', (code) => { if (code !== 0) { try { child.kill(signal); } catch {} } });
+  // fixture; fall back to the handle so callers still observe an exit. This
+  // reaches the direct child only, which is all a pid that taskkill refused can
+  // be expected to leave behind.
+  killer.once('exit', (code) => { if (code !== 0) { try { child.kill(signal); } catch {} } });
   killer.unref();
 }
 export function assertPrivateDirectory(directory) {

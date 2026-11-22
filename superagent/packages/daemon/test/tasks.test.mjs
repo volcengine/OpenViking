@@ -86,7 +86,7 @@ describe('TaskManager', () => {
     assert.match(turn.prompt, /^\[task t1\] 查 X 变慢\nRequested by Alice in chat=oc_a thread=omt_1 \(source=lark\)\./);
     assert.match(turn.prompt, /\[chat=oc_a msg=om_\d+ event=e\d+\] 帮我查下 X 为什么慢/);
     assert.match(turn.prompt, /Routing note from the agent: Alice 只要上周的数据/);
-    const escapedDirectory = path.join(workspace, 'tasks', 't1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedDirectory = escapeRegExp(path.join(workspace, 'tasks', 't1'));
     assert.match(turn.prompt, new RegExp(`Your directory: ${escapedDirectory}`));
     assert.ok(fs.existsSync(path.join(workspace, 'tasks', 't1')));
     assert.equal(tasks.workerFor(turn.authority), 't1');

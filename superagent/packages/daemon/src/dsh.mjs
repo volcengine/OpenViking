@@ -9,8 +9,8 @@
 // and its settlement), events (what DSH reports back) and models (route
 // selection). The modules only define functions; installing them here keeps a
 // single class with a single public surface.
-import { createHash, randomUUID } from 'node:crypto';
-import { assembleConversationPolicy } from './conversation-policy.mjs';
+import { randomUUID } from 'node:crypto';
+import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { DSH_DEFAULT_MODEL, DSH_EFFORTS } from './dsh-runtime.mjs';
 import { spawn as platformSpawn } from './platform/index.mjs';
@@ -197,10 +197,7 @@ export class DshAgent {
   get resolvedModel() { return this.appliedModel ?? ''; }
 
   get policyHash() {
-    return createHash('sha256')
-      .update(this.systemPrompt).update('\0')
-      .update(this.config.workspace).update('\0')
-      .update('dsh-sdk-v1').digest('hex');
+    return policyHashOf(this.systemPrompt, this.config.workspace, 'dsh-sdk-v1');
   }
 
   get state() {

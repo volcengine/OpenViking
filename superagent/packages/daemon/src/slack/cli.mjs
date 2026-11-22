@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { SlackError, validToken } from './api.mjs';
 // Platform execFile, like every other CLI client: Windows starts a `.cmd` shim
@@ -11,16 +12,19 @@ import { SlackError, validToken } from './api.mjs';
 // extensionless script the way POSIX does.
 import { execFile, findExecutable, hostPlatformId, systemEnvironmentKeys } from '../platform/index.mjs';
 
-// A Windows temp directory can still be held by the child's handles; cleanup
-// must not turn a completed query into a failure.
-function removeTempDir(directory) {
+const RETRYABLE_REMOVE = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
+
+// A Windows temp directory can still be held by the child's handles right after
+// it exits; cleanup must not turn a completed query into a failure. Retry the
+// transient codes without blocking the daemon, then leave the directory to the
+// OS temp sweep rather than fail a read that already succeeded.
+async function removeTempDir(directory) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try { fs.rmSync(directory, { recursive: true, force: true }); return; }
     catch (error) {
-      // Windows may still hold the child's files briefly; retry the transient
-      // codes and let a real permission failure through.
-      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error.code)) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      // A real permission failure is not ours to hide.
+      if (!RETRYABLE_REMOVE.has(error.code)) throw error;
+      await delay(50);
     }
   }
 }
@@ -70,7 +74,7 @@ export class SlackCli {
       if (error || result?.ok !== true) throw new Error('Slack CLI query failed or returned invalid JSON');
       return result;
     } finally {
-      removeTempDir(directory);
+      await removeTempDir(directory);
     }
   }
 }

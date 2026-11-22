@@ -5,7 +5,7 @@ import { spawnDetached } from './platform/index.mjs';
 import * as platform from './platform/index.mjs';
 
 import { spawn as nodeSpawn } from './platform/index.mjs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
@@ -13,7 +13,7 @@ import { safeError as safe } from './logger.mjs';
 import { captureStartupStderr } from './runtime-diagnostics.mjs';
 import { activityPayload } from './activity.mjs';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
-import { assembleConversationPolicy } from './conversation-policy.mjs';
+import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { codexConfigFile, codexIsolationArgs } from './ov-isolation.mjs';
@@ -288,10 +288,7 @@ export class CodexAgent {
   // policy. Model/effort are deliberately not part of the hash: they are per-turn
   // overrides now, and switching them must not orphan the stored thread.
   get policyHash() {
-    return createHash('sha256')
-      .update(this.developerInstructionsText).update('\0')
-      .update(this.config.workspace).update('\0')
-      .update(this.policyVersion).digest('hex');
+    return policyHashOf(this.developerInstructionsText, this.config.workspace, this.policyVersion);
   }
 
   get state() {

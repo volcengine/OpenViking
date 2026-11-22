@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,25 @@ function promptDir(config) {
   return config?.promptDir || DEFAULT_PROMPT_DIR;
 }
 
+// The policy reaches a runtime as one text, and a stored session is resumed by
+// the hash of that text. Both must be the same on every host: prompt files, the
+// soul and connector sections can come back with CRLF from a Windows checkout, a
+// local file an editor wrote, or OpenViking. Normalize at the boundary, so
+// neither the text nor the hash depends on who produced the line endings.
+export function normalizePolicyText(text) {
+  return String(text ?? '').replace(/\r\n?/g, '\n');
+}
+
+// The policyHash of an assembled policy: its normalized text followed by what the
+// stored session was started with (workspace, policy version). Normalizing here
+// rather than only where the text is read means a caller that assembled or
+// loaded policy text elsewhere still hashes it the same way.
+export function policyHashOf(text, ...parts) {
+  const hash = createHash('sha256').update(normalizePolicyText(text));
+  for (const part of parts) hash.update('\0').update(part);
+  return hash.digest('hex');
+}
+
 // Where the soul is kept unless the instance names another place
 // (agents[].soulUri): its own OV user's memories.
 export const OV_SOUL_URI = 'viking://~/memories/soul.md';
@@ -41,11 +61,10 @@ export function rolePresetText(name, dir = DEFAULT_PROMPT_DIR) {
   return readPromptText(path.join(dir, 'roles', `${name}.md`));
 }
 
-// Prompt files are checked in with LF; a Windows checkout may hand them back
-// with CRLF. The policy text (and its hash) must not depend on the host's
-// line endings, so normalize before anything is assembled or hashed.
+// Every prompt file comes through here, so the text is host-independent before
+// it is split, joined or substituted.
 function readPromptText(file) {
-  return fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
+  return normalizePolicyText(fs.readFileSync(file, 'utf8'));
 }
 
 function agentName(config) {
@@ -89,7 +108,7 @@ function renderPrompt(config, name) {
 }
 
 function joinSections(parts) {
-  return parts.map((part) => String(part || '').trim()).filter(Boolean).join('\n\n');
+  return normalizePolicyText(parts.map((part) => String(part || '').trim()).filter(Boolean).join('\n\n'));
 }
 
 // Policy tests and tools pass partial configs; a running daemon always lists its connectors.
@@ -106,7 +125,7 @@ function connectorSections(config) {
 // The soul as loaded, without its HTML comments (notes for whoever edits
 // it). An instance without one runs on the Core's defaults.
 export function rolePrompt(config = {}) {
-  const text = String(config.soulText ?? '').replace(/<!--[\s\S]*?-->/g, '');
+  const text = normalizePolicyText(config.soulText).replace(/<!--[\s\S]*?-->/g, '');
   return substitutePromptPlaceholders(text, config).trim();
 }
 

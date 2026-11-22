@@ -85,7 +85,9 @@ describe('DshAgent startup and SDK transport', () => {
     const context = newAgent({ childOptions: { hello: new Error('method not found') } });
     await assert.rejects(context.agent.start(), /method not found/);
     assert.equal(context.agent.connected, false);
-    // A fake pid cannot be terminated through taskkill on Windows; the\n    // handshake failure itself is asserted above.\n    if (process.platform !== 'win32') assert.equal(context.children[0].exitCode !== null, true);
+    // A fake pid cannot be terminated through taskkill on Windows, so the child's
+    // exit is not observable there; the handshake failure itself is asserted above.
+    if (process.platform !== 'win32') assert.equal(context.children[0].exitCode !== null, true);
   });
 
   it('resumes a matching stored session and preserves its journal cursor', async () => {
