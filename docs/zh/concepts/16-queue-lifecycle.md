@@ -69,7 +69,7 @@ Python 不应再组合 backend 的 `pending` 和进程内计数来判断完成�
 
 ## Backend 契约
 
-QueueFS `/status` 返回同一次原子读取取得的状态：
+QueueFS `/<queue>/status` 返回同一次原子读取取得的状态：
 
 ```json
 {
@@ -92,8 +92,7 @@ QueueFS 控制文件名属于保留路径段，队列名不能以 `enqueue`、`e
   删除消息。
 
 `NamedQueue.get_status()` 通过 `/<queue>/status` 读取单个队列的两个计数。全局检查时，
-`QueueManager` 读取 QueueFS 挂载根的内部操作 `/status`。后端在同一时点采集所有队列的计数，
-管理器只检查自己注册的队列。
+`QueueManager` 在自己的 QueueFS 目录中请求一份快照，后端在同一次原子读取中采集其已注册队列的计数。
 
 当这些队列的 `pending` 和 `processing` 首次在同一份快照中全部为零时，
 `wait_complete()` 返回该快照。在队列间交接的工作会在快照中保持可见。采样后仍可接收新任务。

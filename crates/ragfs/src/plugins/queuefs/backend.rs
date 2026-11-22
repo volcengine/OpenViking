@@ -216,7 +216,7 @@ pub trait QueueBackend: Send + Sync {
     fn status(&self, queue_name: &str) -> Result<QueueState>;
 
     /// Read all queue counts from one backend snapshot.
-    fn status_snapshot(&self) -> Result<HashMap<String, QueueState>>;
+    fn status_snapshot(&self, names: &[String]) -> Result<HashMap<String, QueueState>>;
 
     /// List every unacknowledged message without changing queue state
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>>;
@@ -399,10 +399,10 @@ impl QueueBackend for MemoryBackend {
         Ok(queue.status())
     }
 
-    fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
-        Ok(self
-            .queues
+    fn status_snapshot(&self, names: &[String]) -> Result<HashMap<String, QueueState>> {
+        Ok(names
             .iter()
+            .filter_map(|name| self.queues.get_key_value(name))
             .map(|(name, queue)| (name.clone(), queue.status()))
             .collect())
     }
@@ -926,21 +926,23 @@ impl QueueBackend for SQLiteQueueBackend {
         })
     }
 
-    fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
+    fn status_snapshot(&self, names: &[String]) -> Result<HashMap<String, QueueState>> {
+        let names = serde_json::to_string(names)?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {e}")))?;
         conn.prepare(
             "SELECT queues.queue_name,
-                    COUNT(CASE WHEN messages.status = 'pending' THEN 1 END),
-                    COUNT(CASE WHEN messages.status = 'processing' THEN 1 END)
+                    (SELECT COUNT(*) FROM queue_messages
+                     WHERE queue_name = queues.queue_name AND status = 'pending'),
+                    (SELECT COUNT(*) FROM queue_messages
+                     WHERE queue_name = queues.queue_name AND status = 'processing')
              FROM queue_metadata AS queues
-             LEFT JOIN queue_messages AS messages ON messages.queue_name = queues.queue_name
-             GROUP BY queues.queue_name",
+             WHERE queues.queue_name IN (SELECT value FROM json_each(?1))",
         )
         .and_then(|mut statement| {
-            let rows = statement.query_map([], |row| {
+            let rows = statement.query_map([names], |row| {
                 Ok((
                     row.get(0)?,
                     QueueState {

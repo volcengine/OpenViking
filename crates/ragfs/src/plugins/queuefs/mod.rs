@@ -8,7 +8,7 @@
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
 //! - `/queue_name/status` - Read pending and processing message counts
-//! - `/status` - Read a single snapshot of message counts across all queues
+//! - `/<directory>/status=<selection>` - Read a single snapshot for selected queues
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use backend::{
     MemoryBackend, Message, QueueBackend, QueueState, SQLiteQueueBackend, SQLiteQueueOptions,
 };
+use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 #[cfg(feature = "cache")]
 use cache_backend::CacheQueueStorage;
 use serde::Serialize;
@@ -220,11 +221,11 @@ impl QueueStorage {
         }
     }
 
-    async fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
+    async fn status_snapshot(&self, names: &[String]) -> Result<HashMap<String, QueueState>> {
         match self {
-            Self::Local(backend) => backend.lock().await.status_snapshot(),
+            Self::Local(backend) => backend.lock().await.status_snapshot(names),
             #[cfg(feature = "cache")]
-            Self::Cache(storage) => storage.status_snapshot().await,
+            Self::Cache(storage) => storage.status_snapshot(names).await,
         }
     }
 
@@ -402,8 +403,32 @@ impl FileSystem for QueueFileSystem {
     }
 
     async fn read(&self, path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
-        if path.trim_start_matches('/') == "status" {
-            let snapshot = self.storage.status_snapshot().await?;
+        let relative_path = path.trim_start_matches('/');
+        let (directory, file) = relative_path
+            .rsplit_once('/')
+            .unwrap_or(("", relative_path));
+        if let Some(selection) = file.strip_prefix("status=") {
+            // Encode a JSON list so nested and Unicode queue names fit in one path component.
+            let selection = URL_SAFE
+                .decode(selection)
+                .map_err(|_| Error::invalid_path(path))?;
+            let names: Vec<String> = serde_json::from_slice(&selection)?;
+            let qualified_names = names
+                .iter()
+                .map(|name| {
+                    if directory.is_empty() {
+                        name.trim_start_matches('/').to_owned()
+                    } else {
+                        format!("{directory}/{name}")
+                    }
+                })
+                .collect::<Vec<_>>();
+            let states = self.storage.status_snapshot(&qualified_names).await?;
+            let snapshot: HashMap<_, _> = names
+                .into_iter()
+                .zip(qualified_names)
+                .filter_map(|(name, qualified)| states.get(&qualified).map(|state| (name, state)))
+                .collect();
             return Ok(serde_json::to_vec(&snapshot)?);
         }
         let parsed = Self::parse_queue_path(path)?;
@@ -998,26 +1023,41 @@ mod tests {
     use serde::Deserialize;
 
     async fn populate_status_snapshot(fs: &QueueFileSystem) {
-        for name in ["pending", "processing", "team/empty"] {
+        for name in [
+            "team/pending",
+            "team/processing",
+            "team/nested/空",
+            "team/unregistered",
+            "peer/pending",
+        ] {
             fs.mkdir(&format!("/{name}"), 0o755).await.unwrap();
         }
-        for name in ["pending", "processing"] {
+        for name in [
+            "team/pending",
+            "team/processing",
+            "team/unregistered",
+            "peer/pending",
+        ] {
             fs.write(&format!("/{name}/enqueue"), b"payload", 0, WriteFlag::None)
                 .await
                 .unwrap();
         }
-        fs.read("/processing/dequeue", 0, 0).await.unwrap();
+        fs.read("/team/processing/dequeue", 0, 0).await.unwrap();
     }
 
     async fn assert_status_snapshot(fs: &QueueFileSystem) {
-        let raw = fs.read("/status", 0, 0).await.unwrap();
+        let selection = URL_SAFE.encode(r#"["pending","processing","nested/空","missing"]"#);
+        let raw = fs
+            .read(&format!("/team/status={selection}"), 0, 0)
+            .await
+            .unwrap();
         let snapshot: serde_json::Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(
             snapshot,
             serde_json::json!({
                 "pending": {"pending": 1, "processing": 0},
                 "processing": {"pending": 0, "processing": 1},
-                "team/empty": {"pending": 0, "processing": 0}
+                "nested/空": {"pending": 0, "processing": 0}
             })
         );
     }
@@ -1025,17 +1065,21 @@ mod tests {
     #[tokio::test]
     async fn memory_status_snapshot_is_an_internal_root_read() {
         let fs = QueueFileSystem::new();
-        assert_eq!(fs.read("/status", 0, 0).await.unwrap(), b"{}");
+        let selection = URL_SAFE.encode("[]");
+        let path = format!("/status={selection}");
+        assert_eq!(fs.read(&path, 0, 0).await.unwrap(), b"{}");
         populate_status_snapshot(&fs).await;
         assert_status_snapshot(&fs).await;
         assert_eq!(
-            fs.read("/team/empty/status", 0, 0).await.unwrap(),
+            fs.read("/team/nested/空/status", 0, 0).await.unwrap(),
             br#"{"pending":0,"processing":0}"#
         );
-        assert!(fs.create("/status").await.is_err());
-        assert!(fs.stat("/status").await.is_err());
+        assert!(fs.create(&path).await.is_err());
+        assert!(fs.stat(&path).await.is_err());
         let entries = fs.read_dir("/", None, None, None, None).await.unwrap();
-        assert!(!entries.iter().any(|entry| entry.name == "status"));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.name.starts_with("status=")));
     }
 
     #[tokio::test]

@@ -7,7 +7,9 @@ All queues are managed through NamedQueue.
 
 import asyncio
 import atexit
+import json
 import threading
+from base64 import urlsafe_b64encode
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
 from openviking.observability.log_safety import safe_path_for_log, short_hash
@@ -43,7 +45,6 @@ def init_queue_manager(
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     max_concurrent_external_task: int = 10,
     *,
-    queuefs_root: Optional[str] = None,
     middlewares: Sequence[QueueMiddleware] = (),
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
@@ -52,7 +53,6 @@ def init_queue_manager(
         agfs: Pre-initialized AGFS client (HTTP or Binding).
         timeout: Request timeout in seconds.
         mount_point: Directory for this manager's queues.
-        queuefs_root: QueueFS plugin mount when the manager uses a subdirectory.
         max_concurrent_embedding: Max concurrent embedding tasks.
         max_concurrent_semantic: Max concurrent semantic node work.
         max_concurrent_external_parse: Max concurrent ExternalParse tasks.
@@ -73,7 +73,6 @@ def init_queue_manager(
         max_concurrent_reindex=max_concurrent_reindex,
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
-        queuefs_root=queuefs_root,
         middlewares=middlewares,
     )
     return _instance
@@ -122,7 +121,6 @@ class QueueManager:
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
         max_concurrent_external_task: int = 10,
         *,
-        queuefs_root: Optional[str] = None,
         middlewares: Sequence[QueueMiddleware] = (),
     ):
         """Initialize QueueManager."""
@@ -130,7 +128,6 @@ class QueueManager:
         self._async_agfs = AsyncAGFSClient(agfs)
         self.timeout = timeout
         self.mount_point = mount_point
-        self._queuefs_root = (queuefs_root or mount_point).rstrip("/")
         self._max_concurrent_embedding = max_concurrent_embedding
         self._max_concurrent_semantic = max_concurrent_semantic
         self._max_concurrent_external_parse = max_concurrent_external_parse
@@ -595,24 +592,22 @@ class QueueManager:
                 return {}
             return {queue_name: await self._queues[queue_name].get_status()}
 
-        root_prefix = f"{self._queuefs_root}/"
         while True:
             queues = self._queues.copy()
             if not queues:
                 return {}
             for queue in queues.values():
                 await queue._ensure_initialized()
-            content = await self._async_agfs.read(f"{root_prefix}status")
+            names = json.dumps(list(queues), ensure_ascii=False, separators=(",", ":"))
+            selection = urlsafe_b64encode(names.encode("utf-8")).decode("ascii")
+            content = await self._async_agfs.read(f"{self.mount_point}/status={selection}")
             if queues != self._queues:
                 continue
             snapshot = _decode_status_response(content)
             if not isinstance(snapshot, dict):
                 raise ValueError("Invalid QueueFS status snapshot")
             return {
-                name: queue._status_from_backend(
-                    snapshot[queue.path.removeprefix(root_prefix).lstrip("/")]
-                )
-                for name, queue in queues.items()
+                name: queue._status_from_backend(snapshot[name]) for name, queue in queues.items()
             }
 
     def has_errors(self, queue_name: Optional[str] = None) -> bool:

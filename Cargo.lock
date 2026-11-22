@@ -4302,6 +4302,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws-types",
+ "base64",
  "bytes",
  "chrono",
  "criterion",

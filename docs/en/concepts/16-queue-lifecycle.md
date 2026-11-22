@@ -77,7 +77,7 @@ cannot infer a handler result from dequeue or ACK alone.
 
 ## Backend Contract
 
-QueueFS `/status` returns counts read atomically:
+QueueFS `/<queue>/status` returns counts read atomically:
 
 ```json
 {
@@ -100,10 +100,9 @@ Backend requirements:
   ACK removes the message from it.
 
 `NamedQueue.get_status()` reads `/<queue>/status`, which captures the two counts
-for one queue. For a global check, `QueueManager` reads the internal `/status`
-operation at the QueueFS mount root. The backend captures counts for every
-queue at one point in time, and the manager considers only its registered
-queues.
+for one queue. For a global check, `QueueManager` requests a single snapshot of
+its registered queues from its QueueFS directory. Each backend reads those counts
+atomically.
 
 `wait_complete()` returns the first snapshot in which all those queues have zero
 `pending` and zero `processing`. This keeps work visible during a handoff from

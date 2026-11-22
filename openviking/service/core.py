@@ -58,7 +58,6 @@ from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.system_assets.reconcile import AccountLister, SystemAssetReconciler
 from openviking.system_assets.sync import SystemAssetSynchronizer
 from openviking.utils.agfs_utils import (
-    QUEUEFS_ROOT,
     build_runtime_ragfs_binding_config,
     resolve_queuefs_mount_point,
 )
@@ -219,7 +218,6 @@ class OpenVikingService:
                 agfs=self._agfs_client,
                 timeout=config.agfs.timeout,
                 mount_point=queue_mount_point,
-                queuefs_root=QUEUEFS_ROOT,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
                 max_concurrent_external_parse=max_concurrent_external_parse,

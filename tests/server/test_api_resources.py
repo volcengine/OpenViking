@@ -868,10 +868,11 @@ async def test_wait_processed_waits_through_semantic_to_embedding_handoff(
 
     async def read_at_handoff(self, path, *args, **kwargs):
         content = await read(self, path, *args, **kwargs)
-        if path in ("/queue/status", "/queue/Embedding/status") and not first_sample.is_set():
+        is_snapshot = path.startswith("/queue/status=")
+        if (is_snapshot or path == "/queue/Embedding/status") and not first_sample.is_set():
             first_sample.set()
             await handoff_done.wait()
-        elif path == "/queue/status" and json.loads(content)["Embedding"]["pending"] == 1:
+        elif is_snapshot and json.loads(content)["Embedding"]["pending"] == 1:
             sampled_pending_child.set()
         return content
 

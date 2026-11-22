@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+from base64 import urlsafe_b64decode
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -263,7 +264,7 @@ async def test_wait_complete_returns_the_snapshot_that_showed_registered_queues_
     agfs = Mock()
     agfs.read.side_effect = [
         b'{"Registered":{"pending":0,"processing":1}}',
-        b'{"Registered":{"pending":0,"processing":0},"Unregistered":{"pending":1,"processing":0}}',
+        b'{"Registered":{"pending":0,"processing":0}}',
     ]
     manager = QueueManager(agfs, mount_point="/jobs")
     handler = AsyncMock(spec=DequeueHandlerBase)
@@ -279,7 +280,9 @@ async def test_wait_complete_returns_the_snapshot_that_showed_registered_queues_
     assert [error.message for error in statuses["Registered"].errors] == [
         "previous delivery failed"
     ]
-    assert [call.args[0] for call in agfs.read.call_args_list] == ["/jobs/status"] * 2
+    for call in agfs.read.call_args_list:
+        assert _snapshot_selection(call.args[0], "/jobs") == ["Registered"]
+    assert agfs.read.call_count == 2
     assert agfs.mkdir.call_args.args[0] == "/jobs/Registered"
 
 
@@ -292,9 +295,11 @@ async def test_check_status_resamples_when_a_queue_is_registered_during_read():
     second = b'{"First":{"pending":0,"processing":0},"Second":{"pending":1,"processing":0}}'
 
     def read_status(path, **kwargs):
-        assert path == "/queue/status"
+        selection = _snapshot_selection(path, "/queue")
         if agfs.read.call_count > 1:
+            assert selection == ["First", "Second"]
             return second
+        assert selection == ["First"]
         manager.get_queue("Second", allow_create=True)
         return first
 
@@ -303,25 +308,29 @@ async def test_check_status_resamples_when_a_queue_is_registered_during_read():
     assert {call.args[0] for call in agfs.mkdir.call_args_list} == {"/queue/First", "/queue/Second"}
 
 
-async def test_check_status_limits_a_worker_manager_to_its_registered_queue_paths(tmp_path):
-    from openviking.utils.agfs_utils import QUEUEFS_ROOT, RagfsBindingConfig, create_agfs_client
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+async def test_check_status_limits_a_worker_manager_to_its_registered_queue_paths(
+    tmp_path, backend
+):
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
     from openviking_cli.utils.config.agfs_config import AGFSConfig, QueueFSConfig
 
     client = create_agfs_client(
         RagfsBindingConfig(
-            agfs=AGFSConfig(path=str(tmp_path), queuefs=QueueFSConfig(backend="memory"))
+            agfs=AGFSConfig(path=str(tmp_path), queuefs=QueueFSConfig(backend=backend))
         )
     )
     try:
-        manager = QueueManager(client, mount_point="/queue/worker-1", queuefs_root=QUEUEFS_ROOT)
+        manager = QueueManager(client, mount_point="/queue/worker-1")
         manager.get_queue("Test", allow_create=True)
-        peer = QueueManager(client, mount_point="/queue/worker-2", queuefs_root=QUEUEFS_ROOT)
+        peer = QueueManager(client, mount_point="/queue/worker-2")
         await peer.get_queue("Test", allow_create=True).enqueue({"kind": "peer"})
 
         statuses = await manager.check_status()
         assert list(statuses) == ["Test"]
         assert statuses["Test"].is_complete
         assert (await manager.check_status("Test")) == statuses
+        assert await manager.wait_complete() == statuses
         assert (await peer.check_status())["Test"].pending == 1
     finally:
         client.close()
@@ -358,7 +367,14 @@ async def test_wait_complete_propagates_invalid_or_unavailable_backend_snapshots
     with pytest.raises(error):
         await manager.wait_complete()
 
-    assert [call.args[0] for call in agfs.read.call_args_list] == ["/queue/status"]
+    agfs.read.assert_called_once()
+    assert _snapshot_selection(agfs.read.call_args.args[0], "/queue") == ["Registered"]
+
+
+def _snapshot_selection(path: str, mount_point: str) -> list[str]:
+    prefix = f"{mount_point}/status="
+    assert path.startswith(prefix)
+    return json.loads(urlsafe_b64decode(path.removeprefix(prefix)))
 
 
 @pytest.fixture

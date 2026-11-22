@@ -189,17 +189,13 @@ return {pending_count(), redis.call('ZCARD', processing)}
 
 pub(super) const STATUS_SNAPSHOT_SCRIPT: &str = r#"
 local names = KEYS[1]
-if redis.call('SCARD', names) ~= #ARGV then
-    return nil
-end
-for _, name in ipairs(ARGV) do
-    if redis.call('SISMEMBER', names, name) == 0 then
-        return nil
-    end
-end
 local statuses = {}
-for i = 1, #ARGV do
-    statuses[i] = {redis.call('ZCARD', KEYS[2 * i]), redis.call('ZCARD', KEYS[2 * i + 1])}
+for i, name in ipairs(ARGV) do
+    if redis.call('SISMEMBER', names, name) == 1 then
+        statuses[i] = {redis.call('ZCARD', KEYS[2 * i]), redis.call('ZCARD', KEYS[2 * i + 1])}
+    else
+        statuses[i] = false
+    end
 end
 return statuses
 "#;

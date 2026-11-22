@@ -27,7 +27,7 @@ const ENQUEUE_ID: &str = "queuefs.enqueue.v4";
 const DEQUEUE_ID: &str = "queuefs.dequeue.v4";
 const PEEK_ID: &str = "queuefs.peek.v2";
 const STATUS_ID: &str = "queuefs.status.v2";
-const STATUS_SNAPSHOT_ID: &str = "queuefs.status_snapshot.v1";
+const STATUS_SNAPSHOT_ID: &str = "queuefs.status_snapshot.v2";
 const PENDING_IDS_ID: &str = "queuefs.pending_ids.v1";
 const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v2";
 const ACK_ID: &str = "queuefs.ack.v4";
@@ -369,44 +369,26 @@ impl CacheQueueStorage {
         decode_queue_status(value)
     }
 
-    pub(super) async fn status_snapshot(&self) -> Result<HashMap<String, QueueState>> {
-        self.status_snapshot_from(self.list_queues("").await?).await
-    }
-
-    async fn status_snapshot_from(
+    pub(super) async fn status_snapshot(
         &self,
-        mut names: Vec<String>,
+        names: &[String],
     ) -> Result<HashMap<String, QueueState>> {
-        let mut retried = false;
-        loop {
-            let value = self
-                .execute(
-                    "status_snapshot",
-                    STATUS_SNAPSHOT_ID,
-                    status_snapshot_keys(&self.key_prefix, &names),
-                    names.iter().map(bytes).collect(),
-                )
-                .await?;
-            match value {
-                ScriptValue::Array(values) if values.len() == names.len() => {
-                    return names
-                        .into_iter()
-                        .zip(values)
-                        .map(|(name, value)| Ok((name, decode_queue_status(value)?)))
-                        .collect();
-                }
-                // Queue creation or removal raced with preparation of the script keys.
-                ScriptValue::Null if !retried => {
-                    names = self.list_queues("").await?;
-                    retried = true;
-                }
-                ScriptValue::Null => {
-                    return Err(Error::internal(
-                        "redis queue names changed twice during status snapshot",
-                    ));
-                }
-                other => return Err(invalid_result("queue status snapshot", other)),
-            }
+        let value = self
+            .execute(
+                "status_snapshot",
+                STATUS_SNAPSHOT_ID,
+                status_snapshot_keys(&self.key_prefix, names),
+                names.iter().map(bytes).collect(),
+            )
+            .await?;
+        match value {
+            ScriptValue::Array(values) if values.len() == names.len() => names
+                .iter()
+                .zip(values)
+                .filter(|(_, value)| !matches!(value, ScriptValue::Null))
+                .map(|(name, value)| Ok((name.clone(), decode_queue_status(value)?)))
+                .collect(),
+            other => Err(invalid_result("queue status snapshot", other)),
         }
     }
 
@@ -801,7 +783,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn redis_status_snapshot_resamples_changed_queue_names() {
+    async fn redis_status_snapshot_ignores_unrequested_queue_changes() {
         let Ok(endpoint) = std::env::var("REDIS_URL") else {
             return;
         };
@@ -820,9 +802,10 @@ mod tests {
         let reader = CacheQueueStorage::open(Arc::clone(&reader_runtime), prefix)
             .await
             .unwrap();
-        assert!(reader.status_snapshot().await.unwrap().is_empty());
+        assert!(reader.status_snapshot(&[]).await.unwrap().is_empty());
 
-        for name in ["pending", "processing", "old"] {
+        let names = ["pending", "processing", "team/empty"].map(str::to_owned);
+        for name in ["pending", "processing", "team/empty", "peer/old"] {
             writer.create_queue(name).await.unwrap();
         }
         for name in ["pending", "processing"] {
@@ -832,9 +815,12 @@ mod tests {
                 .unwrap();
         }
         assert!(writer.dequeue("processing").await.unwrap().is_some());
-        let stale_names = reader.list_queues("").await.unwrap();
-        writer.remove_queue("old").await.unwrap();
-        writer.create_queue("team/empty").await.unwrap();
+        writer.remove_queue("peer/old").await.unwrap();
+        writer.create_queue("peer/new").await.unwrap();
+        writer
+            .enqueue("peer/new", Message::new(b"unrelated".to_vec()))
+            .await
+            .unwrap();
 
         let expected = HashMap::from([
             (
@@ -859,13 +845,16 @@ mod tests {
                 },
             ),
         ]);
-        assert_eq!(
-            reader.status_snapshot_from(stale_names).await.unwrap(),
-            expected
-        );
-        assert_eq!(reader.status_snapshot().await.unwrap(), expected);
+        assert_eq!(reader.status_snapshot(&names).await.unwrap(), expected);
+        writer.remove_queue("peer/new").await.unwrap();
+        assert_eq!(reader.status_snapshot(&names).await.unwrap(), expected);
 
-        for name in expected.keys() {
+        writer.remove_queue("pending").await.unwrap();
+        let mut remaining = expected;
+        remaining.remove("pending");
+        assert_eq!(reader.status_snapshot(&names).await.unwrap(), remaining);
+
+        for name in remaining.keys() {
             writer.remove_queue(name).await.unwrap();
         }
         reader.shutdown().await.unwrap();
