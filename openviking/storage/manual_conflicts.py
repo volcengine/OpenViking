@@ -7,12 +7,14 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Iterator
 from difflib import SequenceMatcher
 
 from openviking_cli.exceptions import InvalidArgumentError
 
 _CONFLICT_BLOCK = re.compile(r"<!--\s*CONFLICTS_CONTENT\b(.*?)-->", re.DOTALL)
 _MANUAL_RESOLUTION = "用户手动解决内容冲突，修正后的内容如正文所示"
+_MANUAL_BASIS = "人工修复"
 # Fixed contexts prevent matching neighboring edits.
 _ANCHOR_CONTEXT_CHARS = 10
 
@@ -117,16 +119,30 @@ def _parse_conflict_records(payload: str) -> list[dict]:
     return records
 
 
-def conflict_tags_from_content(content: str) -> list[str]:
-    """Return Markdown conflict tags (zero if absent); invalid metadata raises InvalidArgumentError."""
+def _read_conflict_records(content: str) -> Iterator[dict]:
     if re.search(r"<!--\s*CONFLICTS_CONTENT\b", _CONFLICT_BLOCK.sub("", content)):
         raise InvalidArgumentError("CONFLICTS_CONTENT comment must be closed")
-    unfixed = 0
     for match in _CONFLICT_BLOCK.finditer(content):
         for record in _parse_conflict_records(match.group(1)):
             if record.get("state") not in ("fixed", "unfixed"):
                 raise InvalidArgumentError("conflict state must be fixed or unfixed")
-            unfixed += record["state"] == "unfixed"
+            yield record
+
+
+def read_manual_conflict_records(content: str) -> list[dict]:
+    """Read human decisions, including legacy records with only a manual marker."""
+    return [
+        record
+        for record in _read_conflict_records(content)
+        if record.get("fix_plan") == _MANUAL_RESOLUTION
+        or record.get("resolution_basis") == _MANUAL_BASIS
+        or record.get("resolved_by") not in (None, "", "compile_agent")
+    ]
+
+
+def conflict_tags_from_content(content: str) -> list[str]:
+    """Return Markdown conflict tags (zero if absent); invalid metadata raises InvalidArgumentError."""
+    unfixed = sum(record["state"] == "unfixed" for record in _read_conflict_records(content))
     return [f"has_conflict={'true' if unfixed else 'false'}", f"conflict_num={unfixed}"]
 
 
@@ -169,7 +185,7 @@ def resolve_manual_conflicts(
                         state="fixed",
                         fix_plan=_MANUAL_RESOLUTION,
                         fix_time=now,
-                        resolution_basis="人工修复",
+                        resolution_basis=_MANUAL_BASIS,
                         resolved_by=user_id,
                     )
                     changed = True

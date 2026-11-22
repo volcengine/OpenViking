@@ -14,6 +14,7 @@ from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
 from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
+from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
 from vikingbot.compile.ops import reduce as reduce_op
@@ -29,7 +30,7 @@ from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 
 MAP_ONLY = "drafts = p.map(sources, task=contract.extract)\np.finalize(drafts, into=target)"
 MERGE = (
@@ -443,10 +444,14 @@ async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline
     pipeline.old.clear()
     pipeline.client.stat = AsyncMock(return_value={"isDir": False})
     pipeline.client.download_bytes.return_value = b"# Existing facts"
-    assert (await finalize.run(pipeline, [doc])).operations[0]["mode"] == "create"
+    operation = (await finalize.run(pipeline, [doc])).operations[0]
+    assert operation["mode"] == "create" and operation["if_absent"] is True
     pipeline.old.clear()
     await TargetReader(pipeline).execute(path="topic.md")
-    assert (await finalize.run(pipeline, [doc])).operations[0]["mode"] == "replace"
+    operation = (await finalize.run(pipeline, [doc])).operations[0]
+    assert operation["mode"] == "replace" and operation["expected_sha256"] == content_hash(
+        b"# Existing facts"
+    )
     pipeline.client.download_bytes.return_value = b"concurrent edit"
     with pytest.raises(ValueError, match="changed after reading"):
         await finalize.run(pipeline, [doc])
@@ -512,6 +517,7 @@ async def test_service_publishes_final_markdown_with_batch_write_and_honors_canc
                 "uri": pipeline.target + "/topic.md",
                 "content": "# Topic\n\n[Source](viking://resources/source/one.md)\n",
                 "mode": "create",
+                "if_absent": True,
             }
         ]
         assert task.status == ("failed" if conflict else "completed")
@@ -616,15 +622,15 @@ async def test_compile_write_tool_rejects_invalid_okf_frontmatter(content, expec
     from vikingbot.compile.simple import CompileWriteTool
 
     client = SimpleNamespace(
-        read_raw=AsyncMock(side_effect=NotFoundError("not found")),
-        write=AsyncMock(),
+        download_bytes=AsyncMock(side_effect=NotFoundError("not found")),
+        batch_write=AsyncMock(),
     )
     tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
     ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
 
     with pytest.raises(ValueError, match=expected_pattern):
         await tool.execute(ctx, path="selection-rules.md", content=content)
-    client.write.assert_not_awaited()
+    client.batch_write.assert_not_awaited()
     assert tool.outcomes == {}
 
 
@@ -633,8 +639,8 @@ async def test_compile_write_tool_allows_valid_okf_frontmatter():
 
     uri = "viking://resources/distill/selection-rules.md"
     client = SimpleNamespace(
-        read_raw=AsyncMock(side_effect=NotFoundError("not found")),
-        write=AsyncMock(return_value={"uri": uri, "content_updated": True}),
+        download_bytes=AsyncMock(side_effect=NotFoundError("not found")),
+        batch_write=AsyncMock(return_value={"created": [uri]}),
     )
     tool = CompileWriteTool(client, "viking://resources/distill", AsyncMock())
     ctx = ToolContext(session_key=SessionKey(type="cli", channel_id="test", chat_id="fm"))
@@ -642,14 +648,48 @@ async def test_compile_write_tool_allows_valid_okf_frontmatter():
 
     outcome = await tool.execute(ctx, path="selection-rules.md", content=valid)
     assert outcome == f"created: {uri}"
-    client.write.assert_awaited_once()
+    client.batch_write.assert_awaited_once_with(
+        root_uri="viking://resources/distill",
+        operations=[{"uri": uri, "content": valid, "mode": "replace", "if_absent": True}],
+        wait=False,
+    )
+
+
+async def test_compile_write_tool_retries_resource_append_after_revision_conflict():
+    root = "viking://resources/wiki"
+    uri = root + "/limits.md"
+    old, newer = b"# Limits\r\n", b"# Updated limits\r\n"
+    client = SimpleNamespace(
+        download_bytes=AsyncMock(side_effect=[old, newer]),
+        batch_write=AsyncMock(
+            side_effect=[ConflictError("Content revision changed"), {"updated": [uri]}]
+        ),
+    )
+    writer = simple.CompileWriteTool(client, root, AsyncMock())
+    addition = "\r\nRetry after 60 seconds.\r\n"
+    with pytest.raises(ConflictError, match="Content revision changed"):
+        await writer.execute(ToolContext(), "limits.md", addition, mode="append")
+    assert writer.outcomes == {} and writer.unconfirmed == set()
+    assert (
+        await writer.execute(ToolContext(), "limits.md", addition, mode="append")
+        == f"updated: {uri}"
+    )
+    for request, previous in zip(client.batch_write.await_args_list, [old, newer], strict=True):
+        assert request.kwargs["operations"] == [
+            {
+                "uri": uri,
+                "mode": "replace",
+                "content": previous.decode() + addition,
+                "expected_sha256": content_hash(previous),
+            }
+        ]
 
 
 async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
     pipeline, agent_loop
 ):
     loop, session_key, _ = agent_loop
-    pipeline.client.write = AsyncMock()
+    pipeline.client.download_bytes.side_effect = NotFoundError("not found")
     pipeline.model.provider.chat = AsyncMock(
         side_effect=[
             LLMResponse(
@@ -684,7 +724,7 @@ async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
         )
 
     assert caught.value.code == "COMPILE_INCOMPLETE"
-    pipeline.client.write.assert_not_awaited()
+    pipeline.client.batch_write.assert_not_awaited()
 
 
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
@@ -722,3 +762,95 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert empty_bundle.operations == []
     assert len(pipeline.warnings) == 1
     assert "selection-rules.md" in pipeline.warnings[0]
+
+
+async def test_finalize_withholds_unreadable_resource_history_per_page(pipeline):
+    blocked = pipeline.target + "/limits.md"
+    pipeline.client.stat.side_effect = [
+        {"isDir": False},
+        NotFoundError(pipeline.target + "/retry.md"),
+    ]
+    pipeline.client.download_bytes.side_effect = PermissionDeniedError("Cannot read the target")
+    await pipeline.files.sandbox.write_file("draft.md", "# Retry after 60 seconds")
+    bundle = await finalize.run(
+        pipeline, [Document("limits.md", "draft.md"), Document("retry.md", "draft.md")]
+    )
+    assert [operation["uri"] for operation in bundle.operations] == [pipeline.target + "/retry.md"]
+    assert blocked not in bundle.created
+    assert "Cannot read Wiki conflict history for limits.md" in pipeline.warnings[0]
+
+
+@pytest.mark.parametrize("executor", ["simple", "complex"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "retained",
+        "legacy",
+        "omitted",
+        "rewritten",
+        "hidden",
+        "stranded",
+        "reattributed",
+        "fabricated",
+        "malformed",
+    ],
+)
+async def test_compile_protects_human_resolution(pipeline, executor, case):
+    from openviking.storage.manual_conflicts import resolve_manual_conflicts
+
+    anchor = "The limit is 10 requests."
+    unresolved = (
+        "# Limits\n\nThe limit is 20 requests.\n\nRetry policy is documented here.\n\n"
+        '<!-- CONFLICTS_CONTENT\n{"state":"unfixed","match_text":"The limit is 20 requests."}\n-->'
+    )
+    previous, _ = resolve_manual_conflicts(
+        unresolved, unresolved.replace("20 requests.", "10 requests.", 1), "alice"
+    )
+    if case == "legacy":
+        previous = previous.rsplit(",", 2)[0] + "\n}\n-->"
+    candidate = previous.replace("Retry policy is documented here.", "Retry after 60 seconds.")
+    if case == "omitted":
+        candidate = candidate.split("<!-- CONFLICTS_CONTENT", 1)[0]
+    elif case == "rewritten":
+        candidate = candidate.replace(anchor, "The limit is 30 requests.", 1)
+    elif case == "hidden":
+        candidate = candidate.replace(anchor, f"<!-- {anchor} -->", 1)
+    elif case == "stranded":
+        candidate += "\n\nNew findings after the conflict trailer."
+    elif case == "reattributed":
+        candidate = candidate.replace('"alice"', '"bob"')
+    elif case == "fabricated":
+        previous = unresolved
+    elif case == "malformed":
+        previous = previous.replace('"resolved_by": "alice"', '"resolved_by":')
+
+    path = "limits.md"
+    uri = pipeline.target + "/" + path
+    if executor == "simple":
+        pipeline.client.read_raw.return_value = previous
+        pipeline.client.download_bytes.return_value = previous.encode()
+        pipeline.client.write = AsyncMock(return_value={"uri": uri, "content_updated": True})
+        pipeline.client.batch_write.return_value = {"updated": [uri], "created": []}
+        writer = simple.CompileWriteTool(pipeline.client, pipeline.target, AsyncMock())
+        if case in {"retained", "legacy"}:
+            assert await writer.execute(ToolContext(), path, candidate) == f"updated: {uri}"
+        else:
+            with pytest.raises(ValueError, match="conflict"):
+                await writer.execute(ToolContext(), path, candidate)
+            pipeline.client.write.assert_not_awaited()
+            pipeline.client.batch_write.assert_not_awaited()
+            assert writer.outcomes == {}
+    else:
+        pipeline.client.stat.return_value = {"isDir": False}
+        pipeline.client.stat.side_effect = None
+        pipeline.client.download_bytes.return_value = previous.encode()
+        await TargetReader(pipeline).execute(path=path)
+        await pipeline.files.sandbox.write_file("draft.md", candidate)
+        bundle = await finalize.run(pipeline, [Document(path, "draft.md")])
+        if case in {"retained", "legacy"}:
+            assert [
+                (operation["uri"], operation["content"]) for operation in bundle.operations
+            ] == [(uri, candidate)]
+        else:
+            assert bundle.operations == []
+            assert any(path in warning and "conflict" in warning for warning in pipeline.warnings)

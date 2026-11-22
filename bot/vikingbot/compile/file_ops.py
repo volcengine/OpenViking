@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import base64
 import json
+import re
+from collections import Counter
 from typing import TYPE_CHECKING
 
+import yaml
+from markdown_it import MarkdownIt
+
 from openviking.core.skill_loader import validate_skill_format
+from openviking.storage.manual_conflicts import read_manual_conflict_records
 from openviking.utils.path_safety import safe_join_viking_uri
-from openviking_cli.exceptions import OpenVikingError
-from vikingbot.compile.renderer import validate_relative_file_path
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
+from vikingbot.compile.renderer import strip_okf_frontmatter, validate_relative_file_path
 
 if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
@@ -55,6 +61,50 @@ async def load_old(runtime: Pipeline, path: str) -> str | bytes | None:
                 raise
             runtime.old[path] = None
     return runtime.old[path]
+
+
+def validate_wiki_conflict_update(previous: str | bytes | None, candidate: str) -> None:
+    """Require existing human decisions and their exact anchors to survive a write."""
+    if isinstance(previous, bytes):
+        raise ValueError("Wiki conflict history must be readable UTF-8")
+    previous = previous or ""
+    try:
+        old_records = read_manual_conflict_records(previous)
+        new_records = read_manual_conflict_records(candidate)
+    except InvalidArgumentError as exc:
+        raise ValueError(f"Invalid Wiki conflict history: {exc}") from exc
+    if Counter(json.dumps(record, sort_keys=True) for record in old_records) != Counter(
+        json.dumps(record, sort_keys=True) for record in new_records
+    ):
+        raise ValueError("Wiki conflict output must preserve the existing human resolutions")
+    if not old_records:
+        return
+    try:
+        bodies = [
+            strip_okf_frontmatter(text.removeprefix("\ufeff")) for text in (previous, candidate)
+        ]
+    except (ValueError, yaml.YAMLError) as exc:
+        raise ValueError("Cannot read the Markdown body for human conflict anchors") from exc
+    for body in bodies:
+        # The Wiki reader only exposes records in trailing comments, outside code examples.
+        trailer = []
+        for block in reversed(MarkdownIt().parse(body)):
+            if (
+                block.type != "html_block"
+                or not re.match(r"\s*<!--\s*CONFLICTS_CONTENT\b", block.content)
+                or not block.content.rstrip().endswith("-->")
+            ):
+                break
+            trailer.append(block.content)
+        if len(read_manual_conflict_records("\n".join(reversed(trailer)))) != len(old_records):
+            raise ValueError("Human conflict resolutions must remain in trailing Markdown comments")
+    visible = [re.sub(r"<!--.*?(?:-->|\Z)", "\x00", body, flags=re.DOTALL) for body in bodies]
+    for record in old_records:
+        anchor = record.get("match_text")
+        if record["state"] != "fixed" or not isinstance(anchor, str) or not anchor.strip():
+            raise ValueError("Invalid human conflict resolution in history")
+        if any(anchor not in body for body in visible):
+            raise ValueError("Human conflict resolution anchor is missing from the Markdown body")
 
 
 def validate_skill_output(files: dict[str, str | None]) -> None:

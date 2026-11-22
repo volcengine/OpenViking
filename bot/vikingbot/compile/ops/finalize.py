@@ -2,6 +2,7 @@
 
 from openviking.core.namespace import classify_uri
 from openviking.utils.path_safety import safe_join_viking_uri
+from openviking_cli.exceptions import OpenVikingError
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.renderer import (
@@ -16,7 +17,7 @@ async def run(runtime, documents):
     """Reject duplicate paths and unseen replacements before preparing publication operations.
 
     Only selected, completed worker outputs are eligible. Existing target files require a
-    prior read by a worker. This preflight does not provide atomic compare-and-swap writes.
+    prior read by a worker. Resource writes also carry a revision guard for publication.
     """
     bundle = RenderedBundle()
     contents, outputs = {}, {}
@@ -33,34 +34,48 @@ async def run(runtime, documents):
         if not path.lower().endswith(".md") or not content.strip():
             raise ValueError(f"Output must be nonempty UTF-8 Markdown: {path}")
         uri = safe_join_viking_uri(runtime.target, path)
-        if classify_uri(uri).context_type == "resource":
+        resource = classify_uri(uri).context_type == "resource"
+        if resource:
             try:
                 validate_declared_okf_markdown(uri, content.encode("utf-8"))
             except ValueError as exc:
                 runtime.warnings.append(str(exc))
                 continue
+        read_before = path in runtime.old
+        try:
+            old = await file_ops.load_old(runtime, path)
+            if old is not None and read_before:
+                current = await runtime.client.download_bytes(uri)
+                if content_hash(current) != content_hash(old):
+                    raise ValueError(f"Target changed after reading: {uri}")
+        except OpenVikingError as exc:
+            if resource and exc.code == "PERMISSION_DENIED":
+                runtime.warnings.append(f"Cannot read Wiki conflict history for {path}: {exc}")
+                continue
+            raise
+        replaces = old is not None and read_before
+        if resource and (not replaces or old != content):
+            try:
+                file_ops.validate_wiki_conflict_update(old if replaces else None, content)
+            except ValueError as exc:
+                runtime.warnings.append(f"{path}: {exc}")
+                continue
         contents[path] = content
         outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
-        read_before = path in runtime.old
-        old = await file_ops.load_old(runtime, path)
-        if old is not None and not read_before:
-            # Create mode lets the server preserve an existing target as a reported conflict.
-            mode = "create"
-        elif old is not None:
-            current = await runtime.client.download_bytes(uri)
-            if content_hash(current) != content_hash(old):
-                raise ValueError(f"Target changed after reading: {uri}")
-            if current == content.encode("utf-8"):
-                bundle.unchanged.append(uri)
-                continue
-            mode = "replace"
-        else:
-            mode = "create"
-        bundle.operations.append({"uri": uri, "content": content, "mode": mode})
+        if replaces and old == content:
+            bundle.unchanged.append(uri)
+            continue
+        mode = "replace" if replaces else "create"
+        operation: dict[str, str | bool] = {"uri": uri, "content": content, "mode": mode}
+        if resource:
+            if old is not None and replaces:
+                operation["expected_sha256"] = content_hash(old)
+            else:
+                operation["if_absent"] = True
+        bundle.operations.append(operation)
         (bundle.updated if mode == "replace" else bundle.created).append(uri)
         if runtime.output_format == "wiki":
             bundle.wiki_uris.append(uri)
-        outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
     if runtime.skill_target and contents:
         file_ops.validate_skill_output(contents)
     await runtime.files.put("finalize", {"outputs": outputs})
