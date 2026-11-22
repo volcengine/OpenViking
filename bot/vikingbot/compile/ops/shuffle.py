@@ -167,7 +167,8 @@ def ranking_text(markdown: str) -> str:
     _, closed, trailing = last.content.partition("-->")
     if not closed or trailing.strip():
         return markdown
-    lines = markdown.splitlines(keepends=True)
+    # Match CommonMark's CR/LF lines while keeping the original byte boundaries.
+    lines = re.split(r"(?<=\n)|(?<=\r)(?!\n)", markdown)
     if "".join(lines[last.map[1] :]).strip():
         return markdown
     return "".join(lines[: last.map[0]])

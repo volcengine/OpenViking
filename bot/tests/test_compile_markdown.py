@@ -728,7 +728,7 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
 async def test_shuffle_ranks_visible_wiki_text(pipeline, monkeypatch, fenced):
     pipeline.contract = contract(True)
     trailer = '<!-- CONFLICTS_CONTENT\n{"state":"unfixed","match_text":"A fact"}\n-->\n'
-    body = "# A fact\n\n"
+    body = "# A fact\u2028continued\r\n\r\n"
     content = body + (f"```markdown\n{trailer}```\n" if fenced else trailer)
     doc = Document("wiki.md", "drafts/wiki.md")
     await pipeline.files.sandbox.write_file(doc.workspace_path, content)
