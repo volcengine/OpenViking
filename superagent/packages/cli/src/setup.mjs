@@ -1362,6 +1362,53 @@ export async function loginPi({ prompter, env }) {
   });
 }
 
+// The built-in Durable needs one provider key, not a login screen. Setup saves
+// it to the same secrets.env the daemon reads, so the runtime is usable in this
+// run and on every later start.
+const DURABLE_PROVIDERS = [
+  { value: 'DEEPSEEK_API_KEY', label: 'DeepSeek' },
+  { value: 'OPENAI_API_KEY', label: 'OpenAI' },
+  { value: 'ANTHROPIC_API_KEY', label: 'Anthropic' },
+  { value: 'ARK_API_KEY', label: '火山方舟 Ark' },
+];
+
+function durableSecretsFile(env) {
+  const configured = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim();
+  if (configured) return configured;
+  return env.HOME ? path.join(env.HOME, '.ov-superagent', 'secrets.env') : '';
+}
+
+function saveDurableProviderKey(env, name, value) {
+  const file = durableSecretsFile(env);
+  if (!file) throw new Error(t('找不到 HOME，无法保存密钥', 'HOME is not set, so the key cannot be saved'));
+  let text = '';
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith(`${name}=`));
+  lines.push(`${name}=${value}`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch {}
+  return file;
+}
+
+export async function configureDurable({ prompter, env }) {
+  const provider = await prompter.select(t('内置的 Durable 用哪个模型提供方', 'Which provider should the built-in Durable use'),
+    DURABLE_PROVIDERS, { back: false });
+  const key = String(await prompter.secret(t('粘贴 API key（不回显，只写入 secrets.env）',
+    'Paste the API key (hidden; saved only to secrets.env)')) || '').trim();
+  if (!key) {
+    prompter.warn(t('没有填 key，Durable 仍然不可用', 'No key entered, so Durable is still unavailable'));
+    return false;
+  }
+  const file = saveDurableProviderKey(env, provider, key);
+  prompter.success(t(`密钥已写入 ${file}`, `Key saved to ${file}`));
+  return true;
+}
+
 export function greet({ larkCliBin, profile, userId, text }) {
   return new LarkCli(larkCliBin).sendText({ profile, userId, text });
 }
@@ -1481,24 +1528,32 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
     const labelWidth = Math.max(...detected.map((runtime) => width(runtime.label)));
     for (const runtime of detected) prompter.write(`      ${padEnd(runtime.label, labelWidth)}  ${runtime.note}\n`);
     const later = t(`登录好其中一个后，重新运行 ${superagentCommand(env)} setup。`, `Log in to one of them, then run ${superagentCommand(env)} setup again.`);
-    if (!prompter.tty || !connect.pi) {
+    if (!prompter.tty) {
       prompter.info(later);
       return { stopped: 'unavailable' };
     }
-    const next = await prompter.select(t('现在怎么办', 'What now'), [
-      { label: t('用内置的 Pi，现在登录一个模型', 'Use the built-in Pi and log in to a model now'), value: 'pi',
-        hint: t('在 Pi 里输入 /login，登录后 /quit 回到这里', 'type /login in Pi, then /quit to come back') },
-      { label: t('先退出，我去登录 Codex 或 Claude Code', 'Quit; I will log in to Codex or Claude Code'), value: 'quit' },
-    ], { back: false });
+    const choices = [];
+    if (connect.pi) {
+      choices.push({ label: t('用内置的 Pi，现在登录一个模型', 'Use the built-in Pi and log in to a model now'), value: 'pi',
+        hint: t('在 Pi 里输入 /login，登录后 /quit 回到这里', 'type /login in Pi, then /quit to come back') });
+    }
+    choices.push({ label: t('用内置的 Durable，现在填一个模型密钥', 'Use the built-in Durable and enter a model key now'), value: 'durable',
+      hint: t('填一个 provider 的 API key，写进 secrets.env', 'enter one provider API key; saved to secrets.env') });
+    choices.push({ label: t('先退出，我去登录 Codex 或 Claude Code', 'Quit; I will log in to Codex or Claude Code'), value: 'quit' });
+    const next = await prompter.select(t('现在怎么办', 'What now'), choices, { back: false });
     if (next === 'quit') {
       prompter.info(later);
       return { stopped: 'quit' };
     }
-    // Pi takes the whole screen while it runs.
-    live?.release();
-    await connect.pi({ prompter, env });
-    live?.resume();
-    prompter.redraw();
+    if (next === 'pi') {
+      // Pi takes the whole screen while it runs.
+      live?.release();
+      await connect.pi({ prompter, env });
+      live?.resume();
+      prompter.redraw();
+    } else {
+      await configureDurable({ prompter, env });
+    }
     detected = await step(prompter, t('再看一次有哪些 agent', 'Looking for agents again'), () => detect.runtimes({ env }),
       (again) => (again.some((runtime) => runtime.available)
         ? found(again.filter((runtime) => runtime.available).map((runtime) => runtime.label)) : t('还是没有能用的 agent', 'Still no usable agent')));
