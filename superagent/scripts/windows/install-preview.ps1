@@ -579,14 +579,12 @@ function Write-Launcher([string]$nodeRelative, [string]$mjsRelative) {
 
 function Add-ToPath([string]$binDir) {
     $separator = [IO.Path]::PathSeparator
-    # This terminal first: the installer usually runs inside the shell the user
-    # typed in, and a child process cannot change its parent's PATH.
+    # This terminal first when the installer runs with & (same process): setup
+    # starts from here. A `pwsh -File` run is a child process, so its parent only
+    # sees the user PATH from a new terminal; the messages below name the full
+    # command for that case.
     $parts = @($env:PATH -split [regex]::Escape($separator) | Where-Object { $_ })
     if ($parts -notcontains $binDir) { $env:PATH = (@($binDir) + $parts) -join $separator }
-    # Do not rely on PowerShell noticing a PATH change after it has started. An
-    # alias in the global scope survives this script (including irm | iex) and
-    # pins the command to this install, so the recovery commands printed by a
-    # failed setup work in the same terminal. New terminals use the user PATH.
     Set-Alias -Name 'ov-superagent' -Value (Join-Path $binDir 'ov-superagent.cmd') -Scope Global -Force -ErrorAction Stop
     if (-not $PersistPath) { return }
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -594,9 +592,9 @@ function Add-ToPath([string]$binDir) {
     if ($persistent -contains $binDir) { return }
     try {
         [Environment]::SetEnvironmentVariable('Path', (@($binDir) + $persistent) -join $separator, 'User')
-        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已加进 PATH：这个终端和新开的终端都能直接用 ov-superagent" "$(Short $binDir) is on the PATH: this terminal and new ones know ov-superagent")${RESET}")
+        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已写入用户 PATH：新开的终端可以直接用 ov-superagent；当前终端请用 $(Short (Join-Path $binDir 'ov-superagent.cmd'))" "$(Short $binDir) is saved in the user PATH: new terminals know ov-superagent; in this terminal use $(Short (Join-Path $binDir 'ov-superagent.cmd'))")${RESET}")
     } catch {
-        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，这个终端里可以直接用 ov-superagent。新终端要直接用，请手动加入：$binDir" "Could not write the user PATH; OpenViking SuperAgent is installed and this terminal knows ov-superagent. For new terminals, add this yourself: $binDir")
+        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，请直接用 $(Join-Path $binDir 'ov-superagent.cmd')" "Could not write the user PATH; OpenViking SuperAgent is installed: run $(Join-Path $binDir 'ov-superagent.cmd') directly")
     }
 }
 
@@ -786,9 +784,9 @@ if ($Isolated) {
     # did not get through, is not an install failure: name what is left to do
     # instead of throwing a stack trace over the advice.
     if ($LASTEXITCODE) {
-        Note (M "安装已完成，setup 没有跑完（退出码 $LASTEXITCODE）：之后运行 ov-superagent setup 继续" "Installed; setup did not finish (exit $LASTEXITCODE). Run ov-superagent setup later to continue")
+        Note (M "安装已完成，setup 没有跑完（退出码 $LASTEXITCODE）：之后运行 $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup 继续；新开的终端里可以直接用 ov-superagent setup" "Installed; setup did not finish (exit $LASTEXITCODE). Run $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup later to continue; a new terminal can use ov-superagent setup")
     }
 } else {
-    Note (M '下一步：运行 ov-superagent setup' 'next: run ov-superagent setup')
+    Note (M "下一步：运行 $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup（新开的终端里可以简写为 ov-superagent setup）" "next: run $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup (a new terminal can use ov-superagent setup)")
 }
 } finally { Cleanup }
