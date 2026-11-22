@@ -16,6 +16,7 @@ from openviking.storage.queuefs.named_queue import (
     NamedQueue,
 )
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.queuefs.queue_middleware import QueueMiddleware
 
 
@@ -412,11 +413,18 @@ async def test_invalid_process_result_does_not_ack(transport):
     transport.write.assert_not_awaited()
 
 
-async def test_ack_error_does_not_double_count_processing(transport):
+async def test_dequeue_returns_processed_result_when_ack_fails(transport):
+    class ProcessedHandler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            return ProcessResult.success({"processed": data["id"]})
+
     transport.read.return_value = b'{"id":"m","data":"{}"}'
     transport.write.side_effect = OSError("ack failed")
-    queue = NamedQueue(object(), "/queue", "Test", dequeue_handler=Handler())
-    await queue.dequeue()
+    manager = QueueManager(object())
+    queue = manager.get_queue("Test", dequeue_handler=ProcessedHandler(), allow_create=True)
+
+    assert await manager.dequeue("Test") == {"processed": "m"}
+    transport.write.assert_awaited_once_with("/queue/Test/ack", b"m")
     assert queue._processed == 1
     assert queue._error_count == 0
 

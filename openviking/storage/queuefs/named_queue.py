@@ -264,6 +264,7 @@ class NamedQueue:
 
         If the process crashes between steps 1 and 3, the backend's RecoverStale
         on the next startup resets the message back to 'pending' for retry.
+        An ACK failure is logged and the processing result is still returned.
         """
         await self._ensure_initialized()
         try:
@@ -277,7 +278,17 @@ class NamedQueue:
             else:
                 result = ProcessResult.success(data)
             # Middleware persists Work before either native retry or final ACK.
-            await self.settle_dequeued(raw_data, result)
+            try:
+                await self.settle_dequeued(raw_data, result)
+            except Exception as e:
+                if result.outcome is ProcessOutcome.RETRY:
+                    raise
+                logger.info(
+                    "Ack failed for %s msg_id=%s: %s",
+                    short_hash(str(self.name)),
+                    short_hash(str(raw_data.get("id", ""))),
+                    type(e).__name__,
+                )
             return data
         except Exception as e:
             logger.debug("Dequeue failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
