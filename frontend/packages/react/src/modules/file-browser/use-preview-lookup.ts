@@ -6,6 +6,7 @@ import { createPreviewBodyCache } from './preview-body-cache.js';
 import type { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
 import { readPreviewStat } from './fs-stat.js';
 import { isMemoryUri } from './fs-memory-fields.js';
+import { hasDynamicIdentity } from '../../client/managed-client.js';
 
 export function usePreviewLookup({
   client,
@@ -26,6 +27,9 @@ export function usePreviewLookup({
 }) {
   const scope = scopeKeyOf(client, requestOptions);
   const signal = requestOptions?.signal;
+  const cacheableIdentity = client
+    ? !hasDynamicIdentity(client, requestOptions)
+    : false;
   const cache = useMemo(
     () => ({
       scope,
@@ -68,12 +72,15 @@ export function usePreviewLookup({
               ? readPreviewStat(api, target, options)
               : undefined,
           bodyCache:
-            isMemoryUri(target) && /\.md$/i.test(target)
+            isMemoryUri(target) &&
+            /\.md$/i.test(target) &&
+            updatedAt !== undefined &&
+            cacheableIdentity
               ? cache.body.forFile(target, updatedAt)
               : undefined,
         };
       },
     }),
-    [client, uri, wikiSave, cache],
+    [client, uri, wikiSave, cache, cacheableIdentity],
   );
 }
