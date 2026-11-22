@@ -11,6 +11,20 @@ import { SlackError, validToken } from './api.mjs';
 // extensionless script the way POSIX does.
 import { execFile, findExecutable, hostPlatformId, systemEnvironmentKeys } from '../platform/index.mjs';
 
+// A Windows temp directory can still be held by the child's handles; cleanup
+// must not turn a completed query into a failure.
+function removeTempDir(directory) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try { fs.rmSync(directory, { recursive: true, force: true }); return; }
+    catch (error) {
+      // Windows may still hold the child's files briefly; retry the transient
+      // codes and let a real permission failure through.
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
 export const SLACK_CLI_VERSION = '4.10.0';
 export const bundledSlackCli = ({ host = hostPlatformId, env = process.env } = {}) => host.startsWith('termux-')
   ? findExecutable('slack', env) || 'slack'
@@ -56,7 +70,7 @@ export class SlackCli {
       if (error || result?.ok !== true) throw new Error('Slack CLI query failed or returned invalid JSON');
       return result;
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      removeTempDir(directory);
     }
   }
 }

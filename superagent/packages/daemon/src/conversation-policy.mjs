@@ -38,7 +38,14 @@ export function isLocalSoul(uri) {
 // soul with.
 export function rolePresetText(name, dir = DEFAULT_PROMPT_DIR) {
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(String(name ?? ''))) throw new Error(`Unknown role preset: ${name}`);
-  return fs.readFileSync(path.join(dir, 'roles', `${name}.md`), 'utf8');
+  return readPromptText(path.join(dir, 'roles', `${name}.md`));
+}
+
+// Prompt files are checked in with LF; a Windows checkout may hand them back
+// with CRLF. The policy text (and its hash) must not depend on the host's
+// line endings, so normalize before anything is assembled or hashed.
+function readPromptText(file) {
+  return fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
 }
 
 function agentName(config) {
@@ -78,7 +85,7 @@ export function substitutePromptPlaceholders(text, config = {}) {
 }
 
 function renderPrompt(config, name) {
-  return substitutePromptPlaceholders(fs.readFileSync(path.join(promptDir(config), name), 'utf8'), config).trim();
+  return substitutePromptPlaceholders(readPromptText(path.join(promptDir(config), name)), config).trim();
 }
 
 function joinSections(parts) {
@@ -239,7 +246,8 @@ function ownDirectories(config) {
   const project = config.projectDir || PACKAGE_DIR;
   const install = path.basename(path.dirname(project)) === 'releases' ? path.dirname(path.dirname(project)) : project;
   const inside = (dir, parent) => { const relative = path.relative(parent, dir); return !relative.startsWith('..') && !path.isAbsolute(relative); };
-  return [install, config.dataDir].filter(Boolean).map((dir) => path.resolve(dir))
+  const resolve = (dir) => (String(dir).startsWith('/') ? path.posix.resolve(dir) : path.resolve(dir));
+  return [install, config.dataDir].filter(Boolean).map(resolve)
     .filter((dir, index, all) => all.indexOf(dir) === index && !all.some((other) => other !== dir && inside(dir, other)));
 }
 

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -53,7 +54,7 @@ function fixture(t, { thread = false, run } = {}) {
     config: { profile, workspace, tempDir, maxReplyChars: 30_000 }, store, connectors, logger,
   });
   const call = (tool, input) => service.call(tool, input, { authority });
-  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { store.close(); removeTempDir(directory); });
   return { directory, workspace, tempDir, databasePath, store, service, call, calls: connectors.calls };
 }
 
@@ -255,7 +256,7 @@ it('registers a cross-channel card where it landed, not where the decision came 
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
   const store = new Store(path.join(directory, 'state.sqlite3'), logger);
-  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { store.close(); removeTempDir(directory); });
   store.initializeCognition('pi', authority);
   const groupMessage = normalizeEvent({ type: 'im.message.receive_v1', event_id: 'evt-group',
     message_id: 'om_groupmsg123456', chat_id: chatId, chat_type: 'group', message_type: 'text',

@@ -3,7 +3,7 @@
 // The short-lived DSH control process: patch, handshake, settings and credentials calls, teardown.
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn } from '../src/platform/index.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

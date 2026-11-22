@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,7 +40,7 @@ const waitAbort = (signal) => new Promise((resolve) => {
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-qq-'));
   const state = new QQState(dir);
-  t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { state.close(); removeTempDir(dir); });
   return { dir, state };
 }
 function provider(fn = () => assert.fail('unexpected HTTP request')) {

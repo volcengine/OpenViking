@@ -27,7 +27,7 @@ import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
-const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8');
+const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8').replace(/\r\n?/g, '\n');
 const role = (name) => rolePresetText(name);
 
 describe('conversation policy assemble', () => {

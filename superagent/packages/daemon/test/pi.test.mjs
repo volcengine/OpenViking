@@ -68,6 +68,11 @@ class FakeChild extends EventEmitter {
   kill(signal = 'SIGTERM') { this.finish(signal === 'SIGKILL' ? 137 : 0, signal); }
 }
 
+async function waitForExit(child, timeoutMs = 2_000) {
+  const started = Date.now();
+  while (child.exitCode === null && Date.now() - started < timeoutMs) await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 const helpFlags = [
   '--mode', '--append-system-prompt', '--thinking', '--session-id', '--session-dir',
   '--model', '--extension', '--approve', '--no-extensions', 'rpc',
@@ -374,7 +379,7 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.ok(args.includes('--session-id'));
     const env = calls.at(-1).options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
+    assert.ok(calls.every((call) => call.options.env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter))));
     assert.equal(env.PERSONAL_AGENT_SOCKET, baseConfig.actionSocketPath);
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
     assert.equal(env.LARK_APP_SECRET, undefined);
@@ -444,6 +449,7 @@ describe('PiAgent persistent rpc runtime', () => {
     await assert.rejects(agent.start(), /Pi startup timed out/);
     assert.equal(agent.connected, false);
     assert.equal(store.global().sessionReady, false);
+    await waitForExit(persistent[0]);
     assert.notEqual(persistent[0].exitCode, null);
   });
 
@@ -454,6 +460,7 @@ describe('PiAgent persistent rpc runtime', () => {
     await assert.rejects(agent.start(), /interactive dialog during startup/);
     assert.equal(agent.connected, false);
     assert.equal(store.global().sessionReady, false);
+    await waitForExit(persistent[0]);
     assert.notEqual(persistent[0].exitCode, null);
     assert.ok(!parsedWrites(persistent[0]).some(({ type }) => type === 'extension_ui_response'),
       'Pi cannot read a dialog answer before session_start returns');

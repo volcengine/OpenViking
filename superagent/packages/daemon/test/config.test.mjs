@@ -100,7 +100,7 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal(original.tempDir, '/root/.local/share/superagent-primary/tmp');
     setEnv('OV_SUPERAGENT_TEMP_DIR', '/tmp/superagent-primary/');
     const configured = getConfig();
-    assert.equal(path.resolve(configured.tempDir), '/tmp/superagent-primary');
+    assert.equal(configured.tempDir.startsWith('/') ? path.posix.resolve(configured.tempDir) : path.resolve(configured.tempDir), '/tmp/superagent-primary');
     for (const field of ['dataDir', 'databasePath', 'lockPath', 'workspace']) {
       assert.equal(configured[field], original[field]);
     }

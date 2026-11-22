@@ -220,10 +220,16 @@ function manifestString(value, name, { maxLength = 128 } = {}) {
   return normalized;
 }
 
+function manifestJoin(base, ...parts) {
+  return String(base).startsWith('/') ? path.posix.join(base, ...parts) : path.join(base, ...parts);
+}
+
 function manifestAbsolutePath(value, name) {
   const normalized = manifestString(value, name, { maxLength: 4096 });
   if (!path.isAbsolute(normalized)) throw new Error(`${name} must be an absolute path`);
-  return path.normalize(normalized);
+  // A POSIX path describes a POSIX deployment even when the manifest is edited
+  // on Windows; resolving it with the host rules would produce a `C:\root...`.
+  return normalized.startsWith('/') ? path.posix.normalize(normalized) : path.normalize(normalized);
 }
 
 function optionalManifestString(value, name) {
@@ -622,7 +628,7 @@ function selectDeploymentAgent(deployment, id = deployment.defaultInstance) {
 // directory, shared by every process of the OS user, so even an inert plugin
 // gets its own directories under the instance's data directory.
 function openVikingAgentEnv(agent) {
-  const state = path.join(agent.dataDir, 'openviking');
+  const state = manifestJoin(agent.dataDir, 'openviking');
   return {
     OPENVIKING_CLI_CONFIG_FILE: agent.ovConfig,
     OPENVIKING_CREDENTIAL_SOURCE: 'cli',
@@ -634,11 +640,11 @@ function openVikingAgentEnv(agent) {
     OPENVIKING_WORKSPACE_PEER: '0',
     OPENVIKING_RECALL_PEER_SCOPE: 'all',
     OPENVIKING_HOME: state,
-    OPENVIKING_STATE_DIR: path.join(state, 'state'),
-    OPENVIKING_HOOK_STATE_DIR: path.join(state, 'hook-state'),
-    OPENVIKING_CODEX_STATE_DIR: path.join(state, 'codex-plugin-state'),
-    OPENVIKING_PENDING_DIR: path.join(state, 'pending'),
-    OPENVIKING_RECALL_LEDGER_DIR: path.join(state, 'recall-ledger'),
+    OPENVIKING_STATE_DIR: manifestJoin(state, 'state'),
+    OPENVIKING_HOOK_STATE_DIR: manifestJoin(state, 'hook-state'),
+    OPENVIKING_CODEX_STATE_DIR: manifestJoin(state, 'codex-plugin-state'),
+    OPENVIKING_PENDING_DIR: manifestJoin(state, 'pending'),
+    OPENVIKING_RECALL_LEDGER_DIR: manifestJoin(state, 'recall-ledger'),
   };
 }
 

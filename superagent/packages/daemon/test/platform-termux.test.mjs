@@ -49,7 +49,7 @@ test('Android tool defaults select executable PATH installs, never bundled Linux
   }
 });
 
-test('Android selects the Termux facade before config loads and preserves explicit LARK_CLI_BIN', () => {
+test('Android selects the Termux facade before config loads and preserves explicit LARK_CLI_BIN', { skip: process.platform === 'win32' ? 'the Termux facade is selected by the host platform id, which this host is not' : false }, () => {
   const moduleUrl = relative => new URL(relative, import.meta.url).href;
   const script = `
     Object.defineProperty(process, 'platform', { value: 'android' });

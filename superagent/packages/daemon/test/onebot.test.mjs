@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -123,7 +124,7 @@ async function until(check, ms = 2000) {
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-onebot-'));
   const state = new OneBotState(dir);
-  t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { state.close(); removeTempDir(dir); });
   return { dir, state };
 }
 
@@ -875,7 +876,7 @@ test('onebot policy validates the owner file strictly', () => {
 
 test('onebot policy file reloads on change and keeps the last good policy', (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-onebot-policy-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  t.after(() => removeTempDir(dataDir));
   const warnings = [];
   const file = new PolicyFile(dataDir, { warn: (event, fields) => warnings.push([event, fields]) });
   assert.equal(file.path, path.join(dataDir, 'onebot', 'config.json'));

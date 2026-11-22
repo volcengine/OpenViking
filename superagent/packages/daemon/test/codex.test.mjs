@@ -3,6 +3,7 @@
 
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import {
@@ -297,7 +298,7 @@ describe('formatting helpers', () => {
     assert.match(rendered, /plugins\.openviking-memory@openviking\.enabled=false/);
     assert.match(rendered, /features\.memories=false/);
     assert.equal(spawnOptions[0].env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(spawnOptions[0].env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.ok(spawnOptions[0].env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter)));
     assert.equal(spawnOptions[0].env.OPENVIKING_USAGE_VIEW, 'off');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_SOCKET, '/data/actions.sock');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);

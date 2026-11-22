@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -143,7 +144,7 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
     model.closeAllConnections();
     await new Promise((resolve) => model.close(resolve));
     store.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTempDir(root);
   });
   await new Promise((resolve) => model.listen(0, '127.0.0.1', resolve));
   fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify({ providers: { fixture: {

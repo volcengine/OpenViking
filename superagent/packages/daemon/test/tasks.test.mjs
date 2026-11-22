@@ -65,6 +65,8 @@ function setup(t, options = {}) {
   return { db, tasks, executor, inbox, relayed, activities, workspace, ingest };
 }
 
+function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 describe('TaskManager', () => {
   it('does not leave a runnable task with a partially recorded request', (t) => {
     const { tasks, db, executor } = setup(t);
@@ -84,7 +86,8 @@ describe('TaskManager', () => {
     assert.match(turn.prompt, /^\[task t1\] 查 X 变慢\nRequested by Alice in chat=oc_a thread=omt_1 \(source=lark\)\./);
     assert.match(turn.prompt, /\[chat=oc_a msg=om_\d+ event=e\d+\] 帮我查下 X 为什么慢/);
     assert.match(turn.prompt, /Routing note from the agent: Alice 只要上周的数据/);
-    assert.match(turn.prompt, new RegExp(`Your directory: ${path.join(workspace, 'tasks', 't1')}`));
+    const escapedDirectory = path.join(workspace, 'tasks', 't1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(turn.prompt, new RegExp(`Your directory: ${escapedDirectory}`));
     assert.ok(fs.existsSync(path.join(workspace, 'tasks', 't1')));
     assert.equal(tasks.workerFor(turn.authority), 't1');
     assert.equal(tasks.get('t1').status, 'running');
@@ -243,7 +246,7 @@ describe('TaskManager', () => {
     const brief = executor.turns.at(-1).prompt;
     assert.match(brief, /^Your session from the earlier rounds of this task was deleted to save disk some days after it ended: this brief is rebuilt from the task record\.\n\[task t1\] A\n/);
     assert.match(brief, /This task has had 2 rounds, each a request on the same work, answered in turn; the last is the one to do now\. The requests, as the agent received them:\nRound 1, from Alice \(done\):\n\[chat=oc_a msg=om_\d+ event=e\d+\] 做 A\nRound 2 \(now\), from Bob:\n\[chat=oc_a msg=om_\d+ event=e\d+\] 再加个参数\n/);
-    assert.match(brief, new RegExp(`Your directory: ${dir}\\nYour directory \\(${dir}\\) was deleted to save disk some days after the task ended, and is empty again: start from your results`));
+    assert.match(brief, new RegExp(`Your directory: ${escapeRegExp(dir)}\\nYour directory \\(${escapeRegExp(dir)}\\) was deleted to save disk some days after the task ended, and is empty again: start from your results`));
     assert.match(brief, /What your earlier rounds found:\n\| A 的结论\nYour answer to the previous round \(the requester has it\):\n\| A 做完了\nPrevious artifacts: \["branch-A"\]\nWork on the request of round 2, then finish with task_report: its result answers that request\./);
   });
 
@@ -410,7 +413,7 @@ describe('TaskManager', () => {
     // is deleted from the directory its brief points to while it works.
     tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
     assert.equal(tasks.get('t2').workdir, path.join(workspace, 'tasks', 't2'));
-    assert.match(executor.turns[1].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${dir}\\nIts dependency folders \\(node_modules, virtual environments, build caches\\) were deleted to save disk: install again only what you need\\.\\n`));
+    assert.match(executor.turns[1].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${escapeRegExp(dir)}\\nIts dependency folders \\(node_modules, virtual environments, build caches\\) were deleted to save disk: install again only what you need\\.\\n`));
     write(path.join(dataDir, 'workers', 't2', 'session.jsonl'));
     now += 30 * day;
     assert.deepEqual(await tasks.sweepDirs().then(({ pruned: a, removed: b }) => [a, b]), [[], []]);

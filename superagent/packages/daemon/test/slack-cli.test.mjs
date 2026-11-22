@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,7 +17,7 @@ import { installNodeCommand } from './fake-executable.mjs';
 const token = 'xoxb-1111-2222-test-credential';
 function executable(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'slack-cli-test-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  t.after(() => removeTempDir(directory));
   const bin = installNodeCommand(directory, 'slack', { body: `#!${process.execPath}
     import fs from 'node:fs';
     const args = process.argv.slice(2);
@@ -108,7 +109,7 @@ test('Slack CLI installer refuses unverified archives before replacing the binar
   assert.equal(fs.existsSync(path.join(root, 'bin', 'slack')), false);
 });
 
-test('Slack CLI extraction supports Linux and macOS archive layouts without an embedded license', (t) => {
+test('Slack CLI extraction supports Linux and macOS archive layouts without an embedded license', { skip: process.platform === 'win32' ? 'the POSIX archive layouts are extracted and checked on POSIX' : false }, (t) => {
   const root = path.dirname(executable(t));
   const source = path.join(root, 'source');
   fs.mkdirSync(path.join(source, 'bin'), { recursive: true });

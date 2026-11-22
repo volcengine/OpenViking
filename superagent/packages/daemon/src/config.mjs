@@ -13,6 +13,13 @@ import { OV_SOUL_URI } from './conversation-policy.mjs';
 import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
 import { RUNTIME_IDS } from './runtime-catalog.mjs';
 
+// A manifest may describe a POSIX deployment (`/root/...`) while setup runs on
+// Windows. Resolve those with POSIX semantics so the host does not turn them
+// into a drive-relative `C:\root...`; a native path keeps the host's rules.
+const isPosixPath = (value) => String(value).startsWith('/');
+const joinPath = (base, ...parts) => (isPosixPath(base) ? path.posix.join(base, ...parts) : path.join(base, ...parts));
+const normalizePath = (value) => (isPosixPath(value) ? path.posix.normalize(value) : path.normalize(value));
+
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
 // TraeX installs under any of these names; without a configured binary, use
@@ -151,9 +158,9 @@ function pathsOverlap(left, right) {
 }
 
 export function getConfig() {
-  const dataDir = path.resolve(
-    process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.ov-superagent', 'data'),
-  );
+  const configuredDataDir = process.env.OV_SUPERAGENT_DATA_DIR
+    || path.join(os.homedir(), '.ov-superagent', 'data');
+  const dataDir = isPosixPath(configuredDataDir) ? path.posix.resolve(configuredDataDir) : path.resolve(configuredDataDir);
   const primaryRuntime = process.env.OV_SUPERAGENT_PRIMARY_RUNTIME
     ? enumEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', '', RUNTIME_IDS) : '';
   const fallbackRuntime = enumEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'codex', RUNTIME_IDS);
@@ -161,10 +168,9 @@ export function getConfig() {
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
     throw new Error('OV_SUPERAGENT_TEMP_DIR must be an absolute path');
   }
-  const workspace = path.resolve(
-    process.env.OV_SUPERAGENT_WORKSPACE
-      || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace'),
-  );
+  const configuredWorkspace = process.env.OV_SUPERAGENT_WORKSPACE
+    || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace');
+  const workspace = isPosixPath(configuredWorkspace) ? path.posix.resolve(configuredWorkspace) : path.resolve(configuredWorkspace);
   const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
   assertLoopbackHost(host);
   const channel = enumEnv('OV_SUPERAGENT_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
@@ -213,9 +219,9 @@ export function getConfig() {
   return {
     projectDir,
     dataDir,
-    databasePath: path.join(dataDir, 'superagent.sqlite3'),
-    lockPath: path.join(dataDir, 'daemon.lock'),
-    tempDir: configuredTempDir ? path.normalize(configuredTempDir) : path.join(dataDir, 'tmp'),
+    databasePath: joinPath(dataDir, 'superagent.sqlite3'),
+    lockPath: joinPath(dataDir, 'daemon.lock'),
+    tempDir: configuredTempDir ? normalizePath(configuredTempDir) : joinPath(dataDir, 'tmp'),
     workspace,
     promptDir,
     soulUri: soulUriEnv(),
