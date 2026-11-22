@@ -778,7 +778,7 @@ test("--input runs the same pipeline: filters, roles, dates, redaction, dedupe",
       ],
     },
     { id: "ses_sub", cwd: join(repo, "src"), messages: exchange(NOW - 2 * DAY, [["Why is CI red?", "A missing env var."], ["Fix it", "Fixed."]]) },
-    { id: "ses_updated", cwd: repo, updated_at: iso(NOW - 4 * DAY), messages: [{ role: "user", text: "no per-message time" }, { role: "assistant", text: "ok" }] },
+    { id: "ses_updated", cwd: repo, updated_at: iso(NOW - 4 * DAY), messages: [{ role: "user", text: "no per-message time" }, { role: "assistant", text: `${"a".repeat(19_999)}🚀 tail` }] },
     { id: "ses_undated", cwd: repo, messages: [{ role: "user", text: "when was this?", created_at: "1" }, { role: "assistant", text: "nobody knows", created_at: "yesterday-ish" }] },
     { id: "ses_child", cwd: repo, subagent: true, messages: exchange(NOW - DAY, [["sub-agent prompt", "sub-agent answer"]]) },
     { id: "ses_live", cwd: repo, messages: exchange(NOW - DAY, [["Already captured by the plugin", "yes"]]) },
@@ -834,7 +834,10 @@ test("--input runs the same pipeline: filters, roles, dates, redaction, dedupe",
   assert.equal(created.messages[1].parts[0].text, "Added a token bucket.\n\nAnd tested it.");
   assert.equal(created.messages[0].created_at, iso(NOW - 3 * DAY - 60_000));
   assert.ok(created.messages.every((m) => m.peer_id === "github.com-acme-app"));
-  assert.equal(server.sessions.get("import__opencode__ses_updated").messages[0].created_at, undefined);
+  const updated = server.sessions.get("import__opencode__ses_updated").messages;
+  assert.equal(updated[0].created_at, undefined);
+  // The default cut lands inside the emoji: half of it would make the server refuse the batch.
+  assert.equal(updated[1].parts[0].text, `${"a".repeat(19_999)}\n... [truncated, 7 more characters]`);
   assert.doesNotMatch(JSON.stringify([...server.sessions.values()]), /the-real-key-123|ABCDEFGHIJKLMNOP|system prompt|tool output|internal note|sub-agent/);
 
   const writes = server.calls.length;
