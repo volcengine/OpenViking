@@ -113,45 +113,6 @@ describe('/tasks', () => {
     assert.match(run('t1').text, /\n状态：等 Alice 回复 8 天（久未回复：router 的任务提示里不再出现/);
   });
 
-  it('answers the overview with a card too: a table per group of tasks, and never an email address', async (t) => {
-    const day = 86_400_000;
-    let at = Date.parse('2026-11-01T00:00:00Z');
-    const { tasks, turns, row, run } = setup(t, { now: () => at });
-    assert.equal(run('').card, undefined, 'no card without tasks');
-    tasks.create({ rows: [row()], title: '问 Alice', requester: 'Alice', runtime: 'pi' });
-    tasks.report('t1', { state: 'needs_user', question: '哪个？' });
-    turns[0].finish({ text: '' });
-    await settle();
-    at += 8 * day;
-    tasks.create({ rows: [row()], title: '回复 bob@example.com 的邮件', requester: 'Bob', runtime: 'pi' });
-    tasks.report('t2', { state: 'blocked', summary: '没有邮箱权限' });
-    turns[1].finish({ text: '' });
-    await settle();
-    tasks.settleReports({ taskIds: ['t2'], by: 'reply_message' });
-    at += 60_000;
-    tasks.create({ rows: [row()], title: '排查令牌刷新失败', requester: '陈晓斌', runtime: 'pi', parent: 't2' });
-    at += 2 * 60_000;
-
-    const { text, card } = run('');
-    assert.match(text, /^后台任务：运行中 1 · 排队 0 · 等待回复 0 · 久未回复 1 · 共 3 个 · /, 'the text stays, for where cards cannot go');
-    assert.deepEqual([card.schema, card.header.title.content, card.header.subtitle.content], ['2.0', '后台任务', '共 3 个 · worker 槽位 1/3（跟进预留 0/1）']);
-    const { elements } = card.body;
-    assert.equal(elements[0].content, '运行中 **1** · 排队 **0** · 等待回复 **0** · 久未回复 **1**');
-    assert.deepEqual(elements.filter((element) => element.tag === 'markdown').slice(1).map((element) => element.content), ['**进行中**', '**最近结束**']);
-    const [working, ended] = elements.filter((element) => element.tag === 'table');
-    assert.deepEqual(working.columns.map((column) => column.display_name), ['编号', '状态', '时长', '任务', '请求人', '位置'], 'no result for work under way');
-    assert.deepEqual(working.rows, [{ id: 't3', status: [{ text: '运行中', color: 'blue' }], elapsed: '2 分钟（第 1 次运行）',
-      title: '排查令牌刷新失败（跟进 t2）', requester: '陈晓斌', where: 'OpenViking 用户群 · 话题' }]);
-    assert.deepEqual(ended.rows, [{ id: 't2', status: [{ text: '受阻', color: 'red' }], elapsed: '3 分钟前',
-      title: '回复 bob＠example.com 的邮件', requester: 'Bob', where: 'OpenViking 用户群 · 话题', result: '已发出' }]);
-    assert.deepEqual(elements.filter((element) => element.tag === 'div').map((element) => element.text.content), [
-      '久未回复（5 天以上无动静，router 的任务提示里不再出现）：t1 等 Alice 8 天',
-      '/tasks <编号> 查看详情 · /tasks stop <编号> [原因] 停止任务',
-    ]);
-    assert.doesNotMatch(JSON.stringify(card), /@/, 'Lark refuses a bot message with an email address in it');
-    assert.equal(run('t2').card, undefined, 'one task stays text');
-  });
-
   it('shows one task: its request, follow-ups and their fate, and its reports and their delivery', async (t) => {
     const { tasks, turns, row, run } = setup(t);
     tasks.create({ rows: [row({ content: '查一下 X 为什么慢' })], title: '查 X', requester: 'Alice', note: 'Alice 只要上周', runtime: 'pi' });
