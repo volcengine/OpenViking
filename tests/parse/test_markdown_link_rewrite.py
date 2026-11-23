@@ -73,6 +73,31 @@ class TestRewriteRelativeLinks:
             rewrite_ctx=rewrite_ctx,
         )
 
+    @pytest.mark.parametrize(
+        ("heading", "anchor"),
+        [
+            ("# Target", "target"),
+            ("# Target ##", "target"),
+            ("# Target ###   ", "target"),
+            ("# Target\t##", "target"),
+            ("# Target##", "target"),
+            (r"# Target \##", "target-"),
+            (r"# Target \# ##", "target-"),
+            ("# Target ##\u00a0", "target-"),
+        ],
+    )
+    async def test_optional_closing_hashes_keep_section_fragment(
+        self, tmp_path: Path, heading: str, anchor: str
+    ):
+        (tmp_path / "target.md").write_text(
+            heading + "\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
+            encoding="utf-8",
+        )
+
+        rewritten = await self._rewrite(self._parser(), tmp_path, f"[target](target.md#{anchor})")
+
+        assert rewritten == f"[target](../target/Target.md#{anchor})"
+
     async def test_md_target_becomes_directory(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
         out = await self._rewrite(
