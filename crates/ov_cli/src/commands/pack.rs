@@ -1,31 +1,39 @@
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
+
+fn output_path(to: Option<&str>, wait: bool) -> Result<Option<&str>> {
+    match (wait, to) {
+        (true, None) => Err(Error::Client(
+            "An output path is required when waiting for OVPack".into(),
+        )),
+        (false, Some(_)) => Err(Error::Client(
+            "Omit the output path with --wait false".into(),
+        )),
+        _ => Ok(to),
+    }
+}
 
 pub async fn export(
     client: &HttpClient,
     uri: &str,
-    to: &str,
+    to: Option<&str>,
     include_vectors: bool,
-    async_task: bool,
+    wait: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let file_path = client
+    let mut result = client
         .export_ovpack(
             uri,
-            to,
+            output_path(to, wait)?,
             include_vectors,
-            async_task,
             matches!(format, OutputFormat::Table),
         )
         .await?;
-
-    // Output success message with the file path
-    let result = serde_json::json!({
-        "file": file_path,
-        "message": format!("Successfully exported to {}", file_path)
-    });
+    if let Some(file) = result["file"].as_str() {
+        result["message"] = serde_json::json!(format!("Successfully exported to {file}"));
+    }
 
     output_success(&result, format, compact);
     Ok(())
@@ -33,25 +41,22 @@ pub async fn export(
 
 pub async fn backup(
     client: &HttpClient,
-    to: &str,
+    to: Option<&str>,
     include_vectors: bool,
-    async_task: bool,
+    wait: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let file_path = client
+    let mut result = client
         .backup_ovpack(
-            to,
+            output_path(to, wait)?,
             include_vectors,
-            async_task,
             matches!(format, OutputFormat::Table),
         )
         .await?;
-
-    let result = serde_json::json!({
-        "file": file_path,
-        "message": format!("Successfully backed up to {}", file_path)
-    });
+    if let Some(file) = result["file"].as_str() {
+        result["message"] = serde_json::json!(format!("Successfully backed up to {file}"));
+    }
 
     output_success(&result, format, compact);
     Ok(())
@@ -63,7 +68,7 @@ pub async fn import(
     target: &str,
     on_conflict: Option<&str>,
     vector_mode: Option<&str>,
-    async_task: bool,
+    wait: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -73,7 +78,7 @@ pub async fn import(
             target,
             on_conflict,
             vector_mode,
-            async_task,
+            wait,
             matches!(format, OutputFormat::Table),
         )
         .await?;
@@ -86,7 +91,7 @@ pub async fn restore(
     file_path: &str,
     on_conflict: Option<&str>,
     vector_mode: Option<&str>,
-    async_task: bool,
+    wait: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -95,7 +100,7 @@ pub async fn restore(
             file_path,
             on_conflict,
             vector_mode,
-            async_task,
+            wait,
             matches!(format, OutputFormat::Table),
         )
         .await?;

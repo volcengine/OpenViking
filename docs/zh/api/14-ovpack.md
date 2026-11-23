@@ -11,8 +11,9 @@ OVPack API 用于导入、导出、备份和恢复 OpenViking 数据。
 
 异步导出和备份完成后，任务结果包含 `download_path`、`filename` 和 `size`（字节数）。
 提交者使用原有鉴权向 `download_path` 发起 GET 请求下载包，包随成功任务保留 24 小时。
-CLI 的 `export`、`backup`、`import`、`restore` 可使用 `--async`，
-CLI 会等待任务完成，导出和备份会再下载到指定文件。
+CLI 的 `export`、`backup`、`import`、`restore` 默认等待。
+传 `--wait false` 时，命令输出任务 ID 后退出，可用 `ov task status <task_id>` 查结果。
+异步导出和备份省略本地输出路径，例如 `ov export viking://resources/project --wait false`。
 
 ## API 参考
 

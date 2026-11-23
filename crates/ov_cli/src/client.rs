@@ -2,7 +2,6 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use std::env;
 use std::path::Path;
-use tokio::io::AsyncWriteExt;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
@@ -1145,7 +1144,7 @@ impl HttpClient {
                         .to_string(),
                 )
             })?;
-        self.wait_for_task_result(
+        self.wait_for_resource_task(
             task_id,
             tokio::signal::ctrl_c(),
             std::time::Duration::from_secs(1),
@@ -1156,7 +1155,7 @@ impl HttpClient {
     /// Wait without an overall deadline. Each status GET retains the ordinary
     /// HTTP timeout. Consecutive observation failures are bounded, and retries
     /// never resubmit the import.
-    async fn wait_for_task_result(
+    async fn wait_for_resource_task(
         &self,
         task_id: &str,
         interrupted: impl std::future::Future<Output = std::io::Result<()>>,
@@ -1571,35 +1570,30 @@ impl HttpClient {
 
     // ============ Pack Methods ============
 
-    async fn download_pack(
+    async fn request_pack(
         &self,
         endpoint: &str,
-        body: serde_json::Value,
-        to: &str,
+        mut body: Value,
+        to: Option<&str>,
         default_name: &str,
-        async_task: bool,
         show_progress: bool,
-    ) -> Result<String> {
-        let progress = show_progress
-            .then(|| ProgressGuard::new("Preparing OVPack on server", "OVPack download failed"));
-        let request = if async_task {
-            let result = self.run_pack_task(endpoint, body).await?;
-            let task_id = result["task_id"]
-                .as_str()
-                .ok_or_else(|| Error::Parse("Missing OVPack task ID".into()))?;
-            self.base.http.get(format!(
-                "{}/api/v1/pack/download/{task_id}",
-                self.base.base_url
-            ))
-        } else {
-            self.base
-                .http
-                .post(format!("{}{}", self.base.base_url, endpoint))
-                .json(&body)
-        }
-        .headers(self.base.build_headers())
-        .query(&[("profile", "0")]);
-        let mut response = self
+    ) -> Result<Value> {
+        let Some(to) = to else {
+            body["wait"] = json!(false);
+            return self.post(endpoint, &body).await;
+        };
+        let url = format!("{}{}", self.base.base_url, endpoint);
+        let request = self
+            .base
+            .http
+            .post(&url)
+            .headers(self.base.build_headers())
+            .json(&body)
+            .query(&[("profile", "0")]);
+        let progress = show_progress.then(|| {
+            ProgressGuard::new("Preparing OVPack on server", "OVPack download failed")
+        });
+        let response = self
             .base
             .send_request(request, "HTTP request failed")
             .await?;
@@ -1616,6 +1610,11 @@ impl HttpClient {
         if let Some(progress) = &progress {
             progress.set_message("Downloading OVPack");
         }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))?;
+
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
             to_path.join(format!("{}.ovpack", default_name))
@@ -1628,81 +1627,43 @@ impl HttpClient {
         if let Some(parent) = final_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        if async_task {
-            let directory = final_path
-                .parent()
-                .filter(|path| !path.as_os_str().is_empty());
-            let temp =
-                tempfile::NamedTempFile::new_in(directory.unwrap_or_else(|| Path::new(".")))?;
-            let mut file = tokio::fs::File::from_std(temp.reopen()?);
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|e| Error::from_reqwest("Failed to read OVPack download", e))?
-            {
-                file.write_all(&chunk).await?;
-            }
-            file.flush().await?;
-            drop(file);
-            temp.persist(&final_path).map_err(|error| error.error)?;
-        } else {
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| Error::from_reqwest("Failed to read response bytes", e))?;
-            std::fs::write(&final_path, bytes)?;
-        }
+        std::fs::write(&final_path, bytes)?;
 
         if let Some(progress) = progress {
             progress.finish("OVPack download complete");
         }
 
-        Ok(final_path.to_string_lossy().to_string())
+        Ok(json!({"file": final_path.to_string_lossy()}))
     }
 
     async fn post_pack_operation(
         &self,
         endpoint: &str,
-        body: serde_json::Value,
-        async_task: bool,
+        mut body: Value,
+        wait: bool,
         show_progress: bool,
         message: &str,
     ) -> Result<serde_json::Value> {
-        let processing =
-            show_progress.then(|| ProgressGuard::new(message, "OVPack processing failed"));
-        let result = if async_task {
-            self.run_pack_task(endpoint, body).await?
-        } else {
-            self.post(endpoint, &body).await?
-        };
+        if !wait {
+            body["wait"] = json!(false);
+            return self.post(endpoint, &body).await;
+        }
+        let processing = show_progress
+            .then(|| ProgressGuard::new(message, "OVPack processing failed"));
+        let result = self.post(endpoint, &body).await?;
         if let Some(processing) = processing {
             processing.finish("OVPack processing complete");
         }
         Ok(result)
     }
 
-    async fn run_pack_task(&self, endpoint: &str, mut body: Value) -> Result<Value> {
-        body["wait"] = json!(false);
-        let result: Value = self.post(endpoint, &body).await?;
-        let task_id = result["task_id"]
-            .as_str()
-            .ok_or_else(|| Error::Parse("Missing OVPack task ID".into()))?;
-        self.wait_for_task_result(
-            task_id,
-            tokio::signal::ctrl_c(),
-            std::time::Duration::from_secs(1),
-        )
-        .await
-    }
-
     pub async fn export_ovpack(
         &self,
         uri: &str,
-        to: &str,
+        to: Option<&str>,
         include_vectors: bool,
-        async_task: bool,
         show_progress: bool,
-    ) -> Result<String> {
+    ) -> Result<Value> {
         let body = serde_json::json!({
             "uri": uri,
             "include_vectors": include_vectors,
@@ -1712,30 +1673,21 @@ impl HttpClient {
             .split('/')
             .last()
             .unwrap_or("export");
-        self.download_pack(
-            "/api/v1/pack/export",
-            body,
-            to,
-            base_name,
-            async_task,
-            show_progress,
-        )
-        .await
+        self.request_pack("/api/v1/pack/export", body, to, base_name, show_progress)
+            .await
     }
 
     pub async fn backup_ovpack(
         &self,
-        to: &str,
+        to: Option<&str>,
         include_vectors: bool,
-        async_task: bool,
         show_progress: bool,
-    ) -> Result<String> {
-        self.download_pack(
+    ) -> Result<Value> {
+        self.request_pack(
             "/api/v1/pack/backup",
             serde_json::json!({"include_vectors": include_vectors}),
             to,
             "openviking-backup",
-            async_task,
             show_progress,
         )
         .await
@@ -1747,23 +1699,11 @@ impl HttpClient {
         parent: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
-        async_task: bool,
+        wait: bool,
         show_progress: bool,
     ) -> Result<serde_json::Value> {
-        let file_path_obj = Path::new(file_path);
-
-        if !file_path_obj.exists() {
-            return Err(Error::Client(format!(
-                "Local ovpack file not found: {}",
-                file_path
-            )));
-        }
-        if !file_path_obj.is_file() {
-            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
-        }
-
         let temp_file_id = self
-            .upload_pack_file(file_path_obj, async_task, show_progress)
+            .upload_pack_file(Path::new(file_path), wait, show_progress)
             .await?;
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
@@ -1775,7 +1715,7 @@ impl HttpClient {
         self.post_pack_operation(
             "/api/v1/pack/import",
             body,
-            async_task,
+            wait,
             show_progress,
             "Validating and importing OVPack on server",
         )
@@ -1787,23 +1727,11 @@ impl HttpClient {
         file_path: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
-        async_task: bool,
+        wait: bool,
         show_progress: bool,
     ) -> Result<serde_json::Value> {
-        let file_path_obj = Path::new(file_path);
-
-        if !file_path_obj.exists() {
-            return Err(Error::Client(format!(
-                "Local ovpack file not found: {}",
-                file_path
-            )));
-        }
-        if !file_path_obj.is_file() {
-            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
-        }
-
         let temp_file_id = self
-            .upload_pack_file(file_path_obj, async_task, show_progress)
+            .upload_pack_file(Path::new(file_path), wait, show_progress)
             .await?;
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
@@ -1814,26 +1742,30 @@ impl HttpClient {
         self.post_pack_operation(
             "/api/v1/pack/restore",
             body,
-            async_task,
+            wait,
             show_progress,
             "Validating and restoring OVPack on server",
         )
         .await
     }
 
-    async fn upload_pack_file(
-        &self,
-        path: &Path,
-        async_task: bool,
-        progress: bool,
-    ) -> Result<String> {
-        let uploader = if async_task {
+    async fn upload_pack_file(&self, path: &Path, wait: bool, show_progress: bool) -> Result<String> {
+        if !path.exists() {
+            return Err(Error::Client(format!(
+                "Local ovpack file not found: {}",
+                path.display()
+            )));
+        }
+        if !path.is_file() {
+            return Err(Error::Client(format!("Path is not a file: {}", path.display())));
+        }
+
+        let uploader = if wait {
             self.create_uploader()
-                .with_upload_mode(Some("shared".into()))
         } else {
-            self.create_uploader()
+            self.create_uploader().with_upload_mode(Some("shared".into()))
         };
-        if progress {
+        if show_progress {
             uploader.upload_temp_file_with_progress(path, false).await
         } else {
             uploader.upload_temp_file(path).await
@@ -3041,11 +2973,7 @@ mod tests {
         client
             .export_ovpack(
                 "viking://resources",
-                output
-                    .path()
-                    .to_str()
-                    .expect("tempdir path should be valid"),
-                false,
+                Some(output.path().to_str().expect("tempdir path should be valid")),
                 false,
                 false,
             )
@@ -3404,8 +3332,7 @@ mod tests {
         let error = client
             .export_ovpack(
                 "viking://resources/demo",
-                destination.path().to_str().unwrap(),
-                false,
+                Some(destination.path().to_str().unwrap()),
                 false,
                 true,
             )

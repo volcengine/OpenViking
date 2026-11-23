@@ -343,18 +343,18 @@ pub async fn handle_add_skill(
 
 pub async fn handle_export(
     uri: String,
-    to: String,
+    to: Option<String>,
     include_vectors: bool,
-    async_task: bool,
+    wait: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::pack::export(
         &client,
         &uri,
-        &to,
+        to.as_deref(),
         include_vectors,
-        async_task,
+        wait,
         ctx.output_format,
         ctx.compact,
     )
@@ -362,17 +362,17 @@ pub async fn handle_export(
 }
 
 pub async fn handle_backup(
-    to: String,
+    to: Option<String>,
     include_vectors: bool,
-    async_task: bool,
+    wait: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::pack::backup(
         &client,
-        &to,
+        to.as_deref(),
         include_vectors,
-        async_task,
+        wait,
         ctx.output_format,
         ctx.compact,
     )
@@ -384,7 +384,7 @@ pub async fn handle_import(
     target_uri: String,
     on_conflict: Option<String>,
     vector_mode: Option<String>,
-    async_task: bool,
+    wait: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -394,7 +394,7 @@ pub async fn handle_import(
         &target_uri,
         on_conflict.as_deref(),
         vector_mode.as_deref(),
-        async_task,
+        wait,
         ctx.output_format,
         ctx.compact,
     )
@@ -405,7 +405,7 @@ pub async fn handle_restore(
     file_path: String,
     on_conflict: Option<String>,
     vector_mode: Option<String>,
-    async_task: bool,
+    wait: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -414,7 +414,7 @@ pub async fn handle_restore(
         &file_path,
         on_conflict.as_deref(),
         vector_mode.as_deref(),
-        async_task,
+        wait,
         ctx.output_format,
         ctx.compact,
     )
