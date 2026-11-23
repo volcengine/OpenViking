@@ -6,9 +6,9 @@ description: >
 
 # OpenViking Memory Doctor
 
-Troubleshooting for the OpenViking memory integration in Cursor, TRAE, TRAE CN, ZCode, Antigravity, Kimi Code, CodeBuddy Code and Qoder CLI. Three things go wrong on a user's machine, each silently:
+Troubleshooting for the OpenViking memory integration in Cursor, TRAE, TRAE CN, ZCode, Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, pi and DeepSeek Harness. Three things go wrong on a user's machine, each silently:
 
-- **Install** — the hooks and the MCP server the installer wrote into the host's configuration (Cursor, TRAE, ZCode) or shipped as a host plugin (Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI), the runtime assembled beside them, and the skills. When these are wrong, hooks never run and nothing is logged anywhere.
+- **Install** — the hooks and the MCP server the installer wrote into the host's configuration (Cursor, TRAE, ZCode) or shipped as a plugin the host loads (Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, pi, DeepSeek Harness), the runtime beside them, and the skills. When these are wrong, nothing runs and nothing is logged anywhere.
 - **Configuration** — `~/.openviking/ovcli.conf`, `~/.openviking/ov.conf` and `OPENVIKING_*` environment variables, resolved as env → ovcli.conf → ov.conf → defaults. A malformed file reads as "no config" and the integration silently falls back to `http://127.0.0.1:1933` with no key; a stray env var silently overrides the file.
 - **Connection** — on a self-hosted server `/health` answers 200 even with a bad key, so everything can look reachable while every real request 401s. On OpenViking Cloud the gateway authenticates `/health` and `/ready` too, so the same probe answers 401 without a key and says nothing about the url.
 
@@ -28,8 +28,9 @@ Run the copy installed for the host this session runs in:
 | Kimi Code | `node "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs"` |
 | CodeBuddy Code | `node ~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/agent-integrations/codebuddy/scripts/ov-memory-doctor.mjs` |
 | Qoder CLI | `node ~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs` |
+| OpenCode, pi, DeepSeek Harness | `node <directory of this skill>/../../scripts/ov-memory-doctor.mjs` |
 
-With `OPENVIKING_HOME` set, the copies live under it instead of `~/.openviking`. Options: `--json` (machine-readable), `--offline` (skip network probes), `--timeout <ms>` (per probe, default 5000), `--no-color`.
+On OpenCode, pi and DeepSeek Harness the doctor ships in the same plugin as this skill, two directories above it. With `OPENVIKING_HOME` set, the `~/.openviking` copies live under it instead. Options: `--json` (machine-readable), `--offline` (skip network probes), `--timeout <ms>` (per probe, default 5000), `--no-color`.
 
 The report has seven sections — Environment, Plugin install, Configuration, Workspace, Connection, Server health, Recent activity — and a Summary listing every ✗/⚠ with a fix. Read the whole report before acting: one root cause usually shows up in several sections (a bad key → "api key rejected" + "system/status → 401").
 
@@ -46,6 +47,12 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 | `<hooks file> cannot be parsed` | The host's config is not valid JSON; the installer refuses to overwrite a file it cannot read | Fix the JSON with the user, then re-run the installer. |
 | `an installed hook names a script that is not on disk` / `the MCP server points at a proxy that is not on disk` | The runtime directory was moved or deleted after install | Re-run the installer. |
 | `<host> has not loaded this plugin` | The plugin is assembled on disk but the host does not list it as installed and enabled. CodeBuddy Code, Qoder CLI: the host CLI was not on PATH at install time, or the plugin was uninstalled or disabled in the host. Kimi Code: its entry in `plugins/installed.json` is missing or disabled | If the plugin was disabled, re-enable it in the host; the installer keeps that choice. Otherwise re-run the installer, for CodeBuddy Code and Qoder CLI with the host CLI on PATH. |
+| `OpenCode does not load this plugin` / `loads a plugin that is not on disk` | OpenCode: neither the `plugins/openviking.js` wrapper nor `@openviking/opencode-plugin` in the config's plugin list is in place, or the wrapper points at a missing directory | Re-run the installer with `--harness opencode`. |
+| `OpenCode loads this plugin twice` | Both the file wrapper and the npm package are registered, so everything runs twice | Remove `@openviking/opencode-plugin` from the plugin list, or re-run the installer. |
+| `the extension is not installed where pi discovers it` / `the MCP client dependency is not installed` | pi: nothing under `~/.pi/agent/extensions/openviking`, or its `node_modules` is incomplete, in which case pi cannot load the extension at all | Re-run the installer with `--harness pi`, or run the `npm ci` command the finding prints. |
+| `pi's settings turn this extension off` | A `-` override for the extension in pi's user or project `settings.json`, as `pi config` writes when it is switched off | Turn it back on in `pi config`. |
+| `no DeepSeek Harness profile … has the plugin` / `installed in profile <p> but turned off` / `enables the plugin but has no copy of it` | DeepSeek Harness loads plugins per profile: the plugin is missing from the profile this session runs, or is off in its Plugins page | Run the `dsh plugin --profile <p> add` command the finding prints, or turn the plugin on in the Plugins page. |
+| `no config outside profile <p>'s cordis.patch.yml` | DeepSeek Harness: the connection is set in the profile's patch file, which the doctor does not read, so its connection checks may target another server than the plugin | Compare with `endpoint` and `apiKey` in that file, or move them to `~/.openviking/ovcli.conf`. |
 | `ZCode's hook runner is off` | `hooks.enabled` is not `true` in `~/.zcode/cli/config.json`, so no hook fires | Re-run the installer, or set `hooks.enabled = true`. |
 | `no 'openviking' MCP server` / `<mcp file> not found` | Hooks may work, but the memory tools are not wired up | Re-run the installer. |
 | `the installer wrote no MCP server` (info) | Antigravity already had an `openviking` server in `~/.gemini/config/mcp_config.json`, and the installer left it as the only one | Nothing to fix; MCP findings then concern that server, not the plugin. |
@@ -73,7 +80,7 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 
 ## Step 3 — targeted checks (only when the report is not conclusive)
 
-Prove hooks run at all: put `OPENVIKING_DEBUG=1` in the environment that launches the host, run one turn, then read `~/.openviking/logs/<client>-hooks.log` (JSONL; grep `"error"`). An absent or unchanged log after a full turn means the hooks were not spawned.
+Prove hooks run at all: put `OPENVIKING_DEBUG=1` in the environment that launches the host, run one turn, then read `~/.openviking/logs/<client>-hooks.log` (JSONL; grep `"error"`). An absent or unchanged log after a full turn means the hooks were not spawned. OpenCode, pi and DeepSeek Harness run in the host's own process and have no hooks log; the Recent activity section names the log each of them writes.
 
 Prove the key and identity by hand (`Bearer` is case-sensitive with exactly one space):
 
@@ -92,7 +99,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$URL/mcp" \
   -H "Authorization: Bearer $KEY" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Prove a capture landed: session state lives in `~/.openviking/hook-state/<client>/`, and the OpenViking session id is the host's own session id behind a prefix (`cu-` Cursor, `tr-` TRAE, `trcn-` TRAE CN, `zc-` ZCode, `ag-` Antigravity, `kc-` Kimi Code, `cb-` CodeBuddy Code, `qd-` Qoder CLI). `GET $URL/api/v1/sessions/<id>` (or `ov session get <id>`) should show the captured messages, and `commit_count > 0` proves extraction ran.
+Prove a capture landed on a hook host: session state lives in `~/.openviking/hook-state/<client>/`, and the OpenViking session id is the host's own session id behind a prefix (`cu-` Cursor, `tr-` TRAE, `trcn-` TRAE CN, `zc-` ZCode, `ag-` Antigravity, `kc-` Kimi Code, `cb-` CodeBuddy Code, `qd-` Qoder CLI). `GET $URL/api/v1/sessions/<id>` (or `ov session get <id>`) should show the captured messages, and `commit_count > 0` proves extraction ran.
 
 Second opinion from the CLI: `ov health` and `ov config validate` read the same `~/.openviking/ovcli.conf`. `ov config list` reveals whether a different profile was switched in with `ov config switch`, which also retargets the integration.
 
@@ -113,7 +120,7 @@ lsof -nP -iTCP:1933 -sTCP:LISTEN            # who owns the port
 
 ## Documentation
 
-- Source and issues: <https://github.com/volcengine/OpenViking> — the integration lives under `examples/agent-hook-plugin`, the shared installer under `examples/memory-plugin-shared/`.
+- Source and issues: <https://github.com/volcengine/OpenViking> — the integrations live under `examples/`, the shared installer under `examples/memory-plugin-shared/`.
 - Documentation index (LLM-friendly): <https://docs.openviking.ai/llms.txt>; the harness integration pages under it cover install paths, configuration keys and known limitations.
 - `https://api.vikingdb.cn-beijing.volces.com/openviking` is the Volcengine-hosted OpenViking Service (OpenViking Cloud): the path prefix is part of the base url, it accepts `Authorization: Bearer` only, and its keys are issued from the Volcengine console rather than by a self-hosted admin.
 

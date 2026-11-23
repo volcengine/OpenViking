@@ -263,12 +263,17 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
     committed: true,
   }))),
-  // The hook hosts share one doctor, so its skill is theirs alone and is kept
-  // beside it: Claude Code and Codex each document a doctor of their own.
-  ...["cursor", "trae", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"].map((host) => ({
+  // Claude Code and Codex each document a doctor of their own under this name;
+  // every other harness shares this one.
+  ...[
+    ...["cursor", "trae", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"]
+      .map((host) => ["agent-hook-plugin", "hosts", host, "skills"]),
+    ["opencode-plugin", "skills"],
+    ["pi-coding-agent-extension", "skills"],
+    ["dsh-memory-plugin", "skills"],
+  ].map((path) => ({
     skill: "ov-memory-doctor",
-    source: join(ROOT, "examples", "agent-hook-plugin", "skills"),
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
+    dir: join(ROOT, "examples", ...path),
     committed: true,
   })),
 ];
@@ -454,8 +459,8 @@ async function writeManifest(files) {
   await rename(staging, MANIFEST_PATH);
 }
 
-async function copySkill(skill, targetDir, source = SKILLS_DIR) {
-  const sourceDir = join(source, skill);
+async function copySkill(skill, targetDir) {
+  const sourceDir = join(SKILLS_DIR, skill);
   for (const file of (await readdir(sourceDir)).sort()) {
     const target = join(targetDir, skill);
     await mkdir(target, { recursive: true });
@@ -505,8 +510,8 @@ async function main() {
     process.stdout.write(`unused lib/${file} — no target imports it\n`);
   }
 
-  for (const { skill, dir, source } of SKILL_TARGETS) {
-    await copySkill(skill, dir, source);
+  for (const { skill, dir } of SKILL_TARGETS) {
+    await copySkill(skill, dir);
     process.stdout.write(`synced ${skill}/ -> ${relative(ROOT, dir)}\n`);
   }
 }

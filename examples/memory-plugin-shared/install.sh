@@ -3084,7 +3084,7 @@ install_kimicode() {
     rm -rf "$bundle"
     return 1
   }
-  rm -rf "$root/tests" "$root/skills"
+  rm -rf "$root/tests"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
   cp "$root/hosts/kimicode/kimi.plugin.json" "$bundle/kimi.plugin.json" || {
     rm -rf "$bundle"
@@ -3210,7 +3210,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   rm -rf "$bundle"
   mkdir -p "$bundle"
   root="$(assemble_agent_integration "$host" "$host" "$bundle")" || { rm -rf "$bundle"; return 1; }
-  rm -rf "$root/tests" "$root/skills"
+  rm -rf "$root/tests"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
   # Keep this host's config directory aside before the adapters are pruned.
   config="$bundle/$host-config"
@@ -4053,11 +4053,13 @@ EOF
     next_steps "Qoder CLI" "$(t "start a new $(qoder_clis | sed 's/ / or /') session" "新建一个 $(qoder_clis | sed 's/ / 或 /') 会话")" "$rerun" "$doctor" "$uninstall qoder"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
-    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
+    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" \
+      "node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs" \
       "$(t "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js, then remove mcp.openviking from $(short_path "$(opencode_config_file)")" "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js，再删除 $(short_path "$(opencode_config_file)") 中的 mcp.openviking")"
   fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
-    next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
+    next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" \
+      "node ~/.pi/agent/extensions/openviking/scripts/ov-memory-doctor.mjs" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
   if contains_harness dsh && have_npm_dsh; then
     next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" "" \
