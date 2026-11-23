@@ -55,3 +55,88 @@ test('a localized quick-input prompt without a known skill still asks for the ou
     await view.unmount();
   }
 });
+
+test('a sole Skill stays selectable and then appears only in the picker value', async () => {
+  const skill = 'viking://system/skills/wiki/SKILL.md';
+  const view = await mountHitl(
+    [
+      card('compile_skill', 'Skill', {
+        candidates: [{ uri: skill, label: 'Wiki' }],
+      }),
+    ],
+    { fetch: async () => Response.json({ status: 'ok', result: [] }) },
+  );
+  try {
+    await view.start();
+    const trigger = () =>
+      view.container.querySelector('.ov-viking-bot__compile-skill button');
+    assert.equal(
+      view.container.querySelectorAll('input[type="radio"]').length,
+      1,
+    );
+    assert.equal(
+      view.container.querySelector('button[type="submit"]').disabled,
+      true,
+    );
+    await click(view.container.querySelector(`input[value="${skill}"]`));
+    assert.match(trigger().textContent, new RegExp(skill));
+    assert.equal(trigger().querySelector('span[title]').title, skill);
+    assert.equal(
+      view.container.querySelectorAll('input[type="radio"]').length,
+      0,
+    );
+    assert.equal(
+      view.container.querySelector('button[type="submit"]').disabled,
+      false,
+    );
+    await submit(view);
+    assert.equal(JSON.parse(view.requests[1].text).answers[0].value, skill);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('multiple Skill candidates keep a single selection reflected in the picker', async () => {
+  const skills = [
+    'viking://system/skills/wiki/SKILL.md',
+    'viking://system/skills/report/SKILL.md',
+  ];
+  const view = await mountHitl(
+    [
+      card('compile_skill', 'Skill', {
+        candidates: skills.map((uri, index) => ({
+          uri,
+          label: `Skill ${index + 1}`,
+        })),
+      }),
+    ],
+    { fetch: async () => Response.json({ status: 'ok', result: [] }) },
+  );
+  try {
+    await view.start();
+    await click(view.container.querySelector(`input[value="${skills[0]}"]`));
+    await click(view.container.querySelector(`input[value="${skills[1]}"]`));
+    assert.equal(
+      view.container.querySelectorAll('input[type="radio"]').length,
+      2,
+    );
+    assert.equal(
+      view.container.querySelector(`input[value="${skills[0]}"]`).checked,
+      false,
+    );
+    assert.equal(
+      view.container.querySelector(`input[value="${skills[1]}"]`).checked,
+      true,
+    );
+    await view.rerender({ language: 'en-US' });
+    assert.match(
+      view.container.querySelector('.ov-viking-bot__compile-skill button')
+        .textContent,
+      new RegExp(skills[1]),
+    );
+    await submit(view);
+    assert.equal(JSON.parse(view.requests[1].text).answers[0].value, skills[1]);
+  } finally {
+    await view.unmount();
+  }
+});
