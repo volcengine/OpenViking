@@ -40,7 +40,7 @@ opencode
 
 OpenCode 2 使用同一个包：v2 调用 `setup()`，OpenCode 1 调用 `server()`。OpenCode 2 会把 `"plugin"` 规范化为 `"plugins"`，因此安装器继续写兼容 v1/v2 的 `"plugin"`；不要为了 v2 手工改写现有配置。
 
-插件自带 skill，不需要另外安装：`openviking-memory`、`openviking-skills` 和 `ov-experience-memory`，告诉模型什么时候该用哪个 OpenViking 工具。OpenCode 1 由插件的 `config` hook 把插件的 `skills/` 目录加进 `skills.paths`；OpenCode 2 则通过 `skill.transform` 注册这个目录。这些 skill 只随插件的 OpenViking MCP server 一起提供：hook-only 模式下、或你关闭了 `mcp.openviking` 时不会加入。
+插件自带 skill，不需要另外安装：`openviking-memory`、`openviking-skills`、`ov-experience-memory` 和 `openviking-rule-search`，告诉模型什么时候该用哪个 OpenViking 工具。OpenCode 1 由插件的 `config` hook 把插件的 `skills/` 目录加进 `skills.paths`；OpenCode 2 则通过 `skill.transform` 注册这个目录。这些 skill 只随插件的 OpenViking MCP server 一起提供：hook-only 模式下、或你关闭了 `mcp.openviking` 时不会加入。
 
 在 OpenCode 2 中，插件把 MCP server 设为 `codemode: false`，所以工具仍以 `openviking_*` 直接暴露，不会收进 Code Mode。OpenCode 2 没有插件 toast API，服务不可用等信息只写入插件日志。
 

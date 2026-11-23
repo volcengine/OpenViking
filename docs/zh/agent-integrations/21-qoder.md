@@ -25,7 +25,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - 生命周期 Hook：加载画像、提问时召回、捕获对话、提交 session，以及 `viking://` URI 保护。
 - 以 stdio 代理形式提供的 OpenViking MCP 服务，含 `search`、`read`、`remember`、`add_skill` 等工具。
-- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
+- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
 
 `PATH` 中的每个 Qoder CLI 版本都会装上插件：`qodercli` 装在 `~/.qoder`（`QODER_CONFIG_DIR`），国内版 `qoderclicn` 装在 `~/.qoder-cn`（`QODERCN_CONFIG_DIR`）。卸载时两处都会移除。
 
