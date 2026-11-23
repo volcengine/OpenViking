@@ -202,8 +202,10 @@
   align-items: center;
 }
 .ov-viking-bot__compile-source:has(.ov-viking-bot__compile-source-tags) {
-  gap: 6px;
-  padding-inline: 8px;
+  position: relative;
+  isolation: isolate;
+  min-height: 37px;
+  padding-inline: 8px 38px;
   border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
   border-radius: 6px;
 }
@@ -220,12 +222,16 @@
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
 .ov-viking-bot__compile-source-tags {
+  position: relative;
+  z-index: 1;
   display: flex;
   min-width: 0;
   flex: 1;
   flex-wrap: wrap;
   gap: 4px;
   padding-block: 4px;
+  /* Let the trigger receive clicks between tags while keeping tag buttons clickable. */
+  pointer-events: none;
 }
 .ov-viking-bot__compile-source-tag {
   display: inline-flex;
@@ -250,11 +256,15 @@
   padding-inline: 4px;
   font-size: inherit;
 }
+.ov-viking-bot__compile-source-tag > .ov-button:not(:disabled) {
+  pointer-events: auto;
+}
 .ov-viking-bot__compile-source-tags + .ov-viking-bot__compile-source-trigger {
-  width: 24px;
-  flex: none;
-  padding: 0;
-  justify-content: center;
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  padding-inline: 14px;
+  justify-content: flex-end;
   border: 0;
 }
 .ov-viking-bot__compile-source-tags
