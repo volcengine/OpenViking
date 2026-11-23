@@ -368,7 +368,6 @@ class TaskWorkStore(Protocol):
 
     async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
         """Count pending/running non-Inline Work by queue across an account's users."""
-        ...
 
     async def summarize_works(
         self,
