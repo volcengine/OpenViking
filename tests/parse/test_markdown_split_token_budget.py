@@ -1,5 +1,7 @@
 """Native section limits use characters, independently of legacy token settings."""
 
+import re
+
 import pytest
 
 from openviking.parse.parsers.markdown import MarkdownParser
@@ -72,3 +74,77 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+def _hierarchical_tail_document(
+    *, direct=0, child_size=600, tail_size=0, lead=False, two_tails=False, nested=False
+):
+    heading = "##" if nested else "#"
+    child_heading = heading + "#"
+    content = "# Lead\n\nLEAD_MARKER " + "L" * 600 + "\n\n" if lead else ""
+    if nested:
+        content += "# Root\n\n"
+    content += heading + " Parent\n\n"
+    if direct:
+        content += "DIRECT_MARKER " + "P" * direct + "\n\n"
+    content += child_heading + " Child A\n\nCHILD_A_MARKER " + "A" * child_size + "\n\n"
+    content += child_heading + " Child B\n\nCHILD_B_MARKER " + "B" * child_size + "\n\n"
+    if two_tails:
+        return (
+            content
+            + heading
+            + " Tail One\n\nTAIL_ONE_MARKER\n\n"
+            + heading
+            + " Tail Two\n\nTAIL_TWO_MARKER"
+        )
+    return content + heading + " Tail\n\nTAIL_MARKER " + "T" * tail_size
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        _hierarchical_tail_document(),
+        _hierarchical_tail_document(direct=600),
+        _hierarchical_tail_document(direct=20, child_size=320, lead=True),
+        _hierarchical_tail_document(direct=30, child_size=370, tail_size=100, lead=True),
+        "# Parent\n\nDIRECT_MARKER " + "P" * 1200 + "\n\n# Tail\n\nTAIL_MARKER",
+        _hierarchical_tail_document(two_tails=True),
+        "# Before\n\nBEFORE_MARKER\n\n" + _hierarchical_tail_document().split("\n\n# Tail", 1)[0],
+        _hierarchical_tail_document(nested=True),
+    ],
+    ids=[
+        "parent-empty",
+        "parent-direct",
+        "fits",
+        "crosses-budget",
+        "flat",
+        "two-tails",
+        "tiny-leading",
+        "nested",
+    ],
+)
+async def test_trailing_sections_preserve_source_order(content):
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=900))
+    assert parser.config.max_section_chars == 900
+    layout = await parser._compute_layout(content, "viking://temp/test", resource_name="doc")
+    written = "\n".join(op.content for op in layout.ops if op.kind == "write")
+    marker_pattern = r"\b[A-Z_]+_MARKER\b"
+    expected_markers = re.findall(marker_pattern, content)
+    assert expected_markers
+    assert re.findall(marker_pattern, written) == expected_markers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail_body", [True, False])
+async def test_fitting_hierarchical_tail_stays_in_one_file(tail_body):
+    content = _hierarchical_tail_document(direct=20, child_size=320, lead=True)
+    if not tail_body:
+        content = content.replace("TAIL_MARKER ", "")
+    max_chars = len(content[content.index("# Parent") :].strip())
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=max_chars))
+    assert len(content) > parser.config.max_section_chars
+    layout = await parser._compute_layout(content, "viking://temp/test", resource_name="doc")
+    tail_files = [op.content for op in layout.ops if op.kind == "write" and "# Tail" in op.content]
+    assert len(tail_files) == 1
+    assert all(marker in tail_files[0] for marker in ("CHILD_A_MARKER", "CHILD_B_MARKER"))
