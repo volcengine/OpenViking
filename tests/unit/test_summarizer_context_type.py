@@ -44,7 +44,7 @@ class TestSummarizerContextType:
 
     def test_session_uri_defaults_to_resource(self):
         """Session URIs should not be treated as memory-specific content."""
-        uri = "viking://session/default/sess_001/history/archive_001"
+        uri = "viking://user/default/sessions/sess_001/history/archive_001"
         assert context_type_for_uri(uri) == "resource"
 
     def test_resource_named_memories_does_not_classify_as_memory(self):

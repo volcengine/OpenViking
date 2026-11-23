@@ -30,7 +30,7 @@ def _fail_package_summaries(monkeypatch, name):
 async def _assert_failed_package_settled(client, failed_paths):
     # Resource follow-up work may include a separate parent refresh. Wait for
     # the whole queue, including that work, before checking its final counts.
-    waited = await client.post("/api/v1/system/wait", json={"timeout": 5})
+    waited = await client.post("/api/v1/system/wait", json={})
     assert waited.status_code == 200, waited.text
     assert waited.json()["result"]["Semantic"]["error_count"] == 1
     queue_manager = get_queue_manager()
@@ -57,9 +57,7 @@ async def test_failed_skill_files_do_not_break_global_wait_or_followup_work(
         "Failing package",
         {"references/a.md": "First attachment", "references/b.md": "Second attachment"},
     )
-    response = await client.post(
-        "/api/v1/skills", json={"temp_file_id": upload, "wait": True, "timeout": 5}
-    )
+    response = await client.post("/api/v1/skills", json={"temp_file_id": upload, "wait": True})
     assert response.status_code == 500, response.text
     # The request still reports every failed file, not merely the first failure.
     for path in failed_paths:
@@ -81,13 +79,11 @@ async def test_failed_skill_files_do_not_break_global_wait_or_followup_work(
     assert after.processed > before.processed
 
 
-async def test_update_with_multiple_file_failures_restores_package_and_settles_queue(
+async def test_update_with_multiple_file_failures_keeps_replacement_and_settles_queue(
     client, monkeypatch, tmp_path, upload_temp_dir
 ):
     name = "update-multiple-file-failures"
     root = (await _add_skill(client, name, "Original"))["root_uri"]
-    old_content = await _download(client, f"{root}/SKILL.md")
-    old_index = await _indexed_record(client, root, 0)
     failed_paths, original = _fail_package_summaries(monkeypatch, name)
     upload = await _upload_package(
         client,
@@ -99,14 +95,15 @@ async def test_update_with_multiple_file_failures_restores_package_and_settles_q
 
     response = await client.put(
         f"/api/v1/skills/{name}",
-        json={"temp_file_id": upload, "wait": True, "timeout": 5},
+        json={"temp_file_id": upload, "wait": True},
     )
     assert response.status_code == 500, response.text
     for path in failed_paths:
         assert path in response.json()["error"]["message"]
     before = await _assert_failed_package_settled(client, failed_paths)
-    assert await _download(client, f"{root}/SKILL.md") == old_content
-    assert await _indexed_record(client, root, 0) == old_index
+    assert b"Failed replacement" in await _download(client, f"{root}/SKILL.md")
+    for path in ("references/a.md", "references/b.md"):
+        assert await _indexed_record(client, f"{root}/{path}", 2) == []
 
     monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", original)
     retry = await client.put(

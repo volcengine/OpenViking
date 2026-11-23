@@ -216,11 +216,9 @@ class LoadAdapter:
 
     async def observer_queue(self) -> Any: ...
 
-    async def add_resource(
-        self, *, path: str, to: str, reason: str, wait: bool, timeout: Optional[float]
-    ) -> Any: ...
+    async def add_resource(self, *, path: str, to: str, reason: str, wait: bool) -> Any: ...
 
-    async def wait_processed(self, timeout: Optional[float]) -> Any: ...
+    async def wait_processed(self) -> Any: ...
 
     async def find(self, *, query: str, target_uri: str, limit: int) -> Any: ...
 
@@ -278,19 +276,16 @@ class AsyncHTTPAdapter(LoadAdapter):
     async def observer_queue(self) -> Any:
         return await self._client._get_queue_status()
 
-    async def add_resource(
-        self, *, path: str, to: str, reason: str, wait: bool, timeout: Optional[float]
-    ) -> Any:
+    async def add_resource(self, *, path: str, to: str, reason: str, wait: bool) -> Any:
         return await self._client.add_resource(
             path=path,
             to=to,
             wait=wait,
-            timeout=timeout,
             options={"reason": reason, "strict": False},
         )
 
-    async def wait_processed(self, timeout: Optional[float]) -> Any:
-        return await self._client.wait_processed(timeout=timeout)
+    async def wait_processed(self) -> Any:
+        return await self._client.wait_processed()
 
     async def find(self, *, query: str, target_uri: str, limit: int) -> Any:
         result = await self._client.find(query=query, target_uri=target_uri, limit=limit)
@@ -353,21 +348,14 @@ class CliSubprocessAdapter(LoadAdapter):
     async def observer_queue(self) -> AdapterResult:
         return await self._run(["observer", "queue"])
 
-    async def add_resource(
-        self, *, path: str, to: str, reason: str, wait: bool, timeout: Optional[float]
-    ) -> AdapterResult:
+    async def add_resource(self, *, path: str, to: str, reason: str, wait: bool) -> AdapterResult:
         args = ["add-resource", path, "--to", to, "--reason", reason]
         if wait:
             args.append("--wait")
-            if timeout is not None:
-                args.extend(["--timeout", str(timeout)])
         return await self._run(args, operation_timeout=max(self._config.timeout, 60.0))
 
-    async def wait_processed(self, timeout: Optional[float]) -> AdapterResult:
-        args = ["wait"]
-        if timeout is not None:
-            args.extend(["--timeout", str(timeout)])
-        return await self._run(args, operation_timeout=timeout or self._config.timeout)
+    async def wait_processed(self) -> AdapterResult:
+        return await self._run(["wait"])
 
     async def find(self, *, query: str, target_uri: str, limit: int) -> AdapterResult:
         return await self._run(["find", query, "--uri", target_uri, "-n", str(limit)])
@@ -660,7 +648,6 @@ class BenchmarkRunner:
                         to=uri,
                         reason="OpenViking server load benchmark",
                         wait=False,
-                        timeout=None,
                     ),
                     resource_uri=resource_uri,
                     worker_id=worker_id,
@@ -683,7 +670,7 @@ class BenchmarkRunner:
             adapter,
             scenario,
             "wait_processed",
-            lambda: adapter.wait_processed(timeout=self.config.drain_timeout),
+            lambda: asyncio.wait_for(adapter.wait_processed(), timeout=self.config.drain_timeout),
         )
         self.recorder.add_phase(
             PhaseMetadata(
@@ -903,7 +890,6 @@ class BenchmarkRunner:
                         to=uri,
                         reason="OpenViking mixed load benchmark",
                         wait=False,
-                        timeout=None,
                     ),
                     resource_uri=resource_uri,
                     worker_id=worker_id,

@@ -14,6 +14,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
+from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -36,8 +37,9 @@ class _BorrowableBackend(_SingleAccountBackend):
 
 
 @pytest.mark.asyncio
-async def test_single_account_backend_upsert_many_uses_one_adapter_call():
+async def test_single_account_backend_upsert_many_preserves_payload_contract():
     calls = []
+    event_loop_thread = threading.get_ident()
 
     class _Collection:
         def get_meta_data(self):
@@ -48,6 +50,10 @@ async def test_single_account_backend_upsert_many_uses_one_adapter_call():
                     {"FieldName": "abstract", "FieldType": "text"},
                     {"FieldName": "account_id"},
                     {"FieldName": "context_type"},
+                    {"FieldName": "acl_mode"},
+                    {"FieldName": "acl_direct_grants"},
+                    {"FieldName": "acl_inherited_grants"},
+                    {"FieldName": "search_tags"},
                 ]
             }
 
@@ -59,6 +65,7 @@ async def test_single_account_backend_upsert_many_uses_one_adapter_call():
             return _Collection()
 
         def upsert(self, data):
+            assert threading.get_ident() != event_loop_thread
             calls.append(data)
             return [row["id"] for row in data]
 
@@ -70,10 +77,15 @@ async def test_single_account_backend_upsert_many_uses_one_adapter_call():
             "abstract": "one",
             "context_type": "resource",
             "unknown": "ignored",
+            "acl_mode": "restricted",
+            "acl_direct_grants": [],
+            "acl_inherited_grants": [],
+            "search_tags": [],
         },
         {
             "uri": "viking://resources/two",
             "context_type": "resource",
+            "acl_inherited_grants": ["1:user:alice"],
         },
     ]
 
@@ -91,6 +103,10 @@ async def test_single_account_backend_upsert_many_uses_one_adapter_call():
             "abstract": "one",
             "account_id": "acc1",
             "context_type": "resource",
+            "acl_mode": "restricted",
+            "acl_direct_grants": ["none"],
+            "acl_inherited_grants": ["none"],
+            "search_tags": [],
         },
         {
             "id": ids[1],
@@ -98,11 +114,13 @@ async def test_single_account_backend_upsert_many_uses_one_adapter_call():
             "abstract": "",
             "account_id": "acc1",
             "context_type": "resource",
+            "acl_inherited_grants": ["1:user:alice"],
         },
     ]
     assert "id" not in records[1]
     assert "account_id" not in records[0]
     assert records[0]["unknown"] == "ignored"
+    assert records[0]["acl_direct_grants"] == records[0]["acl_inherited_grants"] == []
 
 
 @pytest.mark.asyncio
@@ -194,28 +212,9 @@ async def test_single_account_backend_upsert_many_rejects_invalid_adapter_result
 
 
 @pytest.mark.asyncio
-async def test_viking_vector_index_backend_upsert_many_delegates_once():
-    backend = object.__new__(VikingVectorIndexBackend)
-    backend.acl_manager = None
-    ctx = SimpleNamespace(account_id="acc1")
-    records = [{"id": "rec-1"}, {"id": "rec-2"}]
-    calls = []
-
-    class _BoundBackend:
-        async def upsert_many(self, data_list):
-            calls.append(data_list)
-            return [row["id"] for row in data_list]
-
-    backend._get_backend_for_context = AsyncMock(return_value=_BoundBackend())
-
-    assert await backend.upsert_many(records, ctx=ctx) == ["rec-1", "rec-2"]
-    assert calls == [records]
-
-
-@pytest.mark.asyncio
 async def test_viking_vector_index_backend_bulk_ingest_balances_scope_on_error():
-    backend = object.__new__(VikingVectorIndexBackend)
-    ctx = SimpleNamespace(account_id="acc1")
+    backend = object.__new__(VikingDBManager)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     calls = []
 
     class _BoundBackend(_BorrowableBackend):
@@ -229,10 +228,11 @@ async def test_viking_vector_index_backend_bulk_ingest_balances_scope_on_error()
     backend._get_backend_for_context = AsyncMock(return_value=bound_backend)
 
     with pytest.raises(RuntimeError, match="injected"):
-        async with backend.bulk_ingest(ctx=ctx):
+        async with VikingDBManagerProxy(backend, ctx).bulk_ingest():
             calls.append("body")
             raise RuntimeError("injected")
 
+    backend._get_backend_for_context.assert_awaited_once_with(ctx)
     assert calls == ["begin", "body", "end"]
 
 
@@ -334,9 +334,9 @@ async def test_bulk_ingest_cancellation_during_threaded_end_waits_for_cleanup():
 
 
 @pytest.mark.asyncio
-async def test_viking_vector_index_backend_upsert_many_persists_batch(tmp_path):
+async def test_bound_vector_manager_upsert_many_persists_batch(tmp_path):
     collection_name = "bulk_upsert_test"
-    backend = VikingVectorIndexBackend(
+    backend = VikingDBManager(
         VectorDBBackendConfig(
             backend="local",
             name=collection_name,
@@ -345,9 +345,14 @@ async def test_viking_vector_index_backend_upsert_many_persists_batch(tmp_path):
         )
     )
     backend.set_vector_config_resolver(
-        SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
-            dedicated_vectordb=False, vectordb=backend._config,
-        )))
+        SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=SimpleNamespace(
+                    dedicated_vectordb=False,
+                    vectordb=backend._config,
+                )
+            )
+        )
     )
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     schema = {
@@ -375,61 +380,11 @@ async def test_viking_vector_index_backend_upsert_many_persists_batch(tmp_path):
 
     try:
         assert await backend.create_collection(collection_name, schema)
-        assert await backend.upsert_many(records, ctx=ctx) == ["rec-0", "rec-1"]
+        proxy = VikingDBManagerProxy(backend, ctx)
+        assert await proxy.upsert_many(records) == ["rec-0", "rec-1"]
         assert await backend.count(ctx=ctx) == 2
-        fetched = await backend.get(["rec-0", "rec-1"], ctx=ctx)
+        fetched = await proxy.get(["rec-0", "rec-1"])
         assert [row["id"] for row in fetched] == ["rec-0", "rec-1"]
         assert all(row["account_id"] == "acc1" for row in fetched)
     finally:
         await backend.close()
-
-
-@pytest.mark.asyncio
-async def test_vikingdb_manager_proxy_upsert_many_forwards_bound_context():
-    from openviking.storage.vikingdb_manager import VikingDBManagerProxy
-
-    ctx = SimpleNamespace(account_id="acc1")
-    captured = {}
-
-    class _Manager:
-        collection_name = "context"
-        mode = "local"
-
-        async def upsert_many(self, data_list, *, ctx):
-            captured["data_list"] = data_list
-            captured["ctx"] = ctx
-            return [row["id"] for row in data_list]
-
-    proxy = VikingDBManagerProxy(_Manager(), ctx)
-    records = [{"id": "rec-1"}, {"id": "rec-2"}]
-
-    assert await proxy.upsert_many(records) == ["rec-1", "rec-2"]
-    assert captured == {"data_list": records, "ctx": ctx}
-
-
-@pytest.mark.asyncio
-async def test_vikingdb_manager_proxy_bulk_ingest_forwards_bound_context():
-    from contextlib import asynccontextmanager
-
-    from openviking.storage.vikingdb_manager import VikingDBManagerProxy
-
-    ctx = SimpleNamespace(account_id="acc1")
-    calls = []
-
-    class _Manager:
-        collection_name = "context"
-        mode = "local"
-
-        @asynccontextmanager
-        async def bulk_ingest(self, *, ctx):
-            calls.append(("begin", ctx))
-            try:
-                yield
-            finally:
-                calls.append(("end", ctx))
-
-    proxy = VikingDBManagerProxy(_Manager(), ctx)
-    async with proxy.bulk_ingest():
-        calls.append(("body", ctx))
-
-    assert calls == [("begin", ctx), ("body", ctx), ("end", ctx)]

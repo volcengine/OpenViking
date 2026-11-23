@@ -76,10 +76,10 @@ async def test_find_omits_unset_optional_fields():
 async def test_find_keeps_explicit_tags():
     client, fake = _client_with_fake()
 
-    await client.find("hello", tags=["a", "b"])
+    await client.find("hello", options={"tags": ["team=search", "env=prod"]})
 
     payload = fake.calls[-1]["json"]
-    assert payload["tags"] == ["a", "b"]
+    assert payload["tags"] == ["team=search", "env=prod"]
 
 
 async def test_search_omits_unset_optional_fields():
@@ -89,7 +89,14 @@ async def test_search_omits_unset_optional_fields():
 
     payload = fake.calls[-1]["json"]
     assert payload["query"] == "hello"
-    for dropped in ("session_id", "score_threshold", "filter", "context_type", "tags"):
+    for dropped in (
+        "session_id",
+        "score_threshold",
+        "filter",
+        "context_type",
+        "tags",
+        "events_time_decay_protection",
+    ):
         assert dropped not in payload
 
 

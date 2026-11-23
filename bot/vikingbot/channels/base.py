@@ -1,10 +1,5 @@
 """Base channel interface for chat platforms."""
 
-import re as _re
-
-# Bare image filenames only: no path separators, no "..", bounded length.
-_SEND_FILENAME_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
-
 import base64
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -15,8 +10,8 @@ from loguru import logger
 
 from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
+from vikingbot.channels.utils import read_image_file
 from vikingbot.config.schema import BaseChannelConfig, SessionKey
-from vikingbot.utils import get_data_path
 
 # Optional HTML processing libraries
 try:
@@ -236,27 +231,9 @@ class BaseChannel(ABC):
 
                 return False, content
         elif data_uri.startswith("send://"):
-            filename = data_uri.split("send://", 1)[1]
-            # send:// URIs come from model-authored outbound content and must
-            # never escape the images directory: a crafted remainder such as
-            # "../../secrets.txt" would otherwise read an arbitrary server file
-            # and (via channel image delivery) exfiltrate it.
-            if not _SEND_FILENAME_RE.fullmatch(filename):
-                raise ValueError(
-                    f"send:// URI must be a bare filename, got {filename!r}"
-                )
-            path_obj = get_data_path() / "images" / filename
-            return False, path_obj.read_bytes()
-        else:
-            # Try to resolve as local file path
-            candidate_paths = []
+            return False, read_image_file(data_uri.removeprefix("send://"))
 
-            # 1. Check if it's already an absolute path that exists
-            path_obj = Path(data_uri)
-            if path_obj.is_absolute():
-                candidate_paths.append(path_obj)
-
-            return False, path_obj.read_bytes()
+        raise ValueError("Unsupported outbound image URI")
 
     def _is_image_data(self, data: bytes) -> bool:
         """Check if bytes represent a valid image by magic numbers."""

@@ -4,7 +4,7 @@ description: 私有交付的配置生效、升级验收、回滚准备和故障�
 
 # 企业私有化部署：升级与排障
 
-使用 ovadmin 和 Operator 维护[企业私有化部署](20-private-deployment.md)，包括配置更新、版本升级和故障排查。开源服务的容器更新见[服务端部署](03-deployment.md)，OpenViking 数据模型迁移见[迁移指南](../migration/01-user-peer-model.md)。交付包版本和 runtime 版本分别核对。
+使用 ovadmin 和 Operator 维护[企业私有化部署](20-private-deployment.md)，包括配置更新、版本升级和故障排查。开源服务的容器更新见[服务端部署](03-deployment.md)。交付包版本和 runtime 版本分别核对。
 
 ## 配置修改如何生效
 
@@ -56,13 +56,18 @@ kubectl -n vikingdb get events --sort-by=.lastTimestamp
 | ImagePullBackOff / 镜像检查失败 | 完整前缀、交付 tag、仓库是否已同步、各 namespace 的拉取 Secret | 修正源配置或补齐镜像，再预览 |
 | Pod Pending | 节点标签、污点、资源 requests、PVC 与节点亲和性 | 用 Pod / PVC 事件区分调度和存储问题 |
 | PVC Pending / 无可用 StorageClass | 实际 StorageClass、kubeconfig context、列举存储类的 RBAC | 显式指定适用的存储类；不直接删除 PVC |
-| License 非 Active | fingerprint、有效期、system namespace、CR 首次同步 | 按随包授权流程处理，再查状态 |
+| License 非 Active | fingerprint、有效期、system namespace、CR 首次同步；在线授权还要查集群到授权服务的网络和证书 | 按随包授权流程处理，再查状态；在线授权可用 `license renew <集群名> --yes` 手动续期 |
 | `license checksum mismatch` | `.vlic` 是否由本集群 fingerprint 签发、文件是否被改动 | 不修改文件内容；用本集群 `fingerprint.json` 重新申请原始 `.vlic` |
 | API Server 访问失败，但已提交资源 | 部署机到 API Server 的网络与 API 状态 | 恢复后用 `cluster get` / `doctor` 查最终状态，不立即重装 |
 | workspace Ready，但导入或检索失败 | 模型鉴权、维度、API 路径、限流、向量服务、用户 Key | 运行 OpenViking P0 并读取对应失败阶段 |
 | Root Key 可管理但数据访问失败 | 是否把 Root Key 用于数据面 | 改用 User / Admin Key |
 | 模型配置更新后未变化 | 修改的是否为源模板；是否重渲染 | 使用 `workspace restart`，重新验证模型请求 |
 | 集群内可访问，外部不可访问 | 客户端 endpoint 是否为 Service DNS、Ingress / LB / TLS | 配好外部入口，再生成对应客户端配置 |
+| VikingDB Ready，但索引一直 `INIT`；workspace 的 `VectorDBReady` 为 `False` | fermat 容器 `/var/log/tiger/hdfs_upload.log` 中的 `Permission denied: user=root` | 给 `root` 授予 HDFS 模型目录写权限（见[部署文档](20-private-deployment.md#_2-生成并编辑配置)），fermat 会自动重试上传。meta 日志中同时出现的 `slot ... resource not enough` 不一定是原因 |
+| 修改 Deployment 被拒绝：`direct update is rejected ... managed by VikingDbCluster` | 是否直接修改了受管工作负载 | 改 `vdb.yaml` 后执行 `setup apply --module vikingdb` |
+| tbase-api / tbase-scan `Pending`，其他组件正常 | 节点污点；本版不渲染 `spec.tbase` 的 `tolerations` | 用 `spec.tbase.nodeSelector` 调度到无污点节点 |
+| apply 报 `namespaces "viking-infra" not found` | `spec.observability.oneAgent.enabled` | 未部署配套观测栈时设为 `false` |
+| `open /tmp/openviking-operator-install.yaml: permission denied` | 部署机上其他用户留下的同名文件 | 以 `TMPDIR=<自有目录>` 运行 `setup apply --module openviking` |
 
 ## 交付给支持人员的信息
 

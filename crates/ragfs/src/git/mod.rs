@@ -36,17 +36,25 @@ pub mod index_store;
 pub mod object_store;
 pub mod ref_store;
 pub mod service;
+pub mod snapshot_log;
 pub mod tree_builder;
 pub mod types;
 pub mod util;
 
-pub use config::{GitConfig, GitLocalConfig, GitS3ConfigPy, GitTuningConfig};
+pub use config::{
+    GitConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotConfig, GitSnapshotLogConfig,
+    GitSnapshotLogMySqlConfig, GitSnapshotLogSqliteConfig, GitTuningConfig,
+};
 pub use error::{GitError, ObjectStoreError, RefStoreError};
 pub use ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_MAX_BYTES, OVGITIGNORE_PATH};
 pub use index_store::{CommitIndex, IndexStore, IndexStoreError};
 pub use object_store::ObjectStore;
 pub use ref_store::RefStore;
 pub use service::GitService;
+pub use snapshot_log::{
+    MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit, SnapshotLogRow, SnapshotLogStore,
+    SqliteSnapshotLogStore,
+};
 pub use tree_builder::{flatten, lookup, TreeEditor};
 pub use types::{
     Actor, CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreDiff,

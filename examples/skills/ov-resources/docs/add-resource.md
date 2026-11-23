@@ -63,9 +63,6 @@ Semantic processing runs asynchronously. Use `--wait` to block until complete:
 # Wait for completion
 ov add-resource ./docs --wait
 
-# Wait with timeout
-ov add-resource ./docs --wait --timeout 60
-
 # Fire and forget (default)
 ov add-resource ./docs
 ```
@@ -145,7 +142,6 @@ With `--wait`, the response includes `queue_status` with `pending`, `processing`
 | `--reason` | Reason for adding (experimental) |
 | `--instruction` | Processing instructions (experimental) |
 | `--wait` | Block until semantic processing completes |
-| `--timeout` | Timeout in seconds when `--wait` is used |
 | `--strict` | Use strict mode |
 | `--ignore-dirs` | Directory names to ignore (comma-separated) |
 | `--include` | File patterns to include (glob) |

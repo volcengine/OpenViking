@@ -4,7 +4,7 @@
 """Global test fixtures"""
 
 import asyncio
-import shutil
+import socket
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -20,70 +20,15 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
-
-
-# ── Workaround: local .so may lack AGFS_Grep symbol (new in latest source) ──
-def _patch_agfs_grep_if_missing():
-    """Wrap _setup_functions to catch missing AGFS_Grep and skip its binding."""
-    try:
-        from openviking.pyagfs.binding_client import BindingLib
-
-        _orig_setup = BindingLib._setup_functions
-
-        def _safe_setup(self):
-            try:
-                _orig_setup(self)
-            except AttributeError as e:
-                if "AGFS_Grep" not in str(e):
-                    raise
-                # Re-implement _setup_functions but skip AGFS_Grep lines.
-                # We do this by temporarily removing the Grep lines from the
-                # source, but since we can't edit .so, we monkey-patch the lib
-                # object's __getattr__ to not fail on AGFS_Grep.
-                import ctypes
-
-                class _GrepStub:
-                    """Fake ctypes function descriptor for AGFS_Grep."""
-
-                    argtypes = [
-                        ctypes.c_int64,
-                        ctypes.c_char_p,
-                        ctypes.c_char_p,
-                        ctypes.c_int,
-                        ctypes.c_int,
-                        ctypes.c_int,
-                        ctypes.c_int,
-                    ]
-                    restype = ctypes.c_char_p
-
-                    def __call__(self, *args):
-                        return b'{"error":"AGFS_Grep not available in this .so version"}'
-
-                # Patch at the CDLL instance level by overriding __getattr__
-                orig_class = type(self.lib)
-                orig_getattr = orig_class.__getattr__
-
-                def patched_getattr(cdll_self, name):
-                    if name == "AGFS_Grep":
-                        return _GrepStub()
-                    return orig_getattr(cdll_self, name)
-
-                orig_class.__getattr__ = patched_getattr
-                try:
-                    _orig_setup(self)
-                finally:
-                    orig_class.__getattr__ = orig_getattr
-
-        BindingLib._setup_functions = _safe_setup
-    except Exception:
-        pass
-
-
-_patch_agfs_grep_if_missing()
+from tests.utils.watch_fixtures import (  # noqa: F401
+    watch_manager,
+    watch_store,
+    watch_tracker,
+    watch_vfs,
+)
 
 # Test data root directory
 PROJECT_ROOT = Path(__file__).parent.parent
-TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp"
 
 
 @pytest.fixture(scope="session")
@@ -95,11 +40,9 @@ def event_loop():
 
 
 @pytest.fixture(scope="function")
-def temp_dir() -> Generator[Path, None, None]:
-    """Create temp directory, auto-cleanup before and after test"""
-    shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
-    TEST_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    yield TEST_TMP_DIR
+def temp_dir(tmp_path: Path) -> Generator[Path, None, None]:
+    """Keep concurrent test runs from deleting each other's vector stores."""
+    yield tmp_path
 
 
 @pytest.fixture(scope="function")
@@ -160,6 +103,8 @@ async def service(
     OpenVikingConfigSingleton.reset_instance()
     OpenVikingConfigSingleton.initialize(
         config_dict={
+            # Domain tests use a file-only fake; Watch leadership has dedicated fixtures.
+            "enable_watch_scheduler": False,
             "storage": {
                 "workspace": str(test_data_dir),
                 "agfs": {"backend": "local"},
@@ -195,3 +140,28 @@ def request_context() -> RequestContext:
         user=UserIdentifier.the_default_user(),
         role=Role.USER,
     )
+
+
+@pytest.fixture
+def working_memory_policy():
+    """Explicit opt-in for tests exercising WM/checkpoint generation."""
+    return {"working_memory": {"enabled": True}}
+
+
+@pytest.fixture
+def public_resource_dns(monkeypatch):
+    """Resolve fixture URLs without relying on external DNS."""
+    resolve = socket.getaddrinfo
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        if host in {
+            "example.com",
+            "example.org",
+            "example.feishu.cn",
+            "example.larkoffice.com",
+            "alidocs.dingtalk.com",
+        }:
+            host = "93.184.215.14"
+        return resolve(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)

@@ -26,6 +26,7 @@ import glob
 import os
 import sys
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.vectordb.utils.path_safety import resolve_storage_path
 from openviking_cli.utils import get_logger
 
@@ -73,10 +74,11 @@ def _can_reclaim_posix_lock(lock_path: str) -> bool:
     """
     try:
         import fcntl
-    except ImportError:
+    except ImportError as _log_error:
         logger.debug(
-            "fcntl unavailable, skipping RocksDB LOCK probe: %s",
-            _safe_log_text(lock_path),
+            "fcntl unavailable, skipping RocksDB LOCK probe: %s error_type=%s",
+            safe_path_for_log(str(lock_path)),
+            type(_log_error).__name__,
         )
         return False
 
@@ -84,17 +86,18 @@ def _can_reclaim_posix_lock(lock_path: str) -> bool:
         with open(lock_path, "r+b") as lock_file:
             try:
                 fcntl.lockf(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+            except BlockingIOError as _log_error:
                 logger.debug(
-                    "RocksDB LOCK is held by a live process, skipping: %s",
-                    _safe_log_text(lock_path),
+                    "RocksDB LOCK is held by a live process, skipping: %s error_type=%s",
+                    safe_path_for_log(str(lock_path)),
+                    type(_log_error).__name__,
                 )
                 return False
             except OSError as exc:
                 logger.debug(
                     "Could not probe RocksDB LOCK %s: %s",
-                    _safe_log_text(lock_path),
-                    _safe_log_text(exc),
+                    safe_path_for_log(str(lock_path)),
+                    type(exc).__name__,
                 )
                 return False
 
@@ -106,8 +109,8 @@ def _can_reclaim_posix_lock(lock_path: str) -> bool:
     except OSError as exc:
         logger.debug(
             "Could not open RocksDB LOCK %s for probe: %s",
-            _safe_log_text(lock_path),
-            _safe_log_text(exc),
+            safe_path_for_log(str(lock_path)),
+            type(exc).__name__,
         )
         return False
 
@@ -131,6 +134,7 @@ def clean_stale_rocksdb_locks(data_dir: str) -> int:
 
     data_root = resolve_storage_path(data_dir)
     removed = 0
+    failed_locks = 0
     seen: set[str] = set()
 
     for pattern in _LOCK_GLOB_PATTERNS:
@@ -148,28 +152,32 @@ def clean_stale_rocksdb_locks(data_dir: str) -> int:
                     continue
                 os.remove(lock_path)
                 removed += 1
-                logger.info("Removed stale RocksDB LOCK: %s", _safe_log_text(lock_path))
+                logger.debug("Removed stale RocksDB LOCK: %s", safe_path_for_log(str(lock_path)))
             except FileNotFoundError:
                 # Another startup path may have removed it already.
                 continue
-            except PermissionError:
+            except PermissionError as _log_error:
                 # File is held by a live process — leave it alone.
                 logger.debug(
-                    "RocksDB LOCK is held by a live process, skipping: %s",
-                    _safe_log_text(lock_path),
+                    "RocksDB LOCK is held by a live process, skipping: %s error_type=%s",
+                    safe_path_for_log(str(lock_path)),
+                    type(_log_error).__name__,
                 )
             except OSError as exc:
-                logger.warning(
+                failed_locks += 1
+                logger.debug(
                     "Could not remove RocksDB LOCK %s: %s",
-                    _safe_log_text(lock_path),
-                    _safe_log_text(exc),
+                    safe_path_for_log(str(lock_path)),
+                    type(exc).__name__,
                 )
 
+    if failed_locks:
+        logger.info("Stale lock cleanup incomplete failed=%d degraded=true", failed_locks)
     if removed:
         logger.info(
             "Cleaned %d stale RocksDB LOCK file(s) under %s",
             removed,
-            _safe_log_text(data_root),
+            safe_path_for_log(str(data_root)),
         )
 
     return removed

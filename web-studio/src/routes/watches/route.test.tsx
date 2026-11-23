@@ -1,19 +1,20 @@
+import i18n from '#/i18n/core'
 // @vitest-environment jsdom
 
-import * as React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
-  act,
 } from '@testing-library/react'
+import * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { WatchManagementPage } from './route'
-import type { WatchTask } from './-lib/api'
+import type { WatchTask } from '#/features/workbench/watches/lib/api'
+import { WatchManagementPage } from '#/features/workbench/watches/page'
 
 const apiMocks = vi.hoisted(() => ({
   deleteWatch: vi.fn(),
@@ -38,13 +39,18 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
+const service = vi.hoisted(() => ({ provider: 'opensource' }))
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
+  useStudioService: () => service,
+}))
+
 vi.mock('sonner', () => ({ toast: toastMocks }))
 
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'default/default' }),
 }))
 
-vi.mock('#/routes/resources/resource-upload', () => ({
+vi.mock('#/features/workbench/resources/resource-upload', () => ({
   AddResourceForm: (props: {
     onAccepted?: (result: { rootUri: string | null }) => void
     onCompleted?: () => void
@@ -74,15 +80,16 @@ vi.mock('#/routes/resources/resource-upload', () => ({
     children,
 }))
 
-vi.mock('./-components/edit-watch-dialog', () => ({
+vi.mock('#/features/workbench/watches/components/edit-watch-dialog', () => ({
   EditWatchDialog: () => null,
 }))
 
-vi.mock('./-components/watch-history-sheet', () => ({
-  WatchHistorySheet: () => null,
+vi.mock('#/features/workbench/watches/components/watch-history-sheet', () => ({
+  WatchHistorySheet: ({ watch }: { watch: WatchTask | null }) =>
+    watch ? <div data-testid="watch-history">{watch.toUri}</div> : null,
 }))
 
-vi.mock('./-lib/api', () => apiMocks)
+vi.mock('#/features/workbench/watches/lib/api', () => apiMocks)
 
 const watch: WatchTask = {
   createdAt: '2026-08-10T00:00:00Z',
@@ -113,6 +120,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  service.provider = 'opensource'
   apiMocks.fetchWatches.mockResolvedValue([watch])
   apiMocks.fetchWatchProcessingHistory.mockResolvedValue([
     { status: 'running', task_id: 'processing-1' },
@@ -128,6 +136,24 @@ afterEach(() => {
 })
 
 describe('WatchManagementPage', () => {
+  it('does not offer hosted write actions when only list access is verified', async () => {
+    service.provider = 'volcengine'
+    renderPage()
+    await screen.findByText(watch.path)
+    for (const name of [
+      'actions.edit',
+      'actions.trigger',
+      'actions.more',
+      'add',
+    ]) {
+      expect(screen.queryByRole('button', { name })).toBeNull()
+    }
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.getByText('columns.actions')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'actions.history' }))
+    expect(screen.getByTestId('watch-history').textContent).toBe(watch.toUri)
+    expect(apiMocks.triggerWatch).not.toHaveBeenCalled()
+  })
   it('shows edit as a direct row action', async () => {
     renderPage()
 
@@ -209,7 +235,10 @@ describe('WatchManagementPage', () => {
       }),
     )
     await waitFor(() =>
-      expect(toastMocks.error).toHaveBeenCalledWith('update failed'),
+      expect(toastMocks.error).toHaveBeenCalledWith(
+        i18n.t('studio:errors.requestFailed'),
+        { description: 'update failed' },
+      ),
     )
   })
 

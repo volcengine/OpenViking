@@ -17,66 +17,22 @@ class _FakeQueueManager:
         return self._statuses
 
 
-def test_historical_queue_errors_do_not_make_drained_queue_unhealthy() -> None:
-    observer = QueueObserver(
-        _FakeQueueManager(
-            {
-                "Semantic": QueueStatus(
-                    pending=0,
-                    in_progress=0,
-                    processed=69,
-                    requeue_count=1,
-                    error_count=1,
-                )
-            }
-        )
-    )
+def test_queue_health_changes_as_work_drains_with_recorded_errors() -> None:
+    statuses = {"Semantic": QueueStatus(pending=1, error_count=1, processed=69)}
+    observer = QueueObserver(_FakeQueueManager(statuses))
 
+    assert observer.has_errors() is True
+    assert observer.is_healthy() is False
+
+    statuses["Semantic"] = QueueStatus(in_progress=1, error_count=1, processed=69)
+    assert observer.has_errors() is True
+    assert observer.is_healthy() is False
+
+    statuses["Semantic"] = QueueStatus(error_count=1, processed=70, requeue_count=1)
     assert observer.has_errors() is False
     assert observer.is_healthy() is True
-
-    table = observer.get_status_table()
-    assert "Semantic" in table
-    assert "Warnings:" not in table
-
-
-def test_queue_errors_make_pending_queue_unhealthy() -> None:
-    observer = QueueObserver(
-        _FakeQueueManager(
-            {
-                "Semantic": QueueStatus(
-                    pending=1,
-                    in_progress=0,
-                    processed=69,
-                    error_count=1,
-                )
-            }
-        )
-    )
-
-    assert observer.has_errors() is True
-    assert observer.is_healthy() is False
-
-    table = observer.get_status_table()
-    assert "Warnings:" not in table
-
-
-def test_queue_errors_make_in_progress_queue_unhealthy() -> None:
-    observer = QueueObserver(
-        _FakeQueueManager(
-            {
-                "Semantic": QueueStatus(
-                    pending=0,
-                    in_progress=1,
-                    processed=69,
-                    error_count=1,
-                )
-            }
-        )
-    )
-
-    assert observer.has_errors() is True
-    assert observer.is_healthy() is False
+    assert "Semantic" in observer.get_status_table()
+    assert "Warnings:" not in observer.get_status_table()
 
 
 class _TreeStats:

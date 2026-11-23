@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Focused tests for the external Connector HTTP contract."""
 
+import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from openviking.connector import client as client_module
@@ -185,3 +187,58 @@ async def test_get_task_info_unwraps_task_object():
 def test_connector_business_error_is_not_treated_as_success():
     with pytest.raises(InternalError, match=r"code=1003.*permission denied"):
         _unwrap_connector_response({"code": 1003, "message": "permission denied", "data": {}})
+
+
+def test_resolve_connector_credential_posts_reference_with_api_key(monkeypatch):
+    reference = {
+        "account_id": "acct",
+        "resource_id": "ov-resource",
+        "user_id": "alice",
+        "ov_user_id": "ov-user",
+        "type": "oauth",
+        "platform": "dingtalk",
+        "binding_version": 3,
+    }
+
+    def handle(request):
+        assert request.method == "POST"
+        assert request.headers["x-api-key"] == "user-key"
+        assert "authorization" not in request.headers
+        assert json.loads(request.content) == reference
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"auth_config": {"user_access_token": "live"}}},
+        )
+
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    client = ConnectorClient("", "", "acct")
+
+    data = client.resolve_connector_credential(
+        "https://connector.example/api/v1/inner/connector/credential/resolve",
+        "user-key",
+        reference,
+    )
+
+    assert data == {"auth_config": {"user_access_token": "live"}}
+
+
+def test_resolve_connector_credential_hides_remote_error(monkeypatch):
+    def handle(request):
+        return httpx.Response(200, json={"code": 42, "message": "must-not-expose-secret"})
+
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    client = ConnectorClient("", "", "acct")
+
+    with pytest.raises(InternalError) as error:
+        client.resolve_connector_credential("https://connector.example/resolve", "k", {})
+    assert "must-not-expose-secret" not in str(error.value)

@@ -1,7 +1,7 @@
 import path from 'node:path'
 import type { DefaultTheme } from 'vitepress'
 import { documentationSections } from '../docs-navigation.ts'
-import { sections } from './docs-sections.ts'
+import { sectionForPage } from './docs-sections.ts'
 
 type CatalogPage = { title: string; href: string; file: string; group: string }
 
@@ -23,10 +23,9 @@ export default {
     return Object.fromEntries(['en', 'zh'].map((locale: 'en' | 'zh') => [locale,
       documentationSections(locale).map(section => {
         const pages = collectPages(section.items || [])
-        const id = pages[0]?.href.split('/')[2]
-        const metadata = sections.find(item => item.id === id)
-        if (!metadata) throw new Error(`Missing documentation section: ${id}`)
-        return { ...metadata, [locale]: section.text, pages }
+          .filter(page => sectionForPage(`${page.href.slice(1)}.md`)?.id === section.id)
+        const { items, text, groups, nextSteps, ...metadata } = section
+        return { ...metadata, pages }
       })
     ]))
   }

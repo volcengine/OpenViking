@@ -24,9 +24,7 @@ class UserIdentifier(object):
 
         verr = self._validate_error()
         if verr:
-            logger.error(
-                f"Invalid user identifier: {verr}. account_id={self._account_id} user_id={self._user_id}"
-            )
+            logger.info("user identifier rejected error_code=INVALID_ARGUMENT")
             raise ValueError(verr)
 
     @classmethod

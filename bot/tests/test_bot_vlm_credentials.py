@@ -10,6 +10,7 @@ from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.vlm import MultiCredentialVLM
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+from openviking.models.vlm.retry_vlm import RetryVLM
 
 
 def _write_config(tmp_path, monkeypatch, data):
@@ -123,13 +124,17 @@ def test_status_shows_selected_model_config_without_exposing_secrets(
         assert hidden not in result.output
 
 
-def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path, monkeypatch):
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
+def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(
+    tmp_path, monkeypatch, temperature
+):
     config = _write_config(
         tmp_path,
         monkeypatch,
         {
             "vlm": {
                 "model": "root-primary",
+                **({"temperature": temperature} if temperature != "omitted" else {}),
                 "credentials": _credential_chain("root"),
             }
         },
@@ -147,9 +152,16 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
         "root-backup",
     ]
 
+    expected_temperature = None if temperature == "omitted" else temperature
+    assert config.agents.temperature == expected_temperature
+    assert [vlm.temperature for vlm in provider._vlm._vlm_instances] == [
+        expected_temperature,
+        expected_temperature,
+    ]
+
 
 @pytest.mark.parametrize("bot_override", [False, True], ids=["inherited-model", "bot-model"])
-def test_agent_max_tokens_reaches_provider(tmp_path, monkeypatch, bot_override):
+def test_agent_generation_settings_reach_provider(tmp_path, monkeypatch, bot_override):
     agents = {"max_tokens": 8192}
     if bot_override:
         agents.update(provider="openai", model="bot-model", api_key="bot-key")
@@ -162,6 +174,7 @@ def test_agent_max_tokens_reaches_provider(tmp_path, monkeypatch, bot_override):
                 "model": "root-model",
                 "api_key": "root-key",
                 "max_tokens": 4096,
+                "thinking": False,
             },
             "bot": {"agents": agents},
         },
@@ -169,6 +182,9 @@ def test_agent_max_tokens_reaches_provider(tmp_path, monkeypatch, bot_override):
     provider = _make_provider(config)
     assert config.agents.inherits_root_vlm() is (not bot_override)
     assert provider._vlm.max_tokens == 8192
+    assert config.agents.temperature is None
+    assert provider._vlm.temperature is None
+    assert provider._vlm.thinking is bot_override
 
 
 def test_explicit_bot_model_uses_bot_credentials_instead_of_root(tmp_path, monkeypatch):
@@ -248,6 +264,7 @@ def test_bot_credentials_without_outer_model_use_bot_chain(tmp_path, monkeypatch
         {
             "vlm": {
                 "model": "root-primary",
+                "thinking": False,
                 "credentials": [
                     {
                         "id": "root-primary",
@@ -264,6 +281,7 @@ def test_bot_credentials_without_outer_model_use_bot_chain(tmp_path, monkeypatch
     provider = _make_provider(config)
 
     assert config.agents.inherits_root_vlm() is False
+    assert provider._vlm.thinking is True
     assert config.agents.model == ""
     assert isinstance(provider._vlm, MultiCredentialVLM)
     assert provider._vlm._credential_ids == ["bot-primary", "bot-backup"]
@@ -353,7 +371,8 @@ def test_explicit_litellm_provider_uses_vlm_adapter(tmp_path, monkeypatch):
     provider = _make_provider(config)
 
     assert isinstance(provider, VLMProviderAdapter)
-    assert isinstance(provider._vlm, LiteLLMVLMProvider)
+    assert isinstance(provider._vlm, RetryVLM)
+    assert isinstance(provider._vlm.inner, LiteLLMVLMProvider)
     assert provider._vlm.model == "openrouter/openai/gpt-4o-mini"
 
 

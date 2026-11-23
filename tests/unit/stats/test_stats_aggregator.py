@@ -3,11 +3,17 @@
 """Tests for StatsAggregator."""
 
 from datetime import datetime, timedelta, timezone
+from random import Random
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.stats_aggregator import StatsAggregator, _parse_datetime
+from openviking.storage.vectordb import engine
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 @pytest.fixture
@@ -48,7 +54,7 @@ class TestStatsAggregator:
     @pytest.mark.asyncio
     async def test_empty_store(self, aggregator, mock_vikingdb, mock_ctx):
         """Stats for an empty memory store should return zeros."""
-        mock_vikingdb.query = AsyncMock(return_value=[])
+        mock_vikingdb.filter = AsyncMock(return_value=[])
 
         result = await aggregator.get_memory_stats(mock_ctx)
 
@@ -65,7 +71,7 @@ class TestStatsAggregator:
             _make_memory_record("cases", active_count=3, updated_at=now),
             _make_memory_record("tools", active_count=1, updated_at=now),
         ]
-        mock_vikingdb.query = AsyncMock(return_value=records)
+        mock_vikingdb.filter = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx)
 
@@ -80,7 +86,7 @@ class TestStatsAggregator:
         records = [
             _make_memory_record("patterns", active_count=2, updated_at=now),
         ]
-        mock_vikingdb.query = AsyncMock(return_value=records)
+        mock_vikingdb.filter = AsyncMock(return_value=records)
 
         result = await aggregator.get_memory_stats(mock_ctx, category="patterns")
 
@@ -97,7 +103,7 @@ class TestStatsAggregator:
         cold_record = _make_memory_record(
             "cases", active_count=0, updated_at=now - timedelta(days=60)
         )
-        mock_vikingdb.query = AsyncMock(return_value=[hot_record, cold_record])
+        mock_vikingdb.filter = AsyncMock(return_value=[hot_record, cold_record])
 
         result = await aggregator.get_memory_stats(mock_ctx, category="cases")
 
@@ -115,7 +121,7 @@ class TestStatsAggregator:
             updated_at=now - timedelta(days=40),
             created_at=now - timedelta(days=50),
         )
-        mock_vikingdb.query = AsyncMock(return_value=[old_record])
+        mock_vikingdb.filter = AsyncMock(return_value=[old_record])
 
         result = await aggregator.get_memory_stats(mock_ctx, category="events")
 
@@ -126,12 +132,57 @@ class TestStatsAggregator:
     @pytest.mark.asyncio
     async def test_query_error_returns_empty(self, aggregator, mock_vikingdb, mock_ctx):
         """If VikingDB query fails, the category should show 0 records."""
-        mock_vikingdb.query = AsyncMock(side_effect=Exception("connection error"))
+        mock_vikingdb.filter = AsyncMock(side_effect=Exception("connection error"))
 
         result = await aggregator.get_memory_stats(mock_ctx, category="cases")
 
         assert result["by_category"]["cases"] == 0
         assert result["total_memories"] == 0
+
+    @pytest.mark.asyncio
+    async def test_query_all_memories_paginates_past_the_single_query_cap(
+        self, vector_backend_factory, tmp_path, monkeypatch
+    ):
+        """Count all memories when a shared timestamp spans multiple index pages."""
+        if not getattr(engine, "PersistStore", None):
+            pytest.skip("local persistent vectordb engine is not available")
+
+        monkeypatch.setattr(
+            "openviking.storage.viking_vector_index_backend.init_cpp_logging", lambda: None
+        )
+        monkeypatch.setattr("openviking.storage.vectordb_adapters.base.random", Random(1))
+        backend = vector_backend_factory(
+            config=VectorDBBackendConfig(
+                backend="local", name="context", dimension=4, path=str(tmp_path)
+            )
+        )
+        ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+        timestamp = "2025-01-01T00:00:00Z"
+        records = []
+        for index in range(10_050):
+            category = "events" if index < 10_000 else "profile"
+            records.append(
+                {
+                    "id": str(index),
+                    "uri": f"viking://user/alice/memories/{category}/{index}.md",
+                    "context_type": "memory",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "vector": [1.0 if category == "events" else -1.0, 0.0, 0.0, 0.0],
+                }
+            )
+        try:
+            assert await backend.create_collection(
+                "context", CollectionSchemas.context_collection("context", 4)
+            )
+            await backend.upsert_many(records, ctx=ctx)
+            result = await StatsAggregator(backend).get_memory_stats(ctx)
+        finally:
+            await backend.close()
+
+        assert result["total_memories"] == 10_050
+        assert result["by_category"]["events"] == 10_000
+        assert result["by_category"]["profile"] == 50
 
 
 class TestParseDatetime:
