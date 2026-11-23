@@ -656,7 +656,8 @@ class MarkdownParser(BaseParser):
                 continue
 
             level = len(match.group(1))
-            title = match.group(2).strip()
+            title = match.group(2).removesuffix("\r")
+            title = re.sub(r"(?:^|[ \t]+)#+[ \t]*$", "", title).strip(" \t")
             if not title:
                 continue
             headings.append((match.start(), match.end(), title, level))
@@ -1159,12 +1160,12 @@ class MarkdownParser(BaseParser):
         if suffix:
             # A) #anchor uniquely located in a real section → point at that section file.
             if suffix.startswith("#"):
-                anchor = suffix[1:]
+                anchor = unquote(suffix[1:])
                 hits = [
                     rel
                     for rel, text in layout.items()
                     if any(
-                        _gh_slug(h) == anchor for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+                        _gh_slug(title) == anchor for _, _, title, _ in self._find_headings(text)
                     )
                 ]
                 if len(hits) == 1:
@@ -1530,7 +1531,17 @@ class MarkdownParser(BaseParser):
         if pending:
             # No next section exists. Fold a single tiny pending section back into
             # the previous saved candidate instead of emitting a standalone file.
-            if buffered_section is not None and self._should_merge_pending_into_next(pending):
+            # Direct content precedes children when a parent becomes a directory.
+            # Keep the trailing section outside that subtree in that case.
+            if (
+                buffered_section is not None
+                and self._should_merge_pending_into_next(pending)
+                and (
+                    not buffered_section["has_children"]
+                    or len(buffered_section["content"].strip()) + len(pending[0][1].strip()) + 2
+                    <= max_size
+                )
+            ):
                 buffered_section = self._merge_pending_into_previous_section(
                     buffered_section, pending
                 )

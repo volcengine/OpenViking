@@ -4,6 +4,7 @@
 
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 
@@ -160,18 +161,26 @@ class TestRewriteRelativeLinks:
         )
         assert out == "[x](../目录甲/目录乙/目录丙/文档/文档.md?v=1)"
 
-    async def test_large_file_anchor_resolves_to_an_actual_section_file(self, tmp_path: Path):
+    async def test_split_target_keeps_raw_and_encoded_fragments(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
         target = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
         target.write_text(
             "\n\n".join(
-                f"## {title}\n\n" + ("正文内容。" * 300)
-                for title in ("Setup", "Monitor", "Logs & Metrics")
+                f"## {title}\n\n" + "正文内容。" * 240
+                for title in ("第1章 部署", "第2章 监控", "第3章 排查", "Logs & Metrics")
             ),
             encoding="utf-8",
         )
+        fragment = "第3章-排查"
+        encoded_fragment = quote(fragment)
         source = kb / "文档.md"
-        source.write_text("[Logs](./目录甲/目录乙/目录丙/big.md#logs--metrics)", encoding="utf-8")
+        source.write_text(
+            f"[raw](./目录甲/目录乙/目录丙/big.md#{fragment})\n"
+            f"[encoded](./目录甲/目录乙/目录丙/big.md#{encoded_fragment})\n"
+            "[Logs](./目录甲/目录乙/目录丙/big.md#logs--metrics)",
+            encoding="utf-8",
+        )
+
         parser = MarkdownParser()
         output = tmp_path / "out"
         store = LocalParseOutputStore(str(output))
@@ -184,30 +193,47 @@ class TestRewriteRelativeLinks:
 
         assert result.artifact_ref is not None
         assert list(output.iterdir()) == [Path(result.artifact_ref.root)]
-        link = await store.read_bytes(result.artifact_ref, "文档/文档.md")
-        prefix = "[Logs](../目录甲/目录乙/目录丙/"
-        assert link.decode().startswith(prefix)
-        section, fragment = link.decode().removeprefix(prefix).removesuffix(")").split("#")
-        assert fragment == "logs--metrics"
+        content = await store.read_bytes(result.artifact_ref, "文档/文档.md")
+        raw, encoded, logs = content.decode().splitlines()
+        directory = "../目录甲/目录乙/目录丙/"
+        section = "big/第3章_排查.md"
+        assert raw == f"[raw]({directory}{section}#{fragment})"
+        assert encoded == f"[encoded]({directory}{section}#{encoded_fragment})"
+        logs_prefix = f"[Logs]({directory}big/"
+        assert logs.startswith(logs_prefix)
+        logs_file, logs_fragment = logs.removeprefix(logs_prefix).removesuffix(")").split("#")
+        assert logs_fragment == "logs--metrics"
 
         parsed_target = await parser.parse(target, parse_output_store=store)
         assert parsed_target.artifact_ref is not None
         assert (
-            "## Logs & Metrics"
+            "## 第3章 排查"
             in (await store.read_bytes(parsed_target.artifact_ref, section)).decode()
         )
+        assert (
+            "## Logs & Metrics"
+            in (await store.read_bytes(parsed_target.artifact_ref, f"big/{logs_file}")).decode()
+        )
 
-    async def test_large_file_unlocatable_anchor_falls_back_to_dir(self, tmp_path: Path):
-        # Anchor matches no heading in the (large) target → drop suffix, point at dir.
+    async def test_split_target_resolves_closing_hashes_and_falls_back_for_missing_anchor(
+        self, tmp_path: Path
+    ):
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
-        big.write_text("# 大文档\n\n" + ("这是一段较长的正文内容。" * 1200), encoding="utf-8")
+        big.write_text(
+            "# Target ##\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
+            encoding="utf-8",
+        )
         out = await self._rewrite(
             self._parser(),
             kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
+            "[found](./目录甲/目录乙/目录丙/big.md#target) "
+            "[missing](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
         )
-        assert out == "[x](../目录甲/目录乙/目录丙/big/)"
+        assert out == (
+            "[found](../目录甲/目录乙/目录丙/big/Target.md#target) "
+            "[missing](../目录甲/目录乙/目录丙/big/)"
+        )
 
     async def test_multiple_links_on_one_line(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
