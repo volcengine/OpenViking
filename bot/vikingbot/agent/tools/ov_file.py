@@ -1370,9 +1370,17 @@ class VikingMultiReadTool(OVFileTool):
                         )
                         skill_runtime = getattr(tool_context, "skill_runtime", None)
                         if skill_runtime is not None:
-                            active_skill = await skill_runtime.activate_from_read(uri, content)
-                            if active_skill is not None:
-                                content = skill_runtime.render_skill_content(active_skill)
+                            activation_params = {
+                                "uris": [uri],
+                                "offset": offset,
+                                "limit": limit,
+                            }
+                            if skill_runtime.is_activation_call(self.name, activation_params):
+                                active_skill = await skill_runtime.activate_from_read(uri, content)
+                                if active_skill is not None:
+                                    content = skill_runtime.render_skill_content(active_skill)
+                            else:
+                                skill_runtime.note_remote_read(uri)
                         return {
                             "uri": uri,
                             "content": content,
