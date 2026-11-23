@@ -39,7 +39,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。
-- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
+- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。
 - **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
 
 hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据，不会在服务端、账号或用户上各说各话。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.qoder` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `qd-<session id>`。

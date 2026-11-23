@@ -14,7 +14,7 @@ The installer asks which harnesses to install and for your OpenViking credential
 
 - **Session start** — injects the user profile and preferences, plus an `<available-skills>` catalog of the user's own and account-shared OpenViking skills, and replays anything an offline session queued. Kimi replays a bounded batch at startup and injects the profile on the first successful prompt hook because its SessionStart output is not a context channel.
 - **Prompt submit** — searches OpenViking for memories and skills relevant to the prompt and injects them, deduplicated by event id and a 500ms window.
-- **Tool use** — denies local file tools a `viking://` virtual path and points the agent back at the OpenViking MCP tools. On TRAE a shell command that carries a `viking://` URI still runs, with a notice pointing at the same tools.
+- **Tool use** — denies local file tools a `viking://` virtual path and points the agent back at the OpenViking MCP tools. On TRAE and Qoder CLI a shell command that carries a `viking://` URI still runs, with a notice pointing at the same tools.
 - **Stop** — captures the finished turn and commits the OpenViking session. Cursor also runs this before a compaction and at session end; ZCode answers first and finishes the writes in a detached worker.
 
 ## Layout

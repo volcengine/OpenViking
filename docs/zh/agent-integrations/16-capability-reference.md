@@ -699,7 +699,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 
 - `UserPromptSubmit` 与 `SessionEnd` 在 TUI 和 headless `-p` 运行中都会触发。每次 `-p` 运行结束时还会结束一个没有 transcript 的辅助会话，它的 `SessionEnd` 会被忽略。
 - 注入的上下文会作为 attachment 记录写进 transcript。捕获只读取对话记录，召回的记忆不会被再次捕获。
-- URI guard 拒绝路径为 `viking://` URI 的文件工具，拒绝原因以失败的工具结果送达模型，并附上调用对应 OpenViking 工具的 `mcp_call` 示例。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
+- URI guard 拒绝路径为 `viking://` URI 的文件工具，拒绝原因以失败的工具结果送达模型，并附上调用对应 OpenViking 工具的 `mcp_call` 示例。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。
 - hook 超时被杀时会连同其进程组一起结束；捕获 worker 是分离的，因此 hook 进程返回后提交仍能完成。
 - MCP 工具通过 `mcp_call` 懒加载。在默认权限模式的 headless 运行中，需要权限规则或更宽松的权限模式。
 - v1 不支持子代理采集：宿主会触发相应事件，但共享 dispatcher 目前还没有子代理阶段。

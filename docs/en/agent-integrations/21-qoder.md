@@ -39,7 +39,7 @@ Every Qoder CLI build on `PATH` gets the plugin: `qodercli` in `~/.qoder` (`QODE
 
 - **SessionStart** injects the user profile and replays anything the offline queue is holding.
 - **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`.
-- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
+- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. A Bash command that contains such a URI still runs, with a notice pointing at the same tools, so `ov` invocations and literal `viking://` arguments still work.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
 
 Hooks and MCP read the same credentials from `~/.openviking/ovcli.conf`, so they cannot disagree about the server, account, or user. `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.qoder` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Sessions are stored in OpenViking as `qd-<session id>`.

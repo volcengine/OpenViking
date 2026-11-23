@@ -701,7 +701,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 - `UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs. Every `-p` run also ends an auxiliary session that has no transcript; its `SessionEnd` is ignored.
 - Injected context is written into the transcript as attachment records. Capture reads only the conversation records, so recalled memories are not captured back.
-- The URI guard denies file tools whose path is a `viking://` URI, and the denial reaches the model as the failed tool result, with an example `mcp_call` to the matching OpenViking tool. Shell commands are not checked, so `ov` calls and literal `viking://` arguments still work.
+- The URI guard denies file tools whose path is a `viking://` URI, and the denial reaches the model as the failed tool result, with an example `mcp_call` to the matching OpenViking tool. A Bash command that contains such a URI still runs, with a notice pointing at the same tools, so `ov` calls and literal `viking://` arguments still work.
 - A hook killed at its timeout takes its process group with it; the capture worker is detached, so a commit still finishes after the hook process returns.
 - MCP tools load lazily through `mcp_call`. In a headless run with the default permission mode, they need a permission rule or a permissive mode.
 - Subagent capture is not supported in v1: the host fires the events, but the shared dispatcher has no subagent stage yet.

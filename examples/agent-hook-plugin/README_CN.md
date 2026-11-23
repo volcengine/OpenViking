@@ -14,7 +14,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - **会话开始** — 注入用户画像与偏好，外加 `<available-skills>` 清单，列出用户自己的和账号内共享的 OpenViking skill；同时重放离线会话排队的写入。Kimi 启动时只重放一个有界小批次，并在第一次成功的 prompt hook 注入画像。
 - **提交 prompt** — 搜索与 prompt 相关的记忆和 skill 并注入，按事件 id 与 500ms 窗口去重。
-- **工具调用前** — 拦截本地文件工具对 `viking://` 虚拟路径的访问，引导回 OpenViking MCP 工具。在 TRAE 上，带 `viking://` URI 的 shell 命令照常执行，并附加一条指向同一组工具的提示。
+- **工具调用前** — 拦截本地文件工具对 `viking://` 虚拟路径的访问，引导回 OpenViking MCP 工具。在 TRAE 和 Qoder CLI 上，带 `viking://` URI 的 shell 命令照常执行，并附加一条指向同一组工具的提示。
 - **Stop** — 捕获完成的回合并按宿主策略提交 OpenViking 会话。Kimi 还使用 PreCompact、SessionEnd 与同步 Interrupt 信号。
 
 ## 目录结构
