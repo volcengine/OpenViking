@@ -668,8 +668,14 @@ class CompileService:
                 raise UnavailableError(
                     "memory compile", "memory consolidation runner is not configured"
                 )
+            enabled_review = (request.args or {}).get("enabled_review", False)
+            if not isinstance(enabled_review, bool):
+                raise InvalidArgumentError("args.enabled_review must be a JSON boolean")
             return await self._memory_runner.create(
-                target=request.to, instruction=request.instruction, ctx=ctx
+                target=request.to,
+                instruction=request.instruction,
+                ctx=ctx,
+                enabled_review=enabled_review,
             )
         compile_name = request.compile_name
         owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)

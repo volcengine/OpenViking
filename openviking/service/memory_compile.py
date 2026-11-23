@@ -161,6 +161,7 @@ class MemoryCompileRunner:
         *,
         target: str,
         instruction: Optional[str],
+        enabled_review: bool = False,
         ctx: RequestContext,
     ) -> TaskRecord:
         canonical_target, memory_type, peer_id = await self._normalize_target(target, ctx)
@@ -193,6 +194,7 @@ class MemoryCompileRunner:
                 memory_type=memory_type,
                 peer_id=peer_id,
                 instruction=instruction,
+                enabled_review=enabled_review,
                 ctx=ctx,
             )
         )
@@ -231,6 +233,7 @@ class MemoryCompileRunner:
         memory_type: Optional[str],
         peer_id: Optional[str],
         instruction: Optional[str],
+        enabled_review: bool = False,
         ctx: RequestContext,
     ) -> None:
         tracker = get_task_tracker()
@@ -272,6 +275,7 @@ class MemoryCompileRunner:
                         memory_type=memory_type,
                         peer_id=peer_id,
                         instruction=instruction,
+                        enabled_review=enabled_review,
                         ctx=ctx,
                     )
                 result = {"to": target, "skill": "memory", "trace_id": trace_id, **result}
@@ -370,6 +374,7 @@ class MemoryCompileRunner:
         memory_type: Optional[str],
         peer_id: Optional[str],
         instruction: Optional[str],
+        enabled_review: bool = False,
         ctx: RequestContext,
     ) -> dict[str, Any]:
         default_registry = get_default_registry()
@@ -437,7 +442,8 @@ class MemoryCompileRunner:
             isolation_handler=isolation_handler,
             # Compile is offline and user-initiated; allow a longer agentic loop
             # so the model can ls/search/read across the directory before writing.
-            max_iterations=10,
+            max_iterations=20,
+            review=provider.review_coverage if enabled_review else None,
         )
         operations, _tools_used = await orchestrator.run()
         if operations is None:

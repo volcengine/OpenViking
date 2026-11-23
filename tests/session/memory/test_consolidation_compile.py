@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.service.compile_service import MEMORY_COMPILE_SKILL, CompileRequest
+from openviking.service.compile_service import MEMORY_COMPILE_SKILL, CompileRequest, CompileService
 from openviking.service.memory_compile import (
     MemoryCompileRunner,
     _discover_memory_types,
@@ -164,7 +164,10 @@ async def test_discover_root_types_propagates_storage_errors():
 @pytest.mark.parametrize(
     "target", ["viking://user/u1/memories", "viking://user/u1/peers/agent_x/memories"]
 )
-async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_config, target):
+@pytest.mark.parametrize("args", [None, {"enabled_review": False}, {"enabled_review": True}])
+async def test_root_compile_creates_one_task_and_one_loop(
+    monkeypatch, language_config, target, args
+):
     language_config.output_language_override = "en"
     vlm = SimpleNamespace(model="test", get_completion_async=AsyncMock(return_value="sdk.commit()"))
     language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: vlm)
@@ -209,13 +212,21 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     monkeypatch.setattr("openviking.service.memory_compile.acquire_memory_operation_lease", acquire)
     runner = MemoryCompileRunner(service)
 
-    accepted = await runner.create(target=target, instruction="整理全部已有记忆", ctx=_ctx())
+    compile_service = CompileService(None, tracker, service)
+    compile_service._memory_runner = runner
+    if args and args["enabled_review"]:
+        vlm.get_completion_async.side_effect = ["sdk.commit()", '{"pass":true,"reason":"done"}']
+    accepted = await compile_service.create(
+        CompileRequest(to=target, skill="memory", instruction="整理全部已有记忆", args=args),
+        connection={},
+        ctx=_ctx(),
+    )
     await asyncio.gather(*list(runner._running))
     final = await tracker.get(accepted.task_id, account_id="acc", user_id="u1")
 
     service.finalize_compile_directories.assert_not_awaited()
 
-    vlm.get_completion_async.assert_awaited_once()
+    assert vlm.get_completion_async.await_count == (2 if args and args["enabled_review"] else 1)
     fs.glob.assert_awaited_once()
     assert fs.glob.await_args.kwargs["uri"] == target
     apply.assert_awaited_once()
@@ -229,7 +240,7 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     assert final.result["memory_type"] is None
     assert final.result["memory_types"] == ["entities", "preferences", "profile"]
     assert final.result["errors"] == []
-    prompt = vlm.get_completion_async.await_args.kwargs["messages"][0]["content"]
+    prompt = vlm.get_completion_async.await_args_list[0].kwargs["messages"][0]["content"]
     for name in ("entities", "preferences", "profile"):
         assert name in prompt
     assert "create_events" not in prompt
@@ -449,6 +460,7 @@ async def test_prefetch_seeds_recursive_listing_and_lets_model_explore():
     assert ".overview.md" not in seeded
     assert messages[-1]["role"] == "user"
     assert "recursive listing" in messages[-1]["content"]
+    assert "may be incomplete" in messages[-1]["content"]
     assert "consolidation operations" in messages[-1]["content"]
 
 
@@ -464,6 +476,9 @@ def test_instruction_mentions_type_and_explore_tools():
     text = provider.instruction()
     assert "entities" in text
     assert "recursive=true" in text
+    assert "incomplete even without a truncation warning" in text
+    assert "recursive=false" in text
+    assert "child directories" in text
     assert "read" in text
     assert "no write tool" in text
     assert "Only touch pets." in text
@@ -1318,3 +1333,19 @@ async def test_xiaomei_snapshot_does_not_hide_errors_or_truncation():
     client.ls.return_value = [{}] * 1000
     with pytest.raises(AssertionError, match="截断"):
         await script._snapshot_memory_dir(client, "viking://user/xiaomei/memories")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["true", 1, None, {}])
+async def test_memory_review_option_requires_a_json_boolean(value):
+    service = CompileService(None, Mock(), Mock())
+    service._memory_runner = AsyncMock()
+    with pytest.raises(InvalidArgumentError, match="enabled_review"):
+        await service.create(
+            CompileRequest(
+                skill="memory", to="viking://~/memories", args={"enabled_review": value}
+            ),
+            connection={},
+            ctx=_ctx(),
+        )
+    service._memory_runner.create.assert_not_awaited()

@@ -4,9 +4,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
+from collections import Counter
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
+from openviking.core.namespace import classify_uri
+from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -18,6 +25,7 @@ from openviking.session.memory.session_extract_context_provider import (
 from openviking.session.memory.tools import add_tool_call_pair_to_messages, get_tool
 from openviking.session.memory.utils.language import resolve_output_language_from_text
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry.tracer import otel_trace
 from openviking_cli.exceptions import NotFoundError
 
 _RESERVED_NAMES = {".overview.md", ".abstract.md"}
@@ -57,6 +65,7 @@ class ConsolidationExtractContextProvider(SessionExtractContextProvider):
         # directory instead of re-deriving it from ctx.user_id, which can be
         # empty/wrong and collapse the URI (viking://user//memories/...).
         self.target_directory = target_directory.rstrip("/") if target_directory else None
+        self._target_listing = ""
         self._instruction_text = (instruction or "").strip()
         self._output_language = resolve_output_language_from_text(
             "",
@@ -103,8 +112,11 @@ memories of these types: {memory_types}, under {target} in place so the final co
 clean, non-redundant, and conforms to each memory type's own schema.
 
 ## Workflow
-1. Call `ls` with `recursive=true` on the target directory ONCE to see every file
-   (including files inside subdirectories) as `relative/path size`.
+1. Start with the provided `ls` result (`recursive=true`) for the target directory,
+   which lists files as `relative/path size`.
+   The listing may be incomplete even without a truncation warning. To discover
+   omitted files, call `ls` with `recursive=false` once on the target, then use
+   the same shallow listing to walk child directories (entries ending in `/`).
 2. `read` the full content of every file you may merge, split, edit, or delete.
    You MUST read a file before changing it. Do not repeatedly `ls` the same path.
 3. Output ONLY the memory operations (no extra text) once you have gathered enough
@@ -134,17 +146,78 @@ All memory content MUST be written in {output_language}.
 {MEMORY_MERGE_POLICY}
 """
 
+    async def review_coverage(self, vlm: VLMBase, tools_used: list[dict]) -> str | None:
+        """Grade exploration inside the compile target. Return feedback to continue, or None
+        to accept. Invalid replies and provider errors propagate to the fail-open caller.
+        """
+        target = self.target_directory
+        assert target is not None
+        prefix = target + "/"
+        reads = dict.fromkeys(self.memory_types, 0)
+        for uri, memory in self.read_file_contents.items():
+            if uri.startswith(prefix) and not uri.rsplit("/", 1)[-1].startswith("."):
+                kind = memory.memory_type
+                if kind is None:
+                    location = classify_uri(uri)
+                    if location.content_index is not None:
+                        kind = location.parts[location.content_index + 1].removesuffix(".md")
+                if kind in reads:
+                    reads[kind] += 1
+        listed = set()
+        for call in tools_used:
+            if call["tool_name"] == "ls" and isinstance(call["result"], str):
+                uri = validate_request_viking_uri(call["params"]["uri"], self._ctx).rstrip("/")
+                if uri == target or uri.startswith(prefix):
+                    listed.add(uri)
+        # The capped inventory is evidence of visible candidates, not a total file count.
+        visible = Counter()
+        for line in self._target_listing.splitlines():
+            path, _, _size = line.rpartition(" ")
+            if path.endswith(".md"):
+                branch, separator, _ = path.partition("/")
+                visible[branch if separator else "."] += 1
+        evidence = {
+            "target": target,
+            "unique_reads_by_type": reads,
+            "listed": sorted(listed),
+            "visible_files_by_branch_in_initial_listing": visible,
+        }
+        prompt = (
+            "Review whether exploration of the target is sufficient to finish consolidation. "
+            "Directory listings only guide navigation. Consider coverage of types and branches "
+            "inside this target. Zero changes is valid. If more reading is warranted, give "
+            "a concrete next step within the target. Return only JSON with a boolean pass "
+            "and a string reason. Coverage evidence: " + json.dumps(evidence, ensure_ascii=False)
+        )
+        # Empty tools preserves finish_reason without exposing tools to the grader.
+        # The backend can emit prompt/response trace events. Only the verdict is observable.
+        with otel_trace.use_span(otel_trace.INVALID_SPAN) if otel_trace else nullcontext():
+            response = await asyncio.wait_for(
+                vlm.get_completion_async(prompt=prompt, tools=[], thinking=False, max_tokens=256),
+                timeout=30,
+            )
+        if getattr(response, "finish_reason", "stop") != "stop":
+            raise ValueError("Incomplete coverage review")
+        verdict = json.loads(response if isinstance(response, str) else response.content)
+        if (
+            not isinstance(verdict, dict)
+            or not isinstance(verdict.get("pass"), bool)
+            or not isinstance(verdict.get("reason"), str)
+        ):
+            raise ValueError("Invalid coverage verdict")
+        return None if verdict["pass"] else verdict["reason"]
+
     # ── Prefetch: seed the loop with a recursive file listing, not content ──
 
     async def prefetch(self) -> List[Dict[str, Any]]:
         directories = self._target_directories()
         prefetch_messages: List[Dict[str, Any]] = []
         call_id = 0
-        # Seed with a recursive ls of each target directory so the model sees every
-        # file (including those in subdirectories) up front and can go straight to
-        # read, instead of re-listing directories. Content is not fetched here.
+        # Seed exploration with capped path-and-size listings without fetching content.
         for directory in directories:
             listing = await self._recursive_listing(directory)
+            if directory == self.target_directory and isinstance(listing, str):
+                self._target_listing = listing
             add_tool_call_pair_to_messages(
                 messages=prefetch_messages,
                 call_id=call_id,
@@ -163,7 +236,9 @@ All memory content MUST be written in {output_language}.
                     "every file you intend to merge, split, edit, or delete (you MUST "
                     "read a file before changing it); use search only if you need more "
                     "context. Then output ALL consolidation operations in a single "
-                    "response. If nothing needs reorganizing, return an empty operation set."
+                    "response. If nothing needs reorganizing, return an empty operation set. "
+                    "The listing may be incomplete. Follow the Workflow above to discover "
+                    "omitted files."
                 ),
             }
         )

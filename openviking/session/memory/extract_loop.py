@@ -8,12 +8,15 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 
 import asyncio
 import json
+import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.observability.log_trace_bridge import log_and_add_event
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
@@ -58,6 +61,7 @@ logger = get_logger(__name__)
 # Models whose max output tokens is BELOW this value (e.g. gpt-4o-mini at 16384)
 # must set `vlm.max_tokens` in ov.conf to their own limit to override this default.
 _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS = 32768
+_COMPILE_REVIEW_EXTENSION = 20
 
 
 @dataclass
@@ -138,6 +142,7 @@ class ExtractLoop:
         isolation_handler: MemoryIsolationHandler = None,
         thinking: Optional[bool] = None,
         max_output_tokens: Optional[int] = None,
+        review: Callable[[VLMBase, list[dict]], Awaitable[str | None]] | None = None,
     ):
         """
         Initialize the ExtractLoop.
@@ -152,11 +157,13 @@ class ExtractLoop:
             thinking: Per-call thinking override for this extraction loop. True/False
                 force the mode for every call; None (default) defers to the VLM
                 backend's configured thinking policy.
+            review: Optional compile-only grader returning continuation feedback or None to finish.
             max_output_tokens: Per-call output cap for the extraction LLM. When None, the
                 configured vlm.max_tokens is used, falling back to a value large enough for
                 full memory rewrites so providers do not apply a small server-side default
                 (e.g. Ark's 4096) and truncate the program mid-string.
         """
+        self.review = review
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
         self.model = model or self.vlm.model
@@ -204,17 +211,9 @@ class ExtractLoop:
             Tuple of (final operations, tools_used list). Exhausted format errors
             return None when no validated operations can be retained.
         """
-        iteration = 0
-        max_iterations = self.max_iterations
-        final_operations = None
-        raw_links = []
         tools_used: List[Dict[str, Any]] = []
-        # Reset format retry counter for each run
         self._format_retry_count = 0
-        patch_repair_count = 0
-        resolution_repair_count = 0
-        pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
-        resolution_repair_ranges_only = True
+        self._review_fallback: tuple[ResolvedOperations, list] | None = None
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -302,6 +301,34 @@ class ExtractLoop:
         for uri in self.context_provider.read_file_contents:
             self._extract_context.page_id_map.get_page_id(uri)
 
+        try:
+            plan = await self._collect_operations(messages, tools_used)
+        except Exception:
+            if self._review_fallback is None:
+                raise
+            plan = self._review_fallback
+        if plan is None:
+            plan = self._review_fallback
+        if plan is None:
+            return None, tools_used
+        final_operations, raw_links = plan
+        tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
+        await self.finalize_operations(final_operations, raw_links)
+        return final_operations, tools_used
+
+    async def _collect_operations(self, messages, tools_used):
+        """Explore with the supplied conversation until a candidate and its raw links are ready."""
+        review_count = 0
+        forced_messages = []
+        iteration = 0
+        max_iterations = self.max_iterations
+        final_operations = None
+        raw_links = []
+        patch_repair_count = 0
+        resolution_repair_count = 0
+        pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
+        resolution_repair_ranges_only = True
+
         while iteration < max_iterations:
             iteration += 1
             tracer.info(f"ReAct iteration {iteration}/{max_iterations}")
@@ -317,6 +344,9 @@ class ExtractLoop:
                         "content": self._build_final_operations_instruction(),
                     }
                 )
+
+                if self.review is not None:
+                    forced_messages.append(messages[-1])
 
             # Call LLM with tools - model decides: tool calls OR final operations.
             # The VLM backend traces the (human-readable) input and output, so we do
@@ -409,6 +439,48 @@ class ExtractLoop:
                         console=True,
                     )
                     continue
+                if self._review_fallback is not None and (patch_errors or resolution_issues):
+                    return self._review_fallback
+                if (
+                    self.review is not None
+                    and review_count < 3
+                    and not (patch_errors or resolution_issues)
+                ):
+                    review_count += 1
+                    extended_limit = max_iterations + _COMPILE_REVIEW_EXTENSION
+                    feedback = await self._review_candidate(
+                        tools_used, review_count, extended_limit
+                    )
+                    if feedback is None:
+                        break
+                    self._review_fallback = final_operations, raw_links
+                    max_iterations = extended_limit
+                    messages[:] = [
+                        m for m in messages if all(m is not forced for forced in forced_messages)
+                    ]
+                    forced_messages.clear()
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": self._review_candidate_text},
+                            {
+                                "role": "user",
+                                "content": f"Continue exploring the compile target: {feedback}\n\n"
+                                "Increase coverage within the requested target by reading more distinct "
+                                "memory files. Prioritize areas with zero or few successful reads.\n\n"
+                                "When a listing shows multiple unread files, your next turn MUST issue "
+                                "multiple `read` calls together, one per file. Use `ls` only to discover "
+                                "paths. Repeating a listing or rereading a file does not increase coverage.\n\n"
+                                "Before submitting, check the gaps named in the review. If a gap still "
+                                "has unread files to examine, read another batch. Once the gaps are "
+                                "addressed, submit the complete revised operations based on what you read.",
+                            },
+                        ]
+                    )
+                    self._disable_tools_for_iteration = False
+                    self._format_retry_count = patch_repair_count = resolution_repair_count = 0
+                    pending_resolution_repair = None
+                    resolution_repair_ranges_only = True
+                    continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
@@ -416,6 +488,8 @@ class ExtractLoop:
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
             if failure_kind == "budget_exhausted":
+                if self._review_fallback is not None:
+                    return self._review_fallback
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
                     pending_resolution_repair = None
@@ -461,6 +535,8 @@ class ExtractLoop:
 
             # Preserve a valid first pass when only its resolution repair failed.
             if not retry_remaining:
+                if self._review_fallback is not None:
+                    return self._review_fallback
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
                     pending_resolution_repair = None
@@ -475,7 +551,7 @@ class ExtractLoop:
                         "memory operations parse exhausted; returning empty result",
                         extra={"degraded": True},
                     )
-                    return None, tools_used
+                    return None
                 raise RuntimeError(
                     "Final response could not be parsed as operations "
                     f"after {max_iterations} iterations "
@@ -495,12 +571,22 @@ class ExtractLoop:
             else:
                 raise RuntimeError("ReAct loop completed but no operations generated")
 
-        tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
+        return final_operations, raw_links
 
-        # Resolve links after the loop completes using the URIs already bound in resolve_operations().
-        await self.finalize_operations(final_operations, raw_links)
-
-        return final_operations, tools_used
+    async def _review_candidate(self, tools_used, attempt: int, extended_limit: int) -> str | None:
+        """Return the grader's continuation advice or accept the plan on a grader error."""
+        fields = {"operation": "compile.memory.review", "attempt": attempt}
+        try:
+            feedback = await self.review(self.vlm, tools_used)
+        except Exception as exc:
+            feedback = None
+            fields.update(task_status="accepted_on_error", error_type=type(exc).__name__)
+        else:
+            fields["task_status"] = "passed" if feedback is None else "continue"
+            if feedback is not None:
+                fields["retry_limit"] = extended_limit
+        log_and_add_event(logger, logging.INFO, "Memory compile review", **fields)
+        return feedback
 
     def _resolve_effective_max_output_tokens(self) -> None:
         """Resolve the extraction output cap.
@@ -1394,6 +1480,8 @@ class ExtractLoop:
                     )
                     return (None, None)
 
+                if self.review is not None:
+                    self._review_candidate_text = content
                 return (None, operations)
             except Exception as e:
                 self._last_parse_error = str(e)

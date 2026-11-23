@@ -74,6 +74,28 @@ class TestCommit:
         assert await _marker_exists(session, result["archive_uri"], ".done")
         assert not await _marker_exists(session, result["archive_uri"], ".failed.json")
 
+    async def test_commit_accepts_valid_memory_plan_without_review(
+        self, session_with_messages, monkeypatch
+    ):
+        from openviking.session.memory.session_extract_context_provider import (
+            SessionExtractContextProvider,
+        )
+
+        session = session_with_messages
+        completion = AsyncMock(return_value="sdk.commit()")
+        vlm = SimpleNamespace(model="local-test", max_tokens=4096, get_completion_async=completion)
+        monkeypatch.setattr(
+            session._session_compressor.vlm_resolver, "get_vlm", AsyncMock(return_value=vlm)
+        )
+        monkeypatch.setattr(SessionExtractContextProvider, "prefetch", AsyncMock(return_value=[]))
+        task = await _wait_for_task((await session.commit_async())["task_id"])
+        assert task["status"] == "completed", task
+        completion.assert_awaited_once()
+        messages = completion.await_args.kwargs["messages"]
+        assert messages[0]["role"] == "system"
+        assert "sdk.commit()" in messages[0]["content"]
+        assert "Coverage evidence" not in str(messages)
+
     async def test_failed_commit_preserves_successful_memory_writes(
         self, session_with_messages, monkeypatch
     ):

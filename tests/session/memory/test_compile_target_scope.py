@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Compile may read outside --to, but explicit writes must stay inside it."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -308,3 +309,55 @@ async def test_compile_real_updater_keeps_automatic_external_relations(
     reference = MemoryFileUtils.read(files[external], uri=external)
     assert reference.links[0]["to_uri"] == replacement
     assert reference.backlinks[0]["from_uri"] == replacement
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verdict", "expected_calls"),
+    [
+        ('{"pass":true,"reason":"sufficient"}', 2),
+        ("malformed", 2),
+        ('{"pass":"false","reason":"bad"}', 2),
+        (TimeoutError(), 2),
+        (SimpleNamespace(content='{"pass":false,"reason":"continue"}', finish_reason="length"), 2),
+        (RuntimeError("provider unavailable"), 2),
+        ('{"pass":false,"reason":"inspect another event"}', 3),
+    ],
+)
+async def test_subdirectory_review_preserves_valid_plan(
+    compile_scope, language_config, monkeypatch, verdict, expected_calls
+):
+    runner, fs, apply, acquire = compile_scope
+    target = f"{ROOT}/events/2026/10"
+    inside, outside = f"{target}/event.md", f"{ROOT}/events/2026/11/event.md"
+    originals = {uri: MemoryFileUtils.write(_file(uri, "events")) for uri in (inside, outside)}
+    fs.read_file.side_effect = lambda uri, **kwargs: originals[uri]
+    prefetch = ConsolidationExtractContextProvider.prefetch
+
+    async def seed(provider):
+        messages = await prefetch(provider)
+        for uri in [inside, inside, outside]:
+            await provider.read_file(uri)
+        return messages
+
+    monkeypatch.setattr(ConsolidationExtractContextProvider, "prefetch", seed)
+    replies = ["events_1.delete()\nsdk.commit()", verdict, RuntimeError("continuation unavailable")]
+    vlm = SimpleNamespace(model="test", get_completion_async=AsyncMock(side_effect=replies))
+    language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: vlm)
+    await runner._consolidate(
+        target=target,
+        memory_type="events",
+        peer_id=None,
+        instruction=None,
+        ctx=_ctx(),
+        enabled_review=True,
+    )
+    review = vlm.get_completion_async.await_args_list[1].kwargs
+    evidence = json.loads(review["prompt"].split("Coverage evidence: ")[1])
+    assert evidence["target"] == target
+    assert evidence["unique_reads_by_type"] == {"events": 1}
+    assert outside not in review["prompt"]
+    assert review["tools"] == []
+    assert vlm.get_completion_async.await_count == expected_calls
+    apply.assert_awaited_once()
+    assert [f.uri for f in apply.await_args.args[0].delete_file_contents] == [inside]

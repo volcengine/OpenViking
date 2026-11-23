@@ -364,3 +364,36 @@ class TestExtractionContentBoundary:
             execute.assert_awaited_once()
             assert len(vlm.calls) == 2
         assert response.content == "<think>planning</think>I will read the file."
+
+
+@pytest.mark.asyncio
+async def test_compile_review_reopens_tools_on_last_iteration_and_extends_three_times():
+    import json
+
+    read = ToolCall(
+        id="read-1", name="read", arguments={"uri": "viking://user/u/memories/profile.md"}
+    )
+    vlm = ScriptedVLM(
+        [VLMResponse(tool_calls=[read]) for _ in range(19)]
+        + [
+            "sdk.commit()",
+            VLMResponse(tool_calls=[read]),
+            "sdk.commit()",
+            "sdk.commit()",
+            "sdk.commit()",
+        ]
+    )
+    review = AsyncMock(return_value="Inspect the profile.")
+    loop = _make_loop(vlm, review=review)
+    loop.max_iterations = 20
+    loop.context_provider.get_tools = lambda: ["read"]
+    loop.context_provider.execute_tool = AsyncMock(return_value={"content": "profile"})
+    with patch("openviking.session.memory.extract_loop.log_and_add_event") as log:
+        result, tools = await _run_loop(loop)
+    assert result is not None
+    assert review.await_count == 3
+    assert [call.kwargs["retry_limit"] for call in log.call_args_list] == [40, 60, 80]
+    assert len(vlm.calls) == 24
+    assert vlm.calls[20]["tools"][0]["function"]["name"] == "read"
+    assert "reached the maximum" not in json.dumps(vlm.calls[20]["messages"])
+    assert [call["tool_name"] for call in tools] == ["read"] * 20
