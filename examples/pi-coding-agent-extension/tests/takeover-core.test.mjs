@@ -7,6 +7,7 @@ import {
   buildOverviewMessage,
   commitOutcome,
   countUndeliveredForSession,
+  describeSkip,
   countUserTurns,
   estimatePayloadTokens,
   estimateTokens,
@@ -98,6 +99,7 @@ function makeCore(overrides = {}) {
       return overrides.commitResult === undefined
         ? {
             status: "accepted",
+            effective_enable_working_memory: true,
             archived: true,
             task_id: "t-1",
             archive_uri: "viking://user/x/sessions/s/history/archive_001",
@@ -229,10 +231,12 @@ test("commitOutcome requires this commit's archive URI", () => {
     commitOutcome({ status: "skipped", archived: false, archive_uri: null, reason: "no_messages" }),
     { accepted: false, reason: "skipped:no_messages" },
   );
-  assert.deepEqual(commitOutcome({ status: "accepted", archived: false, archive_uri: "viking://x" }), {
+  assert.deepEqual(commitOutcome({ status: "accepted",
+            effective_enable_working_memory: true, archived: false, archive_uri: "viking://x" }), {
     accepted: false, reason: "not_archived",
   });
-  assert.deepEqual(commitOutcome({ status: "accepted", archived: true }), {
+  assert.deepEqual(commitOutcome({ status: "accepted",
+            effective_enable_working_memory: true, archived: true }), {
     accepted: false, reason: "no_archive_uri",
   });
   assert.deepEqual(commitOutcome({ status: "failed", archived: true, archive_uri: "viking://bad" }), {
@@ -617,8 +621,10 @@ test("skipped, not archived and missing URI results never advance", async () => 
   const branch = branchOf(user("one"), user("two"));
   for (const commitResult of [
     { status: "skipped", archived: false, archive_uri: null, reason: "no_messages" },
-    { status: "accepted", archived: false, archive_uri: "viking://bad" },
-    { status: "accepted", archived: true },
+    { status: "accepted",
+            effective_enable_working_memory: true, archived: false, archive_uri: "viking://bad" },
+    { status: "accepted",
+            effective_enable_working_memory: true, archived: true },
   ]) {
     const { core, calls } = makeCore({ commitResult });
     assert.equal(await core.onTurnSynced(120, branch), false);
@@ -736,7 +742,8 @@ test("two consecutive archives advance one complete user turn at a time", async 
         calls.committed++;
         calls.lastCommitOpts = opts;
         nextArchive++;
-        return { status: "accepted", archived: true, archive_uri: `viking://user/x/sessions/s/history/archive_00${nextArchive}` };
+        return { status: "accepted",
+            effective_enable_working_memory: true, archived: true, archive_uri: `viking://user/x/sessions/s/history/archive_00${nextArchive}` };
       },
     },
   });
@@ -1042,4 +1049,116 @@ test("shutdown persists deduped state once", async () => {
   await core.shutdown();
   assert.equal(calls.persisted.length, 1);
   assert.equal(calls.persisted[0].data.syncedEntryCount, 9);
+});
+
+test("native defaults do not capture a takeover boundary", async () => {
+  const core = new TakeoverCore({ io: { commit: () => { throw new Error("unexpected commit"); } } });
+  const branch = branchOf(user("one"), assistant("answer"));
+  assert.equal(core.enabled, false);
+  assert.equal(await core.handleBeforeCompact({ firstKeptEntryId: "one" }, branch), undefined);
+  assert.deepEqual(core.transformContext(contextOf(branch), branch), contextOf(branch));
+});
+
+for (const state of ["completed", "failed"]) {
+  test(`native compaction stops on ${state} without a summary`, async () => {
+    const { core, calls } = makeCore({ overviews: [""], io: { archiveState: async () => state } });
+    assert.equal(await core.handleBeforeCompact({ firstKeptEntryId: "one" }, branchOf(user("one"))), undefined);
+    assert.equal(calls.overviewCalls, 2);
+    assert.deepEqual(calls.slept, []);
+    assert.equal(core.state.pendingArchive, null);
+  });
+}
+
+test("terminal re-read accepts the summary that landed after the first read", async () => {
+  const { core, calls } = makeCore({ overviews: ["", "ready"], io: { archiveState: async () => "completed" } });
+  const result = await core.handleBeforeCompact({ firstKeptEntryId: "one" }, branchOf(user("one")));
+  assert.match(result.compaction.summary, /ready/);
+  assert.deepEqual(calls.slept, []);
+});
+
+for (const enabled of [false, undefined]) {
+  test(`takeover requires an explicit WM confirmation (${enabled})`, async () => {
+    const { core, calls } = makeCore({ commitResult: {
+      status: "accepted", archived: true, archive_uri: "archive-1", effective_enable_working_memory: enabled,
+    } });
+    assert.equal(await core.handleBeforeCompact({ firstKeptEntryId: "one" }, branchOf(user("one"))), undefined);
+    assert.equal(calls.overviewCalls, undefined);
+    assert.equal(core.state.pendingArchive, null);
+    assert.equal(calls.lastCommitOpts.enableWorkingMemory, true);
+  });
+}
+
+test("overview polling shares its deadline with archive-state reads", async () => {
+  let remaining = 7;
+  const reads = [];
+  const { core, calls } = makeCore({ io: {
+    readArchiveOverview: async (_uri, timeoutMs) => { reads.push(timeoutMs); remaining -= 2; return ""; },
+    archiveState: async (_uri, timeoutMs) => { reads.push(timeoutMs); remaining = 0; return "completed"; },
+  } });
+  core.remaining = () => remaining;
+  assert.deepEqual(await core.pollArchiveOverview("viking://archive", undefined, 7), { overview: "", terminal: true });
+  assert.deepEqual(reads, [7, 5]);
+  assert.deepEqual(calls.slept, []);
+});
+
+test("a manual commit the server skips says why instead of a bare failure", async () => {
+  // 0.4.22 user report: /viking commit POSTed keep_recent_count=125, the server
+  // answered 200 `skipped: all_within_keep_window`, and pi only showed
+  // "commit failed".
+  const { core } = makeCore({
+    commitResult: {
+      status: "skipped", archived: false, archive_uri: null, task_id: null,
+      reason: "all_within_keep_window", trace_id: "",
+    },
+  });
+  const branch = branchOf(user("one"), assistant("a"), user("two"), assistant("b"));
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.match(core.lastFailure, /^nothing new to archive/);
+  assert.match(core.lastFailure, /all_within_keep_window/);
+  assert.match(core.lastFailure, / 2 most recent messages/);
+  assert.equal(core.state.coveredThroughEntryId, "");
+});
+
+test("a rejected commit carries the HTTP status and server message", async () => {
+  const { core } = makeCore({
+    commitResult: null,
+    io: { lastCommitError: () => "HTTP 500: Session commit failed: disk full" },
+  });
+  const branch = branchOf(user("one"), user("two"));
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.equal(core.lastFailure, "the server rejected the commit (HTTP 500: Session commit failed: disk full)");
+});
+
+test("every commit that does not advance records a reason; a success clears it", async () => {
+  const cases = [
+    ["too few turns", makeCore(), branchOf(user("only")), /nothing new to archive: the context needs more than 1 user turns/],
+    ["flush closed", makeCore({ flushResult: false }), branchOf(user("one"), user("two")), /not delivered yet/],
+    ["capture gap", makeCore({ syncResult: { permanentFailures: 1 } }), branchOf(user("one"), user("two")), /capture gap/],
+    ["no archive uri", makeCore({ commitResult: { status: "accepted", archived: true } }), branchOf(user("one"), user("two")), /no archive \(no_archive_uri\)/],
+    ["throws", makeCore({ io: { syncBranch: async () => { throw new Error("boom"); } } }), branchOf(user("one"), user("two")), /archive preparation failed: boom/],
+  ];
+  for (const [name, { core }, branch, expected] of cases) {
+    assert.equal(await core.commitAndAdvance(branch), false, name);
+    assert.match(core.lastFailure, expected, name);
+  }
+  const { core } = makeCore();
+  core.lastFailure = "stale";
+  assert.equal(await core.commitAndAdvance(branchOf(user("one"), user("two"))), true);
+  assert.equal(core.lastFailure, "");
+});
+
+test("an archive that failed on the server without a summary is named in the reason", async () => {
+  const { core } = makeCore({ overviews: [""], io: { archiveState: async () => "failed" } });
+  const branch = branchOf(user("one"), user("two"));
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.ok(core.state.pendingArchive);
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.equal(core.state.pendingArchive, null);
+  assert.match(core.lastFailure, /^archive_001 failed on the server without a Working Memory summary/);
+});
+
+test("describeSkip reads the server skip reasons", () => {
+  assert.match(describeSkip("no_messages"), /no live messages/);
+  assert.match(describeSkip("all_within_keep_window", 125), /at most the 125 most recent messages/);
+  assert.equal(describeSkip("weird"), "the server skipped the archive (weird)");
 });

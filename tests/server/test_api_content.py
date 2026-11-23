@@ -10,8 +10,16 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
-from openviking.server.routers.content import ReindexRequest, WriteContentRequest, reindex
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking.server.routers.content import (
+    BatchWriteOperation,
+    BatchWriteRequest,
+    ReindexRequest,
+    WriteContentRequest,
+    batch_write,
+    reindex,
+)
+from openviking.service.task_tracker import get_task_tracker
+from openviking_cli.exceptions import ConflictError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -54,6 +62,77 @@ def test_write_content_request_accepts_clear_without_tags():
     assert request.tag_mode == "clear"
 
 
+def test_batch_write_request_accepts_write_parity_options():
+    request = BatchWriteRequest(
+        root_uri="viking://resources/demo",
+        processing_mode="vectors_only",
+        operations=[
+            BatchWriteOperation(
+                uri="viking://resources/demo/a.md",
+                content="updated",
+                resolve_conflicts=True,
+                tags=["team=search"],
+                tag_mode="append",
+                acl={
+                    "acl_mode": "restricted",
+                    "entries": [{"principal": "group:engineering", "level": "write"}],
+                },
+            )
+        ],
+    )
+
+    assert request.processing_mode == "vectors_only"
+    assert request.defer_processing is False
+    assert request.operations[0].tags == ["team=search"]
+    assert request.operations[0].resolve_conflicts is True
+    assert request.operations[0].tag_mode == "append"
+    assert request.operations[0].acl.acl_mode == "restricted"
+
+
+async def test_batch_write_forwards_processing_mode_and_operation_metadata(monkeypatch):
+    seen = {}
+
+    async def fake_batch_write(**kwargs):
+        seen.update(kwargs)
+        return {"updated": [kwargs["operations"][0]["uri"]]}
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(batch_write=fake_batch_write)),
+    )
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await batch_write(
+        BatchWriteRequest(
+            root_uri="viking://resources/demo",
+            processing_mode="vectors_only",
+            use_snapshot=True,
+            operations=[
+                BatchWriteOperation(
+                    uri="viking://resources/demo/a.md",
+                    content="updated",
+                    resolve_conflicts=True,
+                    tags=["team=search"],
+                    tag_mode="append",
+                    acl={"acl_mode": "restricted", "entries": []},
+                )
+            ],
+        ),
+        ctx,
+    )
+
+    assert seen["processing_mode"] == "vectors_only"
+    assert seen["defer_processing"] is False
+    assert seen["use_snapshot"] is True
+    operation = seen["operations"][0]
+    assert operation["resolve_conflicts"] is True
+    assert operation["tags"] == ["team=search"]
+    assert operation["tag_mode"] == "append"
+    assert operation["acl"]["acl_mode"] == "restricted"
+    assert list(operation["acl"]["entries"]) == []
+
+
 async def test_write_forwards_processing_mode_to_service(monkeypatch):
     seen = {}
 
@@ -70,12 +149,16 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
             uri="viking://resources/demo.md",
             content="updated",
             processing_mode="vectors_only",
+            defer_processing=True,
+            use_snapshot=True,
         ),
         ctx,
     )
 
     assert response["status"] == "ok"
     assert seen["processing_mode"] == "vectors_only"
+    assert seen["defer_processing"] is True
+    assert seen["use_snapshot"] is True
 
 
 async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):
@@ -151,14 +234,12 @@ async def test_read_content(client, service, monkeypatch):
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
 
-    monkeypatch.setattr(
-        service.viking_fs,
-        "read_file",
-        AsyncMock(side_effect=[PermissionDeniedError("denied"), "legacy content"]),
-    )
+    reader = AsyncMock(side_effect=[PermissionDeniedError("denied"), "legacy content"])
+    monkeypatch.setattr(service.viking_fs, "read_file", reader)
     resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
+    reader.assert_awaited_once()
 
 
 async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypatch):
@@ -244,18 +325,27 @@ async def test_overview_content(client_with_resource, service):
     assert body["result"] == f"# {uri}\n\n[Directory overview is not ready]"
 
 
-async def test_ls_file_uri_returns_invalid_argument(client, service):
+async def test_listing_a_file_returns_one_entry(client, service):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     file_uri = "viking://resources/directory-type-check/file.md"
     await service.viking_fs.mkdir("viking://resources/directory-type-check", ctx=ctx)
     await service.viking_fs.write_file(file_uri, "file content", ctx=ctx)
 
-    resp = await client.get("/api/v1/fs/ls", params={"uri": file_uri})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "not a directory" in body["error"]["message"]
+    for endpoint, output in (("ls", "original"), ("tree", "agent")):
+        response = await client.get(
+            f"/api/v1/fs/{endpoint}", params={"uri": file_uri, "output": output}
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        (entry,) = body["result"]
+        assert entry["uri"] == file_uri
+        assert entry["isDir"] is False
+        assert entry["name" if endpoint == "ls" else "rel_path"] == "file.md"
+        assert body["has_more"] is False
+
+    next_page = await client.get("/api/v1/fs/tree", params={"uri": file_uri, "offset": 1})
+    assert next_page.status_code == 200, next_page.text
+    assert next_page.json()["result"] == []
 
 
 async def test_overview_missing_uri_returns_not_found(client):
@@ -278,10 +368,82 @@ async def test_reindex_missing_uri(client):
     assert resp.status_code == 400
 
 
-async def test_reindex_endpoint_registered(client):
-    """Test the reindex endpoint is registered (GET returns 405, not 404)."""
-    resp = await client.get("/api/v1/content/reindex")
-    assert resp.status_code == 405  # Method Not Allowed, not 404
+async def test_directory_index_preserves_summaries_and_tags(client, service):
+    """Directory indexing preserves content; Compile tags belong only to the target root."""
+    from openviking.storage.expr import PathScope
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    uri = "viking://resources/compile"
+    await service.viking_fs.mkdir(f"{uri}/child", ctx=ctx)
+    seeded = await client.post(
+        "/api/v1/content/ensure_directory_index",
+        json={"uri": uri, "fallback_abstract": "Compile output"},
+    )
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["result"]["created_abstract"] is True
+    assert seeded.json()["result"]["indexed_levels"] == [0]
+    await service.fs.write(f"{uri}/child/note.md", "Content", ctx=ctx, wait=True)
+    await service.resources.wait_processed()
+    original = await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx)
+    await service.fs.set_tags(uri, ["team=search"], mode="append", recursive=False, ctx=ctx)
+    tagging = await service.fs.ensure_compile_target(uri, ctx)
+    await get_task_tracker().wait(
+        tagging["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=30
+    )
+    repeated = await client.post(
+        "/api/v1/content/ensure_directory_index",
+        json={"uri": uri, "fallback_abstract": "Do not replace stored summaries"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["result"]["created_abstract"] is False
+    assert await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx) == original
+    assert await service.fs.read(f"{uri}/child/note.md", ctx) == "Content"
+    records = await service.vikingdb_manager.filter(
+        filter=PathScope("uri", uri), output_fields=["uri", "level", "search_tags"], ctx=ctx
+    )
+    root_records = [record for record in records if record["uri"] == uri and record["level"] < 2]
+    assert any(record["level"] == 0 for record in root_records)
+    assert all(
+        {"compile_target=true", "team=search"} <= set(record["search_tags"])
+        for record in root_records
+    )
+    assert all(
+        "compile_target=true" not in (record.get("search_tags") or [])
+        for record in records
+        if record not in root_records
+    )
+
+
+async def test_tagged_output_snapshots_writes_and_blocks_resource_replacement(client, service):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    parent = "viking://resources/tagged-output-parent"
+    output = f"{parent}/output"
+    tagging = await service.fs.ensure_compile_target(output, ctx)
+    await get_task_tracker().wait(
+        tagging["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=30
+    )
+    uri = f"{output}/child/note.md"
+
+    await service.fs.write(uri, "tagged output", ctx, wait=True, use_snapshot=True)
+
+    history = await service.fs.file_versions(uri, ctx, limit=10)
+    from openviking.storage.expr import Eq
+
+    tagged = await service.vikingdb_manager.filter(
+        filter=Eq("search_tags", "compile_target=true"),
+        output_fields=["uri", "level", "search_tags"],
+        ctx=ctx,
+    )
+    assert all(record["uri"].startswith(output) for record in tagged), tagged
+    assert len(history["versions"]) == 1
+    assert await service.viking_fs.show(history["versions"][0]["oid"], path=uri, ctx=ctx) == (
+        b"tagged output"
+    )
+    for destination in (output, uri, parent):
+        with pytest.raises(ConflictError, match="tagged Compile output"):
+            await service.resources._ensure_resource_target_available(destination, ctx)
+    await service.resources._ensure_resource_target_available(parent, ctx, is_parent=True)
+    await service.resources._ensure_resource_target_available(f"{output}-sibling", ctx)
 
 
 async def test_reindex_request_validation(client):

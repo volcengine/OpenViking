@@ -15,7 +15,7 @@ class TestBuildMediaResourcesSlow:
     """TC-B13~B15 媒体类资源构建测试"""
 
     def test_build_image_svg(self, api_client):
-        """TC-B13 图片构建(SVG)：验证 .svg 文件解析失败时错误信息合理，成功时 source_format=image 且可检索"""
+        """TC-B13 图片构建(SVG)：验证受支持的 SVG 可成功导入并检索。"""
         random_id = str(uuid.uuid4())[:8]
         unique_keyword = f"svg_keyword_{random_id}"
         temp_dir = tempfile.mkdtemp()
@@ -27,39 +27,12 @@ class TestBuildMediaResourcesSlow:
 
         try:
             response = api_client.add_resource(path=svg_path, wait=True)
-            assert response.status_code == 500
+            assert response.status_code == 200, response.text
 
             data = response.json()
-            assert data.get("status") in ("ok", "error"), (
-                f"SVG文件应返回 ok 或 error, 实际: {data.get('status')}"
-            )
-
-            if data.get("status") == "error":
-                error_msg = str(data.get("error", "")).lower()
-                assert (
-                    "image" in error_msg
-                    or "svg" in error_msg
-                    or "parse" in error_msg
-                    or "error" in error_msg
-                ), f"SVG外层错误应包含 image/svg/parse/error, 实际: {error_msg}"
-                print("✓ TC-B13 图片构建(SVG)通过(服务端返回error，SVG格式不被支持)")
-                return
+            assert data.get("status") == "ok"
 
             result = data.get("result", {})
-            if isinstance(result, dict) and result.get("status") == "error":
-                inner_errors = result.get("errors", [])
-                inner_msg = " ".join(str(e) for e in inner_errors)
-                assert (
-                    "image" in inner_msg.lower()
-                    or "parse" in inner_msg.lower()
-                    or "identify" in inner_msg.lower()
-                    or "svg" in inner_msg.lower()
-                ), f"SVG解析错误信息应包含 image/parse/identify/svg, 实际: {inner_msg}"
-                print(
-                    f"✓ TC-B13 图片构建(SVG)通过(服务端内层解析错误，SVG格式不被支持): {inner_msg[:80]}"
-                )
-                return
-
             root_uri = result.get("root_uri") if isinstance(result, dict) else None
             assert_root_uri_valid(root_uri)
 

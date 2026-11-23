@@ -15,12 +15,14 @@ session state â€” only the filesystem handle, request context, and session URI â
 so it can be composed by ``Session`` and exercised in isolation.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
 from openviking.message import Message
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -103,6 +105,15 @@ class ArchiveStore:
     # ------------------------------------------------------------------
     # Pure helpers (no I/O)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def normalize_done(done: Dict[str, Any]) -> Dict[str, Any]:
+        """Read markers written before the WM switch was renamed."""
+        normalized = dict(done)
+        if "enable_working_memory" not in normalized and "working_memory_enabled" in normalized:
+            normalized["enable_working_memory"] = normalized["working_memory_enabled"]
+        normalized.pop("working_memory_enabled", None)
+        return normalized
 
     @staticmethod
     def archive_index_from_uri(archive_uri: str) -> int:
@@ -202,8 +213,10 @@ class ArchiveStore:
             try:
                 if await self._viking_fs.exists(f"{archive_uri}/{marker}", ctx=self._ctx):
                     return state
-            except Exception:
-                continue
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    continue
+                raise
         return "pending"
 
     async def list_refs(self) -> List[Dict[str, Any]]:
@@ -213,8 +226,10 @@ class ArchiveStore:
 
         try:
             history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self._ctx)
-        except Exception:
-            return []
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return []
+            raise
 
         refs: List[Dict[str, Any]] = []
         for item in history_items:
@@ -239,6 +254,7 @@ class ArchiveStore:
     async def scan_states(self) -> List[ArchiveState]:
         """Derive every archive state exclusively from its directory markers."""
         states: List[ArchiveState] = []
+        degraded_archives = 0
         refs = sorted(await self.list_refs(), key=lambda item: item["index"])
         for archive in refs:
             done_uri = f"{archive['archive_uri']}/.done"
@@ -252,12 +268,16 @@ class ArchiveStore:
                     raw_done = await self._viking_fs.read_file(done_uri, ctx=self._ctx)
                     parsed_done = json.loads(raw_done or "{}")
                     if isinstance(parsed_done, dict):
-                        done = parsed_done
+                        done = self.normalize_done(parsed_done)
                 except Exception as exc:
+                    degraded_archives += 1
                     # Marker existence still means completion, but unreadable
                     # contents cannot extend coverage to earlier archives.
-                    logger.warning(
-                        "Unreadable archive done marker %s: %s", archive["archive_uri"], exc
+                    logger.debug(
+                        "archive done marker unreadable uri=%s error_type=%s",
+                        safe_uri_for_log(archive["archive_uri"]),
+                        type(exc).__name__,
+                        extra={"error_type": type(exc).__name__},
                     )
 
             if done_exists:
@@ -265,16 +285,17 @@ class ArchiveStore:
                 # Otherwise leave overview empty here and let context assembly
                 # lazy-load the newest terminal completed archive's overview.
                 overview = ""
-                if done.get("working_memory_enabled") is True:
+                if done.get("enable_working_memory") is True:
                     overview = await self.read_overview(archive["archive_uri"])
                     if not overview.strip():
+                        degraded_archives += 1
                         # New markers distinguish an intentionally overview-less
                         # working_memory=false commit from a missing/corrupt
                         # required overview. The latter remains logically live and
                         # can be rolled forward by a later successful archive.
-                        logger.warning(
-                            "Completed archive has no readable required overview: %s",
-                            archive["archive_uri"],
+                        logger.debug(
+                            "archive required overview unavailable uri=%s",
+                            safe_uri_for_log(archive["archive_uri"]),
                         )
                         states.append(
                             ArchiveState(
@@ -320,7 +341,13 @@ class ArchiveStore:
                     if isinstance(parsed_failed, dict):
                         failed = parsed_failed
                 except Exception as exc:
-                    logger.warning("Unreadable archive failed marker %s: %s", failed_uri, exc)
+                    degraded_archives += 1
+                    logger.debug(
+                        "archive failed marker unreadable uri=%s error_type=%s",
+                        safe_uri_for_log(failed_uri),
+                        type(exc).__name__,
+                        extra={"error_type": type(exc).__name__},
+                    )
             states.append(
                 ArchiveState(
                     archive_id=archive["archive_id"],
@@ -329,6 +356,13 @@ class ArchiveStore:
                     state="failed" if failed_exists else "pending",
                     failed=failed,
                 )
+            )
+        if degraded_archives:
+            logger.info(
+                "archive metadata scan degraded total=%d failed=%d",
+                len(refs),
+                degraded_archives,
+                extra={"degraded": True, "total": len(refs), "failed": degraded_archives},
             )
         return states
 
@@ -354,18 +388,25 @@ class ArchiveStore:
                     "archive_uri": state.archive_uri,
                     "index": state.index,
                     "context_reset": state.done.get("context_reset") is True,
+                    "enable_working_memory": state.done.get("enable_working_memory"),
                 }
             )
 
         return completed
 
+    async def read_done(self, archive_uri: str) -> Dict[str, Any]:
+        """Read completion metadata without changing the terminal boundary."""
+        try:
+            done = json.loads(
+                await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self._ctx)
+            )
+        except Exception:
+            return {}
+        return self.normalize_done(done) if isinstance(done, dict) else {}
+
     async def is_context_reset_archive(self, archive_uri: str) -> bool:
         """Return True when the archive's ``.done`` marks a context reset boundary."""
-        try:
-            done = json.loads(await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self._ctx))
-        except Exception:
-            return False
-        return isinstance(done, dict) and done.get("context_reset") is True
+        return (await self.read_done(archive_uri)).get("context_reset") is True
 
     # ------------------------------------------------------------------
     # Sidecar readers
@@ -374,9 +415,7 @@ class ArchiveStore:
     async def read_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
         try:
-            overview = await self._viking_fs.read_file(
-                f"{archive_uri}/.overview.md", ctx=self._ctx
-            )
+            overview = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self._ctx)
         except Exception:
             return ""
         return body_for_preview(overview or "")
@@ -384,9 +423,7 @@ class ArchiveStore:
     async def read_abstract(self, archive_uri: str, overview: str = "") -> str:
         """Read archive abstract text, falling back to summary extraction."""
         try:
-            abstract = await self._viking_fs.read_file(
-                f"{archive_uri}/.abstract.md", ctx=self._ctx
-            )
+            abstract = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self._ctx)
         except Exception:
             abstract = ""
 
@@ -424,6 +461,19 @@ class ArchiveStore:
                 raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
         return messages
+
+    async def messages_sha256(self, archive_uri: str) -> str:
+        """Return the archive-time SHA-256 of ``messages.jsonl``.
+
+        Archives written before the hash was persisted fall back to hashing the
+        current bytes.
+        """
+        phase1 = (await self.read_meta(archive_uri)).get("phase1")
+        persisted = phase1.get("messages_sha256") if isinstance(phase1, dict) else None
+        if isinstance(persisted, str) and persisted:
+            return persisted
+        raw = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self._ctx)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     async def read_meta(self, archive_uri: str) -> Dict[str, Any]:
         try:
@@ -497,9 +547,9 @@ class ArchiveStore:
             except Exception as exc:
                 if not is_storage_not_found(exc):
                     raise
-                logger.warning(
-                    "Skipping pending archive %s because messages.jsonl is missing",
-                    state.archive_uri,
+                logger.info(
+                    "pending archive messages missing; skipping uri=%s",
+                    safe_uri_for_log(state.archive_uri),
                 )
         return self.stable_deduplicate_messages(messages)
 

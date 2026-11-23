@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -24,10 +23,9 @@ from openviking.session.train.domain import (
     PolicySet,
     PolicyUpdatePlan,
 )
+from openviking.session.train.utils import experience_target_uri
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
-
-_EXPERIENCE_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
 @dataclass(slots=True)
@@ -101,20 +99,39 @@ class MemoryFilePolicyUpdater:
             policy_set=policy_set,
             updated_policy_set=updated_policy_set,
         )
-        trajectory_uris = sorted({link.to_uri for link in operations.resolved_links if link.to_uri})
+        related_uris = {
+            uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri) if uri
+        }
+        related_uris.update(operations.delete_replacements)
+        related_uris.update(operations.delete_replacements.values())
+        for source in operations.delete_file_contents:
+            related_uris.update(
+                uri
+                for link in [*source.links, *source.backlinks]
+                for uri in (link.get("from_uri"), link.get("to_uri"))
+                if uri
+            )
         operation_lease = transaction_handle
         combined_lease = None
-        if trajectory_uris:
+        if related_uris:
             uri_to_path = getattr(viking_fs, "_uri_to_path", None)
             if not callable(uri_to_path):
                 raise RuntimeError("VikingFS must provide _uri_to_path for policy link locking")
-            combined_lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                sorted(uri_to_path(uri, ctx=context) for uri in trajectory_uris),
-                [uri_to_path(policy_set.root_uri, ctx=context)],
-                timeout_secs=300.0,
-                owner_lease_ref=transaction_handle,
-            )
-            operation_lease = combined_lease
+            root_path = uri_to_path(policy_set.root_uri, ctx=context).rstrip("/")
+            exact_paths = {uri_to_path(uri, ctx=context) for uri in related_uris if uri}
+            exact_paths = {
+                path
+                for path in exact_paths
+                if path != root_path and not path.startswith(root_path + "/")
+            }
+            if exact_paths:
+                combined_lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
+                    sorted(exact_paths),
+                    [root_path],
+                    timeout_secs=300.0,
+                    owner_lease_ref=transaction_handle,
+                )
+                operation_lease = combined_lease
 
         try:
             updater = MemoryUpdater(
@@ -133,7 +150,13 @@ class MemoryFilePolicyUpdater:
         finally:
             if combined_lease is not None:
                 await viking_fs._async_agfs.pathlock_release(combined_lease)
-        errors = [*preflight_errors, *[f"{uri}: {exc}" for uri, exc in apply_result.errors]]
+        errors_by_uri: dict[str, list[str]] = {}
+        for uri, error in [
+            *preflight_errors,
+            *[(uri, f"{uri}: {exc}") for uri, exc in apply_result.errors],
+        ]:
+            errors_by_uri.setdefault(uri, []).append(error)
+        errors = [error for messages in errors_by_uri.values() for error in messages]
 
         return PolicyApplyResult(
             updated_policy_set=updated_policy_set if not errors else policy_set,
@@ -145,6 +168,7 @@ class MemoryFilePolicyUpdater:
                 "item_count": len(plan.items),
                 "operation_upsert_count": len(operations.upsert_operations),
                 "operation_delete_count": len(operations.delete_file_contents),
+                "errors_by_uri": errors_by_uri,
             },
         )
 
@@ -154,7 +178,7 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
     result = list(policy_set.policies)
 
     for item in items:
-        uri = _target_uri(item, policy_set.root_uri)
+        uri = experience_target_uri(policy_set.root_uri, item.target_name, item.target_uri)
 
         if item.kind == "delete":
             existing = policies_by_uri.get(uri) or _find_policy(
@@ -236,25 +260,20 @@ def _find_policy(
     return None
 
 
-def _target_uri(item: PolicyPlanItem, root_uri: str) -> str:
-    if item.target_uri:
-        return item.target_uri
-    return f"{root_uri.rstrip('/')}/{_safe_experience_filename(item.target_name)}.md"
-
-
 def _plan_to_resolved_operations(
     *,
     plan: PolicyUpdatePlan,
     policy_set: PolicySet,
     updated_policy_set: PolicySet,
-) -> tuple[ResolvedOperations, list[str]]:
+) -> tuple[ResolvedOperations, list[tuple[str, str]]]:
     upserts: list[ResolvedOperation] = []
     deletes: list[MemoryFile] = []
+    delete_replacements: dict[str, str] = {}
     links: list[StoredLink] = []
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
 
     for item in plan.items:
-        uri = _target_uri(item, policy_set.root_uri)
+        uri = experience_target_uri(policy_set.root_uri, item.target_name, item.target_uri)
         current = _find_policy(policy_set, uri=uri, name=item.target_name)
         if (
             current is not None
@@ -263,23 +282,28 @@ def _plan_to_resolved_operations(
             != _normalize_guard_content(item.before_content)
         ):
             errors.append(
-                f"base content mismatch for {item.target_name}: expected gradient before_content"
+                (
+                    uri,
+                    f"base content mismatch for {item.target_name}: expected gradient before_content",
+                )
             )
             continue
 
         if item.kind == "delete":
             deletes.append(_policy_or_plan_item_memory_file(item, uri=uri, current=current))
+            if item.replacement_uri:
+                delete_replacements[uri] = item.replacement_uri
             continue
 
         if item.kind != "upsert":
             continue
         if item.after_content is None:
-            errors.append(f"missing after_content for {item.target_name}")
+            errors.append((uri, f"missing after_content for {item.target_name}"))
             continue
 
         updated = _find_policy(updated_policy_set, uri=uri, name=item.target_name)
         if updated is None:
-            errors.append(f"planned policy not found after simulation: {item.target_name}")
+            errors.append((uri, f"planned policy not found after simulation: {item.target_name}"))
             continue
 
         upserts.append(
@@ -299,6 +323,11 @@ def _plan_to_resolved_operations(
             )
         )
         links.extend(_source_trajectory_links(exp_uri=uri, links=item.links))
+        links.extend(
+            link
+            for link in item.links
+            if "/memories/cases/" in link.from_uri and link.to_uri == uri
+        )
 
     return (
         ResolvedOperations(
@@ -306,6 +335,7 @@ def _plan_to_resolved_operations(
             delete_file_contents=deletes,
             errors=[],
             resolved_links=links,
+            delete_replacements=delete_replacements,
         ),
         errors,
     )
@@ -319,6 +349,8 @@ def _policy_or_plan_item_memory_file(
 ) -> MemoryFile:
     if current is not None:
         return _policy_to_memory_file(current)
+    if item.before_file is not None and item.before_file.uri == uri:
+        return item.before_file
     return MemoryFile(
         uri=uri,
         content=item.before_content or "",
@@ -373,11 +405,6 @@ def _source_trajectory_links(
             update["created_at"] = datetime.now(timezone.utc).isoformat()
         result.append(link.model_copy(update=update))
     return result
-
-
-def _safe_experience_filename(name: str) -> str:
-    filename = _EXPERIENCE_NAME_RE.sub("_", name.strip()).strip("._-")
-    return filename or "new_experience"
 
 
 def _normalize_guard_content(content: str) -> str:

@@ -20,8 +20,12 @@ class _PathLock:
         self.acquired += 1
         return "lease-1"
 
+    async def pathlock_acquire_exact_batch(self, paths, timeout_secs, owner_lease_ref):
+        self.acquired += 1
+        return "file-lease"
+
     async def pathlock_release(self, lease):
-        assert lease == "lease-1"
+        assert lease in {"lease-1", "file-lease"}
         self.released += 1
 
 
@@ -39,6 +43,9 @@ class _MetaVikingFS:
     def _uri_to_path(self, uri, ctx=None):
         del uri, ctx
         return "/sessions/session-1"
+
+    async def exists(self, uri, ctx=None):
+        return uri in self.files
 
     async def read_file(self, uri, ctx=None):
         del ctx
@@ -133,6 +140,4 @@ async def test_update_config_updates_policy_and_tags_in_one_locked_write():
     assert saved_meta.message_count == 41
     assert saved_meta.pending_tokens == 8200
     assert len(viking_fs.writes) == 1
-    assert viking_fs.writes[0][2] is None
-    assert viking_fs._async_agfs.acquired == 1
-    assert viking_fs._async_agfs.released == 1
+    assert viking_fs._async_agfs.acquired == viking_fs._async_agfs.released

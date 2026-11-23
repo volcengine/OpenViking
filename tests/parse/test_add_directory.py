@@ -284,6 +284,7 @@ class TestEmptyDirectory:
                         "type": "file",
                         "token": "file-token",
                         "reason": "HTTP 403",
+                        "error_code": "PERMISSION_DENIED",
                     }
                 ]
             },
@@ -302,6 +303,7 @@ class TestEmptyDirectory:
                 "type": "file",
                 "token": "file-token",
                 "reason": "HTTP 403",
+                "error_code": "PERMISSION_DENIED",
             }
         ]
         assert any("Skipped Feishu Drive item blocked.pdf: HTTP 403" in w for w in result.warnings)

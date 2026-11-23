@@ -4,14 +4,15 @@ import copy
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
     FetchDataInCollectionResult,
-    SearchItemResult,
     SearchResult,
+    parse_remote_search_result,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     VIKING_DB_VERSION,
@@ -19,7 +20,9 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
 )
 from openviking.utils.search_filters import VALID_TIME_FIELDS
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[str, Any]):
@@ -52,7 +55,7 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     try:
         params = {"Action": "CreateVikingdbCollection", "Version": VIKING_DB_VERSION}
         response = client.do_req("POST", req_params=params, req_body=meta_data)
-        logger.info(f"Create collection response: {response.text}")
+        logger.debug("Collection creation response received http_status=%d", response.status_code)
         if response.status_code != 200:
             result = response.json()
             if "AlreadyExists" in result.get("ResponseMetadata", {}).get("Error", {}).get(
@@ -64,10 +67,10 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
                     f"Failed to create collection: {response.status_code} {response.text}"
                 )
     except Exception as e:
-        logger.error(f"Failed to create collection: {e}")
+        logger.debug("Failed to create collection: %s", type(e).__name__)
         raise e
 
-    logger.info(f"Collection {collection_name} created successfully")
+    logger.debug("Collection %s created successfully", short_hash(str(collection_name)))
     return Collection(
         VolcengineCollection(
             ak,
@@ -126,7 +129,7 @@ class VolcengineCollection(ICollection):
         params = {"Action": action, "Version": VIKING_DB_VERSION}
         response = self.console_client.do_req("POST", req_params=params, req_body=data)
         if response.status_code != 200:
-            logger.error(str(self._build_response_error(response, action)))
+            logger.debug("Vector provider request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -136,7 +139,13 @@ class VolcengineCollection(ICollection):
         except json.JSONDecodeError:
             return {}
 
-    def _console_get(self, params: Optional[Dict[str, Any]], action: str):
+    def _console_get(
+        self,
+        params: Optional[Dict[str, Any]],
+        action: str,
+        *,
+        raise_on_error: bool = False,
+    ):
         if params is None:
             params = {}
         req_params = {"Action": action, "Version": VIKING_DB_VERSION}
@@ -144,12 +153,16 @@ class VolcengineCollection(ICollection):
         response = self.console_client.do_req("POST", req_params=req_params, req_body=req_body)
 
         if response.status_code != 200:
-            logger.error(str(self._build_response_error(response, action)))
+            if raise_on_error:
+                raise self._build_response_error(response, action)
+            logger.debug("Vector provider request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
             return result.get("Result", {})
         except json.JSONDecodeError:
+            if raise_on_error:
+                raise self._build_response_error(response, action)
             return {}
 
     @staticmethod
@@ -282,7 +295,7 @@ class VolcengineCollection(ICollection):
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             error = self._build_response_error(response, path)
-            logger.error(str(error))
+            logger.debug("Vector provider request failed error_type=%s", type(error).__name__)
             if raise_for_status:
                 raise error
             return {}
@@ -297,7 +310,7 @@ class VolcengineCollection(ICollection):
     def _data_get(self, path: str, params: Dict[str, Any]):
         response = self.data_client.do_req("GET", path, req_params=params)
         if response.status_code != 200:
-            logger.error(f"Request to {path} failed: {response.text}")
+            logger.debug("Vector provider request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -317,12 +330,16 @@ class VolcengineCollection(ICollection):
 
         return self._console_post(data, action="UpdateVikingdbCollection")
 
-    def get_meta_data(self):
+    def get_meta_data(self, *, raise_on_error: bool = False):
         params = {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
         }
-        return self._console_get(params, action="GetVikingdbCollection")
+        return self._console_get(
+            params,
+            action="GetVikingdbCollection",
+            raise_on_error=raise_on_error,
+        )
 
     def close(self):
         pass
@@ -439,7 +456,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
-        return self._data_post(path, data)
+        return self._data_post(path, data, raise_for_status=True)
 
     def delete_all_data(self):
         path = "/api/vikingdb/data/delete"
@@ -448,7 +465,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "del_all": True,
         }
-        return self._data_post(path, data)
+        return self._data_post(path, data, raise_for_status=True)
 
     def _parse_fetch_result(self, data: Dict[str, Any]) -> FetchDataInCollectionResult:
         result = FetchDataInCollectionResult()
@@ -467,18 +484,7 @@ class VolcengineCollection(ICollection):
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
-        result = SearchResult()
-        if isinstance(data, dict) and "data" in data:
-            data_list = data.get("data", [])
-            result.data = [
-                SearchItemResult(
-                    id=item.get("id"),
-                    fields=item.get("fields"),
-                    score=item.get("score"),
-                )
-                for item in data_list
-            ]
-        return result
+        return parse_remote_search_result(data)
 
     def search_by_vector(
         self,
@@ -489,6 +495,8 @@ class VolcengineCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/vector"
         data = {
@@ -504,6 +512,10 @@ class VolcengineCollection(ICollection):
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
+        if advance is not None:
+            data["advance"] = advance
+        if return_detail_info:
+            data["return_detail_info"] = True
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -593,6 +605,11 @@ class VolcengineCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -601,12 +618,20 @@ class VolcengineCollection(ICollection):
             "index_name": index_name,
             "keywords": keywords,
             "query": query,
+            "mode": mode,
+            "fields": fields,
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
             "ignore_unknown_fields": True,
         }
+        if bm25_k1 is not None:
+            data["bm25_k1"] = bm25_k1
+        if bm25_b is not None:
+            data["bm25_b"] = bm25_b
+        if advance is not None:
+            data["advance"] = advance
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -634,7 +659,7 @@ class VolcengineCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
-        resp_data = self._data_post(path, data)
+        resp_data = self._data_post(path, data, raise_for_status=True)
         return self._parse_search_result(resp_data)
 
     def _parse_aggregate_result(

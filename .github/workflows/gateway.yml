@@ -1,0 +1,65 @@
+name: OpenViking Gateway
+on:
+  pull_request:
+    paths: ["openviking_gateway/**", "tests/gateway/**", "scripts/gateway_*", "tests/fixtures/gateway_upstream_urls.json", "openviking_cli/utils/config/openviking_gateway_config.py", "openviking_cli/utils/config/encryption_config.py", "openviking_cli/utils/config/agfs_config.py", "openviking/server/account_stores/redis_client.py", "pyproject.toml", "MANIFEST.in", "openviking_cli/setup_wizard.py", "openviking/crypto/**", ".github/workflows/gateway.yml"]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 2s --health-retries 20
+    env:
+      OV_TEST_REDIS: redis://127.0.0.1:6379
+      OV_TEST_REDIS_CLUSTER: redis://127.0.0.1:7000,redis://127.0.0.1:7001,redis://127.0.0.1:7002
+      OV_TEST_REDIS_USERNAME: gateway
+      OV_TEST_REDIS_PASSWORD: gateway-test-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # The gateway talks to OpenViking over HTTP and reuses only its pure-Python crypto
+      # module, so its tests run from the source tree without building the native wheel.
+      - run: pip install "aiohttp>=3.13.3" "async-timeout>=5.0.1" "orjson>=3.11.7" "packaging>=24.0" "fastapi>=0.128.0" "uvicorn>=0.39.0" "pydantic>=2.0.0" "httpx>=0.25.0" "cryptography>=48.0.1" "json-repair>=0.25.0" "loguru>=0.7.3" "mcp>=1.27,<2" "redis==6.4.0" pytest pytest-asyncio
+      - name: Start Redis Cluster and configure the gateway ACL
+        shell: bash
+        run: |
+          set -euo pipefail
+          for port in 7000 7001 7002; do
+            docker run -d --network host --name gateway-redis-$port redis:7.2 \
+              redis-server --port "$port" --cluster-enabled yes \
+              --cluster-config-file nodes.conf --cluster-node-timeout 5000 \
+              --cluster-announce-ip 127.0.0.1 --appendonly no
+          done
+          for port in 7000 7001 7002; do
+            for attempt in {1..30}; do
+              if docker exec gateway-redis-$port redis-cli -p "$port" ping; then break; fi
+              sleep 1
+            done
+          done
+          docker exec gateway-redis-7000 redis-cli --cluster create \
+            127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-yes
+          for port in 7000 7001 7002; do
+            for attempt in {1..30}; do
+              state=$(docker exec gateway-redis-$port redis-cli -p "$port" cluster info)
+              if [[ "$state" == *cluster_state:ok* ]]; then break; fi
+              sleep 1
+            done
+            [[ "$state" == *cluster_state:ok* ]]
+          done
+          for port in 6379 7000 7001 7002; do
+            docker run --rm --network host redis:7.2 redis-cli -p "$port" ACL SETUSER \
+              gateway reset on '>gateway-test-password' '~ovgw:*' \
+              +@read +@write +@scripting +@connection +@transaction \
+              +ping +time +scan +unlink '+cluster|slots' '+cluster|shards'
+          done
+      - run: PYTHONPATH=. pytest tests/gateway --confcutdir=tests/gateway -o addopts=''
+      # Only the storage ports touch redis-py directly; check them on the oldest supported client.
+      - run: |
+          pip install "redis==5.3.1"
+          PYTHONPATH=. pytest tests/gateway/test_storage_ports.py --confcutdir=tests/gateway -o addopts=''

@@ -32,7 +32,7 @@ def processing():
         auxiliary_files=[],
         base_path=None,
         cleanup_path=None,
-        privacy_values={"api_key": "test-value"},
+        privacy=None,
     )
     return processor, fs, ctx, prepared
 

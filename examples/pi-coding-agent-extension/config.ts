@@ -32,10 +32,13 @@ export interface OVConfig {
   recallLedger: boolean;
   scoreThreshold: number;
   minQueryLength: number;
+  recallQueryFilters: string[];
+  recallExcludeUris: string[];
   profileTokenBudget: number;
   skillCatalog: boolean;
   skillCatalogTokenBudget: number;
   resumeContextBudget: number;
+  resumeArchiveInject: boolean;
   commitTokenThreshold: number;
   commitKeepRecentCount: number;
   takeoverEnabled: boolean;

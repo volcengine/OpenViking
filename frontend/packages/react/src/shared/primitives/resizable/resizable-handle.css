@@ -1,0 +1,73 @@
+/**
+ * 分隔条的组件变量。颜色取自包级主题基线，只有纯几何量（命中区宽度、线宽、
+ * 圆角）直接赋值。
+ *
+ * 命中区 16px 但视觉上只是一根 1px 的线：太细的线拖起来很难对准，太粗的线又
+ * 会挡住两侧内容。线平时用描边色承担分栏，悬停、聚焦与拖动时转主色。
+ *
+ * Component variables of the divider. Colours come from the package baseline; only
+ * pure geometry (hit area, line width, radius) is assigned here.
+ *
+ * The hit area is 16px while the visible line is 1px: a thinner line is hard to
+ * grab, a thicker one covers the content on both sides. The line uses the border
+ * colour at rest so it still divides the columns, and turns primary on hover, focus
+ * or drag.
+ */
+.ov-resizable-handle {
+  --ov-ui-resizable-handle-hit: 16px;
+  --ov-ui-resizable-handle-line: 1px;
+  --ov-ui-resizable-handle-rest: var(
+    --ov-ui-color-border-1,
+    var(--ov-ui-border-1-default, #f0f2fa)
+  );
+  --ov-ui-resizable-handle-accent: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+
+  display: flex;
+  flex: none;
+  width: var(--ov-ui-resizable-handle-hit);
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  cursor: ew-resize;
+  outline: none;
+  /* 触摸拖动时不让浏览器把这次滑动解释成滚动。 */
+  /* Stop the browser from reading a touch drag as a scroll. */
+  touch-action: none;
+}
+
+.ov-resizable-handle__line {
+  display: block;
+  width: var(--ov-ui-resizable-handle-line);
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ov-ui-resizable-handle-rest);
+  transition: background-color 160ms ease;
+}
+
+.ov-resizable-handle:hover .ov-resizable-handle__line,
+.ov-resizable-handle:focus-visible .ov-resizable-handle__line,
+.ov-resizable-handle[data-dragging] .ov-resizable-handle__line {
+  background: var(--ov-ui-resizable-handle-accent);
+}
+
+/*
+ * 键盘聚焦时线加粗到 2px：1px 的主色线在浅底上仍偏细，作为唯一的焦点提示不够
+ * 明确。不加外框是因为分隔条是整列高的，外框会圈住一大片空白。
+ *
+ * The line thickens to 2px on keyboard focus: a 1px accent line is still thin on a
+ * light background and makes a weak focus cue. No outline, because the divider
+ * spans the full column height and a box would enclose a lot of empty space.
+ */
+.ov-resizable-handle:focus-visible .ov-resizable-handle__line {
+  width: calc(var(--ov-ui-resizable-handle-line) * 2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-resizable-handle__line {
+    transition: none;
+  }
+}

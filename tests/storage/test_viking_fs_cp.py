@@ -3,14 +3,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.resource.watch_storage import WATCH_TASK_CONTROL_URIS
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import parse_abstract_overview
-from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -18,6 +19,7 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend, _record
 
 
 def _ctx() -> RequestContext:
@@ -243,12 +245,13 @@ async def test_cp_rejects_non_root_container_sources(monkeypatch, uri):
 
 
 @pytest.mark.asyncio
-async def test_cp_rejects_watch_control_source(monkeypatch):
+@pytest.mark.parametrize("uri", sorted(WATCH_TASK_CONTROL_URIS))
+async def test_cp_rejects_watch_control_source(monkeypatch, uri):
     fs = _viking_fs(monkeypatch, _CopyAGFS())
 
     with pytest.raises(PermissionDeniedError, match="watch-task control"):
         await fs._ensure_copy_source_access(
-            "viking://resources/.watch_tasks.json",
+            uri,
             recursive=False,
             ctx=_ctx(),
         )
@@ -295,41 +298,9 @@ async def test_cp_file_uses_exact_locks_agfs_copy_then_vector_copy(monkeypatch):
         "viking://resources/source.md",
         "viking://resources/target.md",
         recursive=False,
-        ctx=_ctx(),
+        ctx=replace(_ctx(), bypass_acl=True),
     )
     assert agfs.events[-1] == ("release", agfs.operation_lease)
-
-
-@pytest.mark.asyncio
-async def test_cp_returns_diagnostic_transfer_summary(monkeypatch):
-    agfs = _CopyAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(
-        fs,
-        "_copy_vector_store_uris",
-        AsyncMock(
-            return_value=SimpleNamespace(scanned=2, written=2, deleted=0, restored=0, batches=1)
-        ),
-        raising=False,
-    )
-
-    result = await fs.cp(
-        "viking://resources/source.md",
-        "viking://resources/target.md",
-        ctx=_ctx(),
-    )
-
-    assert len(result["operation_id"]) == 32
-    assert result["operation"] == "copy"
-    assert result["phase"] == "completed"
-    assert result["files_created"] == 1
-    assert result["vectors"] == {
-        "scanned": 2,
-        "written": 2,
-        "deleted": 0,
-        "restored": 0,
-        "batches": 1,
-    }
 
 
 @pytest.mark.asyncio
@@ -375,7 +346,7 @@ async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatc
         "viking://resources/source",
         "viking://resources/target",
         recursive=True,
-        ctx=_ctx(),
+        ctx=replace(_ctx(), bypass_acl=True),
         source_uris=[
             "viking://resources/source",
             "viking://resources/source/.hidden",
@@ -457,53 +428,6 @@ Back to viking://resources/source/data.bin.
 
 
 @pytest.mark.asyncio
-async def test_cp_directory_locks_only_source_and_target_trees(monkeypatch):
-    agfs = _DirectoryCopyAGFS()
-    agfs.directories = {
-        "/local/acct/resources",
-        "/local/acct/resources/source-parent",
-        "/local/acct/resources/source-parent/source",
-        "/local/acct/resources/source-parent/source/empty",
-        "/local/acct/resources/target-parent",
-    }
-    agfs.files = {
-        "/local/acct/resources/source-parent/source/data.bin": b"data",
-    }
-    fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
-
-    await fs.cp(
-        "viking://resources/source-parent/source",
-        "viking://resources/target-parent/target",
-        recursive=True,
-        ctx=_ctx(),
-    )
-
-    acquire = next(event for event in agfs.events if event[0] == "acquire-batch")
-    assert acquire[1] == [
-        {"path": "/local/acct/resources/source-parent/source", "kind": "tree"},
-        {"path": "/local/acct/resources/target-parent/target", "kind": "tree"},
-    ]
-    assert agfs.exact_leases == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-async def test_transfer_overwrites_existing_file(monkeypatch, operation):
-    agfs = _DirectoryCopyAGFS()
-    agfs.files = {
-        "/local/acct/resources/source.md": b"new",
-        "/local/acct/resources/target.md": b"old",
-    }
-    fs = _viking_fs(monkeypatch, agfs)
-    await getattr(fs, operation)(
-        "viking://resources/source.md", "viking://resources/target.md", ctx=_ctx()
-    )
-    assert agfs.files["/local/acct/resources/target.md"] == b"new"
-    assert ("/local/acct/resources/source.md" in agfs.files) == (operation == "cp")
-
-
-@pytest.mark.asyncio
 async def test_cp_rejects_missing_target_parent_before_locking(monkeypatch):
     agfs = _CopyAGFS(parent_exists=False)
     fs = _viking_fs(monkeypatch, agfs)
@@ -546,14 +470,20 @@ async def test_mv_rejects_missing_target_parent_before_locking(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mv_keeps_partial_target_when_agfs_copy_fails(monkeypatch):
+@pytest.mark.parametrize(
+    ("operation", "vector_method"),
+    [("cp", "_copy_vector_store_uris"), ("mv", "_update_vector_store_uris")],
+)
+async def test_transfer_stops_before_vector_write_when_agfs_copy_fails(
+    monkeypatch, operation, vector_method
+):
     agfs = _CopyAGFS(fail_copy=True)
     fs = _viking_fs(monkeypatch, agfs)
-    vector_move = AsyncMock()
-    monkeypatch.setattr(fs, "_update_vector_store_uris", vector_move)
+    vector_write = AsyncMock()
+    monkeypatch.setattr(fs, vector_method, vector_write)
 
     with pytest.raises(RuntimeError, match="injected AGFS copy failure"):
-        await fs.mv(
+        await getattr(fs, operation)(
             "viking://resources/source.md",
             "viking://resources/target.md",
             ctx=_ctx(),
@@ -563,7 +493,7 @@ async def test_mv_keeps_partial_target_when_agfs_copy_fails(monkeypatch):
         event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
     )
     assert agfs.target_exists
-    vector_move.assert_not_awaited()
+    vector_write.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -591,27 +521,6 @@ async def test_cp_removes_target_file_when_vector_copy_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cp_keeps_partial_target_when_agfs_copy_fails(monkeypatch):
-    agfs = _CopyAGFS(fail_copy=True)
-    fs = _viking_fs(monkeypatch, agfs)
-    vector_copy = AsyncMock()
-    monkeypatch.setattr(fs, "_copy_vector_store_uris", vector_copy, raising=False)
-
-    with pytest.raises(RuntimeError, match="injected AGFS copy failure"):
-        await fs.cp(
-            "viking://resources/source.md",
-            "viking://resources/target.md",
-            ctx=_ctx(),
-        )
-
-    assert not any(
-        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
-    )
-    assert agfs.target_exists
-    vector_copy.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_mv_keeps_target_when_source_delete_fails(monkeypatch):
     agfs = _MoveRollbackAGFS()
     fs = _viking_fs(monkeypatch, agfs)
@@ -626,85 +535,14 @@ async def test_mv_keeps_target_when_source_delete_fails(monkeypatch):
         )
 
     assert agfs.paths == {"/local/acct/resources/target.md"}
+    assert [event[1:3] for event in agfs.events if event[0] == "cp"] == [
+        ("/local/acct/resources/source.md", "/local/acct/resources/target.md")
+    ]
     assert vector_move.await_args_list[0].args == (
         "viking://resources/source.md",
         "viking://resources/target.md",
     )
     assert vector_move.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_mv_restores_vectors_before_removing_target_when_acl_refresh_fails(monkeypatch):
-    agfs = _CopyAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    source_uri = "viking://resources/source.md"
-    target_uri = "viking://resources/target.md"
-    vector_uris = {source_uri}
-
-    async def move_vectors(old_uri, new_uri, *, recursive, ctx):
-        assert recursive is False
-        assert ctx == _ctx()
-        vector_uris.remove(old_uri)
-        vector_uris.add(new_uri)
-        agfs.events.append(("move-vectors", old_uri, new_uri))
-        return SimpleNamespace(scanned=1, written=1, deleted=1, restored=0, batches=1)
-
-    async def acl_enabled(account_id):
-        return account_id == "acct"
-
-    fs.acl_manager = SimpleNamespace(
-        is_enabled=acl_enabled,
-        refresh_context_subtree=AsyncMock(side_effect=RuntimeError("ACL refresh failed")),
-    )
-    monkeypatch.setattr(fs, "_update_vector_store_uris", move_vectors)
-
-    with pytest.raises(RuntimeError, match="ACL refresh failed"):
-        await fs.mv(source_uri, target_uri, ctx=_ctx())
-
-    assert vector_uris == {source_uri}
-    assert not agfs.target_exists
-    vector_restore_index = agfs.events.index(("move-vectors", target_uri, source_uri))
-    target_cleanup_index = next(
-        index
-        for index, event in enumerate(agfs.events)
-        if event[0:3] == ("rm", "/local/acct/resources/target.md", False)
-    )
-    assert vector_restore_index < target_cleanup_index
-
-
-@pytest.mark.asyncio
-async def test_mv_still_cleans_target_when_vector_restore_after_acl_refresh_fails(monkeypatch):
-    agfs = _CopyAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    source_uri = "viking://resources/source.md"
-    target_uri = "viking://resources/target.md"
-    vector_uris = {source_uri}
-
-    async def move_vectors(old_uri, new_uri, *, recursive, ctx):
-        assert recursive is False
-        assert ctx == _ctx()
-        if old_uri == target_uri:
-            raise RuntimeError("vector restore failed")
-        vector_uris.remove(old_uri)
-        vector_uris.add(new_uri)
-        return SimpleNamespace(scanned=1, written=1, deleted=1, restored=0, batches=1)
-
-    async def acl_enabled(account_id):
-        return account_id == "acct"
-
-    fs.acl_manager = SimpleNamespace(
-        is_enabled=acl_enabled,
-        refresh_context_subtree=AsyncMock(side_effect=RuntimeError("ACL refresh failed")),
-    )
-    monkeypatch.setattr(fs, "_update_vector_store_uris", move_vectors)
-
-    with pytest.raises(RuntimeError, match="ACL refresh failed"):
-        await fs.mv(source_uri, target_uri, ctx=_ctx())
-    assert vector_uris == {target_uri}
-    assert not agfs.target_exists
-    assert any(
-        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
-    )
 
 
 @pytest.mark.asyncio
@@ -755,32 +593,6 @@ async def test_persist_temp_tree_explicitly_enables_same_mount_fast_path(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_mv_returns_diagnostic_transfer_summary(monkeypatch):
-    agfs = _CopyAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(
-        fs,
-        "_update_vector_store_uris",
-        AsyncMock(
-            return_value=SimpleNamespace(scanned=2, written=2, deleted=2, restored=0, batches=1)
-        ),
-    )
-
-    result = await fs.mv(
-        "viking://resources/source.md",
-        "viking://resources/target.md",
-        ctx=_ctx(),
-    )
-
-    assert len(result["operation_id"]) == 32
-    assert result["operation"] == "move"
-    assert result["phase"] == "completed"
-    assert result["files_created"] == 1
-    assert result["files_deleted"] == 1
-    assert result["vectors"]["deleted"] == 2
-
-
-@pytest.mark.asyncio
 async def test_mv_preserves_original_error_when_vector_failure_cleanup_fails(monkeypatch):
     agfs = _CopyAGFS()
     fs = _viking_fs(monkeypatch, agfs)
@@ -801,59 +613,6 @@ async def test_mv_preserves_original_error_when_vector_failure_cleanup_fails(mon
     assert not any(
         event[0:3] == ("rm", "/local/acct/resources/source.md", False) for event in agfs.events
     )
-
-
-@pytest.mark.asyncio
-async def test_mv_does_not_copy_back_after_source_delete_failure(monkeypatch):
-    agfs = _MoveRollbackAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    with pytest.raises(RuntimeError, match="injected source delete failure"):
-        await fs.mv("viking://resources/source.md", "viking://resources/target.md", ctx=_ctx())
-    assert [event[1:3] for event in agfs.events if event[0] == "cp"] == [
-        ("/local/acct/resources/source.md", "/local/acct/resources/target.md")
-    ]
-    assert agfs.paths == {"/local/acct/resources/target.md"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("source", "target", "source_is_dir"),
-    [
-        ("viking://resources/source.md", "viking://resources/source.md", False),
-        ("viking://resources/source", "viking://resources/source/child", True),
-    ],
-)
-async def test_mv_rejects_same_path_and_source_subtree(monkeypatch, source, target, source_is_dir):
-    agfs = _CopyAGFS(source_is_dir=source_is_dir)
-    fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
-
-    with pytest.raises(InvalidArgumentError):
-        await fs.mv(source, target, ctx=_ctx())
-
-    assert not any(event[0] == "acquire-batch" for event in agfs.events)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-async def test_transfer_merges_directory_preserving_target_only_files(monkeypatch, operation):
-    agfs = _DirectoryCopyAGFS()
-    agfs.directories.update({"/local/acct/resources/target", "/local/acct/resources/target/empty"})
-    agfs.files.update(
-        {
-            "/local/acct/resources/target/data.bin": b"old",
-            "/local/acct/resources/target/only.txt": b"keep",
-        }
-    )
-    fs = _viking_fs(monkeypatch, agfs)
-    kwargs = {"recursive": True} if operation == "cp" else {}
-    await getattr(fs, operation)(
-        "viking://resources/source", "viking://resources/target", ctx=_ctx(), **kwargs
-    )
-    assert agfs.files["/local/acct/resources/target/data.bin"] == b"\x00\xff"
-    assert agfs.files["/local/acct/resources/target/only.txt"] == b"keep"
-    assert agfs.files["/local/acct/resources/target/.hidden"] == b"hidden"
-    assert ("/local/acct/resources/source" in agfs.directories) == (operation == "cp")
 
 
 @pytest.mark.asyncio
@@ -879,46 +638,52 @@ async def test_transfer_rejects_type_conflicts_before_copy(monkeypatch, operatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-async def test_transfer_rejects_target_ancestor(monkeypatch, operation):
-    fs = _viking_fs(monkeypatch, _DirectoryCopyAGFS())
-    kwargs = {"recursive": True} if operation == "cp" else {}
-    with pytest.raises(InvalidArgumentError):
-        await getattr(fs, operation)(
-            "viking://resources/source", "viking://resources", ctx=_ctx(), **kwargs
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-@pytest.mark.parametrize("child", ["data.bin", "tasks/private.txt", "_system/private.txt"])
-async def test_transfer_checks_child_target_write_permission_before_copy(
-    monkeypatch, operation, child
-):
+@pytest.mark.parametrize("permission", ["source_denied", "target_write", "target_manage"])
+async def test_cp_requires_readable_source_and_manage_for_directory_merge(permission):
+    source, target = "viking://resources/source", "viking://resources/target"
     agfs = _DirectoryCopyAGFS()
     agfs.directories.add("/local/acct/resources/target")
-    if "/" in child:
-        name = child.split("/")[0]
-        agfs.directories.update(
-            {f"/local/acct/resources/source/{name}", f"/local/acct/resources/target/{name}"}
-        )
-    agfs.files[f"/local/acct/resources/source/{child}"] = b"new"
-    agfs.files[f"/local/acct/resources/target/{child}"] = b"protected"
-    fs = _viking_fs(monkeypatch, agfs)
-
-    async def ensure_access(uri, ctx, *, action=AclAction.READ):
-        if uri == f"viking://resources/target/{child}" and action == AclAction.WRITE:
-            raise PermissionDeniedError("protected child", resource=uri)
-
-    monkeypatch.setattr(fs, "_ensure_access", ensure_access)
+    agfs.directories.add("/local/acct/resources/source/nested")
+    agfs.files["/local/acct/resources/source/nested/secret.md"] = b"nested"
+    agfs.files["/local/acct/resources/target/data.bin"] = b"old"
+    agfs.files["/local/acct/resources/target/only.txt"] = b"keep"
+    if permission == "source_denied":
+        agfs.files["/local/acct/resources/target/nested"] = b"type conflict"
+    target_grant = "3:user:alice" if permission == "target_write" else "7:user:alice"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("a-source", source, acl_mode="restricted", acl_direct_grants=["1:user:alice"]),
+            _record("b-target", target, acl_mode="restricted", acl_direct_grants=[target_grant]),
+            _record(
+                "c-secret",
+                f"{source}/nested/secret.md",
+                acl_mode="restricted",
+                acl_direct_grants=[] if permission == "source_denied" else ["1:user:alice"],
+            ),
+            # Neither absent files nor an older index level may block an otherwise readable copy.
+            _record(
+                "d-orphan", f"{source}/missing.md", acl_mode="restricted", acl_direct_grants=[]
+            ),
+            _record("e-stale-source", source, level=1, acl_mode="restricted", acl_direct_grants=[]),
+        ]
+    )
+    fs = VikingFS(agfs=SimpleNamespace(), vector_store=backend, acl_manager=backend.acl_manager)
+    fs._async_agfs = agfs
     before = dict(agfs.files)
-    kwargs = {"recursive": True} if operation == "cp" else {}
-    with pytest.raises(PermissionDeniedError, match="protected child"):
-        await getattr(fs, operation)(
-            "viking://resources/source", "viking://resources/target", ctx=_ctx(), **kwargs
+    ctx = _user_ctx()
+    if permission == "target_manage":
+        await fs.cp(source, target, recursive=True, ctx=ctx)
+        assert agfs.files["/local/acct/resources/target/data.bin"] == b"\x00\xff"
+        assert agfs.files["/local/acct/resources/target/only.txt"] == b"keep"
+        assert all(
+            agfs.files[path] == content for path, content in before.items() if "/source/" in path
         )
-    assert agfs.files == before
-    assert not any(event[0] in {"cp", "rm"} for event in agfs.events)
+        assert not ctx.bypass_acl
+    else:
+        with pytest.raises(PermissionDeniedError):
+            await fs.cp(source, target, recursive=True, ctx=ctx)
+        assert agfs.files == before
+        assert not any(event[0] == "cp" for event in agfs.events)
 
 
 @pytest.mark.asyncio

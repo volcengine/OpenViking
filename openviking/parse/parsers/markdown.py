@@ -7,13 +7,13 @@ This parser implements the new simplified architecture:
 - Parse structure and create directory structure directly in VikingFS
 - No LLM calls during parsing (semantic generation moved to SemanticQueue)
 - Support mixed directory structure (files + subdirectories)
-- Small sections (< 800 tokens) are merged with adjacent sections
+- Small sections (< 512 characters) are merged with adjacent sections
 
 The parser handles scenarios:
-1. Small files (< 4000 tokens) → save as single file with original name
+1. Small files (<= 2000 characters) → save as single file with original name
 2. Large files with sections → split by sections with merge logic
 3. Sections with subsections → section becomes directory
-4. Small sections (< 800 tokens) → merged with adjacent sections
+4. Small sections (< 512 characters) → merged with adjacent sections
 5. Oversized sections without subsections → split by paragraphs
 """
 
@@ -25,7 +25,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
+import yaml
+
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.image_validation import is_valid_image
@@ -178,11 +182,7 @@ class MarkdownParser(BaseParser):
     """
 
     # Configuration constants
-    DEFAULT_MAX_SECTION_SIZE = 2048  # Maximum tokens per section
-    DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
-    # Worst-case token density used by _estimate_token_count (CJK ~0.7 tok/char).
-    # Used to bound force-split chunk size so it also respects the token budget.
-    MAX_TOKENS_PER_CHAR = 0.7
+    DEFAULT_MIN_SECTION_CHARS = 512  # Minimum chars to create a separate section
     TABLE_HEADER_REPEAT_MAX_CHARS = 1024
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
@@ -215,14 +215,15 @@ class MarkdownParser(BaseParser):
         self.extract_frontmatter = extract_frontmatter
 
         # Compile regex patterns for better performance
-        self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+        self._heading_pattern = re.compile(r"^(#{1,6})[ \t]+(.+)$", re.MULTILINE)
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
         self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
-        self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+        # Optional CR so LF and Windows CRLF documents share the same delimiters.
+        self._frontmatter_pattern = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
         self._html_comment_pattern = re.compile(r"<!--.*?-->", re.DOTALL)
         self._indented_code_pattern = re.compile(r"^(?:    |\t).+$", re.MULTILINE)
 
@@ -378,7 +379,7 @@ class MarkdownParser(BaseParser):
             return result
 
         except Exception as e:
-            logger.error(f"[MarkdownParser] Parse failed: {e}", exc_info=True)
+            logger.debug("Markdown parsing failed error_type=%s", type(e).__name__)
             await writer.cleanup()
             raise
 
@@ -417,13 +418,12 @@ class MarkdownParser(BaseParser):
 
         # Preserve the original uploaded filename when available instead of the temp
         # upload name (e.g. upload_<uuid>.txt).
-        doc_title = meta.get("frontmatter", {}).get(
-            "title",
-            explicit_name
-            if explicit_name
-            else _smart_stem(source_path)
-            if source_path
-            else "Document",
+        fallback_title = explicit_name or (_smart_stem(source_path) if source_path else "Document")
+        frontmatter_title = meta.get("frontmatter", {}).get("title")
+        doc_title = (
+            frontmatter_title
+            if isinstance(frontmatter_title, str) and frontmatter_title.strip()
+            else fallback_title
         )
         doc_name = self._sanitize_for_path(doc_title)
         # Preserve code source filenames as the temp document directory.
@@ -522,13 +522,20 @@ class MarkdownParser(BaseParser):
 
         total_s = time.perf_counter() - started
         if _env_bool("OPENVIKING_MARKDOWN_APPLY_PROFILE", False):
-            logger.info(
-                f"[MarkdownApplyProfile] total={total_s:.3f}s mkdir={mkdir_s:.3f}s "
-                f"write={write_s:.3f}s images={images_s:.3f}s ops={len(layout.ops)} "
-                f"mkdir_ops={len(mkdir_ops)} mkdir_count={mkdir_count} "
-                f"write_ops={len(write_ops)} write_chars={write_chars} "
-                f"rewrite_enabled={rewrite_enabled} has_image_refs={has_image_refs} "
-                f"root={layout.root_dir}"
+            logger.debug(
+                "Markdown layout applied total=%.3fs mkdir=%.3fs write=%.3fs images=%.3fs ops=%d mkdir_ops=%d mkdir_count=%d write_ops=%d write_chars=%d rewrite_enabled=%s has_image_refs=%s root=%s",
+                total_s,
+                mkdir_s,
+                write_s,
+                images_s,
+                len(layout.ops),
+                len(mkdir_ops),
+                mkdir_count,
+                len(write_ops),
+                write_chars,
+                rewrite_enabled,
+                has_image_refs,
+                safe_path_for_log(str(layout.root_dir)),
             )
 
     # ========== Helper Methods ==========
@@ -602,17 +609,19 @@ class MarkdownParser(BaseParser):
             return content, None
 
         frontmatter_text = match.group(1)
-        content_without_frontmatter = content[match.end() :]
 
-        # Parse YAML (simple key: value parsing)
-        frontmatter = {}
-        for line in frontmatter_text.split("\n"):
-            line = line.strip()
-            if ":" in line:
-                key, value = line.split(":", 1)
-                frontmatter[key.strip()] = value.strip()
+        try:
+            # Keep scalar values as strings, matching the previous parser and keeping
+            # ParseResult metadata JSON-serializable, while honoring YAML nesting.
+            frontmatter = yaml.load(frontmatter_text, Loader=yaml.BaseLoader)
+        except yaml.YAMLError:
+            logger.info("Malformed YAML frontmatter ignored degraded=true")
+            return content, None
 
-        return content_without_frontmatter, frontmatter
+        if not isinstance(frontmatter, dict):
+            return content, None
+
+        return content[match.end() :], frontmatter
 
     def _find_headings(self, content: str) -> List[Tuple[int, int, str, int]]:
         """
@@ -655,92 +664,53 @@ class MarkdownParser(BaseParser):
 
             level = len(match.group(1))
             title = match.group(2).strip()
+            if not title:
+                continue
             headings.append((match.start(), match.end(), title, level))
 
         return headings
 
     def _smart_split_content(self, content: str, max_size: int) -> List[str]:
-        """
-        Split oversized content by paragraphs, force split single oversized paragraphs.
-
-        Targets both the token estimate limit (max_size) and the character limit
-        (self.config.max_section_chars). A single oversized Markdown table row is
-        kept intact so downstream semantic and embedding stages can apply their own
-        input limits without destroying the source table structure.
-
-        Args:
-            content: Content to split
-            max_size: Maximum size per part (in tokens)
-
-        Returns:
-            List of content parts
-        """
-        max_chars = self.config.max_section_chars
-        if max_chars <= 0:
-            # Char limit disabled (misconfigured); fall back to token-only splitting
-            max_chars = len(content) + 1
+        """Split by character budget, preserving an indivisible Markdown table row."""
+        max_chars = min(max_size, self.config.max_section_chars)
         paragraphs = content.split("\n\n")
         parts = []
         current = ""
-        current_tokens = 0
 
         for para in paragraphs:
-            para_tokens = self._estimate_token_count(para)
-            para_len = len(para)
-
-            # Single paragraph too long (by tokens or chars): force split by characters.
-            # If the already accumulated prefix is very short, merge it into this
-            # oversized paragraph first so we do not create a low-value tiny chunk
-            # like `section_1.md` that only contains the heading/introduction.
-            if para_tokens > max_size or para_len > max_chars:
+            if len(para) > max_chars:
                 if current:
-                    if current_tokens < self.DEFAULT_MIN_SECTION_TOKENS:
+                    if len(current) < self.DEFAULT_MIN_SECTION_CHARS:
                         para = current + "\n\n" + para
                     else:
                         parts.append(current.strip())
                     current = ""
-                    current_tokens = 0
-                # Step by the smaller of the char limit and the token-safe
-                # width, so a paragraph that is under max_chars but over
-                # max_size tokens (e.g. dense CJK text) is still split enough
-                # to keep every chunk within the token budget.
-                token_safe_chars = max(1, int(max_size / self.MAX_TOKENS_PER_CHAR))
-                step = min(max_chars, token_safe_chars)
-                table_parts = self._split_markdown_table_by_rows(
-                    para,
-                    max_size=max_size,
-                    max_chars=step,
-                )
+                table_parts = self._split_markdown_table_by_rows(para, max_chars=max_chars)
                 if table_parts:
                     parts.extend(table_parts)
                 else:
-                    for i in range(0, len(para), step):
-                        parts.append(para[i : i + step].strip())
-            elif (
-                current_tokens + para_tokens > max_size or len(current) + len(para) + 2 > max_chars
-            ) and current:
+                    parts.extend(
+                        para[i : i + max_chars].strip() for i in range(0, len(para), max_chars)
+                    )
+            elif current and len(current) + len(para) + 2 > max_chars:
                 parts.append(current.strip())
                 current = para
-                current_tokens = para_tokens
             else:
                 current = current + "\n\n" + para if current else para
-                current_tokens += para_tokens
 
         if current.strip():
-            # Avoid emitting a tiny trailing chunk when all earlier content has
-            # already been split out (for example, a huge paragraph followed by
-            # a short "no data" tail). Fold the tail back into the previous part.
-            if parts and current_tokens < self.DEFAULT_MIN_SECTION_TOKENS:
-                parts[-1] = f"{parts[-1]}\n\n{current.strip()}".strip()
+            tail = current.strip()
+            if parts and len(parts[-1]) + 2 + len(tail) <= max_chars:
+                parts[-1] = f"{parts[-1]}\n\n{tail}"
             else:
-                parts.append(current.strip())
+                parts.append(tail)
 
         return parts if parts else [content]
 
     @staticmethod
     def _is_markdown_table_row(line: str) -> bool:
         stripped = line.strip()
-        return stripped.startswith("|") and stripped.endswith("|") and "|" in stripped[1:-1]
+        return len(stripped) >= 2 and stripped.startswith("|") and stripped.endswith("|")
 
     @staticmethod
     def _is_markdown_table_separator(line: str) -> bool:
@@ -754,7 +724,6 @@ class MarkdownParser(BaseParser):
         self,
         content: str,
         *,
-        max_size: int,
         max_chars: int,
     ) -> Optional[List[str]]:
         """Split a single oversized Markdown table without cutting rows.
@@ -790,40 +759,35 @@ class MarkdownParser(BaseParser):
         rows = lines[table_start + 2 : table_end]
         header_text = "\n".join(header)
         repeat_header = (
-            len(header_text) <= self.TABLE_HEADER_REPEAT_MAX_CHARS
-            and len(header_text) < max_chars
-            and self._estimate_token_count(header_text) < max_size
+            len(header_text) <= self.TABLE_HEADER_REPEAT_MAX_CHARS and len(header_text) < max_chars
         )
 
         parts: List[str] = []
         current_lines: List[str] = []
-        current_data_rows = 0
 
         def flush() -> None:
-            nonlocal current_lines, current_data_rows
+            nonlocal current_lines
             if current_lines:
                 parts.append("\n".join(current_lines).strip())
                 current_lines = []
-                current_data_rows = 0
 
         if prefix:
-            current_lines.extend([prefix, ""])
-        current_lines.extend(header)
+            parts.extend(prefix[i : i + max_chars] for i in range(0, len(prefix), max_chars))
 
-        for row in rows:
-            candidate_lines = [*current_lines, row]
-            candidate = "\n".join(candidate_lines)
-            if (
-                current_lines
-                and (len(candidate) > max_chars or self._estimate_token_count(candidate) > max_size)
-                and current_data_rows > 0
-            ):
+        # Keep the header and separator together until the first data row is handled.
+        current_lines.extend(header)
+        for index, row in enumerate(rows):
+            candidate = "\n".join([*current_lines, row])
+            if current_lines and len(candidate) > max_chars:
+                if index == 0 and len(row) > max_chars:
+                    current_lines = [*header, row]
+                    continue
                 flush()
-                current_lines = [*header, row] if repeat_header else [row]
-                current_data_rows = 1
-            else:
-                current_lines.append(row)
-                current_data_rows += 1
+                if len(row) > max_chars or (
+                    repeat_header and len(header_text) + 1 + len(row) <= max_chars
+                ):
+                    current_lines.extend(header)
+            current_lines.append(row)
 
         flush()
         return parts or None
@@ -865,6 +829,8 @@ class MarkdownParser(BaseParser):
 
         # mapping: rel_md_path -> {original_path_str -> unique_filename}
         mappings: Dict[str, Dict[str, str]] = {}
+        names_by_directory: Dict[str, set[str]] = {}
+        skipped_images = 0
 
         for md_uri, content in markdown_files:
             # Collect all image references in this markdown file: markdown
@@ -888,7 +854,10 @@ class MarkdownParser(BaseParser):
 
                 resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
                 if resolved_path is None:
-                    logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
+                    skipped_images += 1
+                    logger.debug(
+                        "Image path unresolved; skipping path=%s", safe_path_for_log(path_str)
+                    )
                     continue
 
                 # Skip duplicates within the same markdown file
@@ -905,12 +874,16 @@ class MarkdownParser(BaseParser):
             md_dir = md_uri.rsplit("/", 1)[0]
 
             # Copy each local image next to the markdown file, deduplicating names
-            used_names: set[str] = set()
+            used_names = names_by_directory.setdefault(md_dir, set())
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
             for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
-                        logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
+                        skipped_images += 1
+                        logger.debug(
+                            "Image file missing; skipping path=%s",
+                            safe_path_for_log(str(resolved_path)),
+                        )
                         continue
 
                     # Read image bytes
@@ -920,6 +893,7 @@ class MarkdownParser(BaseParser):
                     if not await asyncio.to_thread(
                         self._is_valid_image, image_bytes, resolved_path
                     ):
+                        skipped_images += 1
                         continue
 
                     # Get filename and deduplicate
@@ -935,13 +909,21 @@ class MarkdownParser(BaseParser):
                     file_mappings[origin_link] = unique_filename
 
                 except Exception as e:
-                    logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
+                    skipped_images += 1
+                    logger.debug(
+                        "Image ingestion failed; skipping path=%s error_type=%s",
+                        safe_path_for_log(str(resolved_path)),
+                        type(e).__name__,
+                    )
 
             if file_mappings:
                 rel_md_path = (
                     md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
                 )
                 mappings[rel_md_path] = file_mappings
+
+        if skipped_images:
+            logger.info("Local image ingestion incomplete skipped=%d degraded=true", skipped_images)
 
         # Write a single mapping file at the root directory for rewrite_image_uris
         if mappings:
@@ -975,11 +957,11 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            path = Path(unquote(self._unwrap_link_destination(path_str), errors="strict"))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
-                logger.warning(f"[MarkdownParser] Rejected absolute image path: {path_str}")
+                logger.debug("Absolute image path rejected path=%s", safe_path_for_log(path_str))
                 return None
 
             # Build the list of allowed roots to confine resolution to.
@@ -1017,8 +999,9 @@ class MarkdownParser(BaseParser):
                 try:
                     candidate.relative_to(root.resolve())
                 except ValueError:
-                    logger.warning(
-                        f"[MarkdownParser] Rejected image path outside base dir: {path_str}"
+                    logger.debug(
+                        "Image path outside base directory rejected path=%s",
+                        safe_path_for_log(path_str),
                     )
                     continue
 
@@ -1027,7 +1010,7 @@ class MarkdownParser(BaseParser):
 
             return None
         except Exception:
-            logger.warning(f"[MarkdownParser] Cannot resolve image path: {path_str}")
+            logger.debug("Image path unresolved path=%s", safe_path_for_log(path_str))
             return None
 
     def _is_valid_image(self, image_bytes: bytes, source_path: Path) -> bool:
@@ -1149,6 +1132,8 @@ class MarkdownParser(BaseParser):
             return link
 
         m = _MD_FRAGMENT_RE.match(raw)
+        if m is None:
+            return link
         path_part = m.group(1)
         suffix = m.group(2) or ""
         if not path_part:
@@ -1248,7 +1233,7 @@ class MarkdownParser(BaseParser):
         the same depth adjustment as document links so they stay valid after the
         document moves into its ingest directory.
         """
-        from openviking.parse.image_rewrite import HTML_IMG_PATTERN
+        from openviking.parse.image_rewrite import HTML_IMG_PATTERN, _protected_ranges
 
         src_dir = os.path.dirname(os.path.abspath(rewrite_ctx.source_path))
         import_root_abs = os.path.abspath(rewrite_ctx.import_root)
@@ -1259,9 +1244,12 @@ class MarkdownParser(BaseParser):
 
         out: List[str] = []
         last = 0
+        protected = _protected_ranges(content)
         for match in _MD_LINK_RE.finditer(content):
-            out.append(content[last : match.start()])
             bang, text, link = match.group(1), match.group(2), match.group(3)
+            if not bang and any(start <= match.start() < end for start, end in protected):
+                continue
+            out.append(content[last : match.start()])
             if bang and await self._ingest_will_handle_image(link, rewrite_ctx):
                 new_link = link
             else:
@@ -1349,7 +1337,11 @@ class MarkdownParser(BaseParser):
                 out[rel] = op.content
             return out
         except Exception as exc:
-            logger.debug(f"[_probe_split_layout] failed for {target_path}: {exc}")
+            logger.info(
+                "Split layout probe failed; using fallback layout target=%s error_type=%s",
+                safe_uri_for_log(target_path),
+                type(exc).__name__,
+            )
             return None
 
     def _section_subpath(self, uri: str, root_dir: str) -> str:
@@ -1415,12 +1407,9 @@ class MarkdownParser(BaseParser):
             source_path: Source file path for naming
             split_content: Whether large Markdown may be split into multiple files
         """
-        max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
+        max_size = self.config.max_section_chars
         max_chars = self.config.max_section_chars
-        min_size = self.DEFAULT_MIN_SECTION_TOKENS
-
-        # Estimate document size
-        estimated_tokens = self._estimate_token_count(content)
+        min_size = self.DEFAULT_MIN_SECTION_CHARS
 
         # Create root directory
         ops.append(_LayoutOp("mkdir", root_dir))
@@ -1433,11 +1422,13 @@ class MarkdownParser(BaseParser):
         if not split_content:
             file_path = f"{root_dir}/{doc_name}.md"
             ops.append(_LayoutOp("write", file_path, content))
-            logger.debug(f"[MarkdownParser] No-split document planned as: {file_path}")
+            logger.debug(
+                "Document layout planned path=%s split=false", safe_path_for_log(str(file_path))
+            )
             return
 
-        # Small document: save as single file (check both token and char limits)
-        if estimated_tokens <= max_size and len(content) <= max_chars:
+        # Small document: save as single file (character budget)
+        if len(content) <= max_chars:
             file_path = f"{root_dir}/{doc_name}.md"
             ops.append(_LayoutOp("write", file_path, content))
             return
@@ -1449,25 +1440,26 @@ class MarkdownParser(BaseParser):
                 ops.append(_LayoutOp("write", f"{root_dir}/{doc_name}_{part_idx}.md", part))
             return
 
-        # Build virtual section list (pre-heading content as first virtual section)
+        # Build virtual section list (content before the first top-level heading,
+        # including any lower-level headings there, is the first virtual section)
         sections = []
-        first_heading_start = headings[0][0]
+        min_level = min(h[3] for h in headings)
+        first_heading_start = next(h[0] for h in headings if h[3] == min_level)
         if first_heading_start > 0:
             pre_content = content[:first_heading_start].strip()
             if pre_content:
-                pre_tokens = self._estimate_token_count(pre_content)
+                pre_chars = len(pre_content)
                 sections.append(
                     {
                         "name": doc_name,
                         "content": pre_content,
-                        "tokens": pre_tokens,
+                        "chars": pre_chars,
                         "has_children": False,
                         "heading_idx": None,
                     }
                 )
 
         # Add real sections (top-level only for this pass)
-        min_level = min(h[3] for h in headings)
         i = 0
         while i < len(headings):
             if headings[i][3] == min_level:
@@ -1521,24 +1513,24 @@ class MarkdownParser(BaseParser):
                 buffered_section = None
 
         for sec in expanded:
-            name, tokens, content_text = sec["name"], sec["tokens"], sec["content"]
+            name, chars, content_text = sec["name"], sec["chars"], sec["content"]
             has_children = sec["has_children"]
 
             # Handle small sections
-            if tokens < min_size:
-                if pending and sum(t for _, _, t in pending) + tokens > max_size:
+            if chars < min_size:
+                if pending and sum(t for _, _, t in pending) + chars > max_size:
                     await flush_buffered()
                     await self._save_merged(ops, parent_dir, pending)
                     pending = []
-                pending.append((name, content_text, tokens))
+                pending.append((name, content_text, chars))
                 continue
 
             if pending:
                 await flush_buffered()
 
                 # Try merge with pending
-                if self._can_merge(pending, tokens, max_size, has_children):
-                    pending.append((name, content_text, tokens))
+                if self._can_merge(pending, chars, max_size, has_children):
+                    pending.append((name, content_text, chars))
                     await self._save_merged(ops, parent_dir, pending)
                     pending = []
                     continue
@@ -1570,13 +1562,13 @@ class MarkdownParser(BaseParser):
 
         await flush_buffered()
 
-    def _can_merge(self, pending: List, tokens: int, max_size: int, has_children: bool) -> bool:
+    def _can_merge(self, pending: List, chars: int, max_size: int, has_children: bool) -> bool:
         """Check if section can merge with pending."""
-        return sum(t for _, _, t in pending) + tokens <= max_size and not has_children
+        return sum(t for _, _, t in pending) + chars <= max_size and not has_children
 
     def _should_merge_pending_into_next(self, pending: List[Tuple[str, str, int]]) -> bool:
         """Prefer folding a single tiny pending section into the next section."""
-        return len(pending) == 1 and pending[0][2] <= self.DEFAULT_MIN_SECTION_TOKENS
+        return len(pending) == 1 and pending[0][2] <= self.DEFAULT_MIN_SECTION_CHARS
 
     def _merge_pending_into_next_section(
         self, pending: List[Tuple[str, str, int]], section: Dict[str, Any]
@@ -1585,7 +1577,7 @@ class MarkdownParser(BaseParser):
         _, pending_content, _ = pending[0]
         merged = dict(section)
         merged["content"] = f"{pending_content}\n\n{section['content']}".strip()
-        merged["tokens"] = self._estimate_token_count(merged["content"])
+        merged["chars"] = len(merged["content"])
 
         if merged.get("has_children"):
             direct_content = section.get("direct_content", "").strip()
@@ -1604,7 +1596,7 @@ class MarkdownParser(BaseParser):
         _, pending_content, _ = pending[0]
         merged = dict(section)
         merged["content"] = f"{section['content']}\n\n{pending_content}".strip()
-        merged["tokens"] = self._estimate_token_count(merged["content"])
+        merged["chars"] = len(merged["content"])
 
         if merged.get("has_children"):
             direct_content = section.get("direct_content", "").strip()
@@ -1627,11 +1619,11 @@ class MarkdownParser(BaseParser):
         min_size: int,
     ) -> None:
         """Plan a single section (file or directory) into ``ops``."""
-        name, tokens, content_text = section["name"], section["tokens"], section["content"]
+        name, content_text = section["name"], section["content"]
         has_children = section["has_children"]
 
-        # Fits in one file (check both token and char limits)
-        if tokens <= max_size and len(content_text) <= self.config.max_section_chars:
+        # Fits in one file (character budget)
+        if len(content_text) <= max_size:
             ops.append(_LayoutOp("write", f"{parent_dir}/{name}.md", content_text))
             return
 
@@ -1664,7 +1656,7 @@ class MarkdownParser(BaseParser):
                 {
                     "name": name,
                     "content": section["direct_content"],
-                    "tokens": self._estimate_token_count(section["direct_content"]),
+                    "chars": len(section["direct_content"]),
                     "has_children": False,
                     "heading_idx": None,
                 }
@@ -1735,7 +1727,7 @@ class MarkdownParser(BaseParser):
         content = "\n\n".join(c for _, c, _ in sections)
         max_chars = self.config.max_section_chars
         if len(content) > max_chars:
-            max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
+            max_size = self.config.max_section_chars
             parts = self._smart_split_content(content, max_size)
             for i, part in enumerate(parts, 1):
                 ops.append(_LayoutOp("write", f"{parent_dir}/{name}_{i}.md", part))
@@ -1749,7 +1741,7 @@ class MarkdownParser(BaseParser):
         idx: int,
     ) -> Dict[str, Any]:
         """
-        Get section info including content, tokens, children info.
+        Get section info including content, chars, children info.
 
         Args:
             content: Full markdown content
@@ -1788,7 +1780,7 @@ class MarkdownParser(BaseParser):
         heading_prefix = "#" * level
         section_start = end_pos  # After heading line
         full_content = f"{heading_prefix} {title}\n\n{content[section_start:section_end].strip()}"
-        full_tokens = self._estimate_token_count(full_content)
+        full_chars = len(full_content)
 
         direct_content = ""
         if has_children:
@@ -1799,17 +1791,9 @@ class MarkdownParser(BaseParser):
         return {
             "name": section_name,
             "content": full_content,
-            "tokens": full_tokens,
+            "chars": full_chars,
             "has_children": has_children,
             "heading_idx": idx,
             "direct_content": direct_content,
             "child_indices": child_indices,
         }
-
-    def _estimate_token_count(self, content: str) -> int:
-        # CJK characters (Chinese, Japanese, Korean): ~0.7 token per char
-        # Other characters (including Latin, Arabic, Cyrillic, etc.): ~0.3 token per char
-        # This provides better coverage for multilingual documents
-        cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
-        other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
-        return int(cjk_chars * self.MAX_TOKENS_PER_CHAR + other_chars * 0.3)

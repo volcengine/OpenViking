@@ -36,15 +36,27 @@ async def test_observer_queue_structured(client: httpx.AsyncClient):
     assert isinstance(result["status"]["summary"], dict)
 
 
-async def test_observer_vikingdb(client: httpx.AsyncClient):
-    """GET /api/v1/observer/vikingdb should return VikingDB status."""
-    resp = await client.get("/api/v1/observer/vikingdb")
+async def test_observer_vikingdb(client: httpx.AsyncClient, service):
+    """VikingDB status should preserve table output and expose loaded index semantics."""
+    table_resp = await client.get("/api/v1/observer/vikingdb")
+    assert table_resp.status_code == 200
+    assert isinstance(table_resp.json()["result"]["status"], str)
+
+    manager = service.vikingdb_manager
+    assert manager is not None
+    backend = await manager.get_account_backend("default")
+    backend._distance_metric = "l2"
+
+    resp = await client.get("/api/v1/observer/vikingdb", params={"format": "json"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     result = body["result"]
-    assert "name" in result
-    assert "is_healthy" in result
+    assert result["name"] == "vikingdb"
+    assert result["is_healthy"] is True
+    assert result["status"]["backend"] == "local"
+    assert result["status"]["distance_metric"] == "cosine"
+    assert result["status"]["pure_dense_score_scale"] == "cosine_affine_0_1"
 
 
 async def test_observer_models(client: httpx.AsyncClient):

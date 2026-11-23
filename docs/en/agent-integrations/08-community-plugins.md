@@ -20,15 +20,8 @@ ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. T
 Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness zcode
-```
-
-Use the TOS mirror where GitHub is unavailable:
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness zcode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
 The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, and merges hooks and MCP configuration into `~/.zcode/cli/config.json`.
@@ -43,9 +36,11 @@ After restarting ZCode, verify that:
 | Hooks not firing | Hook configuration is disabled or stale | Re-run the installer and restart ZCode |
 | Recall returns nothing | OpenViking is unavailable or has not extracted memories yet | Check `curl http://127.0.0.1:1933/health` and wait for extraction |
 | MCP tools not appearing | The MCP proxy failed to start | Check the absolute `mcp.servers.openviking` command in `~/.zcode/cli/config.json` |
-| Duplicate captures | An older installation left duplicate hook entries | Run `install.sh --harness zcode --uninstall`, then reinstall |
+| Duplicate captures | An older installation left duplicate hook entries | Run `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness zcode`, then reinstall |
 
 Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
+
+Once installed, start a new ZCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
 ## Kimi Code memory integration
 
@@ -65,25 +60,57 @@ transcript decoding, output formatting, and commit policy:
 Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness kimicode
-```
-
-Use the TOS mirror where GitHub is unavailable:
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness kimicode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
 The installer assembles a self-contained runtime under
 `$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
 `~/.kimi-code/`), then updates only the `openviking-memory` entry in
 `plugins/installed.json`. Existing plugin records are preserved. Re-run the
-same command to upgrade, or add `--uninstall` to remove only this plugin.
+same command to upgrade. To remove only this plugin:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
 
 The verified host contract and version are recorded in
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
+
+Once installed, start a new Kimi Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
+## Antigravity memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Antigravity integration serves the Antigravity desktop app and the `agy` CLI, which load the same plugins from `~/.gemini/config/plugins/`:
+
+- **SessionStart** injects the user profile.
+- **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
+- **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
+
+Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
+```
+
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The installer does not add an MCP server; add the OpenViking MCP server in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
+
+Restart the Antigravity app or start a new `agy` session, then verify that:
+
+- the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
+- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`.
+
+To uninstall:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
+```
 
 ## AstrBot plugin
 
@@ -95,11 +122,13 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 
 **Install**: In AstrBot WebUI, search **OpenViking Memory** in the Plugin Marketplace; or install from URL: `https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+The current plugin requires AstrBot 4.23.1+ and a compatible OpenViking server. Use a User key for `global`; `venue` needs an Admin key to create users. Check the linked plugin README before migrating an older configuration.
+
 **Key features**:
 
 - Auto-recall and auto-capture via hooks — the model doesn't need to invoke tools
-- Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
-- Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
+- `self_scope=global` shares one bot identity; `venue` creates a separate user per group/DM. People are represented as peers. Legacy `isolation_mode` values are mapped to these scopes.
+- Automatic commit by message count, token threshold, or idle timeout
 - Backfills platform message history on first venue encounter
 
 ## Open WebUI tool server

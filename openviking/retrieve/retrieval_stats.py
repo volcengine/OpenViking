@@ -157,11 +157,6 @@ class RetrievalStatsCollector:
 
             return copy.deepcopy(self._stats)
 
-    def reset(self) -> None:
-        """Reset all counters (useful for testing)."""
-        with self._lock:
-            self._stats = RetrievalStats()
-
 
 # Module-level singleton.
 _collector: RetrievalStatsCollector | None = None
