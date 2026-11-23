@@ -174,31 +174,6 @@ class _DirectoryCopyAGFS(_CopyAGFS):
         }
 
 
-class _ConcurrentDirectoryCopyAGFS(_DirectoryCopyAGFS):
-    def __init__(self, file_count: int = 10):
-        super().__init__()
-        self.directories = {
-            "/local/acct/resources",
-            "/local/acct/resources/source",
-        }
-        self.files = {
-            f"/local/acct/resources/source/{index}.bin": bytes([index])
-            for index in range(file_count)
-        }
-        self.active_copies = 0
-        self.peak_copies = 0
-
-    async def cp(self, source, target, recursive=False, fs_ctx=None):
-        self.events.append(("cp", source, target, recursive, fs_ctx))
-        self.active_copies += 1
-        self.peak_copies = max(self.peak_copies, self.active_copies)
-        try:
-            await asyncio.sleep(0.01)
-            self.files[target] = self.files[source]
-        finally:
-            self.active_copies -= 1
-
-
 class _DirectoryMoveRollbackAGFS(_DirectoryCopyAGFS):
     def __init__(self):
         super().__init__()
@@ -421,7 +396,23 @@ async def test_directory_transfer_lists_each_source_directory_once(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_cp_directory_copies_files_with_fixed_bounded_concurrency(monkeypatch):
-    agfs = _ConcurrentDirectoryCopyAGFS(file_count=10)
+    agfs = _DirectoryCopyAGFS()
+    agfs.directories.discard("/local/acct/resources/source/empty")
+    agfs.files = {f"/local/acct/resources/source/{i}.bin": bytes([i]) for i in range(10)}
+    copy = agfs._copy_file
+    active = peak = 0
+
+    async def tracked_copy(*args, **kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0)
+            return await copy(*args, **kwargs)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(agfs, "_copy_file", tracked_copy)
     fs = _viking_fs(monkeypatch, agfs)
     monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
 
@@ -432,7 +423,7 @@ async def test_cp_directory_copies_files_with_fixed_bounded_concurrency(monkeypa
         ctx=_ctx(),
     )
 
-    assert agfs.peak_copies == 8
+    assert peak == 8
     assert result["files_created"] == 11
     copy_events = [event for event in agfs.events if event[0] == "cp"]
     assert len(copy_events) == 10

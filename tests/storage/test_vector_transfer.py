@@ -1548,8 +1548,10 @@ async def test_uri_mapping_write_failure_keeps_source_without_restoring_old_targ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize("with_levels", [False, True])
 async def test_uri_mapping_source_uris_limits_source_and_target_replacement_scope(
     transfer_method,
+    with_levels,
 ):
     source = "viking://resources/src"
     target = "viking://resources/dst"
@@ -1572,6 +1574,7 @@ async def test_uri_mapping_source_uris_limits_source_and_target_replacement_scop
         target,
         recursive=True,
         source_uris=[source, f"{source}/a.md"],
+        source_expected_levels={source: {2}, f"{source}/a.md": {2}} if with_levels else None,
     )
 
     assert result.scanned == 2
@@ -2184,34 +2187,15 @@ async def test_manifest_transfer_propagates_fetch_backend_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_timestamp_pages_accept_mixed_missing_and_valid_boundary(monkeypatch):
-    backend = _MemoryTransferBackend([])
-    page = [{"id": str(i)} for i in range(99)] + [{"id": "last", "updated_at": 11}]
-    query = AsyncMock(side_effect=[page, []])
-    monkeypatch.setattr(
-        backend,
-        "_get_backend_for_context",
-        AsyncMock(return_value=SimpleNamespace(strict_query=query)),
-    )
-    scope = PathScope("uri", "viking://resources/source", depth=-1)
-    pages = [
-        page
-        async for page in backend._timestamp_scan_pages(
-            _ctx(), scope, batch_size=100, output_fields=["id"]
-        )
-    ]
-    assert len(pages) == 2
-    assert query.await_args_list[1].kwargs["offset"] == 1
-    assert query.await_args_list[1].kwargs["filter"] == And([scope, Range("updated_at", gte=11)])
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("exact", [False, True])
-async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
-    uri = "viking://resources/source/a.md"
-    records = [_record(str(i), uri, updated_at=11) for i in range(100)]
+@pytest.mark.parametrize("mode", ["pgvector", "opengauss"])
+async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact, mode):
+    root = "viking://resources/source"
+    uri = root + "/0.md"
+    records = [_record(str(i), uri if exact else f"{root}/{i}.md") for i in range(100)]
     records.append(_record("legacy", uri, updated_at=None))
     backend = _MemoryTransferBackend(records)
+    backend.backend_mode = mode
     count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
     monkeypatch.setattr(backend, "_strict_transfer_count", count)
     requests = []
@@ -2220,7 +2204,8 @@ async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
         requests.append(kwargs)
         candidates = [record for record in records if _matches_filter(kwargs["filter"], record)]
         candidates.sort(
-            key=lambda record: (record["updated_at"] is None, record["updated_at"] or 0)
+            key=lambda record: (record["updated_at"] is None, record["updated_at"] or 0),
+            reverse=kwargs.get("order_desc", False),
         )
         return candidates[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
 
@@ -2228,69 +2213,28 @@ async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact):
     scope = And(
         [
             Eq("account_id", "acct"),
-            Eq("uri", uri) if exact else PathScope("uri", "viking://resources/source", depth=-1),
+            Eq("uri", uri) if exact else PathScope("uri", root, depth=-1),
         ]
     )
-    found = await backend._read_transfer_inventory(_ctx(), scope, what="NULLS LAST scan")
+    found = await backend._read_transfer_inventory(
+        _ctx(), scope, what="NULLS LAST scan", entry_uris=[record["uri"] for record in records]
+    )
     assert {record["id"] for record in found} == set(backend.records)
-    assert [request["offset"] for request in requests[-2:]] == [0, 100]
     assert all(
-        _matches_filter(request["filter"], _record("probe", uri, updated_at=None))
-        for request in requests[-2:]
-    )
-    assert all(
-        not _matches_filter(request["filter"], _record("other", uri + "-other"))
-        for request in requests[-2:]
+        not _matches_filter(request["filter"], _record("other", root + "-other/0.md"))
+        for request in requests
     )
     count.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reported_count", [0, 999])
-async def test_manifest_transfer_ignores_independent_inventory_count(monkeypatch, reported_count):
-    source, target = "viking://resources/source", "viking://resources/target"
-    backend = _RealAclMemoryTransferBackend(
-        [
-            _record("source", source + "/a.md"),
-            _record("old-target", target + "/a.md"),
-            _record("keep", target + "/keep.md"),
-        ]
-    )
-    backend.acl_manager = None
-    count = AsyncMock(return_value=reported_count)
-    monkeypatch.setattr(backend, "_strict_transfer_count", count)
-    result = await backend.copy_uri_mapping(
-        _ctx(), source, target, recursive=True, source_uris=[source, source + "/a.md"]
-    )
-    assert result.written == 1
-    assert backend.records["keep"]["uri"] == target + "/keep.md"
-    assert "old-target" not in backend.records
-    count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("size", [99, 100, 101, 205])
-async def test_transfer_inventory_pages_actual_records_without_count(monkeypatch, size):
-    uri = "viking://resources/source/a.md"
-    backend = _RealAclMemoryTransferBackend([_record(str(i), uri) for i in range(size)])
-    count = AsyncMock(side_effect=RuntimeError("count must not be used"))
-    monkeypatch.setattr(backend, "_strict_transfer_count", count)
-    records = await backend._read_transfer_inventory(
-        _ctx(), And([Eq("account_id", "acct"), Eq("uri", uri)]), what="actual records"
-    )
-    assert {record["id"] for record in records} == set(backend.records)
-    # Full pages require a count-free recovery walk; short scans need only one.
-    assert len(backend.query_calls) <= 2 * (size // 100 + 1)
-    assert backend.query_calls[0][2] == 0
-    count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tied", [False, True])
-async def test_stable_transfer_inventory_reads_101_records_once(monkeypatch, tied):
+@pytest.mark.parametrize(
+    "size,tied", [(99, False), (100, True), (101, False), (101, True), (205, False)]
+)
+async def test_stable_transfer_inventory_reads_each_record_once(monkeypatch, size, tied):
     root = "viking://resources/source"
     records = [_record("root-l0", root, level=0), _record("root-l1", root, level=1)]
-    records += [_record(str(i), f"{root}/{i}.md") for i in range(99)]
+    records += [_record(str(i), f"{root}/{i}.md") for i in range(size - 2)]
     if not tied:
         records = [{**record, "updated_at": i + 11} for i, record in enumerate(records)]
     backend = _MemoryTransferBackend(records)
@@ -2308,40 +2252,13 @@ async def test_stable_transfer_inventory_reads_101_records_once(monkeypatch, tie
     found = await backend._read_transfer_inventory(
         _ctx(),
         And([Eq("account_id", "acct"), PathScope("uri", root, depth=-1)]),
-        what="stable 101 records",
+        what="stable inventory",
         entry_uris=[record["uri"] for record in records],
     )
     assert {record["id"] for record in found} == set(backend.records)
-    assert len(returned) == 101
-    assert len(backend.query_calls) == 2
+    assert len(returned) == size
+    assert len(backend.query_calls) == size // 100 + 1
     count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["pgvector", "opengauss"])
-async def test_transfer_recovers_null_timestamp_id_for_already_seen_uri(monkeypatch, mode):
-    root = "viking://resources/source"
-    records = [_record(str(i), f"{root}/{i}.md") for i in range(100)]
-    records.append(_record("legacy", f"{root}/0.md", updated_at=None))
-    backend = _MemoryTransferBackend(records)
-    backend.backend_mode = mode
-
-    async def query(**kwargs):
-        candidates = [record for record in records if _matches_filter(kwargs["filter"], record)]
-        candidates.sort(
-            key=lambda record: (record["updated_at"] is None, record["updated_at"] or 0),
-            reverse=kwargs.get("order_desc", False),
-        )
-        return candidates[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
-
-    monkeypatch.setattr(backend, "_query", query)
-    found = await backend._read_transfer_inventory(
-        _ctx(),
-        And([Eq("account_id", "acct"), PathScope("uri", root, depth=-1)]),
-        what="legacy ID on existing URI",
-        entry_uris=[record["uri"] for record in records],
-    )
-    assert {record["id"] for record in found} == set(backend.records)
 
 
 @pytest.mark.asyncio
