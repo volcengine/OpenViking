@@ -116,7 +116,8 @@ export function useConversation(
   const isSending =
     switching || chat.status === 'streaming' || chat.status === 'loading';
   const busy = isSending || chat.isSubmitting;
-  useReplaceReference(referenceSelection, Boolean(references) && !busy);
+  const available = conversation?.isAvailable !== false;
+  useReplaceReference(referenceSelection, !!references && available && !busy);
   if (!enabled) {
     const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
     return { ...conversation, debugContext, sessions: scoped };
