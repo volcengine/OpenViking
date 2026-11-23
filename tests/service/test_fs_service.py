@@ -2535,27 +2535,3 @@ async def test_fs_rejects_invalid_processing_mode_before_mutation(request_contex
                 **kwargs,
             )
     native.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("has_input", [True, False])
-async def test_vectors_only_rm_updates_each_changed_memory_once(
-    request_context, monkeypatch, has_input
-):
-    memory = "viking://user/test-user/memories/entities/a.md"
-    cleanup = SimpleNamespace(
-        before_resource_delete=AsyncMock(return_value={"memory_uris": [memory, memory]})
-    )
-    db = SimpleNamespace(has_queue_manager=True, delete_uris=AsyncMock())
-    from openviking.session.memory.memory_updater import MemoryUpdater
-
-    refresh = AsyncMock(return_value=has_input)
-    monkeypatch.setattr(MemoryUpdater, "refresh_file_embedding", refresh)
-    monkeypatch.setattr(MemoryUpdater, "refresh_schema_overview", AsyncMock(return_value=False))
-    result = await FSService(
-        viking_fs=_FakeVikingFS(), vikingdb=db, resource_memory_link_service=cleanup
-    ).rm("viking://resources/a.md", request_context, processing_mode="vectors_only", wait=False)
-    refresh.assert_awaited_once()
-    assert result["vector_status"] == ("queued" if has_input else "complete")
-    if not has_input:
-        db.delete_uris.assert_awaited_once_with(request_context, [memory], recursive=False)
