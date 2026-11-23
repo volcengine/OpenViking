@@ -509,10 +509,8 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
-| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
+`max_concurrent` controls independent AddResource jobs. File-level work within each job uses an internal bounded concurrency limit.
 
 ### `queue_workers.reindex`
 
@@ -580,14 +578,6 @@ the host root logger. See the [logging policy](https://github.com/volcengine/Ope
 | `poll_interval_ms` | integer | `30000` | External task polling interval |
 
 When `base_url` is configured, OV sends the current user's OV API key in `X-API-Key`. It sends `X-Gateway-Token` only when `gateway_token` is configured.
-
-## Reindex Settings
-
-### `reindex`
-
-| Field | Type | Default | Description |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, fingerprinted, and prepared by one resource/skill reindex task; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
 ## HTTP Server Settings
 

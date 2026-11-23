@@ -9,7 +9,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from openviking.concurrency import bounded_map
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.core.namespace import context_type_for_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.storage.abstract_overview import body_for_preview
@@ -88,7 +88,6 @@ async def build_rfv_snapshot(
     ctx: Any,
     request_intent: RequestIntent,
     recursive: bool = True,
-    source_read_concurrency: int = 8,
     root_is_dir: bool | None = None,
     formal_inventory: tuple[bool, list[Mapping[str, Any]], bool] | None = None,
     vector_inventory: Mapping[str, Mapping[str, Any]] | None = None,
@@ -271,7 +270,7 @@ async def build_rfv_snapshot(
     await bounded_map(
         source_jobs,
         read_source,
-        concurrency=max(1, source_read_concurrency),
+        concurrency=FILE_TASK_CONCURRENCY,
     )
     source_metadata = None
     if source_metadata_uri is not None:
