@@ -251,6 +251,17 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, ...path),
     committed: true,
   })),
+  // Antigravity reads these from the plugin itself.
+  ...["antigravity"].flatMap((host) => [
+    "openviking-memory",
+    "openviking-skills",
+    "ov-experience-memory",
+    "openviking-rule-search",
+  ].map((skill) => ({
+    skill,
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
+    committed: true,
+  }))),
 ];
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);

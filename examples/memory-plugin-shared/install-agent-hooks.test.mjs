@@ -35,6 +35,8 @@ function hookCommands(value, out = []) {
   return out;
 }
 
+const HOST_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search"];
+
 function writeJson(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -902,15 +904,32 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
 
     const hooks = JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8"));
     assert.deepEqual(Object.keys(hooks), ["openviking-memory"]);
-    assert.deepEqual(Object.keys(hooks["openviking-memory"]), ["SessionStart", "PreInvocation", "Stop"]);
+    assert.deepEqual(Object.keys(hooks["openviking-memory"]), ["SessionStart", "PreInvocation", "PreToolUse", "Stop"]);
     assert.equal(JSON.parse(readFileSync(join(pluginDir, "plugin.json"), "utf8")).name, "openviking-memory");
     const commands = hookCommands(hooks);
-    assert.equal(commands.length, 3);
+    assert.equal(commands.length, 4);
     for (const command of commands) {
       assert.match(command, /OPENVIKING_INTEGRATION_ID='openviking-memory'/);
-      assert.ok(command.includes(join(runtime, "scripts", "hook.mjs")), command);
+      assert.ok(command.includes(join(runtime, "scripts")), command);
       assert.doesNotMatch(command, /__OPENVIKING_/);
     }
+    // The guard is grouped under a matcher, and its rendered command denies a
+    // file tool aimed at a viking:// URI.
+    const guard = hooks["openviking-memory"].PreToolUse[0];
+    assert.equal(guard.matcher, "*");
+    const denied = spawnSync("sh", ["-c", guard.hooks[0].command], {
+      env: { ...process.env, HOME: home },
+      input: JSON.stringify({ toolCall: { name: "read_file", args: { Path: "viking://user/default/memories/profile.md" } } }),
+      encoding: "utf8",
+    });
+    assert.equal(JSON.parse(denied.stdout).decision, "deny", denied.stderr);
+
+    const mcp = JSON.parse(readFileSync(join(pluginDir, "mcp_config.json"), "utf8")).mcpServers.openviking;
+    assert.equal(mcp.args[0], join(runtime, "servers", "mcp-proxy.mjs"));
+    assert.ok(existsSync(mcp.command), mcp.command);
+    assert.equal(mcp.env.OPENVIKING_HOOK_SOURCE, "antigravity");
+    for (const skill of HOST_SKILLS) assert.ok(existsSync(join(pluginDir, "skills", skill, "SKILL.md")), skill);
+    assert.deepEqual(JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).capabilities, ["hooks", "mcp", "skills"]);
     const sessionStart = spawnSync("sh", ["-c", hooks["openviking-memory"].SessionStart[0].command], {
       env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
       input: "{}",
@@ -958,6 +977,28 @@ test("Antigravity installs and validates under a home path containing an apostro
     assert.equal(existsSync(pluginDir), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity adds no second MCP server beside one the user configured", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-mcp-"));
+  const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
+  const userMcp = join(home, ".gemini", "config", "mcp_config.json");
+  const own = '{\n  // my server\n  "mcpServers": { "openviking": { "url": "https://ov.example/mcp" } }\n}\n';
+  try {
+    mkdirSync(dirname(userMcp), { recursive: true });
+    writeFileSync(userMcp, own);
+    const install = runInstaller(home, [
+      "--harness", "antigravity", "--source", "dev", "--lang", "en",
+      "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    ]);
+    assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
+    assert.match(install.stdout, /Kept the openviking MCP server you already configured/);
+    assert.equal(existsSync(join(pluginDir, "mcp_config.json")), false);
+    assert.ok(existsSync(join(pluginDir, "skills", "openviking-memory", "SKILL.md")));
+    assert.equal(readFileSync(userMcp, "utf8"), own);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

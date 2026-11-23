@@ -2952,22 +2952,25 @@ install_zcode() {
   info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
 }
 
-# Antigravity loads plugins from directories, each a plugin.json and a
-# hooks.json whose top-level keys name the hooks. The directory is the
-# installer's alone, so it is written whole instead of merged into user files.
+# Antigravity loads plugins from directories: a plugin.json, a hooks.json whose
+# top-level keys name the hooks, an mcp_config.json and a skills directory. The
+# directory is the installer's alone, so it is written whole instead of merged
+# into user files.
 install_antigravity() {
   step_heading "$(t 'Antigravity integration' 'Antigravity 集成')"
-  local root plugin_dir lib
+  local root plugin_dir lib user_mcp
   ensure_bundle
   root="$(assemble_agent_integration antigravity antigravity)" || return 1
   plugin_dir="$(antigravity_plugin_dir)"
   lib="$(require_install_lib_dir)" || return 1
-  "$NODE_BIN" --input-type=module - "$root" "$plugin_dir" "$NODE_BIN" "$SOURCE_MODE" "$lib/host-json-config.mjs" <<'NODE' || return 1
+  user_mcp="$(antigravity_config_dir)/mcp_config.json"
+  "$NODE_BIN" --input-type=module - "$root" "$plugin_dir" "$NODE_BIN" "$SOURCE_MODE" "$lib" "$user_mcp" <<'NODE' || return 1
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [root, pluginDir, nodeBin, sourceMode, helper] = process.argv.slice(2);
-const { readJson, ownsHook } = await import(pathToFileURL(helper).href);
+const [root, pluginDir, nodeBin, sourceMode, lib, userMcpPath] = process.argv.slice(2);
+const { readJson, ownsHook } = await import(pathToFileURL(path.join(lib, "host-json-config.mjs")).href);
+const { stripJsonc } = await import(pathToFileURL(path.join(lib, "jsonc-edit.mjs")).href);
 const hostDir = path.join(root, "hosts", "antigravity");
 const version = readJson(path.join(root, "plugin.json")).version;
 const existing = path.join(pluginDir, "hooks.json");
@@ -2984,11 +2987,21 @@ const render = (command) => {
   const args = (match[2] || "").replaceAll("__OPENVIKING_CLIENT_ID__", "antigravity");
   return `${env} ${quote(nodeBin)} ${quote(path.join(root, match[1]))}${args} # openviking-memory`;
 };
+// PreToolUse groups its handlers under a matcher; the other events list them flat.
+const renderHandler = (handler) => (Array.isArray(handler.hooks)
+  ? { ...handler, hooks: handler.hooks.map(renderHandler) }
+  : { ...handler, command: render(handler.command) });
 const template = readJson(path.join(hostDir, "hooks.json"));
 const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) => [name,
-  Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event,
-    handlers.map((handler) => ({ ...handler, command: render(handler.command) }))])),
+  Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event, handlers.map(renderHandler)])),
 ]));
+// A server the user registered under this name stays the only one: a second
+// would hand the model every tool twice.
+let userHasServer = false;
+try {
+  userHasServer = Boolean(JSON.parse(stripJsonc(fs.readFileSync(userMcpPath, "utf8"))).mcpServers?.openviking);
+} catch {}
+const capabilities = userHasServer ? ["hooks", "skills"] : ["hooks", "mcp", "skills"];
 // Stage beside plugins/, not in it, so an interrupted run leaves no second
 // plugin for Antigravity to load; the config directory keeps the rename on
 // one filesystem.
@@ -2997,6 +3010,24 @@ fs.rmSync(tmp, { recursive: true, force: true });
 fs.mkdirSync(tmp, { recursive: true });
 fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
 fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
+fs.cpSync(path.join(hostDir, "skills"), path.join(tmp, "skills"), { recursive: true });
+if (!userHasServer) {
+  // MCP commands run without a shell and expand no environment variables, so
+  // every value is written out in full.
+  fs.writeFileSync(path.join(tmp, "mcp_config.json"), JSON.stringify({
+    mcpServers: {
+      openviking: {
+        command: nodeBin,
+        args: [path.join(root, "servers", "mcp-proxy.mjs")],
+        env: {
+          OPENVIKING_INTEGRATION_ID: "openviking-memory",
+          OPENVIKING_INTEGRATION_VERSION: version,
+          OPENVIKING_HOOK_SOURCE: "antigravity",
+        },
+      },
+    },
+  }, null, 2) + "\n", { mode: 0o600 });
+}
 fs.rmSync(pluginDir, { recursive: true, force: true });
 fs.mkdirSync(path.dirname(pluginDir), { recursive: true });
 fs.renameSync(tmp, pluginDir);
@@ -3010,13 +3041,17 @@ fs.writeFileSync(manifestPath, JSON.stringify({
   client: "antigravity",
   installMode: "managed-native",
   source: sourceMode,
-  capabilities: ["hooks"],
+  capabilities,
   hooksConfig: path.join(pluginDir, "hooks.json"),
+  ...(userHasServer ? {} : { mcpConfig: path.join(pluginDir, "mcp_config.json") }),
   installedAt: previous.installedAt || now,
   updatedAt: now,
 }, null, 2) + "\n");
 NODE
   info "$(t 'Antigravity plugin installed:' 'Antigravity 插件已安装：') $plugin_dir"
+  if [ ! -f "$plugin_dir/mcp_config.json" ]; then
+    info "$(t 'Kept the openviking MCP server you already configured; the plugin adds no second one:' '保留你已配置的 openviking MCP 服务，插件不再重复添加：') $user_mcp"
+  fi
 }
 
 install_kimicode() {
@@ -3489,16 +3524,23 @@ if (typeof command !== "string" || !command.includes("OPENVIKING_INTEGRATION_ID=
 process.stdout.write(command);
 ' "$ag_hooks" 2>/dev/null)" || ag_command=""
     if [ -f "$(antigravity_plugin_dir)/plugin.json" ] \
+      && [ -f "$(antigravity_plugin_dir)/skills/openviking-memory/SKILL.md" ] \
       && [ -f "$ag_root/scripts/hook.mjs" ] \
+      && [ -f "$ag_root/scripts/uri-guard.mjs" ] \
+      && [ -f "$ag_root/servers/mcp-proxy.mjs" ] \
       && [ -f "$ag_root/integration.json" ] \
       && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ] \
       && [ -n "$ag_command" ]; then
-      "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" \
+        && "$NODE_BIN" --check "$ag_root/scripts/uri-guard.mjs" \
+        && "$NODE_BIN" --check "$ag_root/servers/mcp-proxy.mjs" || { ok=0; agent_fatal=1; }
       if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 sh -c "$ag_command" >/dev/null; then
         warn "antigravity: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
+      elif [ -f "$(antigravity_plugin_dir)/mcp_config.json" ]; then
+        info "antigravity: $(t 'plugin installed (Hooks + MCP + skills)' '插件已安装（Hooks + MCP + skills）')"
       else
-        info "antigravity: $(t 'plugin installed (Hooks)' '插件已安装（Hooks）')"
+        info "antigravity: $(t 'plugin installed (Hooks + skills; MCP from your own config)' '插件已安装（Hooks + skills；MCP 沿用你自己的配置）')"
       fi
     else
       warn "antigravity: $(t 'plugin installation is incomplete' '插件安装不完整')"
