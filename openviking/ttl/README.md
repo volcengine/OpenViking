@@ -30,11 +30,11 @@ Use a stable ResourceID across restarts; each Redis scope also includes the
 OpenViking Account ID. Production credentials and Redis durability are deployment
 configuration. The regular OV Docker image already includes the expiry extra.
 No external Python class path, wheel or overlay image is needed.
-`ttl_adapter.config.redis` stores directory indexes; `expiry.redis` stores the
+`ttl_adapter.config.redis` stores directory indexes; `expiry.cache.instance` stores the
 shared scheduler's tasks. The example uses the same Redis and runs the publisher
 in-process. If auto commit already configures expiry, retain that configuration
 and its publisher deployment. TTL also requires `expiry.service_name` and
-`expiry.redis.endpoints`.
+selected `cache.instances.<instance>.params.endpoints`.
 
 An omitted or disabled `server.ttl_adapter` installs no write hook, starts no TTL
 worker and loads no TTL Redis client. Explicit policy writes then return

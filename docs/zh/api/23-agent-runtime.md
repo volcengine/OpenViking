@@ -61,7 +61,10 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 
 只传频率时，服务端在 00:00–03:59 中为计划分配固定时间。每周计划省略 `weekday` 时也会分配固定执行日（1 为周一，7 为周日）。只传 `hour`（0–23）时，在该小时内分配固定分钟，例如 `hour: 10` 对应 10:00–10:59。只传 `minute`（0–59）时，小时取 0。查询配置的 `update_schedule` 可查看分配结果。
 
-定时执行要求开启 `compile_api.scheduler_enabled=true` 并配置 Redis expiry 服务。凭据加密保存，每次触发时重新验证凭据及当前用户组权限。调度未启用或不可用时返回错误，不会退化为立即执行。禁用计划后 `next_triggered_slot` 为 null。
+定时执行要求开启 `compile_api.scheduler_enabled=true`，并通过
+`expiry.cache.instance` 选择 Redis CacheRuntime。凭据加密保存，每次触发时重新验证
+凭据及当前用户组权限。调度未启用或不可用时返回错误，不会退化为立即执行。禁用计划后
+`next_triggered_slot` 为 null。
 
 ### 执行编译
 

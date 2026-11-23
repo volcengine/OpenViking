@@ -39,13 +39,12 @@ from openviking.scheduling.expiry.api import (
     HandlerOptions,
     ItemIdentity,
 )
-from openviking.scheduling.expiry.config import ExpiryRedisConfig
-from openviking.scheduling.expiry.redis_store import create_redis_client
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 from openviking.storage.abstract_overview import ABSTRACT_OVERVIEW_FILENAMES
 from openviking.ttl.adapter import TTLBackfillRequest, TTLRecycleRequest, TTLRecycleResult
+from openviking.ttl.redis import DirectoryTTLRedisConfig, create_directory_ttl_redis_client
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -170,7 +169,7 @@ class DirectoryTTL:
         if not resource_id or not 1 <= batch_size <= 512 or stat_rate <= 0 or batch_interval < 0:
             raise ValueError("invalid TTL resource or rate limits")
         self.resource_id = resource_id
-        self.redis_config = ExpiryRedisConfig.model_validate(redis or {})
+        self.redis_config = DirectoryTTLRedisConfig.model_validate(redis or {})
         self.writer = writer
         # With no override, naive date timestamps use the writer's existing
         # local timezone, just like its date-directory generation fallback.
@@ -550,7 +549,9 @@ class DirectoryTTL:
 
             if not self.redis_config.endpoints:
                 raise UnavailableError("TTL Redis is not configured")
-            self.redis = create_redis_client(self.redis_config, retry=Retry(NoBackoff(), 0))
+            self.redis = create_directory_ttl_redis_client(
+                self.redis_config, retry=Retry(NoBackoff(), 0)
+            )
         return self.redis
 
     async def start_reporting(self) -> None:

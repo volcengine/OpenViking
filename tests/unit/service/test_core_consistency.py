@@ -101,7 +101,7 @@ def test_service_loads_account_store_runtime_from_config_file(tmp_path, monkeypa
     )
 
     binding = service._build_ragfs_binding_config()
-    assert binding.account_store_cache_instance == "accountstore"
+    assert binding.required_cache_instances == {"Redis MySQL Account Store": "accountstore"}
     cache = binding.to_binding_dict()["cache"]
     assert cache["runtime_enabled"] is True
     assert cache["cachefs"]["enabled"] is False

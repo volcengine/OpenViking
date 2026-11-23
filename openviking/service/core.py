@@ -258,7 +258,7 @@ class OpenVikingService:
         from openviking.server.dependencies import get_server_config
 
         config_file = OpenVikingConfigSingleton.get_config_file()
-        account_store_cache_instance = None
+        required_cache_instances: dict[str, str] = {}
         server_config = get_server_config()
         if server_config is not None:
             account_store = server_config.account_store
@@ -280,11 +280,13 @@ class OpenVikingService:
         if provider == "redis_mysql":
             from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 
-            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(params)
+            required_cache_instances["Redis MySQL Account Store"] = (
+                RedisMySQLAccountStore.cache_instance_from_params(params)
+            )
 
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(
             self._config,
-            account_store_cache_instance=account_store_cache_instance,
+            required_cache_instances=required_cache_instances,
         )
         return binding_config
 
@@ -907,8 +909,11 @@ class OpenVikingService:
             from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 
             expiry_config.validate_for_runtime()
+            if self._agfs_client is None or expiry_config.cache is None:
+                raise RuntimeError("Expiry requires an initialized RAGFS CacheRuntime")
             self._expiry_runtime = ExpiryRuntime(
                 expiry_config,
+                cache_runtime=self._agfs_client.cache_runtime(expiry_config.cache.instance),
                 roles=ExpiryRuntimeRoles(
                     report=True,
                     publish=scheduler and not expiry_config.publisher_separate_process,
