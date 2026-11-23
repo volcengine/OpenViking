@@ -34,8 +34,6 @@ from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.image_validation import is_valid_image
 from openviking.parse.output import (
-    AgfsParseOutputStore,
-    ParseArtifactRef,
     ParseArtifactWriter,
     create_parse_artifact_writer,
 )
@@ -468,7 +466,7 @@ class MarkdownParser(BaseParser):
         self,
         layout: _Layout,
         *,
-        writer: Optional[ParseArtifactWriter] = None,
+        writer: ParseArtifactWriter,
         rewrite_ctx: Optional[_RewriteContext] = None,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
@@ -477,11 +475,6 @@ class MarkdownParser(BaseParser):
         create dirs, write each section (rewriting relative links when enabled), then
         ingest the local images those sections reference."""
         started = time.perf_counter()
-        if writer is None:
-            writer = ParseArtifactWriter(
-                AgfsParseOutputStore(viking_fs=self._get_viking_fs()),
-                ParseArtifactRef(backend="agfs", root=layout.temp_uri),
-            )
         mkdir_ops = [op for op in layout.ops if op.kind == "mkdir"]
         write_ops = [op for op in layout.ops if op.kind == "write"]
         write_chars = sum(len(op.content or "") for op in write_ops)
@@ -798,8 +791,8 @@ class MarkdownParser(BaseParser):
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
         *,
-        writer: Optional[ParseArtifactWriter] = None,
-        markdown_files: Optional[List[Tuple[str, str]]] = None,
+        writer: ParseArtifactWriter,
+        markdown_files: List[Tuple[str, str]],
     ) -> None:
         """
         Scan every processed markdown file under ``root_dir`` and copy the local
@@ -817,14 +810,6 @@ class MarkdownParser(BaseParser):
             allowed_media_dirs: Additional directories from which derived media
                 may be read (passed through to ``_resolve_image_path``)
         """
-        if writer is None:
-            writer = ParseArtifactWriter(
-                AgfsParseOutputStore(viking_fs=self._get_viking_fs()),
-                ParseArtifactRef(backend="agfs", root=root_dir),
-            )
-        if markdown_files is None:
-            raise ValueError("markdown_files are required for artifact image ingestion")
-
         root_prefix = root_dir.rstrip("/")
 
         # mapping: rel_md_path -> {original_path_str -> unique_filename}
@@ -1359,7 +1344,7 @@ class MarkdownParser(BaseParser):
         uri: str,
         content: str,
         *,
-        writer: Optional[ParseArtifactWriter] = None,
+        writer: ParseArtifactWriter,
         rewrite_ctx: Optional[_RewriteContext] = None,
     ) -> str:
         """Write a markdown section file, rewriting relative links when enabled."""
@@ -1368,11 +1353,6 @@ class MarkdownParser(BaseParser):
                 content,
                 section_subpath=self._section_subpath(uri, rewrite_ctx.root_dir),
                 rewrite_ctx=rewrite_ctx,
-            )
-        if writer is None:
-            writer = ParseArtifactWriter(
-                AgfsParseOutputStore(viking_fs=self._get_viking_fs()),
-                ParseArtifactRef(backend="agfs", root=uri.rsplit("/", 1)[0]),
             )
         await writer.write_text(uri, content)
         return content

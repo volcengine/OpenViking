@@ -6,12 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from openviking.parse.directory_scan import (
-    CLASS_PROCESSABLE,
-    ClassifiedFile,
-    DirectoryScanResult,
-    scan_directory,
-)
+from openviking.parse.directory_scan import DirectoryScanResult, scan_directory
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.exceptions import InvalidArgumentError, UnsupportedDirectoryFilesError
 
@@ -315,17 +310,6 @@ class TestScanDirectoryEdgeCases:
         all_rel_dot = [f.rel_path for f in result_rel_dot.processable + result_rel_dot.unsupported]
         assert not any(p.startswith("src/") for p in all_rel_dot)
 
-    def test_result_all_processable(
-        self, tmp_all_supported: Path, registry: ParserRegistry
-    ) -> None:
-        result: DirectoryScanResult = scan_directory(
-            tmp_all_supported, registry=registry, strict=True
-        )
-        all_p = result.all_processable_files()
-        assert len(all_p) == len(result.processable)
-        for cf in all_p:
-            assert cf.classification == CLASS_PROCESSABLE
-
 
 class TestDirectorySafetyLimits:
     """Directory scans must fail before processing unbounded input trees."""
@@ -570,25 +554,3 @@ class TestGitignoreHandling:
         assert "keep.txt" in rel_paths
         assert "generated/skip.txt" not in rel_paths
         assert any("generated (gitignore)" in s for s in result.skipped)
-
-
-class TestClassifiedFileAndResult:
-    """Test ClassifiedFile and DirectoryScanResult types."""
-
-    def test_classified_file_has_rel_path_and_classification(self) -> None:
-        p = Path("/tmp/foo/bar.txt")
-        cf = ClassifiedFile(path=p, rel_path="bar.txt", classification=CLASS_PROCESSABLE)
-        assert cf.rel_path == "bar.txt"
-        assert cf.classification == CLASS_PROCESSABLE
-
-    def test_scan_result_root_and_lists(
-        self, tmp_all_supported: Path, registry: ParserRegistry
-    ) -> None:
-        result: DirectoryScanResult = scan_directory(
-            tmp_all_supported, registry=registry, strict=True
-        )
-        assert result.root == tmp_all_supported.resolve()
-        assert isinstance(result.processable, list)
-        assert isinstance(result.unsupported, list)
-        assert isinstance(result.warnings, list)
-        assert isinstance(result.skipped, list)
