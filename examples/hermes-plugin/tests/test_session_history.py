@@ -43,12 +43,14 @@ def _history_calls(client):
 
 def test_tool_defaults_to_the_compression_lineage(history_provider):
     provider, module, client = history_provider
-    assert "viking_session_history" in {schema["name"] for schema in provider.get_tool_schemas()}
+    schema = next(s for s in provider.get_tool_schemas() if s["name"] == "viking_session_history")
+    assert "tool" not in schema["parameters"]["properties"]
     assert module._is_openviking_recall_tool_name("viking_session_history")
 
     assert (
         provider.handle_tool_call(
-            "viking_session_history", {"action": "search", "query": "ECONNREFUSED", "role": None}
+            "viking_session_history",
+            {"action": "search", "query": "ECONNREFUSED", "role": None, "tool": "bash"},
         )
         == "found it"
     )

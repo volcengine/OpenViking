@@ -484,7 +484,7 @@ test("session_history requires session and posts the rest to the first session's
   const ctx = { abort: new AbortController().signal };
   await assert.rejects(tool.session_history.execute({ action: "overview", session: "magpie-a" }, ctx), /disabled/);
   await f.save({ plugin: { magpie: { mcpEnabled: true } } });
-  for (const args of [{ action: "overview" }, { action: "overview", session: " , " }, { action: "overview", session: "magpie-a", user: "other" }]) {
+  for (const args of [{ action: "overview" }, { action: "overview", session: " , " }, { action: "overview", session: "magpie-a", user: "other" }, { action: "search", query: "x", session: "magpie-a", tool: "bash" }]) {
     await assert.rejects(tool.session_history.execute(args, ctx), /invalid/);
   }
   assert.equal(f.calls.length, 0);
