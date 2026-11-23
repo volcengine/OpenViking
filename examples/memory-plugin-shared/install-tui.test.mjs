@@ -96,6 +96,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -118,6 +119,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -148,6 +150,7 @@ add_detected_traecode_cli_alias
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 tui_reset_bin_selection
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
@@ -602,9 +605,14 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
 });
 
 test("what was asked for but not installed is listed again just before the onboarding link", (t) => {
-  const { run } = detachedInstaller(t);
+  const { home, run: runWithPath } = detachedInstaller(t);
+  // pi is selected but not on PATH; dsh is. The directory node itself sits in
+  // may hold a real pi, so node is reached through a directory of its own.
+  const nodeBin = join(home, "node-bin");
+  mkdirSync(nodeBin);
+  symlinkSync(process.execPath, join(nodeBin, "node"));
+  const run = (args) => runWithPath(args, { PATH: `${join(home, "bin")}:${nodeBin}:/usr/bin:/bin` });
 
-  // pi is selected but not on PATH; dsh is.
   const result = run(["--harness", "dsh,pi", "--lang", "en", "--yes"]);
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -743,6 +751,8 @@ test("Linux never offers DeepSeek Harness Desktop", (t) => {
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
