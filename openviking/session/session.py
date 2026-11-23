@@ -70,7 +70,6 @@ from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
 )
 from openviking.session.memory.memory_updater import MemoryUpdateError
-from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
@@ -2701,13 +2700,13 @@ class Session:
                         if enable_working_memory
                         else []
                     )
-                    latest_archive_overview = (
+                    latest_archive_overview, previous_descriptions = (
                         await self._archives.latest_completed_overview(
                             exclude_archive_uri=archive_uri,
                             before_archive_index=archive_index,
                         )
                         if enable_working_memory
-                        else ""
+                        else ("", {})
                     )
                     extraction_messages = await self._tool_outputs.hydrate_for_extraction(messages)
                     usage_events_extracted = len(
@@ -2724,11 +2723,15 @@ class Session:
                                 "working Memory summary skipped (memory_policy.working_memory.enabled=false)"
                             )
                             return
+                        output_language_override = await get_output_language_override(
+                            self._runtime_config_manager, self.ctx.account_id
+                        )
                         summary_kwargs: Dict[str, Any] = {
                             "latest_archive_overview": latest_archive_overview,
                             "session_window_context": session_window_context,
                             "summary_token_ratio": summary_token_ratio,
                             "reasoning_effort": reasoning_effort,
+                            "output_language_override": output_language_override,
                         }
                         if checkpoint_requests:
                             summary_kwargs["checkpoint_requests"] = checkpoint_requests
@@ -2767,7 +2770,14 @@ class Session:
                                 "Working Memory output is empty for a required checkpoint"
                             )
                         if self._viking_fs and summary:
-                            abstract = extract_abstract_from_summary(summary)
+                            descriptions = wm.match_wm_template_descriptions(
+                                summary,
+                                previous_descriptions,
+                                output_language=wm.wm_output_language(
+                                    extraction_messages, output_language_override
+                                ),
+                            )
+                            abstract = extract_abstract_from_summary(summary, descriptions)
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.abstract.md",
                                 content=render_abstract_overview(
@@ -2803,6 +2813,7 @@ class Session:
                                 {
                                     "overview_tokens": estimate_text_tokens(summary),
                                     "abstract_tokens": estimate_text_tokens(abstract),
+                                    wm.WM_TEMPLATE_DESCRIPTIONS_KEY: descriptions,
                                     "checkpoints": checkpoint_records,
                                 },
                             )
@@ -3794,21 +3805,11 @@ class Session:
             return ""
 
         formatted = wm.format_messages_for_wm(messages, checkpoint_requests)
-        language_conversation = "\n".join(
-            f"[{message.role}]: {line}"
-            for message in messages
-            for part in message.parts
-            if isinstance(part, TextPart)
-            for line in part.text.splitlines()
-            if line.strip()
-        )
         if output_language_override is None:
             output_language_override = await get_output_language_override(
                 self._runtime_config_manager, self.ctx.account_id
             )
-        output_language = resolve_output_language_from_conversation(
-            language_conversation, output_language_override=output_language_override
-        )
+        output_language = wm.wm_output_language(messages, output_language_override)
         checkpoint_instructions = wm.checkpoint_prompt_instructions(len(checkpoint_requests))
         session_window_context = max(1, int(session_window_context or 128_000))
         summary_budget_tokens = max(1, int(session_window_context * float(summary_token_ratio)))

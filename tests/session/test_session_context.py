@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.message import Message, TextPart
+from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.prompts import manager as prompt_manager
 from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
@@ -752,7 +753,17 @@ class TestGetSessionArchive:
 
     @pytest.mark.parametrize(
         "summary_format",
-        ["structured", "compact", "wrapped", "custom", "jinja", "example", "italic-example"],
+        [
+            "structured",
+            "compact",
+            "wrapped",
+            "custom",
+            "plain-description",
+            "description-only",
+            "jinja",
+            "example",
+            "italic-example",
+        ],
     )
     async def test_get_session_archive_returns_messages_and_working_memory(
         self, client: partial, monkeypatch, tmp_path, summary_format
@@ -766,7 +777,14 @@ class TestGetSessionArchive:
             template = "# Working Memory\n\n**Status**: {state}"
         elif summary_format == "wrapped":
             template = template.replace("{state}", "**Status**:\n{state}")
-        elif summary_format in {"custom", "jinja", "example", "italic-example"}:
+        elif summary_format in {
+            "custom",
+            "plain-description",
+            "description-only",
+            "jinja",
+            "example",
+            "italic-example",
+        }:
             relative_path = "compression/ov_wm_v2.yaml"
             bundled = prompt_manager.PromptManager._get_bundled_templates_dir() / relative_path
             override = tmp_path / relative_path
@@ -776,10 +794,12 @@ class TestGetSessionArchive:
             if summary_format == "jinja":
                 template_line = "_Record the latest sign-off outcome in {{ output_language }}._"
                 description = "_Record the latest sign-off outcome in en._"
+            elif summary_format == "plain-description":
+                template_line = description = "Record the latest sign-off outcome here."
             elif summary_format == "example":
-                template_line = description = "Sign-off complete."
+                template_line += "\n  Sign-off complete."
             elif summary_format == "italic-example":
-                template_line = description = "_Sign-off complete._"
+                template_line += "\n  _Sign-off complete._"
             source = bundled.read_text(encoding="utf-8")
             before, state_section = source.split("  ## Current State\n", 1)
             _, remaining = state_section.split("\n", 1)
@@ -792,13 +812,16 @@ class TestGetSessionArchive:
                 "compression.ov_wm_v2", {"messages": "", "output_language": "en"}
             )
             assert description in prompt
-            if summary_format in {"custom", "jinja"}:
-                example = prompt[prompt.index("# Working Memory\n") :]
-                template = example.split("\n## Task & Goals", 1)[0].rstrip() + "\n{state}"
+            if summary_format in {"custom", "plain-description", "description-only", "jinja"}:
+                _, _, example = prompt.partition("\n## Current State\n")
+                state_example = example.split("\n## Task & Goals", 1)[0].strip()
+                template = template.replace("{state}", state_example + "\n{state}")
 
         states = ("Sign-off pending.", "Sign-off complete.")
         if summary_format == "italic-example":
             states = tuple(f"_{state}_" for state in states)
+        if summary_format == "description-only":
+            template = template.replace("Sign-off review", "{state}").removesuffix("\n{state}")
         overviews = iter(template.format(state=state) for state in states)
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
@@ -833,14 +856,25 @@ class TestGetSessionArchive:
             historical = await session.get_session_archive(archive_id)
             assert historical["abstract"] == expected
 
-        if summary_format in {"custom", "jinja"}:
+        if summary_format in {"custom", "plain-description", "description-only", "jinja"}:
+            vfs = session._viking_fs
+            legacy_uri = f"{session.uri}/history/archive_003"
+            await vfs.write_file(f"{legacy_uri}/.done", "{}", ctx=session.ctx)
+            await vfs.write_file(f"{legacy_uri}/messages.jsonl", "", ctx=session.ctx)
+            await vfs.write_file(
+                f"{legacy_uri}/.overview.md", template.format(state=states[0]), ctx=session.ctx
+            )
+            await vfs.write_file(f"{legacy_uri}/.abstract.md", description, ctx=session.ctx)
+            legacy = await session.get_session_archive("archive_003")
+            assert legacy["abstract"] == states[0]
+            assert await vfs.read_file(f"{legacy_uri}/.abstract.md", ctx=session.ctx) == description
+
             override.write_text(
                 f"{before}  ## Current State\n  _Describe the acceptance result._\n{remaining}",
                 encoding="utf-8",
             )
             # Simulate a new process with template B reading the L1 written with template A.
             monkeypatch.setattr(prompt_manager, "_default_manager", None)
-            vfs = session._viking_fs
             first_abstract = f"{session.uri}/history/archive_001/.abstract.md"
             await vfs.rm(first_abstract, ctx=session.ctx)
             for index, expected in enumerate(states, 1):
@@ -848,6 +882,55 @@ class TestGetSessionArchive:
                 assert historical["abstract"] == expected
                 assert historical["overview"] == template.format(state=expected)
             assert not await vfs.exists(first_abstract, ctx=session.ctx)
+
+    async def test_archive_abstract_keeps_italic_state_after_wm_update(self, client, monkeypatch):
+        session = client(session_id="italic_wm_update")
+        await session.ensure_exists()
+        title = "# Working Memory\n\n## Session Title\nSign-off review\n\n## Current State\n"
+        states = ("*Sign-off pending.*", "_Sign-off complete._")
+        updates = iter(states)
+
+        async def complete(self, prompt, **kwargs):
+            if not kwargs.get("tools"):
+                return title + "Waiting for the review."
+            assert kwargs["tools"][0]["function"]["name"] == "update_working_memory"
+            return VLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="update",
+                        name="update_working_memory",
+                        arguments={
+                            "sections": {
+                                "Current State": {
+                                    "op": "UPDATE",
+                                    "content": f"{next(updates)}\nTracker updated.",
+                                },
+                            },
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+
+        monkeypatch.setattr(VLMConfig, "get_completion_async", complete)
+
+        for index in range(1, 4):
+            session.add_message("user", [TextPart(f"Check the sign-off status, turn {index}.")])
+            session.add_message("assistant", [TextPart("I checked the tracker.")])
+            result = await session.commit_async()
+            task = await _wait_for_task(result["task_id"])
+            assert task["status"] == "completed", task
+
+        for index, expected in enumerate(states, 2):
+            archive_id = f"archive_{index:03d}"
+            abstract_uri = f"{session.uri}/history/{archive_id}/.abstract.md"
+            vfs = session._viking_fs
+            stored = await vfs.read_file(abstract_uri, ctx=session.ctx)
+            assert body_for_preview(stored) == expected
+            await vfs.rm(abstract_uri, ctx=session.ctx)
+            historical = await session.get_session_archive(archive_id)
+            assert f"## Current State\n{expected}\nTracker updated.\n" in historical["overview"]
+            assert historical["abstract"] == expected
 
     @pytest_asyncio.fixture
     async def historical_archive(self, client: partial):

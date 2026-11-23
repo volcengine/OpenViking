@@ -485,8 +485,10 @@ Recommended approach:
 
 When overriding `compression.ov_wm_v2`, keep the canonical Working Memory headings
 in the output example. Put each fixed section description on the first nonblank
-line under its heading and keep it on a single line. Archive abstracts use the
-loaded template to skip those descriptions.
+line under its heading and keep it on a single line. Plain text and Markdown
+are both supported. Put sample content after the description. New archives
+record the matched descriptions so abstract recovery can skip them after a
+template change.
 
 Example directory:
 

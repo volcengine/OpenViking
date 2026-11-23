@@ -24,7 +24,13 @@ from typing import Any, Dict, List, Literal, Optional
 from openviking.message import Message
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
-from openviking.session.working_memory import WM_DOCUMENT_TITLE, extract_wm_abstract
+from openviking.session.working_memory import (
+    WM_DOCUMENT_TITLE,
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    extract_wm_abstract,
+    match_wm_template_descriptions,
+    wm_output_language,
+)
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
@@ -48,12 +54,12 @@ def is_storage_not_found(exc: BaseException) -> bool:
     return False
 
 
-def extract_abstract_from_summary(summary: str) -> str:
+def extract_abstract_from_summary(summary: str, descriptions: dict[str, str] | None = None) -> str:
     """Extract a short abstract from a Working Memory or legacy summary."""
     if not summary:
         return ""
 
-    wm_abstract = extract_wm_abstract(summary)
+    wm_abstract = extract_wm_abstract(summary, descriptions)
     if wm_abstract is not None:
         return wm_abstract
 
@@ -425,13 +431,30 @@ class ArchiveStore:
         except Exception:
             abstract = ""
 
-        # Legacy sidecars can retain a terminal newline in the body.
-        if abstract.strip() and abstract.rstrip("\r\n") != WM_DOCUMENT_TITLE:
-            return abstract
-
         if not overview:
             overview = await self.read_overview(archive_uri)
-        return extract_abstract_from_summary(overview)
+        descriptions = {}
+        if overview.lstrip().partition("\n")[0].strip() == WM_DOCUMENT_TITLE:
+            recorded = await self.read_wm_template_descriptions(archive_uri)
+            if recorded is None:
+                try:
+                    messages = await self.read_messages(archive_uri)
+                    output_language = wm_output_language(messages) if messages else "en"
+                except (AGFSClientError, OSError, NotFoundError, _ArchiveMessagesCorruptError):
+                    output_language = "en"
+                recorded = match_wm_template_descriptions(
+                    overview, {}, output_language=output_language
+                )
+            descriptions = recorded
+
+        # Legacy sidecars can retain a terminal newline in the body.
+        if (
+            abstract.strip()
+            and abstract.rstrip("\r\n") != WM_DOCUMENT_TITLE
+            and abstract.strip() not in descriptions.values()
+        ):
+            return abstract
+        return extract_abstract_from_summary(overview, descriptions)
 
     async def read_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
@@ -482,6 +505,10 @@ class ArchiveStore:
         except Exception:
             return {}
 
+    async def read_wm_template_descriptions(self, archive_uri: str) -> dict[str, str] | None:
+        descriptions = (await self.read_meta(archive_uri)).get(WM_TEMPLATE_DESCRIPTIONS_KEY)
+        return descriptions if isinstance(descriptions, dict) else None
+
     # ------------------------------------------------------------------
     # Derived summaries
     # ------------------------------------------------------------------
@@ -518,13 +545,16 @@ class ArchiveStore:
         self,
         exclude_archive_uri: Optional[str] = None,
         before_archive_index: Optional[int] = None,
-    ) -> str:
-        """Return the newest completed archive overview, skipping incomplete archives."""
+    ) -> tuple[str, dict[str, str]]:
+        """Return the newest completed overview with its recorded template descriptions."""
         summary = await self.latest_completed_summary(
             exclude_archive_uri,
             before_archive_index,
         )
-        return summary["overview"] if summary else ""
+        if not summary:
+            return "", {}
+        descriptions = await self.read_wm_template_descriptions(summary["archive_uri"])
+        return summary["overview"], descriptions or {}
 
     async def uncovered_messages(
         self,

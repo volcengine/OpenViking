@@ -20,14 +20,16 @@ processing. It has no dependency on the ``Session`` object.
 import json
 import re
 from functools import cache
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
+from jinja2 import TemplateError
 from yaml import YAMLError
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.observability.log_safety import short_hash
-from openviking.prompts.manager import PromptManager
+from openviking.prompts.manager import PromptManager, get_manager
+from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.retention import UserTurn, build_turns
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -85,6 +87,7 @@ def wm_debug(msg: str, *args: Any) -> None:
 
 WM_DOCUMENT_TITLE = "# Working Memory"
 WM_CREATE_PROMPT_ID = "compression.ov_wm_v2"
+WM_TEMPLATE_DESCRIPTIONS_KEY = "wm_template_descriptions"
 
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
@@ -363,21 +366,64 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
 
 _WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
 _WM_BOLD_LABEL_RE = re.compile(r"^\*\*[^*]+\*\*:\s*")
-_WM_ITALIC_LINE_RE = re.compile(
-    r"_(?![_\s])(?:[^_]|(?<=\w)_(?=\w))+(?<![_\s])_|\*(?!\s)[^*]+(?<!\s)\*"
-)
+
+
+def _wm_template_descriptions(template: str) -> dict[str, str]:
+    _, _, example = f"\n{template}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
+    return {
+        header: body.partition("\n")[0].strip()
+        for header, body in parse_wm_sections(example).items()
+        if body and header.removeprefix("## ") in WM_SEVEN_SECTIONS
+    }
 
 
 @cache
 def _bundled_wm_template_descriptions() -> dict[str, str]:
     manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
-    template = manager.load_template(WM_CREATE_PROMPT_ID).template
-    _, _, example = f"\n{template}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
-    return {
-        header: body.split("\n", 1)[0]
-        for header, body in parse_wm_sections(example).items()
-        if _WM_ITALIC_LINE_RE.fullmatch(body.split("\n", 1)[0])
-    }
+    return _wm_template_descriptions(manager.load_template(WM_CREATE_PROMPT_ID).template)
+
+
+def wm_output_language(messages: list[Message], output_language_override: str | None = None) -> str:
+    conversation = "\n".join(
+        f"[{message.role}]: {line}"
+        for message in messages
+        for part in message.parts
+        if isinstance(part, TextPart)
+        for line in part.text.splitlines()
+        if line.strip()
+    )
+    return resolve_output_language_from_conversation(
+        conversation, output_language_override=output_language_override
+    )
+
+
+def match_wm_template_descriptions(
+    text: str, previous: Mapping[str, str], *, output_language: str = "en"
+) -> dict[str, str]:
+    """Identify fixed descriptions that appear in the first line of their own section."""
+    if text.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
+        return {}
+
+    try:
+        bundled = _bundled_wm_template_descriptions()
+    except (OSError, ValueError, YAMLError):
+        bundled = {}
+    try:
+        # Fixed descriptions may use the output language. Keep conversation and prior
+        # overview text out of the rendered example used for matching.
+        prompt = get_manager().render(
+            WM_CREATE_PROMPT_ID, {"messages": "", "output_language": output_language}
+        )
+        active = _wm_template_descriptions(prompt)
+    except (OSError, ValueError, YAMLError, TemplateError):
+        active = {}
+
+    matches = {}
+    for header, body in parse_wm_sections(text).items():
+        first_line = body.partition("\n")[0].strip()
+        if first_line in (previous.get(header), active.get(header), bundled.get(header)):
+            matches[header] = first_line
+    return matches
 
 
 def _first_wm_abstract_line(body: str) -> str:
@@ -388,40 +434,31 @@ def _first_wm_abstract_line(body: str) -> str:
     return ""
 
 
-def _wm_section_abstract(header: str, body: str) -> str:
+def _wm_section_abstract(body: str, description: str | None) -> str:
     first_line, _, rest = body.partition("\n")
-    first_line = first_line.strip()
-    if header.removeprefix("## ") in WM_SEVEN_SECTIONS and _WM_ITALIC_LINE_RE.fullmatch(first_line):
-        # The WM format places its italic description above the section body.
-        # Look at the archived lines so the rule also works after prompt changes.
-        if abstract := _first_wm_abstract_line(rest):
-            return abstract
-        # A lone italic line can be real content, such as an emphasized title.
-        # Recognize known bundled placeholders when their template is readable.
-        try:
-            if first_line == _bundled_wm_template_descriptions().get(header):
-                return ""
-        except (OSError, ValueError, YAMLError):
-            return first_line
+    if first_line.strip() == description:
+        body = rest
     return _first_wm_abstract_line(body)
 
 
-def extract_wm_abstract(text: str) -> Optional[str]:
+def extract_wm_abstract(text: str, descriptions: Mapping[str, str] | None = None) -> Optional[str]:
     """Return a v2 abstract, or None if the document has no Working Memory title."""
     lines = text.lstrip().splitlines()
     if not lines or lines[0].strip() != WM_DOCUMENT_TITLE:
         return None
+    if descriptions is None:
+        descriptions = match_wm_template_descriptions(text, {})
 
     body = "\n".join(lines[1:])
     sections = parse_wm_sections(body)
     for header in ("## Current State", "## Session Title"):
-        if abstract := _wm_section_abstract(header, sections.pop(header, "")):
+        if abstract := _wm_section_abstract(sections.pop(header, ""), descriptions.get(header)):
             return abstract
     preamble = re.split(r"(?m)^[^\S\n]*## [^\S\n]*\S", body, maxsplit=1)[0]
     if abstract := _first_wm_abstract_line(preamble):
         return abstract
     for header, content in sections.items():
-        if abstract := _wm_section_abstract(header, content):
+        if abstract := _wm_section_abstract(content, descriptions.get(header)):
             return abstract
     return ""
 
