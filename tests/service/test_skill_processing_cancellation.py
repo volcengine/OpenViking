@@ -23,7 +23,8 @@ from tests.test_task_tracker import _FakeAgfs
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["complete", "fail"])
 async def test_skill_update_cleanup_persists_cancellation_for_finished_work(monkeypatch, outcome):
-    store = PersistentTaskStore(_FakeAgfs())
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store=store)
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
@@ -35,7 +36,7 @@ async def test_skill_update_cleanup_persists_cancellation_for_finished_work(monk
     with pytest.raises(ValueError, match="already"):
         await tracker.cancel(task.task_id, **owner)
     await ResourceService.__new__(ResourceService).cancel_skill_processing(task.task_id, ctx)
-    restarted = TaskTracker(store=store)
+    restarted = TaskTracker(store=PersistentTaskStore(agfs))
     restored = await restarted.get(task.task_id, **owner)
     assert restored.status == TaskStatus.CANCELLED
     assert await restarted.is_cancellation_requested(task.task_id, **owner)

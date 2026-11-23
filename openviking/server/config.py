@@ -702,14 +702,6 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     )
 
 
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def _is_localhost(host: str) -> bool:
-    """Return True if *host* resolves to a loopback address."""
-    return host in _LOCALHOST_HOSTS
-
-
 def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
     """Load bot gateway token from ov.conf bot.gateway.token."""
     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)

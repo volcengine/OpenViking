@@ -762,7 +762,6 @@ class RuleService:
                 existing_rules=list(rules_by_id.values()),
                 source_uris=source_uris,
                 ctx=ctx,
-                persist=False,
             )
             batch_scenarios = applied.pop("_scenarios")
             batch_rules = applied.pop("_rules")
@@ -1973,7 +1972,6 @@ existing_rules:
         existing_rules: list[StoredRule],
         source_uris: list[str],
         ctx: RequestContext,
-        persist: bool = True,
     ) -> dict[str, Any]:
         fs, _, _ = self._dependencies()
         root = _rules_root(ctx)
@@ -2212,28 +2210,13 @@ existing_rules:
                 }
             )
 
-        if persist and writes:
-            write_result = await fs.batch_write(
-                root_uri=root,
-                operations=[
-                    {"uri": uri, "content": content, "mode": "upsert"}
-                    for uri, content in writes.items()
-                ],
-                ctx=ctx,
-                wait=False,
-            )
-        else:
-            write_result = {"created": [], "updated": [], "unchanged": []}
-        result = {
+        return {
             "operations": outcomes,
             "written_uris": sorted(writes),
-            "write_result": write_result,
+            "_scenarios": list(scenarios.values()),
+            "_rules": list(rules.values()),
+            "_writes": writes,
         }
-        if not persist:
-            result["_scenarios"] = list(scenarios.values())
-            result["_rules"] = list(rules.values())
-            result["_writes"] = writes
-        return result
 
     async def _score_rules_with_jev(
         self,

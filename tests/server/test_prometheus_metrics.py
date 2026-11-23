@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 from openviking.metrics.global_api import (
     get_metrics_registry,
@@ -206,14 +207,14 @@ class TestMetricsEndpoint:
         finally:
             shutdown_metrics(app=app)
 
-    async def test_metrics_account_dimension_config_is_loaded(self):
+    async def test_metrics_account_dimension_config_applies_to_exported_samples(self):
         config = ServerConfig(
             observability=ObservabilityConfig(
                 metrics=MetricsConfig(
                     enabled=True,
                     account_dimension=MetricsAccountDimensionConfig(
                         enabled=True,
-                        max_active_accounts=3,
+                        max_active_accounts=2,
                         metric_allowlist=["openviking_http_requests_total"],
                     ),
                 )
@@ -222,11 +223,34 @@ class TestMetricsEndpoint:
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
         try:
-            assert config.observability.metrics.account_dimension.enabled is True
-            assert config.observability.metrics.account_dimension.max_active_accounts == 3
-            assert config.observability.metrics.account_dimension.metric_allowlist == [
-                "openviking_http_requests_total"
+            for account_id in ("acct-a", "acct-b", "acct-c"):
+                HttpRequestLifecycleDataSource.record_request(
+                    method="POST",
+                    route="/api/v1/resources",
+                    status="200",
+                    duration_seconds=0.2,
+                    account_id=account_id,
+                )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.get("/metrics")
+            assert response.status_code == 200, response.text
+            samples = response.text.splitlines()
+            requests = [
+                line for line in samples if line.startswith("openviking_http_requests_total{")
             ]
+            assert len(requests) == 3
+            for account_id in ("acct-a", "acct-b", "__overflow__"):
+                assert any(f'account_id="{account_id}"' in line for line in requests)
+            durations = [
+                line
+                for line in samples
+                if line.startswith("openviking_http_request_duration_seconds_count{")
+            ]
+            [duration] = durations
+            assert 'account_id="__unknown__"' in duration
+            assert float(duration.rsplit(" ", 1)[1]) == 3
         finally:
             shutdown_metrics(app=app)
 
@@ -278,7 +302,7 @@ class TestMetricsEndpoint:
         finally:
             shutdown_metrics(app=app)
 
-    def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
+    async def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
         import importlib
         import sys
 

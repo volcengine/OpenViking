@@ -10,51 +10,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.crypto.encryptor import PROVIDER_LOCAL, FileEncryptor
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
 from openviking.utils.process_lock import LOCK_FILENAME
-from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.storage_config import StorageConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
-
-
-class _FakeCacheConfig:
-    def model_dump(self, mode: str) -> dict:
-        assert mode == "json"
-        return {"provider": "redis", "params": {}}
-
-
-class _FakeConfig:
-    """Minimal config object exposing the service-facing to_dict API."""
-
-    service_name = "test-core-encryption"
-    storage = SimpleNamespace(
-        agfs=AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-        ),
-        skip_process_lock=False,
-    )
-    cache = _FakeCacheConfig()
-
-    def to_dict(self) -> dict:
-        return {"encryption": {"enabled": True, "provider": "local"}}
-
-
-class _FakeProvider:
-    """Fake provider with async root-key retrieval."""
-
-    async def get_root_key(self) -> bytes:
-        return b"k" * 32
-
-
-class _FakeEncryptor:
-    """Fake encryptor returned by bootstrap_encryption."""
-
-    provider_type = 1
-
-    def __init__(self) -> None:
-        self.provider = _FakeProvider()
 
 
 def _service_for_close(monkeypatch) -> OpenVikingService:
@@ -73,17 +35,18 @@ def _service_for_close(monkeypatch) -> OpenVikingService:
 
 
 @pytest.mark.asyncio
-async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkeypatch):
-    """Build the single binding config from async bootstrap while already in an event loop."""
-
-    async def _bootstrap(config: dict) -> _FakeEncryptor:
-        assert config["encryption"]["enabled"] is True
-        return _FakeEncryptor()
-
-    monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", _bootstrap)
+async def test_build_ragfs_binding_config_works_inside_running_event_loop(tmp_path, monkeypatch):
+    """Bootstrap the real local key from within the application's running loop."""
+    monkeypatch.setattr("openviking.server.dependencies._server_config", None)
     service = OpenVikingService.__new__(OpenVikingService)
-    service._config = _FakeConfig()
-    service._encryptor = None
+    root_key = b"k" * 32
+    service._config = OpenVikingConfig.model_validate(
+        {
+            "service_name": "test-core-encryption",
+            "storage": {"workspace": str(tmp_path), "agfs": {"backend": "local"}},
+            "encryption": {"enabled": True, "local": {"root_key": root_key.hex()}},
+        }
+    )
 
     ragfs_config = service._build_ragfs_binding_config()
 
@@ -94,10 +57,10 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert binding["cache"]["runtime_enabled"] is False
     assert binding["pathlock"]["provider"] == "filesystem"
     assert binding["encryption"] == {
-        "root_key": b"k" * 32,
-        "provider_type": 1,
+        "root_key": root_key,
+        "provider_type": PROVIDER_LOCAL,
     }
-    assert isinstance(service._encryptor, _FakeEncryptor)
+    assert isinstance(service._encryptor, FileEncryptor)
 
 
 @pytest.mark.parametrize("backend", ["local", "cuvs"])

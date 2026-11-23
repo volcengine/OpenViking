@@ -79,20 +79,17 @@ async def test_add_locations_resource_server_default_and_precedence(
     app.state.config.user_config_defaults = UserConfig(
         add_targets=AddTargetsConfig(resource_uri="viking://~/resources")
     )
-    assert (
-        app.state.config.user_config_defaults.add_targets.resource_uri == "viking://~/resources"
-    )
-
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")
 
     response = await client.patch(
         "/api/v1/user-settings/add-locations",
-        json={"resource_uri": "viking://~/resources/project-a"},
+        json={"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"},
     )
     assert response.status_code == 200, response.text
     body = response.json()["result"]
     assert body["effective"]["resource_uri"] == "viking://user/default/resources/project-a"
+    assert body["effective"]["skill_uri"] == "viking://user/default/skills"
 
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/project-a/")
@@ -160,26 +157,6 @@ async def test_add_locations_skill_server_default(
     )
     assert response.status_code == 200, response.text
     assert response.json()["result"]["root_uri"] == "viking://agent/skills/default-agent-skill"
-
-
-async def test_add_locations_patch_accepts_home_alias_uris(
-    app,
-    user_role_client: httpx.AsyncClient,
-    sample_markdown_file,
-    upload_temp_dir,
-):
-    client = user_role_client
-    response = await client.patch(
-        "/api/v1/user-settings/add-locations",
-        json={"resource_uri": "viking://~/resources/project-a", "skill_uri": "viking://~/skills"},
-    )
-    assert response.status_code == 200, response.text
-    effective = response.json()["result"]["effective"]
-    assert effective["resource_uri"] == "viking://user/default/resources/project-a"
-    assert effective["skill_uri"] == "viking://user/default/skills"
-
-    root_uri = await _add_resource(client, sample_markdown_file.name)
-    assert root_uri.startswith("viking://user/default/resources/project-a/")
 
 
 async def test_add_locations_patch_rejects_bad_uris(client: httpx.AsyncClient):

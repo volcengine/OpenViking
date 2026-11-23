@@ -326,12 +326,17 @@ async def test_trusted_cancelled_flush_requeues_batch_and_shutdown_preserves_sto
 
     monkeypatch.setattr(runtime, "ensure_trusted_identities", blocked_batch)
     flush = asyncio.create_task(plugin.flush_trusted_identities())
-    await entered.wait()
-    flush.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await flush
-    monkeypatch.setattr(runtime, "ensure_trusted_identities", original)
-    await plugin.shutdown()
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        flush.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(flush, timeout=2)
+    finally:
+        if not flush.done():
+            flush.cancel()
+            await asyncio.gather(flush, return_exceptions=True)
+        monkeypatch.setattr(runtime, "ensure_trusted_identities", original)
+        await asyncio.wait_for(plugin.shutdown(), timeout=2)
     assert await runtime.has_user("acme", "bob")
     assert await runtime.get_registered_user_role("acme", "alice") == Role.ADMIN
 
@@ -420,8 +425,7 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
         ]
         if custom:
             invalid_claims.extend(
-                ({"org": value}, "account_id")
-                for value in ("Team|prod", "Team\n", "_system")
+                ({"org": value}, "account_id") for value in ("Team|prod", "Team\n", "_system")
             )
         for changes, field in invalid_claims:
             token = jwt.encode(

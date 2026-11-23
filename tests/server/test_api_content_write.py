@@ -4,12 +4,8 @@
 """Tests for content write endpoint."""
 
 import json
-from types import SimpleNamespace
 
 import pytest
-
-from openviking.service import fs_service
-from openviking.service.fs_service import FSService
 
 
 async def _first_file_uri(client, root_uri: str) -> str:
@@ -21,40 +17,6 @@ async def _first_file_uri(client, root_uri: str) -> str:
     children = resp.json().get("result", [])
     assert children
     return children[0]
-
-
-async def test_write_endpoint_registered(client):
-    resp = await client.get("/api/v1/content/write")
-    assert resp.status_code == 405
-
-
-async def test_set_tags_endpoint_registered(client):
-    resp = await client.get("/api/v1/fs/attrs/set_tags")
-    assert resp.status_code == 405
-
-
-async def test_fs_attrs_filters_legacy_non_kv_search_tags(monkeypatch):
-    class FakeVikingDBManagerProxy:
-        def __init__(self, *_args):
-            pass
-
-        async def filter(self, **_kwargs):
-            return [
-                {
-                    "level": 2,
-                    "search_tags": ["default", "team=search", "bad=", "channel=app"],
-                }
-            ]
-
-    monkeypatch.setattr(fs_service, "VikingDBManagerProxy", FakeVikingDBManagerProxy)
-
-    tags = await FSService(vikingdb=object())._tags_attr(
-        "viking://user/default/memories/events/example.md",
-        SimpleNamespace(),
-        is_dir=False,
-    )
-
-    assert tags == ["team=search", "channel=app"]
 
 
 async def test_write_rejects_directory_uri(client_with_resource):
@@ -173,27 +135,6 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     }
 
 
-async def test_write_appends_existing_resource_file(client_with_resource):
-    client, uri = client_with_resource
-    file_uri = await _first_file_uri(client, uri)
-    original = (await client.get("/api/v1/content/read", params={"uri": file_uri})).json()["result"]
-
-    write_resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": file_uri,
-            "content": "\n\nAppended section.",
-            "mode": "append",
-            "wait": True,
-        },
-    )
-    assert write_resp.status_code == 200
-
-    read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
-    assert read_resp.status_code == 200
-    assert read_resp.json()["result"] == original + "\n\nAppended section."
-
-
 async def test_write_without_wait_is_immediately_readable(client_with_resource):
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
@@ -249,65 +190,37 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
     assert resp.status_code == 400
 
 
-async def test_api_create_mode_new_file_success(client):
-    """Test create mode with a new file."""
-    resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": "viking://user/default/memories/new_file.md",
-            "content": "new content",
-            "mode": "create",
-            "wait": True,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["mode"] == "create"
+async def test_api_create_overwrites_the_same_file_and_updates_persisted_tags(client):
+    uri = "viking://resources/write-contract/page.md"
 
-
-async def test_api_create_mode_write_then_read(client):
-    """Create a new file then read it back — verify content roundtrips."""
-    uri = "viking://user/default/memories/create_readback_test.md"
-
-    write_resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": uri,
-            "content": "# Hello\n\nWrite-then-read verification.",
-            "mode": "create",
-            "wait": True,
-        },
-    )
-    assert write_resp.status_code == 200
-
-    read_resp = await client.get("/api/v1/content/read", params={"uri": uri})
-    assert read_resp.status_code == 200
-    assert read_resp.json()["result"] == "# Hello\n\nWrite-then-read verification."
-
-
-async def test_api_create_mode_existing_file_overwrites(client_with_resource):
-    """create is an upsert: writing an existing file overwrites it, no 409."""
-    client, uri = client_with_resource
-    file_uri = await _first_file_uri(client, uri)
-
-    resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": file_uri,
-            "content": "# Overwritten\n\nvia create.",
-            "mode": "create",
-            "wait": True,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["mode"] == "create"
-
-    read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
-    assert read_resp.status_code == 200
-    assert read_resp.json()["result"] == "# Overwritten\n\nvia create."
+    for options, text, tags in (
+        (
+            {"mode": "create", "tags": ["Team=Search"]},
+            "first version",
+            {"team=search"},
+        ),
+        (
+            {"mode": "create", "tags": ["env=prod"], "tag_mode": "append"},
+            "replacement",
+            {"env=prod", "team=search"},
+        ),
+        ({"mode": "replace"}, "plain replace", {"env=prod", "team=search"}),
+        ({"mode": "append", "tag_mode": "clear"}, "\naddition", set()),
+    ):
+        written = await client.post(
+            "/api/v1/content/write",
+            json={"uri": uri, "content": text, "wait": True, **options},
+        )
+        assert written.status_code == 200, written.text
+        assert written.json()["result"]["mode"] == options["mode"]
+        result = await client.get("/api/v1/content/read", params={"uri": uri})
+        assert result.status_code == 200, result.text
+        assert result.json()["result"] == (
+            "plain replace\naddition" if options["mode"] == "append" else text
+        )
+        attrs = await client.get("/api/v1/fs/attrs", params={"uri": uri})
+        assert attrs.status_code == 200, attrs.text
+        assert set(attrs.json()["result"]["attrs"]["tags"]) == tags
 
 
 async def test_api_create_mode_invalid_extension_400(client):
@@ -344,135 +257,36 @@ async def test_api_create_mode_empty_content_success(client):
     assert body["result"]["mode"] == "create"
 
 
-async def test_api_create_mode_regression_replace_unchanged(client_with_resource):
-    """Test replace mode still works (regression test)."""
-    client, uri = client_with_resource
-    file_uri = await _first_file_uri(client, uri)
-    resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": file_uri,
-            "content": "# Updated\n\nFresh content.",
-            "mode": "replace",
-            "wait": True,
-        },
+async def test_set_tags_omitted_tags_is_noop(client_with_resource):
+    client, root = client_with_resource
+    file_uri = await _first_file_uri(client, root)
+    tags = {"team=search", "env=prod"}
+    seeded = await client.post(
+        "/api/v1/fs/attrs/set_tags", json={"uri": file_uri, "tags": ["team=search"]}
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["mode"] == "replace"
+    assert seeded.status_code == 200, seeded.text
 
-    read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
-    assert read_resp.status_code == 200
-    assert read_resp.json()["result"] == "# Updated\n\nFresh content."
-
-
-async def test_set_tags_omitted_tags_is_noop(client, service, monkeypatch):
-    captured = {}
-
-    async def fake_set_tags(
-        *,
-        uri,
-        tags,
-        ctx,
-        mode="replace",
-        recursive=False,
-    ):
-        del ctx
-        captured["uri"] = uri
-        captured["tags"] = tags
-        captured["mode"] = mode
-        captured["recursive"] = recursive
-        return {"uri": uri, "tags": tags, "mode": mode}
-
-    monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
-
-    resp = await client.post(
+    appended = await client.post(
         "/api/v1/fs/attrs/set_tags",
-        json={"uri": "viking://resources/demo/file.md"},
+        json={"uri": root, "tags": ["env=prod"], "mode": "append", "recursive": True},
     )
+    assert appended.status_code == 200, appended.text
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
+    assert set(attrs.json()["result"]["attrs"]["tags"]) == tags
 
-    assert resp.status_code == 200
-    assert captured == {
-        "uri": "viking://resources/demo/file.md",
-        "tags": [],
-        "mode": "replace",
-        "recursive": False,
-    }
+    omitted = await client.post("/api/v1/fs/attrs/set_tags", json={"uri": file_uri})
+    assert omitted.status_code == 200, omitted.text
+    assert omitted.json()["result"]["tags_updated"] is False
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
+    assert set(attrs.json()["result"]["attrs"]["tags"]) == tags
 
-
-async def test_set_tags_clear_allows_omitted_tags(client, service, monkeypatch):
-    captured = {}
-
-    async def fake_set_tags(
-        *,
-        uri,
-        tags,
-        ctx,
-        mode="replace",
-        recursive=False,
-    ):
-        del ctx
-        captured["uri"] = uri
-        captured["tags"] = tags
-        captured["mode"] = mode
-        captured["recursive"] = recursive
-        return {"uri": uri, "tags": tags, "mode": mode}
-
-    monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
-
-    resp = await client.post(
-        "/api/v1/fs/attrs/set_tags",
-        json={"uri": "viking://resources/demo/file.md", "mode": "clear"},
+    cleared = await client.post(
+        "/api/v1/fs/attrs/set_tags", json={"uri": file_uri, "mode": "clear"}
     )
-
-    assert resp.status_code == 200
-    assert captured == {
-        "uri": "viking://resources/demo/file.md",
-        "tags": [],
-        "mode": "clear",
-        "recursive": False,
-    }
-
-
-async def test_set_tags_passes_tags_to_service(client, service, monkeypatch):
-    captured = {}
-
-    async def fake_set_tags(
-        *,
-        uri,
-        tags,
-        ctx,
-        mode="replace",
-        recursive=False,
-    ):
-        del ctx
-        captured["uri"] = uri
-        captured["tags"] = tags
-        captured["mode"] = mode
-        captured["recursive"] = recursive
-        return {"uri": uri, "tags": tags}
-
-    monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
-
-    resp = await client.post(
-        "/api/v1/fs/attrs/set_tags",
-        json={
-            "uri": "viking://resources/demo/file.md",
-            "tags": ["a", "b"],
-            "mode": "append",
-            "recursive": True,
-        },
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured == {
-        "uri": "viking://resources/demo/file.md",
-        "tags": ["a", "b"],
-        "mode": "append",
-        "recursive": True,
-    }
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["result"]["tags_updated"] is True
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
+    assert attrs.json()["result"]["attrs"]["tags"] == []
 
 
 async def test_set_tags_rejects_wait_and_timeout_fields(client_with_resource):
@@ -530,13 +344,21 @@ async def test_tag_updates_preserve_content_and_isolate_batch_failures(
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "vector": [0.1] * service.vikingdb_manager.vector_dim,
-                "search_tags": ["team=search", "used_count=5", "last_used_at=123"],
+                "search_tags": ["team=search", "used_count=5", "last_used_at=123"]
+                + (["default", "bad="] if uri == file_uri else []),
             },
             ctx=owner,
         )
     root_ctx = RequestContext(user=service.user, role=Role.ROOT)
     before = await service.vikingdb_manager.get_strict(record_ids, ctx=root_ctx)
     monkeypatch.setitem(app.dependency_overrides, get_request_context, lambda: ctx)
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
+    assert attrs.status_code == 200, attrs.text
+    assert set(attrs.json()["result"]["attrs"]["tags"]) == {
+        "team=search",
+        "used_count=5",
+        "last_used_at=123",
+    }
 
     response = await client.post(
         "/api/v1/fs/attrs/set_tags",
