@@ -2685,20 +2685,9 @@ def _history_arg(kind: str, description: str = "", **extra: Any) -> Any:
     return Field(json_schema_extra=shape)
 
 
-def _history_text(value: Any) -> str:
-    """Any JSON value as text: null means not given, a list of strings is comma-joined."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return ",".join(value)
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
 # The field annotation stays ``str``: FastMCP then passes string arguments through
 # unchanged instead of pre-parsing JSON-looking text such as '{"detail":"Not Found"}'.
-_HistoryText = Annotated[str, BeforeValidator(_history_text)]
+_HistoryText = Annotated[str, BeforeValidator(_history.argument_text)]
 
 
 @_mcp_error_results()

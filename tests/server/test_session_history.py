@@ -891,8 +891,8 @@ async def test_bad_stored_fields_become_one_unreadable_item(client, service):
         )
         assert resp.status_code == 200
     resp = await client.post(
-        f"/api/v1/sessions/{sid}/history",
-        json={"action": "read", "id": "2", "before": 1, "after": 1},
+        "/api/v1/sessions/history",
+        json={"action": "read", "id": "2", "before": 1, "after": 1, "session": sid},
     )
     text = resp.json()["result"]["text"]
     h = hashlib.sha256(sid.encode()).hexdigest()[:6]
@@ -1264,26 +1264,6 @@ async def test_json_looking_text_over_the_http_transport(service):
                 )
 
 
-async def test_rest_session_ids_with_commas_are_kept_whole(client):
-    for sid in ("a,b", "c"):
-        resp = await client.post(
-            f"/api/v1/sessions/{sid}/messages", json={"role": "user", "content": f"in {sid}"}
-        )
-        assert resp.status_code == 200
-    resp = await client.post(
-        "/api/v1/sessions/a,b/history",
-        json={"action": "search", "query": "in", "sessions": ["c"]},
-    )
-    text = resp.json()["result"]["text"]
-    assert "Session a,b = " in text and "Session c = " in text
-    assert "Nothing is saved" not in text
-    too_long = await client.post(
-        "/api/v1/sessions/a,b/history",
-        json={"action": "overview", "sessions": ["x" * 1_000, "y" * 1_000]},
-    )
-    assert "session is longer than 2000 characters" in too_long.json()["result"]["text"]
-
-
 @pytest.mark.parametrize("response_tokens", [history.RESPONSE_TOKENS, 1_500])
 async def test_read_neighbours_fit_the_budget(service, monkeypatch, response_tokens):
     monkeypatch.setattr(history, "RESPONSE_TOKENS", response_tokens)
@@ -1539,8 +1519,8 @@ async def test_rest_history_route_returns_text_ids_and_more_flag(client):
         )
         assert resp.status_code == 200
     resp = await client.post(
-        f"/api/v1/sessions/{sid}/history",
-        json={"action": "search", "query": "needle", "limit": 2},
+        "/api/v1/sessions/history",
+        json={"action": "search", "query": "needle", "limit": 2, "session": sid},
     )
     assert resp.status_code == 200
     result = resp.json()["result"]
@@ -1548,25 +1528,53 @@ async def test_rest_history_route_returns_text_ids_and_more_flag(client):
     assert result["ids"] == [f"{h}#1", f"{h}#2"]
     assert result["has_more"] is True
     assert result["text"].startswith(history.FRAME)
-
-    unknown = await client.post(
-        "/api/v1/sessions/hist-rest-missing/history", json={"action": "overview"}
-    )
-    assert unknown.status_code == 200
-    assert "Nothing is saved under session hist-rest-missing" in unknown.json()["result"]["text"]
-
-    bad = await client.post(f"/api/v1/sessions/{sid}/history", json={"action": "read", "nope": 1})
-    assert bad.status_code == 400
-    removed = await client.post(
-        f"/api/v1/sessions/{sid}/history", json={"action": "search", "tool": "bash"}
-    )
-    assert removed.status_code == 400
     read = await client.post(
-        f"/api/v1/sessions/{sid}/history", json={"action": "read", "id": "2", "limit": 4}
+        "/api/v1/sessions/history",
+        json={"action": "read", "id": "2", "limit": 4, "session": sid},
     )
     assert read.json()["result"]["text"].endswith(" · chars 0–4 of 11\n| beta")
-    too_many = await client.post(
-        f"/api/v1/sessions/{sid}/history",
-        json={"action": "overview", "sessions": [f"s{i}" for i in range(history.MAX_SESSIONS)]},
-    )
-    assert too_many.status_code == 400
+
+    old = await client.post(f"/api/v1/sessions/{sid}/history", json={"action": "overview"})
+    assert old.status_code == 404
+    created = await client.post("/api/v1/sessions", json={"session_id": "history"})
+    assert created.status_code == 200
+    got = await client.get("/api/v1/sessions/history")
+    assert got.status_code == 200 and got.json()["result"]["session_id"] == "history"
+    deleted = await client.delete("/api/v1/sessions/history")
+    assert deleted.json()["result"] == {"session_id": "history"}
+    assert (await client.get("/api/v1/sessions/history")).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "search", "query": "deploy.sh", "session": SID},
+        {"action": "read", "id": "1", "offset": 10, "limit": 20, "session": SID},
+        {"action": "overview", "session": SID},
+        {"action": "overview"},
+        {"action": "overview", "session": ""},
+        {"action": "search", "query": "deploy", "session": f"no-such-session,{SID}"},
+        {"action": "overview", "session": ",".join([*(f"s{i}" for i in range(10)), SID])},
+        {"action": "read", "id": "1", "session": [SID]},
+        {"action": "search", "query": "deploy", "role": None, "from_id": None, "session": SID},
+        {"action": "read", "id": "2", "limit": "12", "before": "1", "session": SID},
+        {"action": "read", "id": "2", "limit": "null", "session": SID},
+        {"action": "read", "id": "1", "limit": 1.5, "session": SID},
+        {"action": "delete", "session": SID},
+        {"action": {"name": "read"}, "session": SID},
+        {"action": "read", "id": f"{H}#99", "session": SID},
+        {"action": "overview", "session": "no-such-session"},
+        {"action": "search", "query": "q" * 501, "session": SID},
+        {"action": "search", "query": "deploy", "tool": "bash", "sessions": ["x"], "session": SID},
+    ],
+)
+async def test_rest_route_answers_exactly_as_the_mcp_tool(stored, app, client, arguments):
+    from openviking.server.auth import get_session_request_context
+
+    app.dependency_overrides[get_session_request_context] = lambda: CTX
+    result = await mcp_endpoint.mcp.call_tool("session_history", arguments)
+    mcp_text = (result[0] if isinstance(result, tuple) else result)[0].text
+    resp = await client.post("/api/v1/sessions/history", json=arguments)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"]["text"] == mcp_text
+    assert mcp_text.startswith(history.FRAME)

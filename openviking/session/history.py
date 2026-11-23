@@ -461,6 +461,17 @@ def _clamp(value: Optional[int], default: int, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
+def argument_text(value: Any) -> str:
+    """Any JSON value as text: null means not given, a list of strings is comma-joined."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return ",".join(value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
 def _text_arg(value: Any) -> Optional[str]:
     """A text argument as str ("" when absent), or None when it is not text."""
     if value is None:
@@ -473,6 +484,9 @@ def _text_arg(value: Any) -> Optional[str]:
 def _int_arg(value: Any) -> tuple[Optional[int], bool]:
     """A whole-number argument (None when absent), and whether it was acceptable."""
     if value is None or value == "":
+        return None, True
+    if isinstance(value, str) and value.strip(" \t\n\r") == "null":
+        # FastMCP turns the JSON text null of an untyped argument into None, so REST does too.
         return None, True
     if isinstance(value, bool):
         return None, False
@@ -487,13 +501,12 @@ def _int_arg(value: Any) -> tuple[Optional[int], bool]:
     return None, False
 
 
-def _split_sessions(sessions: Sequence[str] | str) -> tuple[List[str], bool]:
+def _split_sessions(sessions: str) -> tuple[List[str], bool]:
     """Distinct session ids in order, at most MAX_SESSIONS, and whether more were given."""
-    raw = sessions.split(",") if isinstance(sessions, str) else sessions
     result: List[str] = []
     seen: set[str] = set()
-    for value in raw:
-        sid = str(value or "").strip()
+    for value in sessions.split(","):
+        sid = value.strip()
         if not sid or sid in seen:
             continue
         if len(result) == MAX_SESSIONS:
@@ -1528,18 +1541,9 @@ async def _answer(
     def bad(line: str) -> HistoryResult:
         return HistoryResult("\n".join([FRAME, line]))
 
-    # A list (REST) stays a list, so an id that contains a comma can still be named.
-    session_list: Optional[List[str]] = None
-    if isinstance(sessions, (list, tuple)):
-        if not all(isinstance(sid, str) for sid in sessions):
-            return bad(_t_bad_text("session"))
-        session_list = list(sessions)
-        session_text: Optional[str] = ",".join(sessions)
-    else:
-        session_text = _text_arg(sessions)
     texts = {
         "action": _text_arg(action),
-        "session": session_text,
+        "session": _text_arg(sessions),
         "query": _text_arg(query),
         "role": _text_arg(role),
         "id": _text_arg(id_),
@@ -1571,9 +1575,7 @@ async def _answer(
     if action == "search" and not query.strip():
         return bad(T_BAD_SEARCH)
 
-    requested, truncated = _split_sessions(
-        session_list if session_list is not None else session_text
-    )
+    requested, truncated = _split_sessions(texts["session"])
     if not requested:
         return HistoryResult("\n".join([FRAME, T_NEED_SESSION]))
     notes = [T_TOO_MANY_SESSIONS] if truncated else []

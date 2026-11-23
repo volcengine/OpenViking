@@ -936,7 +936,7 @@ Read-only lookup over everything a session has saved: every archive that has a `
 - **search**: literal, case-insensitive substring search over the rendered text; tool names are part of it, so an ordinary query finds them (the rest of the rendering labels is not matched). Each matching line is printed verbatim, where a line is the text between line breaks as `read` shows it, and is addressed as `[<id> @<offset>]`: the offset is where the printed text starts in the item, so a `read` with that id and offset starts exactly on it. The first line of an item also carries `<role> · <time>`. Several matches on one line print it once; a line longer than about 400 characters prints a window of about 200 characters on each side of the match and its address says `part of a <N>-char line`; a further match outside that window prints a window of its own and counts as a line. At most 5 lines are printed per item, followed by how many more matching lines that item has and the offset of the next one. Results are oldest first: archives, then the live tail, and with several sessions the older session (later in `session`) first. `limit` caps the printed lines; when it or the response size cuts the result, the newest lines are left out and the answer says how many and at which id and offset they start. When a phrase of several words has no hit, the lines of the items that contain all the words are printed and the answer says so. Calls of a tool whose name ends with `session_history` are skipped. Each call scans at most about 32 MB of text, oldest first, and says where it stopped.
 - **read**: an exact range of one item, from `offset` (default 0) and at most `limit` characters, within the response cap. When less than the whole item is shown, its header ends with `chars <start>–<end> of <total>`; reading again from `<end>` continues it. `before`/`after` add up to 20 neighbouring items each (default 0), each shown up to about 400 tokens.
 - **Cut points**: answers state where something was cut (a read's char range, where left-out search lines start, where a scan stopped) rather than spelling out the next call.
-- **Argument bounds**: `query` up to 500 characters, `id`/`from_id`/`to_id` 140, `session` 2,000; longer values are answered with a `Bad arguments` line, as is a number argument that is not a whole number. Through MCP, text arguments are taken as given (JSON-looking text such as `{"detail":"Not Found"}` stays text), null means not given, another JSON value is used as its compact JSON text, and a list of strings for `session` is joined with commas. The HTTP body rejects text fields over 10,000 characters; its `sessions` list is kept as a list, so an id containing a comma can be named there.
+- **Argument bounds**: `query` up to 500 characters, `id`/`from_id`/`to_id` 140, `session` 2,000; longer values are answered with a `Bad arguments` line, as is a number argument that is not a whole number. Text arguments are taken as given (JSON-looking text such as `{"detail":"Not Found"}` stays text), null means not given, another JSON value is used as its compact JSON text, and a list of strings for `session` is joined with commas. The HTTP route takes the same arguments as the MCP tool, ignores names the tool does not declare, and answers with the same text.
 - **overview**: one row per archive (id range, time range, first user message), the live-tail range, and subagent sessions (`<session_id>__subagent-…`).
 - Responses are capped at about 4,000 tokens. Problems are answered in `text` with status 200: without any session the answer only says that one is needed and lists no other sessions; a named session with nothing saved for this caller is reported as such; a stored line that cannot be parsed stays in place as an unreadable item, except the unparseable last line of a file without a final newline, which is still being written and is skipped; a session file that cannot be read hides that session (its ids would be wrong) while other sessions are still answered. A lookup never creates a session.
 - Reads use the caller's identity and permission checks, and every text (live and archived `messages.jsonl`, tool-result `output.txt`) passes through the same read-time privacy step as `read`, so a value registered after it was stored comes back as its <code v-pre>{{ov_privacy:…}}</code> placeholder; placeholders are never resolved. The step runs on groups of whole JSONL lines, so large files are not refused; a single message too large to check is shown as unreadable, and a tool output too large to check is replaced by its stored preview. Sessions are not indexed; search is a linear scan.
@@ -948,12 +948,12 @@ Read-only lookup over everything a session has saved: every archive that has a `
 
 #### 2. Interface and Parameter Description
 
-**Parameters** (JSON body; `session_id` is in the path)
+**Parameters** (JSON body, the arguments of the MCP tool `session_history`)
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | action | str | Yes | - | `search`, `read` or `overview` |
-| sessions | list[str] | No | `[]` | More session ids (at most 9), newest first, looked at after the path session |
+| session | str | Yes | - | Session ids, comma-separated, newest first; at most 10 are used |
 | query | str | No | `""` | search: literal text, case-insensitive; required for search |
 | role | str | No | `""` | search: `user`, `assistant` or `tool`. `user` is what the user wrote; a user-role message that only carries tool results counts as `tool` and is labelled so in results |
 | from_id / to_id | str | No | `""` | search: inclusive id bounds |
@@ -969,14 +969,14 @@ The response `result` has `text`, `ids` (the ids of the items shown) and `has_mo
 **HTTP API**
 
 ```http
-POST /api/v1/sessions/{session_id}/history
+POST /api/v1/sessions/history
 ```
 
 ```bash
-curl -X POST "http://localhost:1933/api/v1/sessions/a1b2c3d4/history" \
+curl -X POST "http://localhost:1933/api/v1/sessions/history" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"action": "search", "query": "ECONNREFUSED", "limit": 5}'
+  -d '{"action": "search", "session": "a1b2c3d4", "query": "ECONNREFUSED", "limit": 5}'
 ```
 
 **Response Example**
