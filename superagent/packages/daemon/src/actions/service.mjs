@@ -559,28 +559,40 @@ export class ActionService {
 
   // Daemon-authored reply (slash command result, failure notice) on an event's
   // own reply route. Never carries model output; keyed once per event+purpose.
-  async replyToEvent(event, text, purpose) {
+  // With a card, the reply is that card where the route takes cards, else the
+  // text; a card that is refused is followed by the text.
+  async replyToEvent(event, text, purpose, { card = null } = {}) {
     if (!event?.replyRoute) return { ok: false, stage: 'no-target' };
-    const trace = { purpose, connector: event.connectorInstance, action: event.replyRoute.action, inboundSeq: event.seq };
-    try {
-      const result = await this.deliver({
-        caller: { trace },
-        connector: event.connectorInstance,
-        action: event.replyRoute.action,
-        input: { ...event.replyRoute.input, content: { type: 'markdown', text } },
-        key: actionKey('daemon', purpose, eventIdentity(event)),
-        summary: text,
-        scope: { chatId: event.chatId, threadId: event.threadId, convKey: event.conversationKey },
-        inboundSeq: event.seq ?? null,
-        // Non-chat history is rendered from the event it answers.
-        metadata: event.chatId ? {} : { event: event.envelope },
-      });
-      this.logger.info('daemon_reply', { ...trace, outcome: result.duplicate ? 'duplicate' : result.dry_run ? 'dry_run' : 'ok' });
-      return { ok: true };
-    } catch (error) {
-      this.logger.warn('daemon_reply', { ...trace, outcome: 'failed', error: safeError(error) });
-      return { ok: false, stage: 'send', error };
+    const send = async (content, as) => {
+      const trace = { purpose, connector: event.connectorInstance, action: event.replyRoute.action, inboundSeq: event.seq,
+        contentType: content.type };
+      try {
+        const result = await this.deliver({
+          caller: { trace },
+          connector: event.connectorInstance,
+          action: event.replyRoute.action,
+          input: { ...event.replyRoute.input, content },
+          key: actionKey('daemon', as, eventIdentity(event)),
+          summary: text,
+          scope: { chatId: event.chatId, threadId: event.threadId, convKey: event.conversationKey },
+          inboundSeq: event.seq ?? null,
+          // Non-chat history is rendered from the event it answers.
+          metadata: event.chatId ? {} : { event: event.envelope },
+        });
+        this.logger.info('daemon_reply', { ...trace, outcome: result.duplicate ? 'duplicate' : result.dry_run ? 'dry_run' : 'ok' });
+        return { ok: true };
+      } catch (error) {
+        this.logger.warn('daemon_reply', { ...trace, outcome: 'failed', error: safeError(error) });
+        return { ok: false, stage: 'send', error };
+      }
+    };
+    const takesCards = this.actionSpec(event.connectorInstance, event.replyRoute.action, event.chatId)?.content?.includes('card');
+    if (card && takesCards) {
+      const sent = await send({ type: 'card', card }, purpose);
+      if (sent.ok) return sent;
+      return send({ type: 'markdown', text }, `${purpose}:text`);
     }
+    return send({ type: 'markdown', text }, purpose);
   }
 
   // Daemon-authored operational notice to the owner's primary IM. Unlike the
