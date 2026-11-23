@@ -12,6 +12,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Tuple
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,12 +20,15 @@ from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
     AGFSNotSupportedError,
+    GitConcurrentCommitError,
+    GitRestoreWritebackConflictError,
+    GitRestoreWritebackPartialError,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_work_index import get_task_context
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
@@ -400,6 +404,111 @@ def vfs_encrypted(workspace, ragfs_client_type):
     client.mount("localfs", "/local", {"local_dir": str(fs_root)})
     try:
         yield VikingFS(agfs=client)
+    finally:
+        client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_failure", ["resume", "edit", "new_head", "no_write_permission"])
+async def test_restore_resumes_only_safe_pending_paths(
+    workspace, ragfs_client_type, monkeypatch, after_failure
+):
+    config, disk = _write_workspace(workspace)
+    ctx = _make_ctx(account="acct_restore_resume")
+    project = "viking://resources/project"
+    blocked = disk / ctx.account_id / "resources/project/blocked"
+    pending, remove, applied = (
+        f"{project}/blocked/a.txt",
+        f"{project}/blocked/remove.txt",
+        f"{project}/done.txt",
+    )
+
+    def open_storage():
+        client = ragfs_client_type(
+            git_config_path=str(config),
+            config={
+                "service_name": "snapshot-test",
+                "encryption": {"root_key": b"k" * 32, "provider_type": 1},
+            },
+        )
+        client.mount("localfs", "/local", {"local_dir": str(disk)})
+        vfs = VikingFS(agfs=client)
+        monkeypatch.setattr(vfs, "_schedule_restore_reindex_for_paths", AsyncMock())
+        return client, vfs
+
+    client, vfs = open_storage()
+    try:
+        await vfs.write_file(pending, b"old", ctx=ctx)
+        await vfs.write_file(applied, b"old", ctx=ctx)
+        source = await vfs.commit(message="before", paths=[project], ctx=ctx)
+        for uri in [pending, remove, applied]:
+            await vfs.write_file(uri, b"new", ctx=ctx)
+        await vfs.commit(message="after", paths=[project], ctx=ctx)
+        params = {"project_dir": project, "source_commit": source["commit_oid"], "ctx": ctx}
+
+        blocked.chmod(0o500)
+        try:
+            with pytest.raises(GitRestoreWritebackPartialError) as error:
+                await vfs.restore(**params)
+        finally:
+            blocked.chmod(0o700)
+        restore_oid = error.value.new_commit_oid
+        assert await vfs.read(applied, ctx=ctx) == b"old"
+        assert await vfs.read(pending, ctx=ctx) == b"new"
+        assert await vfs.read(remove, ctx=ctx) == b"new"
+    finally:
+        client.close()
+
+    # Reopen the store so the retry cannot use the original binding's memory.
+    client, vfs = open_storage()
+    try:
+        if after_failure == "new_head":
+            outside = "viking://resources/another.txt"
+            await vfs.write_file(outside, b"separate commit", ctx=ctx)
+            await vfs.commit(message="unrelated", paths=[outside], ctx=ctx)
+            with pytest.raises(GitConcurrentCommitError):
+                await vfs.restore(**params)
+            assert await vfs.read(pending, ctx=ctx) == b"new"
+            return
+        if after_failure == "edit":
+            await vfs.write_file(pending, b"newer edit", ctx=ctx)
+            with pytest.raises(GitRestoreWritebackConflictError):
+                await vfs.restore(**params)
+            assert await vfs.read(pending, ctx=ctx) == b"newer edit"
+            assert await vfs.read(remove, ctx=ctx) == b"new"
+            return
+
+        if after_failure == "no_write_permission":
+            user_ctx = RequestContext(user=ctx.user, role=Role.USER)
+            monkeypatch.setattr(vfs, "_ensure_access", AsyncMock())
+            deny_writes = AsyncMock(side_effect=PermissionDeniedError("Permission revoked"))
+            monkeypatch.setattr(vfs, "_ensure_access_many", deny_writes)
+            with pytest.raises(PermissionDeniedError):
+                await vfs.restore(**{**params, "ctx": user_ctx})
+            assert deny_writes.await_args.args[0] == [pending]
+            assert await vfs.read(pending, ctx=ctx) == b"new"
+            assert await vfs.read(remove, ctx=ctx) == b"new"
+            return
+
+        await vfs.write_file(applied, b"edit after successful writeback", ctx=ctx)
+        plan = await vfs.restore(**params, dry_run=True)
+        assert [item["path"] for item in plan["diff"]["to_write"]] == ["blocked/a.txt"]
+        assert plan["diff"]["to_delete"] == ["blocked/remove.txt"]
+
+        result = await vfs.restore(**params)
+        assert result["result"] == "applied"
+        assert result["new_commit_oid"] == restore_oid
+        assert result["written_paths"] == ["resources/project/blocked/a.txt"]
+        assert result["deleted_paths"] == ["resources/project/blocked/remove.txt"]
+        assert (await vfs.show("main", ctx=ctx))["oid"] == restore_oid
+        assert await vfs.read(pending, ctx=ctx) == b"old"
+        assert await vfs.read(applied, ctx=ctx) == b"edit after successful writeback"
+        with pytest.raises((AGFSNotFoundError, NotFoundError)):
+            await vfs.read(remove, ctx=ctx)
+
+        await vfs.write_file(pending, b"uncommitted", ctx=ctx)
+        assert (await vfs.restore(**params))["result"] == "noop"
+        assert await vfs.read(pending, ctx=ctx) == b"uncommitted"
     finally:
         client.close()
 

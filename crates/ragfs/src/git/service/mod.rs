@@ -39,6 +39,7 @@ mod commit;
 mod diff;
 mod log;
 mod restore;
+mod restore_writeback;
 mod snapshot_log;
 mod show;
 mod validate;

@@ -37,6 +37,7 @@ from .exceptions import (
     AGFSSerializationError,
     AGFSTimeoutError,
     GitConcurrentCommitError,
+    GitRestoreWritebackConflictError,
     GitRestoreWritebackPartialError,
 )
 from .helpers import cp, download, upload
@@ -252,6 +253,7 @@ __all__ = [
     "AGFSInternalError",
     "AGFSPluginError",
     "GitConcurrentCommitError",
+    "GitRestoreWritebackConflictError",
     "GitRestoreWritebackPartialError",
     "cp",
     "upload",

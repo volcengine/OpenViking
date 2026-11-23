@@ -21,7 +21,7 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 
 - **Commit**: A snapshot is a commit, uniquely identified by a 40-hex SHA-1 `commit_oid`. Most commands also accept an abbreviated OID prefix or a branch name (e.g. `main`).
 - **Branch**: The default branch is `main`. Unless you pass one explicitly, every command operates on `main`.
-- **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. The restore preserves prior commits; when the selected source tree matches HEAD, it returns `noop` without creating a commit. This comparison does not inspect uncommitted workspace changes.
+- **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. The restore preserves prior commits; when the selected source tree matches HEAD and there is no pending writeback, it returns `noop` without creating a commit. This comparison does not inspect uncommitted workspace changes.
 - **Scope**: `commit` can be limited to specific URIs via `paths`; `restore` can be limited to a subtree via `project_dir`, leaving files outside it untouched.
 
 ## ACL permissions
@@ -566,9 +566,15 @@ On a successful write that produces a new commit, `result` is `applied`. Note `p
 
 When the restore has vector side effects (files written/deleted), the response carries a `task_id` you can poll via `GET /api/v1/tasks/{task_id}` to track the background vector rebuild.
 
+**Retrying partial writeback**
+
+For a directory restore, `RESTORE_WRITEBACK_PARTIAL` means the branch already points to the restore commit and some working-tree changes still need to be applied. Repeat the same restore with the same source commit, branch, and directory to resume the recorded changes. The retry reuses the restore commit and checks current permissions. A changed branch or working file returns a conflict. A dry run of a pending restore reports its outstanding write and delete paths.
+
+The server records the writeback plan before advancing the branch. The record is stored with the Git objects and refs, so it is available to another process using the same stores. Only affected paths are checked. A regular `noop` still compares the snapshot trees, preserving uncommitted workspace edits.
+
 **Response (noop)**
 
-When the source is byte-identical to the current state, the result is `noop` and no new commit is created:
+When the selected source tree matches HEAD and there is no pending writeback, the result is `noop` and no new commit is created:
 
 ```json
 {

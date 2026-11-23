@@ -1,4 +1,7 @@
+use super::restore_writeback::{parse_oid, writeback_ref, PendingRestore};
 use super::*;
+use crate::git::types::RestoreDiff;
+use futures::stream::{self, StreamExt};
 
 impl GitService {
     /// Restore a subtree at `project_dir` to the state it had in `source_commit`,
@@ -58,6 +61,62 @@ impl GitService {
         )
         .await?;
         let head_oid = self.ref_store.read(account, &ref_name).await?;
+        let writeback_key = project_dir
+            .as_deref()
+            .filter(|_| !allow_missing_source)
+            .map(|project| writeback_ref(branch, project, source_oid));
+        let (previous_record, pending) = match &writeback_key {
+            Some(key) => self.read_restore_writeback(account, key).await?,
+            None => (None, None),
+        };
+        if let (Some(key), Some(project), Some(record_oid), Some(pending)) =
+            (&writeback_key, project_dir, previous_record, pending)
+        {
+            let parent = parse_oid(&pending.parent)?;
+            let restore_commit = parse_oid(&pending.commit)?;
+            if head_oid == restore_commit {
+                let diff = pending.diff()?;
+                if *dry_run {
+                    return Ok(RestoreResponse::DryRun {
+                        diff,
+                        head: head_oid,
+                        source: source_oid,
+                    });
+                }
+                let (diff, written, deleted) = pending
+                    .check_workspace(self, account, project, diff)
+                    .await?;
+                let observed_head = self.ref_store.read(account, &ref_name).await?;
+                if observed_head != head_oid {
+                    return Err(GitError::ConcurrentCommit {
+                        ref_name,
+                        expected: Some(head_oid),
+                        actual: Some(observed_head),
+                    });
+                }
+                return self
+                    .apply_restore_writeback(
+                        &req,
+                        source_oid,
+                        parent,
+                        restore_commit,
+                        diff,
+                        pending.unchanged,
+                        Some((key, record_oid, pending)),
+                        written,
+                        deleted,
+                    )
+                    .await;
+            }
+            // A prepared record whose parent is still HEAD never reached writeback.
+            if head_oid != parent {
+                return Err(GitError::ConcurrentCommit {
+                    ref_name,
+                    expected: Some(restore_commit),
+                    actual: Some(head_oid),
+                });
+            }
+        }
         let source_meta =
             load_commit_meta(self.object_store.as_ref(), account, &source_oid).await?;
         let head_meta = load_commit_meta(self.object_store.as_ref(), account, &head_oid).await?;
@@ -136,19 +195,6 @@ impl GitService {
         let snapshot_log_paths =
             super::snapshot_log::restore_snapshot_log_paths(project_dir.as_deref(), &diff);
 
-        // 6. Prepare writeback metadata. Paths in the diff are relative to
-        //    project_dir — prefix here. NOTE: the VFS is NOT mutated yet. The
-        //    ref-consistency protocol (steps 7–9) must complete first so that a
-        //    losing CAS race leaves the working tree untouched; the actual
-        //    writeback happens in step 10 only after the ref swap succeeds.
-        use futures::stream::{self, StreamExt};
-
-        let abs_prefix = match project_dir {
-            Some(project_dir) => format!("/local/{}/{}", account, project_dir),
-            None => format!("/local/{}", account),
-        };
-        let unchanged_count = diff.unchanged.len();
-
         // 7. Build the new tree: load head.tree into an editor and splice
         //    source_subtree at project_dir, or use source tree directly if full restore.
         let new_tree_oid = match project_dir {
@@ -192,6 +238,25 @@ impl GitService {
         )
         .await?;
 
+        let unchanged_count = diff.unchanged.len();
+        let record = if let (Some(key), Some(project)) = (&writeback_key, project_dir) {
+            let prefix = format!("/local/{account}/{project}");
+            let pending = PendingRestore::prepare(
+                self.vfs.as_ref(),
+                &prefix,
+                head_oid,
+                new_commit_oid,
+                &diff,
+            )
+            .await;
+            let oid = self
+                .save_restore_writeback(account, key, previous_record, Some(&pending))
+                .await?;
+            Some((key.as_str(), oid, pending))
+        } else {
+            None
+        };
+
         // 9. CAS-swap the branch ref. Map Conflict → ConcurrentCommit.
         //    This MUST happen before any VFS writeback: if another commit
         //    advanced the branch between our HEAD read and now, the CAS fails
@@ -204,6 +269,14 @@ impl GitService {
         {
             Ok(()) => {}
             Err(crate::git::error::RefStoreError::Conflict { expected, actual }) => {
+                if let Some((key, oid, _)) = &record {
+                    if let Err(err) = self
+                        .save_restore_writeback(account, key, Some(*oid), None)
+                        .await
+                    {
+                        warn!("could not clear unpublished restore writeback record: {err}");
+                    }
+                }
                 return Err(GitError::ConcurrentCommit {
                     ref_name,
                     expected,
@@ -221,6 +294,40 @@ impl GitService {
             &snapshot_log_paths,
         )
         .await;
+
+        self.apply_restore_writeback(
+            &req,
+            source_oid,
+            head_oid,
+            new_commit_oid,
+            diff,
+            unchanged_count,
+            record,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_restore_writeback(
+        &self,
+        req: &RestoreRequest,
+        source_oid: ObjectId,
+        head_oid: ObjectId,
+        new_commit_oid: ObjectId,
+        diff: RestoreDiff,
+        unchanged_count: usize,
+        mut record: Option<(&str, ObjectId, PendingRestore)>,
+        mut written_paths: Vec<String>,
+        mut deleted_paths: Vec<String>,
+    ) -> Result<RestoreResponse, GitError> {
+        let account = &req.account;
+        let project_dir = &req.project_dir;
+        let abs_prefix = match project_dir {
+            Some(project) => format!("/local/{account}/{project}"),
+            None => format!("/local/{account}"),
+        };
 
         // 10. The ref swap committed our new state. Now write back through the
         //     VFS so the working tree reflects the restored content. The ref
@@ -363,7 +470,6 @@ impl GitService {
         //      that actually reached the VFS — callers use these lists to
         //      drive reindex, and a path whose write failed must not be
         //      reindexed (the file's blob never landed).
-        let mut written_paths: Vec<String> = Vec::with_capacity(write_results.len());
         let mut failed_writes: Vec<(String, String)> = Vec::new();
         for (path, r) in write_results {
             match r {
@@ -371,7 +477,6 @@ impl GitService {
                 Err(e) => failed_writes.push((path, e.to_string())),
             }
         }
-        let mut deleted_paths: Vec<String> = Vec::with_capacity(delete_results.len());
         let mut failed_deletes: Vec<(String, String)> = Vec::new();
         for (path, r) in delete_results {
             match r {
@@ -390,20 +495,33 @@ impl GitService {
         //     payload for the caller to schedule reindex for the paths that
         //     *did* succeed and to report the failures upward.
         if !failed_writes.is_empty() || !failed_deletes.is_empty() {
-            return Err(GitError::RestoreWritebackPartial(Box::new(
-                crate::git::types::RestoreWritebackPartial {
-                    new_commit_oid,
-                    source_commit: source_oid,
-                    parent_commit: head_oid,
-                    written: written_actual,
-                    deleted: deleted_actual,
-                    unchanged: unchanged_count,
-                    written_paths,
-                    deleted_paths,
-                    failed_writes,
-                    failed_deletes,
-                },
-            )));
+            let failure = crate::git::types::RestoreWritebackPartial {
+                new_commit_oid,
+                source_commit: source_oid,
+                parent_commit: head_oid,
+                written: written_actual,
+                deleted: deleted_actual,
+                unchanged: unchanged_count,
+                written_paths,
+                deleted_paths,
+                failed_writes,
+                failed_deletes,
+            };
+            if let (Some((key, oid, pending)), Some(project)) = (record.as_mut(), project_dir) {
+                pending.retain_failures(project, &failure);
+                if let Err(err) = self
+                    .save_restore_writeback(account, key, Some(*oid), Some(pending))
+                    .await
+                {
+                    // The earlier record still covers all unconfirmed paths.
+                    warn!("could not narrow pending restore writeback record: {err}");
+                }
+            }
+            return Err(GitError::RestoreWritebackPartial(Box::new(failure)));
+        }
+        if let Some((key, oid, _)) = record {
+            self.save_restore_writeback(account, key, Some(oid), None)
+                .await?;
         }
 
         Ok(RestoreResponse::Applied {
@@ -423,7 +541,7 @@ impl GitService {
 ///
 /// Errors out with `CorruptedObject` if the loaded object is not a blob —
 /// this should not happen on a well-formed store but is cheap to verify.
-async fn read_blob_payload(
+pub(super) async fn read_blob_payload(
     store: &dyn ObjectStore,
     account: &str,
     blob_oid: &gix_hash::ObjectId,

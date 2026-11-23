@@ -453,6 +453,8 @@ class _SnapshotMixin:
                     tree_dir=tree_dir or "",
                     ctx=real_ctx,
                 )
+                # Apply the same source whose pending paths we just authorized.
+                kwargs["source_commit"] = plan["source"]
             try:
                 result = await self._async_agfs.run(
                     "git_restore", **kwargs, ctx=self._pathlock_fs_ctx(real_ctx, lease)
