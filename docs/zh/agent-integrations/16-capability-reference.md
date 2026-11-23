@@ -600,12 +600,12 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 无 | 无 | 一条常驻 rule，加上与 Claude Code 相同的五个 | 安装器菜单 |
 | TRAE、TRAE CN、ZCode | 无 | 无 | 与 Claude Code 相同的五个 | 安装器菜单 |
 | Kimi Code | 无 | 无 | 与 Claude Code 相同的五个 | 无 |
-| OpenCode | 无 | 无 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`，仅在插件注册自己的 MCP 服务时提供 | 有 |
-| DSH | 无 | 无 | 与 OpenCode 相同的四个 | 无 |
+| OpenCode | 无 | 无 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor`，仅在插件注册自己的 MCP 服务时提供 | 有 |
+| DSH | 无 | 无 | 与 OpenCode 相同的五个，`mcpEnabled` 为 `false` 时不提供 | 无 |
 | CodeBuddy Code | 无 | 无 | 与 Claude Code 相同的五个 | 无 |
 | Qoder CLI | 无 | 无 | 与 Claude Code 相同的五个 | 无 |
 | Antigravity | 无 | 无 | 与 Claude Code 相同的五个，每个也可以用 `/<name>` 调用 | 安装器菜单 |
-| pi | 有 | `/viking`、`/viking commit` | 与 OpenCode 相同的四个，`mcpEnabled` 为 `false` 时不提供 | 有 |
+| pi | 有 | `/viking`、`/viking commit` | 与 OpenCode 相同的五个，`mcpEnabled` 为 `false` 时不提供 | 有 |
 | OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 四个插件 skill，含 `openviking-rule-search` | 有；检查 key 的角色和版本兼容性 |
 | Hermes（内置） | 无 | 无 | 无 | 有；`hermes memory status` 列出环境变量覆盖项 |
 | ov CLI | 无 | CLI 本身 | 无 | `ov config` |
@@ -722,7 +722,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 
 - v2 每次提问只召回一次，把结果存进用户消息的 metadata；后续模型 step 直接复用，不发新请求，prompt 缓存因此保持稳定。每次执行结束时，v2 读取完整的用户、助手和工具消息用于捕获。
 - v2 在每次执行结束后检查提交阈值，包括失败和被中断的执行，这些执行会保留状态。v2 只处理本 location 的会话，游标存在插件 storage 中。v2 没有 toast API，改为写日志。
-- MCP 工具保留 `openviking_` 前缀；v2 设置 `codemode: false`。4 个 skill 只在插件注册自己的 MCP 服务时加入，hook-only 模式或关闭 `mcp.openviking` 时不加入。
+- MCP 工具保留 `openviking_` 前缀；v2 设置 `codemode: false`。5 个 skill 只在插件注册自己的 MCP 服务时加入，hook-only 模式或关闭 `mcp.openviking` 时不加入。
 - URI guard 在工具执行前拒绝路径为 `viking://` URI 的 `read`、`glob` 和 `grep` 调用，并给出对应的 `openviking_*` 工具调用示例；`bash` 命令中包含这种 URI 时照常执行，执行后在工具输出末尾追加一条提示。
 - 提交超时 30 秒。
 
@@ -738,6 +738,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - 默认捕获工具结果（`captureToolResults: true`），所以 `ov-experience-memory` 能完整运行；关闭捕获后，只能检索和应用 Experience。
 - URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令（Windows 上是 `pwsh` 命令）附加提示。
 - Cordis patch 中写明的凭据优先于其他所有来源；对行为配置来说，patch 是优先级最低的一层。
+- `mcpEnabled: false`（写在 `ovcli.conf` 的 `plugin` 或 `plugin.dsh` 中，或写在 Cordis patch 中）时，既不挂载 MCP 工具，也不挂载内置 skill。
 
 <a id="pi-pi-coding-agent-extension"></a>
 

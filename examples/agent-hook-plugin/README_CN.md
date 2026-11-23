@@ -25,7 +25,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 `hosts/<host>/` 只放宿主配置或原生 manifest；可执行适配器放在上一层。`../../memory-plugin-shared/lib` 这条相对路径在源码树、配置型安装和 Kimi 组装后的原生插件里都成立。
 
-`skills/ov-memory-doctor` 是体检 skill 的源文件；`examples/memory-plugin-shared/sync.mjs` 把它和共享 skill 一起复制到各个 `hosts/<host>/skills`。
+`examples/memory-plugin-shared/sync.mjs` 把 `examples/skills` 下的共享 skill（包括 `ov-memory-doctor`）复制到各个 `hosts/<host>/skills`。
 
 记忆逻辑本身不在这里：召回、批量写入、待处理队列、凭据解析与 MCP 代理都来自 `examples/memory-plugin-shared/lib`，由安装脚本复制到 `~/.openviking/agent-integrations/memory-plugin-shared/lib`。
 

@@ -602,12 +602,12 @@ Settings that apply only to some integrations:
 | Cursor | No | None | An always-on rule plus the same five as Claude Code | Installer menu |
 | TRAE, TRAE CN, ZCode | No | None | Same five as Claude Code | Installer menu |
 | Kimi Code | No | None | Same five as Claude Code | No |
-| OpenCode | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, only when the plugin registers its MCP server | Yes |
-| DSH | No | None | The same four as OpenCode | No |
+| OpenCode | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`, only when the plugin registers its MCP server | Yes |
+| DSH | No | None | The same five as OpenCode, unless `mcpEnabled` is `false` | No |
 | CodeBuddy Code | No | None | Same five as Claude Code | No |
 | Qoder CLI | No | None | Same five as Claude Code | No |
 | Antigravity | No | None | Same five as Claude Code, each also invocable as `/<name>` | Installer menu |
-| pi | Yes | `/viking`, `/viking commit` | The same four as OpenCode, unless `mcpEnabled` is `false` | Yes |
+| pi | Yes | `/viking`, `/viking commit` | The same five as OpenCode, unless `mcpEnabled` is `false` | Yes |
 | OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Four plugin skills, including `openviking-rule-search` | Yes; checks the key's role and version compatibility |
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
 | ov CLI | No | The CLI itself | None | `ov config` |
@@ -724,7 +724,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 - v2 recalls once per prompt and stores the result in the user message's metadata; later model steps reuse it without new requests, which keeps the prompt cache stable. At the end of each execution, v2 reads the complete user, assistant, and tool messages for capture.
 - v2 checks the commit threshold after every execution, including failed or interrupted ones, which keep their state. It handles only sessions of its own location and stores its cursor in plugin storage. v2 has no toast API and logs notices instead.
-- MCP tools keep the `openviking_` prefix; v2 sets `codemode: false`. The 4 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
+- MCP tools keep the `openviking_` prefix; v2 sets `codemode: false`. The 5 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
 - The URI guard denies `read`, `glob`, and `grep` calls whose path is a `viking://` URI before they run, with an example call to the matching `openviking_*` tool; a `bash` command that contains one runs, and a notice is appended to its output afterwards.
 - Commit timeout is 30 seconds.
 
@@ -740,6 +740,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - Tool results are captured by default (`captureToolResults: true`), so `ov-experience-memory` runs its full loop; turning capture off leaves it able only to find and apply Experience.
 - The URI guard lowercases tool names, denies file tools on `viking://` paths in `tools/pre-execute`, and adds a notice to `bash` commands, and to `pwsh` commands on Windows, in `tools/post-execute`.
 - Credentials named in the Cordis patch override every other source. For behavior settings the patch is the lowest layer.
+- `mcpEnabled: false` (in `ovcli.conf` `plugin` or `plugin.dsh`, or in the Cordis patch) mounts neither the MCP tools nor the bundled skills.
 
 <a id="pi-pi-coding-agent-extension"></a>
 

@@ -25,7 +25,7 @@ The root `plugin.json` is host-neutral package metadata used for version checks 
 
 `hosts/<host>/` holds host configuration or native-manifest files; executable adapters stay one level up. The `../../memory-plugin-shared/lib` import resolves in the repository, config-driven installs, and Kimi's assembled native bundle.
 
-`skills/ov-memory-doctor` is the source of the doctor skill; `examples/memory-plugin-shared/sync.mjs` copies it, with the shared skills, into each `hosts/<host>/skills`.
+`examples/memory-plugin-shared/sync.mjs` copies the shared skills from `examples/skills`, `ov-memory-doctor` among them, into each `hosts/<host>/skills`.
 
 The memory logic itself is not here: recall, batching, the pending queue, credential resolution and the MCP proxy all come from `examples/memory-plugin-shared/lib`, which the installer copies to `~/.openviking/agent-integrations/memory-plugin-shared/lib`.
 

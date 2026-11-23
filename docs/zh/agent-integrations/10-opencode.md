@@ -40,7 +40,7 @@ opencode
 
 OpenCode 2 使用同一个包：v2 调用 `setup()`，OpenCode 1 调用 `server()`。OpenCode 2 会把 `"plugin"` 规范化为 `"plugins"`，因此安装器继续写兼容 v1/v2 的 `"plugin"`；不要为了 v2 手工改写现有配置。
 
-插件自带 skill，不需要另外安装：`openviking-memory`、`openviking-skills`、`ov-experience-memory` 和 `openviking-rule-search`，告诉模型什么时候该用哪个 OpenViking 工具。OpenCode 1 由插件的 `config` hook 把插件的 `skills/` 目录加进 `skills.paths`；OpenCode 2 则通过 `skill.transform` 注册这个目录。这些 skill 只随插件的 OpenViking MCP server 一起提供：hook-only 模式下、或你关闭了 `mcp.openviking` 时不会加入。
+插件自带 skill，不需要另外安装：`openviking-memory`、`openviking-skills`、`ov-experience-memory` 和 `openviking-rule-search` 告诉模型什么时候该用哪个 OpenViking 工具，`ov-memory-doctor` 诊断插件安装、客户端配置和服务端连接。OpenCode 1 由插件的 `config` hook 把插件的 `skills/` 目录加进 `skills.paths`；OpenCode 2 则通过 `skill.transform` 注册这个目录。这些 skill 只随插件的 OpenViking MCP server 一起提供：hook-only 模式下、或你关闭了 `mcp.openviking` 时不会加入。
 
 在 OpenCode 2 中，插件把 MCP server 设为 `codemode: false`，所以工具仍以 `openviking_*` 直接暴露，不会收进 Code Mode。OpenCode 2 没有插件 toast API，服务不可用等信息只写入插件日志。
 
@@ -148,6 +148,8 @@ OpenCode 1.15.7 不会调用插件 dispose。v1 的短时 CLI 运行也可能在
 ```
 
 ## 故障排查
+
+先运行诊断：`node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs` 检查插件安装、客户端配置和服务端连接，并为发现的每个问题给出修复方法（支持 `--json`、`--offline`、`--timeout <ms>`、`--no-color`）。npm 包在 `scripts/` 下带有同一个脚本，会话中也可以用 `ov-memory-doctor` skill 运行它。
 
 | 问题 | 排查方向 |
 |------|----------|
