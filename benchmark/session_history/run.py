@@ -133,8 +133,6 @@ def arm_policy(arm, settings):
         "context_window": settings.context_window,
         "compaction_threshold": settings.compaction_threshold,
         "summary_max_tokens": settings.summary_max_tokens,
-        # Forked probes replace each other's unconfirmed tails; an idle delivery would not.
-        "idle_seconds": 86400,
         "show_tool_calls": True,
         "agent_windows": False,
         "gateway_tools": True,
@@ -504,14 +502,14 @@ def checks(arm, requests, probes, logs, settings):
         )
     if any((p["hidden_rounds"] or 0) > 0 and not p["tools"] for p in probes):
         problems.append("lookup detection unavailable: hidden rounds without tool lines")
-    # The gap probe races capture by design; everything before it must have been delivering.
+    # The gap probe's turn is unsaved during its lookups by design; the other turns must save.
     ids = (requests.get("checkpoint") or [""])[-1:]
     ids += [r for p in probes if p["kind"] != "gap" for r in p["request_ids"]]
     for record in (logs[r] for r in ids if r in logs):
         status = record.get("capture_status")
         if status not in (None, "active"):
             reason = record.get("capture_reason") or ""
-            problems.append(f"capture not delivering: {status} {reason}".strip())
+            problems.append(f"capture not saving: {status} {reason}".strip())
             break
     found["gap_probe_valid"] = found["gap_compaction"] in verified
     found["problems"] = problems
@@ -540,29 +538,38 @@ async def run_arm(gateway, scenario, settings, run_id):
         labels.append(label)
         if status != 200:
             raise HarnessError(f"{session} {label}: HTTP {status}: {json.dumps(body)[:500]}")
+        message = (body.get("choices") or [{}])[0].get("message") or {}
+        # Kept in place of the scripted reply, as a client keeps it: the gateway saved the turn
+        # up to this reply, and the next turn's save continues after it.
+        history.append({"role": "assistant", "content": message.get("content") or ""})
 
     started = time.monotonic()
-    for index, turn in enumerate(scenario.turns):
-        history.append(turn.messages[0])
-        if index % settings.turns_per_request == 0:
+    turns = scenario.turns
+    for index, turn in enumerate(turns):
+        # A request ends each group of turns; the last group goes with the checkpoint.
+        if (index + 1) % settings.turns_per_request or index + 1 == len(turns):
+            history.extend(turn.messages)
+        else:
+            history.extend(turn.messages[:-1])
             await send(f"turn-{index}")
-        history.extend(turn.messages[1:])
     history.append(scenario.checkpoint.messages[0])
     await send("checkpoint")
-    history.extend(scenario.checkpoint.messages[1:])
-    # Capture delivers in the background; probes should find everything saved.
+    # The checkpoint turn is saved after its reply was sent.
     await asyncio.sleep(settings.settle_seconds)
+    gap = None
+    if scenario.gap_probe and not settings.skip_gap:
+        # First, while the history ends where the gateway saved: its request is the first to
+        # carry the gap turns, and they stay unsaved until its reply ends.
+        gap_history = [*history, *(m for t in scenario.gap_turns for m in t.messages)]
+        gap = await ask(gateway, session, gap_history, scenario.gap_probe, settings, policy, key)
+        if gap["attempts"]:
+            requests["gap"] = gap["attempts"][0]
     results = [
         (probe, await ask(gateway, session, history, probe, settings, policy, key))
         for probe in scenario.probes
     ]
-    if scenario.gap_probe and not settings.skip_gap:
-        # Its request is the first to carry the gap turns, and its cut removes them at once.
-        gap_history = [*history, *(m for t in scenario.gap_turns for m in t.messages)]
-        result = await ask(gateway, session, gap_history, scenario.gap_probe, settings, policy, key)
-        if result["attempts"]:
-            requests["gap"] = result["attempts"][0]
-        results.append((scenario.gap_probe, result))
+    if gap is not None:
+        results.append((scenario.gap_probe, gap))
     logs = {}
     for _ in range(5):
         logs = await gateway.logs()
@@ -734,7 +741,7 @@ def markdown(result):
 def expected_calls(settings):
     """Model calls per seed and arm before hidden rounds and client-tool continuations."""
     scenario = build(0, "history", filler_turns=settings.filler_turns)
-    main = -(-len(scenario.turns) // settings.turns_per_request) + 1
+    main = -(-len(scenario.turns) // settings.turns_per_request)
     probes = len(scenario.probes) + (0 if settings.skip_gap else 1)
     summaries = 1 + (0 if settings.skip_gap else 1)
     return main, summaries, probes

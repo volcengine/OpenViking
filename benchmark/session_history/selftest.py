@@ -173,17 +173,17 @@ def fix_round_checks():
     allowed = Settings(model="m", context_window=8000, allow_unverified=True)
     found = checks("history", requests, [], {}, allowed)
     expect(found["valid"] and found["gap_probe_valid"], f"3: --allow-unverified {found}")
-    # 4: capture must be delivering at the checkpoint and the probes, not the gap probe.
+    # 4: capture must be saving at the checkpoint and the probes, not the gap probe.
     cut = {"compaction_tokens": 100, "capture_status": "active"}
-    paused = {**cut, "capture_status": "paused", "capture_reason": "gateway_key_revoked"}
+    save_failed = {**cut, "capture_status": "failed", "capture_reason": "save_timeout"}
     gap_probe = scored_probe("gap", "not saved yet", request_ids=["g"])
-    found = checks("history", requests, [gap_probe], {"c": cut, "g": paused}, settings)
+    found = checks("history", requests, [gap_probe], {"c": cut, "g": save_failed}, settings)
     expect(found["valid"], f"4: the gap probe's capture state counted: {found['problems']}")
     probe = scored_probe("token", "x", request_ids=["p"])
-    found = checks("history", requests, [probe], {"c": cut, "g": cut, "p": paused}, settings)
+    found = checks("history", requests, [probe], {"c": cut, "g": cut, "p": save_failed}, settings)
     expect(
-        "capture not delivering: paused gateway_key_revoked" in found["problems"],
-        f"4: paused capture not reported: {found['problems']}",
+        "capture not saving: failed save_timeout" in found["problems"],
+        f"4: failed capture not reported: {found['problems']}",
     )
 
     # 5: tool sizes must fall from history to grep-hint to closed-book within a seed.
@@ -432,8 +432,7 @@ async def transport_checks():
 async def gateway_runs():
     probes = [*build(1, "history").probes, build(1, "history").gap_probe]
     model = ScriptedModel(probes)
-    # The gap turn's write is slow, so a lookup right after its cut cannot find it yet.
-    viking = FakeOpenViking(CATALOG, slow_marker="acquired migration lock", slow_seconds=2)
+    viking = FakeOpenViking(CATALOG)
     runner, base = await serve(viking, model)
     results = {}
     try:
@@ -460,6 +459,7 @@ async def gateway_runs():
                 ) as http:
                     for name, arm in CASES:
                         model.offered.clear()
+                        model.looked.clear()
                         settings = Settings(
                             model=name,
                             arms=[arm],
@@ -472,7 +472,7 @@ async def gateway_runs():
                         result = await run(
                             settings, http, "user-key", run_id="selftest-" + name, log=print
                         )
-                        results[name, arm] = (result, list(model.offered))
+                        results[name, arm] = (result, list(model.offered), list(model.looked))
     finally:
         await runner.cleanup()
     return results
@@ -483,7 +483,7 @@ def by_kind(result):
 
 
 def gateway_checks(results):
-    for (name, arm), (result, offered) in results.items():
+    for (name, arm), (result, offered, _) in results.items():
         label = f"{name}/{arm}"
         for item in result["runs"]:
             expect(item["checks"]["valid"], f"{label}: invalid run {item['checks']['problems']}")
@@ -504,6 +504,11 @@ def gateway_checks(results):
         expect(probes[kind]["lookup_tools"] == {"session_history": 1}, f"looker/history: {kind}")
     expect(probes["injection"]["injection_complied"], "looker/history: compliance not detected")
     expect(probes["gap"]["gap_outcome"] == "abstained", "looker/history: gap not reported")
+    note = "before your current context window are not saved yet"
+    expect(
+        any("migration lock" in t and note in t for t in results["looker", "history"][2]),
+        "looker/history: the gap lookup lacks the gateway's not-saved note",
+    )
     expect(all((p["hidden_rounds"] or 0) >= 1 for p in probes.values()), "hidden rounds missing")
 
     probes = by_kind(results["looker", "grep-hint"][0])
@@ -545,7 +550,7 @@ def main():
     asyncio.run(transport_checks())
     results = asyncio.run(gateway_runs())
     gateway_checks(results)
-    for (name, arm), (result, _) in results.items():
+    for (name, arm), (result, _, _) in results.items():
         row = result["summary"].get(arm, {}).get("all", {})
         tools = Counter(row.get("lookup_tools", {}))
         print(

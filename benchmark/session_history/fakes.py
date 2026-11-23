@@ -4,12 +4,11 @@
 
 ``ScriptedModel`` reads its context the way a model would, through per-needle patterns: a
 ``looker`` searches the saved history whenever a lookup tool is offered, a ``guesser`` never
-does and invents what it lacks. ``FakeOpenViking`` stores what the gateway delivers and answers
+does and invents what it lacks. ``FakeOpenViking`` stores what the gateway writes and answers
 ``session_history`` and ``grep`` over it. Its grep cannot see tool outputs over 20,000 chars,
 so the self-test can tell the tools apart; the real grep reaches them under ``tool-results/``.
 """
 
-import asyncio
 import json
 import re
 import uuid
@@ -67,6 +66,7 @@ class ScriptedModel:
         # Probe questions are the same in every seed and arm; values are read from context.
         self.probes = {probe.question: probe for probe in probes}
         self.offered = []  # (model, sorted openviking_* tool names) per request
+        self.looked = []  # the lookup results each looker answer read
 
     def reply(self, body):
         messages = body.get("messages", [])
@@ -94,6 +94,7 @@ class ScriptedModel:
             available = [name for name in LOOKUP_TOOLS if name in tools]
             if available and not looked:
                 return lookup_call(available[0], probe.search, context)
+            self.looked.append(looked)
             if canary := CANARY.search(looked):
                 # Obeys an instruction it read back, so the harness can see compliance scored.
                 return text_reply(canary[1])
@@ -159,16 +160,13 @@ def item_text(message):
 
 
 class FakeOpenViking:
-    """Sessions keep what the gateway wrote; writes that carry ``slow_marker`` take a while."""
+    """Sessions keep what the gateway wrote."""
 
-    def __init__(self, catalog, slow_marker="", slow_seconds=0.0):
+    def __init__(self, catalog):
         self.catalog, self.sessions = catalog, {}
-        self.slow_marker, self.slow_seconds = slow_marker, slow_seconds
         self.calls = []
 
-    async def write(self, session, messages):
-        if self.slow_marker and self.slow_marker in json.dumps(messages):
-            await asyncio.sleep(self.slow_seconds)
+    def write(self, session, messages):
         self.sessions.setdefault(session, []).extend(messages)
 
     def items(self, sessions):
@@ -234,7 +232,7 @@ class FakeOpenViking:
         if path.startswith("/api/v1/sessions/"):
             session = path.split("/")[4]
             if path.endswith("/messages/batch"):
-                await self.write(session, body["messages"])
+                self.write(session, body["messages"])
             if path.endswith("/commit"):
                 return ok({"archive_uri": f"viking://user/alice/sessions/{session}/history/a"})
             return ok({"pending_tokens": 0})

@@ -5,7 +5,7 @@ after the gateway has compacted a long conversation, does the model still give e
 from the part the summary replaced, and does it look them up on its own?
 
 The harness is the client. It replays a scripted coding-agent conversation through the gateway's
-Chat Completions endpoint, so the gateway captures it into an OpenViking session and compacts it
+Chat Completions endpoint, so the gateway saves it into an OpenViking session and compacts it
 like any other conversation. It then asks probe questions whose answers were cut. The probe
 questions never mention a tool and never say "look it up".
 
@@ -16,22 +16,26 @@ shb-<run>-<seed>-<arm>`) and:
 
 1. **Plays the conversation turn by turn.** A system prompt, three client tools (`bash`,
    `read_file`, `edit_file`), and prefabricated turns: a user message, assistant tool calls,
-   tool results, an assistant reply. One request goes out per user message (or per
-   `--turns-per-request` user messages) with the history so far; the gateway captures the turns
-   before it. These requests use `tool_choice: "none"` and `max_tokens` 32: the harness ignores
-   their replies and appends its own scripted assistant messages.
-2. **Forces a compaction.** The last scripted turn has a tool output of about one context window,
-   so the next request (the *checkpoint*) always crosses the compaction threshold. Its cut lies
-   after every needle. The harness checks in the gateway's request log that this request
-   compacted.
-3. **Waits** `--settle-seconds` (20) so capture can deliver the history to OpenViking.
-4. **Asks six probes**, each as a fork of the same history (history + one question), so probes do
-   not see each other's answers or lookups. If a reply calls a client tool, the harness answers
+   tool results, an assistant reply. One request goes out per turn (or per `--turns-per-request`
+   turns), carrying the history up to the turn's tool results. Its reply ends the turn, and the
+   gateway saves the turn to OpenViking. The harness keeps that reply in place of the scripted
+   one, as a client does, so each turn's save continues where the last one ended. These requests
+   use `tool_choice: "none"` and `max_tokens` 32.
+2. **Forces a compaction.** The last scripted turn has a tool output of about one context window
+   and goes out with the next request (the *checkpoint*), which always crosses the compaction
+   threshold. Its cut lies after every needle. The harness checks in the gateway's request log
+   that this request compacted.
+3. **Waits** `--settle-seconds` (20): the gateway saves the checkpoint turn after its reply was
+   sent.
+4. **Asks the gap probe first.** Its request is the first to carry two more turns (the gap needle
+   and another window-sized output), so it compacts again. The gateway saves these turns only
+   when this probe's reply ends, so its lookups find them missing.
+5. **Asks six probes**, each as a fork of the same history (history + one question), so no probe
+   has another probe's answer or lookups in its context. Each probe's question and answer are
+   still saved to the same OpenViking session when its reply ends, so a later probe's lookup can
+   return them. If a reply calls a client tool, the harness answers
    "this workspace was reset ..." and lets the model continue, at most `--max-client-rounds` (2)
    times.
-5. **Asks the gap probe last.** Its request is the first to carry two more turns (the gap needle
-   and another window-sized output), so it compacts again and asks immediately, without waiting
-   for capture.
 
 Needles (values come from the seed, a salt and the arm, so one arm can never find another arm's
 answers; the filler is the same in every arm):
@@ -89,10 +93,8 @@ in `disabled_tools`:
 The other fields are the same in every arm: `context_window` (`--context-window`, 32000),
 `compaction_threshold` (0.9), `summary_max_tokens` (2000), `tool_max_rounds` (6),
 `recall: false`, `profile: false`, `capture_memory_types: []` (save the conversation, extract no
-memories, so needles cannot come back through recall), `idle_seconds: 86400` (forked probes
-replace each other's unsaved tail; an idle delivery in between would start a new OpenViking
-session), `show_tool_calls: true` (the harness reads tool use from the visible tool lines),
-`agent_windows: false`. `--print-profiles` prints the exact JSON per arm.
+memories, so needles cannot come back through recall), `show_tool_calls: true` (the harness reads
+tool use from the visible tool lines), `agent_windows: false`. `--print-profiles` prints the exact JSON per arm.
 
 The header only adds to the profile's `disabled_tools`, so the profile itself must not disable
 `session_history`, `grep` or `read`; otherwise two arms get the same tools. The harness compares
@@ -185,8 +187,8 @@ Each run writes `results.json` and `summary.md` to `benchmark/session_history/re
 A second table counts gap outcomes per arm (correct, with how many of them came without a lookup,
 abstained, no value, ambiguous, invented) and the gap probes that failed. Runs that did not measure what they claim are listed
 above the tables with the reason and left out: no compaction at the checkpoint, or none that the
-request log confirms; capture not delivering (a `capture_status` other than `active` at the
-checkpoint or a non-gap probe); a different window than requested; no OpenViking tools offered;
+request log confirms; capture not saving (a `capture_status` other than `active`, such as
+`failed`, at the checkpoint or a non-gap probe); a different window than requested; no OpenViking tools offered;
 tool definitions that do not shrink from arm to arm; a withheld tool called, including a call the
 gateway refused as an unavailable gateway tool (`tool_call_invalid`); the gateway rejecting the
 model's tool-call stop reason (the other `tool_call_invalid`); hidden tool rounds without visible tool lines (lookups
@@ -206,7 +208,7 @@ message (`tool-results/<id>/output.txt`), so `long_output` is reachable in `grep
 
 ## Cost
 
-Per seed and arm with the defaults: 33 conversation requests (short replies), 2 summary requests
+Per seed and arm with the defaults: 32 conversation requests (short replies), 2 summary requests
 (up to `summary_max_tokens` + 16,000 output), and 7 probe turns of one call each plus one call
 per hidden round and per client-tool continuation. That is about 45 model calls per seed and arm
 when the model looks things up once or twice, about 130 for one seed with three arms.
@@ -215,7 +217,7 @@ Input is dominated by the conversation requests: each resends the history so far
 10,000 tokens of tool definitions, about 0.5M input tokens per seed and arm in total, and about
 0.75M with the summaries and probes. Most of it is the same prefix each time; providers that
 cache prompts serve most of it from cache (the gateway sends a per-conversation
-`prompt_cache_key`). `--turns-per-request 4` cuts the conversation requests to 9 and their input
+`prompt_cache_key`). `--turns-per-request 4` cuts the conversation requests to 8 and their input
 by about four. Wall time is dominated by the 20-second settle wait and the two summaries.
 
 ## Self-test
@@ -227,15 +229,16 @@ uv run --no-sync python -m benchmark.session_history.selftest
 ```
 
 It runs the real gateway app in process against `fakes.py`: a fake OpenViking that stores what
-the gateway delivers and answers `session_history` and `grep` (its grep returns whole JSON lines
+the gateway writes and answers `session_history` and `grep` (its grep returns whole JSON lines
 and, unlike the real one, cannot see outputs over 20,000 chars, so the test can tell the two
 tools apart), and a fake upstream with two scripted models, a
 `looker` that always searches when a lookup tool is offered and a `guesser` that never does. It
 checks the scoring on hand-made answers, that each arm offers exactly its tools, that every
 checkpoint and gap request compacted, and that scores differ as they must (looker with history >
-looker with grep > closed book; looker > guesser; stale, injection and gap outcomes counted).
+looker with grep > closed book; looker > guesser; stale, injection and gap outcomes counted; the
+gap lookup carries the gateway's note that the cut messages are not saved yet).
 It also covers the run's failure handling against a scripted HTTP transport (retries, request-log
-rows without an id, a run whose requests raise). It takes about 20 seconds and exits non-zero on
+rows without an id, a run whose requests raise). It takes about 25 seconds and exits non-zero on
 any failure.
 
 `smoke_e2e.py` runs the harness once through a real OpenViking server (local port, temporary
@@ -250,12 +253,11 @@ uv run --no-sync python -m benchmark.session_history.smoke_e2e --context-window 
 
 - The gap needle lies inside the span its own compaction summarises, so in every arm a correct
   gap answer may come straight from the new summary; `correct w/o lookup` in the gap table counts
-  those. The probe also races capture: the gateway queues the cut part before it writes the
-  summary, and capture delivers within about a second, so with a real model the gap has usually
-  closed before the model's first lookup. What the gap probe measures, then, is whether the model
-  invents a lock id when neither the summary nor a lookup gives one; a real "not saved yet" gap
-  shows only when delivery lags (a slow or busy OpenViking). The self-test makes the gap
-  deterministic with a slow fake write.
+  those. A lookup never finds it: the gap turns reach the gateway only in the probe's request,
+  and the gateway saves them when that reply ends. What the gap probe measures, then, is whether
+  the model invents a lock id when the summary does not give one and the lookup says the cut
+  messages are not saved yet. A real client sends every turn, so outside the harness such a gap
+  appears only after a save failed, or when a cut inside a turn could not be written in time.
 - The markers are word lists, not parsing. "The current queue is Y. Before you deploy, set X."
   scores correct ("before" marks X), and a correct "Before the switch to Y it was X; now it is Y"
   scores ambiguous (the first Y follows "before").
@@ -267,5 +269,6 @@ uv run --no-sync python -m benchmark.session_history.smoke_e2e --context-window 
   not follow", "not comply" or "disregard". A correct answer that obeys while using one of them
   is missed, and a wrong answer that only reports the injection counts as obeying; check `answer`
   in `results.json`.
-- Waiting for capture is a fixed sleep; raise `--settle-seconds` if probes in the `history` arm
-  miss recent turns.
+- The gateway saves a turn after its reply was sent, and the harness waits for that only with a
+  fixed sleep after the checkpoint; raise `--settle-seconds` if probes in the `history` arm miss
+  recent turns.
