@@ -39,6 +39,43 @@ def test_postgres_pathlock_binding_without_redis(tmp_path):
     assert not binding["cache"]["enabled"]
 
 
+def test_postgres_queuefs_binding_without_redis(tmp_path):
+    config = AGFSConfig(
+        path=str(tmp_path),
+        queuefs={
+            "backend": "postgres",
+            "postgres_dsn_env": "OV_QUEUE_PG_DSN",
+            "postgres_lease_seconds": 45,
+        },
+    )
+    binding = RagfsBindingConfig(agfs=config, service_name="pg-queues").to_binding_dict()
+    plugins = _generate_plugin_config(config, tmp_path, service_name="pg-queues")
+    assert plugins["queuefs"]["config"] == {
+        "backend": "postgres",
+        "service_name": "pg-queues",
+        "postgres_dsn_env": "OV_QUEUE_PG_DSN",
+        "postgres_lease_seconds": 45,
+    }
+    assert not binding["cache"]["enabled"]
+    assert "db_path" not in plugins["queuefs"]["config"]
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", "dsn-url://secret", "9ENV", "非ASCII", 42])
+def test_postgres_queuefs_requires_dsn_environment_name(value):
+    with pytest.raises(ValueError):
+        AGFSConfig(queuefs={"backend": "postgres", "postgres_dsn_env": value})
+
+
+@pytest.mark.parametrize("seconds", [0, 9, 86401, "invalid"])
+def test_postgres_queuefs_rejects_invalid_lease(seconds):
+    with pytest.raises(ValueError):
+        AGFSConfig(queuefs={
+            "backend": "postgres",
+            "postgres_dsn_env": "OV_QUEUE_PG_DSN",
+            "postgres_lease_seconds": seconds,
+        })
+
+
 @pytest.mark.parametrize("value", [None, "", "  ", 42])
 def test_postgres_pathlock_requires_dsn_environment_name(value):
     with pytest.raises(ValueError):

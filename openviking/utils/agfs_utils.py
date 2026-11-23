@@ -463,9 +463,15 @@ def _build_queuefs_plugin_config(
 
         plugin_config["db_path"] = queue_db_path
 
-    if backend == "cache":
+    if backend in {"cache", "postgres"}:
         plugin_config["service_name"] = service_name
+    if backend == "cache":
         plugin_config["instance"] = getattr(queuefs_config, "instance", "default")
+    if backend == "postgres":
+        plugin_config["postgres_dsn_env"] = getattr(queuefs_config, "postgres_dsn_env", None)
+        plugin_config["postgres_lease_seconds"] = getattr(
+            queuefs_config, "postgres_lease_seconds", 60
+        )
 
     return plugin_config
 
