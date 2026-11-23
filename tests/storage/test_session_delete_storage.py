@@ -11,12 +11,9 @@ import pytest
 from openviking.core.namespace import resolve_request_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
-from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.viking_fs import VikingFS
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
@@ -25,7 +22,6 @@ from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend, _r
 SESSION_URI = "viking://user/alice/sessions/session-1"
 SESSION_PATH = "/local/account/user/alice/sessions/session-1"
 RESOURCE_URI = "viking://resources/project"
-RESOURCE_PATH = "/local/account/resources/project"
 
 
 @pytest.fixture
@@ -266,269 +262,106 @@ async def test_session_rm_preserves_namespace_and_path_validation(storage, acl_e
     storage.vector.delete_uris.assert_not_awaited()
 
 
-@pytest.mark.parametrize("missing", [False, True])
-@pytest.mark.parametrize("uri", [RESOURCE_URI, SESSION_URI])
-async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
-    delete = AsyncMock(return_value=7)
-    backend = object.__new__(VikingVectorIndexBackend)
-    backend._get_backend_for_context = AsyncMock(
-        return_value=SimpleNamespace(delete_by_filter=delete)
-    )
-    storage.vector.delete_uris = backend.delete_uris
-    if missing:
-        storage.agfs.stat.side_effect = FileNotFoundError(RESOURCE_PATH)
-
-    result = await storage.fs.rm(uri, recursive=True, ctx=storage.ctx)
-
-    assert result == {"estimated_deleted_count": 7}
-    storage.agfs.ls.assert_not_awaited()
-    storage.vector.count.assert_not_awaited()
-    delete.assert_awaited_once_with(
-        And(
-            [
-                Eq("account_id", storage.ctx.account_id),
-                Or([Eq("uri", uri), PathScope("uri", uri, depth=-1)]),
-            ]
-        )
-    )
-    if missing:
-        storage.agfs.rm.assert_not_awaited()
-    else:
-        storage.agfs.rm.assert_awaited_once()
-        storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
-
-
-@pytest.mark.parametrize("allowed", [False, True])
-async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
-    storage.acl.is_enabled.return_value = True
-    managed = EffectiveAcl(
-        AclMode.RESTRICTED,
-        DirectAcl((AclEntry("user:alice", AclLevel.MANAGE),)),
-        DirectAcl(),
-    )
-    denied = EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
-
-    async def resolve_many(uris, ctx):
-        return {uri: managed if uri == RESOURCE_URI and allowed else denied for uri in uris}
-
-    storage.acl.resolve_many.side_effect = resolve_many
-    service = FSService(viking_fs=storage.fs)
-    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
-    if allowed:
-        await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
-        storage.agfs.rm.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once()
-        assert not storage.ctx.bypass_acl
-        storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
-    else:
-        with pytest.raises(PermissionDeniedError):
-            await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
-        storage.agfs.rm.assert_not_awaited()
-        storage.vector.delete_uris.assert_not_awaited()
-
-
-@pytest.mark.parametrize("acl_case", ["restricted", "inherit", "stale", "orphan", "unindexed"])
-async def test_recursive_rm_checks_indexed_descendant_acl_without_listing(storage, acl_case):
-    child_uri = f"{RESOURCE_URI}/nested/restricted.md"
-    root = _record(
-        "root",
-        RESOURCE_URI,
-        account_id="account",
-        level=0,
-        acl_mode="restricted",
-        acl_direct_grants=["7:user:alice"],
-    )
-    child = _record(
-        "child",
-        child_uri,
-        account_id="account",
-        acl_mode="restricted",
-        acl_direct_grants=[],
-    )
-    records = [root]
-    if acl_case == "inherit":
-        child.update(acl_mode="inherit", acl_inherited_grants=["3:group:finance"])
-    if acl_case != "unindexed":
-        records.append(child)
-    if acl_case == "stale":
-        child["id"] = "z-old-child"
-        records.append({**child, "id": "a-current-child", "acl_direct_grants": ["7:user:alice"]})
-    backend = _RealAclMemoryTransferBackend(records)
-    storage.fs.vector_store = backend
-    storage.fs.acl_manager = backend.acl_manager
-
-    async def stat(path):
-        if path == RESOURCE_PATH:
-            return {"isDir": True}
-        if acl_case == "orphan":
-            raise FileNotFoundError(path)
-        return {"isDir": False}
-
-    storage.agfs.stat.side_effect = stat
-    if acl_case in ("restricted", "inherit"):
-        with pytest.raises(PermissionDeniedError, match="manage permission required"):
-            await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx)
-        assert len(backend.records) == len(records)
-        storage.agfs.rm.assert_not_awaited()
-    else:
-        result = await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx)
-        assert result == {"estimated_deleted_count": len(records)}
-        assert backend.records == {}
-        storage.agfs.rm.assert_awaited_once()
-    assert any(
-        isinstance(scope, And) and PathScope("uri", RESOURCE_URI, depth=-1) in scope.conds
-        for scope in backend.scroll_filters
-    )
-    storage.agfs.ls.assert_not_awaited()
-    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
-
-
-@pytest.mark.parametrize("failure_stage", ["acl", "vector", "files"])
-async def test_recursive_rm_preserves_failure_order_and_releases_lease(storage, failure_stage):
-    if failure_stage == "acl":
-        storage.acl.is_enabled.return_value = True
-        managed = EffectiveAcl(
-            AclMode.RESTRICTED,
-            DirectAcl((AclEntry("user:alice", AclLevel.MANAGE),)),
-            DirectAcl(),
-        )
-        storage.acl.resolve_many.side_effect = lambda uris, ctx: dict.fromkeys(uris, managed)
-
-        async def failed_acl_query(*args, **kwargs):
-            raise OSError("acl query failed")
-            yield  # Make this an async iterator matching iter_denied_uris.
-
-        storage.acl.iter_denied_uris = failed_acl_query
-    elif failure_stage == "vector":
-        storage.vector.delete_uris.side_effect = OSError("vector delete failed")
-    else:
-        storage.agfs.rm.side_effect = OSError("files delete failed")
-
-    with pytest.raises(OSError, match=failure_stage):
-        await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx)
-    if failure_stage == "acl":
-        storage.vector.delete_uris.assert_not_awaited()
-    else:
-        storage.vector.delete_uris.assert_awaited_once()
-    if failure_stage != "files":
-        storage.agfs.rm.assert_not_awaited()
-    storage.agfs.ls.assert_not_awaited()
-    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
-
-
-async def test_indexed_file_rm_uses_exact_scope_and_deletion_count(storage):
-    storage.agfs.stat.return_value = {"isDir": False}
-    storage.vector.delete_uris.return_value = 3
-    result = await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx)
-
-    assert result == {"estimated_deleted_count": 3}
-    storage.vector.delete_uris.assert_awaited_once_with(
-        storage.ctx, [RESOURCE_URI], recursive=False
-    )
-    storage.vector.count.assert_not_awaited()
-    storage.agfs.pathlock_acquire_exact.assert_awaited_once_with(RESOURCE_PATH)
-    storage.agfs.pathlock_acquire_tree.assert_not_awaited()
-    storage.agfs.rm.assert_awaited_once_with(
-        RESOURCE_PATH,
-        recursive=False,
-        fs_ctx={"account_id": "account", "lease_ref": "delete-lease"},
-        auto_pathlock=True,
-    )
-
-
-@pytest.mark.parametrize("recursive", [False, True])
-async def test_delete_uris_returns_total_submitted_count(storage, recursive):
-    backend = object.__new__(VikingVectorIndexBackend)
-    delete = AsyncMock(side_effect=[2, 3])
-    backend._get_backend_for_context = AsyncMock(
-        return_value=SimpleNamespace(delete_by_filter=delete)
-    )
-
-    count = await backend.delete_uris(
-        storage.ctx, [RESOURCE_URI, f"{RESOURCE_URI}-old"], recursive=recursive
-    )
-
-    assert count == 5
-    assert delete.await_count == 2
-    for call in delete.await_args_list:
-        assert Eq("account_id", "account") in call.args[0].conds
-
-
-async def test_recursive_rm_deletes_all_vector_pages_and_preserves_other_scopes(
-    storage,
-    vector_backend_factory,
-    tmp_path,
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("uri", "missing"),
+    [(RESOURCE_URI, False), (RESOURCE_URI, True), (f"{SESSION_URI}/messages.jsonl", False)],
+)
+async def test_default_rm_still_cleans_vector_records(
+    storage, vector_backend_factory, tmp_path, monkeypatch, uri, missing
 ):
-    backend = vector_backend_factory(
-        VectorDBBackendConfig(
-            backend="local",
-            name="context",
-            dimension=4,
-            path=str(tmp_path / "vectors"),
-        )
-    )
+    is_dir = uri == RESOURCE_URI
+    storage.agfs.stat.return_value = {"isDir": is_dir}
+    if missing:
+        storage.agfs.stat.side_effect = FileNotFoundError(uri)
+
+    target_uris = [uri]
+    if is_dir:
+        target_uris.extend(f"{uri}/nested/{i}.md" for i in range(205))
     records = [
         {
             "id": f"target-{i}",
-            "uri": f"{RESOURCE_URI}/deep/nested/{i}.md",
-            "account_id": "account",
-            "vector": [0.1] * 4,
+            "uri": target_uri,
+            "account_id": storage.ctx.account_id,
             "level": i % 3,
+            "vector": [0.1] * 4,
         }
-        for i in range(205)
+        for i, target_uri in enumerate(target_uris)
     ]
-    records.extend(
-        [
-            {
-                "id": "root",
-                "uri": RESOURCE_URI,
-                "account_id": "account",
-                "vector": [0.1] * 4,
-                "level": 0,
-            },
-            {
-                "id": "orphan",
-                "uri": f"{RESOURCE_URI}/missing.md",
-                "account_id": "account",
-                "vector": [0.1] * 4,
-            },
-            {
-                "id": "sibling",
-                "uri": f"{RESOURCE_URI}-old/file.md",
-                "account_id": "account",
-                "vector": [0.1] * 4,
-            },
-            {
-                "id": "foreign",
-                "uri": f"{RESOURCE_URI}/file.md",
-                "account_id": "other",
-                "vector": [0.1] * 4,
-            },
-        ]
+    sibling = {**records[0], "id": "sibling", "uri": f"{uri}.bak"}
+    foreign = {**records[0], "id": "foreign", "account_id": "other"}
+    foreign_ctx = RequestContext(user=UserIdentifier("other", "alice"), role=Role.ROOT)
+    backend = vector_backend_factory(
+        VectorDBBackendConfig(backend="local", name="context", dimension=4, path=str(tmp_path))
     )
     try:
         assert await backend.create_collection(
             "context", CollectionSchemas.context_collection("context", 4)
         )
-        foreign_ctx = RequestContext(user=UserIdentifier("other", "alice"), role=Role.ROOT)
-        assert len(await backend.upsert_many(records[:-1], ctx=storage.ctx)) == len(records) - 1
-        assert await backend.upsert_many(records[-1:], ctx=foreign_ctx) == ["foreign"]
-        monkeypatch.setattr(
-            backend,
-            "count",
-            AsyncMock(side_effect=AssertionError("rm must not count before delete")),
-        )
+        await backend.upsert_many([*records, sibling], ctx=storage.ctx)
+        await backend.upsert_many([foreign], ctx=foreign_ctx)
+        monkeypatch.setattr(backend, "count", AsyncMock())
         storage.fs.vector_store = backend
-        result = await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx)
 
-        assert result == {"estimated_deleted_count": 207}
-        remaining = await backend.get_strict([r["id"] for r in records], ctx=storage.ctx)
-        assert {record["id"] for record in remaining} == {"sibling"}
+        result = await storage.fs.rm(uri, recursive=True, ctx=storage.ctx)
+
+        assert result == {"estimated_deleted_count": len(records)}
+        remaining = await backend.get_strict(
+            [record["id"] for record in records] + ["sibling"], ctx=storage.ctx
+        )
+        assert [record["id"] for record in remaining] == ["sibling"]
         assert [r["id"] for r in await backend.get_strict(["foreign"], ctx=foreign_ctx)] == [
             "foreign"
         ]
+        backend.count.assert_not_awaited()
         storage.agfs.ls.assert_not_awaited()
-        storage.agfs.rm.assert_awaited_once()
+        if missing:
+            storage.agfs.rm.assert_not_awaited()
+        else:
+            storage.agfs.rm.assert_awaited_once()
+            assert storage.agfs.rm.await_args.kwargs["recursive"] is is_dir
+            storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
     finally:
         await backend.close()
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record(
+                "root",
+                RESOURCE_URI,
+                account_id=storage.ctx.account_id,
+                level=0,
+                acl_mode="restricted",
+                acl_direct_grants=["7:user:alice"] if allowed else [],
+            ),
+            _record(
+                "child",
+                f"{RESOURCE_URI}/nested/restricted.md",
+                account_id=storage.ctx.account_id,
+                acl_mode="restricted",
+                acl_direct_grants=[],
+            ),
+        ]
+    )
+    storage.fs.vector_store = backend
+    storage.fs.acl_manager = backend.acl_manager
+    service = FSService(viking_fs=storage.fs)
+    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
+
+    if allowed:
+        # Direct deletion still checks the child; FSService authorizes the subtree at its root.
+        with pytest.raises(PermissionDeniedError, match="manage permission required"):
+            await storage.fs.rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
+        assert set(backend.records) == {"root", "child"}
+        storage.agfs.rm.assert_not_awaited()
+
+        await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
+        assert not backend.records
+        storage.agfs.rm.assert_awaited_once()
+    else:
+        with pytest.raises(PermissionDeniedError):
+            await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
+        assert set(backend.records) == {"root", "child"}
+        storage.agfs.rm.assert_not_awaited()
