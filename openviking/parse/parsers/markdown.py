@@ -1108,6 +1108,8 @@ class MarkdownParser(BaseParser):
     ) -> str:
         """Rewrite one link target; return original `link` if it must not change."""
         raw = link.strip()
+        angle_wrapped = len(raw) >= 2 and raw.startswith("<") and raw.endswith(">")
+        raw = self._unwrap_link_destination(raw)
         if (
             not raw
             or raw.startswith("#")
@@ -1136,7 +1138,8 @@ class MarkdownParser(BaseParser):
 
         def _to_rel(new_disk: str, keep_suffix: bool) -> str:
             r = os.path.relpath(new_disk, source_new_dir).replace(os.sep, "/")
-            return (r + suffix) if keep_suffix else (r if r.endswith("/") else r + "/")
+            rewritten = (r + suffix) if keep_suffix else (r if r.endswith("/") else r + "/")
+            return f"<{rewritten}>" if angle_wrapped else rewritten
 
         ext = os.path.splitext(target_disk)[1].lower()
         if ext not in _MD_DIR_EXTS:
