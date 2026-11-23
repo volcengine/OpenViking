@@ -801,29 +801,6 @@ def test_sync_session_commit_async_and_repr_match_sync_usage():
     assert "demo-session" in repr(session)
 
 
-def test_sync_http_client_get_status_does_not_require_run_async():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    client._async_client._get_system_status = AsyncMock(return_value={"is_healthy": True})
-
-    status = client.get_status()
-
-    assert status == {"is_healthy": True}
-
-
-def test_sync_http_client_observer_methods_accept_format():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    client._async_client._get_queue_status = AsyncMock(return_value={"name": "queue"})
-    client._async_client._get_system_status = AsyncMock(return_value={"is_healthy": True})
-
-    queue_status = client.queue_status(format="json")
-    system_status = client.get_status(format="json")
-
-    assert queue_status == {"name": "queue"}
-    assert system_status == {"is_healthy": True}
-    client._async_client._get_queue_status.assert_awaited_once_with(format="json")
-    client._async_client._get_system_status.assert_awaited_once_with(format="json")
-
-
 def test_sync_http_client_health_wraps_async_coroutine():
     client = SyncHTTPClient(url="http://localhost:1933")
     client._async_client.health = AsyncMock(return_value=True)
@@ -831,43 +808,43 @@ def test_sync_http_client_health_wraps_async_coroutine():
     assert client.health() is True
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method_name", "format_value", "expected_path", "expected_params"),
+    ("method_name", "format_value", "component"),
     [
-        ("_get_queue_status", None, "/api/v1/observer/queue", None),
-        ("_get_queue_status", "json", "/api/v1/observer/queue", {"format": "json"}),
-        ("_get_vikingdb_status", "json", "/api/v1/observer/vikingdb", {"format": "json"}),
-        ("_get_models_status", "table", "/api/v1/observer/models", {"format": "table"}),
-        ("_get_system_status", None, "/api/v1/observer/system", None),
+        ("queue_status", None, "queue"),
+        ("queue_status", "json", "queue"),
+        ("vikingdb_status", "json", "vikingdb"),
+        ("models_status", "table", "models"),
+        ("get_status", None, "system"),
     ],
 )
-async def test_async_http_client_observer_requests_support_optional_format(
-    method_name, format_value, expected_path, expected_params
+def test_http_client_observer_requests_support_optional_format(
+    method_name, format_value, component
 ):
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {"ok": True}}
+    result: dict[str, object] = {"is_healthy": True}
+    if component != "system":
+        result["name"] = component
+        result["status"] = {"sample": 1} if format_value == "json" else "sample"
+    requests: list[httpx.Request] = []
 
-    method = getattr(client, method_name)
-    if format_value is None:
-        result = await method()
-    else:
-        result = await method(format=format_value)
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": result})
 
-    assert result == {"ok": True}
-    if expected_params is None:
-        client._request.assert_awaited_once_with(
-            "GET",
-            expected_path,
-            params=None,
-        )
-    else:
-        client._request.assert_awaited_once_with(
-            "GET",
-            expected_path,
-            params=expected_params,
-        )
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        method = getattr(client, method_name)
+        assert (method() if format_value is None else method(format=format_value)) == result
+    finally:
+        client.close()
+
+    (request,) = requests
+    assert request.method == "GET"
+    assert request.url.path == f"/api/v1/observer/{component}"
+    assert dict(request.url.params) == ({"format": format_value} if format_value else {})
 
 
 @pytest.mark.asyncio
