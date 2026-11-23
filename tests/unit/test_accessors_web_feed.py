@@ -98,6 +98,36 @@ def _page(title):
     return f"<html><head><title>{title}</title></head><body><h1>{title}</h1><p>body</p></body></html>".encode()
 
 
+def _body_text_and_tags(document):
+    from html.parser import HTMLParser
+
+    class BodyParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.in_body = False
+            self.text = []
+            self.tags = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "body":
+                self.in_body = True
+            elif self.in_body:
+                self.tags.append(tag)
+
+        def handle_endtag(self, tag):
+            if tag == "body":
+                self.in_body = False
+
+        def handle_data(self, data):
+            if self.in_body:
+                self.text.append(data)
+
+    parser = BodyParser()
+    parser.feed(document)
+    parser.close()
+    return "".join(parser.text), parser.tags
+
+
 # --------------------------------------------------------------------------- #
 # can_handle
 # --------------------------------------------------------------------------- #
@@ -457,9 +487,11 @@ class TestAccessFeed:
             "<content:encoded><![CDATA[<p>FULL INLINE BODY</p>]]></content:encoded>"
             "</item></channel></rss>"
         ).encode()
-        # Note: deliberately DO NOT register the article URL — if access tried to
-        # fetch it we'd get a 404 and page_count would drop to 0.
-        routes = {f"{base}/rss.xml": _FakeResponse(content=rss, content_type="application/rss+xml")}
+        # Keep the article route successful; saved markup must still be inline content.
+        routes = {
+            f"{base}/rss.xml": _FakeResponse(content=rss, content_type="application/rss+xml"),
+            f"{base}/posts/inline/": _FakeResponse(content=_page("article")),
+        }
         patch_httpx(routes)
 
         acc = WebFeedAccessor()
@@ -467,15 +499,56 @@ class TestAccessFeed:
         try:
             assert resource.meta["page_count"] == 1
             saved = (resource.path / "Inline.html").read_text(encoding="utf-8")
-            assert "FULL INLINE BODY" in saved
+            assert "<p>FULL INLINE BODY</p>" in saved
         finally:
             resource.cleanup()
 
-    async def test_atom_feed(self, patch_httpx):
+    @pytest.mark.parametrize(
+        ("inline_content", "expected_text", "expected_tags"),
+        [
+            ("", "E1body", ["h1", "p"]),
+            (
+                '<content type="text">Use &lt;em&gt;words&lt;/em&gt; literally '
+                '&amp; keep "quotes".</content>',
+                'Use <em>words</em> literally & keep "quotes".',
+                [],
+            ),
+            (
+                "<content>Pass &lt;Widget&gt; &amp; &lt;em&gt; tokens unchanged.</content>",
+                "Pass <Widget> & <em> tokens unchanged.",
+                [],
+            ),
+            (
+                '<content type="text/plain">Literal &amp;amp; and &amp;lt;em&amp;gt; '
+                "spellings are documentation text.</content>",
+                "Literal &amp; and &lt;em&gt; spellings are documentation text.",
+                [],
+            ),
+            (
+                '<content type="text">Type Widget &amp; keep ordinary text.</content>',
+                "Type Widget & keep ordinary text.",
+                [],
+            ),
+            (
+                '<content type="html">&lt;p&gt;Use &lt;em&gt;words&lt;/em&gt; '
+                "&amp;amp; examples.&lt;/p&gt;</content>",
+                "Use words & examples.",
+                ["p", "em"],
+            ),
+            (
+                '<content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">'
+                "<p>Use <em>words</em> &amp; examples.</p></div></content>",
+                "Use words & examples.",
+                ["p", "em"],
+            ),
+        ],
+    )
+    async def test_atom_feed(self, patch_httpx, inline_content, expected_text, expected_tags):
         base = "https://example.org"
         atom = (
             '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">'
-            '<entry><title>Entry One</title><link href="https://example.org/e1/"/></entry>'
+            '<entry><title>Entry One</title><link href="https://example.org/e1/"/>'
+            f"{inline_content}</entry>"
             "</feed>"
         ).encode()
         routes = {
@@ -489,6 +562,8 @@ class TestAccessFeed:
         try:
             assert resource.meta["url_type"] == "atom"
             assert resource.meta["page_count"] == 1
+            saved = (resource.path / "Entry One.html").read_text(encoding="utf-8")
+            assert _body_text_and_tags(saved) == (expected_text, expected_tags)
         finally:
             resource.cleanup()
 
