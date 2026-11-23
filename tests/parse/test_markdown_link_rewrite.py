@@ -215,8 +215,23 @@ class TestRewriteRelativeLinks:
             in (await store.read_bytes(parsed_target.artifact_ref, f"big/{logs_file}")).decode()
         )
 
+    @pytest.mark.parametrize(
+        "suffix,expected_suffix",
+        [
+            ("#target", "Target.md#target"),
+            ("?v=1#target", "Target.md?v=1#target"),
+            ("?#target", "Target.md?#target"),
+            ("?q=%23value#target", "Target.md?q=%23value#target"),
+            ("?lang=en&mode=full#target", "Target.md?lang=en&mode=full#target"),
+            ("?v=1#%74arget", "Target.md?v=1#%74arget"),
+            ("?q=%23target", ""),
+            ("#target?v=1", ""),
+            ("?v=1#missing", ""),
+            ("?v=1#", ""),
+        ],
+    )
     async def test_split_target_resolves_closing_hashes_and_falls_back_for_missing_anchor(
-        self, tmp_path: Path
+        self, tmp_path: Path, suffix, expected_suffix
     ):
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
@@ -227,11 +242,11 @@ class TestRewriteRelativeLinks:
         out = await self._rewrite(
             self._parser(),
             kb,
-            "[found](./目录甲/目录乙/目录丙/big.md#target) "
+            f"[found](./目录甲/目录乙/目录丙/big.md{suffix}) "
             "[missing](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
         )
         assert out == (
-            "[found](../目录甲/目录乙/目录丙/big/Target.md#target) "
+            f"[found](../目录甲/目录乙/目录丙/big/{expected_suffix}) "
             "[missing](../目录甲/目录乙/目录丙/big/)"
         )
 

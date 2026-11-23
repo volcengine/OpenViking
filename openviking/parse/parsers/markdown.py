@@ -1158,9 +1158,10 @@ class MarkdownParser(BaseParser):
         landing, landing_is_dir = self._doc_landing(layout)
 
         if suffix:
-            # A) #anchor uniquely located in a real section → point at that section file.
-            if suffix.startswith("#"):
-                anchor = unquote(suffix[1:])
+            # A) A fragment, optionally after a query, uniquely locates a real section.
+            _, fragment_marker, fragment = suffix.partition("#")
+            if fragment_marker:
+                anchor = unquote(fragment)
                 hits = [
                     rel
                     for rel, text in layout.items()
