@@ -920,7 +920,7 @@ def test_semantic_item_scan_ignores_another_accounts_write(
     adapter.upsert([{**record, "vector": [1, 0, 0, 0]}])
     local = adapter.get_collection()._Collection__collection
     index = local.indexes.get("default")
-    original_upsert, original_search = index.upsert_data, index.search
+    original_upsert, original_search = index.upsert_data, index.search_items
     store_committed, release_writer, writer_finished = (threading.Event() for _ in range(3))
     recalls = 0
 
@@ -955,7 +955,7 @@ def test_semantic_item_scan_ignores_another_accounts_write(
             writer_finished.set()
 
     monkeypatch.setattr(index, "upsert_data", pause_after_store_commit)
-    monkeypatch.setattr(index, "search", search)
+    monkeypatch.setattr(index, "search_items", search)
     with ThreadPoolExecutor(max_workers=2) as pool:
         writer = pool.submit(write)
         try:
@@ -971,7 +971,7 @@ def test_semantic_item_scan_ignores_another_accounts_write(
 
 
 @pytest.mark.parametrize("filter_by_attrs", [False, True])
-def test_semantic_item_scan_retries_if_store_fields_change_after_recall(
+def test_semantic_item_scan_retries_if_store_fields_change_before_return(
     adapter, monkeypatch, filter_by_attrs
 ):
     root = "viking://resources/items"
@@ -987,11 +987,11 @@ def test_semantic_item_scan_retries_if_store_fields_change_after_recall(
     adapter.upsert([record])
     local = adapter.get_collection()._Collection__collection
     index = local.indexes.get("default")
-    native_search = index.search
+    native_search = index.search_items
     recalled, updated = threading.Event(), threading.Event()
     calls = 0
 
-    def pause_after_recall(*args, **kwargs):
+    def pause_after_search(*args, **kwargs):
         nonlocal calls
         result = native_search(*args, **kwargs)
         calls += 1
@@ -1000,7 +1000,7 @@ def test_semantic_item_scan_retries_if_store_fields_change_after_recall(
             assert updated.wait(5)
         return result
 
-    monkeypatch.setattr(index, "search", pause_after_recall)
+    monkeypatch.setattr(index, "search_items", pause_after_search)
     scope = Eq("account_id", "a")
     condition = And([scope, Eq("item_attrs", "kind=A")]) if filter_by_attrs else scope
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -1018,10 +1018,52 @@ def test_semantic_item_scan_retries_if_store_fields_change_after_recall(
     if filter_by_attrs:
         # The retry counts zero eligible members after the record moves to B.
         assert groups == []
-        assert calls == 1
     else:
         assert [(g["entity_id"], g["entity_score"]) for g in groups] == [("B", 0.5)]
-        assert calls == 2
+    assert calls == 2
+
+
+def test_semantic_item_scan_retries_after_index_replacement(monkeypatch):
+    adapter = LocalCollectionAdapter("context", "", "default")
+    adapter.create_collection(
+        "context",
+        CollectionSchemas.context_collection("context", 4),
+        distance="cosine",
+        sparse_weight=0,
+        index_name="default",
+    )
+    try:
+        root = "viking://resources/item-a"
+        declare_adapter_item(adapter, root, "A", [])
+        adapter.upsert(
+            {
+                "id": "a-member",
+                "account_id": "a",
+                "uri": f"{root}/member",
+                "level": 2,
+                "vector": [1, 0, 0, 0],
+            }
+        )
+        local = adapter.get_collection()._Collection__collection
+        old_index = local.get_index("default")
+        original = type(old_index).search_items
+        searched = []
+
+        def search_then_replace(index, *args, **kwargs):
+            result = original(index, *args, **kwargs)
+            searched.append(index)
+            if index is old_index:
+                local._rebuild_index("default", old_index)
+            return result
+
+        monkeypatch.setattr(type(old_index), "search_items", search_then_replace)
+        result = adapter.search_item_groups(query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"))
+        new_index = local.get_index("default")
+        assert new_index is not old_index
+        assert searched == [old_index, new_index]
+        assert [(g["entity_id"], g["entity_score"]) for g in result["groups"]] == [("A", 1.0)]
+    finally:
+        adapter.close()
 
 
 def test_item_root_type_is_validated_before_a_resource_replacement():

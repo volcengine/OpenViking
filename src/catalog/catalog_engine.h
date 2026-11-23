@@ -3,6 +3,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace vectordb {
@@ -10,6 +11,7 @@ namespace vectordb {
 class IndexEngine;
 class KVStore;
 class BytesRow;
+struct SearchRequest;
 
 // Collection-owned explicit declarations; effective values are resolved in C++.
 class CatalogEngine {
@@ -21,6 +23,10 @@ class CatalogEngine {
   std::string aggregate_filter(IndexEngine& index, KVStore& candidates,
                                 const BytesRow& row,
                                 const std::string& request_json);
+  // Returns no result if the account's Catalog revision changed during recall.
+  std::optional<std::string> search_items(IndexEngine& index, KVStore& candidates,
+                                          const BytesRow& row, SearchRequest query,
+                                          const std::string& request_json);
 
  private:
   class Impl;

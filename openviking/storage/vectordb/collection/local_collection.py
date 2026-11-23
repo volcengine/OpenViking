@@ -26,7 +26,7 @@ from openviking.storage.vectordb.collection.result import (
     UpsertDataResult,
 )
 from openviking.storage.vectordb.index.index import IIndex
-from openviking.storage.vectordb.index.local_index import PersistentIndex, VolatileIndex
+from openviking.storage.vectordb.index.local_index import LocalIndex, PersistentIndex, VolatileIndex
 from openviking.storage.vectordb.meta.collection_meta import CollectionMeta, create_collection_meta
 from openviking.storage.vectordb.meta.index_meta import create_index_meta
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
@@ -849,7 +849,7 @@ class LocalCollection(ICollection):
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
     ) -> Dict[str, Any]:
-        """Recall semantic candidates or stream scalar matches into native Item grouping."""
+        """Search and group Item members under the appropriate collection snapshot."""
         scope = self._catalog_scope(filters)
         if scope is None:
             raise ValueError("Item grouping requires a mandatory account scope")
@@ -887,30 +887,50 @@ class LocalCollection(ICollection):
                     return index.aggregate_items(catalog, self.store_mgr.storage, request)
 
         with self._catalog_lock:
-            self._open_catalog()
+            catalog = self._open_catalog()
+        native_request = {
+            **request,
+            "candidate_table": StoreManager.CandsTable,
+            "primary_key": self.meta.primary_key,
+        }
         for _ in range(3):
             snapshot = self._index_mutation_barrier.item_snapshot(scope)
-            recalled = self.search_by_vector(
-                index_name=index_name,
-                dense_vector=dense_vector,
-                sparse_vector=sparse_vector,
-                filters=filters,
-                output_fields=["uri"],
-                item_members_only=True,
-            )
-            candidates = [
-                {
-                    "label": str(item.id),
-                    "uri": item.fields["uri"],
-                    "score": float(item.score or 0.0),
-                }
-                for item in recalled.data
-                if item.fields and item.fields.get("uri")
-            ]
-            request["candidates"] = candidates
-            grouped = self.catalog_execute(request)
-            if grouped.get("revision") == recalled.catalog_revision and (
-                self._index_mutation_barrier.is_item_snapshot_current(snapshot)
+            index = self.indexes.get(index_name)
+            if isinstance(index, LocalIndex) and index.dense_search is None:
+                if not self.store_mgr:
+                    raise RuntimeError("Store manager is not initialized")
+                grouped = index.search_items(
+                    catalog,
+                    self.store_mgr.storage,
+                    native_request,
+                    dense_vector,
+                    sparse_vector,
+                    filters,
+                )
+            else:
+                # Preserve external dense-index routing, including cuVS fallback.
+                recalled = self.search_by_vector(
+                    index_name=index_name,
+                    dense_vector=dense_vector,
+                    sparse_vector=sparse_vector,
+                    filters=filters,
+                    output_fields=["uri"],
+                    item_members_only=True,
+                )
+                request["candidates"] = [
+                    {
+                        "label": str(item.id),
+                        "uri": item.fields["uri"],
+                        "score": float(item.score or 0.0),
+                    }
+                    for item in recalled.data
+                    if item.fields and item.fields.get("uri")
+                ]
+                grouped = self.catalog_execute(request)
+                if grouped.get("revision") != recalled.catalog_revision:
+                    continue
+            if grouped is not None and self._index_mutation_barrier.is_item_snapshot_current(
+                snapshot
             ):
                 return grouped
         raise RuntimeError("Collection changed repeatedly during Item recall; retry the request")

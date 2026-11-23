@@ -77,16 +77,13 @@ def test_item_recall_excludes_ordinary_records_and_keeps_sum_stable(local_adapte
                 }
             )
     adapter.upsert(records)
-    index = adapter.get_collection()._Collection__collection.indexes.get("default")
-    search = index.search
-    recalled_counts = []
+    local = adapter.get_collection()._Collection__collection
 
-    def record_recall(*args, **kwargs):
-        labels, scores = search(*args, **kwargs)
-        recalled_counts.append(len(labels))
-        return labels, scores
+    def no_python_members(*args, **kwargs):
+        pytest.fail("Native Item search must keep members inside the engine")
 
-    monkeypatch.setattr(index, "search", record_recall)
+    monkeypatch.setattr(local, "search_by_vector", no_python_members)
+    monkeypatch.setattr(local.store_mgr, "fetch_cands_fields", no_python_members)
 
     def item_groups(limit):
         return adapter.search_item_groups(
@@ -103,7 +100,6 @@ def test_item_recall_excludes_ordinary_records_and_keeps_sum_stable(local_adapte
         ("uuid-b", 1200),
         ("uuid-a", 1000),
     ]
-    assert recalled_counts == [2200, 2200]
 
 
 class EnabledAcl:
@@ -711,12 +707,13 @@ def test_noop_node_updates_do_not_invalidate_every_item_recall(local_adapter, mo
         ]
     )
     collection = adapter.get_collection()._Collection__collection
-    original_search = collection.search_by_vector
+    index = collection.indexes.get("default")
+    original_search = index.search_items
     recalls = []
 
     def search_then_noop_upsert(*args, **kwargs):
         recalled = original_search(*args, **kwargs)
-        before = recalled.catalog_revision
+        before = recalled["revision"]
         after = collection.catalog_execute(
             {
                 "op": "upsert_nodes",
@@ -727,10 +724,10 @@ def test_noop_node_updates_do_not_invalidate_every_item_recall(local_adapter, mo
         recalls.append({"before": before, "after": after})
         return recalled
 
-    monkeypatch.setattr(collection, "search_by_vector", search_then_noop_upsert)
+    monkeypatch.setattr(index, "search_items", search_then_noop_upsert)
     result = adapter.search_item_groups(
         query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=1
     )
     assert result["groups"][0]["entity_id"] == "uuid-read"
     assert len(recalls) == 1
-    assert len(recalls) == 1
+    assert recalls[0]["before"] == recalls[0]["after"]

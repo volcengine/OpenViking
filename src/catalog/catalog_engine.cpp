@@ -29,6 +29,9 @@ class CatalogEngine::Impl {
   std::string aggregate_filter(IndexEngine& index, KVStore& candidates,
                                const BytesRow& row,
                                const std::string& request_json);
+  std::optional<std::string> search_items(IndexEngine& index, KVStore& candidates,
+                                          const BytesRow& row, SearchRequest query,
+                                          const std::string& request_json);
 
  private:
   struct Candidate {
@@ -38,6 +41,9 @@ class CatalogEngine::Impl {
   };
   using CandidateConsumer = std::function<void(const Candidate&)>;
   using CandidateSource = std::function<void(const CandidateConsumer&)>;
+  static std::optional<Candidate> project_candidate(const JsonValue& fields,
+                                                      const std::string& primary_key,
+                                                      double score);
   void group_candidates(const JsonValue& request, const std::string& scope,
                         JsonDoc& result, const CandidateSource& source) const;
 
@@ -90,9 +96,16 @@ std::string CatalogEngine::aggregate_filter(IndexEngine& index, KVStore& candida
   return impl_->aggregate_filter(index, candidates, row, request_json);
 }
 
+std::optional<std::string> CatalogEngine::search_items(
+    IndexEngine& index, KVStore& candidates, const BytesRow& row,
+    SearchRequest query, const std::string& request_json) {
+  return impl_->search_items(index, candidates, row, std::move(query), request_json);
+}
+
 namespace {
 
 constexpr const char* kIdentityModeKey = "@item_uuids_mode";
+constexpr size_t kItemCandidateBatchSize = 256;
 
 JsonDoc parse(const std::string& value) {
   JsonDoc doc;
@@ -624,6 +637,122 @@ void CatalogEngine::Impl::group_candidates(
   result.AddMember("groups", output_groups, allocator);
 }
 
+std::optional<CatalogEngine::Impl::Candidate> CatalogEngine::Impl::project_candidate(
+    const JsonValue& fields, const std::string& primary_key, double score) {
+  if (!fields.HasMember("uri") || !fields["uri"].IsString() ||
+      fields["uri"].GetStringLength() == 0) return std::nullopt;
+  const auto pk = fields.FindMember(primary_key.c_str());
+  if (pk == fields.MemberEnd()) {
+    throw std::runtime_error("Item candidate is missing its primary key");
+  }
+  std::string label;
+  if (pk->value.IsString()) {
+    label.assign(pk->value.GetString(), pk->value.GetStringLength());
+  } else if (pk->value.IsUint64()) {
+    label = std::to_string(pk->value.GetUint64());
+  } else if (pk->value.IsInt64()) {
+    label = std::to_string(pk->value.GetInt64());
+  } else {
+    throw std::runtime_error("Item candidate primary key must be string or integer");
+  }
+  if (label.empty() || label.find('\0') != std::string::npos) {
+    throw std::invalid_argument("Item candidate label must be non-empty and without NUL");
+  }
+  if (!std::isfinite(score)) {
+    throw std::invalid_argument("candidate score must be finite");
+  }
+  return Candidate{std::move(label), canonical(required_string(fields, "uri")), score};
+}
+
+std::optional<std::string> CatalogEngine::Impl::search_items(
+    IndexEngine& index, KVStore& candidates, const BytesRow& row,
+    SearchRequest query, const std::string& request_json) {
+  const auto req = parse(request_json);
+  const auto scope = required_string(req, "scope");
+  const auto table = required_string(req, "candidate_table");
+  const auto primary_key = required_string(req, "primary_key");
+  const auto filter = parse(query.dsl);
+
+  JsonDoc compiled(rapidjson::kObjectType);
+  std::string revision;
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+    auto effective = compile_item_filter(scope, filter, compiled.GetAllocator());
+    compiled.CopyFrom(effective, compiled.GetAllocator());
+    revision = identity_revision(scope);
+  }
+
+  auto& allocator = compiled.GetAllocator();
+  JsonValue count_filter(rapidjson::kObjectType);
+  count_filter.AddMember("filter", JsonValue(
+      compiled.HasMember("filter") ? compiled["filter"] : compiled, allocator),
+      allocator);
+  JsonValue sorter(rapidjson::kObjectType);
+  sorter.AddMember("op", "count", allocator);
+  count_filter.AddMember("sorter", sorter, allocator);
+  SearchRequest count_query;
+  count_query.topk = 1;
+  count_query.dsl = encode(count_filter);
+  JsonDoc counts;
+  const auto count_response = index.search(count_query);
+  counts.Parse(count_response.extra_json.c_str(), count_response.extra_json.size());
+  if (!counts.IsObject() || !counts.HasMember("__total_count__") ||
+      !counts["__total_count__"].IsUint()) {
+    throw std::invalid_argument("Native index could not count eligible Item members");
+  }
+
+  SearchResult recalled;
+  query.topk = counts["__total_count__"].GetUint();
+  if (query.topk != 0) {
+    query.dsl = encode(compiled);
+    recalled = index.search(query);
+  }
+  if (recalled.labels.size() != recalled.scores.size()) {
+    throw std::runtime_error("Native Item candidate labels and scores differ in size");
+  }
+
+  const auto limit = std::min(recalled.labels.size(), static_cast<size_t>(query.topk));
+  std::vector<Candidate> projected;
+  projected.reserve(limit);
+  std::vector<std::string> keys;
+  keys.reserve(kItemCandidateBatchSize);
+  for (size_t start = 0; start < limit; start += kItemCandidateBatchSize) {
+    const auto end = std::min(limit, start + kItemCandidateBatchSize);
+    keys.clear();
+    for (size_t i = start; i < end; ++i) {
+      keys.push_back(table + std::to_string(recalled.labels[i]));
+    }
+    const auto records = candidates.get_data(keys);
+    if (records.size() != keys.size()) {
+      throw std::runtime_error("Incomplete Item candidate batch");
+    }
+    for (size_t i = 0; i < records.size(); ++i) {
+      if (records[i].empty()) continue;
+      const auto fields_value = row.deserialize_field(records[i], "fields");
+      const auto* encoded = std::get_if<std::string>(&fields_value);
+      if (!encoded) continue;
+      JsonDoc fields;
+      fields.Parse(encoded->data(), encoded->size());
+      if (fields.HasParseError() || !fields.IsObject()) continue;
+      if (auto candidate = project_candidate(fields, primary_key, recalled.scores[start + i])) {
+        projected.push_back(std::move(*candidate));
+      }
+    }
+  }
+
+  JsonDoc result(rapidjson::kObjectType);
+  {
+    // Index and Store reads above do not hold the Catalog lock.
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (identity_revision(scope) != revision) return std::nullopt;
+    group_candidates(req, scope, result, [&](const CandidateConsumer& consume) {
+      for (const auto& candidate : projected) consume(candidate);
+    });
+  }
+  put_string(result, "revision", revision, result.GetAllocator());
+  return encode(result);
+}
+
 std::string CatalogEngine::Impl::aggregate_filter(
     IndexEngine& index, KVStore& candidates, const BytesRow& row,
     const std::string& request_json) {
@@ -648,9 +777,8 @@ std::string CatalogEngine::Impl::aggregate_filter(
   group_candidates(req, scope, result, [&](const CandidateConsumer& consume) {
     // Only one bounded batch of stored records is decoded at a time. Dense
     // vectors remain encoded, and no per-member data crosses the Python ABI.
-    constexpr size_t kBatchSize = 256;
     std::vector<std::string> keys;
-    keys.reserve(kBatchSize);
+    keys.reserve(kItemCandidateBatchSize);
     const auto flush = [&]() {
       if (keys.empty()) return;
       const auto records = candidates.get_data(keys);
@@ -666,32 +794,15 @@ std::string CatalogEngine::Impl::aggregate_filter(
           throw std::runtime_error("Item candidate fields must be JSON text");
         }
         const auto fields = parse(std::get<std::string>(fields_value));
-        if (!fields.HasMember("uri") || !fields["uri"].IsString() ||
-            fields["uri"].GetStringLength() == 0) continue;
-        const auto pk = fields.FindMember(primary_key.c_str());
-        if (pk == fields.MemberEnd()) {
-          throw std::runtime_error("Item candidate is missing its primary key");
+        if (auto candidate = project_candidate(fields, primary_key, 0.0)) {
+          consume(*candidate);
         }
-        std::string label;
-        if (pk->value.IsString()) {
-          label.assign(pk->value.GetString(), pk->value.GetStringLength());
-        } else if (pk->value.IsUint64()) {
-          label = std::to_string(pk->value.GetUint64());
-        } else if (pk->value.IsInt64()) {
-          label = std::to_string(pk->value.GetInt64());
-        } else {
-          throw std::runtime_error("Item candidate primary key must be string or integer");
-        }
-        if (label.empty() || label.find('\0') != std::string::npos) {
-          throw std::invalid_argument("Item candidate label must be non-empty and without NUL");
-        }
-        consume({label, canonical(required_string(fields, "uri")), 0.0});
       }
       keys.clear();
     };
     index.visit_filtered_labels(filter_dsl, [&](uint64_t label) {
       keys.push_back(table + std::to_string(label));
-      if (keys.size() == kBatchSize) flush();
+      if (keys.size() == kItemCandidateBatchSize) flush();
     });
     flush();
   });
