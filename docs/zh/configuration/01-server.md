@@ -561,6 +561,7 @@ Console API 和读端时区口径保持一致。
           "schema": "openviking_usage_audit",
           "maxsize": 10,
           "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
           "sslmode": "prefer"
         }
       }
@@ -577,10 +578,18 @@ runtime 只验证 schema，不创建或迁移表。自定义 schema 时替换脚
 连接参数支持 `sslrootcert`、`sslcert`、`sslkey`，不接受 DSN；
 生产环境应按数据库要求设置 `verify-ca` 或 `verify-full`。
 
+schema 当前为 v2。已有预览版 v1 时，先停止全部 writer，由管理员执行
+`openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`，
+再重启全部实例；不混跑旧 writer。`lock_timeout_ms` 默认 `1000`，范围 `1..60000`，
+限制写入和删除事务的单次数据库锁等待；超时回滚，worker 按 best-effort 语义丢弃该批。
+删除会持久化账号/用户删除版本，拒绝其他实例队列中的旧版本事件。
+远端 writer 刷新版本前接收的同范围新事件也会保守丢弃；每次写入刷新版本后，
+新接收事件（包括重新创建的同名身份）正常写入。版本判断不依赖机器时钟。
+
 保留配置与 SQLite 相同，`0` 关闭对应裁剪。切换后端不会迁移历史数据；
 事件仍经进程内队列异步写入，不保证重启恢复或 exactly-once。
 这只共享 Usage/Audit 数据，其他业务存储和分布式锁需单独配置。
-完整口径见[模块说明](../../../openviking/observability/usage_audit/README.md)。
+完整口径见[模块说明](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md)。
 
 ## Compile API 配置
 

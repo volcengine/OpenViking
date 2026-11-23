@@ -81,5 +81,15 @@ CREATE INDEX idx_request_audit_account_api
     ON openviking_usage_audit.request_audit(account_id, api_type);
 CREATE INDEX idx_request_audit_account_status
     ON openviking_usage_audit.request_audit(account_id, status_code);
-INSERT INTO openviking_usage_audit._schema_meta (key, value) VALUES ('version', '1');
+-- Fences survive projection deletion/retention and invalidate events admitted
+-- by another writer before it observed the latest deletion generation.
+CREATE TABLE openviking_usage_audit.usage_deletion_fence (
+    account_id text COLLATE "C" NOT NULL,
+    scope text COLLATE "C" NOT NULL CHECK (scope IN ('account', 'user')),
+    user_id text COLLATE "C" NOT NULL,
+    generation bigint NOT NULL CHECK (generation > 0),
+    PRIMARY KEY (account_id, scope, user_id)
+);
+INSERT INTO openviking_usage_audit._schema_meta (key, value)
+    VALUES ('version', '2'), ('deletion_generation', '0');
 COMMIT;

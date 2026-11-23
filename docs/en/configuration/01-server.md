@@ -589,6 +589,7 @@ server instances, preserving the Console API and viewer timezone behavior.
           "schema": "openviking_usage_audit",
           "maxsize": 10,
           "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
           "sslmode": "prefer"
         }
       }
@@ -606,11 +607,22 @@ table `SELECT/INSERT/UPDATE/DELETE`, and sequence `USAGE/SELECT`.
 Connection settings also accept `sslrootcert`, `sslcert`, and `sslkey`; DSNs are
 not accepted. Set `verify-ca` or `verify-full` according to production TLS requirements.
 
+The schema is now v2. For a preview v1 schema, stop all writers, have an administrator
+run `openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`,
+then restart all instances with the new code; do not mix old writers.
+`lock_timeout_ms` defaults to `1000` (range `1..60000`) and bounds each database lock
+wait in write/delete transactions. Timeout rolls back the batch; the best-effort
+worker drops that batch. Deletion persists account/user generation fences to reject
+older events queued on other instances. Events admitted for that scope before a
+remote writer refreshes its generation are also conservatively dropped. Each write
+refreshes the generation; subsequently admitted events, including recreated identity
+IDs, can be stored normally. This decision does not depend on machine clocks.
+
 Retention settings match SQLite; `0` disables the corresponding limit. Changing
 backends does not migrate historical data. Events still use an in-process queue,
 without restart recovery or exactly-once delivery. This setting only shares
 Usage/Audit projections; configure other storage and distributed locks separately.
-See the [module guide](../../../openviking/observability/usage_audit/README.md).
+See the [module guide](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md).
 
 ## Compile API Settings
 

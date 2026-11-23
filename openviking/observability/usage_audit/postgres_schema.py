@@ -7,7 +7,7 @@ import re
 from sqlalchemy import BigInteger, Column, Double, Identity, Integer, MetaData, Table, Text
 
 DEFAULT_SCHEMA = "openviking_usage_audit"
-POSTGRES_SCHEMA_VERSION = 1
+POSTGRES_SCHEMA_VERSION = 2
 PROVISION_SQL = "openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql"
 
 
@@ -17,6 +17,16 @@ def validate_schema(value: object) -> str:
             "Usage/audit PostgreSQL schema must be a lowercase SQL identifier (1..63 characters)"
         )
     return value
+
+
+def validate_lock_timeout(value: object) -> int:
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("Usage/audit lock_timeout_ms must be an integer (1..60000)") from None
+    if isinstance(value, bool) or str(timeout) != str(value) or not 1 <= timeout <= 60_000:
+        raise ValueError("Usage/audit lock_timeout_ms must be an integer (1..60000)")
+    return timeout
 
 
 def make_tables(schema: str) -> dict[str, Table]:
@@ -60,4 +70,12 @@ def make_tables(schema: str) -> dict[str, Table]:
         key("created_at", primary=False),
     )
     Table("_schema_meta", metadata, key("key"), key("value", primary=False))
+    Table(
+        "usage_deletion_fence",
+        metadata,
+        key("account_id"),
+        key("scope"),
+        key("user_id"),
+        Column("generation", BigInteger, nullable=False),
+    )
     return {table.name: table for table in metadata.tables.values()}

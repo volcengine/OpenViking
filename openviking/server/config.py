@@ -337,12 +337,14 @@ class UsageAuditConfig(BaseModel):
         if value:
             from openviking.observability.usage_audit.postgres_schema import (
                 DEFAULT_SCHEMA,
+                validate_lock_timeout,
                 validate_schema,
             )
             from openviking.storage.postgres_config import postgres_connection_options
 
             values = dict(value)
             validate_schema(values.pop("schema", DEFAULT_SCHEMA))
+            validate_lock_timeout(values.pop("lock_timeout_ms", 1000))
             postgres_connection_options(values, context="usage/audit")
         return value
 

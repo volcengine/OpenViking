@@ -3,6 +3,8 @@
 """PostgreSQL contract tests; OV_TEST_USAGE_AUDIT_POSTGRES is a disposable DB DSN."""
 
 import asyncio
+import hashlib
+import json
 import os
 import threading
 import uuid
@@ -16,7 +18,10 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from openviking.observability.events import ObservabilityEvent
-from openviking.observability.usage_audit.postgres_schema import PROVISION_SQL
+from openviking.observability.usage_audit.postgres_schema import (
+    POSTGRES_SCHEMA_VERSION,
+    PROVISION_SQL,
+)
 from openviking.observability.usage_audit.postgres_store import PostgresUsageAuditStore
 from openviking.observability.usage_audit.sqlite_store import SQLiteUsageAuditStore
 from openviking.server.config import UsageAuditConfig
@@ -250,7 +255,14 @@ async def test_schema_validation_does_not_create_or_migrate(pg_database):
         store = PostgresUsageAuditStore(params)
         with pytest.raises(RuntimeError, match="version"):
             await store.initialize()
-        conn.execute(f'UPDATE "{schema}"._schema_meta SET value = %s', ("1",))
+        conn.execute(
+            f'UPDATE "{schema}"._schema_meta SET value = %s WHERE key = %s',
+            (str(POSTGRES_SCHEMA_VERSION), "version"),
+        )
+        conn.execute(
+            f'UPDATE "{schema}"._schema_meta SET value = %s WHERE key = %s',
+            ("0", "deletion_generation"),
+        )
         conn.execute(
             f'ALTER TABLE "{schema}".usage_token_hourly ALTER COLUMN token_count TYPE integer'
         )
@@ -392,3 +404,218 @@ async def test_postgres_runtime_events_flush_and_delete(pg_database):
         await shutdown_usage_audit(app=app)
     assert app.state.usage_audit_runtime is None
     assert runtime.store._engine is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", ["u", None])
+async def test_remote_worker_cannot_resurrect_deleted_data(pg_database, monkeypatch, user_id):
+    from openviking.observability.usage_audit.runtime import UsageAuditRuntime
+    from openviking.observability.usage_audit.worker import UsageAuditWorker
+
+    params, conn = pg_database
+    local, remote = PostgresUsageAuditStore(params), PostgresUsageAuditStore(params)
+    workers = [
+        UsageAuditWorker(local, flush_interval_seconds=0.1),
+        UsageAuditWorker(remote, batch_size=1, flush_interval_seconds=0.1),
+    ]
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = remote.record_batch
+
+    async def paused_batch(events):
+        entered.set()
+        await release.wait()
+        await original(events)
+
+    try:
+        await local.initialize()
+        await remote.initialize()
+        for worker in workers:
+            await worker.start()
+        workers[0].enqueue(http(request_id="persisted"))
+        await workers[0].flush()
+        assert (await local.query_audit_logs(account_id="a"))["total"] == 1
+        monkeypatch.setattr(remote, "record_batch", paused_batch)
+        # The first old event is already in-flight, the rest remain queued.
+        workers[1].enqueue(http(request_id="late-old"))
+        await asyncio.wait_for(entered.wait(), 5)
+        for item in [
+            event(prompt_tokens=10),
+            http(route="/api/v1/resources"),
+            http(user="other", request_id="other-user"),
+            http(account="other", request_id="other-account"),
+        ]:
+            workers[1].enqueue(item)
+        runtime = UsageAuditRuntime(local, workers[0], None, 1)
+        await runtime.delete_data(account_id="a", user_id=user_id)
+        assert (await local.query_audit_logs(account_id="a"))["total"] == 0
+        release.set()
+        await asyncio.wait_for(workers[1].flush(), 5)
+        assert [
+            item["request_id"] for item in (await local.query_audit_logs(account_id="a"))["items"]
+        ] == (["other-user"] if user_id is not None else [])
+        assert (await local.query_audit_logs(account_id="other"))["total"] == 1
+        assert (await local.get_today_tokens(account_id="a", user_date="2026-05-12", tz=UTC))[
+            "total"
+        ] == 0
+        assert (
+            sum(
+                row["total"]
+                for row in await local.get_context_commit_heatmap(
+                    account_id="a",
+                    start_user_date="2026-05-12",
+                    end_user_date="2026-05-12",
+                    bucket="hour",
+                    tz=UTC,
+                )
+            )
+            == 0
+        )
+        # Same IDs may be used again after the writer observed the deletion.
+        # This deliberately uses the old event timestamp to prove fencing
+        # does not depend on application clocks or event time.
+        workers[1].enqueue(http(request_id="new-incarnation"))
+        await workers[1].flush()
+        assert (await local.query_audit_logs(account_id="a", request_id="new-incarnation"))[
+            "total"
+        ] == 1
+        assert (
+            conn.execute(
+                f'SELECT COUNT(*) FROM "{params["schema"]}".usage_deletion_fence'
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        release.set()
+        for worker in workers:
+            await worker.close(timeout_seconds=0.2)
+        await local.close()
+        await remote.close()
+
+
+@pytest.mark.asyncio
+async def test_deletion_fence_survives_restart_and_empty_scope(pg_database):
+    params, _ = pg_database
+    writer, deleter = PostgresUsageAuditStore(params), PostgresUsageAuditStore(params)
+    try:
+        await writer.initialize()
+        await deleter.initialize()
+        old = writer.prepare_event(http())
+        await deleter.delete_data(account_id="a", user_id="u")
+        await deleter.close()
+        await writer.close()
+        await writer.initialize()
+        await writer.record_batch([old])
+        assert (await writer.query_audit_logs(account_id="a"))["total"] == 0
+        await writer.record_batch([http()])
+        assert (await writer.query_audit_logs(account_id="a"))["total"] == 1
+        # Repeated deletion advances the fence; an already prepared batch is stale.
+        old = writer.prepare_event(http())
+        await writer.delete_data(account_id="a", user_id="u")
+        await writer.record_batch([old])
+        assert (await writer.query_audit_logs(account_id="a"))["total"] == 0
+    finally:
+        await writer.close()
+        await deleter.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_kind", ["table", "advisory"])
+async def test_lock_wait_is_bounded_and_worker_close_finishes(pg_database, lock_kind):
+    from sqlalchemy.exc import OperationalError
+
+    from openviking.observability.usage_audit.worker import UsageAuditWorker
+
+    params, conn = pg_database
+    schema = params["schema"]
+    store = PostgresUsageAuditStore(dict(params, lock_timeout_ms=100))
+    worker = UsageAuditWorker(store, flush_interval_seconds=0.1)
+    try:
+        await store.initialize()
+        await store.record_batch([http(request_id="initial")])
+        # A table lock covers implicit insert/delete lock waits as well as
+        # advisory waits. Another account must remain usable after rollback.
+        conn.execute("BEGIN")
+        if lock_kind == "table":
+            conn.execute(f'LOCK TABLE "{schema}".request_audit IN ACCESS EXCLUSIVE MODE')
+        else:
+            key = int.from_bytes(
+                hashlib.sha256(
+                    json.dumps(["openviking_usage_audit", schema, "a"], ensure_ascii=False).encode()
+                ).digest()[:8],
+                "big",
+                signed=True,
+            )
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(OperationalError) as error:
+            await asyncio.wait_for(store.record_batch([event(prompt_tokens=10), http()]), 2)
+        assert error.value.orig.sqlstate == "55P03"
+        assert asyncio.get_running_loop().time() - started < 1.5
+        # Failed deletion must roll back the fence and the shared generation.
+        with pytest.raises(OperationalError):
+            await asyncio.wait_for(store.delete_data(account_id="a", user_id="u"), 2)
+        await worker.start()
+        worker.enqueue(http())
+        await asyncio.sleep(0.02)
+        await asyncio.wait_for(worker.close(timeout_seconds=0.05), 1.5)
+        conn.execute("ROLLBACK")
+        assert (
+            conn.execute(f'SELECT COUNT(*) FROM "{schema}".usage_deletion_fence').fetchone()[0] == 0
+        )
+        assert (
+            conn.execute(
+                f'SELECT value FROM "{schema}"._schema_meta WHERE key = %s',
+                ("deletion_generation",),
+            ).fetchone()[0]
+            == "0"
+        )
+        assert (await store.query_audit_logs(account_id="a"))["total"] == 1
+        assert (await store.get_today_tokens(account_id="a", user_date="2026-05-12", tz=UTC))[
+            "total"
+        ] == 0
+        await store.record_batch([http(account="other")])
+        assert (await store.query_audit_logs(account_id="other"))["total"] == 1
+    finally:
+        conn.execute("ROLLBACK")
+        await worker.close(timeout_seconds=0.2)
+        await store.close()
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 60001, True, 0.5, None, "invalid"])
+def test_invalid_lock_timeout(timeout):
+    with pytest.raises(ValidationError, match="lock_timeout_ms"):
+        UsageAuditConfig(
+            backend="postgres", postgres={"user": "u", "database": "d", "lock_timeout_ms": timeout}
+        )
+
+
+@pytest.mark.asyncio
+async def test_preview_v1_migration_preserves_rows(pg_database):
+    params, conn = pg_database
+    schema = params["schema"]
+    store = PostgresUsageAuditStore(params)
+    try:
+        await store.initialize()
+        await store.record_batch([event(prompt_tokens=10), http()])
+        await store.close()
+        # Simulate the preview v1 layout, then apply the administrator script.
+        conn.execute(f'DROP TABLE "{schema}".usage_deletion_fence')
+        conn.execute(
+            f'DELETE FROM "{schema}"._schema_meta WHERE key = %s', ("deletion_generation",)
+        )
+        conn.execute(
+            f'UPDATE "{schema}"._schema_meta SET value = %s WHERE key = %s', ("1", "version")
+        )
+        sql = (
+            Path("openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql")
+            .read_text()
+            .replace("openviking_usage_audit", schema)
+        )
+        conn.execute(sql)
+        await store.initialize()
+        assert (await store.query_audit_logs(account_id="a"))["total"] == 1
+        assert (await store.get_today_tokens(account_id="a", user_date="2026-05-12", tz=UTC))[
+            "total"
+        ] == 10
+    finally:
+        await store.close()
