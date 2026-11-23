@@ -589,6 +589,11 @@ async def test_alias_conflicts_retry_without_blocking_unrelated_publication(
     pipeline.generate = pipeline.generate_once = worker
     outputs = await reduce_op.resolve_files(pipeline, [*docs, unrelated])
     assert pipeline.generate.await_count == len(results)
+    earlier, retry = worker.await_args_list[:-1], worker.await_args_list[-1]
+    assert all("previous_rejected_paths" not in call.args[2] for call in earlier)
+    assert retry.args[2]["previous_rejected_paths"] == sorted(
+        names if collision == "same_worker" else [alias.path]
+    )
     assert outputs == (
         [unrelated, first, merged] if collision == "other_worker" else [unrelated, merged]
     )
