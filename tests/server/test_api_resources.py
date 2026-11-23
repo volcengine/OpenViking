@@ -5,6 +5,8 @@
 
 import asyncio
 import zipfile
+from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -12,6 +14,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.resources import AddResourceRequest
+from openviking.storage.queuefs.named_queue import QueueError, QueueStatus
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -619,14 +622,47 @@ async def test_add_resource_non_wait_same_name_preserves_both_files(
         assert response.json()["result"].strip() == content
 
 
-async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/system/wait",
-        json={},
+async def test_wait_processed_separates_account_work_from_runtime(client, monkeypatch):
+    path = "/api/v1/system/wait"
+    queue_status = {
+        "Semantic": QueueStatus(
+            processed=4,
+            error_count=5,
+            errors=[QueueError(timestamp=datetime.now(), message="private queue error")],
+        )
+    }
+    manager = SimpleNamespace(
+        check_status=AsyncMock(return_value=queue_status),
+        wait_complete=AsyncMock(return_value={}),
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
+    has_work = AsyncMock(side_effect=[True, False, RuntimeError("private storage error")])
+    monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", lambda: manager)
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: SimpleNamespace(has_work=has_work),
+    )
+    monkeypatch.setattr(
+        "openviking.service.resource_service.asyncio", SimpleNamespace(sleep=AsyncMock())
+    )
+
+    runtime = await client.post(path, json={})
+    assert runtime.status_code == 200
+    assert runtime.json()["result"] == {}
+
+    account = await client.post(path, json={"scope": "account"})
+    assert account.status_code == 200, account.text
+    assert account.json()["result"]["Semantic"] == {
+        "processed": 4,
+        "requeue_count": 0,
+        "error_count": 5,
+        "errors": [{"message": "Queue processing error"}],
+    }
+    has_work.assert_awaited_with(account_id="default", exclude_inline=True)
+    manager.check_status.assert_awaited_once_with(account_id="default")
+
+    failed = await client.post(path, json={"scope": "account"})
+    assert failed.status_code == 503, failed.text
+    assert "private storage error" not in failed.text
 
 
 async def test_temp_upload_uses_configured_shared_default(client, app):
