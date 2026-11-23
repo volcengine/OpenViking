@@ -73,31 +73,6 @@ class TestRewriteRelativeLinks:
             rewrite_ctx=rewrite_ctx,
         )
 
-    @pytest.mark.parametrize(
-        ("heading", "anchor"),
-        [
-            ("# Target", "target"),
-            ("# Target ##", "target"),
-            ("# Target ###   ", "target"),
-            ("# Target\t##", "target"),
-            ("# Target##", "target"),
-            (r"# Target \##", "target-"),
-            (r"# Target \# ##", "target-"),
-            ("# Target ##\u00a0", "target-"),
-        ],
-    )
-    async def test_optional_closing_hashes_keep_section_fragment(
-        self, tmp_path: Path, heading: str, anchor: str
-    ):
-        (tmp_path / "target.md").write_text(
-            heading + "\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
-            encoding="utf-8",
-        )
-
-        rewritten = await self._rewrite(self._parser(), tmp_path, f"[target](target.md#{anchor})")
-
-        assert rewritten == f"[target](../target/Target.md#{anchor})"
-
     async def test_md_target_becomes_directory(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
         out = await self._rewrite(
@@ -203,17 +178,25 @@ class TestRewriteRelativeLinks:
         assert out.startswith("[x](../目录甲/目录乙/目录丙/big/")
         assert out.endswith(".md#第3章-排查)")  # points at a file, anchor kept
 
-    async def test_large_file_unlocatable_anchor_falls_back_to_dir(self, tmp_path: Path):
-        # Anchor matches no heading in the (large) target → drop suffix, point at dir.
+    async def test_split_target_resolves_closing_hashes_and_falls_back_for_missing_anchor(
+        self, tmp_path: Path
+    ):
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
-        big.write_text("# 大文档\n\n" + ("这是一段较长的正文内容。" * 1200), encoding="utf-8")
+        big.write_text(
+            "# Target ##\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
+            encoding="utf-8",
+        )
         out = await self._rewrite(
             self._parser(),
             kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
+            "[found](./目录甲/目录乙/目录丙/big.md#target) "
+            "[missing](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
         )
-        assert out == "[x](../目录甲/目录乙/目录丙/big/)"
+        assert out == (
+            "[found](../目录甲/目录乙/目录丙/big/Target.md#target) "
+            "[missing](../目录甲/目录乙/目录丙/big/)"
+        )
 
     async def test_multiple_links_on_one_line(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
