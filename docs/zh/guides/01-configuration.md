@@ -2305,10 +2305,10 @@ publisher 不再暴露为公共 CLI 命令。
 | --- | --- | --- |
 | `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | 直接复制。 |
 | `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | 补充 `redis://` 或 `rediss://`；裸 `host:port` 会被拒绝。 |
-| `expiry.redis.tls` | endpoint scheme | 为 `true` 时使用 `rediss://`。 |
+| `expiry.redis.tls` | endpoint scheme | 保留显式 `redis://` 或 `rediss://` scheme；仅将 `tls=true` 的裸 endpoint 转为 `rediss://`。 |
 | `expiry.redis.username` | `cache.instances.<instance>.params.username` | 直接复制。 |
 | `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | 直接复制。 |
-| `expiry.redis.password` | `password_env` | 改为环境变量；不提供明文替代字段。 |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | 直接复制；新部署建议使用 `password_env`。 |
 | `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | 乘以 1000。 |
 | `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | 乘以 1000。 |
 | `expiry.redis.max_connections` | `pool_size` | 直接复制。 |

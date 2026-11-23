@@ -2350,10 +2350,10 @@ public CLI command.
 | --- | --- | --- |
 | `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | Copy the value. |
 | `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | Add `redis://` or `rediss://`; bare `host:port` values are rejected. |
-| `expiry.redis.tls` | endpoint scheme | Use `rediss://` when it is `true`. |
+| `expiry.redis.tls` | endpoint scheme | Preserve an explicit `redis://` or `rediss://` scheme; use `rediss://` only when converting a bare endpoint with `tls=true`. |
 | `expiry.redis.username` | `cache.instances.<instance>.params.username` | Copy the value. |
 | `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | Copy the value. |
-| `expiry.redis.password` | `password_env` | Define an environment variable instead; no plaintext replacement exists. |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | Copy the value; prefer `password_env` for new deployments. |
 | `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | Multiply by 1000. |
 | `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | Multiply by 1000. |
 | `expiry.redis.max_connections` | `pool_size` | Copy the value. |
