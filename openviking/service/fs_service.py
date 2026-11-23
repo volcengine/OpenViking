@@ -135,7 +135,6 @@ def _visible_grep_content(content: str, uri: str) -> str:
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
-    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
     from openviking.storage import VikingDBManager
 
 
@@ -147,7 +146,6 @@ class FSService:
         viking_fs: Optional[VikingFS] = None,
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
-        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
         watch_manager: Optional["WatchManager"] = None,
     ):
@@ -157,7 +155,6 @@ class FSService:
         self._privacy_sanitizer = privacy_sanitizer or (
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
-        self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
 
     def set_dependencies(
@@ -165,7 +162,6 @@ class FSService:
         viking_fs: VikingFS,
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
-        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
         watch_manager: Optional["WatchManager"] = None,
     ) -> None:
@@ -176,7 +172,6 @@ class FSService:
         self._privacy_sanitizer = privacy_sanitizer or (
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
-        self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
 
     def _ensure_initialized(self) -> VikingFS:
