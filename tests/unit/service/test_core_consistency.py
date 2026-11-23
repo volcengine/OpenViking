@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Focused tests for core service behavior."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from openviking.server.config import AccountStoreConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
@@ -65,6 +67,93 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
     assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
     assert storage_calls[0][1]["max_concurrent_external_task"] == 6
+
+
+def test_service_loads_account_store_runtime_from_config_file(monkeypatch) -> None:
+    """Forward the configured Account Store Runtime instance to the AGFS binding builder."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    account_store = {
+        "provider": "redis_mysql",
+        "params": {"cache": {"instance": "accountstore"}},
+    }
+    calls = []
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: Path("/tmp/ov.conf"),
+    )
+    monkeypatch.setattr(
+        "openviking.service.core.load_json_config",
+        lambda path: {"server": {"account_store": account_store}},
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", None)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
+
+
+def test_service_uses_registered_account_store_runtime_without_config_file(monkeypatch) -> None:
+    """Use the registered ServerConfig when no startup configuration file exists."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    server_config = SimpleNamespace(
+        account_store=SimpleNamespace(
+            provider="redis_mysql",
+            params={"cache": {"instance": "accountstore"}},
+        )
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: None,
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
+
+
+def test_service_prefers_registered_account_store_config_over_config_file(monkeypatch) -> None:
+    """Use normalized ServerConfig instead of stale Account Store file settings."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    server_config = SimpleNamespace(
+        account_store=AccountStoreConfig(
+            provider=" REDIS_MYSQL ",
+            params={"cache": {"instance": "accountstore"}},
+        )
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: Path("/tmp/ov.conf"),
+    )
+    monkeypatch.setattr(
+        "openviking.service.core.load_json_config",
+        lambda path: {"server": {"account_store": {"provider": "file"}}},
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:

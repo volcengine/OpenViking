@@ -5,19 +5,28 @@ import { mount, ok } from './helpers/console-dom.mjs';
 test('the five quick commands use scoped native requests and command-specific result cards', async () => {
   const calls = [];
   const root = 'viking://resources/notes';
+  const compileSkill = 'viking://system/compile/example-skills/llm-wiki';
   const responses = [
     { task_id: 'resource-task', root_uri: root, source_path: 'internal' },
     { root_uri: 'viking://agent/skills/wiki' },
     { message_count: 1 },
     { task_id: 'memory-task' },
     { resources: [{ uri: root, score: 0.95 }] },
+    { compile_name: 'demo-wiki' },
     { task_id: 'compile-task', status: 'pending' },
-    { to: 'viking://resources/wiki', auto_update: false },
+    { task_id: 'compile-task', status: 'completed' },
+    { task_id: 'one-off-compile', status: 'pending' },
   ];
-  const host = await mount(async (url, init) => {
-    calls.push([new URL(url).pathname, JSON.parse(init.body)]);
-    return ok(responses[calls.length - 1]);
-  });
+  const host = await mount(
+    async (url, init) => {
+      calls.push([
+        new URL(url).pathname,
+        init?.body ? JSON.parse(init.body) : undefined,
+      ]);
+      return ok(responses[calls.length - 1]);
+    },
+    { taskService: { getTask: async (id) => ({ id, status: 'pending' }) } },
+  );
   try {
     await host.execute('ov add-resource https://example.com/notes.md');
     assert.match(
@@ -48,25 +57,28 @@ test('the five quick commands use scoped native requests and command-specific re
     await host.execute('ov find "notes"');
     assert.match(host.records.at(-1).textContent, /0\.950/);
     await host.execute(
-      'ov compile --from viking://resources/notes --to viking://resources/wiki',
+      `ov compile create --compile-name demo-wiki --from ${root},viking://resources/report --from ${root} --from viking://resources/research --to viking://resources/wiki --skill ${compileSkill} --instruction "Keep sources" --args '{"model_name":"sample-model","auto_update":true,"update_schedule":{"frequency":"daily","hour":9,"minute":30}}'`,
     );
     assert.match(
       host.records.at(-1).querySelector('.ov-command-console__write')
         .textContent,
-      /compile-task/,
-    );
-    await host.execute(
-      'ov compile create --from viking://resources/notes --to viking://resources/wiki',
-    );
-    assert.match(
-      host.records.at(-1).querySelector('.ov-command-console__write')
-        .textContent,
-      /Auto update: false/,
+      /Compile name: demo-wiki/,
     );
     assert.doesNotMatch(
       host.records.at(-1).querySelector('.ov-command-console__write')
         .textContent,
       /Task id/,
+    );
+    await host.execute('ov compile --compile-name research-Wiki');
+    assert.match(
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
+      /compile-task/,
+    );
+    await host.execute('ov task status compile-task');
+    assert.match(host.records.at(-1).textContent, /completed/);
+    await host.execute(
+      'ov compile --from viking://resources/notes --to viking://resources/wiki',
     );
     assert.deepEqual(calls, [
       ['/gateway/api/v1/resources', { path: 'https://example.com/notes.md' }],
@@ -84,26 +96,53 @@ test('the five quick commands use scoped native requests and command-specific re
       ['/gateway/api/v1/sessions/test%2Fa%20b/commit', {}],
       ['/gateway/api/v1/search/find', { query: 'notes' }],
       [
-        '/gateway/api/v1/compile',
+        '/gateway/api/v1/compile/create',
         {
-          from: [root],
+          compile_name: 'demo-wiki',
+          from: [
+            root,
+            'viking://resources/report',
+            'viking://resources/research',
+          ],
           to: 'viking://resources/wiki',
-          skill: 'viking://system/compile/example-skills/llm-wiki/SKILL.md',
+          skill: compileSkill,
+          instruction: 'Keep sources',
+          args: {
+            model_name: 'sample-model',
+            auto_update: true,
+            update_schedule: { frequency: 'daily', hour: 9, minute: 30 },
+          },
         },
       ],
+      ['/gateway/api/v1/compile', { compile_name: 'research-Wiki' }],
+      ['/gateway/api/v1/tasks/compile-task', undefined],
       [
         '/gateway/api/v1/compile',
         {
           from: [root],
           to: 'viking://resources/wiki',
           skill: 'viking://system/compile/example-skills/llm-wiki/SKILL.md',
-          args: { auto_update: false },
         },
       ],
     ]);
-    await host.execute('ov compile --from viking://resources/notes');
-    assert.equal(host.records.at(-1).dataset.status, 'error');
-    assert.equal(calls.length, 7);
+    await host.execute('ov compile --compile-name 研发-Wiki');
+    assert.equal(host.records.at(-1).dataset.status, 'success');
+    assert.deepEqual(calls.at(-1), [
+      '/gateway/api/v1/compile',
+      { compile_name: '研发-Wiki' },
+    ]);
+    for (const command of [
+      'ov compile --from viking://resources/notes',
+      'ov compile --compile-name demo-wiki --from viking://resources/notes',
+      'ov compile --compile-name "invalid name"',
+      `ov compile --compile-name ${'a'.repeat(32)}汉`,
+      'ov compile create --compile-name demo-wiki --from viking://resources/notes --to viking://resources/wiki',
+      `ov compile create --compile-name demo-wiki --from ${root} --to viking://resources/wiki --skill ${compileSkill} --args '[]'`,
+    ]) {
+      await host.execute(command);
+      assert.equal(host.records.at(-1).dataset.status, 'error', command);
+    }
+    assert.equal(calls.length, 10);
   } finally {
     await host.dispose();
   }

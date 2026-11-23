@@ -2,18 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Dependency injection for OpenViking HTTP Server."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import Any
 
-from openviking.service.core import OpenVikingService
-
-if TYPE_CHECKING:
-    from openviking.server.config import ServerConfig
-
-_service: Optional[OpenVikingService] = None
-_server_config: Optional["ServerConfig"] = None
+_service: Any | None = None
+_server_config: Any | None = None
 
 
-def get_service() -> OpenVikingService:
+def get_service() -> Any:
     """Get the OpenVikingService instance.
 
     Returns:
@@ -27,12 +22,12 @@ def get_service() -> OpenVikingService:
     return _service
 
 
-def get_service_or_none() -> Optional[OpenVikingService]:
+def get_service_or_none() -> Any | None:
     """Return the registered OpenVikingService, or None if not set."""
     return _service
 
 
-def set_service(service: Optional[OpenVikingService]) -> None:
+def set_service(service: Any | None) -> None:
     """Set (or clear) the OpenVikingService instance.
 
     Args:
@@ -42,7 +37,7 @@ def set_service(service: Optional[OpenVikingService]) -> None:
     _service = service
 
 
-def get_server_config() -> Optional["ServerConfig"]:
+def get_server_config() -> Any | None:
     """Return the active ServerConfig if one was registered, else None.
 
     MCP tools that need server-level settings (e.g. public_base_url for upload URLs)
@@ -51,7 +46,7 @@ def get_server_config() -> Optional["ServerConfig"]:
     return _server_config
 
 
-def set_server_config(config: "ServerConfig") -> None:
+def set_server_config(config: Any) -> None:
     """Register the active ServerConfig at server bootstrap."""
     global _server_config
     _server_config = config

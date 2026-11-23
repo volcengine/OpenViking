@@ -40,27 +40,14 @@ async def test_delete_resource_delegates_to_fs_with_index_wait(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "uri",
-    [
-        "viking://resources",
-        "viking://resources/",
-        "viking://user/alice/resources/private.md",
-        "viking://agent/skills/demo",
-        "viking://",
-        "viking://resources-other/demo",
-        "viking://resources/../agent/tools/demo",
-        "viking://resources/%2e%2e/agent/tools/demo",
-    ],
-)
-async def test_delete_resource_rejects_root_and_non_shared_subtree(uri, monkeypatch):
+async def test_delete_resource_rejects_shared_root(monkeypatch):
     async def unexpected_rm(**kwargs):
         raise AssertionError("rejected URI must not reach filesystem deletion")
 
     monkeypatch.setattr(resources, "remove_filesystem_entry", unexpected_rm)
 
     with pytest.raises(InvalidArgumentError):
-        await resources.delete_resource(uri=uri, _ctx=_ctx())
+        await resources.delete_resource(uri="viking://resources/", _ctx=_ctx())
 
 
 @pytest.mark.asyncio

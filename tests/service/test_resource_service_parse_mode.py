@@ -50,12 +50,12 @@ def ctx() -> RequestContext:
 
 
 @pytest.fixture
-def service(monkeypatch: pytest.MonkeyPatch, watch_tracker) -> ResourceService:
+def service(monkeypatch: pytest.MonkeyPatch, watch_tracker, watch_vfs) -> ResourceService:
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
 
     instance = ResourceService(
         vikingdb=object(),
-        viking_fs=object(),
+        viking_fs=watch_vfs,
         resource_processor=_ResourceProcessor(),
         skill_processor=object(),
     )
@@ -82,6 +82,7 @@ def service(monkeypatch: pytest.MonkeyPatch, watch_tracker) -> ResourceService:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_no_split_watch_replay_preserves_auto_bound_file_target(
     watch_store,
     watch_vfs,

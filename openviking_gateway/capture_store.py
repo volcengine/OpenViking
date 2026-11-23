@@ -1,19 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""A durable, per-session mailbox. Every CAS affects exactly one document.
+"""One versioned document per session. Every CAS affects exactly one document.
 
-Scheduling and leasing belong to the queue adapter. Neither replay keys nor
-capture branch rules participate in the queue's transactions.
+A document whose ``idle_at`` is set is listed by ``waiting`` once that time is reached,
+until a swap clears the field. ``forget`` drops a listing unless the document changed
+since the caller read it at ``version``; it is for listings with no due time behind them.
+Neither replay keys nor capture branch rules participate in its transactions.
 """
 
-import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Protocol
-
-
-class LeaseLost(Exception):
-    """The queue job is now owned by a different worker."""
 
 
 @dataclass
@@ -22,14 +18,14 @@ class Document:
     version: int = 0
 
 
-class CaptureQueue(Protocol):
+class CaptureStore(Protocol):
     async def get(self, scope, session) -> Document: ...
-    async def swap(self, scope, session, previous: Document, value, ready, owner=None) -> bool: ...
-    async def claim(self, lease_seconds=120) -> dict | None: ...
-    async def release(self, item) -> None: ...
+    async def swap(self, scope, session, previous: Document, value) -> bool: ...
+    async def waiting(self, before) -> list[tuple[str, str]]: ...
+    async def forget(self, scope, session, version) -> None: ...
 
 
-class SQLiteCaptureQueue:
+class SQLiteCaptureStore:
     def __init__(self, db):
         self.db = db
 
@@ -46,66 +42,43 @@ class SQLiteCaptureQueue:
 
         return await self.db.run(get)
 
-    async def swap(self, scope, session, previous, value, ready, owner=None):
+    async def swap(self, scope, session, previous, value):
         def swap():
             with self.db.connect() as c:
                 c.execute("BEGIN IMMEDIATE")
-                if owner is not None:
-                    lease = c.execute(
-                        "SELECT owner,lease FROM capture WHERE scope=? AND session=?",
-                        (scope, session),
-                    ).fetchone()
-                    if not lease or lease[0] != owner or lease[1] <= time.time():
-                        raise LeaseLost
                 self.db.touch(c, scope, session)
+                due = value.get("idle_at")
                 if previous.version:
                     changed = c.execute(
                         "UPDATE capture SET value=?,version=version+1,ready=? "
                         "WHERE scope=? AND session=? AND version=?",
-                        (self.db.encode(value), ready, scope, session, previous.version),
+                        (self.db.encode(value), due, scope, session, previous.version),
                     ).rowcount
                 else:
                     changed = c.execute(
-                        "INSERT OR IGNORE INTO capture(scope,session,value,version,ready) VALUES (?,?,?,1,?)",
-                        (scope, session, self.db.encode(value), ready),
+                        "INSERT OR IGNORE INTO capture(scope,session,value,version,ready) "
+                        "VALUES (?,?,?,1,?)",
+                        (scope, session, self.db.encode(value), due),
                     ).rowcount
                 c.commit()
                 return bool(changed)
 
         return await self.db.run(swap, write=True)
 
-    async def claim(self, lease_seconds=120):
-        def claim():
-            now, owner = time.time(), uuid.uuid4().hex
+    async def waiting(self, before):
+        def waiting():
             with self.db.connect() as c:
-                c.execute("BEGIN IMMEDIATE")
-                row = c.execute(
-                    "SELECT scope,session,value,version FROM capture "
-                    "WHERE ready<=? AND lease<? ORDER BY ready LIMIT 1",
-                    (now, now),
-                ).fetchone()
-                if row is None:
-                    return None
-                c.execute(
-                    "UPDATE capture SET lease=?,owner=? WHERE scope=? AND session=?",
-                    (now + lease_seconds, owner, row["scope"], row["session"]),
-                )
-                c.commit()
-                return {
-                    "scope": row["scope"],
-                    "session": row["session"],
-                    "owner": owner,
-                    "document": Document(self.db.decode(row["value"]), row["version"]),
-                }
+                rows = c.execute("SELECT scope,session FROM capture WHERE ready<=?", (before,))
+                return [tuple(row) for row in rows]
 
-        return await self.db.run(claim, write=True)
+        return await self.db.run(waiting)
 
-    async def release(self, item):
-        def release():
+    async def forget(self, scope, session, version):
+        def forget():
             with self.db.connect() as c:
                 c.execute(
-                    "UPDATE capture SET lease=0,owner=NULL WHERE scope=? AND session=? AND owner=?",
-                    (item["scope"], item["session"], item["owner"]),
+                    "UPDATE capture SET ready=NULL WHERE scope=? AND session=? AND version=?",
+                    (scope, session, version),
                 )
 
-        await self.db.run(release, write=True)
+        await self.db.run(forget, write=True)

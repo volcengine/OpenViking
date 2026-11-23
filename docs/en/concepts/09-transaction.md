@@ -425,7 +425,7 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 
 Path locks are enabled by default with the `filesystem` provider. Use
 `storage.agfs.pathlock.provider=cache` for Redis-backed coordination between
-processes. Cache-backed PathLock requires a top-level Redis Cache Provider and
+processes. Cache-backed PathLock requires a Redis entry in `cache.instances` and
 uses top-level `service_name` as the Redis namespace. The runtime wait timeout
 is fixed at `0.0` seconds. Alternatively, use `provider=postgres` for shared
 coordination across processes or hosts without Redis; it uses its own DSN and
@@ -456,16 +456,25 @@ Redis-backed configuration:
 {
   "service_name": "production",
   "cache": {
-    "provider": "redis",
-    "params": {
-      "mode": "standalone",
-      "endpoints": ["redis://127.0.0.1:6379"]
+    "instances": {
+      "locks": {
+        "provider": "redis",
+        "params": {
+          "mode": "standalone",
+          "endpoints": ["redis://127.0.0.1:6379"]
+        }
+      },
+      "default": {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6379"]}
+      }
     }
   },
   "storage": {
     "agfs": {
       "pathlock": {
         "provider": "cache",
+        "instance": "locks",
         "lock_expire_secs": 30.0
       }
     }
@@ -497,6 +506,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache` | `filesystem` |
+| `instance` | str | Cache Runtime name when `provider="cache"`; must select Redis | `"default"` |
 | `sqlite_path` | str / null | Optional absolute local database path for `sqlite`; see [SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `postgres_dsn_env` | str / null | Required for `postgres`; name of the environment variable containing its DSN | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |

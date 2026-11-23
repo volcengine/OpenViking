@@ -8,49 +8,37 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.server import mcp_endpoint
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import resources as resources_router
 from openviking.server.routers.resources import AddResourceRequest
-from openviking.server.upload_token_store import ConsumedUploadToken
 from openviking_cli.session.user_id import UserIdentifier
+from tests.server.test_api_resources import _wait_task_terminal
 
 
-def test_add_resource_request_exposes_parse_mode_only_inside_args():
-    request = AddResourceRequest(
-        path="https://example.com/demo.md",
-        args={"parse_mode": "no_split"},
-        preserve_structure=False,
+async def test_add_resource_route_forwards_no_split_mode(client, upload_temp_dir):
+    source = upload_temp_dir / "guide.md"
+    content = "# Setup\n\nInstall the package.\n\n# Upgrade\n\nRebuild the index.\n"
+    source.write_text(content)
+    payload = {"temp_file_id": source.name, "wait": True}
+
+    rejected = await client.post("/api/v1/resources", json={**payload, "parse_mode": "no_split"})
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+    imported = await client.post(
+        "/api/v1/resources", json={**payload, "args": {"parse_mode": "no_split"}}
     )
-
-    assert "parse_mode" not in AddResourceRequest.model_json_schema()["properties"]
-    assert request.args == {"parse_mode": "no_split"}
+    assert imported.status_code == 200, imported.text
+    target = imported.json()["result"]["root_uri"]
+    assert target == "viking://resources/guide.md"
+    read = await client.get("/api/v1/content/read", params={"uri": target})
+    assert read.status_code == 200, read.text
+    assert read.json()["result"].strip() == content.strip()
 
 
 @pytest.mark.asyncio
-async def test_add_resource_route_forwards_no_split_mode(monkeypatch: pytest.MonkeyPatch):
-    add_resource = AsyncMock(
-        return_value={"status": "success", "root_uri": "viking://resources/demo"}
-    )
-    service = SimpleNamespace(resources=SimpleNamespace(add_resource=add_resource))
-    monkeypatch.setattr(resources_router, "get_service", lambda: service)
-    ctx = RequestContext(
-        user=UserIdentifier("test_account", "test_user"),
-        role=Role.USER,
-    )
-
-    await resources_router.add_resource(
-        SimpleNamespace(headers={}),
-        AddResourceRequest(
-            path="https://example.com/demo.md",
-            args={"parse_mode": "no_split"},
-        ),
-        ctx,
-    )
-
-    assert add_resource.await_args.kwargs["args"] == {"parse_mode": "no_split"}
-
-
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_route_forwards_connector_auth_config(monkeypatch: pytest.MonkeyPatch):
     add_resource = AsyncMock(
         return_value={"status": "success", "root_uri": "viking://resources/docs"}
@@ -90,44 +78,38 @@ async def test_add_resource_route_forwards_connector_auth_config(monkeypatch: py
     assert add_resource.await_args.kwargs["connector_auth_config"] == reference
 
 
-@pytest.mark.asyncio
 async def test_signed_temp_upload_forwards_token_bound_parse_mode(
-    monkeypatch: pytest.MonkeyPatch,
+    client, upload_temp_dir, monkeypatch
 ):
-    signed = ConsumedUploadToken(
-        account_id="test_account",
-        user_id="test_user",
-        role=Role.USER,
-        to="",
-        parent="viking://user/test_user/resources/team",
-        reason="",
-        actor_peer_id="",
-        parse_mode="no_split",
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "http://testserver")
+    ctx = RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role(Role.USER),
     )
-    request = SimpleNamespace(
-        state=SimpleNamespace(signed_upload=signed),
-        app=SimpleNamespace(state=SimpleNamespace(config=object())),
+    context_token = mcp_endpoint._mcp_ctx.set(ctx)
+    try:
+        instructions = await mcp_endpoint.add_resource(
+            path="/tmp/manual.md",
+            parent="viking://~/resources/signed",
+            args={"parse_mode": "no_split"},
+        )
+    finally:
+        mcp_endpoint._mcp_ctx.reset(context_token)
+
+    upload_url = next(
+        line.strip()
+        for line in instructions.splitlines()
+        if line.strip().startswith("http://testserver/api/v1/resources/temp_upload?")
     )
-    store = SimpleNamespace(save_upload=AsyncMock(return_value="upload-id"))
-    monkeypatch.setattr(resources_router.TempUploadStore, "build", lambda _config: store)
-    ingest = AsyncMock(return_value={"root_uri": "viking://resources/upload"})
-    monkeypatch.setattr(resources_router, "ingest_temp_upload", ingest)
-
-    async def run_operation(*, operation, telemetry, fn):
-        return SimpleNamespace(result=await fn(), telemetry=None)
-
-    monkeypatch.setattr(resources_router, "run_operation", run_operation)
-
-    await resources_router.temp_upload(
-        request,
-        object(),
-        False,
-        "local",
-        RequestContext(
-            user=UserIdentifier("test_account", "test_user"),
-            role=Role.USER,
-        ),
+    content = "# Start\n\nRead this first.\n\n# Finish\n\nKeep this in the same file.\n"
+    response = await client.post(
+        upload_url, files={"file": ("manual.md", content, "text/markdown")}
     )
-
-    assert ingest.await_args.kwargs["parse_mode"] == "no_split"
-    assert ingest.await_args.kwargs["parent"] == "viking://user/test_user/resources/team"
+    assert response.status_code == 200, response.text
+    task = await _wait_task_terminal(client, response.json()["result"]["task_id"])
+    assert task["status"] == "completed", task
+    target = task["result"]["root_uri"]
+    assert target == "viking://user/default/resources/signed/manual.md"
+    read = await client.get("/api/v1/content/read", params={"uri": target})
+    assert read.status_code == 200, read.text
+    assert read.json()["result"].strip() == content.strip()

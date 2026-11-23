@@ -1,0 +1,98 @@
+.ov-file-preview__session {
+  box-sizing: border-box;
+  block-size: 100%;
+  min-block-size: 0;
+  overflow: auto;
+  padding: 20px 40px;
+  background: var(
+    --ov-ui-color-preview-backdrop,
+    var(--ov-ui-preview-backdrop-default)
+  );
+}
+
+.ov-file-preview__session-message {
+  display: flex;
+  inline-size: min(640px, 82%);
+  flex-direction: column;
+  gap: 8px;
+  margin-block-end: 24px;
+  margin-inline-end: auto;
+  align-items: start;
+}
+
+.ov-file-preview__session-message--user {
+  margin-inline-start: auto;
+  margin-inline-end: 0;
+  align-items: end;
+}
+
+.ov-file-preview__session-role {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 18px;
+  text-transform: uppercase;
+}
+
+.ov-file-preview__session-bubble {
+  box-sizing: border-box;
+  inline-size: 100%;
+  padding: 16px 20px;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 18px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  box-shadow: 0 2px 6px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 8%,
+      transparent
+    );
+}
+
+.ov-file-preview__session-message--user .ov-file-preview__session-bubble {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ov-file-preview__session-message--user .ov-file-preview__session-bubble,
+.ov-file-preview__session-message--tool .ov-file-preview__session-bubble,
+.ov-file-preview__session-message--system .ov-file-preview__session-bubble {
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+}
+
+.ov-file-preview__session-content {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 24px;
+  user-select: text;
+}
+
+.ov-file-preview__session-meta {
+  display: flex;
+  margin-block-start: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.ov-file-preview__session-meta > * {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+@container (max-width: 480px) {
+  .ov-file-preview__session {
+    padding: 20px 16px;
+  }
+
+  .ov-file-preview__session-message {
+    inline-size: 92%;
+  }
+}

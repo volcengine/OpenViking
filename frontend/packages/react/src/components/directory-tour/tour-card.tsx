@@ -7,7 +7,7 @@ import { tourIllustrations } from './illustrations.js';
 
 type Props = Pick<
   DirectoryTourProps,
-  'locale' | 'labels' | 'onClose' | 'renderContent'
+  'locale' | 'labels' | 'onClose' | 'showCloseButton' | 'renderContent'
 > & {
   step: DirectoryTourStep;
   index: number;
@@ -25,6 +25,7 @@ export function TourCard({
   locale,
   labels,
   onClose,
+  showCloseButton,
   renderContent,
   titleId,
   bodyId,
@@ -44,7 +45,7 @@ export function TourCard({
           : 'ov-directory-tour__card'
       }
     >
-      {!renderContent && onClose && (
+      {!renderContent && showCloseButton && onClose && (
         <Button
           size="mini"
           type="text"

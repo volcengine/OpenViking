@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import mimetypes
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -133,7 +134,7 @@ class _AnyDocMarkdownRenderer:
                 return f"### Speaker Notes\n\n{inner}"
             return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
         if kind == "code_block":
-            body = (block.text or "").rstrip("\n")
+            body = (block.text or "").removesuffix("\n")
             fence = self._backtick_fence(body, 3)
             return f"{fence}{block.lang or ''}\n{body}\n{fence}"
         if kind == "rule":
@@ -193,7 +194,7 @@ class _AnyDocMarkdownRenderer:
             number = self.note_numbers.get(inline.note_id or "")
             return f"[^{number}]" if number is not None else ""
         if kind == "line_break":
-            return "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
+            return "<br>" if context == "block" else "\n" if context == "table_cell" else " "
         if kind == "math":
             source = self._escape_math_source(inline.text or "", context=context)
             return f"${source}$" if source else ""
@@ -267,17 +268,20 @@ class _AnyDocMarkdownRenderer:
         if code:
             rendered = self._render_code_span(core.replace("\n", " "), context=context)
         else:
+            use_html = (bold or italic) and any(
+                unicodedata.category(char).startswith(("P", "S")) for char in (core[0], core[-1])
+            )
             opening = ""
             closing = ""
             if strike:
-                opening += "~~"
-                closing = "~~" + closing
+                opening += "<del>" if use_html else "~~"
+                closing = ("</del>" if use_html else "~~") + closing
             if bold:
-                opening += "**"
-                closing = "**" + closing
+                opening += "<strong>" if use_html else "**"
+                closing = ("</strong>" if use_html else "**") + closing
             if italic:
-                opening += "*"
-                closing = "*" + closing
+                opening += "<em>" if use_html else "*"
+                closing = ("</em>" if use_html else "*") + closing
             escaped = self._escape_text(core, context=context, styled=True, in_label=in_label)
             rendered = f"{opening}{escaped}{closing}"
         if underline:
@@ -362,11 +366,9 @@ class _AnyDocMarkdownRenderer:
             relative = Path(saved_path).relative_to(Path(self.storage.media_dir)).as_posix()
         except Exception as exc:
             self.warnings.append(f"Failed to save AnyDoc image asset {reference}: {exc}")
-            logger.warning(
-                "Failed to save anydoc image asset %s from %s",
-                reference,
-                self.resource_name,
-                exc_info=True,
+            logger.info(
+                "AnyDoc image save failed; omitting image error_type=%s degraded=true",
+                type(exc).__name__,
             )
             self.asset_paths[reference] = None
             return None

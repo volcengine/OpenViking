@@ -1,70 +1,80 @@
 import { ConsoleCommandError } from './command-messages.js';
+import { parseValue } from './command-values.js';
 
-interface CommandToken {
-  value: string;
-  literal: boolean;
-}
+import { tokenize, type CommandToken } from './command-tokenizer.js';
 
-/** Parses arguments as data; never invokes a shell. */
-export function tokenize(input: string): CommandToken[] {
-  const tokens: CommandToken[] = [];
-  let value = '',
-    quote = '',
-    escaped = false,
-    started = false,
-    literal = false;
-  for (const character of input.trim()) {
-    if (escaped) {
-      value += character;
-      escaped = false;
-      started = true;
-    } else if (character === '\\' && quote !== "'") {
-      escaped = true;
-      literal = true;
-    } else if (quote) {
-      if (character === quote) quote = '';
-      else value += character;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-      started = true;
-      literal = true;
-    } else if (/\s/.test(character)) {
-      if (started) tokens.push({ value, literal });
-      value = '';
-      started = false;
-      literal = false;
-    } else {
-      if ('|;&<>`$'.includes(character))
-        throw new ConsoleCommandError('shellSyntax');
-      value += character;
-      started = true;
-    }
-  }
-  if (quote || escaped) throw new ConsoleCommandError('unclosedQuote');
-  if (started) tokens.push({ value, literal });
-  if (tokens[0]?.value === 'ov') tokens.shift();
-  if (tokens[0]?.value.startsWith('/'))
-    tokens[0].value = tokens[0].value.slice(1);
-  return tokens;
-}
+export { tokenize } from './command-tokenizer.js';
 
 export interface Argument {
   name: string;
-  kind?: 'uri' | 'integer' | 'boolean';
+  kind?:
+    | 'uri'
+    | 'uri-list'
+    | 'uri-or-list'
+    | 'integer'
+    | 'integer-list'
+    | 'number'
+    | 'boolean'
+    | 'boolean-or-json'
+    | 'json-array'
+    | 'json-object';
+  placeholder?: string;
+  descriptionKey?: string;
   optional?: boolean;
+  rest?: boolean;
   required?: boolean;
   alias?: string;
-  defaultValue?: string;
+  aliases?: readonly string[];
+  hidden?: boolean;
+  valueKey?: string;
+  defaultValue?: string | number | boolean;
+  helpDefault?: Argument['defaultValue'];
   choices?: readonly string[];
+  pattern?: RegExp;
   min?: number;
+  max?: number;
+}
+
+export type ArgumentValue =
+  string | number | boolean | unknown[] | Record<string, unknown>;
+
+export type ArgumentValues = Record<string, ArgumentValue>;
+
+function isOption(token: CommandToken) {
+  return !token.literal && /^(?:--|-[A-Za-z])/.test(token.value);
+}
+
+function flagValue(
+  argument: Argument,
+  inline: string | undefined,
+  next: CommandToken | undefined,
+  token: string,
+): [value: string, consumed: number] {
+  if (inline !== undefined) return [inline, 0];
+  if (argument.kind === 'boolean' || argument.kind === 'boolean-or-json') {
+    if (next && /^(?:true|false)$/i.test(next.value)) return [next.value, 1];
+    if (argument.kind === 'boolean-or-json' && next?.value.startsWith('{'))
+      return [next.value, 1];
+    return ['true', 0];
+  }
+  if (!next || isOption(next))
+    throw new ConsoleCommandError('missingValue', token);
+  return [next.value, 1];
 }
 
 export function parseArguments(
   tokens: readonly CommandToken[],
   positional: readonly Argument[],
   flags: readonly Argument[] = [],
+  onArgument?: (
+    argument: Argument,
+    value: string,
+    start: number,
+    end: number,
+  ) => void,
 ) {
-  const result: Record<string, string | number | boolean> = {};
+  const result: ArgumentValues = {};
+  const rest: string[] = [];
   let index = 0;
   let options = true;
   for (let cursor = 0; cursor < tokens.length; cursor++) {
@@ -74,56 +84,77 @@ export function parseArguments(
       options = false;
       continue;
     }
-    const flag =
-      options &&
-      !current.literal &&
-      (token.startsWith('--') || flags.some((item) => token === item.alias));
+    const flag = options && isOption(current);
+    const equals = flag ? token.indexOf('=') : -1;
+    const name = equals === -1 ? token : token.slice(0, equals);
     const argument = flag
-      ? flags.find((item) => token === `--${item.name}` || token === item.alias)
-      : positional[index++];
+      ? flags.find(
+          (item) =>
+            name === `--${item.name}` ||
+            name === item.alias ||
+            item.aliases?.includes(name),
+        )
+      : positional[index];
     if (!argument) throw new ConsoleCommandError('unexpectedArgument', token);
-    if (Object.hasOwn(result, argument.name))
-      throw new ConsoleCommandError('duplicateArgument', token);
-    const next =
-      flag && argument.kind !== 'boolean' ? tokens[++cursor] : current;
-    if (
-      !next ||
-      (flag &&
-        argument.kind !== 'boolean' &&
-        !next.literal &&
-        (next.value.startsWith('--') ||
-          flags.some((item) => next.value === item.alias)))
-    )
-      throw new ConsoleCommandError('missingValue', token);
-    const value = flag && argument.kind === 'boolean' ? 'true' : next.value;
-    if (argument.kind === 'uri' && !/^viking:\/\//.test(value))
-      throw new ConsoleCommandError('expectedUri', value);
-    if (argument.choices && !argument.choices.includes(value))
-      throw new ConsoleCommandError(
-        'invalidArgument',
-        `${argument.name}: ${value}`,
-      );
-    if (argument.kind === 'integer') {
-      const number = Number(value);
-      if (
-        !/^-?\d+$/.test(value) ||
-        !Number.isSafeInteger(number) ||
-        number < (argument.min ?? 0)
-      )
-        throw new ConsoleCommandError(
-          'invalidArgument',
-          `${argument.name}: ${value}`,
-        );
-      result[argument.name] = number;
-    } else result[argument.name] = argument.kind === 'boolean' ? true : value;
+    if (!flag) {
+      if (argument.rest) {
+        rest.push(token);
+        continue;
+      }
+      index++;
+    }
+    const key = argument.valueKey ?? argument.name;
+    const [raw, consumed] = flag
+      ? flagValue(
+          argument,
+          equals === -1 ? undefined : token.slice(equals + 1),
+          tokens[cursor + 1],
+          name,
+        )
+      : [token, 0];
+    if (onArgument) {
+      const valueToken = tokens[cursor + consumed]!;
+      const valueStart =
+        equals === -1 ? valueToken.start : valueToken.start + equals + 1;
+      onArgument(argument, raw, valueStart, valueToken.end);
+    }
+    cursor += consumed;
+    result[key] = parseValue(argument, raw, result[key], name);
   }
-  for (const argument of positional) {
-    if (!argument.optional && result[argument.name] === undefined)
-      throw new ConsoleCommandError('missingArgument', argument.name);
-  }
-  for (const flag of flags) {
-    if (flag.required && result[flag.name] === undefined)
-      throw new ConsoleCommandError('missingArgument', `--${flag.name}`);
-  }
+  const text = positional[index];
+  if (text?.rest && rest.length)
+    result[text.valueKey ?? text.name] = parseValue(
+      text,
+      rest.join(' '),
+      undefined,
+      text.name,
+    );
+  for (const argument of positional)
+    applyDefault(argument, result, !argument.optional, argument.name);
+  for (const flag of flags)
+    applyDefault(flag, result, flag.required === true, `--${flag.name}`);
   return result;
+}
+
+function applyDefault(
+  argument: Argument,
+  result: ArgumentValues,
+  required: boolean,
+  name: string,
+) {
+  const key = argument.valueKey ?? argument.name;
+  if (result[key] !== undefined) return;
+  if (required) throw new ConsoleCommandError('missingArgument', name);
+  if (argument.defaultValue !== undefined) result[key] = argument.defaultValue;
+}
+
+export function clearRequested(input: string) {
+  try {
+    const tokens = tokenize(input);
+    if (tokens[0]?.value !== 'clear') return false;
+    parseArguments(tokens.slice(1), []);
+    return true;
+  } catch {
+    return false;
+  }
 }

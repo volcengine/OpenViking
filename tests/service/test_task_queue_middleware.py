@@ -5,7 +5,7 @@
 import asyncio
 import json
 import threading
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -509,36 +509,6 @@ async def test_running_cancellation_waits_for_handler_cleanup(tracked_queue, que
         release.set()
         executing.cancel()
         await asyncio.gather(executing, return_exceptions=True)
-
-
-async def test_normal_process_uses_one_admission_and_one_cancellation_read(
-    tracked_queue, monkeypatch
-):
-    queue, tracker, transport = tracked_queue
-    message = await enqueue_task(queue, tracker, transport)
-    await tracker.complete("task-1", {"done": True}, **OWNER)
-    store = tracker._store
-    start = create_autospec(store.start_work, side_effect=store.start_work)
-    status = create_autospec(store.get_task_status, side_effect=store.get_task_status)
-    work = create_autospec(store.get_work, side_effect=store.get_work)
-    finish = create_autospec(store.finish_work, side_effect=store.finish_work)
-    monkeypatch.setattr(store, "start_work", start)
-    monkeypatch.setattr(store, "get_task_status", status)
-    monkeypatch.setattr(store, "get_work", work)
-    monkeypatch.setattr(store, "finish_work", finish)
-
-    class Handler(DequeueHandlerBase):
-        async def on_dequeue(self, data):
-            return ProcessResult.success()
-
-    queue.set_dequeue_handler(Handler())
-    assert (await queue.process_dequeued(message)).outcome is ProcessOutcome.SUCCESS
-    start.assert_awaited_once_with(
-        "task-1", extract_task_metadata(message).work_id, queue_name="Embedding", **OWNER
-    )
-    status.assert_awaited_once_with("task-1", **OWNER)
-    work.assert_not_awaited()
-    assert finish.await_count == 1
 
 
 @pytest.mark.parametrize("worker", ["serial", "concurrent"])

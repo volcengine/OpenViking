@@ -21,8 +21,15 @@ from .harness import (
     scope,
     session_keys,
     wait_for,
+    wait_written,
     written_messages,
 )
+
+MANUAL_COMMITS = {
+    "pending_token_threshold": 0,
+    "message_count_threshold": 0,
+    "idle_timeout_seconds": 0,
+}
 
 
 def assert_delivery(snapshot, expected, library="library-a", key="key-a"):
@@ -56,13 +63,22 @@ def test_01_session_continues_across_pods(harness):
         messages.append({"role": "user", "content": f"continuity turn {turn}"})
         messages.append(chat(harness, pods[turn % 2], "eight-turns", messages))
     replay, capture = session_keys(harness, "eight-turns")
-    wait_for(lambda: not document(harness, capture).get("pending"))
-    snapshot = records(harness)
-    assert len(snapshot["libraries"]["library-a"]["sessions"]) == 1
+    snapshot = wait_written(harness, len(messages))
+    sessions = snapshot["libraries"]["library-a"]["sessions"]
+    assert len(sessions) == 1
     assert_delivery(snapshot, messages)
+    # The gateway commits by default, so OpenViking's automatic commits are off; these
+    # turns stay below commit_tokens and well within idle_seconds.
+    (session,) = sessions.values()
+    assert session["auto_commit_policy"] == MANUAL_COMMITS
+    assert session["commits"] == [] and session["pending"] == session["messages"]
+    assert not any(r["path"].endswith("/commit") for r in snapshot["requests"])
     assert harness.redis_keys(f"*k:{{{scope()}}}:rp:*") == [replay]
     assert harness.redis_keys(f"*k:{{cap}}:{scope()}:*") == [capture]
-    assert document(harness, capture)["previous"] == []
+    value = document(harness, capture)
+    assert value["previous"] == [] and value["ov_session"] in sessions
+    # The capture document holds no conversation text.
+    assert "continuity turn" not in json.dumps(value)
 
 
 def test_08_same_identity_libraries_are_isolated(harness):
@@ -76,16 +92,17 @@ def test_08_same_identity_libraries_are_isolated(harness):
     captures = {}
     for key in histories:
         _, captures[key] = session_keys(harness, "same-client-id", key)
-        wait_for(lambda key=key: not document(harness, captures[key]).get("pending"))
     assert captures["key-a"] != captures["key-b"]
-    snapshot = records(harness)
+    wait_written(harness, 4, "library-a")
+    snapshot = wait_written(harness, 4, "library-b")
     for key, library in (("key-a", "library-a"), ("key-b", "library-b")):
         assert len(snapshot["libraries"][library]["sessions"]) == 1
         assert_delivery(snapshot, histories[key], library, key)
         recalls = snapshot["libraries"][library]["recalls"]
         assert len(recalls) == 2, recalls
         assert all(key in json.dumps(recall) for recall in recalls)
-        assert document(harness, captures[key])["account"] == account(key)
+        sessions = snapshot["libraries"][library]["sessions"]
+        assert document(harness, captures[key])["ov_session"] in sessions
     ark = records(harness, "ark")["requests"]
     for request in ark:
         text = json.dumps(request["body"])
@@ -97,21 +114,12 @@ def test_08_same_identity_libraries_are_isolated(harness):
 
 
 @pytest.mark.standalone
-def test_09_revocation_pauses_capture_and_replacement_uses_new_partition(harness):
+def test_09_revocation_refuses_key_and_replacement_uses_new_partition(harness):
     pods = harness.pods()
-    chat(harness, pods[0], "revoked-tail", [{"role": "user", "content": "pending secret"}])
+    chat(harness, pods[0], "revoked-tail", [{"role": "user", "content": "saved secret"}])
     _, capture = session_keys(harness, "revoked-tail")
-    assert document(harness, capture)["pending"]
+    wait_written(harness, 2)
     control(harness, "/_revoke", key="key-a")
-    wait_for(
-        lambda: (
-            (document(harness, capture).get("error") or {}).get("reason") == "gateway_key_revoked"
-        ),
-    )
-    snapshot = records(harness)
-    refused = [r for r in snapshot["requests"] if r["key"] == "key-a" and r["status"] == 401]
-    assert any(r["path"].startswith("/api/v1/sessions") for r in refused), refused
-    assert not credential_keys(harness, "key-a")
     response = harness.request(
         pods[1],
         "POST",
@@ -123,20 +131,25 @@ def test_09_revocation_pauses_capture_and_replacement_uses_new_partition(harness
         },
     )
     assert response.status_code == 401, response.text
-    count = sum(r["key"] == "key-a" for r in records(harness)["requests"])
-    # Exceed the first failure retry interval, proving the paused tail is not retried.
-    time.sleep(12)
+    assert not credential_keys(harness, "key-a")
+    snapshot = records(harness)
+    refused = [r for r in snapshot["requests"] if r["key"] == "key-a" and r["status"] == 401]
+    assert refused and all(r["path"] == "/health" for r in refused), refused
+    count = sum(r["key"] == "key-a" for r in snapshot["requests"])
+    # Nothing uses a stored key in the background.
+    time.sleep(5)
     assert sum(r["key"] == "key-a" for r in records(harness)["requests"]) == count
     chat(
         harness, pods[1], "revoked-tail", [{"role": "user", "content": "replacement"}], "key-a-new"
     )
     _, replacement = session_keys(harness, "revoked-tail", "key-a-new")
     assert replacement != capture
-    assert document(harness, replacement)["account"] == account("key-a-new")
-    assert document(harness, capture)["error"]["retry_at"] is None
+    sessions = wait_written(harness, 4)["libraries"]["library-a"]["sessions"]
+    assert len(sessions) == 2
+    assert document(harness, replacement)["ov_session"] != document(harness, capture)["ov_session"]
 
 
-def test_12_capture_workers_deliver_one_hundred_sessions_once(harness):
+def test_12_finished_turns_write_one_hundred_sessions_once(harness):
     pods = harness.pods()
     for pod in pods:
         assert harness.request(pod, "GET", "/health").status_code == 200
@@ -174,8 +187,14 @@ def test_12_capture_workers_deliver_one_hundred_sessions_once(harness):
     captures = harness.redis_keys(f"*k:{{cap}}:{scope()}:*")
     assert len(captures) == 100
     for capture in captures:
-        value = document(harness, capture)
-        assert value["pending"] == [] and not value["error"]
+        # The cursor moves right after the write it follows.
+        value = wait_for(
+            lambda capture=capture: (
+                (value := document(harness, capture)).get("delivered") and value
+            ),
+            timeout=10,
+        )
+        assert value["ov_session"] in sessions
     assert len(harness.redis_keys(f"*k:{{{scope()}}}:rp:*")) == 100
 
 
@@ -304,7 +323,7 @@ def test_15_management_updates_and_revocations_propagate(harness):
         "PUT",
         ADMIN + "/policies/default",
         key="key-a",
-        json={"name": "Default", "idle_seconds": 5},
+        json={"name": "Default"},
     )
     assert response.status_code == 200, response.text
     issued = harness.request(
@@ -352,15 +371,6 @@ def test_15_management_updates_and_revocations_propagate(harness):
 @pytest.mark.standalone
 def test_16_shared_root_key_decrypts_across_pods_and_missing_key_blocks_start(harness):
     harness.redeploy(config={"encryption": {"enabled": True, "provider": "local"}})
-
-    # Plaintext Pods keep claiming captures during preStop and cannot decrypt them.
-    def gateway_pods():
-        listing = harness.kubectl(
-            "get", "pods", "-l", "app.kubernetes.io/instance=gateway", "-o", "json"
-        )
-        return json.loads(listing)["items"]
-
-    wait_for(lambda: len(gateway_pods()) == 2)
     pods = harness.pods()
     messages = [{"role": "user", "content": "encrypted session private marker"}]
     messages.append(chat(harness, pods[0], "encrypted-session", messages))
@@ -380,8 +390,7 @@ def test_16_shared_root_key_decrypts_across_pods_and_missing_key_blocks_start(ha
     ).strip()
     messages.append({"role": "user", "content": "continue encrypted session"})
     messages.append(chat(harness, pods[1], "encrypted-session", messages))
-    wait_for(lambda: len(written_messages(records(harness))) == 4)
-    snapshot = records(harness)
+    snapshot = wait_written(harness, 4)
     assert len(snapshot["libraries"]["library-a"]["sessions"]) == 1
     assert_delivery(snapshot, messages)
     assert session_keys(harness, "encrypted-session") == (replay, capture)
@@ -434,3 +443,106 @@ def test_16_shared_root_key_decrypts_across_pods_and_missing_key_blocks_start(ha
         c.get("type") == "Ready" and c.get("status") == "True"
         for c in rejected["status"].get("conditions", [])
     )
+
+
+@pytest.mark.standalone
+def test_17_turn_ended_during_openviking_outage_is_written_by_next_turn(harness):
+    pod = harness.pods()[0]
+    messages = [{"role": "user", "content": "saved before the outage"}]
+    messages.append(chat(harness, pod, "outage", messages))
+    wait_written(harness, 2)
+
+    def batches():
+        return [r for r in records(harness)["requests"] if r["path"].endswith("/messages/batch")]
+
+    control(harness, "/_fail", status=503)
+    try:
+        messages.append({"role": "user", "content": "ends during the outage"})
+        messages.append(chat(harness, pod, "outage", messages))
+        wait_for(lambda: [r for r in batches() if r["status"] == 503])
+        # The request's record says the turn was not saved.
+        wait_for(lambda: '"capture_reason":"openviking_http_503"' in harness.logs(), timeout=30)
+        # One attempt per finished turn: nothing retries it in the background.
+        time.sleep(10)
+        assert [r["status"] for r in batches()] == [200, 503]
+    finally:
+        control(harness, "/_fail", on=False)
+    messages.append({"role": "user", "content": "after the outage"})
+    messages.append(chat(harness, pod, "outage", messages))
+    snapshot = wait_written(harness, len(messages))
+    assert len(snapshot["libraries"]["library-a"]["sessions"]) == 1
+    assert_delivery(snapshot, messages)
+
+
+def commit_requests(snapshot):
+    return [r for r in snapshot["requests"] if r["path"].endswith("/commit")]
+
+
+@pytest.mark.standalone
+def test_18_gateway_commits_past_commit_tokens_and_after_idle(harness):
+    pods = harness.pods()
+    ips = {p["metadata"]["name"]: p["status"]["podIP"] for p in harness.pod_objects()}
+    profile = {"commit_tokens": 1000, "keep_recent_messages": 2, "idle_seconds": 10}
+    messages = [{"role": "user", "content": "a turn below commit_tokens"}]
+    messages.append(chat(harness, pods[0], "commits", messages, **profile))
+    snapshot = wait_written(harness, 2)
+    ((sid, session),) = snapshot["libraries"]["library-a"]["sessions"].items()
+    assert session["auto_commit_policy"] == MANUAL_COMMITS
+    assert session["commits"] == []
+    # The other Pod ends a turn that passes commit_tokens. Its write reports the pending
+    # tokens, so it commits at once and keeps the latest keep_recent_messages.
+    messages.append({"role": "user", "content": " ".join(["large"] * 1500)})
+    messages.append(chat(harness, pods[1], "commits", messages, **profile))
+
+    def commits(count):
+        def check():
+            snapshot = records(harness)
+            found = snapshot["libraries"]["library-a"]["sessions"][sid]["commits"]
+            return len(found) >= count and snapshot
+
+        return check
+
+    snapshot = wait_for(commits(1), timeout=8)
+    writes = [r for r in snapshot["requests"] if r["path"].endswith("/messages/batch")]
+    assert len(writes) == 2 and writes[1]["source_pod"] == ips[pods[1]]
+    threshold = snapshot["libraries"]["library-a"]["sessions"][sid]["commits"][0]
+    assert threshold["keep_recent_count"] == 2
+    assert [message_text(m) for m in threshold["messages"]] == [m["content"] for m in messages[:2]]
+    assert threshold["source_pod"] == ips[pods[1]]
+    # idle_seconds after the last turn its Pod commits the rest. The first Pod's timer
+    # fired earlier and found a later turn saved, so it committed nothing.
+    snapshot = wait_for(commits(2), timeout=40)
+    session = snapshot["libraries"]["library-a"]["sessions"][sid]
+    idle = session["commits"][1]
+    assert idle["keep_recent_count"] == 0 and idle["source_pod"] == ips[pods[1]]
+    assert [message_text(m) for m in idle["messages"]] == [m["content"] for m in messages[2:]]
+    assert session["pending"] == []
+    assert 9.5 <= idle["time"] - writes[1]["time"] <= 30
+    time.sleep(3)
+    snapshot = records(harness)
+    assert [(r["source_pod"], r["body"]) for r in commit_requests(snapshot)] == [
+        (ips[pods[1]], {"keep_recent_count": 2, "enable_working_memory": False}),
+        (ips[pods[1]], {"keep_recent_count": 0, "enable_working_memory": False}),
+    ]
+    assert all(r["status"] == 200 for r in commit_requests(snapshot))
+
+
+@pytest.mark.standalone
+def test_19_openviking_auto_commit_leaves_commits_to_openviking(harness):
+    harness.redeploy({"openviking_auto_commit": True})
+    pod = harness.pods()[0]
+    profile = {"commit_tokens": 1000, "keep_recent_messages": 2, "idle_seconds": 5}
+    messages = [{"role": "user", "content": " ".join(["large"] * 1500)}]
+    messages.append(chat(harness, pod, "auto-commit", messages, **profile))
+    snapshot = wait_written(harness, 2)
+    (session,) = snapshot["libraries"]["library-a"]["sessions"].values()
+    # OpenViking's idle time is at least 300 seconds.
+    assert session["auto_commit_policy"] == {
+        "pending_token_threshold": 1000,
+        "message_count_threshold": 0,
+        "idle_timeout_seconds": 300,
+        "keep_recent_count": 2,
+    }
+    # Neither the threshold nor idle_seconds makes the gateway commit.
+    time.sleep(8)
+    assert not commit_requests(records(harness))

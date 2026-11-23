@@ -203,6 +203,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.22.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650", size = 14821, upload-time = "2025-12-23T19:25:43.997Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb", size = 17405, upload-time = "2025-12-23T19:25:42.139Z" },
+]
+
+[[package]]
 name = "alabaster"
 version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3687,6 +3696,8 @@ dependencies = [
     { name = "lark-oapi" },
     { name = "litellm" },
     { name = "loguru" },
+    { name = "markdown-it-py", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "markdown-it-py", version = "4.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "mcp" },
     { name = "openai" },
     { name = "opentelemetry-api" },
@@ -3845,15 +3856,15 @@ postgres = [
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-redis-mysql = [
-    { name = "aiomysql" },
-    { name = "redis" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-]
 reporting = [
     { name = "kafka-python" },
 ]
+sqlite = [
+    { name = "aiosqlite" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
 test = [
+    { name = "aiosqlite" },
     { name = "boto3" },
     { name = "datasets" },
     { name = "diff-match-patch" },
@@ -3880,7 +3891,8 @@ requires-dist = [
     { name = "agent-sandbox", marker = "extra == 'bot'", specifier = ">=0.0.23" },
     { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "aiomysql", marker = "extra == 'mysql'", specifier = ">=0.2.0,<1" },
-    { name = "aiomysql", marker = "extra == 'redis-mysql'", specifier = ">=0.2.0,<1" },
+    { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.20,<1" },
+    { name = "aiosqlite", marker = "extra == 'test'", specifier = ">=0.20,<1" },
     { name = "anyio", marker = "extra == 'gemini-async'", specifier = ">=4.0.0" },
     { name = "apscheduler", specifier = ">=3.11.0" },
     { name = "argon2-cffi", specifier = ">=23.0.0" },
@@ -3927,6 +3939,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.103.10,<1.103.11" },
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "markdown-it-py", specifier = ">=3,<5" },
     { name = "mcp", specifier = ">=1.27,<2" },
     { name = "mcp", marker = "extra == 'bot'", specifier = ">=1,<2" },
     { name = "msgpack", marker = "extra == 'bot'", specifier = ">=1.0.8" },
@@ -3983,7 +3996,6 @@ requires-dist = [
     { name = "rapidfuzz", specifier = ">=3.14,<4" },
     { name = "readability-lxml", marker = "extra == 'bot'", specifier = ">=0.8.0" },
     { name = "redis", marker = "extra == 'expiry'", specifier = ">=5.3.1,<7" },
-    { name = "redis", marker = "extra == 'redis-mysql'", specifier = ">=5.3.1,<7" },
     { name = "redis", marker = "extra == 'test'", specifier = ">=5.3.1,<7" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "rich", marker = "extra == 'bot'", specifier = ">=13.0.0" },
@@ -3998,7 +4010,7 @@ requires-dist = [
     { name = "sphinx-rtd-theme", marker = "extra == 'doc'", specifier = ">=1.3.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'mysql'", specifier = ">=2.0.54,<2.1" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'postgres'", specifier = ">=2.0.54,<2.1" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'redis-mysql'", specifier = ">=2.0.54,<2.1" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlite'", specifier = ">=2.0.54,<2.1" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'test'", specifier = ">=2.0,<2.1" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tavily-python", marker = "extra == 'bot'", specifier = ">=0.5.0" },
@@ -4028,7 +4040,7 @@ requires-dist = [
     { name = "wheel", marker = "extra == 'build'" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["reporting", "expiry", "gateway-fast", "postgres", "mysql", "redis-mysql", "test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed", "opengauss", "pgvector"]
+provides-extras = ["sqlite", "reporting", "expiry", "gateway-fast", "postgres", "mysql", "test", "auth", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "local-embed", "opengauss", "pgvector"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]

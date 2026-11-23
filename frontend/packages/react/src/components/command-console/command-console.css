@@ -7,7 +7,7 @@
   );
   --ov-ui-command-console-muted: var(
     --ov-ui-color-text-3,
-    var(--ov-ui-text-muted, var(--ov-ui-text-3-default))
+    var(--ov-ui-text-muted, var(--ov-ui-conversation-meta-default))
   );
   --ov-ui-command-console-surface: var(
     --ov-ui-color-bg-1,
@@ -29,6 +29,10 @@
     --ov-ui-color-bg-4,
     var(--ov-ui-bg-4-default)
   );
+  --ov-ui-command-console-neutral-bg: var(
+    --ov-ui-color-bg-4,
+    var(--ov-ui-command-console-neutral-bg-default)
+  );
   --ov-ui-command-console-result-bg: var(--ov-ui-command-console-surface);
   --ov-ui-command-console-card-border: var(
     --ov-ui-color-border-2,
@@ -44,7 +48,7 @@
   );
   --ov-ui-command-console-link: var(
     --ov-ui-color-primary,
-    var(--ov-ui-primary, var(--ov-ui-primary-default))
+    var(--ov-ui-primary, var(--ov-ui-conversation-link-default))
   );
   --ov-ui-command-console-success: var(
     --ov-ui-color-status-success,
@@ -126,31 +130,46 @@
   display: inline-flex;
   min-width: 0;
   max-width: 90%;
-  align-items: stretch;
+  align-items: center;
   align-self: flex-end;
-  flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   border-radius: 12px;
-  background: var(--ov-ui-command-console-bubble-bg);
+  background: var(--ov-ui-command-console-neutral-bg);
   padding: 10px 12px;
 }
 
 .ov-command-console__bubble-text {
-  flex: none;
+  flex: 1 1 auto;
   white-space: pre-wrap;
   min-width: 0;
   overflow-wrap: anywhere;
   color: inherit;
-  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', 'Fira Code', monospace);
   font-size: 13px;
+  font-weight: 400;
   line-height: 22px;
 }
 
 .ov-command-console__bubble-time {
   flex: none;
-  align-self: flex-end;
+  max-inline-size: 45%;
+  overflow-wrap: anywhere;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  line-height: 20px;
+}
+
+@container (max-width: 320px) {
+  .ov-command-console__bubble {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ov-command-console__bubble-time {
+    align-self: flex-end;
+    max-inline-size: 100%;
+  }
 }
 
 .ov-command-console__result {
@@ -290,6 +309,21 @@
   text-underline-offset: 3px;
 }
 
+.ov-command-console__bubble-text
+  :is(.ov-command-console__command-prefix, .ov-command-console__link) {
+  color: inherit;
+  font-family: inherit;
+}
+
+.ov-command-console__bubble-text .ov-command-console__command-name {
+  text-shadow: none;
+}
+
+.ov-command-console__bubble-text
+  .ov-command-console__link:is(:hover, :focus-visible) {
+  color: var(--ov-ui-command-console-link);
+}
+
 /* 文本结果。 */
 .ov-command-console__text {
   position: relative;
@@ -401,8 +435,7 @@
   overflow: auto;
   margin: 0;
   padding-inline-end: 36px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 13px;
   line-height: 20px;
@@ -652,6 +685,17 @@
   white-space: nowrap;
 }
 
+.ov-command-console__search-tags {
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-command-console-muted);
+  font-size: 12px;
+}
+
+.ov-command-console__search-content {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* 资源树与写入结果。 */
 .ov-command-console__tree,
 .ov-command-console__write,
@@ -705,6 +749,15 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.ov-command-console__write-line {
+  background: var(--ov-ui-command-console-neutral-bg);
+}
+
+.ov-command-console__write-line .ov-command-console__link {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* 状态卡片。 */
@@ -842,7 +895,7 @@
 .ov-command-console__help {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .ov-command-console__help-lead {
@@ -860,19 +913,21 @@
 .ov-command-console__help-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .ov-command-console__help-section-label {
-  padding: 0 4px;
+  padding: 0 8px;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
 }
 
 .ov-command-console__help-items {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
 .ov-command-console__help-item {
@@ -880,7 +935,7 @@
   inline-size: 100%;
   min-inline-size: 0;
   min-block-size: 36px;
-  grid-template-columns: minmax(13ch, 23ch) minmax(0, 1fr);
+  grid-template-columns: min(42%, 23ch) minmax(0, 1fr);
   align-items: start;
   gap: 20px;
   border: 1px solid var(--ov-ui-command-console-card-border);
@@ -903,14 +958,21 @@
 }
 
 .ov-command-console__help-name {
+  min-inline-size: 0;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .ov-command-console__help-desc {
+  min-inline-size: 0;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  line-height: 22px;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* 顶层候选面板保留主题继承，不占据命令记录区。 */
@@ -1004,6 +1066,11 @@
 
 /* 输入区与补全。 */
 .ov-command-console__composer {
+  --ov-ui-command-console-composer-inset: 16px;
+  --ov-ui-command-console-composer-border: var(
+    --ov-ui-border,
+    var(--ov-ui-command-console-card-border)
+  );
   position: relative;
   display: flex;
   flex: none;
@@ -1011,14 +1078,81 @@
   margin: 0;
   flex-direction: column;
   border: 0;
-  border-top: 1px solid
-    var(--ov-ui-border, var(--ov-ui-command-console-card-border));
-  padding: 12px 16px 6px;
+  border-top: 1px solid var(--ov-ui-command-console-composer-border);
+  padding: 12px var(--ov-ui-command-console-composer-inset) 6px;
+}
+
+.ov-command-console__composer:has(> .ov-command-console__quick-actions) {
+  border-top: 0;
 }
 
 .ov-command-console__composer[data-disabled] {
   cursor: not-allowed;
   opacity: 0.72;
+}
+
+.ov-command-console__quick-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-inline: calc(-1 * var(--ov-ui-command-console-composer-inset));
+  margin-block-end: 12px;
+  border-block-end: 1px solid var(--ov-ui-command-console-composer-border);
+  padding-inline: var(--ov-ui-command-console-composer-inset);
+  padding-block-end: 8px;
+}
+
+.ov-command-console__quick-action {
+  display: inline-flex;
+  min-block-size: 28px;
+  align-items: center;
+  justify-content: center;
+  max-inline-size: 100%;
+  border: 0.6px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 6px;
+  background: var(--ov-ui-command-console-neutral-bg);
+  padding: 2px 8px;
+  color: inherit;
+  font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
+  font-size: 12px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.ov-command-console__quick-action:hover:not(:disabled) {
+  background: var(--ov-ui-command-console-hover);
+}
+
+.ov-command-console__quick-action:focus-visible {
+  outline: 2px solid var(--ov-ui-command-console-focus);
+  outline-offset: 2px;
+}
+
+.ov-command-console__quick-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .ov-command-console__quick-action {
+    transition:
+      background-color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .ov-command-console__quick-action:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+}
+
+@container (max-width: 440px) {
+  .ov-command-console__quick-action {
+    padding-inline: 6px;
+  }
 }
 
 .ov-command-console__input-row {
@@ -1091,10 +1225,6 @@
 .ov-command-console__input-mirror .ov-command-console__link {
   pointer-events: auto;
   font: inherit;
-}
-
-.ov-command-console__bubble-command {
-  color: var(--ov-ui-command-console-text);
 }
 
 .ov-command-console__input-command,
@@ -1379,6 +1509,29 @@
   gap: 6px;
 }
 
+.ov-command-console__hint-guide-link {
+  align-self: flex-start;
+  color: var(--ov-ui-command-console-link);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.ov-command-console__hint-steps {
+  margin: 0;
+  padding: 0;
+  list-style: decimal inside;
+}
+
+.ov-command-console__hint-steps > li + li,
+.ov-command-console__hint-steps .ov-command-console__hint-example {
+  margin-block-start: 6px;
+}
+
+.ov-command-console__hint-steps .ov-command-console__hint-example {
+  width: 100%;
+  color: var(--ov-ui-command-console-text);
+}
+
 .ov-command-console__hint-example {
   display: flex;
   align-items: flex-start;
@@ -1433,10 +1586,18 @@
   color: var(--ov-ui-command-console-muted);
 }
 
+.ov-command-console__hint-table :is(th, td):first-child {
+  min-width: 96px;
+}
+
 .ov-command-console__hint-table :is(th, td):nth-child(2) {
   min-width: 52px;
   text-align: center;
   white-space: nowrap;
+}
+
+.ov-command-console__hint-table :is(th, td):nth-child(3) {
+  min-width: 128px;
 }
 
 .ov-command-console__hint-table :is(th, td):last-child {

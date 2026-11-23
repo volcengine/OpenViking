@@ -1,6 +1,24 @@
 use super::*;
 
 impl GitService {
+    /// Check the exact path's file mode at a pinned commit without loading the blob.
+    pub async fn path_is_file(
+        &self,
+        account: &str,
+        commit_oid: &ObjectId,
+        path: &str,
+    ) -> Result<bool, GitError> {
+        validate_account_id(account)?;
+        validate_relative_path(path)?;
+        let store = self.object_store.as_ref();
+        let commit = load_commit_meta(store, account, commit_oid).await?;
+        Ok(
+            crate::git::tree_builder::lookup(store, account, commit.tree, path)
+                .await?
+                .is_some_and(|(_, mode)| mode.is_blob()),
+        )
+    }
+
     /// Read a commit's metadata, or a single blob's bytes from inside a commit's tree.
     ///
     /// `target_ref` resolution: 40-hex OID / "main" / "refs/heads/main".

@@ -1045,11 +1045,7 @@ def test_upstream_stream_error_uses_protocol_terminator(protocol):
         list(loop.decode(SSEDecoder(), sse(upstream)))
 
     wire = loop.error(caught.value)
-    values = [
-        SSEDecoder.data(frame)
-        for frame in SSEDecoder().feed(wire)
-        if b"[DONE]" not in frame
-    ]
+    values = [SSEDecoder.data(frame) for frame in SSEDecoder().feed(wire) if b"[DONE]" not in frame]
     expected = {
         "type": "error",
         "error": {
@@ -1643,3 +1639,50 @@ async def test_tool_loop_logs_rounds_read_one_by_one(setup_kernel, credential, p
     assert loop.capture.usage["cached_tokens"] == 1700
     assert prepared.metrics["first_upstream_cached_tokens"] == 800
     assert prepared.metrics["hidden_upstream_cached_tokens"] == 900
+
+
+@pytest.mark.parametrize(
+    ("protocol", "streaming"),
+    [("responses", False), ("responses", True), ("chat", True), ("anthropic", True)],
+)
+async def test_tool_continuation_transport_failure_has_fixed_detail(
+    running_gateway, protocol, streaming
+):
+    from test_recall_notice import reply
+    from test_upstream_timeout import CHAT, stream_failure
+
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin, show_tool_calls=False)
+    path, calls = {**PATHS, "chat": CHAT}[protocol], []
+
+    async def backend(request):
+        if request.path == "/mcp":
+            return web.json_response({"id": 1, "result": {"content": []}})
+        if request.path != path:
+            return None
+        calls.append(await request.json())
+        if len(calls) > 1:
+            # The provider drops the continuation without answering.
+            request.transport.close()
+            return web.Response()
+        value = native_response(protocol, 1, owned=True)
+        return await reply(request, protocol, value, streaming)
+
+    app.state.test_backend["handler"] = backend
+    response = await client.post(
+        path,
+        headers={"Authorization": "Bearer " + key["key"]},
+        json=request_body(protocol, streaming),
+    )
+    assert len(calls) == 2
+    detail = "Model upstream closed the connection"
+    # aiohttp's own text names the peer; the client sees only the fixed detail.
+    assert b"Server disconnected" not in response.content
+    if not streaming:
+        assert response.status_code == 502
+        assert response.json()["reason"] == "upstream_disconnected"
+        assert response.json()["detail"] == detail
+        return
+    assert response.status_code == 200
+    kind = "server_error" if protocol == "responses" else "upstream_disconnected"
+    assert stream_failure(protocol, response.content) == (kind, detail)

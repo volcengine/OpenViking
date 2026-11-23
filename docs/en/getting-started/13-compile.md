@@ -23,6 +23,8 @@ ov read viking://agent/skills/llm-wiki/SKILL.md
 
 The package contains the project's LLM Wiki Skill. Compilation calls the model and writes output into a new directory.
 
+For image sources, Compile prepares a temporary model input with a long edge of at most 2,048 pixels and an inline size of at most 3.75 MiB. Images within both limits are sent as-is. Larger static images are resized or compressed when needed, and citations still point to the original resource. The source download precheck is 20 MiB, and images above 24 million pixels are rejected before raster decoding.
+
 ## Submit compilation
 
 Create a named configuration with the sources, target, Skill, and optional `--instruction` and `--args`.
@@ -53,7 +55,7 @@ Check every 5 seconds for up to 5 minutes initially. Read outputs after `complet
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
 
-The first run is full. Subsequent runs use the last successful baseline. The name is required, case-sensitive, and unique for the current user within an account; it contains 1–64 ASCII letters, digits, underscores, or hyphens. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
+The first run is full. Subsequent runs use the last successful baseline. The name is required, case-sensitive, and unique for the current user within an account; it contains Han characters, ASCII letters, digits, underscores, or hyphens. ASCII-only names allow up to 64 characters. A name containing any Han character allows up to 32 characters in total. The first character cannot be a hyphen. Different users can use the same name. See [configuration and execution](../api/23-agent-runtime.md) for schedules and invocation timestamps.
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 

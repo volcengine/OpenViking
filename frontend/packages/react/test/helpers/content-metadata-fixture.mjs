@@ -4,20 +4,38 @@ import { mount, ok, recordingFetch } from './module-dom.mjs';
 const root = 'viking://user/alice';
 const wiki = `${root}/resources/handbook`;
 
-export async function metadataFixture({ uri, content, kinds, registry }) {
+export async function metadataFixture({
+  uri,
+  content,
+  kinds,
+  registry,
+  taggedTarget,
+  fullRead,
+  attrs,
+  canonicalUri,
+}) {
   let browser;
   let document = content;
   const history = [];
-  const canonical = uri.replace('viking://~', root);
+  const canonical = canonicalUri ?? uri.replace('viking://~', root);
   const fetch = recordingFetch(({ path, query }) => {
     if (path.endsWith('/configs'))
       return registry ?? ok({ targets: [{ to: wiki }] });
     if (path.endsWith('/attrs'))
-      return ok({ uri: canonical, attrs: { tags: [] } });
+      return (
+        attrs ??
+        ok({
+          uri: canonical,
+          attrs: {
+            tags: query.uri === taggedTarget ? ['compile_target=true'] : [],
+          },
+        })
+      );
     if (path.endsWith('/stat')) return ok({ uri: canonical, isDir: false });
     if (path.endsWith('/ls')) return ok([{ uri: canonical, isDir: false }]);
     if (path.endsWith('/read')) {
       const limit = Number(query.limit);
+      if (limit < 0 && fullRead) return fullRead;
       const lines = document.match(/[^\n]*\n|[^\n]+$/g) ?? [];
       // Deliberately emulate an old server that ignores raw=false.
       return ok(limit < 0 ? document : lines.slice(0, limit).join(''));

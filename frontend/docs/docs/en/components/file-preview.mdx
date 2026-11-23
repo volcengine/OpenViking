@@ -45,6 +45,10 @@ The demo renders its own toolbar through `slots.actions` with controls from the 
 
 The demo uses fixed mock data; "Empty file" and "Image error" show those states.
 
+### Session transcripts
+
+When full content is readable, `source.fileName` is `messages.jsonl` and `source.path` identifies a native session file under `viking://user/<user>/sessions/<session>/` or `viking://~/sessions/<session>/` (including archives), preview mode shows role-labelled message bubbles with timestamps and IDs. Native `parts` containing text, tool results, image references and context references, and legacy string `content` are supported; text and line breaks are preserved. Image and context references show their original fields as readable text, including URL/detail and URI/context type/abstract; images are not loaded and resources are not opened automatically. Source mode retains the original JSONL. Large or truncated files retain normal admission behavior; other JSONL files and unsupported or conflicting records use the normal JSON preview without dropping parts.
+
 ### Injected actions
 
 Inject your own commands with `actions`: one command is an icon button, and several collapse into the "…" menu. Switch the action layout, tick "Simulate failure" to see the failure message, and use the other checkboxes to show or hide the built-in controls.
@@ -56,6 +60,8 @@ Inject your own commands with `actions`: one command is an icon button, and seve
 Demo commands wait 2 seconds; switch tabs or tick "Custom toolbar" while one runs, and the commands of that resource stay locked.
 
 ### Code editing
+
+Editing hides the preview/source switch and keeps the editor in source mode. Saving or cancelling restores the normal preview actions.
 
 Choose a code file to try 44 grammars in CodeMirror 6, with line numbers, undo and Prism syntax highlighting.
 
@@ -102,16 +108,17 @@ Supply host content and styles through the component-level `slots.errorFallback`
 
 Fields shared by all three tabs. Content tabs have no header row, so `toolbar`, `onOpenParent`, `onCopyPath` and `labels` have no effect on them.
 
-| Property     | Description                                                                                                                    | Type                         | Default                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- | --------------------------------------------------------- |
-| key          | Unique identifier of the tab                                                                                                   | `string`                     | Required                                                  |
-| title        | What the tab row shows, plain text or a styled node                                                                            | `ReactNode`                  | `source.fileName` for file tabs, `key` for directory tabs |
-| icon         | Tab icon; omit it and the tab takes no icon space. For a per-format icon use `getFileTypeIcon` from `@openviking/react/icons`  | `ReactNode`                  | -                                                         |
-| disabled     | Disables the tab so it cannot be selected                                                                                      | `boolean`                    | `false`                                                   |
-| toolbar      | Hides built-in controls for this tab; it cannot turn on a control the top-level `toolbar` switched off                         | `FilePreviewToolbarOptions`  | -                                                         |
-| onOpenParent | File tabs: called after `operations.openParent` resolves, with the full URI of the clicked level; directory tabs never call it | `(uri: string) => void`      | -                                                         |
-| onCopyPath   | Called after the path is copied, with the copied path                                                                          | `(path: string) => void`     | -                                                         |
-| labels       | Overrides text for this tab, taking precedence over the top-level `labels`                                                     | `Partial<FilePreviewLabels>` | -                                                         |
+| Property     | Description                                                                                                                    | Type                               | Default                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | --------------------------------------------------------- |
+| key          | Unique identifier of the tab                                                                                                   | `string`                           | Required                                                  |
+| title        | What the tab row shows, plain text or a styled node                                                                            | `ReactNode`                        | `source.fileName` for file tabs, `key` for directory tabs |
+| badge        | Positive count beside the title, capped at `99+`; `label` provides its tooltip and accessible description                      | `{ count: number; label: string }` | -                                                         |
+| icon         | Tab icon; omit it and the tab takes no icon space. For a per-format icon use `getFileTypeIcon` from `@openviking/react/icons`  | `ReactNode`                        | -                                                         |
+| disabled     | Disables the tab so it cannot be selected                                                                                      | `boolean`                          | `false`                                                   |
+| toolbar      | Hides built-in controls for this tab; it cannot turn on a control the top-level `toolbar` switched off                         | `FilePreviewToolbarOptions`        | -                                                         |
+| onOpenParent | File tabs: called after `operations.openParent` resolves, with the full URI of the clicked level; directory tabs never call it | `(uri: string) => void`            | -                                                         |
+| onCopyPath   | Called after the path is copied, with the same formatted path written to the clipboard                                         | `(path: string) => void`           | -                                                         |
+| labels       | Overrides text for this tab, taking precedence over the top-level `labels`                                                     | `Partial<FilePreviewLabels>`       | -                                                         |
 
 ### FilePreviewFileTab
 
@@ -121,17 +128,51 @@ A tab that renders `source` by its format. It includes every field of `FilePrevi
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
 | kind           | Tab kind, always `'file'`                                                                                                                                   | `'file'`                                                      | Required |
 | source         | The content and file information to preview; when `levels` has an enabled entry, the current level's `source` is rendered instead                           | `FilePreviewSource`                                           | Required |
+| emptyLabel     | Overrides the default empty body message.                                                                                                                   | `string`                                                      | -        |
 | loading        | The body is still being read: it shows a loading state while the tab row and path row stay, and `source` may be empty                                       | `boolean`                                                     | `false`  |
 | operations     | Asynchronous capabilities; a control whose method is missing is unavailable                                                                                 | `FilePreviewOperations`                                       | -        |
 | resources      | Companion resources matched by `key` against Markdown image targets, as relative paths or `viking://` URIs                                                  | `readonly FileViewerResource[]`                               | -        |
 | levels         | Content levels, each with its own `source`, `resources` and `editing`                                                                                       | `readonly FilePreviewLevel[]`                                 | -        |
 | activeLevelKey | Controlled content level; defaults to the first enabled level                                                                                               | `string`                                                      | -        |
+| videoDetails   | Video transcript and extracted frames                                                                                                                       | `FilePreviewFileTab['videoDetails']`                          | -        |
 | resolveImage   | Resolves a Markdown image target to an accessible URL; you own requests, cancellation and Blob URL cleanup                                                  | `(src: string, source: FilePreviewSource) => Promise<string>` | -        |
 | editing        | Editing capability; omit it for a read-only tab, since it alone decides whether a tab is editable. With `levels`, only the current level's `editing` counts | `FilePreviewEditing`                                          | -        |
 | actions        | Your commands in the header row, as an array or a function of the context; see Notes                                                                        | `FilePreviewActionSource`                                     | -        |
 | onLevelChange  | Called when the level changes, with the new level's `key`; when controlled, update `activeLevelKey` yourself                                                | `(key: string) => void`                                       | -        |
 | onOpenUri      | Called after `operations.openUri` opens a Markdown link, with the clicked target                                                                            | `(uri: string) => void`                                       | -        |
 | slots          | Slots for the header row, footer and states                                                                                                                 | `FilePreviewFileTabSlots`                                     | -        |
+
+#### videoDetails
+
+Renders below a video source. The host supplies transcript entries and frames independently; use an empty array when either has no entries. During playback, the active transcript entry is highlighted and scrolled into view. Expand the video to see the transcript alongside the player without interrupting playback. Extracted frames show their filenames.
+
+| Property      | Description                                                                                | Type                                     | Default  |
+| ------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------- | -------- |
+| segments      | Timestamped transcript entries in display order                                            | `readonly Segment[]`                     | Required |
+| frames        | Extracted frames in display order                                                          | `readonly Frame[]`                       | Required |
+| framesLoading | Shows a loading message while frames are being fetched                                     | `boolean`                                | `false`  |
+| onLoadFrames  | Called when selecting the frames tab or retrying failed downloads                          | `() => void`                             | -        |
+| onFrameError  | Reports a thumbnail or enlarged image load/decode failure with its frame ID and failed URL | `(frameId: string, src: string) => void` | -        |
+
+`segments` entries:
+
+| Property | Description                                                                       | Type     | Default  |
+| -------- | --------------------------------------------------------------------------------- | -------- | -------- |
+| startMs  | Start time in milliseconds; selecting the entry seeks to this position            | `number` | Required |
+| endMs    | End time in milliseconds; the entry is highlighted from `startMs` up to this time | `number` | Required |
+| text     | Transcript text                                                                   | `string` | Required |
+| speaker  | Speaker name; empty or omitted values use `labels.videoSpeaker`                   | `string` | -        |
+
+`frames` entries:
+
+| Property | Description                                                                           | Type      | Default  |
+| -------- | ------------------------------------------------------------------------------------- | --------- | -------- |
+| id       | Stable, unique frame identifier                                                       | `string`  | Required |
+| name     | Accessible image name; also shown before the image is available                       | `string`  | Required |
+| src      | Accessible image URL; selecting the image opens an enlarged preview                   | `string`  | -        |
+| failed   | Marks a failed download; when loading finishes, any failed frame shows a retry action | `boolean` | `false`  |
+
+The host owns requests, cancellation and image URL cleanup. In `onLoadFrames`, update `framesLoading` and each frame's `src` or `failed` value; retrying calls the same callback. An image load or decode failure hides the thumbnail and closes its enlarged preview. In `onFrameError`, clear the matching `src` and mark the frame `failed`; ignore the event if the frame already has a different URL. FileBrowser handles this invalidation and downloads the failed frame again on retry. It loads frame images on demand and keeps discovered frames available while the transcript loads or if its request or parsing fails.
 
 ### FilePreviewDirectoryTab
 
@@ -146,7 +187,7 @@ A directory's summary levels, for example an L0 abstract and an L1 overview. It 
 | defaultLevelKey     | Initial level when uncontrolled                                                                                | `string`                                                               | First level |
 | resources           | Companion resources shared by all levels; a level's own `resources` take precedence                            | `readonly FileViewerResource[]`                                        | -           |
 | resolveImage        | Resolves Markdown image targets of the current level, with the same rules as file tabs                         | `(src: string, source: FilePreviewSource) => Promise<string>`          | -           |
-| operations          | Asynchronous capabilities; directory tabs use only `openParent`                                                | `FilePreviewOperations`                                                | -           |
+| operations          | Asynchronous capabilities; directory tabs support `openParent` and `openUri`                                   | `FilePreviewOperations`                                                | -           |
 | actions             | Your commands in the header row; `source` and `path` in the context point to the current level                 | `FilePreviewActionSource`                                              | -           |
 | onActiveLevelChange | Called when the level changes, with the new level's `key`                                                      | `(key: string) => void`                                                | -           |
 | slots               | Slots for the header row, footer and states, the same as file tabs                                             | `FilePreviewFileTabSlots`                                              | -           |
@@ -155,11 +196,12 @@ A directory's summary levels, for example an L0 abstract and an L1 overview. It 
 
 Shows content of your own, such as a dashboard or a graph. It includes every field of `FilePreviewTabBase`.
 
-| Property | Description                                                                          | Type        | Default  |
-| -------- | ------------------------------------------------------------------------------------ | ----------- | -------- |
-| kind     | Tab kind, always `'content'`                                                         | `'content'` | Required |
-| title    | What the tab row shows; a content tab has no file name to fall back to               | `ReactNode` | Required |
-| content  | The tab body, filling everything below the tab row; you own its layout and scrolling | `ReactNode` | Required |
+| Property         | Description                                                                          | Type        | Default  |
+| ---------------- | ------------------------------------------------------------------------------------ | ----------- | -------- |
+| kind             | Tab kind, always `'content'`                                                         | `'content'` | Required |
+| title            | What the tab row shows; a content tab has no file name to fall back to               | `ReactNode` | Required |
+| content          | The tab body, filling everything below the tab row; you own its layout and scrolling | `ReactNode` | Required |
+| hideWhileEditing | Hides this tab while a file is being edited                                          | `boolean`   | `false`  |
 
 ### FilePreviewSource
 
@@ -171,7 +213,7 @@ When several of `content`, `file` and `url` are given, the first one with a valu
 | content   | Text content for Markdown, JSON, code and similar; only an empty string shows the empty-file state                                     | `string`       | -        |
 | file      | Binary file for PDF, Office documents, spreadsheets, images and similar                                                                | `File \| Blob` | -        |
 | url       | An accessible file URL; the component does no authentication                                                                           | `string`       | -        |
-| path      | Full path, shown as the breadcrumb and used as the text for copy path; without it the breadcrumb shows only the file name              | `string`       | -        |
+| path      | Full path for the breadcrumb. Copy path formats Viking URIs. An omitted path shows only the file name.                                 | `string`       | -        |
 | fileType  | Explicit format hint, taking precedence over extension and MIME type                                                                   | `string`       | -        |
 | truncated | Only part of the body was read; when `true`, file tabs show a notice below the body                                                    | `boolean`      | `false`  |
 
@@ -192,31 +234,35 @@ One level of a file tab's `levels`.
 
 One summary level of a directory tab's `levels`.
 
-| Property  | Description                                                                    | Type                            | Default  |
-| --------- | ------------------------------------------------------------------------------ | ------------------------------- | -------- |
-| key       | Unique identifier of the level, used for switching and controlled state        | `string`                        | Required |
-| label     | What the level switch tab shows, for example "L0 Abstract"                     | `ReactNode`                     | Required |
-| source    | The body source of this level, the same as a file tab's `source`               | `FilePreviewSource`             | Required |
-| resources | Companion resources of this level; the tab's `resources` are used when omitted | `readonly FileViewerResource[]` | -        |
+| Property   | Description                                                                    | Type                            | Default  |
+| ---------- | ------------------------------------------------------------------------------ | ------------------------------- | -------- |
+| key        | Unique identifier of the level, used for switching and controlled state        | `string`                        | Required |
+| label      | What the level switch tab shows, for example "L0 Abstract"                     | `ReactNode`                     | Required |
+| source     | The body source of this level, the same as a file tab's `source`               | `FilePreviewSource`             | Required |
+| emptyLabel | Overrides the default empty body message.                                      | `string`                        | -        |
+| resources  | Companion resources of this level; the tab's `resources` are used when omitted | `readonly FileViewerResource[]` | -        |
 
 ### FilePreviewOperations
 
 The component calls these methods to carry out an operation, and fires the matching `onOpenParent` or `onOpenUri` only after the promise resolves; a rejection is silent and notifies nothing.
 
-| Property   | Description                                                                                                                                       | Type                             | Default |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------- |
-| openParent | Opens the clicked ancestor level, taking that level's full URI; without it the breadcrumb levels are not clickable                                | `(uri: string) => Promise<void>` | -       |
-| openUri    | Opens a clicked Markdown link, taking the target as written in the Markdown; supplying it hands navigation, including relative paths, to your app | `(uri: string) => Promise<void>` | -       |
+| Property   | Description                                                                                                                                           | Type                             | Default |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------- |
+| openParent | Opens the clicked ancestor level, taking that level's full URI; without it the breadcrumb levels are not clickable                                    | `(uri: string) => Promise<void>` | -       |
+| openUri    | Opens Markdown links using the original target: files hand all links to the app, while directories hand Viking URIs and relative resource links to it | `(uri: string) => Promise<void>` | -       |
 
 ### FilePreviewEditing
 
-| Property             | Description                                                                                                                                                                 | Type                                                                                           | Default  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
-| save                 | Saves the draft with the optional note. Rejection keeps the draft; returning `{ warning: 'version-not-created' }` shows a warning and still calls `onSave`.                 | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | Required |
-| promptForVersionNote | Prompts for a version note before calling `save`; cancelling keeps the draft.                                                                                               | `boolean`                                                                                      | `false`  |
-| loadContent          | Reads the full text when editing starts; returning `undefined` abandons the edit. Without it, text from `content` or `file` is used, and a `url`-only source must supply it | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -        |
-| onSave               | Called after saving succeeds, with the saved text                                                                                                                           | `(value: string) => void`                                                                      | -        |
-| onCancel             | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                 | `(value: string) => void`                                                                      | -        |
+| Property             | Description                                                                                                                                                                      | Type                                                                                           | Default  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
+| save                 | Saves the draft with the optional note. Rejection keeps the draft; returning `{ warning: 'version-not-created' }` shows a warning and still calls `onSave`.                      | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | Required |
+| promptForVersionNote | Prompts for a version note before calling `save`; cancelling keeps the draft.                                                                                                    | `boolean`                                                                                      | `false`  |
+| loadContent          | Reads the full text when editing starts; returning `undefined` abandons the edit. With neither loader, text from `content` or `file` is used. A `url`-only source needs a loader | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -        |
+| loadDocument         | Takes precedence over `loadContent` and supplies the full text with optional editor annotations; returning `undefined` abandons the edit                                         | `(source: FilePreviewSource) => Promise<FilePreviewEditorDocument \| undefined>`               | -        |
+| onSave               | Called after saving succeeds, with the saved text                                                                                                                                | `(value: string) => void`                                                                      | -        |
+| onCancel             | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                      | `(value: string) => void`                                                                      | -        |
+
+`FilePreviewEditorDocument` contains `content` and optional `annotations` and `readOnlySuffix`. The editor displays the suffix after the draft as read-only text. The save callback receives `content` with the user's edits. Each annotation has `matchText`, `description`, and an optional `reason`. The Markdown editor highlights lines with a unique body match and displays the explanation on hover.
 
 ### FilePreviewAction
 
@@ -233,11 +279,11 @@ The component calls these methods to carry out an operation, and fires the match
 
 A control set to `false` stays hidden even when a tab supplies the capability; a tab's `toolbar` can only hide controls the top level allows.
 
-| Property   | Description                                                              | Type      | Default |
-| ---------- | ------------------------------------------------------------------------ | --------- | ------- |
-| copyPath   | Copy-path button beside the path; shown when a path exists               | `boolean` | `true`  |
-| viewSwitch | Preview/source switch; shown when the current format supports both views | `boolean` | `true`  |
-| edit       | Edit button; shown when the current file or level supplies `editing`     | `boolean` | `true`  |
+| Property   | Description                                                                      | Type      | Default |
+| ---------- | -------------------------------------------------------------------------------- | --------- | ------- |
+| copyPath   | Copy-path button beside the path; shown when a path exists                       | `boolean` | `true`  |
+| viewSwitch | Preview/source switch, shown outside editing when the format supports both views | `boolean` | `true`  |
+| edit       | Edit button; shown when the current file or level supplies `editing`             | `boolean` | `true`  |
 
 ### FilePreviewHeaderSlots
 
@@ -274,6 +320,7 @@ The context the component passes to an `actions` function and a `slots.actions` 
 | setViewMode   | Switches the view mode                                                                                                       | `(mode: FilePreviewViewMode) => void` | -       |
 | canSwitchView | Whether the format supports both preview and source; render no switch when `false`                                           | `boolean`                             | -       |
 | editing       | Whether the tab is being edited                                                                                              | `boolean`                             | -       |
+| draft         | Current draft while editing, including an empty string                                                                       | `string`                              | -       |
 | busy          | Whether a save or a read is in progress                                                                                      | `boolean`                             | -       |
 | canEdit       | Whether editing can start: `editing` is supplied, the file is not an image or video, and the tab is not already being edited | `boolean`                             | -       |
 | startEditing  | Enters editing, reading the full text first                                                                                  | `() => void`                          | -       |
@@ -292,7 +339,7 @@ Every field is an optional `string`; omitted fields use the default text of the 
 | closePreview           | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                                          |
 | showHiddenPath         | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                                |
 | copyPath               | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                              |
-| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                                 |
+| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Node path copied'`                                       |
 | copyFailed             | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                                         |
 | moreActions            | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                                           |
 | actionFailed           | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                                      |
@@ -320,6 +367,17 @@ Every field is an optional `string`; omitted fields use the default text of the 
 | fileEmpty              | Message when `content` is an empty string                                                                            | `string` | `'This file is empty'`                                     |
 | noContent              | The component never renders this text, so setting it has no effect                                                   | `string` | `'No content to show'`                                     |
 | truncated              | Message when `source.truncated` is `true`                                                                            | `string` | `'Only part of the content is shown'`                      |
+
+#### Video labels
+
+| Property          | Description                                               | Type                        | Default                       |
+| ----------------- | --------------------------------------------------------- | --------------------------- | ----------------------------- |
+| expandVideo       | Opens the expanded video preview                          | `string`                    | Expand video                  |
+| videoTranscript   | Transcript tab                                            | `string`                    | Transcript                    |
+| videoFrames       | Formats the frames tab label with the visible frame count | `(count: number) => string` | Extracted frames              |
+| videoSpeaker      | Fallback speaker name                                     | `string`                    | Speaker                       |
+| videoNoTranscript | Empty transcript message                                  | `string`                    | No transcript available       |
+| videoNoFrames     | Empty frames message                                      | `string`                    | No extracted frames available |
 
 ### FilePreviewHandle
 
@@ -362,20 +420,30 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Markdown front matter: leading YAML metadata appears as a code block in the preview, while the source view, editing, saving and copying keep the original text.
 - Dotted backdrop: Markdown bodies and the area around PDF, Word and PowerPoint pages show a dotted backdrop that follows the host theme; its colors are in Theme variables below.
 - Markdown images: `resources` are matched first, then `resolveImage` is called, and a rejected `resolveImage` falls back to the image's original target; the component never turns `viking://` into an HTTP address.
-- Markdown links: only Markdown bodies trigger `operations.openUri`, and the component passes the target as written, without resolving relative paths.
+- File-tab Markdown links: supplying `operations.openUri` hands every link, including external destinations, to the app and prevents default navigation. The app receives the original target and resolves it; omitting the callback preserves the renderer's default behavior.
+- Directory-summary links: `operations.openUri` handles Viking URIs and relative resource links using the original target. HTTP, HTTPS, mail, phone, and protocol-relative external links retain native browser actions.
+- Directory anchors: same-document links can target HTML headings (`h1`–`h6`) with an explicit `id`, even without `operations.openUri`. Plain Markdown headings do not generate IDs; use an HTML heading as the target:
+
+  ```md
+  [Details](#details)
+
+  <h2 id="details">Details</h2>
+  ```
+
 - JSON logs: `.json` and `.jsonl` render as a JSON tree; render structured files that need their own view, such as session logs, in a content tab.
 - Large files: the component does not check file size; FileViewer shows a confirmation state when it needs one, and `slots.confirmFallback` replaces it. Limit the length of editable text in `editing`.
-- Extras: previous/next image, neighbor preloading and video transcripts are not part of the component; compose them outside the preview, or inject them through `slots.actions` and `slots.footer`.
+- Extras: previous/next image and neighbor preloading are not part of the component; compose them outside the preview, or inject them through `slots.actions` and `slots.footer`.
 - FileViewer's own controls: the component hides its download, fullscreen, paging, search and zoom controls; use `getViewerHandle()` for paging, search and zoom, and an injected action for download.
 
 ### Path and breadcrumb
 
-- Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name.
+- Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name. A first-level directory has no ancestor, so the scheme appears on the trailing level instead and `viking://user` reads `viking://user`.
+- URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation uses the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
 - No path: without `source.path` the breadcrumb shows only the file name and there is no copy-path button.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.
 - Absolute paths: the ancestors of `/a/b/c.md` keep the leading `/`, and relative paths stay as written.
 - Overflow: when the path does not fit, the levels after the first move into a "…" menu, and only if that is still too wide does the first level collapse too; the menu entries also call `operations.openParent`.
-- Copy path: it uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
+- Copy path: Viking URI paths decode readable text while retaining escapes for reserved characters. After copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with `labels.copied`. The feedback resets after 1.5 seconds without adding text to the path row. Copying uses `navigator.clipboard`, which needs a secure context (HTTPS or localhost); a failure shows `labels.copyFailed` and does not call `onCopyPath`.
 
 ### Actions and editing
 

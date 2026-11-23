@@ -39,7 +39,11 @@ export async function verifyRetry(t, view, preserve) {
     await setTextarea(input, 'Retained host draft');
     const sibling = preserve && host.container.querySelector(preserve);
     if (preserve) assert.ok(sibling, `missing healthy sibling: ${preserve}`);
-    assert.equal(host.container.querySelector('[data-host-retry]'), null);
+    // Assert on booleans so Node does not format an entire DOM node on failure.
+    assert.ok(
+      !host.container.querySelector('[data-host-retry]'),
+      'retry button stays hidden before a failure',
+    );
     failure.broken = true;
     await host.render(render());
     assert.ok(
@@ -59,13 +63,20 @@ export async function verifyRetry(t, view, preserve) {
       failure.renders > attempts,
       'reset must actually render the failed region again',
     );
-    assert.equal(host.container.querySelector('[data-host-retry]'), null);
-    assert.equal(
-      host.container.querySelector('[aria-label="Host draft"]'),
-      input,
+    assert.ok(
+      !host.container.querySelector('[data-host-retry]'),
+      'retry clears the fallback',
+    );
+    assert.ok(
+      host.container.querySelector('[aria-label="Host draft"]') === input,
+      'retry preserves the host draft input',
     );
     assert.equal(input.value, 'Retained host draft');
-    if (preserve) assert.equal(host.container.querySelector(preserve), sibling);
+    if (preserve)
+      assert.ok(
+        host.container.querySelector(preserve) === sibling,
+        'retry preserves the healthy sibling',
+      );
   } finally {
     await host.unmount();
   }

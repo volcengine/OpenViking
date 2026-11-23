@@ -29,6 +29,7 @@ _MEMORY_FIELDS_START = re.compile(r"<!--\s*MEMORY_FIELDS\b")
 class ConsolidationExtractContextProvider(SessionExtractContextProvider):
     """Reorganize selected memory types using a recursive inventory and read/search tools."""
 
+    is_consolidation = True
     include_tool_parts_in_conversation = False
     split_long_text_messages_for_extraction = False
 
@@ -114,8 +115,12 @@ clean, non-redundant, and conforms to each memory type's own schema.
 - Split files that mix multiple identities.
 - Deduplicate repeated or paraphrased facts, preserving every distinct atomic fact.
 - Normalize fields to each memory's own schema; do not invent new facts.
-- Only modify the selected memory types under the target. Do not merge different types
-  or move memories into another user's or peer's space.
+- Only modify the selected memory types under the target. Do not move memories into
+  another user's or peer's space.
+- Existing add_only memories may be deleted. A deletion replacement may be an existing
+  memory or a new memory of another selected type when it preserves the relevant facts.
+- Original conversation messages are unavailable. Do not create memory types whose
+  rendering requires those messages; the output contract marks these types.
 
 ## Critical
 - Only ls/search/read are available for exploration - there is no write tool; all

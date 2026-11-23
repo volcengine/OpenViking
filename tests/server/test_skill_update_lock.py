@@ -8,8 +8,8 @@ import asyncio
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import skills as skills_router
 from openviking.storage.errors import LockAcquisitionError
-from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_api_skills import _add_skill, _skill_md
 from tests.server.test_api_skills import _stub_mcp_endpoint as _stub_mcp_endpoint
@@ -44,16 +44,15 @@ async def test_update_lock_blocks_same_package_until_failed_update_finishes(
     original_definition = await fs.read_file_bytes(f"{root}/SKILL.md", ctx=_ctx())
     paused = asyncio.Event()
     resume = asyncio.Event()
-    original_apply = SkillProcessor.apply_skill_privacy
+    original_clear = skills_router.clear_skill_package_contents
 
-    async def fail_after_clear(self, *args, **kwargs):
-        if kwargs.get("change_reason") == "auto-extracted from update_skill":
-            paused.set()
-            await resume.wait()
-            raise RuntimeError("injected preparation failure after clearing the package")
-        return await original_apply(self, *args, **kwargs)
+    async def fail_after_clear(*args, **kwargs):
+        await original_clear(*args, **kwargs)
+        paused.set()
+        await resume.wait()
+        raise RuntimeError("injected preparation failure after clearing the package")
 
-    monkeypatch.setattr(SkillProcessor, "apply_skill_privacy", fail_after_clear)
+    monkeypatch.setattr(skills_router, "clear_skill_package_contents", fail_after_clear)
     updating = asyncio.create_task(
         client.put(
             f"/api/v1/skills/{name}",

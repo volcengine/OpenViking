@@ -1,16 +1,24 @@
-import { normalizeResourceUri } from './fs-uri.js';
+import {
+  isSystemUri,
+  normalizeResourceUri,
+} from '../../shared/resource-uri.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import { isExperienceFile } from './experience-data.js';
 
-export const isSystemUri = (uri: string) =>
-  /^viking:\/\/system(?:\/|$)/i.test(normalizeResourceUri(uri));
 export const isSummaryUri = (uri: string) =>
   /\/(?:\.abstract|\.overview)\.md$/i.test(normalizeResourceUri(uri));
 export const isEditableText = (uri: string) =>
   /\.(?:md|json|jsonl|txt|yaml|yml)$/i.test(normalizeResourceUri(uri)) &&
   !isSystemUri(uri) &&
   !isSummaryUri(uri);
-export const supportsFileHistory = (uri: string) =>
+/**
+ * Wiki 目录历史里可列出的文件：Wiki 产物是 Markdown 与常见文本，二进制和摘要
+ * 派生文件不在其列。
+ *
+ * Files a Wiki directory history can list: Wiki outputs are Markdown and ordinary
+ * text, so binaries and derived summaries are excluded.
+ */
+export const supportsWikiHistoryFile = (uri: string) =>
   isEditableText(uri) &&
   !/\/\.relations\.json$/i.test(normalizeResourceUri(uri));
 
@@ -45,7 +53,13 @@ export function previewPolicy({
   const summary = isSummaryUri(uri);
   const experience = isFile && isExperienceFile(uri);
   const wiki = dashboard?.kind === 'wiki';
-  const fileHistory = isFile && supportsFileHistory(uri);
+  // 版本历史只给经验文件与 Wiki 节点，与内部版一致：普通文本文件既没有用户可见
+  // 的历史语义，也没有保存快照的入口。经验目录本身走经验看板，不在此列。
+  //
+  // Version history is for experience files and Wiki nodes only, matching the
+  // internal console: an ordinary text file has no user-facing history semantics
+  // and no snapshot entry. An experience directory has its own dashboard instead.
+  const fileHistory = isFile && experience;
   return {
     system,
     edit: isFile && !system && !summary && !experience && canWrite,
@@ -54,13 +68,11 @@ export function previewPolicy({
     download: isFile,
     history:
       !system &&
-      (fileHistory ||
-        experience ||
-        (wiki && !summary && !/\/\.relations\.json$/.test(uri))),
+      (fileHistory || (wiki && !summary && !/\/\.relations\.json$/.test(uri))),
     fileHistory,
     versionedFile: wiki && isFile && !summary,
     importPack: !isFile && !system && canWrite && supportsPack(uri),
-    exportPack: !system && supportsPack(uri),
+    exportPack: !isFile && !system && supportsPack(uri),
     delete: isFile && !system && !summary && uri !== rootUri && canManage,
     configure: !isFile && !system && wiki && dashboard.isRoot === true,
   };

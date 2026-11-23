@@ -20,6 +20,9 @@ class RetrievalObserver(BaseObserver):
     diagnostics only and do not determine component health.
     """
 
+    def __init__(self, account_id: str | None = None):
+        self._account_id = account_id
+
     @staticmethod
     def _get_collector():
         """Lazy import to avoid circular dependency with storage module."""
@@ -33,14 +36,14 @@ class RetrievalObserver(BaseObserver):
 
     def get_status_json(self) -> dict:
         """Return retrieval statistics as structured JSON."""
-        stats = self._get_collector().snapshot()
+        stats = self._get_collector().snapshot(self._account_id)
         return stats.to_dict()
 
     def _format_status_as_table(self) -> str:
         """Format retrieval stats as a table using tabulate."""
         from tabulate import tabulate
 
-        stats = self._get_collector().snapshot()
+        stats = self._get_collector().snapshot(self._account_id)
 
         if stats.total_queries == 0:
             return "No retrieval queries recorded."

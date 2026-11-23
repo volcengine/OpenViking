@@ -57,20 +57,40 @@
   inline-size: max-content;
   max-inline-size: 100%;
 }
+.ov-viking-bot .ov-viking-bot__user-bubble {
+  font-family: inherit;
+}
 .ov-viking-bot__user-bubble .ov-viking-bot__text {
-  font-family: 'PingFang SC', 'Noto Sans SC', sans-serif;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 14px;
+  font-weight: 400;
   letter-spacing: 0.3px;
   line-height: 22px;
 }
 .ov-viking-bot__text.ov-viking-bot__text--markdown {
+  --stream-md-color-accent: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-conversation-link-default)
+  );
   width: 100%;
   max-width: 100%;
   min-width: 0;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-family: inherit;
   font-size: 13px;
   line-height: 22px;
+}
+.ov-viking-bot__text--markdown :is(pre, code),
+.ov-viking-bot__code pre {
+  font-family: var(
+    --ov-ui-font-mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace
+  );
 }
 .ov-viking-bot__text--markdown :is(p, .ark-agentic-markdown__paragraph) {
   margin: 0;
@@ -89,7 +109,7 @@
   min-height: 20px;
   align-items: center;
   gap: 8px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-conversation-meta-default));
   font-size: 12px;
   line-height: 20px;
   opacity: 0;
@@ -108,6 +128,24 @@
 .ov-viking-bot__message-footer time {
   white-space: nowrap;
 }
+.ov-viking-bot__message-time.ov-button {
+  width: auto;
+  height: auto;
+  min-height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+.ov-viking-bot__copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .ov-viking-bot__message-footer .ov-viking-bot__copy.ov-button {
   width: 20px;
   height: 20px;
@@ -123,8 +161,39 @@
 .ov-viking-bot__message-actions {
   margin-top: 10px;
 }
+.ov-viking-bot__message-action--pill.ov-button {
+  height: 36px;
+  gap: 4px;
+  border: 0;
+  border-radius: 24px;
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  padding: 0 16px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 400;
+}
+.ov-viking-bot__message-action--pill.ov-button:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-7, var(--ov-ui-bg-7-default));
+}
+.ov-viking-bot__message-action--pill.ov-button:disabled {
+  opacity: 1;
+}
+.ov-viking-bot__message-action--pill.ov-viking-bot__message-action--success.ov-button:disabled {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  cursor: default;
+}
+.ov-viking-bot__message-action--pill.ov-viking-bot__message-action--success
+  .ov-button__icon {
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
+.ov-viking-bot__message-action--pill.ov-button--loading {
+  cursor: wait;
+}
 .ov-viking-bot__activity {
   width: min(88%, 960px);
+  font-family: inherit;
 }
 .ov-viking-bot__tool-details {
   display: flex;
@@ -265,7 +334,6 @@
   padding: 16px 8px 16px 20px;
   overflow-x: auto;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
-  font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -300,12 +368,12 @@
   color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
 }
 .ov-viking-bot__code
-  :is(.ov-viking-bot__token--keyword, .ov-viking-bot__token--important),
-.ov-viking-bot__code a {
+  :is(.ov-viking-bot__token--keyword, .ov-viking-bot__token--important) {
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
+.ov-viking-bot__code a,
 .ov-viking-bot__text--markdown a {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  color: var(--ov-ui-color-primary, var(--ov-ui-conversation-link-default));
 }
 @media (hover: none) {
   .ov-viking-bot__message-footer {

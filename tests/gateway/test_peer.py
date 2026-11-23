@@ -1,6 +1,5 @@
 """Peer scoping: X-OpenViking-Actor-Peer and a gateway key's default peer."""
 
-import asyncio
 from unittest.mock import AsyncMock
 
 import orjson
@@ -46,7 +45,7 @@ async def issue(client, admin, **fields):
 
 
 async def two_turns(client, key, headers=None):
-    """A conversation of two user turns; the second confirms the first for capture."""
+    """A conversation of two user turns, each saved when its reply ends it."""
     headers = {"Authorization": "Bearer " + key, "x-openviking-session": "s1", **(headers or {})}
     first = [{"role": "user", "content": "How do we deploy?"}]
     response = await client.post(
@@ -64,12 +63,7 @@ async def two_turns(client, key, headers=None):
     assert response.status_code == 200, response.text
 
 
-async def delivered(app, writes):
-    for _ in range(20):
-        await app.state.worker.once()
-        if writes:
-            break
-        await asyncio.sleep(0.01)
+def delivered(writes):
     return [message for batch in writes for message in batch["messages"]]
 
 
@@ -87,14 +81,14 @@ async def test_header_reaches_recall_and_names_the_captured_user(running_gateway
     assert all("peer_scope" not in body for body in calls["search_body"])
     # The model upstream never sees the header.
     assert seen and all(header(h) is None for _, _, h in seen)
-    messages = await delivered(app, writes)
+    messages = delivered(writes)
     users = [m for m in messages if m["role"] == "user"]
     assert users and all(m["peer_id"] == "review-agent" for m in users)
     assert all("peer_id" not in m for m in messages if m["role"] != "user")
     # Session writes carry the peer in the body; OpenViking ignores an actor peer there.
     assert calls["write"] and all(header(h) is None for h in calls["write"])
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    assert {log.get("peer") for log in logs if log.get("kind") != "capture"} == {"review-agent"}
+    assert {log.get("peer") for log in logs} == {"review-agent"}
 
 
 async def test_key_default_peer_applies_without_a_header(running_gateway):
@@ -108,7 +102,7 @@ async def test_key_default_peer_applies_without_a_header(running_gateway):
     calls = observe(app)
     await two_turns(client, issued["key"])
     assert calls["search"] and all(header(h) == "bot-a" for h in calls["search"])
-    users = [m for m in await delivered(app, writes) if m["role"] == "user"]
+    users = [m for m in delivered(writes) if m["role"] == "user"]
     assert users and all(m["peer_id"] == "bot-a" for m in users)
 
 
@@ -120,7 +114,7 @@ async def test_header_overrides_the_default_and_blank_keeps_it(running_gateway, 
     await two_turns(client, issued["key"], {PEER: sent})
     expected = sent.strip() or "bot-a"
     assert calls["search"] and all(header(h) == expected for h in calls["search"])
-    users = [m for m in await delivered(app, writes) if m["role"] == "user"]
+    users = [m for m in delivered(writes) if m["role"] == "user"]
     assert users and all(m["peer_id"] == expected for m in users)
 
 
@@ -147,13 +141,12 @@ async def test_no_peer_leaves_requests_unchanged(running_gateway):
     calls = observe(app)
     await two_turns(client, key["key"])
     assert calls["search"] and all(header(h) is None for h in calls["search"])
-    messages = await delivered(app, writes)
+    messages = delivered(writes)
     assert messages and all("peer_id" not in m for m in messages)
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    requests = [log for log in logs if log.get("kind") != "capture"]
-    assert all("peer" not in log for log in requests)
+    assert all("peer" not in log for log in logs)
     # The session is the header's digest, as before peers.
-    assert {log["session"] for log in requests} == {digest("s1")}
+    assert {log["session"] for log in logs} == {digest("s1")}
 
 
 async def chat(client, key, messages, peer=None, session="shared"):
@@ -185,16 +178,15 @@ async def test_one_session_holds_user_messages_from_several_peers(running_gatewa
     # Each request recalls with its own peer.
     assert [header(h) for h in calls["search"]] == ["alice-bot", "bob-bot", None, "c"]
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    requests = [log for log in logs if log.get("kind") != "capture"]
     # Session IDs are the header's digest whatever the peer.
-    assert {log["session"] for log in requests} == {digest("shared")}
-    messages = await delivered(app, writes)
+    assert {log["session"] for log in logs} == {digest("shared")}
+    messages = delivered(writes)
     peers = {m["parts"][0]["text"]: m.get("peer_id") for m in messages if m["role"] == "user"}
     assert peers["I am Alice"] == "alice-bot" and peers["I am Bob"] == "bob-bot"
     assert "Anyone?" in peers and peers["Anyone?"] is None
     assert all("peer_id" not in m for m in messages if m["role"] != "user")
     # Capture reset takes the session alone.
-    path = "/admin/keys/" + requests[0]["credential_id"] + "/capture/reset"
+    path = "/admin/keys/" + logs[0]["credential_id"] + "/capture/reset"
     body = {"session": "shared", "protocol": "chat"}
     assert (await client.post(path, headers=admin, json=body)).status_code == 200
 
@@ -207,7 +199,7 @@ async def test_a_message_keeps_the_peer_of_the_request_that_first_sent_it(runnin
     # A peerless message stays peerless when a peer's request carries it later.
     await chat(client, key["key"], [*first, REPLY, user("No peer here")])
     await chat(client, key["key"], [*first, REPLY, user("No peer here"), REPLY, user("Bob")], "bob")
-    messages = await delivered(app, writes)
+    messages = delivered(writes)
     peers = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
     assert peers[:3] == [
         ("Earlier, unseen", "alice-bot"),
@@ -222,7 +214,7 @@ async def test_a_peerless_first_turn_stays_peerless(running_gateway):
     await chat(client, key["key"], [user("No peer here"), REPLY, user("I am Bob")], "bob")
     later = [user("No peer here"), REPLY, user("I am Bob"), REPLY, user("Carol")]
     await chat(client, key["key"], later, "carol")
-    messages = await delivered(app, writes)
+    messages = delivered(writes)
     peers = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
     assert peers[:2] == [("No peer here", None), ("I am Bob", "bob")]
 
@@ -237,8 +229,8 @@ async def group_chat(client, key):
 
 
 @pytest.mark.parametrize("change", ["edit_before_bob", "sliding_window"])
-async def test_a_changed_prefix_keeps_later_messages_peers(running_gateway, change):
-    """A new OpenViking session after an edit or a dropped exchange keeps every peer."""
+async def test_a_changed_prefix_goes_on_with_the_new_messages_peer(running_gateway, change):
+    """After an edit or a dropped exchange the same OpenViking session gets the new turn."""
     app, client, _, key, _, writes = running_gateway
     sessions = []
 
@@ -248,20 +240,15 @@ async def test_a_changed_prefix_keeps_later_messages_peers(running_gateway, chan
 
     app.state.test_backend["handler"] = handler
     history = await group_chat(client, key["key"])
-    await delivered(app, writes)
     if change == "edit_before_bob":
         history = [history[0], {"role": "assistant", "content": "edited"}, *history[2:]]
     else:
         history = history[2:]
-    await chat(client, key["key"], [*history, REPLY, user("I am Dave")], "dave")
-    first = sessions[0]
     writes.clear()
-    sessions.clear()
-    messages = await delivered(app, writes)
-    assert sessions and first not in sessions
-    users = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
-    expected = [("I am Alice", "alice"), ("I am Bob", "bob"), ("I am Carol", "carol")]
-    assert users == expected[2 - len(history) // 2 :]
+    await chat(client, key["key"], [*history, REPLY, user("I am Dave")], "dave")
+    assert len(set(sessions)) == 1
+    written = [(m["parts"][0]["text"], m.get("peer_id")) for m in delivered(writes)]
+    assert written == [("I am Dave", "dave"), ("hello", None)]
 
 
 async def test_repeated_text_keeps_each_senders_peer(running_gateway):
@@ -270,13 +257,12 @@ async def test_repeated_text_keeps_each_senders_peer(running_gateway):
     for peer in ("alice", "bob", "carol"):
         history = [*history, *([REPLY] if history else []), user("+1")]
         await chat(client, key["key"], history, peer)
-    messages = await delivered(app, writes)
-    assert [m.get("peer_id") for m in messages if m["role"] == "user"] == ["alice", "bob"]
+    messages = delivered(writes)
+    assert [m.get("peer_id") for m in messages if m["role"] == "user"] == ["alice", "bob", "carol"]
 
 
-@pytest.mark.parametrize("cause", ["edit", "reset"])
-async def test_saving_again_keeps_each_messages_peer(running_gateway, cause):
-    """Saving the history to a new OpenViking session keeps each message's peer."""
+async def test_saving_again_keeps_each_messages_peer(running_gateway):
+    """A manual reset saves the history to a new OpenViking session with each message's peer."""
     app, client, admin, key, _, writes = running_gateway
     sessions = []
 
@@ -287,21 +273,20 @@ async def test_saving_again_keeps_each_messages_peer(running_gateway, cause):
     app.state.test_backend["handler"] = handler
     await chat(client, key["key"], [user("I am Alice")], "alice-bot")
     await chat(client, key["key"], [user("I am Alice"), REPLY, user("I am Bob")], "bob-bot")
-    await delivered(app, writes)
-    reply = REPLY
-    if cause == "edit":
-        reply = {"role": "assistant", "content": "edited"}
-    else:
-        logs = (await client.get("/admin/logs", headers=admin)).json()
-        path = "/admin/keys/" + logs[0]["credential_id"] + "/capture/reset"
-        body = {"session": "shared", "protocol": "chat"}
-        assert (await client.post(path, headers=admin, json=body)).status_code == 200
-    await chat(client, key["key"], [user("I am Alice"), reply, user("Carol")], "carol-bot")
+    logs = (await client.get("/admin/logs", headers=admin)).json()
+    path = "/admin/keys/" + logs[0]["credential_id"] + "/capture/reset"
+    body = {"session": "shared", "protocol": "chat"}
+    assert (await client.post(path, headers=admin, json=body)).status_code == 200
     writes.clear()
-    messages = await delivered(app, writes)
+    await chat(client, key["key"], [user("I am Alice"), REPLY, user("Carol")], "carol-bot")
     assert len(set(sessions)) == 2
-    users = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
-    assert users[0] == ("I am Alice", "alice-bot")
+    written = [(m["parts"][0]["text"], m.get("peer_id")) for m in delivered(writes)]
+    assert written == [
+        ("I am Alice", "alice-bot"),
+        ("hello", None),
+        ("Carol", "carol-bot"),
+        ("hello", None),
+    ]
 
 
 async def test_anonymous_history_continues_across_peers(setup_kernel, credential, policy):

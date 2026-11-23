@@ -46,14 +46,17 @@ def _system_to_dict(status: SystemStatus) -> dict:
 
 @router.get("/queue")
 async def observer_queue(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
     format: Literal["table", "json"] = Query(
         "table", description="Observer status representation format"
     ),
+    scope: Literal["account", "runtime"] | None = Query(None),
 ):
     """Get queue system status."""
     service = get_service()
-    component = await service.debug.observer.get_queue_status_async(format=format)
+    component = await service.debug.observer.get_queue_status_async(
+        format=format, **({"account_id": ctx.account_id} if scope == "account" else {})
+    )
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -85,27 +88,33 @@ async def observer_models(
 
 @router.get("/lock")
 async def observer_lock(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
     format: Literal["table", "json"] = Query(
         "table", description="Observer status representation format"
     ),
+    scope: Literal["account", "runtime"] | None = Query(None),
 ):
     """Get lock system status."""
     service = get_service()
-    component = await service.debug.observer.get_lock_status_async(format=format)
+    component = await service.debug.observer.get_lock_status_async(
+        format=format, **({"account_id": ctx.account_id} if scope == "account" else {})
+    )
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/retrieval")
 async def observer_retrieval(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
     format: Literal["table", "json"] = Query(
         "table", description="Observer status representation format"
     ),
+    scope: Literal["account", "runtime"] | None = Query(None),
 ):
     """Get retrieval quality metrics."""
     service = get_service()
-    component = service.debug.observer.get_retrieval_status(format=format)
+    component = service.debug.observer.get_retrieval_status(
+        format=format, **({"account_id": ctx.account_id} if scope == "account" else {})
+    )
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -128,8 +137,11 @@ async def observer_system(
     format: Literal["table", "json"] = Query(
         "table", description="Observer status representation format"
     ),
+    scope: Literal["account", "runtime"] | None = Query(None),
 ):
     """Get system overall status (includes all components)."""
     service = get_service()
-    status = await service.debug.observer.account_system(ctx, format=format)
+    status = await service.debug.observer.account_system(
+        ctx, format=format, **({"account_scope": True} if scope == "account" else {})
+    )
     return Response(status="ok", result=_system_to_dict(status))

@@ -1,3 +1,5 @@
+import { decodePathLabel } from '../../shared/path-label.js';
+
 /** 路径分隔符；`viking://` 这类带协议前缀的路径同样按 `/` 拆分。 */
 const SEPARATOR = '/';
 
@@ -46,16 +48,44 @@ export function splitPathSegments(path?: string): PathSegment[] {
 
   parts.slice(0, -1).forEach((part, index) => {
     uri = index === 0 ? `${scheme}${root}${part}` : `${uri}${SEPARATOR}${part}`;
-    segments.push({ label: part, uri, isFirst: index === 0 });
+    segments.push({
+      label: scheme ? decodePathLabel(part) : part,
+      uri,
+      isFirst: index === 0,
+    });
   });
 
   return segments;
 }
 
-/** 取路径里的文件名，用于面包屑末段与标题回落。 */
+/**
+ * 取路径里的文件名，用于面包屑末段与标题回落。
+ *
+ * 面包屑的协议前缀由首段承担，末段只显示名字。但 `viking://user` 这类根级目录
+ * 没有祖先段，前缀就没人承担——此时末段自己带上 scheme，与其他目录的展示保持
+ * 一致；`viking://` 本身就是根，原样返回。
+ *
+ * Takes the trailing name for the breadcrumb and the title fallback.
+ *
+ * The breadcrumb's scheme is carried by the first segment, so the trailing one shows
+ * only the name. A root-level directory such as `viking://user` has no ancestor to
+ * carry it, so the trailing label carries the scheme itself and stays consistent with
+ * every other directory; `viking://` is the root and comes back unchanged.
+ */
 export function getPathFileName(path?: string): string | undefined {
   const trimmed = path?.trim();
   if (!trimmed) return undefined;
-  const parts = trimmed.split(SEPARATOR).filter(Boolean);
-  return parts[parts.length - 1];
+  const schemeIndex = trimmed.indexOf('://');
+  const scheme = schemeIndex >= 0 ? trimmed.slice(0, schemeIndex + 3) : '';
+  const body = schemeIndex >= 0 ? trimmed.slice(schemeIndex + 3) : trimmed;
+  const parts = body.split(SEPARATOR).filter(Boolean);
+  const name = parts[parts.length - 1];
+  if (name === undefined) return scheme || undefined;
+  const label = scheme ? decodePathLabel(name) : name;
+  return scheme && parts.length === 1 ? `${scheme}${label}` : label;
+}
+
+/** Preserve the first segment's scheme or root without displaying its encoded URI. */
+export function pathSegmentLabel({ uri, label, isFirst }: PathSegment): string {
+  return isFirst ? uri.slice(0, uri.lastIndexOf('/') + 1) + label : label;
 }

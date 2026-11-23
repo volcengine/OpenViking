@@ -29,7 +29,7 @@
   border-radius: 6px;
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font-family: Roboto, 'PingFang SC', sans-serif;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 400;
   line-height: 20px;
@@ -65,8 +65,8 @@
   text-align: start;
   cursor: pointer;
 }
-.ov-viking-bot__reference-open:hover {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+.ov-viking-bot__reference-open:is(:hover, :focus-visible) {
+  color: var(--ov-ui-color-primary, var(--ov-ui-conversation-link-default));
 }
 .ov-viking-bot__reference-remove {
   display: inline-flex;

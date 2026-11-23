@@ -190,18 +190,20 @@ An expanded directory with no children; extends `FileTreeChildRow`.
 
 Defaults follow `locale`; the table lists the English ones.
 
-| Property | Description                                                                     | Type                 | Default               |
-| -------- | ------------------------------------------------------------------------------- | -------------------- | --------------------- |
-| search   | Text of the search trigger                                                      | `string`             | `Search files ⌘+K...` |
-| refresh  | Hint and accessible name of the refresh button                                  | `string`             | `Refresh file tree`   |
-| empty    | Message for an empty tree or directory                                          | `string`             | `No files yet`        |
-| error    | Default message when a children load or the whole tree fails                    | `string`             | `Failed to load`      |
-| retry    | Text of the retry button                                                        | `string`             | `Retry`               |
-| loadMore | Text of the load-more button                                                    | `string`             | `Load more`           |
-| loading  | Message while loading                                                           | `string`             | `Loading…`            |
-| expand   | Accessible name of the expand button; `{name}` is replaced with the node name   | `string`             | `Expand {name}`       |
-| collapse | Accessible name of the collapse button; `{name}` is replaced with the node name | `string`             | `Collapse {name}`     |
-| info     | Directory description copy                                                      | `FileTreeInfoLabels` | -                     |
+| Property       | Description                                                                     | Type                 | Default                |
+| -------------- | ------------------------------------------------------------------------------- | -------------------- | ---------------------- |
+| search         | Text of the search trigger                                                      | `string`             | `Search files ⌘+K...`  |
+| refresh        | Hint and accessible name of the refresh button                                  | `string`             | `Refresh file tree`    |
+| empty          | Message when the whole tree is empty                                            | `string`             | `No files yet`         |
+| emptyDirectory | Message inside an expanded empty folder                                         | `string`             | `This folder is empty` |
+| shared         | Label on the shared resources root; an empty string hides it                    | `string`             | `Shared`               |
+| error          | Default message when a children load or the whole tree fails                    | `string`             | `Failed to load`       |
+| retry          | Text of the retry button                                                        | `string`             | `Retry`                |
+| loadMore       | Text of the load-more button                                                    | `string`             | `Load more`            |
+| loading        | Message while loading                                                           | `string`             | `Loading…`             |
+| expand         | Accessible name of the expand button; `{name}` is replaced with the node name   | `string`             | `Expand {name}`        |
+| collapse       | Accessible name of the collapse button; `{name}` is replaced with the node name | `string`             | `Collapse {name}`      |
+| info           | Directory description copy                                                      | `FileTreeInfoLabels` | -                      |
 
 ### FileTreeInfoLabels
 
@@ -337,6 +339,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 ### Layout
 
 - The root element is `100%` tall and scrolls its content internally, so give its container a height.
+- The panel and sticky trailing area share `--ov-ui-color-bg-1` in both light and dark themes. On hover or selection, the trailing area follows the row background.
 - Rows size to their content: names render in full, the container scrolls sideways, and deep indentation gets its space the same way.
 - Descriptions are at most 200px wide and truncate beyond that, so a long description does not stretch the row.
 - Chromium browsers use the same scrollbar styling on every platform. Overflow reserves 12px of space for an 8px rounded thumb, with native macOS light and dark colors. Hovering the scrollbar reveals its track and border; hovering the thumb darkens it in light mode and lightens it in dark mode.

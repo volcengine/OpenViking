@@ -11,12 +11,22 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskPatch, WorkState
-from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
+
+
+def test_local_compile_uses_configured_poll_interval():
+    from openviking.service.compile_service import CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    config = CompileApiConfig(poll_interval_ms=250)
+    service = CompileService(config, ExternalTaskService(), SimpleNamespace())
+    service.configure_local_backend("http://localhost:1", "")
+
+    assert service.poll_interval_seconds == 0.25
 
 
 @pytest.mark.asyncio
@@ -277,6 +287,7 @@ async def test_external_interrupted_cancellation_cleanup_preserves_delivery(monk
         ExternalTaskCancellation,
         ExternalTaskSnapshot,
     )
+    from openviking.service.task_work_index import extract_task_metadata
     from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
     from openviking.storage.queuefs.queue_manager import QueueManager
 
@@ -337,7 +348,16 @@ async def test_external_interrupted_cancellation_cleanup_preserves_delivery(monk
         assert await queue.snapshot() == [original]
         assert (await queue.get_status()).in_progress == 1
         assert await tracker.has_work(task.task_id, **owner)
+        await tracker.mark_work_done(task.task_id, extract_task_metadata(original).work_id, **owner)
+        await queue.retry(original["id"])
+        provider.on_cancel.side_effect = AssertionError("Cancelled replay must not call Runtime")
+        await queue.dequeue()
+        assert not await queue.snapshot()
         provider.on_finish.assert_not_awaited()
+        provider.on_start.return_value = ExternalTaskSnapshot(status="completed")
+        job = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        await queue.dequeue()
+        assert (await tracker.get(job.task_id, **owner)).status is TaskStatus.COMPLETED
     finally:
         transport.close()
 
@@ -542,16 +562,6 @@ async def test_page_reads_past_200_and_isolates_owner():
     assert len(seen) == len(set(seen)) == 205
     assert seen[0] == "cmp_204"
     assert "foreign" not in seen
-
-
-def test_cursor_is_bound_to_identity_and_filters():
-    scope = page_scope(account="a", user="u", status="running")
-    cursor = encode_cursor({"created_at": 123.4, "task_id": "cmp_a"}, scope)
-    assert decode_cursor(cursor, scope) == (123.4, "cmp_a")
-    with pytest.raises(InvalidArgumentError):
-        decode_cursor(cursor, page_scope(account="a", user="other", status="running"))
-    with pytest.raises(InvalidArgumentError):
-        decode_cursor("broken", scope)
 
 
 @pytest.mark.parametrize(

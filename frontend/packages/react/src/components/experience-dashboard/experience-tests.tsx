@@ -1,4 +1,4 @@
-import { ArrowUpRightIcon, FileLinkIcon } from '../../icons/index.js';
+import { ArrowUpRightIcon } from '../../icons/index.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { ExperienceCopyAction } from './experience-copy-action.js';
 import type {
@@ -72,39 +72,40 @@ export function ExperienceTests({
                   String(startIndex + index + 1),
                 )}
               </strong>
-              <div className="ov-experience-dashboard__test-meta">
-                <span className="ov-experience-dashboard__test-meta-label">
-                  {t.sourceUri}
-                </span>
-                <FileLinkIcon aria-hidden="true" width={12} height={12} />
-                <code title={item.uri}>{item.uri ?? '—'}</code>
-                <span className="ov-experience-dashboard__path-actions">
-                  <ExperienceCopyAction value={item.uri} labels={t} />
-                  <Tooltip content={t.open} placement="top">
-                    <button
-                      type="button"
-                      className="ov-experience-dashboard__icon-button"
-                      aria-label={t.open}
-                      disabled={!item.uri || !onOpenUri}
-                      onClick={() => item.uri && onOpenUri?.(item.uri)}
-                    >
-                      <ArrowUpRightIcon width={12} height={12} />
-                    </button>
-                  </Tooltip>
-                </span>
-              </div>
-              {item.taskQuery ? (
-                <div className="ov-experience-dashboard__test-meta ov-experience-dashboard__test-meta--task">
+              <div className="ov-experience-dashboard__test-meta-rows">
+                <div className="ov-experience-dashboard__test-meta">
                   <span className="ov-experience-dashboard__test-meta-label">
-                    {t.task}
+                    {t.sourceUri}
                   </span>
-                  <Tooltip content={item.taskQuery} placement="top">
-                    <span className="ov-experience-dashboard__test-task">
-                      {item.taskQuery}
-                    </span>
-                  </Tooltip>
+                  <code title={item.uri}>{item.uri ?? '—'}</code>
+                  <span className="ov-experience-dashboard__path-actions">
+                    <ExperienceCopyAction value={item.uri} labels={t} />
+                    <Tooltip content={t.open} placement="top">
+                      <button
+                        type="button"
+                        className="ov-experience-dashboard__icon-button"
+                        aria-label={t.open}
+                        disabled={!item.uri || !onOpenUri}
+                        onClick={() => item.uri && onOpenUri?.(item.uri)}
+                      >
+                        <ArrowUpRightIcon width={12} height={12} />
+                      </button>
+                    </Tooltip>
+                  </span>
                 </div>
-              ) : null}
+                {item.taskQuery ? (
+                  <div className="ov-experience-dashboard__test-meta ov-experience-dashboard__test-meta--task">
+                    <span className="ov-experience-dashboard__test-meta-label">
+                      {t.task}
+                    </span>
+                    <Tooltip content={item.taskQuery} placement="top">
+                      <span className="ov-experience-dashboard__test-task">
+                        {item.taskQuery}
+                      </span>
+                    </Tooltip>
+                  </div>
+                ) : null}
+              </div>
             </div>
             <ExperienceCopyAction value={item.content} labels={t} labelled />
           </header>
