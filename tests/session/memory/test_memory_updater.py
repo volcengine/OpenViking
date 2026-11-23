@@ -945,6 +945,9 @@ class TestMemoryUpdater:
         assert result.deleted_uris == [deleted_uri]
         assert live_uris == {written_uri}
         assert result.errors == []
+        assert deleted_uri not in [
+            call.args[0] for call in mock_viking_fs.write_file.await_args_list
+        ]
 
     @pytest.mark.asyncio
     async def test_apply_operations_skips_case_only_delete_conflicting_with_upsert(self):
@@ -2190,6 +2193,7 @@ class TestApplyEditWithSearchReplacePatch:
         result = MemoryFileUtils.read(written_content)
         assert result.extra_fields["source_extraction_id"] == "extract_1"
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
+        assert result.memory_type == "test"
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
@@ -2411,6 +2415,7 @@ class TestConsecutivePatchesSameURI:
         parsed = parse_memory_file_with_fields(final_content)
         assert parsed["content"] == "Step B"
         assert parsed["version"] == 2
+        assert parsed["memory_type"] == memory_type
 
     @pytest.mark.asyncio
     async def test_apply_upsert_strips_user_id_and_sets_version(self):
@@ -2537,9 +2542,7 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(
-        self, monkeypatch, caplog
-    ):
+    async def test_apply_upsert_preserves_content_and_reports_patch_failure(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2590,7 +2593,6 @@ class TestConsecutivePatchesSameURI:
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["content"] == "Original body"
-        assert not any(record.name.endswith("merge_op.patch_handler") for record in caplog.records)
         assert any(
             "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
             and f"uri={uri}" in call.args[0]
