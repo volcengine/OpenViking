@@ -4,6 +4,7 @@
 
 import re
 from abc import ABC, abstractmethod
+from contextlib import aclosing, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
@@ -432,6 +433,11 @@ def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
         pass
 
 
+def closing_vlm_stream(stream):
+    """Settle closable streams and keep support for plain async iterators."""
+    return aclosing(stream) if callable(getattr(stream, "aclose", None)) else nullcontext(stream)
+
+
 class FailoverVLM(VLMBase):
     """VLM wrapper that provides failover to a backup VLM instance.
 
@@ -574,9 +580,10 @@ class FailoverVLM(VLMBase):
         if self._switcher.should_try_primary():
             emitted = False
             try:
-                async for item in stream_factory(self.primary):
-                    emitted = True
-                    yield item
+                async with closing_vlm_stream(stream_factory(self.primary)) as stream:
+                    async for item in stream:
+                        emitted = True
+                        yield item
                 self._switcher.record_primary_success()
                 return
             except Exception as exc:
@@ -588,9 +595,9 @@ class FailoverVLM(VLMBase):
         emitted = False
         try:
             self._switcher.record_backup_request()
-            async for item in stream_factory(self.backup):
-                emitted = True
-                yield item
+            async with closing_vlm_stream(stream_factory(self.backup)) as stream:
+                async for item in stream:
+                    yield item
             return
         except Exception as exc:
             _annotate_vlm_error(exc, self.backup)
@@ -985,9 +992,10 @@ class MultiCredentialVLM(VLMBase):
             emitted = False
 
             try:
-                async for item in stream_factory(vlm_instance):
-                    emitted = True
-                    yield item
+                async with closing_vlm_stream(stream_factory(vlm_instance)) as stream:
+                    async for item in stream:
+                        emitted = True
+                        yield item
                 self._switcher.commit_success(idx)
                 return
             except Exception as exc:

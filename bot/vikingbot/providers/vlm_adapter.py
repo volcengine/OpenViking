@@ -17,7 +17,7 @@ from loguru import logger
 
 from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
-from openviking.models.vlm.base import ToolResultMediaMode
+from openviking.models.vlm.base import ToolResultMediaMode, closing_vlm_stream
 from openviking.utils.message_format import tool_images_as_user_messages
 from openviking.utils.model_retry import effective_max_retries, retry_async
 from openviking.utils.multimodal import redact_image_data_urls
@@ -354,7 +354,7 @@ class VLMProviderAdapter(LLMProvider):
         try:
             stream_with_failover = getattr(self._vlm, "stream_with_failover", None)
             if callable(stream_with_failover):
-                async for event in stream_with_failover(
+                stream = stream_with_failover(
                     lambda vlm: self._chat_stream_with_retry(
                         vlm,
                         messages=messages,
@@ -363,19 +363,19 @@ class VLMProviderAdapter(LLMProvider):
                         max_tokens=max_tokens,
                         temperature=temperature,
                     )
-                ):
+                )
+            else:
+                stream = self._chat_stream_with_retry(
+                    self._vlm,
+                    messages=messages,
+                    tools=tools,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            async with closing_vlm_stream(stream) as events:
+                async for event in events:
                     yield event
-                return
-
-            async for event in self._chat_stream_with_retry(
-                self._vlm,
-                messages=messages,
-                tools=tools,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            ):
-                yield event
         except Exception as exc:
             self._log_request_exception("chat_stream", exc, model=model or self._default_model)
             yield LLMStreamEvent(
