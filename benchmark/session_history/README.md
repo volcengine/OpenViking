@@ -229,10 +229,12 @@ uv run --no-sync python -m benchmark.session_history.selftest
 ```
 
 It runs the real gateway app in process against `fakes.py`: a fake OpenViking that stores what
-the gateway writes and answers `session_history` and `grep` (its grep returns whole JSON lines
-and, unlike the real one, cannot see outputs over 20,000 chars, so the test can tell the two
-tools apart), and a fake upstream with two scripted models, a
-`looker` that always searches when a lookup tool is offered and a `guesser` that never does. It
+the gateway writes and answers `session_history` and `grep` (its `session_history` prints the
+matching lines as `[id @offset]`, oldest first, and reads an item from an offset, as the real
+tool does; its grep returns whole JSON lines and, unlike the real one, cannot see outputs over
+20,000 chars, so the test can tell the two tools apart), and a fake upstream with two scripted
+models, a `looker` that always searches when a lookup tool is offered (and reads on from the
+first matching line when the lines alone lack the value) and a `guesser` that never does. It
 checks the scoring on hand-made answers, that each arm offers exactly its tools, that every
 checkpoint and gap request compacted, and that scores differ as they must (looker with history >
 looker with grep > closed book; looker > guesser; stale, injection and gap outcomes counted; the

@@ -52,7 +52,7 @@ HISTORY_TOOL = mcp_tool(
     "session_history",
     {
         "action": {"type": "string", "enum": ["search", "read", "overview"]},
-        **dict.fromkeys(("session", "query", "role", "tool", "from_id", "to_id", "id"), TEXT),
+        **dict.fromkeys(("session", "query", "role", "from_id", "to_id", "id"), TEXT),
         **dict.fromkeys(("before", "after", "offset", "limit"), {"type": "integer"}),
     },
     ("action",),

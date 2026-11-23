@@ -115,9 +115,9 @@ SAVED = (
     "thinking, images or the gateway's own openviking_* calls. When you need an exact detail {} "
     "(code, an error message, a command's output, a value, the user's wording), look it up "
     'instead of guessing or asking again: openviking_session_history(action="search", '
-    'query="<exact words, a path or an error>") lists matching messages with ids; '
-    'openviking_session_history(action="read", id="<id>") reads around one; action="overview" '
-    "shows what is saved."
+    'query="<exact words, a path or an error>") prints the matching lines, oldest first, each '
+    'with its id and offset; openviking_session_history(action="read", id="<id>", '
+    'offset=<offset>) reads that item from there; action="overview" shows what is saved.'
 )
 # Where each hint goes: the session-start note, a compaction summary, a new window's header.
 LOOKUP = {
@@ -127,9 +127,10 @@ LOOKUP = {
     + SAVED.format("the summary lacks"),
     "window": "Earlier windows of this conversation are saved in OpenViking with complete tool "
     "outputs. When you need an exact detail your notes lack, look it up instead of guessing: "
-    'openviking_session_history(action="search", query="<exact words>") lists matching '
-    'messages with ids, and action="read", id="<id>" reads around one. When a later window '
-    "will need an original message, put its id in your notes.",
+    'openviking_session_history(action="search", query="<exact words>") prints the matching '
+    'lines with their id and offset, and action="read", id="<id>", offset=<offset> reads that '
+    "item from there. When a later window will need an original message, put its id in your "
+    "notes.",
 }
 
 

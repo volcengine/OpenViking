@@ -82,7 +82,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 对话本身仍保存在 OpenViking 里。开启了**保存对话**时，摘要末尾会附上查找方法，具体内容取决于这段对话提供的工具：
 
-- **有 `openviking_session_history` 时**（OpenViking 服务的 MCP 工具中包含 `session_history`）：说明保存了什么（用户和助手的消息、工具调用及其完整输出，不含思考内容、图片和网关自己执行的 OpenViking 工具调用），以及如何按原文检索、再按 id 读取匹配位置前后的内容。
+- **有 `openviking_session_history` 时**（OpenViking 服务的 MCP 工具中包含 `session_history`）：说明保存了什么（用户和助手的消息、工具调用及其完整输出，不含思考内容、图片和网关自己执行的 OpenViking 工具调用），以及如何按原文检索（结果直接列出匹配的行及其 id 和偏移量），再从这个偏移量开始读取该条内容。
 - **否则，有 `openviking_grep` 和 `openviking_read` 时**：这段对话对应的 OpenViking 会话（`viking://user/<user_id>/sessions/<session_id>/`）和会话中消息的存放位置，以及检索步骤：先用具体的关键词 grep 会话，拿到行号，再读取匹配位置前后的内容。
 
 截断点落在一轮中间时，截断点之前的部分会立即保存到 OpenViking，模型在这一轮里就能检索到；这次写入失败时，由这一轮结束时的保存一并写入。

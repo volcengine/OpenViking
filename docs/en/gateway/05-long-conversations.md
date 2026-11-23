@@ -82,7 +82,7 @@ Every later request that resends this history, including housekeeping and token-
 
 The conversation itself is still saved in OpenViking. When **Save conversations** is on, the summary ends with directions that depend on the conversation's tools:
 
-- **With `openviking_session_history`** (OpenViking servers whose MCP tools include `session_history`): what is saved (user and assistant messages and tool calls with their complete outputs, but not thinking, images or the gateway's own OpenViking tool calls), and how to search it for exact words and read around a match by its id.
+- **With `openviking_session_history`** (OpenViking servers whose MCP tools include `session_history`): what is saved (user and assistant messages and tool calls with their complete outputs, but not thinking, images or the gateway's own OpenViking tool calls), and how to search it for exact words, which prints the matching lines with their id and offset, and read an item from such an offset.
 - **Otherwise, with `openviking_grep` and `openviking_read`**: the conversation's OpenViking session (`viking://user/<user_id>/sessions/<session_id>/`) and where its messages are stored, and how to search them: grep the session for a specific pattern to get line numbers, then read the lines around a match.
 
 When a cut falls in the middle of a turn, the part before it is saved to OpenViking right away, so the model can search it within the same turn.
