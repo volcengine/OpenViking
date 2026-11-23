@@ -22,6 +22,7 @@ def _configure_test_env(monkeypatch, tmp_path):
                     "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
+                "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
                 "embedding": {
                     "dense": {
                         "provider": "openai",

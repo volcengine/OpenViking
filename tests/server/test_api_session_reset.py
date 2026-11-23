@@ -25,6 +25,7 @@ def isolated_config(tmp_path, monkeypatch):
                     "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
+                "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
                 "embedding": {
                     "dense": {
                         "provider": "openai",

@@ -1818,7 +1818,7 @@ async def test_create_account(
             "backend": "vikingdb",
             "name": "account_context",
             "index_name": "default",
-            "dimension": 1024,
+            "dimension": admin_service._config.embedding.dimension,
             "vikingdb": {"host": "https://account.invalid"},
         },
     }
@@ -2476,7 +2476,7 @@ async def test_delete_account(
         for record_id in ids:
             rows.pop(record_id, None)
 
-    adapter._collection = SimpleNamespace(delete_data=delete_data)
+    adapter._collection = SimpleNamespace(delete_data=delete_data, close=Mock())
     scan_rows = rows if index_updates_immediately else indexed_rows
     adapter.query = lambda *, filter, limit, offset=0, **kwargs: list(
         islice(
@@ -2739,8 +2739,8 @@ async def test_register_user(admin_client: httpx.AsyncClient, caller):
         "user_id": "bob",
         "role": "user",
     }
-    resp = await admin_client.get("/api/v1/fs/ls?uri=viking://", headers=user_headers)
-    assert resp.status_code == 200
+    root_listing = await admin_client.get("/api/v1/fs/ls?uri=viking://", headers=user_headers)
+    assert root_listing.status_code == 200, root_listing.text
 
     for user_id, registration in (("alice", created), ("bob", resp)):
         listing = await admin_client.get(
