@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session import working_memory as wm
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 from openviking_cli.exceptions import NotFoundError
@@ -749,7 +750,10 @@ class TestGetSessionContext:
 class TestGetSessionArchive:
     """Test get_session_archive"""
 
-    @pytest.mark.parametrize("summary_format", ["structured", "compact", "wrapped", "custom"])
+    @pytest.mark.parametrize(
+        "summary_format",
+        ["structured", "compact", "wrapped", "custom", "jinja", "example", "italic-example"],
+    )
     async def test_get_session_archive_returns_messages_and_working_memory(
         self, client: partial, monkeypatch, tmp_path, summary_format
     ):
@@ -762,17 +766,25 @@ class TestGetSessionArchive:
             template = "# Working Memory\n\n**Status**: {state}"
         elif summary_format == "wrapped":
             template = template.replace("{state}", "**Status**:\n{state}")
-        elif summary_format == "custom":
+        elif summary_format in {"custom", "jinja", "example", "italic-example"}:
             relative_path = "compression/ov_wm_v2.yaml"
             bundled = prompt_manager.PromptManager._get_bundled_templates_dir() / relative_path
             override = tmp_path / relative_path
             override.parent.mkdir()
             description = "_Record the latest sign-off outcome here._"
+            template_line = description
+            if summary_format == "jinja":
+                template_line = "_Record the latest sign-off outcome in {{ output_language }}._"
+                description = "_Record the latest sign-off outcome in en._"
+            elif summary_format == "example":
+                template_line = description = "Sign-off complete."
+            elif summary_format == "italic-example":
+                template_line = description = "_Sign-off complete._"
             source = bundled.read_text(encoding="utf-8")
             before, state_section = source.split("  ## Current State\n", 1)
             _, remaining = state_section.split("\n", 1)
             override.write_text(
-                f"{before}  ## Current State\n  {description}\n{remaining}", encoding="utf-8"
+                f"{before}  ## Current State\n  {template_line}\n{remaining}", encoding="utf-8"
             )
             monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(tmp_path))
             monkeypatch.setattr(prompt_manager, "_default_manager", None)
@@ -780,10 +792,13 @@ class TestGetSessionArchive:
                 "compression.ov_wm_v2", {"messages": "", "output_language": "en"}
             )
             assert description in prompt
-            template = prompt[prompt.index("# Working Memory\n") :].split("\n## Task & Goals")[0]
-            template = template.rstrip() + "\n{state}"
+            if summary_format in {"custom", "jinja"}:
+                example = prompt[prompt.index("# Working Memory\n") :]
+                template = example.split("\n## Task & Goals", 1)[0].rstrip() + "\n{state}"
 
         states = ("Sign-off pending.", "Sign-off complete.")
+        if summary_format == "italic-example":
+            states = tuple(f"_{state}_" for state in states)
         overviews = iter(template.format(state=state) for state in states)
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
@@ -818,6 +833,22 @@ class TestGetSessionArchive:
             historical = await session.get_session_archive(archive_id)
             assert historical["abstract"] == expected
 
+        if summary_format in {"custom", "jinja"}:
+            override.write_text(
+                f"{before}  ## Current State\n  _Describe the acceptance result._\n{remaining}",
+                encoding="utf-8",
+            )
+            # Simulate a new process with template B reading the L1 written with template A.
+            monkeypatch.setattr(prompt_manager, "_default_manager", None)
+            vfs = session._viking_fs
+            first_abstract = f"{session.uri}/history/archive_001/.abstract.md"
+            await vfs.rm(first_abstract, ctx=session.ctx)
+            for index, expected in enumerate(states, 1):
+                historical = await session.get_session_archive(f"archive_{index:03d}")
+                assert historical["abstract"] == expected
+                assert historical["overview"] == template.format(state=expected)
+            assert not await vfs.exists(first_abstract, ctx=session.ctx)
+
     @pytest_asyncio.fixture
     async def historical_archive(self, client: partial):
         session = client(session_id="historical_session_archive_test")
@@ -829,6 +860,49 @@ class TestGetSessionArchive:
             f"{archive_uri}/.done", '{"enable_working_memory": true}', ctx=session.ctx
         )
         return session, archive_uri
+
+    async def test_unreadable_bundled_prompt_allows_historical_read_and_next_commit(
+        self, historical_archive, monkeypatch, tmp_path
+    ):
+        session, archive_uri = historical_archive
+        manager = prompt_manager.PromptManager
+        relative_path = "compression/ov_wm_v2.yaml"
+        bundled_dir = manager._get_bundled_templates_dir()
+        override = tmp_path / "overrides" / relative_path
+        override.parent.mkdir(parents=True)
+        override.write_bytes((bundled_dir / relative_path).read_bytes())
+        load_template = manager.load_template
+
+        def load_with_missing_bundled_prompt(self, prompt_id):
+            if prompt_id == "compression.ov_wm_v2" and self.templates_dir == bundled_dir:
+                raise FileNotFoundError(bundled_dir / relative_path)
+            return load_template(self, prompt_id)
+
+        monkeypatch.setattr(manager, "load_template", load_with_missing_bundled_prompt)
+        monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(override.parent.parent))
+        monkeypatch.setattr(prompt_manager, "_default_manager", None)
+        wm._bundled_wm_template_descriptions.cache_clear()
+
+        overview = "# Working Memory\n\n## Current State\n_Pending sign-off._"
+        vfs = session._viking_fs
+        await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
+
+        archive = await session.get_session_archive("archive_001")
+        assert archive["status"] == "completed"
+        assert archive["abstract"] == "_Pending sign-off._"
+
+        async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
+            assert latest_archive_overview == overview
+            return "# Working Memory\n\n## Current State\nSign-off complete."
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
+        session.add_message("user", [TextPart("The review passed.")])
+        session.add_message("assistant", [TextPart("I recorded the result.")])
+        result = await session.commit_async()
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
+        archive = await session.get_session_archive("archive_002")
+        assert archive["abstract"] == "Sign-off complete."
 
     @pytest.mark.parametrize(
         ("stored_body", "legacy", "expected"),

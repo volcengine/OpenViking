@@ -27,7 +27,7 @@ from yaml import YAMLError
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.observability.log_safety import short_hash
-from openviking.prompts.manager import PromptManager, get_manager
+from openviking.prompts.manager import PromptManager
 from openviking.session.retention import UserTurn, build_turns
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -363,33 +363,47 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
 
 _WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
 _WM_BOLD_LABEL_RE = re.compile(r"^\*\*[^*]+\*\*:\s*")
-
-
-def _wm_template_descriptions(template: str) -> dict[str, str]:
-    # The first line under each canonical heading in the output example is its description.
-    _, _, example = f"\n{template}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
-    return {
-        header: body.split("\n", 1)[0]
-        for header, body in parse_wm_sections(example).items()
-        if body and header.removeprefix("## ") in WM_SEVEN_SECTIONS
-    }
+_WM_ITALIC_LINE_RE = re.compile(
+    r"_(?![_\s])(?:[^_]|(?<=\w)_(?=\w))+(?<![_\s])_|\*(?!\s)[^*]+(?<!\s)\*"
+)
 
 
 @cache
 def _bundled_wm_template_descriptions() -> dict[str, str]:
     manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
-    return _wm_template_descriptions(manager.load_template(WM_CREATE_PROMPT_ID).template)
+    template = manager.load_template(WM_CREATE_PROMPT_ID).template
+    _, _, example = f"\n{template}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
+    return {
+        header: body.split("\n", 1)[0]
+        for header, body in parse_wm_sections(example).items()
+        if _WM_ITALIC_LINE_RE.fullmatch(body.split("\n", 1)[0])
+    }
 
 
-def _first_wm_abstract_line(body: str, descriptions: set[str]) -> str:
+def _first_wm_abstract_line(body: str) -> str:
     for raw_line in body.splitlines():
-        line = raw_line.strip()
-        if line in descriptions:
-            continue
-        line = _WM_BOLD_LABEL_RE.sub("", line)
+        line = _WM_BOLD_LABEL_RE.sub("", raw_line.strip())
         if line and not _WM_HEADING_OR_RULE_RE.fullmatch(line):
             return line
     return ""
+
+
+def _wm_section_abstract(header: str, body: str) -> str:
+    first_line, _, rest = body.partition("\n")
+    first_line = first_line.strip()
+    if header.removeprefix("## ") in WM_SEVEN_SECTIONS and _WM_ITALIC_LINE_RE.fullmatch(first_line):
+        # The WM format places its italic description above the section body.
+        # Look at the archived lines so the rule also works after prompt changes.
+        if abstract := _first_wm_abstract_line(rest):
+            return abstract
+        # A lone italic line can be real content, such as an emphasized title.
+        # Recognize known bundled placeholders when their template is readable.
+        try:
+            if first_line == _bundled_wm_template_descriptions().get(header):
+                return ""
+        except (OSError, ValueError, YAMLError):
+            return first_line
+    return _first_wm_abstract_line(body)
 
 
 def extract_wm_abstract(text: str) -> Optional[str]:
@@ -400,23 +414,16 @@ def extract_wm_abstract(text: str) -> Optional[str]:
 
     body = "\n".join(lines[1:])
     sections = parse_wm_sections(body)
-    if not sections:
-        return _first_wm_abstract_line(body, set())
-
-    bundled = _bundled_wm_template_descriptions()
-    try:
-        active = _wm_template_descriptions(
-            get_manager().load_template(WM_CREATE_PROMPT_ID).template
-        )
-    except (OSError, ValueError, YAMLError):
-        # Archive reads can still use the bundled descriptions if an override is broken.
-        active = {}
-
     for header in ("## Current State", "## Session Title"):
-        descriptions = {bundled.get(header, ""), active.get(header, "")}
-        if abstract := _first_wm_abstract_line(sections.get(header, ""), descriptions):
+        if abstract := _wm_section_abstract(header, sections.pop(header, "")):
             return abstract
-    return _first_wm_abstract_line(body, set(bundled.values()) | set(active.values()))
+    preamble = re.split(r"(?m)^[^\S\n]*## [^\S\n]*\S", body, maxsplit=1)[0]
+    if abstract := _first_wm_abstract_line(preamble):
+        return abstract
+    for header, content in sections.items():
+        if abstract := _wm_section_abstract(header, content):
+            return abstract
+    return ""
 
 
 _WM_SECTION_BULLET_THRESHOLD = 25
