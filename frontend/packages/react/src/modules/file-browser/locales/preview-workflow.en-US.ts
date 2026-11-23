@@ -12,6 +12,8 @@ export default {
   latest: 'Latest',
   rollback: 'Restore this version',
   rollbackBadge: 'Restored',
+  deletedBadge: 'Deleted',
+  deletedVersion: 'The file was deleted in this version.',
   rollbackTitle: 'Restore this document to this version?',
   rollbackConfirm: 'Confirm restore',
   rollbackHint:
@@ -48,6 +50,7 @@ export default {
   addedLines: 'Added content',
   removedLines: 'Removed content',
   copyPath: 'Copy file path',
+  pathCopied: 'Node path copied',
   copyOriginal: 'Copy source',
   copied: 'Copied',
   historyView: 'Historical version content view',
@@ -80,6 +83,7 @@ export default {
   noSchedule: 'Do not update',
   daily: 'Daily',
   weekly: 'Weekly',
+  weeklySchedule: (weekday: string) => `Every ${weekday}`,
   time: 'Run time (Beijing time)',
   weekday: 'Day of week',
 } satisfies FileBrowserWorkflowLabels;

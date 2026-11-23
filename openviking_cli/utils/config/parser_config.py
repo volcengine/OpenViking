@@ -269,9 +269,9 @@ class CodeConfig(CodeHostingConfig):
         data = dict(data)
         if "code_summary_mode" in data:
             data.pop("code_summary_mode", None)
-            logger.warning(
-                "code.code_summary_mode is deprecated and ignored; "
-                "code summaries now always use the fixed skeleton route with LLM fallback"
+            logger.info(
+                "code.code_summary_mode is deprecated and ignored; code summaries now always use the fixed skeleton route with LLM fallback",
+                extra={"degraded": True},
             )
 
         return super().from_dict(data)

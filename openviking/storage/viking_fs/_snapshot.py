@@ -7,6 +7,7 @@ import sys
 from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -480,10 +481,10 @@ class _SnapshotMixin:
                     project_dir=project_dir,
                     real_ctx=real_ctx,
                 )
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore partial: reindex scheduling failed; "
-                    "HEAD advanced but reindex was not queued"
+            except Exception as _log_error:
+                logger.error(
+                    "git restore partial: reindex scheduling failed; HEAD advanced but reindex was not queued error_type=%s",
+                    type(_log_error).__name__,
                 )
             raise partial_exc
 
@@ -503,10 +504,10 @@ class _SnapshotMixin:
                 )
                 if task_id is not None:
                     result["task_id"] = task_id
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore reindex task creation failed; "
-                    "falling back to fire-and-forget rebuild"
+            except Exception as _log_error:
+                logger.info(
+                    "git restore reindex task creation failed; falling back to fire-and-forget rebuild error_type=%s",
+                    type(_log_error).__name__,
                 )
                 self._schedule_vector_rebuild(
                     written=written,
@@ -608,6 +609,7 @@ class _SnapshotMixin:
         Returns ``oid`` (blob ID), ``size``, ``bytes``, ``commit_oid``, and
         ``commit_time_seconds`` (committer Unix seconds, not file modification time).
         Access is checked before resolving the ref; missing commits or paths propagate.
+        A missing tree path carries whether it was a file in the first parent.
         """
         real_ctx = self._ctx_or_default(ctx)
         await self._ensure_access(path, real_ctx)
@@ -618,12 +620,19 @@ class _SnapshotMixin:
         )
         # Pin moving refs so the content and timestamp always describe the same commit.
         commit_oid = commit["oid"]
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=commit_oid,
-            path=tree_path,
-        )
+        try:
+            resp = await self._async_agfs.run(
+                "git_show",
+                account=account,
+                target_ref=commit_oid,
+                path=tree_path,
+            )
+        except AGFSPathNotFoundError as exc:
+            first_parent = next(iter(commit["parents"]), None)
+            exc.deleted_file = first_parent is not None and await self._async_agfs.run(
+                "git_path_is_file", account=account, commit_oid=first_parent, path=tree_path
+            )
+            raise
         if not isinstance(resp, dict) or "bytes" not in resp:
             raise TypeError(
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
@@ -871,14 +880,20 @@ class _SnapshotMixin:
         """
         try:
             from openviking.service.reindex_executor import ReindexExecutor
-        except Exception:
-            logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
+        except Exception as _log_error:
+            logger.info(
+                "ReindexExecutor import failed; skipping rebuild error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("[VikingFS] git restore vector rebuild skipped: no running event loop")
+        except RuntimeError as _log_error:
+            logger.info(
+                "git restore vector rebuild skipped: no running event loop error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         tasks = self._collect_restore_vector_tasks(written, deleted)
@@ -1001,6 +1016,15 @@ class _SnapshotMixin:
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
-                logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
-        except Exception:
-            logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)
+                logger.info(
+                    "unknown vector rebuild op %s for %s",
+                    short_hash(str(op)),
+                    safe_uri_for_log(str(uri)),
+                )
+        except Exception as _log_error:
+            logger.error(
+                "git restore vector task %s failed for %s error_type=%s",
+                short_hash(str(op)),
+                safe_uri_for_log(str(uri)),
+                type(_log_error).__name__,
+            )

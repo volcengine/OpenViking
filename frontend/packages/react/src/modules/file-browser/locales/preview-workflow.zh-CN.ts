@@ -12,6 +12,8 @@ export default {
   latest: '最新',
   rollback: '回滚至此版本',
   rollbackBadge: '回滚',
+  deletedBadge: '已删除',
+  deletedVersion: '此版本的文件已被删除，暂无正文',
   rollbackTitle: '回滚此文档至此版本？',
   rollbackConfirm: '确定回滚',
   rollbackHint:
@@ -43,6 +45,7 @@ export default {
   addedLines: '新增内容',
   removedLines: '删除内容',
   copyPath: '复制文件路径',
+  pathCopied: '节点路径已复制',
   copyOriginal: '复制原文',
   copied: '已复制',
   historyView: '历史版本正文视图',
@@ -75,6 +78,7 @@ export default {
   noSchedule: '不更新',
   daily: '每日',
   weekly: '每周',
+  weeklySchedule: (weekday: string) => `每${weekday.replace(/^星期/, '周')}`,
   time: '更新时间',
   weekday: '更新日期',
 } satisfies FileBrowserWorkflowLabels;

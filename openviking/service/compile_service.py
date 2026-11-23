@@ -18,6 +18,7 @@ from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import short_hash
 from openviking.pyagfs.exceptions import AGFSInternalError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
@@ -395,16 +396,28 @@ class CompileAPIClient:
         detail = body.get("detail") if isinstance(body, dict) else None
         error = body.get("error") if isinstance(body, dict) else None
         source = detail if isinstance(detail, dict) else error if isinstance(error, dict) else {}
-        if response.status_code == 424:
+        status = response.status_code
+        runtime_not_found = status == 404 and path in {
+            "/runtime/v1/tasks",
+            "/runtime/v1/tasks/status",
+            "/runtime/v1/tasks/cancel",
+        }
+        if status == 424 or runtime_not_found:
             request_id = (
                 body.get("request_id") if isinstance(body, dict) else None
             ) or headers.get("X-Tt-Logid")
             detail_message = source.get("message") or (detail if isinstance(detail, str) else None)
-            reason = f"HTTP 424 {path}: {detail_message or 'Compile dependency failed'}"
+            default_message = (
+                "Compile Runtime resource not found"
+                if runtime_not_found
+                else "Compile dependency failed"
+            )
+            reason = f"HTTP {status} {path}: {detail_message or default_message}"
             if request_id and str(request_id) not in reason:
                 reason += f" (request_id={request_id})"
+            default_code = "NOT_FOUND" if runtime_not_found else "CompileDependencyFailed"
             raise CompileDependencyFailure(
-                str(source.get("code") or "CompileDependencyFailed"), reason, transient=False
+                str(source.get("code") or default_code), reason, http_status=status
             )
         default_code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
         code = str(source.get("code") or default_code)
@@ -681,11 +694,12 @@ class CompileService:
             except (AGFSInternalError, ValueError) as exc:
                 if task is None or task.error == ENQUEUE_FAILURE or not _lost_state_lease(exc):
                     raise
-                logger.warning(
-                    "Queued Compile task %s lost the state.json lease for %s",
+                logger.info(
+                    "queued compile task state lease lost; retaining accepted task task_id=%s name_hash=%s error_type=%s",
                     task.task_id,
-                    compile_name,
-                    exc_info=True,
+                    short_hash(str(compile_name)),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
                 )
             return task
         if compile_name:
@@ -762,9 +776,13 @@ class CompileService:
         task: TaskRecord,
         snapshot: ExternalTaskSnapshot,
     ) -> ExternalTaskSnapshot:
-        """Return the finalized snapshot; Runtime archival errors only produce a warning."""
+        """Finalize local output and skip archival after a Runtime session 404."""
         session_id = task.auth.get("external_task_id")
-        if session_id and snapshot.status in _TERMINAL_STATUSES:
+        if (
+            session_id
+            and snapshot.status in _TERMINAL_STATUSES
+            and task.meta.get("compile_runtime_http_status") != 404
+        ):
             try:
                 await self._client().archive(
                     session_id,
@@ -777,7 +795,12 @@ class CompileService:
                     ),
                 )
             except ExternalTaskError as exc:
-                logger.warning("Failed to archive Compile session %s: %s", session_id, exc.code)
+                logger.info(
+                    "compile session archive failed session_hash=%s error_code=%s",
+                    short_hash(str(session_id)),
+                    exc.code,
+                    extra={"degraded": True},
+                )
         if self._lifecycle is None:
             return snapshot
         return await self._lifecycle.on_finish(task, snapshot)
@@ -1218,6 +1241,11 @@ class CompileService:
         if parts[:1] == ["user"] and parts[2:4] == ["memories", "experiences"]:
             raise InvalidArgumentError(
                 "Compile target must not be inside the user memories/experiences subtree"
+            )
+        if {"viking://resources", "viking://user"}.intersection(request.from_):
+            raise InvalidArgumentError(
+                "Compile --from rejects viking://resources and viking://user. Use a "
+                "subdirectory such as viking://resources/test or viking://user/default/resources."
             )
         for uri in request.from_:
             try:

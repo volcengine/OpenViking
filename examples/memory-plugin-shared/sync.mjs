@@ -67,7 +67,7 @@ export const TARGETS = [
   },
 ];
 
-// cursor, trae, trae-cn and zcode vendor nothing: the installer copies the
+// cursor, trae, trae-cn and zcode vendor no runtime: the installer copies the
 // canonical runtime to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
 // and they import it by the relative path that resolves both there and here.
 export const ASSEMBLED_ROOTS = [
@@ -249,6 +249,31 @@ export const SKILL_TARGETS = [
   ].map((path) => ({
     skill: "openviking-rule-search",
     dir: join(ROOT, ...path),
+    committed: true,
+  })),
+  // TRAE and ZCode read these from the user's skills directory, Kimi Code and
+  // Antigravity from the plugin itself.
+  ...["trae", "zcode", "kimicode", "antigravity"].flatMap((host) => [
+    "openviking-memory",
+    "openviking-skills",
+    "ov-experience-memory",
+    "openviking-rule-search",
+  ].map((skill) => ({
+    skill,
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
+    committed: true,
+  }))),
+  // Claude Code and Codex each document a doctor of their own under this name;
+  // every other harness shares this one.
+  ...[
+    ...["cursor", "trae", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"]
+      .map((host) => ["agent-hook-plugin", "hosts", host, "skills"]),
+    ["opencode-plugin", "skills"],
+    ["pi-coding-agent-extension", "skills"],
+    ["dsh-memory-plugin", "skills"],
+  ].map((path) => ({
+    skill: "ov-memory-doctor",
+    dir: join(ROOT, "examples", ...path),
     committed: true,
   })),
 ];

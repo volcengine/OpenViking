@@ -17,7 +17,7 @@ Besides its name and the [Let clients override settings](#client-overrides) swit
 | Section | What it does | Main settings and defaults |
 | --- | --- | --- |
 | Recall memory | Searches OpenViking with each new user message and appends what is relevant to that message. | Sources: memories, resources, skills · Budget per message: 1,600 tokens · Budget per context window: 30,000 tokens · Relevance threshold: 0.35 · Time limit: 2 s |
-| Save conversations | Writes finished turns to an OpenViking session and commits it, so OpenViking can extract memories. | Save the latest reply after: 600 s · Commit after: 20,000 tokens · Keep recent messages: 10 |
+| Save conversations | Writes each finished turn to an OpenViking session and commits it, so OpenViking can extract memories. | Commit when idle for: 600 s · Commit after: 20,000 tokens · Keep recent messages: 10 |
 | Long conversations | When a conversation nears the context window, has the same model write a summary that replaces the earlier messages. | Compaction: on · Compact at: 0.9 of the window · Summary length: 8,000 tokens · Agent-managed context windows: off |
 | OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · every tool selected; see [OpenViking tools](04-openviking-tools.md) |
 
@@ -45,7 +45,8 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | Setting | Default | What it controls |
 | --- | --- | --- |
 | **User profile at conversation start** | On | Gives the model your OpenViking user profile when a conversation starts. |
-| **Opening context budget** | 4,000 tokens | The most the profile and the memory and skill catalogs may use at the start. |
+| **Soul at conversation start** | On | Gives the model your `soul.md`, the standing instructions you keep in OpenViking, when a conversation starts, and tells the model to follow it. The soul is added whole. |
+| **Opening context budget** | 4,000 tokens | The most the profile and the memory and skill catalogs may use at the start. The soul is not counted. |
 | **Show recall summary** | Off | Starts the reply with a one-line summary; see [Recall summary](#recall-summary). |
 | **Sources** | Memories, resources, skills | What recall searches. |
 | **Budget per message** | 1,600 tokens | The most memory added to one message. |
@@ -58,7 +59,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 
 How the settings work together:
 
-- **Opening context.** **User profile at conversation start** works independently of recall. When the OpenViking `read` tool (`openviking_read`) is offered, memory and skill catalogs are added at the start as well. Skills get at most a quarter of the **Opening context budget**, and 0 leaves all of it out. This budget does not count against the recall budget; see [The opening context](01-how-it-works.md#the-opening-context).
+- **Opening context.** **User profile at conversation start** and **Soul at conversation start** work independently of recall and of each other. When the OpenViking `read` tool (`openviking_read`) is offered, memory and skill catalogs are added at the start as well. Skills get at most a quarter of the **Opening context budget**, and 0 leaves the profile and catalogs out. The soul is added whole and is not counted against the budget; only its own switch leaves it out. This budget does not count against the recall budget; see [The opening context](01-how-it-works.md#the-opening-context).
 - **What is added.** OpenViking selects and formats the recalled content within the budget. It may also return just a URI for the model to read later.
 - **Search query.** The query is the user message with client noise removed, cut to **Query length** characters. Messages shorter than 3 characters are not searched.
 - **Budgets.** Each message gets at most the smaller of **Budget per message** and what is left of **Budget per context window**. With less than 64 tokens left, the search is skipped. The budget per context window starts over whenever the conversation is compacted, by the gateway or by the client. These token counts are conservative estimates, not the provider's billing counts.
@@ -72,11 +73,11 @@ How the settings work together:
 The recall summary is a short note at the start of the reply that names what OpenViking added to a new user message, or says why recall failed. It is off by default; turn on **Show recall summary** in the **Recall memory** section of the [context profile](#context-profiles). The model never sees it. For example:
 
 ```text
-> OpenViking context: user profile, memory index, skill list, earlier sessions
+> OpenViking context: soul, user profile, memory index, skill list, earlier sessions
 > OpenViking recall: 4 items (3 memories, 1 resource) — booking_duplicate_handling, user_lang_pref, +2 more
 ```
 
-- The `context` line appears only in the first reply of a conversation. It lists what the opening actually contained: the user profile, the memory catalog, the skill catalog, and where earlier parts of the conversation are stored in OpenViking.
+- The `context` line appears only in the first reply of a conversation. It lists what the opening actually contained: the soul, the user profile, the memory catalog, the skill catalog, and where earlier parts of the conversation are stored in OpenViking.
 - The `recall` line counts the recalled entries by kind and names up to three. If the search fails, it gives the reason instead, for example `> OpenViking recall failed: OpenViking unavailable`. It is left out when nothing was found, recall is off or the budget is used up, so after the first reply such messages get no summary.
 - Tool steps and other follow-up requests show no summary. When the client retries the same message, the summary is the same as the first time.
 - In Anthropic Messages the summary is its own text block, in Responses its own assistant message, and in Chat Completions the start of the reply text. Requests that ask for structured output, and Chat Completions requests with `n` above 1, get no summary.
@@ -84,18 +85,27 @@ The recall summary is a short note at the start of the reply that names what Ope
 
 ## Save conversations {#save-conversations}
 
-The **Save conversations** section (on by default) controls [saving](../guides/15-gateway.md#key-terms): the gateway writes finished turns to an OpenViking session and commits it, so OpenViking can extract memories. How the gateway decides that a turn is finished is explained in [When conversations are saved](01-how-it-works.md#when-conversations-are-saved).
+The **Save conversations** section (on by default) controls [saving](../guides/15-gateway.md#key-terms): the gateway writes each finished turn to an OpenViking session as soon as its reply ends, and commits the session, so OpenViking archives the saved messages and extracts memories from them. When a turn counts as finished is explained in [When conversations are saved](01-how-it-works.md#when-conversations-are-saved).
 
 | Setting | Default | What it controls |
 | --- | --- | --- |
-| **Save the latest reply after** | 600 s | How long the latest turn waits for a follow-up before the gateway saves it and commits the session. |
-| **Commit after** | 20,000 tokens | How many tokens may wait in the session before it is committed. |
-| **Keep recent messages** | 10 | How many messages stay in the session after a commit. |
+| **Commit when idle for** | 600 s | How long after the conversation's last finished turn everything left in the session is committed. |
+| **Commit after** | 20,000 tokens | How many uncommitted tokens at the end of a turn make the session be committed at once. |
+| **Keep recent messages** | 10 | How many of the latest messages a **Commit after** commit leaves in the session. |
 
-- A turn is saved when the next user message arrives. **Save the latest reply after** covers the last turn, so short conversations get committed too.
-- The session is committed whenever **Commit after** tokens are waiting. After each commit, OpenViking extracts memories in the background.
-- After a commit, the session keeps the newest whole turns, at least **Keep recent messages** messages.
-- OpenViking Server 0.5.0+ inherits the user's memory policy by default, including its [memory type](../api/16-memory.md) limits. To set a session policy with specific types, set `capture_memory_types` to their names, for example `["preferences","events"]`, with the management API or the `X-OpenViking-Context` header; an empty list saves conversations without extracting memories. Studio has no control for this setting and keeps its value when you save the profile. A name OpenViking does not know stops saving; see [Configuration reference](13-configuration.md#profile-saving).
+- By default the gateway makes both commits, which works with any OpenViking server. It creates the OpenViking session with OpenViking's own automatic commits off, checks **Commit after** when each turn ends, and times **Commit when idle for** for each conversation; each newer finished turn starts the wait again, and a save in the middle of a turn or a failed save leaves the waiting commit as it is. After each commit, OpenViking extracts memories in the background.
+- The idle commit archives everything left in the session and keeps no recent messages; **Keep recent messages** applies only to **Commit after** commits and counts single messages.
+- A failed idle commit stays due and is tried again every minute until it succeeds, except while OpenViking is marked unavailable. One that OpenViking refuses, because it rejects the key or no longer has the session (HTTP 401, 403 or 404), is dropped instead, and the conversation's next finished turn starts a new wait. A failed **Commit after** commit is not retried by itself; the idle commit or the next turn's threshold check covers it. Commit failures appear only in the gateway log (`could not commit`) and do not change the request record.
+- The idle commit's due time and the ID of the stored key record it uses are recorded with the conversation's saving state in the gateway storage, without any conversation text, so a restart, a crash or a replaced pod does not lose a waiting commit: every gateway process looks once a minute for idle commits that have been due for a minute and makes them, so such a commit comes a minute or two after its due time. An idle commit always takes the OpenViking key from the stored key record at the time it is made: when that record is gone by then (the key was revoked or expired), the commit is dropped, and the conversation's next finished turn starts a new wait. At shutdown the gateway neither makes nor waits for idle commits.
+- When the session already exists (for example, created by an earlier gateway version or under the other commit mode), the gateway sets its automatic commit policy (`auto_commit_policy`) to the current mode's settings on the conversation's first save, and again on the first save after `openviking_auto_commit` changes.
+- On OpenViking Server 0.5.0+, the session follows the user's own memory policy by default, including its [memory type](../api/16-memory.md) limits, and the gateway's commits never write Working Memory; on older servers the gateway creates the session with Working Memory off. To set a session policy with specific types, set `capture_memory_types` to their names, for example `["preferences","events"]`, with the management API or the `X-OpenViking-Context` header; an empty list saves conversations without extracting memories. Studio has no control for this setting and keeps its value when you save the profile. A name OpenViking does not know makes every save of the conversation fail; see [Configuration reference](13-configuration.md#profile-saving).
+
+**Leaving commits to OpenViking.** With `openviking_auto_commit: true` in the [gateway configuration](13-configuration.md#gateway-fields), the gateway neither commits nor keeps timers: it writes the three settings into the session's `auto_commit_policy`, and OpenViking's session auto-commit makes the commits. It is meant for OpenViking servers that have session auto-commit enabled. The one exception comes right after the setting is switched on: idle commits that were already waiting are still made by the gateway, because OpenViking does not commit those sessions until their conversations save another turn. The settings mean the same, with these differences from the default mode:
+
+- **Commit after** works on every server. When a save crosses it while an earlier commit of the session is still extracting memories, OpenViking skips that commit; the next save or the idle commit makes it.
+- The idle commit runs only when the OpenViking server has `memory.session_auto_commit.enabled: true` (`memory.session_auto_commit.idle_enabled` on 0.4.x servers), which is off by default in the open-source server; see [Session Auto Commit Configuration](../guides/01-configuration.md#session-auto-commit-configuration). Without it, a conversation that stays below **Commit after** is saved as messages but never archived, so no memories are extracted from it.
+- OpenViking requires **Commit when idle for** to be at least 300 s; smaller values count as 300 s. With the server's default `local` idle backend (`idle_backend: local`), OpenViking looks for quiet sessions every `check_interval_seconds` (600 by default), so the idle commit can come up to one interval later; the `redis` backend commits on time.
+- On OpenViking Server 0.5.0+, Working Memory follows the user's own memory policy, which leaves it off unless the user turns it on; in the default mode the gateway's commits never write Working Memory.
 
 ## Long conversations and OpenViking tools {#long-conversations-and-tools}
 

@@ -12,6 +12,11 @@ from weakref import WeakKeyDictionary
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
+from openviking.observability.reporting.token_sources import (
+    bind_dashboard_token_source_type,
+    get_dashboard_token_source_type,
+)
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
@@ -261,6 +266,9 @@ class SemanticTreeExecutor:
         self._generation_trigger = generation_trigger
         self._overview_template = overview_template
         self._abstract_template = abstract_template
+        self._dashboard_source_type = get_dashboard_token_source_type(
+            generation_trigger=generation_trigger
+        )
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
@@ -411,7 +419,10 @@ class SemanticTreeExecutor:
                 previous_incremental = self._incremental_update
                 self._incremental_update = False
                 try:
-                    with bind_ingestion_source_type(self._source_type):
+                    with (
+                        bind_ingestion_source_type(self._source_type),
+                        bind_dashboard_token_source_type(self._dashboard_source_type),
+                    ):
                         await self._file_summary_task(root_uri, root_uri)
                 finally:
                     self._incremental_update = previous_incremental
@@ -479,14 +490,13 @@ class SemanticTreeExecutor:
                     status = "skipped"
                 elif self._stale:
                     status = "stale"
-            logger.info(
-                "[ParentAggregation] %s uri=%s trigger=%s files=%d dirs=%d "
-                "abstract=%d overview=%d generated=%d failed_files=%d total_ms=%.3f status=%s",
+            (logger.info if aggregation.failed_files else logger.debug)(
+                "Parent aggregation completed %s target=%s trigger=%s files=%d directories=%d abstract=%d overview=%d generated=%d failed=%d duration_ms=%.3f status=%s",
                 log_correlation(
                     task_id=self._task_context.task_id if self._task_context else "",
                     telemetry_id=self._telemetry_id or "",
                 ),
-                dir_uri,
+                safe_uri_for_log(dir_uri),
                 self._generation_trigger,
                 aggregation.files,
                 aggregation.dirs,
@@ -565,11 +575,13 @@ class SemanticTreeExecutor:
             self._active_executors.discard(self)
 
     @classmethod
-    def get_active_stats(cls) -> SemanticTreeStats:
+    def get_active_stats(cls, account_id: str | None = None) -> SemanticTreeStats:
         stats = SemanticTreeStats()
         with cls._active_lock:
             executors = list(cls._active_executors)
         for executor in executors:
+            if account_id is not None and executor._ctx.account_id != account_id:
+                continue
             current = executor.get_stats()
             stats.total_nodes += current.total_nodes
             stats.pending_nodes += current.pending_nodes
@@ -610,6 +622,7 @@ class SemanticTreeExecutor:
         with (
             bind_telemetry(self._telemetry),
             bind_ingestion_source_type(self._source_type),
+            bind_dashboard_token_source_type(self._dashboard_source_type),
             task_context,
         ):
             await self._run_work_bound(work)
@@ -645,7 +658,7 @@ class SemanticTreeExecutor:
             return
 
         self._mark_node_done()
-        logger.warning("Unknown semantic DAG work kind: %s", work.kind)
+        logger.info("Unknown semantic DAG work kind: %s", type(work.kind).__name__)
 
     async def _dispatch_dir(self, dir_uri: str, parent_uri: Optional[str]) -> bool:
         """Lazy-dispatch tasks for a directory when it is triggered."""
@@ -698,11 +711,15 @@ class SemanticTreeExecutor:
                             else None
                         ),
                     )
-                except LockAcquisitionError:
+                except LockAcquisitionError as _log_error:
                     if self._generation_trigger != "content_write":
                         raise
                     self._aggregate_directory = False
-                    logger.info("Skipping busy parent semantic refresh: %s", dir_uri)
+                    logger.info(
+                        "Skipping busy parent semantic refresh: %s error_type=%s",
+                        safe_uri_for_log(str(dir_uri)),
+                        type(_log_error).__name__,
+                    )
             file_index = {path: idx for idx, path in enumerate(file_paths)}
             child_index = {path: idx for idx, path in enumerate(children_dirs)}
             if self._semantic_plan is not None:
@@ -854,7 +871,11 @@ class SemanticTreeExecutor:
         except Exception as e:
             if aggregation is not None:
                 aggregation.status = "failed"
-            logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
+            logger.debug(
+                "Failed to dispatch directory %s: %s",
+                safe_uri_for_log(str(dir_uri)),
+                type(e).__name__,
+            )
             self._record_skill_failure(dir_uri, e)
             raise
 
@@ -956,8 +977,11 @@ class SemanticTreeExecutor:
         try:
             entries = await self._viking_fs.ls(uri, node_limit=LS_ALL_NODES, ctx=self._ctx)
         except Exception as e:
-            logger.warning(
-                f"[SemanticTreeExecutor] Failed to list directory {uri}: {e} from {from_hint}"
+            logger.debug(
+                "Failed to list directory %s: %s from %s",
+                safe_uri_for_log(str(uri)),
+                type(e).__name__,
+                short_hash(str(from_hint)),
             )
             raise
 
@@ -1007,15 +1031,17 @@ class SemanticTreeExecutor:
 
     def _get_target_file_path(self, current_uri: str) -> Optional[str]:
         if not self._incremental_update or not self._target_uri or not self._root_uri:
-            logger.warning(
-                "Invalid target_uri or root_uri for incremental update: "
-                f"target_uri={self._target_uri}, root_uri={self._root_uri}"
+            logger.debug(
+                "Invalid target_uri or root_uri for incremental update: target_uri=%s, root_uri=%s",
+                safe_uri_for_log(str(self._target_uri)),
+                safe_uri_for_log(str(self._root_uri)),
             )
             return None
         if self._target_uri != self._root_uri:
-            logger.warning(
-                "Incremental semantic update expects target_uri == root_uri: "
-                f"target_uri={self._target_uri}, root_uri={self._root_uri}"
+            logger.debug(
+                "Incremental semantic update expects target_uri == root_uri: target_uri=%s, root_uri=%s",
+                safe_uri_for_log(str(self._target_uri)),
+                safe_uri_for_log(str(self._root_uri)),
             )
             return None
         return current_uri
@@ -1234,7 +1260,11 @@ class SemanticTreeExecutor:
             raise
         except Exception as e:
             self._record_summary_failure(parent_uri, file_path)
-            logger.warning(f"Failed to generate summary for {file_path}: {e}")
+            logger.info(
+                "Failed to generate summary for %s: %s",
+                safe_path_for_log(str(file_path)),
+                type(e).__name__,
+            )
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
             semantic_succeeded = False
@@ -1297,11 +1327,10 @@ class SemanticTreeExecutor:
                     self._scheduled_vector_record_ids.add(slot.record_id)
                     self._stats.indexed_records += 1
             except Exception as e:
-                logger.error(
+                logger.debug(
                     "Failed to schedule vectorization for %s: %s",
-                    file_path,
-                    e,
-                    exc_info=True,
+                    safe_path_for_log(str(file_path)),
+                    type(e).__name__,
                 )
                 if self._context_type != "skill":
                     raise
@@ -1641,7 +1670,11 @@ class SemanticTreeExecutor:
                 and self._task_context.task_type == "content_write"
             ):
                 raise
-            logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+            logger.debug(
+                "Failed to generate overview for %s: %s",
+                safe_uri_for_log(str(dir_uri)),
+                type(e).__name__,
+            )
             if aggregation := self._parent_aggregation_stats.get(dir_uri):
                 aggregation.status = "failed"
             self._record_skill_failure(dir_uri, e)
@@ -1726,11 +1759,10 @@ class SemanticTreeExecutor:
                     else:
                         enqueued_levels = set()
                 except Exception as e:
-                    logger.error(
+                    logger.debug(
                         "Failed to schedule vectorization for %s: %s",
-                        dir_uri,
-                        e,
-                        exc_info=True,
+                        safe_uri_for_log(str(dir_uri)),
+                        type(e).__name__,
                     )
                     if self._context_type != "skill":
                         raise

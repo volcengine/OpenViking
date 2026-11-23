@@ -3,7 +3,7 @@ import { useMediaMonitoring } from './use-media-monitoring.js';
 import { useRenderedMonitoring } from '../../shared/monitoring/context.js';
 import type { FileViewerState } from '@ark-design/ui/file-viewer/core';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   FilePreviewFileTab,
   FilePreviewFileTabSlots,
@@ -17,7 +17,7 @@ import {
 } from './file-preview-state.js';
 import { FilePreviewImageFrame } from './file-preview-image-frame.js';
 import { FilePreviewNativeImage } from './file-preview-native-image.js';
-import { FilePreviewVideoDetails } from './file-preview-video-details.js';
+import { FilePreviewVideoLayout } from './file-preview-video-layout.js';
 
 export { mediaKind } from './media-kind.js';
 
@@ -134,67 +134,71 @@ export function FilePreviewMedia({
     onStateChange?.('ready');
   };
   const details = kind === 'video' && url ? videoDetails : undefined;
+  const media = (toggle?: ReactNode) => (
+    <div
+      ref={exposure}
+      className={
+        details
+          ? 'ov-file-preview__media ov-file-preview__media--video-details'
+          : 'ov-file-preview__media'
+      }
+      aria-busy={!loaded}
+    >
+      {!loaded && (slots?.loadingFallback ?? <LoadingState text={text} />)}
+      {url &&
+        (kind === 'image' ? (
+          <FilePreviewNativeImage
+            attempt={attempt}
+            identity={identity}
+            reports={reports}
+            fileName={source.fileName}
+            url={url}
+            text={text}
+            onReady={ready}
+            onFail={fail}
+          />
+        ) : (
+          // eslint-disable-next-line jsx-a11y/media-has-caption -- Caller-owned raw videos have no caption track in the source contract.
+          <video
+            ref={video}
+            key={`${url}:${attempt}`}
+            src={url}
+            controls
+            controlsList={details ? 'nodownload nofullscreen' : 'nodownload'}
+            preload="metadata"
+            aria-label={source.fileName}
+            onLoadedMetadata={ready}
+            onTimeUpdate={
+              details
+                ? (event) =>
+                    setPlayhead({
+                      owner,
+                      ms: event.currentTarget.currentTime * 1000,
+                    })
+                : undefined
+            }
+            onError={() => fail()}
+          />
+        ))}
+      {toggle}
+    </div>
+  );
   return (
     <FilePreviewImageFrame>
-      <div
-        ref={exposure}
-        className={
-          details
-            ? 'ov-file-preview__media ov-file-preview__media--video-details'
-            : 'ov-file-preview__media'
-        }
-        aria-busy={!loaded}
-      >
-        {!loaded
-          ? (slots?.loadingFallback ?? <LoadingState text={text} />)
-          : null}
-        {url ? (
-          kind === 'image' ? (
-            <FilePreviewNativeImage
-              attempt={attempt}
-              identity={identity}
-              reports={reports}
-              fileName={source.fileName}
-              url={url}
-              text={text}
-              onReady={ready}
-              onFail={fail}
-            />
-          ) : (
-            // eslint-disable-next-line jsx-a11y/media-has-caption -- Caller-owned raw videos have no caption track in the source contract.
-            <video
-              ref={video}
-              key={`${url}:${attempt}`}
-              src={url}
-              controls
-              controlsList="nodownload"
-              preload="metadata"
-              aria-label={source.fileName}
-              onLoadedMetadata={ready}
-              onTimeUpdate={
-                details
-                  ? (event) =>
-                      setPlayhead({
-                        owner,
-                        ms: event.currentTarget.currentTime * 1000,
-                      })
-                  : undefined
-              }
-              onError={() => fail()}
-            />
-          )
-        ) : null}
-      </div>
-      {details && (
-        <FilePreviewVideoDetails
+      {kind === 'video' && url ? (
+        <FilePreviewVideoLayout
           key={url}
           details={details}
+          fileName={source.fileName}
           text={text}
+          ready={Boolean(loaded)}
           timeMs={playhead?.owner === owner ? playhead.ms : 0}
-          onSeek={(ms) => {
-            if (video.current && loaded) video.current.currentTime = ms / 1000;
-          }}
-        />
+          player={video}
+        >
+          {media}
+        </FilePreviewVideoLayout>
+      ) : (
+        media()
       )}
     </FilePreviewImageFrame>
   );

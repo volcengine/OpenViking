@@ -5,7 +5,7 @@ import {
   type Workflow,
 } from '../../shared/monitoring/workflow.js';
 import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 
@@ -30,7 +30,7 @@ export function useDashboardQuery<T>(
     | 'file_browser_experience_dashboard_load',
   empty?: (data: T) => boolean,
   opaque = false,
-): DashboardQuery<T> {
+): DashboardQuery<T> & { readPending: () => Promise<T> | undefined } {
   const client = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const { baseURL, apiKey, accountId, userId, resourceId, signal } =
@@ -78,6 +78,12 @@ export function useDashboardQuery<T>(
       refreshGeneration,
     ],
   );
+  const pending = useRef<{ owner: unknown[]; value: Promise<T> }>(undefined);
+  const readPending = useCallback(
+    () =>
+      pending.current?.owner === owner ? pending.current.value : undefined,
+    [owner],
+  );
   const current = owner.every((value, i) => value === state.owner[i]);
 
   // useEffect 必要性：按资源查询及身份配置同步远端数据，不能由点击覆盖受控 URI 导航。
@@ -112,7 +118,9 @@ export function useDashboardQuery<T>(
         })
       : undefined;
     if (opaque) operation?.span.gap('opaque-host-service');
-    void load(operation?.client(client) ?? client, options).then(
+    const value = load(operation?.client(client) ?? client, options);
+    pending.current = { owner, value };
+    void value.then(
       (data) => {
         if (!options.signal.aborted)
           setState({ owner, data, error: null, operation });
@@ -127,7 +135,10 @@ export function useDashboardQuery<T>(
         }
       },
     );
-    return () => controller.abort();
+    return () => {
+      pending.current = undefined;
+      controller.abort();
+    };
   }, [
     client,
     load,
@@ -151,6 +162,7 @@ export function useDashboardQuery<T>(
     () => ({ empty: empty?.(state.data!) ?? false }),
   );
   return {
+    readPending,
     data: current ? state.data : undefined,
     loading: enabled && !current,
     error: current ? state.error : null,

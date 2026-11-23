@@ -38,6 +38,7 @@ export function PreviewHistoryCore({
   locale,
   path,
   addedFile,
+  deletedFile,
 }: {
   content: string;
   changes?: DiffLine[];
@@ -45,6 +46,7 @@ export function PreviewHistoryCore({
   locale: Locale;
   path?: string;
   addedFile?: boolean;
+  deletedFile?: boolean;
 }) {
   const source = useMemo<FileViewerCoreProps['source']>(() => {
     const patch =
@@ -52,6 +54,7 @@ export function PreviewHistoryCore({
       toFileViewerDiff(
         changes.map((line) => ({
           isNewFile: addedFile,
+          isDeletedFile: deletedFile,
           kind: line.kind === 'same' ? 'context' : line.kind,
           content: line.text.replace(/\r?\n$/, ''),
           filePath: path ?? 'version.md',
@@ -67,7 +70,7 @@ export function PreviewHistoryCore({
       ),
       fileType: changes ? 'diff' : 'markdown',
     };
-  }, [content, changes, view, path, addedFile]);
+  }, [content, changes, view, path, addedFile, deletedFile]);
   return (
     <FileViewerCore
       className="ov-file-history__core"

@@ -9,11 +9,30 @@ import type { CommandConsoleRecordContent } from '../../components/command-conso
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS } from './command-specs.js';
 import { parseArguments, tokenize } from './command-parser.js';
-import { ConsoleCommandError } from './command-messages.js';
+import {
+  ConsoleCommandError,
+  formatConsoleMessage,
+  type ConsoleResultNotice,
+} from './command-messages.js';
+import {
+  isRemoteResourceSource,
+  RESOURCE_COMMAND_SPEC,
+} from './resource-command-spec.js';
 import { consoleCommands, createCommandHelp } from './command-catalog.js';
+import { formatListResult } from './list-results.js';
 import { formatResult } from './results.js';
 import { browserCommandFiles, type CommandExecution } from './command-files.js';
 import type { ConsoleCommandOptions } from './types.js';
+
+const commandSpecsBySpecificity = [...COMMAND_SPECS].sort(
+  (a, b) => b.name.length - a.name.length,
+);
+
+export function resolveCommandSpec(tokens: ReturnType<typeof tokenize>) {
+  return commandSpecsBySpecificity.find((spec) =>
+    spec.name.split(' ').every((part, index) => tokens[index]?.value === part),
+  );
+}
 
 export async function executeCommand(
   input: string,
@@ -22,15 +41,13 @@ export async function executeCommand(
   locale: Locale,
   onTasks?: (tasks: readonly TaskReference[]) => void,
   commandOptions?: ConsoleCommandOptions,
-): Promise<CommandConsoleRecordContent> {
+): Promise<{
+  content: CommandConsoleRecordContent;
+  telemetry?: Record<string, unknown>;
+  resultNotice?: ConsoleResultNotice;
+}> {
   const tokens = tokenize(input);
-  const spec = [...COMMAND_SPECS]
-    .sort((a, b) => b.name.length - a.name.length)
-    .find((item) =>
-      item.name
-        .split(' ')
-        .every((part, index) => tokens[index]?.value === part),
-    );
+  const spec = resolveCommandSpec(tokens);
   if (!spec) throw new ConsoleCommandError('unknownCommand');
   if (spec.admin && !commandOptions?.allowAdminCommands)
     throw new ConsoleCommandError('unavailableCommand', spec.name);
@@ -50,7 +67,28 @@ export async function executeCommand(
     throw error;
   }
   if (!spec.request && !spec.execute)
-    return createCommandHelp(locale, commandOptions);
+    return { content: createCommandHelp(locale, commandOptions) };
+  if (
+    spec === RESOURCE_COMMAND_SPEC &&
+    commandOptions?.onOpenLocalResourceImport
+  ) {
+    const { path, temp_file_id, ...flags } = values;
+    if (!temp_file_id && !isRemoteResourceSource(path, flags.add_type)) {
+      if (Object.keys(flags).length)
+        throw new ConsoleCommandError('localResourceImportFlags');
+      options.signal?.throwIfAborted();
+      commandOptions.onOpenLocalResourceImport();
+      return {
+        content: {
+          variant: 'text',
+          text: formatConsoleMessage(
+            { code: 'localResourceImportOpened' },
+            locale,
+          ),
+        },
+      };
+    }
+  }
   const execution: CommandExecution = {
     signal: options.signal,
     files: commandOptions?.files ?? browserCommandFiles,
@@ -61,9 +99,26 @@ export async function executeCommand(
       return client.request<T>({ ...spec, options });
     },
   };
-  const data = spec.execute
-    ? await spec.execute(values, execution.request, execution)
-    : await execution.request(spec.request!(values));
+  let data: unknown;
+  let telemetry: Record<string, unknown> | undefined;
+  if (spec.execute) {
+    data = await spec.execute(values, execution.request, execution);
+  } else {
+    const request = spec.request!(values);
+    if (spec.name.startsWith('session ') && values.telemetry) {
+      options.signal?.throwIfAborted();
+      ({ result: data, telemetry } = await client.requestEnvelope({
+        ...request,
+        options,
+      }));
+    } else {
+      data = await execution.request(request);
+    }
+  }
   onTasks?.(readTaskReferences(spec.name, data));
-  return formatResult(spec.name, data, values);
+  const listResult = formatListResult(spec.name, data);
+  return {
+    ...(listResult ?? { content: formatResult(spec.name, data, values) }),
+    telemetry,
+  };
 }

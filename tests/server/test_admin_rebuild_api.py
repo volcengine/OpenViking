@@ -465,7 +465,7 @@ async def test_reindex_memory_cancellation_waits_for_inflight_reads(monkeypatch)
     executor._read_memory_body = read
     executor._reindex_memory_directory_chain = AsyncMock(return_value={})
     executor._upsert_context = AsyncMock()
-    monkeypatch.setattr(executor, "_effective_file_vectorization_concurrency", lambda: 2)
+    monkeypatch.setattr("openviking.service.reindex_executor.FILE_TASK_CONCURRENCY", 2)
     ctx = RequestContext(user=UserIdentifier("test", "bob"), role=Role.USER)
     operation = asyncio.create_task(
         executor._reindex_memory_vectors(
@@ -623,7 +623,7 @@ async def test_reindex_memory_vectors_preserves_live_sources_and_cleans_orphans(
         lambda: SimpleNamespace(vikingdb_manager=db),
     )
     executor = ReindexExecutor()
-    monkeypatch.setattr(executor, "_effective_file_vectorization_concurrency", lambda: 2)
+    monkeypatch.setattr("openviking.service.reindex_executor.FILE_TASK_CONCURRENCY", 2)
     counters = _ReindexCounters()
     ctx = RequestContext(user=UserIdentifier("test", "admin"), role=Role.ADMIN)
 

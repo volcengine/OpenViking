@@ -1,6 +1,10 @@
 import PencilIcon from '../../../../icons/svg/file-preview/edit.svg?react';
 import DeleteIcon from '../../../../icons/svg/file-preview/delete.svg?react';
-import { DropdownItem } from '../../shared/primitives/dropdown/index.js';
+import MoreIcon from '../../../../icons/svg/file-preview/more.svg?react';
+import {
+  Dropdown,
+  DropdownItem,
+} from '../../shared/primitives/dropdown/index.js';
 import { SelectOption } from '../../shared/primitives/select/index.js';
 import type { Locale } from '../../shared/locale.js';
 import type { VikingBotSession, VikingBotSessions } from './capabilities.js';
@@ -50,6 +54,7 @@ export function renderSessionHistoryRows({
   return (
     <ul role="none">
       {sessions.items.map((session) => {
+        const canRename = sessions.onRename && session.canRename !== false;
         const date = new Date(session.updatedAt ?? '');
         const current = sessions.currentId === session.id || undefined;
         const content = (
@@ -71,25 +76,37 @@ export function renderSessionHistoryRows({
                 >
                   {content}
                 </DropdownItem>
-                {sessions.onRename && session.canRename !== false ? (
-                  <DropdownItem
-                    className="ov-viking-bot__history-action"
-                    aria-label={`${labels.renameSession} “${session.title}”`}
-                    title={labels.renameSession}
-                    onClick={() => onAction({ kind: 'rename', session })}
+                {canRename || sessions.onRemove ? (
+                  <Dropdown
+                    className="ov-viking-bot__history-action-menu"
+                    trigger={
+                      <DropdownItem
+                        closeOnClick={false}
+                        className="ov-viking-bot__history-action"
+                        aria-label={`${labels.sessionActions} · ${session.title}`}
+                      >
+                        <MoreIcon aria-hidden="true" />
+                      </DropdownItem>
+                    }
                   >
-                    <PencilIcon width={14} height={14} aria-hidden="true" />
-                  </DropdownItem>
-                ) : null}
-                {sessions.onRemove ? (
-                  <DropdownItem
-                    className="ov-viking-bot__history-action"
-                    aria-label={`${labels.removeSession} “${session.title}”`}
-                    title={labels.removeSession}
-                    onClick={() => onAction({ kind: 'remove', session })}
-                  >
-                    <DeleteIcon width={14} height={14} aria-hidden="true" />
-                  </DropdownItem>
+                    {canRename ? (
+                      <DropdownItem
+                        onClick={() => onAction({ kind: 'rename', session })}
+                      >
+                        <PencilIcon width={14} height={14} aria-hidden="true" />
+                        {labels.renameSessionAction}
+                      </DropdownItem>
+                    ) : null}
+                    {sessions.onRemove ? (
+                      <DropdownItem
+                        className="ov-viking-bot__history-delete"
+                        onClick={() => onAction({ kind: 'remove', session })}
+                      >
+                        <DeleteIcon width={14} height={14} aria-hidden="true" />
+                        {labels.removeSessionAction}
+                      </DropdownItem>
+                    ) : null}
+                  </Dropdown>
                 ) : null}
               </>
             ) : (

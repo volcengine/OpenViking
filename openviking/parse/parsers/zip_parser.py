@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
-from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
@@ -78,8 +78,10 @@ class ZipParser(BaseParser):
                 try:
                     with zipfile.ZipFile(path, "r") as zipf:
                         safe_extract_zip(zipf, temp_dir)
-                except zipfile.BadZipFile as exc:
-                    raise InvalidArgumentError(f"Not a valid ZIP file: {path.name}") from exc
+                except (zipfile.BadZipFile, ValueError) as exc:
+                    raise InvalidArgumentError(
+                        f"Not a valid ZIP file: {path.name}. Error: {exc}"
+                    ) from exc
 
             await asyncio.to_thread(_extract_zip)
 

@@ -25,7 +25,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Chat clients / SDK and API apps / other clients without a plugin** | [OpenViking Gateway](../guides/15-gateway.md) — point any client that takes a base URL and an API key at the gateway; it recalls memory and saves conversations with nothing to install in the client |
 | **ZCode / Kimi Code / Antigravity / AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
 
-Some agents, such as Claude Code, Codex, OpenCode, pi and DSH, can use either their plugin or OpenViking Gateway. To decide between them, see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin).
+Some agents, such as Claude Code, Codex, OpenCode, pi, DSH, OpenClaw and Hermes, can use either their plugin or OpenViking Gateway. To decide between them, see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin).
 
 ## Compare integrations side by side
 

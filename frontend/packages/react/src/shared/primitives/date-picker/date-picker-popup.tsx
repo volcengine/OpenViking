@@ -26,10 +26,13 @@ export interface DatePickerPopupProps {
   month: number;
   /** 已选日期；`null` 表示未选。Picked date, or `null`. */
   selected: Dayjs | null;
+  isDateDisabled: (date: Dayjs) => boolean;
   /** BCP 47 语言标签，决定月份与周标题的语言。BCP 47 tag for month and weekday headings. */
   locale: string;
   prevLabel: string;
   nextLabel: string;
+  prevYearLabel: string;
+  nextYearLabel: string;
   onShiftMonth: (delta: number) => void;
   onPick: (value: string) => void;
 }
@@ -38,9 +41,12 @@ export function DatePickerPopup({
   year,
   month,
   selected,
+  isDateDisabled,
   locale,
   prevLabel,
   nextLabel,
+  prevYearLabel,
+  nextYearLabel,
   onShiftMonth,
   onPick,
 }: DatePickerPopupProps) {
@@ -55,51 +61,27 @@ export function DatePickerPopup({
   return (
     <div className="ov-date-picker__popup" role="dialog">
       <div className="ov-date-picker__header">
-        <button
-          type="button"
-          className="ov-date-picker__nav"
-          aria-label={prevLabel}
-          onClick={() => onShiftMonth(-1)}
-        >
-          <svg
-            aria-hidden="true"
-            width={12}
-            height={12}
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <path
-              d="M10 3 5 8l5 5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        <DatePickerNavigation
+          delta={-12}
+          label={prevYearLabel}
+          onShiftMonth={onShiftMonth}
+        />
+        <DatePickerNavigation
+          delta={-1}
+          label={prevLabel}
+          onShiftMonth={onShiftMonth}
+        />
         <span className="ov-date-picker__title">{title}</span>
-        <button
-          type="button"
-          className="ov-date-picker__nav"
-          aria-label={nextLabel}
-          onClick={() => onShiftMonth(1)}
-        >
-          <svg
-            aria-hidden="true"
-            width={12}
-            height={12}
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <path
-              d="m6 3 5 5-5 5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        <DatePickerNavigation
+          delta={1}
+          label={nextLabel}
+          onShiftMonth={onShiftMonth}
+        />
+        <DatePickerNavigation
+          delta={12}
+          label={nextYearLabel}
+          onShiftMonth={onShiftMonth}
+        />
       </div>
       <div className="ov-date-picker__weekdays" aria-hidden="true">
         {weekdays.map((day) => (
@@ -122,6 +104,7 @@ export function DatePickerPopup({
                 .filter(Boolean)
                 .join(' ')}
               aria-pressed={active}
+              disabled={isDateDisabled(cell.date)}
               onClick={() => onPick(toApiDate(cell.date))}
             >
               {cell.date.date()}
@@ -130,6 +113,46 @@ export function DatePickerPopup({
         })}
       </div>
     </div>
+  );
+}
+
+function DatePickerNavigation({
+  delta,
+  label,
+  onShiftMonth,
+}: {
+  delta: number;
+  label: string;
+  onShiftMonth: (delta: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="ov-date-picker__nav"
+      aria-label={label}
+      onClick={() => onShiftMonth(delta)}
+    >
+      <svg
+        aria-hidden="true"
+        width={12}
+        height={12}
+        viewBox="0 0 16 16"
+        fill="none"
+        style={{ transform: delta > 0 ? 'rotate(180deg)' : undefined }}
+      >
+        <path
+          d={
+            Math.abs(delta) === 12
+              ? 'm8 3-5 5 5 5m5-10-5 5 5 5'
+              : 'M10 3 5 8l5 5'
+          }
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
   );
 }
 

@@ -12,11 +12,13 @@ export function ComposerFileButton({
   accept,
   disabled,
   label,
+  tip,
   onFiles,
 }: {
   accept?: string;
   disabled?: boolean;
   label: string;
+  tip?: string;
   onFiles: (files: readonly File[]) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
@@ -35,6 +37,7 @@ export function ComposerFileButton({
       />
       <VikingBotAttach
         label={label}
+        tip={tip}
         disabled={disabled}
         onClick={() => input.current?.click()}
       />

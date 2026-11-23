@@ -7,6 +7,7 @@ import type {
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import type { Argument } from './command-parser.js';
+import { resolveCommandUriArguments } from './command-uri-arguments.js';
 import { resolveConsoleLocale } from './labels.js';
 import type { ConsoleCommandGuide, ConsoleCommandOptions } from './types.js';
 import { parameterExamples } from './parameter-examples.js';
@@ -16,8 +17,8 @@ const COMMAND_GROUPS = {
   core: [
     'add-resource',
     'add-skill',
-    'compile',
     'compile create',
+    'compile',
     'find',
     'read',
     'write',
@@ -63,7 +64,7 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-skill',
   'add-memory',
   'find',
-  'compile',
+  'compile create',
 ] as const;
 
 export function consoleQuickCommands(
@@ -72,7 +73,7 @@ export function consoleQuickCommands(
   const guides = resolveConsoleLocale(locale).commandGuides;
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
-    value: name === 'compile' ? 'ov compile ' : guides[name].examples[0],
+    value: guides[name].examples[0],
   }));
 }
 
@@ -84,11 +85,15 @@ export function consoleCommands(
   const guides: Partial<Record<CommandSpec['name'], ConsoleCommandGuide>> =
     text.commandGuides;
   const descriptions: Record<string, string> = text.parameters;
-  const catalog = new Map(
+  const catalog = new Map<string, CommandConsoleCommandDefinition>(
     COMMAND_SPECS.filter(
       (spec) => !spec.admin || options?.allowAdminCommands,
     ).map((spec) => {
       const guide = guides[spec.name];
+      const description =
+        spec.name === 'add-resource' && options?.onOpenLocalResourceImport
+          ? text.localResourceImportHelp
+          : (guide?.description ?? text.commands[spec.name]);
       const positional = (
         spec.preferredPositional ??
         spec.positional ??
@@ -102,7 +107,7 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          description: guide?.description ?? text.commands[spec.name],
+          description,
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
           quickStart: guide?.quickStart,
@@ -137,10 +142,21 @@ export function consoleCommands(
               flag.name,
           })),
           skeleton: spec.skeleton,
+          resolveUriArguments: (input) =>
+            resolveCommandUriArguments(input, spec.positional, spec.flags),
         },
       ] as const;
     }),
   );
+  const create = catalog.get('compile create');
+  if (create) {
+    create.parameterDetails = {
+      usage: create.usage,
+      options: create.options,
+      extra: text.compileArgsHelp,
+    };
+  }
+
   return Object.entries(COMMAND_GROUPS).flatMap(([group, names]) =>
     names.flatMap((name) => {
       const command = catalog.get(name);
@@ -163,6 +179,7 @@ export function createCommandHelp(
   locale: Locale,
   options?: ConsoleCommandOptions,
 ): CommandConsoleRecordContent {
+  const text = resolveConsoleLocale(locale);
   const commands = consoleCommands(locale, options);
   return {
     variant: 'command-help',
@@ -175,8 +192,11 @@ export function createCommandHelp(
           .filter((command) => command.group === key)
           .map((item) => ({
             key: item.name,
-            name: item.usage,
-            description: item.description,
+            name: item.inputText ?? `ov ${item.name}`,
+            description:
+              item.name === 'add-resource' && options?.onOpenLocalResourceImport
+                ? text.localResourceImportSummary
+                : (item.summary ?? item.description),
           })),
       })),
   };

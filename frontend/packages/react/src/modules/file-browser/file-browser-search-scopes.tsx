@@ -3,8 +3,9 @@ import { useId } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { Radio } from '../../shared/primitives/radio/radio.js';
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 import { FileBrowserSearchScopePicker } from './file-browser-search-scope-picker.js';
-import { isSearchScopeAllowed } from './search-model.js';
+import { isSearchScopeAllowed, setSearchScope } from './search-model.js';
 import type { ScopeOption, SearchFilters } from './search-types.js';
 import type { FilterAvailability } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
@@ -53,9 +54,7 @@ export function FileBrowserSearchScopes({
     }
     onChange({
       ...filters,
-      scopes: selected
-        ? filters.scopes.filter((item) => item !== uri)
-        : [...filters.scopes, uri],
+      scopes: setSearchScope(filters.scopes, uri, !selected),
     });
   };
 
@@ -73,6 +72,7 @@ export function FileBrowserSearchScopes({
           <ul className="ov-file-browser-search__options">
             {scopes.map((option) => {
               const selected = filters.scopes.includes(option.uri);
+              const label = formatVikingUriLabel(option.uri);
               return (
                 <li key={option.uri}>
                   {availability.scope === 'single' ? (
@@ -82,7 +82,7 @@ export function FileBrowserSearchScopes({
                       onChange={() => toggle(option.uri)}
                     >
                       <span className="ov-file-browser-search__option-uri">
-                        {option.uri}
+                        {label}
                       </span>
                     </Radio>
                   ) : (
@@ -91,7 +91,7 @@ export function FileBrowserSearchScopes({
                       onChange={() => toggle(option.uri)}
                     >
                       <span className="ov-file-browser-search__option-uri">
-                        {option.uri}
+                        {label}
                       </span>
                     </Checkbox>
                   )}
@@ -102,9 +102,17 @@ export function FileBrowserSearchScopes({
           <FileBrowserSearchScopePicker
             scopes={scopes}
             value={filters.scopes}
+            multiple={availability.scope === 'multi'}
             text={text}
             requestOptions={requestOptions}
-            onSelect={toggle}
+            onChange={(next) =>
+              onChange({
+                ...filters,
+                scopes: next
+                  .filter((uri) => isSearchScopeAllowed(scopes, uri))
+                  .slice(0, availability.scope === 'single' ? 1 : undefined),
+              })
+            }
           />
         </>
       )}

@@ -53,7 +53,10 @@ export interface VikingBotSessions {
   error?: string;
   hasMore?: boolean;
   onOpenHistory?: () => void;
+  /** Load the next page with no arguments. Return pending work to deduplicate requests. */
   onLoadMore?: () => void;
+  /** Opt into cancellation for page requests. Takes precedence over onLoadMore. */
+  onLoadMoreWithSignal?: (signal: AbortSignal) => unknown;
   onSelect: (id: string) => void;
   onNew: () => void;
   /** Called after the user enters a title. Return false if the change fails. */

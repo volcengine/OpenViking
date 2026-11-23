@@ -24,6 +24,7 @@ export interface FilePreviewCodeEditorProps {
   draft: string;
   source: FilePreviewSource;
   annotations?: readonly FilePreviewEditorAnnotation[];
+  initialAnnotation?: string;
   readOnlySuffix?: string;
   saving: boolean;
   text: Required<FilePreviewLabels>;
@@ -48,7 +49,8 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   // React 渲染无法管理该控件的 DOM、监听器与历史记录。
   // 卸载时 destroy，释放监听器并销毁插件及其高亮定时器。
   useEffect(() => {
-    const { draft, annotations, readOnlySuffix } = latest.current;
+    const { draft, annotations, initialAnnotation, readOnlySuffix } =
+      latest.current;
     const marked = annotations?.length
       ? editorAnnotations(annotations)
       : undefined;
@@ -74,14 +76,22 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
         }),
       ],
     });
-    const first = marked?.firstLine(state);
+    const target =
+      initialAnnotation === undefined
+        ? undefined
+        : marked?.annotationPosition(state, initialAnnotation);
+    const reveal =
+      initialAnnotation === undefined ? marked?.firstLine(state) : target;
     const view = new EditorView({
       parent: container.current!,
-      state,
+      state:
+        target === undefined
+          ? state
+          : state.update({ selection: { anchor: target } }).state,
       scrollTo:
-        first === undefined
+        reveal === undefined
           ? undefined
-          : EditorView.scrollIntoView(first, { y: 'center' }),
+          : EditorView.scrollIntoView(reveal, { y: 'center' }),
     });
     editor.current = view;
     return () => {

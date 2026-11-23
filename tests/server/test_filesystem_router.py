@@ -25,13 +25,11 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_rm_preserves_memory_cleanup(monkeypatch):
-    cleanup = {"status": "success", "memory_uris": ["viking://user/alice/memories/entities/a.md"]}
-
+async def test_rm_omits_legacy_memory_cleanup(monkeypatch):
     async def fake_rm(uri, ctx=None, recursive=False, wait=False):
         return {
             "estimated_deleted_count": 1,
-            "memory_cleanup": cleanup,
+            "memory_cleanup": {"status": "success"},
         }
 
     monkeypatch.setattr(
@@ -46,9 +44,10 @@ async def test_rm_preserves_memory_cleanup(monkeypatch):
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
 
-    assert response.result["uri"] == "viking://resources/id_card.pdf"
-    assert response.result["estimated_deleted_count"] == 1
-    assert response.result["memory_cleanup"] == cleanup
+    assert response.result == {
+        "uri": "viking://resources/id_card.pdf",
+        "estimated_deleted_count": 1,
+    }
 
 
 @pytest.mark.asyncio

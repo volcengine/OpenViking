@@ -15,6 +15,7 @@ import yaml
 from jinja2 import Environment, TemplateSyntaxError
 
 from openviking.core.namespace_policy import SYSTEM_MEMORY_CUSTOM_ROOT
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.session.memory.dataclass import MemoryTypeSchema
@@ -351,7 +352,7 @@ async def _finish_storage_call(
             try:
                 result = await task
             except Exception:
-                logger.debug("Template storage call failed while cancelling", exc_info=True)
+                logger.debug("template storage call failed while cancelling")
             else:
                 if on_cancel is not None:
                     await on_cancel(result)
@@ -516,7 +517,10 @@ async def _publish_template(
                 published = False
             if not published:
                 raise
-            logger.warning("Template move reported an error after publication: %s", path)
+            logger.info(
+                "template move reported failure after publication path=%s",
+                safe_path_for_log(str(path)),
+            )
     finally:
         try:
             await client.rm(staging_path, fs_ctx=fs_ctx)
@@ -524,8 +528,10 @@ async def _publish_template(
             pass
         except Exception:
             # Cleanup cannot undo a published version or mask the original error.
-            logger.warning(
-                "Failed to clean up staged memory template: %s", staging_path, exc_info=True
+            logger.info(
+                "staged memory template cleanup failed path=%s",
+                safe_path_for_log(str(staging_path)),
+                extra={"degraded": True},
             )
 
 
@@ -622,7 +628,11 @@ async def _update_locked_template(
                     },
                 ) from exc
         await _remove_obsolete_backup(client, backup_path, fs_ctx)
-        logger.info("Updated account memory template: %s reset=%s", path, complete is None)
+        logger.debug(
+            "account memory template updated path=%s reset=%s",
+            safe_path_for_log(str(path)),
+            complete is None,
+        )
         return complete
     finally:
         await client.pathlock_release(lease, fs_ctx=fs_ctx_from_agfs_path(path))
@@ -634,7 +644,11 @@ async def _remove_obsolete_backup(client: AsyncAGFSClient, backup_path: str, fs_
     except AGFSNotFoundError:
         pass
     except Exception:
-        logger.warning("Failed to remove obsolete memory template backup: %s", backup_path)
+        logger.info(
+            "obsolete memory template backup cleanup failed path=%s",
+            safe_path_for_log(str(backup_path)),
+            extra={"degraded": True},
+        )
 
 
 async def resolve_account_memory_registry(

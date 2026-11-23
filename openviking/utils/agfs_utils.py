@@ -13,7 +13,7 @@ from threading import Thread
 from typing import Any, Callable, Dict
 from urllib.parse import urlsplit
 
-from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
+from openviking.observability.log_safety import DEFAULT_LOG_FORMAT, safe_path_for_log
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.config_utils import (
     DEFAULT_SERVICE_NAME,
@@ -36,6 +36,7 @@ class RagfsBindingConfig:
     log: Dict[str, Any] | None = None
     service_name: str = DEFAULT_SERVICE_NAME
     shared_redis_backend: bool = False
+    account_store_cache_instance: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the service name used by cache-backed modules."""
@@ -76,14 +77,27 @@ class RagfsBindingConfig:
         if coordination["provider"] != "cache":
             coordination.pop("instance", None)
         backups = getattr(self.agfs, "backups", None)
+        account_store_uses_cache = self.account_store_cache_instance is not None
         uses_runtime = (
             cachefs_backend == "cache"
             or queue_backend == "cache"
             or pathlock_uses_cache
             or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
+            or account_store_uses_cache
         )
         if self.cache is not None:
+            if account_store_uses_cache:
+                account_store_cache = _require_cache_instance(
+                    self.cache,
+                    self.account_store_cache_instance,
+                    "Redis MySQL Account Store",
+                )
+                if _get_config_value(account_store_cache, "provider") != "redis":
+                    raise ValueError(
+                        "Redis MySQL Account Store requires cache instance "
+                        f"'{self.account_store_cache_instance}' to use provider='redis'"
+                    )
             if cachefs_backend == "cache":
                 _require_cache_instance(self.cache, cachefs_instance, "CacheFS")
             if queue_backend == "cache":
@@ -130,8 +144,9 @@ class RagfsBindingConfig:
         else:
             if uses_runtime:
                 raise ValueError(
-                    "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
-                    "coordination, or cache-backed multi-write uses the shared Runtime"
+                    "top-level cache config is required when Redis MySQL Account Store, CacheFS, "
+                    "QueueFS, cache-backed PathLock, coordination, or cache-backed multi-write "
+                    "uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
@@ -178,9 +193,7 @@ def _require_cache_instance(cache_config: Any, instance: str, consumer: str) -> 
     instances = _get_config_value(cache_config, "instances", {})
     configured = _get_config_value(instances, instance)
     if configured is None:
-        raise ValueError(
-            f"{consumer} references unknown cache instance '{instance}'"
-        )
+        raise ValueError(f"{consumer} references unknown cache instance '{instance}'")
     return configured
 
 
@@ -200,16 +213,20 @@ def _build_named_cache_config(
         if provider == "redis":
             from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 
-            instance_config["redis"] = RedisCacheConfig.model_validate(params).model_dump(mode="json")
+            instance_config["redis"] = RedisCacheConfig.model_validate(params).model_dump(
+                mode="json"
+            )
         else:
             instance_config["dynamic"] = params
         instances[name] = instance_config
     cache_config = _disabled_cache_config(service_name)
-    cache_config.update({
-        "enabled": cachefs_enabled,
-        "runtime_enabled": runtime_enabled,
-        "instances": instances,
-    })
+    cache_config.update(
+        {
+            "enabled": cachefs_enabled,
+            "runtime_enabled": runtime_enabled,
+            "instances": instances,
+        }
+    )
     cache_config["cachefs"]["enabled"] = cachefs_enabled
     cache_config["cachefs"]["instance"] = cachefs_instance
     return cache_config
@@ -347,7 +364,11 @@ def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     return dumped
 
 
-def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
+def build_runtime_ragfs_binding_config(
+    config: Any,
+    *,
+    account_store_cache_instance: str | None = None,
+) -> tuple[RagfsBindingConfig, Any | None]:
     """Build the runtime AGFS binding config from storage and encryption settings."""
     from openviking.crypto.config import bootstrap_encryption
 
@@ -382,6 +403,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
             shared_redis_backend=shared_redis_backend,
+            account_store_cache_instance=account_store_cache_instance,
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -397,6 +419,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
             shared_redis_backend=shared_redis_backend,
+            account_store_cache_instance=account_store_cache_instance,
         ),
         encryptor,
     )
@@ -500,7 +523,7 @@ def _generate_plugin_config(
     backups_config = getattr(agfs_config, "backups", None)
     redirects_config = getattr(agfs_config, "redirects", None)
     if redirects_config is not None:
-        logger.warning("storage.agfs.redirects is deprecated and ignored")
+        logger.info("storage.agfs.redirects is deprecated and ignored")
 
     # Build primary backend plugin config
     primary_plugin_config: Dict[str, Any] = {}
@@ -706,8 +729,8 @@ def _serialize_backups_config(
     result["items"] = items
 
     if deprecated_fields:
-        logger.warning(
-            "Deprecated backups configuration fields are ignored: %s",
+        logger.info(
+            "deprecated backups configuration fields ignored fields=%s",
             ", ".join(dict.fromkeys(deprecated_fields)),
         )
     result["service_name"] = service_name
@@ -877,7 +900,7 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
-            logger.debug("[RAGFSUtils] Ensured localfs storage directory exists")
+            logger.debug("localfs storage directory ensured")
         for backup_item in plugin_config.get("config", {}).get("backups", {}).get("items", []):
             if backup_item.get("backend") != "localfs":
                 continue
@@ -896,10 +919,17 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         try:
             cfg = plugin_config.get("config", {})
             logger.debug(
-                f"[RAGFSUtils] Mounting {plugin_name} at {mount_path} with config keys: {list(cfg.keys()) if isinstance(cfg, dict) else type(cfg)}"
+                "mounting storage plugin=%s path=%s config_fields=%d",
+                plugin_name,
+                safe_path_for_log(mount_path),
+                len(cfg) if isinstance(cfg, dict) else 0,
             )
             agfs.mount(plugin_name, mount_path, cfg)
-            logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name}")
+            logger.debug("storage plugin mounted plugin=%s", plugin_name)
         except Exception as e:
-            logger.error(f"[RAGFSUtils] Failed to mount {plugin_name}: {e}")
+            logger.debug(
+                "storage plugin mount failed plugin=%s error_type=%s",
+                plugin_name,
+                type(e).__name__,
+            )
             raise

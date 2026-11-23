@@ -12,24 +12,6 @@ def test_str_to_uint64_preserves_stable_utf8_hashes():
     assert subject.str_to_uint64("部署") == 4215394785105220848
 
 
-def test_str_to_uint64_passes_utf8_bytes_to_xxhash(monkeypatch):
-    seen = []
-
-    class _Digest:
-        @staticmethod
-        def intdigest():
-            return 42
-
-    def _xxh64(value):
-        seen.append(value)
-        return _Digest()
-
-    monkeypatch.setattr(subject.xxhash, "xxh64", _xxh64)
-
-    assert subject.str_to_uint64("部署") == 42
-    assert seen == ["部署".encode("utf-8")]
-
-
 def test_local_collection_round_trips_string_primary_keys():
     collection = get_or_create_local_collection(
         meta_data={

@@ -6,9 +6,11 @@ import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.j
 import { useMemo, useRef, useSyncExternalStore } from 'react';
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
+import { isOvClientError } from '../../client/errors.js';
 import { useQueryScope } from '../../shared/request/use-query-scope.js';
 import type {
   SearchFilters,
+  SearchFailure,
   SearchMode,
   SearchResult,
 } from './search-types.js';
@@ -19,6 +21,7 @@ export interface SearchState {
   result: SearchResult | null;
   loading: boolean;
   error: Error | null;
+  failure: SearchFailure | null;
   retry: () => void;
 }
 export interface UseFsSearchOptions {
@@ -116,12 +119,26 @@ export function useFsSearch({
     !!result?.data && !result.isFetching && !result.error,
     () => ({ resultCount: result!.data!.total, hasMore: null }),
   );
+  const failureError = error ?? result?.error ?? null;
+  const invalidPattern =
+    mode === 'grep' &&
+    isOvClientError(failureError) &&
+    failureError.code === 'INVALID_ARGUMENT' &&
+    /^(?:invalid operation: )?Invalid (?:grep pattern|regex(?: pattern)?):/.test(
+      failureError.message,
+    );
   return {
     monitoring,
     result: result?.data ?? null,
     loading:
       !!client && !!query.trim() && !error && (!result || result.isFetching),
-    error: error ?? result?.error ?? null,
+    error: failureError,
+    failure: failureError
+      ? {
+          reason: invalidPattern ? 'invalid-pattern' : 'request',
+          message: failureError.message,
+        }
+      : null,
     retry: () => {
       if (aborted) return;
       if (observer) {

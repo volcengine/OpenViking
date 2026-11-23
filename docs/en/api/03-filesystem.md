@@ -21,13 +21,48 @@ Account administrators can publish custom memory templates under
 
 ### ls()
 
-List directory contents.
+List a directory's children, or return the file itself as one entry when the URI
+points to a file. A directory listing does not include the requested directory
+itself.
+
+| Target | `ls` | `ls` with `recursive=true` / `tree` |
+|--------|------|-------------------------------------|
+| Directory URI | Direct children | Descendants with `rel_path` relative to the directory |
+| File URI | One file entry without `rel_path` | One file entry with `rel_path` set to the filename |
+
+File results use the same `original`, `agent`, and URI-only `simple` formats as
+directory listings. A file's abstract and overview are empty strings when
+requested; its parent directory's summaries are not loaded. File results have
+`has_more=false`; `offset>=1` or a nonmatching tag filter returns an empty array.
+Request `extra_fields=id,locked` to include `id` and `isLocked`; files never
+include `count`.
+Explicitly requested hidden files are returned without `show_all_hidden=true`;
+storage-internal names remain hidden. Errors explicitly raised by the directory
+read, including `NOT_FOUND` and `PERMISSION_DENIED`, retain their existing behavior.
+
+File target compatibility is provided by the filesystem service for HTTP, SDK,
+CLI, and MCP calls. Internal `VikingFS.ls/tree` retain their directory listing
+behavior, so synchronization and OVPack operations keep their existing contract
+and do not add file-target probes.
+
+Directory reads are attempted first. A Not-a-directory error falls back to file
+metadata. Empty directory results also check the target type because some object
+storage backends return an empty list for file targets. If a successful empty
+directory read is followed by missing metadata, its empty result is preserved.
+In particular, S3 non-recursive `ls` keeps its existing HTTP 200 and empty array
+for nonexistent prefixes. Metadata permission errors and other backend errors
+still propagate; missing metadata after Not-a-directory still returns `NOT_FOUND`.
+
+Nonempty public directory listings do not add a type-check request. Ordinary
+successful empty pages with `offset>0` return directly without a metadata probe.
+GLOBAL and scoped data views retain type validation because an authorized
+container must be a directory.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | File or directory Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
@@ -151,6 +186,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
+# A single file, using the same listing response envelope
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  --data-urlencode "uri=viking://resources/project/readme.md" \
+  --data-urlencode "output=original" \
+  -H "X-API-Key: your-key"
+
 # Recursive listing
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
@@ -206,13 +247,17 @@ Clients can reuse the listing `access` value to control editing without a per-it
 
 ### tree()
 
-Get directory tree structure.
+Get a directory's descendants, or return a file as a single-node tree. The
+response remains a flat node array. For a file URI, `rel_path` is the filename
+(for example, `readme.md`) and `level_limit` does not expand any descendants.
+`directories_only=true` excludes the file and returns an empty array. File
+pagination, tags, metadata, and errors follow the `ls` rules above.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | File or directory Viking URI |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | HTTP: 256; SDKs: 128 | Maximum returned abstract length |
 | include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
@@ -624,7 +669,7 @@ On case-insensitive `localfs`, creating a directory that differs only by case ma
 
 ### rm()
 
-Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
+Remove a file or directory. Recursive removal cleans vector records by URI scope and sends one recursive delete request to the storage backend, without listing the filesystem subtree in Python.
 
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
 Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or `queue` return `INVALID_URI`.
@@ -712,9 +757,9 @@ ov rm viking://resources/old.md [--recursive]
 }
 ```
 
-The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
+The `estimated_deleted_count` field reports the number of vector records submitted for deletion. A file or directory may have multiple records, and unindexed content contributes zero. The count does not guarantee immediate vector-index visibility. The CLI displays this count in its output.
 
-When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
+Deleting a resource leaves existing memory content and `resource_refs` in place. The HTTP response no longer includes `memory_cleanup`.
 
 On case-insensitive `localfs`, case-only aliases may affect the delete target. For example, if the real file is `viking://resources/bob-private/private.md`, `ov rm viking://resources/BOB-PRIVATE/private.md` may delete the same file; on case-sensitive systems, deleting the missing alias path still succeeds because `rm` is idempotent, but it does not delete the real file.
 

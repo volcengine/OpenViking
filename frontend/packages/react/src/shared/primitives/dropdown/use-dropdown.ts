@@ -1,20 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useViewActive } from '../../view-activity.js';
 import type { KeyboardEvent, PointerEvent } from 'react';
+
+function menuItems(menu: HTMLDivElement | null) {
+  return Array.from(
+    menu?.querySelectorAll<HTMLButtonElement>(
+      '.ov-dropdown__item:not(:disabled)',
+    ) ?? [],
+  ).filter((item) => item.closest('[role="menu"]') === menu);
+}
 
 /** Pointer hover and keyboard navigation share one controlled menu. */
 export function useDropdown(
   hover: boolean,
   controlledOpen?: boolean,
   onOpenChange?: (open: boolean) => void,
+  nested = false,
 ) {
+  const active = useViewActive();
+  const currentActivity = useRef(active);
+  currentActivity.current = active;
   const [localOpen, setLocalOpen] = useState(false);
-  const open = controlledOpen ?? localOpen;
+  if (!active && localOpen) setLocalOpen(false);
+  const open = active && (controlledOpen ?? localOpen);
   const setOpen = useCallback(
     (next: boolean) => {
+      if (next && !active) return;
       setLocalOpen(next);
       onOpenChange?.(next);
     },
-    [onOpenChange],
+    [active, onOpenChange],
   );
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement | null>(null);
@@ -26,8 +41,11 @@ export function useDropdown(
     timer.current = undefined;
   };
   // The pointerleave timer bridges the gap to the portal. Unmount is not a
-  // pointer event, so an effect must cancel any pending browser timer on cleanup.
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // pointer event, so hiding its owning view or unmounting must cancel the timer.
+  useEffect(() => {
+    if (!active) clearTimeout(timer.current);
+    return () => clearTimeout(timer.current);
+  }, [active]);
   // Browser focus may leave a pointer-open menu without blurring either of its
   // own nodes. Observe document focus while open; remove the subscription on close
   // or unmount. Local handlers cannot observe those external focus changes.
@@ -60,15 +78,16 @@ export function useDropdown(
   }, [open, setOpen]);
   const close = (restore = true) => {
     clear();
-    if (restore || menu.current?.contains(document.activeElement))
+    if (
+      currentActivity.current &&
+      (restore || menu.current?.contains(document.activeElement))
+    )
       trigger.current?.focus();
     setOpen(false);
   };
   const focus = useCallback((edge: 'first' | 'last') => {
-    const buttons = menu.current?.querySelectorAll<HTMLButtonElement>(
-      '.ov-dropdown__item:not(:disabled)',
-    );
-    (edge === 'first' ? buttons?.[0] : buttons?.[buttons.length - 1])?.focus();
+    const buttons = menuItems(menu.current);
+    (edge === 'first' ? buttons[0] : buttons.at(-1))?.focus();
   }, []);
   const onReady = useCallback(() => {
     if (enter.current) focus(enter.current);
@@ -80,6 +99,11 @@ export function useDropdown(
     timer.current = setTimeout(() => close(false), 150);
   };
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      (event.target as HTMLElement).closest('[role="menu"]') !==
+      event.currentTarget
+    )
+      return;
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -90,7 +114,11 @@ export function useDropdown(
       close();
       return;
     }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (
+      event.defaultPrevented ||
+      !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+    )
+      return;
     if (
       'focusGroup' in HTMLElement.prototype &&
       ['ArrowDown', 'ArrowUp'].includes(event.key)
@@ -98,11 +126,7 @@ export function useDropdown(
       return;
     event.preventDefault();
     keyboard.current = true;
-    const buttons = [
-      ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        '.ov-dropdown__item:not(:disabled)',
-      ),
-    ];
+    const buttons = menuItems(event.currentTarget);
     const current = buttons.indexOf(event.target as HTMLButtonElement);
     const next =
       event.key === 'Home'
@@ -160,7 +184,11 @@ export function useDropdown(
           return;
         }
         if (event.key === 'Tab' && open) close();
-        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        if (
+          (nested && !open) ||
+          (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')
+        )
+          return;
         event.preventDefault();
         keyboard.current = true;
         clear();

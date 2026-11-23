@@ -1076,6 +1076,8 @@ ToolPart(
 POST /api/v1/sessions/{session_id}/messages
 ```
 
+助手回复中断时，可以在该消息中传入可选字段 `interrupted: true`。会话会保存已生成的内容，并在读取历史消息时返回该标记。批量添加消息时也可以为每条助手消息设置该字段。
+
 **简单模式（向后兼容）**
 
 ```bash

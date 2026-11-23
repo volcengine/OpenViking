@@ -27,6 +27,7 @@ import { findCommandConsoleCommand } from './command-definitions.js';
 export function CommandConsoleContent({
   records,
   value,
+  history = records,
   disabled = false,
   busy = false,
   emptyState,
@@ -34,6 +35,7 @@ export function CommandConsoleContent({
   locale: localeProp,
   commands = [],
   commandGroups = [],
+  inputRef,
   onValueChange,
   onSubmit,
   onOpenUri,
@@ -73,6 +75,11 @@ export function CommandConsoleContent({
     composerRef.current
       ?.querySelector('textarea')
       ?.focus({ preventScroll: true });
+  };
+  const shortcuts = pickCommandConsoleCommands(quickCommands, commands);
+  const pickShortcut = (next: string) => {
+    track('console_command_preset_select');
+    fillInput(next);
   };
   const fillCommand = (next: string) =>
     fillInput(formatCommandConsoleCommandInput(next, commands));
@@ -149,13 +156,10 @@ export function CommandConsoleContent({
           ) : (
             <CommandConsoleEmptyRegion
               emptyState={emptyState}
-              commands={pickCommandConsoleCommands(quickCommands, commands)}
+              commands={shortcuts}
               labels={text}
               disabled={inputDisabled || readOnly}
-              onPick={(value) => {
-                track('console_command_preset_select');
-                fillInput(value);
-              }}
+              onPick={pickShortcut}
             />
           )}
         </div>
@@ -170,6 +174,7 @@ export function CommandConsoleContent({
           onPick={fillCommand}
         />
         <CommandConsoleComposer
+          inputRef={inputRef}
           onDismiss={dismissCompletion}
           onRequestPalette={() => {
             setDismissedValue(null);
@@ -180,7 +185,9 @@ export function CommandConsoleContent({
           anchorRef={composerRef}
           onFocus={() => setDismissedValue(null)}
           value={value}
-          history={records.map((record) =>
+          quickCommands={records.length ? shortcuts : undefined}
+          onPickQuickCommand={pickShortcut}
+          history={history.map((record) =>
             formatCommandConsoleCommandInput(record.command, commands),
           )}
           labels={text}

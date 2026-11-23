@@ -43,8 +43,9 @@ export async function mount(transport, props = {}, provider = {}) {
   const button = (name) =>
     [...container.querySelectorAll('button')].find(
       (element) =>
-        element.getAttribute('aria-label') === name ||
-        element.textContent === name,
+        !element.closest('[hidden]') &&
+        (element.getAttribute('aria-label') === name ||
+          element.textContent === name),
     );
   return {
     container,

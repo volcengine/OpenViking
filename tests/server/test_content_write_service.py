@@ -31,6 +31,8 @@ async def test_write_updates_memory_file_and_parent_overview(
 ):
     from openviking.observability.events import get_event_bus
     from openviking.observability.reporting import runtime
+    from openviking.service.task_store import TaskStatus
+    from openviking.service.task_tracker import get_task_tracker
     from openviking.storage.queuefs import get_queue_manager
 
     load_model = AsyncMock(side_effect=AssertionError("memory write must not call a text model"))
@@ -96,7 +98,12 @@ async def test_write_updates_memory_file_and_parent_overview(
         e for e in events if e.event_name == "file_mutation" and e.payload["uri"] == memory_uri
     ]
     assert len(writes) == 1
-    assert writes[0].payload["task_id"]
+    task = await get_task_tracker().get(
+        writes[0].payload["task_id"], ctx.account_id, ctx.user.user_id
+    )
+    assert task is not None
+    assert task.status == TaskStatus.COMPLETED
+    assert task.resource_id == memory_uri
     assert "task_id" not in result
     assert writes[0].payload["memory_type"] == "preferences"
     assert writes[0].payload["change_type"] == "modified"

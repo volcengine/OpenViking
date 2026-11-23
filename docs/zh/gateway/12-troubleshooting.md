@@ -18,7 +18,8 @@ description: 根据现象、Studio 标签或错误码，找到 OpenViking 网关
 | 请求日志中某条请求的状态码为 400 及以上 | 服务商拒绝了请求或调用失败。 | [上游返回错误](#the-upstream-returned-an-error) |
 | 某段对话没有召回，也没有保存 | 检测到 OpenViking 插件，网关把召回、保存和工具都让给了插件。 | 正常行为，避免同一份内容被补充、保存两次，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |
 | 请求不带记忆 | OpenViking 无法访问或超时、预算用完、没有相关内容等。 | [没有补充记忆](#no-memory-is-added) |
-| 保存显示**重试中**，之后变成**已暂停** | OpenViking 拒绝保存或无法访问；或者这段对话的网关密钥已被吊销（`gateway_key_revoked`），例如用户的 OpenViking 密钥被重新生成过。 | OpenViking 恢复后网关会自动恢复保存。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；直接使用的 OpenViking 密钥若保存时收到 401，或记录缺失已达 `session_ttl_seconds`，用户的下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。OpenViking 密钥记录缺失时先显示**重试中**，原因为 `gateway_key_missing`。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
+| 请求的**保存**列显示**保存失败** | 结束这一轮的请求没能把它写入 OpenViking：OpenViking 无法访问、超时，或拒绝了写入。 | 网关不重试；OpenViking 恢复后，这段对话的下一轮结束时会补上缺的内容。一直失败时，修复原因。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
+| 会话里有消息，却一直没有归档或提取出记忆 | 会话没有提交。默认由网关提交时：空闲提交时间还没到；提交一直失败（网关日志中有 `could not commit`，网关每分钟再试一次；被 OpenViking 以 401、403、404 拒绝的不再重试）；或者保存时用的密钥在空闲提交执行之前被吊销或过期，这次提交就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交：对话达不到**提交阈值**，而 OpenViking Server 没有开启 `memory.session_auto_commit.enabled`。 | 见[会话出现了，记忆还没有](#conversations-do-not-appear-in-openviking)。 |
 | 上下文配置开启了工具，对话里却没有 | 还没有能用工具的请求，加载工具清单失败（下一个能用工具的请求会重试），客户端没有回传完整历史，或者客户端自己接了 OpenViking 工具。 | 在请求日志里查看原因，见[什么时候不提供工具](04-openviking-tools.md#when-tools-are-not-offered)。客户端接了 OpenViking MCP 服务器时出现**客户端已接入 OpenViking 工具**（`tool_name_collision`）是正常的；`tools_unavailable` 在 OpenViking 恢复响应后会自行消失；其他原因修正后开始新对话。 |
 | **首次调用缓存命中率**下降，或者概览提示缓存连续未命中 | 记忆无法原样放回、对话换了上游，或者客户端、中转服务改动了请求开头的内容。 | [首次调用缓存命中率下降](#the-first-call-cache-hit-rate-dropped) |
 | 长对话被服务商以过长为由拒绝 | 网关不知道模型的实际窗口，压缩得太晚。 | [长对话超出上下文长度](#long-conversations-hit-the-context-limit) |
@@ -127,12 +128,12 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | OpenViking 返回了 HTTP …（`openviking_http_<status>`），或 OpenViking 报告了错误 …（`openviking_<CODE>`） | OpenViking 返回了错误。查看 OpenViking Server 的日志。 |
 | `trusted_mode_unsupported` | OpenViking 使用 Trusted 模式。把它改为 `api_key` 认证。 |
 
-OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存对话会一直重试，直到 OpenViking 恢复。请求会立即跳过召回、用户画像和对网关已知密钥的检查，原因与卡片上的相同，不再等待 OpenViking。网关会以逐渐拉长的间隔重新检查，最长间隔为 `health_interval_seconds`（默认 60 秒）。
+OpenViking 异常期间，请求照常发给模型，只是不带记忆，结束的轮次保存失败；OpenViking 恢复后，每段对话的下一轮结束时补上缺的内容。请求会立即跳过召回、用户画像和对网关已知密钥的检查，原因与卡片上的相同，不再等待 OpenViking。网关会以逐渐拉长的间隔重新检查，最长间隔为 `health_interval_seconds`（默认 60 秒）。
 
 健康检查比较粗：两次检查之间，每个请求仍会等每次 OpenViking 调用各自的超时（密钥检查 5 秒，召回为配置中的**超时时间**）。OpenViking 卡住而不是拒绝连接时，有两项设置可以限制等待：
 
 - `openviking_budget_seconds` 给每个请求一个从到达时开始计算的截止时间，覆盖密钥检查、召回、用户画像和工具列表。时间用完后，请求不再等剩下的调用，按下文的原因继续处理。网关还没见过的密钥离开 OpenViking 无法确认，所以它的第一个请求在时间用完时收到 503 `openviking_timeout`。
-- `openviking_breaker_failures` 在某个账号的 OpenViking 调用连续这么多次没有应答（超时、连接错误、HTTP 5xx 或 429）后，暂停调用。在 `openviking_breaker_seconds`（默认 30 秒）内，这个账号的请求立即跳过密钥检查、召回、用户画像和工具，不带记忆发给模型，原因为 `openviking_circuit_open`；之后由一次试探调用决定是否恢复。拒绝（401、402、403）和不存在的应答不计数。后台保存不受影响。[状态行](../guides/22-gateway-operations.md#status-line)以 `openviking.open_circuits` 报告暂停中的账号数。
+- `openviking_breaker_failures` 在某个账号的 OpenViking 调用连续这么多次没有应答（超时、连接错误、HTTP 5xx 或 429）后，暂停调用。在 `openviking_breaker_seconds`（默认 30 秒）内，这个账号的请求立即跳过密钥检查、召回、用户画像和工具，不带记忆发给模型，原因为 `openviking_circuit_open`；之后由一次试探调用决定是否恢复。拒绝（401、402、403）和不存在的应答不计数。保存一轮和其他调用一样计数；暂停期间结束的轮次不写入，保存失败，原因为 `openviking_circuit_open`。[状态行](../guides/22-gateway-operations.md#status-line)以 `openviking.open_circuits` 报告暂停中的账号数。
 
 两项默认都关闭；见[配置](13-configuration.md#gateway-fields)。
 
@@ -157,18 +158,19 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 
 ## OpenViking 中看不到对话 {#conversations-do-not-appear-in-openviking}
 
-[保存](08-context-profiles.md#save-conversations)会把每一轮完成的对话写进名为 `gateway-…` 的 OpenViking 会话，会话属于网关密钥背后的 OpenViking 用户。预期中的某一轮没有出现时，对照下表：
+[保存](08-context-profiles.md#save-conversations)会在每一轮的回复结束时，把这一轮写进名为 `gateway-…` 的 OpenViking 会话，会话属于网关密钥背后的 OpenViking 用户。预期中的某一轮没有出现时，对照下表：
 
 | 看到的情况 | 原因 | 处理 |
 | --- | --- | --- |
-| 缺少最新的一轮 | 保存晚一轮：下一条消息到达时，上一轮才会出现；最后一轮要等**最新回复等待时长**（默认 10 分钟）。 | 稍等，或者发送下一条消息。 |
+| 缺少最新的一轮 | 这一轮还没有结束：回复把这一轮交给了客户端执行工具，这一轮在客户端的下一个请求里继续；或者回复没有正常结束，例如流式回复中断或客户端中途断开。 | 一轮结束时才会保存；没有正常结束的回复，由下一轮结束时随历史一起写入。 |
 | **保存**列显示**已关闭** | 上下文配置不保存对话。 | 在上下文配置中打开保存；修改只对新对话生效（见[修改何时生效](06-manage-in-studio.md#when-changes-take-effect)）。 |
-| **重试中**或**已暂停** | 保存失败，展开的行会显示原因。 | 修复原因（例如让 OpenViking 恢复访问）后，网关会在 5 分钟内重试。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；OpenViking 密钥若收到 401 或记录一直缺失，下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。原因为 `gateway_key_missing` 时，网关每 5 分钟重试一次，用这个密钥发出的任何请求都会恢复保存。原因为 `openviking_http_402` 或 `openviking_http_429` 时，检查 OpenViking 账号的订购或限流；网关会在一小时或一分钟后重试。修改 `capture_memory_types` 后出现 `openviking_http_400` 时，先在配置中改正名称，再开始新的对话；进行中的对话保留原来的设置（见[保存对话](13-configuration.md#profile-saving)）。对话一直暂停时，用**重新同步对话…**（见[重新同步对话](10-overview-and-requests.md#resync-a-conversation)）。 |
-| **已丢失**（`stage_failed`） | 网关没能把一轮已完成的对话排入保存队列，通常是因为它的存储不可用；日志里有一条 "lost a finished turn" 错误。每个进程同时最多重试 256 轮这样的对话，超出时直接标记为已丢失。 | 让存储恢复可用。这段对话的下一个请求会随历史重新排入这一轮。 |
+| **保存**列显示**保存失败**（`failed`） | 结束这一轮的请求写入 OpenViking 失败或超过 30 秒，展开的行会显示原因（见[保存状态](10-overview-and-requests.md#saving-status)）。网关不重试。 | 修复原因，例如让 OpenViking 恢复访问；原因为 `openviking_http_402` 或 `openviking_http_429` 时，检查 OpenViking 账号的订购或限流；原因为 `openviking_http_401` 时，用用户当前的 OpenViking 密钥签发新的网关密钥，见[用户的 OpenViking API 密钥变了](09-gateway-keys.md#when-the-openviking-key-changes)；原因为 `save_timeout` 或 `openviking_timeout` 时，检查 OpenViking 的负载。之后这段对话的下一轮结束时，网关会把缺的内容一起写入，前提是客户端原样发回了历史；没有下一轮时，失败的这一轮不会保存。 |
+| 每一轮都失败，原因为 `openviking_http_400` | 修改 `capture_memory_types` 后，其中有 OpenViking 不认识或已停用的记忆类型，OpenViking 拒绝创建会话。 | 在配置中改正名称，再开始新的对话；进行中的对话保留原来的设置（见[保存对话](13-configuration.md#profile-saving)）。 |
 | **检测到 OpenViking 插件**（`plugin_present`） | 检测到 OpenViking 插件的对话，网关不保存任何内容。 | 正常行为；同一个客户端在插件和网关之间二选一。 |
-| 会话里只有部分对话 | 以下情况下，网关会把当前历史写进新的 `gateway-…` 会话：客户端编辑、重新生成或压缩了历史（`history_changed`、`history_changed_during_delivery`），已在**最新回复等待时长**之后保存的一轮又继续了（`continued_after_idle`），或者有人用了**重新同步对话…**（`manual_reset`）。之前的轮次留在旧会话里。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
+| 同一条用户消息出现两次，或者有两个版本的回答 | 客户端重新生成或编辑了回答、自己压缩了历史，网关从这一轮最新的用户消息开始继续写入同一个会话；之前写入的版本保留。一次写入的响应丢失时，下一轮也会把这些消息再写一次。 | 正常行为，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。 |
+| 会话里只有部分对话 | 有人用了**重新同步对话…**（`manual_reset`），或者网关丢失了这段对话的保存进度时，下一轮结束时完整历史写入新的 `gateway-…` 会话，之前的轮次留在旧会话里。对话也可能在更早版本的网关中换过会话（例如原因为 `history_changed`）。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
 | 完全看不到 `gateway-…` 会话 | 你查看时用的 OpenViking 用户，不是网关密钥背后的那个用户。 | 换成那个用户查看。 |
-| 会话出现了，记忆还没有 | OpenViking 在提交之后才在后台提取记忆。 | 等提取完成。 |
+| 会话出现了，记忆还没有 | OpenViking 在提交之后才在后台提取记忆。默认由网关提交：待提交内容达到**提交阈值**的一轮结束时立即提交；否则要等最后一轮结束后的**空闲提交时间**（默认 600 秒），网关在这期间重启只会让这次提交晚一两分钟。一直没有提交时，可能是提交失败，网关日志中会有 `could not commit` 警告及原因，网关每分钟再试一次，被 OpenViking 以 401、403、404 拒绝的不再重试；也可能是保存时用的密钥在空闲提交执行之前被吊销或过期，提交时找不到这份密钥记录，就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交，空闲提交只在 Server 开启 `memory.session_auto_commit.enabled` 时发生，最早也要 300 秒；Server 使用本地扫描（`local` 后端）时，最多再晚一个 `check_interval_seconds`（默认 600 秒）。 | 等提交和提取完成。提交失败时，修复日志中的原因；密钥被吊销或过期时，这段对话的下一轮结束后会重新计时。开启 `openviking_auto_commit` 时，在 Server 的 `ov.conf` 中设置 `memory.session_auto_commit.enabled: true` 并重启 Server。见[保存对话](08-context-profiles.md#save-conversations)。 |
 
 ## 首次调用缓存命中率下降 {#the-first-call-cache-hit-rate-dropped}
 
@@ -233,7 +235,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | 工具历史无法继续使用（`hidden_tool_history_unavailable`） | Claude 对话用过 OpenViking 工具，但当前请求不能使用这些工具，之前的思考内容已被去掉。 | 查看请求详情中的工具停用原因，恢复原设置，或者开始新对话。 |
 | OpenViking 工具调用失败（`hidden_tool_loop_failed`） | 模型使用 OpenViking 工具时未能完成回答，客户端收到错误。 | 见[失败处理](04-openviking-tools.md#failure-handling)。 |
 | 模型未返回回答（`hidden_reply_without_anchor`） | 模型在这次请求中使用了 OpenViking 工具，但没有返回可用于继续对话的内容。客户端仍收到了回复，但下一轮无法沿用这次工具调用的结果。 | 重试本次提问，或开始一段新对话。 |
-| 回复未保存（`capture_parse_failure`） | 流式回复无法解析，这条回复没有保存，客户端不受影响。 | 无需处理，仅供了解。 |
+| 回复未保存（`capture_parse_failure`） | 流式回复无法解析，这次请求没有保存这一轮，客户端不受影响。 | 无需处理。客户端在下一轮发回这条回复时，它随下一轮一起保存。 |
 | 密钥未校验（`revocation_check_unavailable`） | OpenViking 无法确认这把网关密钥，请求在没有检查是否已吊销的情况下照常处理。 | 检查 OpenViking 是否可达、运行是否正常。 |
 
 ## Redis 不可用 {#redis-unavailable}

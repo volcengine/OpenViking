@@ -1,4 +1,10 @@
 export { VikingBotInteraction } from './interaction-boundary.js';
+export { VikingBotConfirmation } from '../confirmation/viking-bot-confirmation.js';
+export type {
+  VikingBotConfirmationProps,
+  VikingBotConfirmationRow,
+  VikingBotConfirmationLabels,
+} from '../confirmation/types.js';
 export { DEFAULT_INTERACTION_LABELS } from './labels.js';
 export type { InteractionLabels } from './labels.js';
 export type {

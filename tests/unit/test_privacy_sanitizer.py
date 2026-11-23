@@ -273,8 +273,8 @@ async def test_prepared_matcher_enforces_utf8_byte_limit_with_empty_catalog(text
 async def test_canonical_reference_is_stable_strict_and_tracks_independent_rotation(
     monkeypatch,
 ):
-    warning = Mock()
-    monkeypatch.setattr("openviking.privacy.sanitizer.logger.warning", warning)
+    info = Mock()
+    monkeypatch.setattr("openviking.privacy.sanitizer.logger.info", info)
     secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     catalog = _PrivacyCatalog(
         {
@@ -287,8 +287,8 @@ async def test_canonical_reference_is_stable_strict_and_tracks_independent_rotat
     result = await sanitizer.sanitize(f"{secret} {secret}", ctx=_ctx())
     assert result.content == f"{chosen} {chosen}"
     assert len(result.ambiguous_references) == 1
-    warning.assert_called()
-    assert secret not in str(warning.call_args)
+    info.assert_called()
+    assert secret not in str(info.call_args)
     query = await sanitizer.prepare_matcher(_ctx())
     monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
     with pytest.raises(InvalidArgumentError, match="multiple fields"):

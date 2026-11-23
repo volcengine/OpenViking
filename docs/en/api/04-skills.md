@@ -926,7 +926,7 @@ A successful update returns the same processing result as `add_skill` with an ad
 }
 ```
 
-`estimated_deleted_count` appears only when the filesystem can estimate the number of deleted entries.
+When present, `estimated_deleted_count` reports vector records submitted for deletion, rather than physical file or directory counts. It does not guarantee immediate vector-index visibility.
 
 ## Best Practices
 

@@ -1,102 +1,37 @@
-"""Shared utilities for channel implementations - image path handling, etc."""
+"""Extract and read outbound image references."""
 
 import re
+import stat
 from pathlib import Path
-from typing import List, Tuple
 
-# Common image file extensions
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff"}
+from vikingbot.utils import get_images_path
 
-
-def is_image_file_path(path_str: str) -> bool:
-    """
-    Check if a string looks like a local image file path.
-
-    Args:
-        path_str: The string to check
-
-    Returns:
-        True if it looks like an image file path
-    """
-    if not path_str:
-        return False
-
-    # Check if it starts with markdown image syntax - skip these
-    if path_str.startswith("!["):
-        return False
-
-    # Check if it's a data URI or URL - those are handled separately
-    if (
-        path_str.startswith("data:")
-        or path_str.startswith("http://")
-        or path_str.startswith("https://")
-    ):
-        return False
-
-    try:
-        path = Path(path_str)
-        # Check if it has an image extension
-        return path.suffix.lower() in IMAGE_EXTENSIONS
-    except Exception:
-        return False
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff"}
+_IMAGE_FILENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
 
 
-def extract_image_paths(content: str) -> Tuple[List[str], str]:
-    """
-    Extract potential image file paths from content.
-    Args:
-        content: The text content to process
-        Tuple of (list_of_image_paths, original_content)
-    """
-    paths = []
-    # First, extract all markdown image syntax: ![alt](path)
-    markdown_image_matches = re.findall(r"!\[.*?\]\((.*?)\)", content)
-    for match in markdown_image_matches:
-        if is_image_file_path(match):
-            paths.append(match)
-
-    # Next, extract all backtick-wrapped content
-    backtick_matches = re.findall(r"`([^`]+)`", content)
-    for match in backtick_matches:
-        if is_image_file_path(match):
-            paths.append(match)
-
-    # Also check all tokens (split by whitespace)
-    for token in content.split():
-        # Clean up token (remove punctuation at end)
-        clean_token = token.rstrip(".,!?;:)]}'\"")
-        if clean_token and is_image_file_path(clean_token) and clean_token not in paths:
-            paths.append(clean_token)
-
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_paths = []
-    for p in paths:
-        if p not in seen:
-            seen.add(p)
-            unique_paths.append(p)
-
-    return unique_paths, content
+def extract_image_filenames(content: str) -> list[str]:
+    """Find distinct image filenames in Markdown images and backticks."""
+    references = re.findall(r"!\[.*?\]\((.*?)\)", content)
+    references.extend(re.findall(r"`([^`]+)`", content))
+    return [
+        filename
+        for filename in dict.fromkeys(references)
+        if _IMAGE_FILENAME_RE.fullmatch(filename)
+        and Path(filename).suffix.lower() in _IMAGE_EXTENSIONS
+    ]
 
 
-def read_image_file(path_str: str) -> bytes:
-    """
-    Read an image file from disk.
+def read_image_file(filename: str) -> bytes:
+    """Read a regular file by bare filename from the bot's image directory."""
+    if not _IMAGE_FILENAME_RE.fullmatch(filename):
+        raise ValueError(f"Image reference must be a bare filename, got {filename!r}")
 
-    Args:
-        path_str: Path to the image file
-
-    Returns:
-        Image bytes
-
-    Raises:
-        FileNotFoundError: If file doesn't exist
-        IOError: If reading fails
-    """
-    path = Path(path_str)
-    if not path.exists():
-        raise FileNotFoundError(f"Image file not found: {path_str}")
-    if not path.is_file():
-        raise IOError(f"Path is not a file: {path_str}")
+    images_dir = get_images_path().resolve()
+    path = (images_dir / filename).resolve()
+    if not path.is_relative_to(images_dir):
+        raise ValueError(f"Image reference resolves outside the image directory: {filename!r}")
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise OSError(f"Image reference is not a regular file: {filename!r}")
 
     return path.read_bytes()
