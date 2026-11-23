@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import mimetypes
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -267,17 +268,20 @@ class _AnyDocMarkdownRenderer:
         if code:
             rendered = self._render_code_span(core.replace("\n", " "), context=context)
         else:
+            use_html = (bold or italic) and any(
+                unicodedata.category(char).startswith(("P", "S")) for char in (core[0], core[-1])
+            )
             opening = ""
             closing = ""
             if strike:
-                opening += "~~"
-                closing = "~~" + closing
+                opening += "<del>" if use_html else "~~"
+                closing = ("</del>" if use_html else "~~") + closing
             if bold:
-                opening += "**"
-                closing = "**" + closing
+                opening += "<strong>" if use_html else "**"
+                closing = ("</strong>" if use_html else "**") + closing
             if italic:
-                opening += "*"
-                closing = "*" + closing
+                opening += "<em>" if use_html else "*"
+                closing = ("</em>" if use_html else "*") + closing
             escaped = self._escape_text(core, context=context, styled=True, in_label=in_label)
             rendered = f"{opening}{escaped}{closing}"
         if underline:
