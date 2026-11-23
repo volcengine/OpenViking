@@ -2,13 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Dependency injection for OpenViking HTTP Server."""
 
-from typing import TYPE_CHECKING, Any, Optional
-
-if TYPE_CHECKING:
-    from openviking.server.config import ServerConfig
+from typing import Any
 
 _service: Any | None = None
-_server_config: Optional["ServerConfig"] = None
+_server_config: Any | None = None
 
 
 def get_service() -> Any:
@@ -40,7 +37,7 @@ def set_service(service: Any | None) -> None:
     _service = service
 
 
-def get_server_config() -> Optional["ServerConfig"]:
+def get_server_config() -> Any | None:
     """Return the active ServerConfig if one was registered, else None.
 
     MCP tools that need server-level settings (e.g. public_base_url for upload URLs)
@@ -49,7 +46,7 @@ def get_server_config() -> Optional["ServerConfig"]:
     return _server_config
 
 
-def set_server_config(config: "ServerConfig") -> None:
+def set_server_config(config: Any) -> None:
     """Register the active ServerConfig at server bootstrap."""
     global _server_config
     _server_config = config
