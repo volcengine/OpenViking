@@ -43,10 +43,10 @@ export function getAgentConnectInstructions(
       );
     return {
       fixed: true,
-      display: instructions('••••••••'),
+      display: instructions('********'),
       copy: instructions(apiKey),
       command: {
-        display: getInstallerCommand(harness, locale, '••••••••', baseUrl),
+        display: getInstallerCommand(harness, locale, '********', baseUrl),
         copy: getInstallerCommand(harness, locale, apiKey, baseUrl),
       },
     };
@@ -95,7 +95,7 @@ export function getAgentConnectInstructions(
   }
   return {
     fixed: false,
-    display: hydrate('••••••••'),
+    display: hydrate('********'),
     copy: hydrate(apiKey),
     markdown: hydrate(keyToken),
     keyToken,

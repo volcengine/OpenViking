@@ -102,7 +102,7 @@ function MarkdownCodeBlock({ children }: { children?: ReactNode }) {
     <AgentConnectCodeBlock
       {...controls}
       language={child.props.className?.replace(/^language-/, '')}
-      display={code.split(keyToken).join('••••••••')}
+      display={code.split(keyToken).join('********')}
       copyText={code.split(keyToken).join(apiKey)}
     />
   );
