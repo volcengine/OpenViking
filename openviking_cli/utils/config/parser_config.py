@@ -699,6 +699,10 @@ class SemanticConfig:
     max_skeleton_chars: int = 12000
     """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
 
+    max_overview_prompt_chars: int = 60000
+    """Maximum characters allowed in the overview generation prompt.
+    If exceeded, file summaries are batched and merged."""
+
     overview_batch_size: int = 50
     """Maximum number of file summaries per batch when splitting oversized prompts."""
 

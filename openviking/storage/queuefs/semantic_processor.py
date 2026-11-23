@@ -91,8 +91,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_OVERVIEW_PROMPT_CHAR_BUDGET = 60_000
-
 _PERMANENT_STORAGE_ERRORS = (
     FileNotFoundError,
     PermissionError,
@@ -1812,7 +1810,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
-        over_budget = estimated_size > _OVERVIEW_PROMPT_CHAR_BUDGET
+        over_budget = estimated_size > semantic.max_overview_prompt_chars
         entry_count = len(file_summaries) + len(children_abstracts)
         many_entries = entry_count > semantic.overview_batch_size
 
@@ -1844,7 +1842,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 estimated_size,
                 len(file_summaries),
             )
-            budget = _OVERVIEW_PROMPT_CHAR_BUDGET - len(children_abstracts_str)
+            budget = semantic.max_overview_prompt_chars
+            budget -= len(children_abstracts_str)
             per_file = max(100, budget // max(len(file_summaries), 1))
             truncated_lines = []
             for idx, item in enumerate(file_summaries, 1):

@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for SemanticConfig."""
+"""Tests for SemanticConfig and overview budget estimation."""
 
 import pytest
 
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
@@ -13,6 +12,7 @@ def test_semantic_config_defaults():
     """Test default values match previously hardcoded constants."""
     config = SemanticConfig()
     assert config.max_file_content_chars == 30000
+    assert config.max_overview_prompt_chars == 60000
     assert config.overview_batch_size == 50
     assert config.overview_sample_limit == 32
     assert config.freshness_refresh_ratio == 0.10
@@ -29,12 +29,36 @@ def test_freshness_refresh_ratio_must_be_a_probability(ratio):
 
 
 def test_semantic_config_custom_values():
-    config = OpenVikingConfig.from_dict(
-        {"semantic": {"max_overview_prompt_chars": 4_000, "overview_sample_limit": 16}}
+    """Test custom values override defaults."""
+    config = SemanticConfig(
+        max_overview_prompt_chars=100000,
+        overview_batch_size=100,
     )
-    semantic = config.to_dict()["semantic"]
-    assert "max_overview_prompt_chars" not in semantic
-    assert config.semantic.overview_sample_limit == 16
+    assert config.max_overview_prompt_chars == 100000
+    assert config.overview_batch_size == 100
+    # Unchanged defaults
+    assert config.max_file_content_chars == 30000
+    assert config.abstract_max_chars == 256
+
+
+def test_budget_under_limit_no_batching():
+    """Small directories should not trigger batching."""
+    config = SemanticConfig()
+    # 10 file summaries, each ~100 chars = ~1000 chars total
+    summaries = [{"name": f"file_{i}.py", "summary": "x" * 100} for i in range(10)]
+    total = sum(len(f"[{i}] {s['name']}: {s['summary']}") for i, s in enumerate(summaries, 1))
+    assert total < config.max_overview_prompt_chars
+    assert len(summaries) <= config.overview_batch_size
+
+
+def test_budget_over_limit_triggers_batching():
+    """Large directories should exceed budget and require batching."""
+    config = SemanticConfig()
+    # 200 file summaries, each ~500 chars = ~100000+ chars total
+    summaries = [{"name": f"file_{i}.py", "summary": "x" * 500} for i in range(200)]
+    total = sum(len(f"[{i}] {s['name']}: {s['summary']}") for i, s in enumerate(summaries, 1))
+    assert total > config.max_overview_prompt_chars
+    assert len(summaries) > config.overview_batch_size
 
 
 def test_abstract_truncation():

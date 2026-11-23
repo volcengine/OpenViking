@@ -188,6 +188,7 @@ class TestOverviewGenerationFlow:
         skeleton = "package client\nimport (\n" + "\n".join(imports) + "\n)\nfunc NewClient()"
         config = MagicMock()
         config.output_language_override = override
+        config.semantic.max_overview_prompt_chars = 60_000
         config.semantic.overview_batch_size = 50
         config.vlm.get_completion_async = AsyncMock(return_value="# client\nClient overview.")
 
