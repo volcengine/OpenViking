@@ -611,13 +611,10 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | path | str | File URI, also used as the historical snapshot path |
-| processing_mode | string | Optional, default `semantic_and_vectors`. `vectors_only` skips VLM and parent semantic refresh; null also uses the default |
+| processing_mode | string | HTTP only. Omitted/null defaults to `semantic_and_vectors`; `vectors_only` skips VLM and parent semantic refresh |
 | restore_commit_id | str | Source commit ID, 40 lowercase hexadecimal characters |
 | current_commit_id | str | Optional. Omit to restore unconditionally, or pass the last commit observed for this file on `main`. A mismatch returns `409 CONFLICT` with resource `VERSION_CONFLICT` |
 | dry_run | bool | Optional; checks the request without changing content or creating a snapshot |
-
-Use HTTP to pass `processing_mode` for single-file restore. Python and TypeScript
-snapshot SDKs currently expose directory restore only.
 
 ```bash
 ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md

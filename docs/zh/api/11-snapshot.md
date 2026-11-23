@@ -615,13 +615,10 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | path | str | 文件 URI，同时用作历史快照中的读取路径 |
-| processing_mode | string | 可选，默认 `semantic_and_vectors`；`vectors_only` 跳过 VLM 和父目录语义刷新，null 也采用默认值 |
+| processing_mode | string | 仅 HTTP；省略/null 默认 `semantic_and_vectors`，`vectors_only` 跳过 VLM 和父目录语义刷新 |
 | restore_commit_id | str | 来源 commit ID，40 位小写十六进制 |
 | current_commit_id | str | 可选。省略时直接恢复；传入时须匹配该文件在 `main` 上最后一次变更的 commit ID，否则返回 `409 CONFLICT`，resource 为 `VERSION_CONFLICT` |
 | dry_run | bool | 可选；仅校验，不修改内容或创建快照 |
-
-单文件恢复的 `processing_mode` 请通过 HTTP 传入；Python、TypeScript 的
-snapshot SDK 当前只暴露目录恢复。
 
 ```bash
 ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md

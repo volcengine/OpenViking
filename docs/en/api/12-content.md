@@ -210,11 +210,6 @@ ov read viking://resources/docs/api.md
 
 Write a file and automatically refresh related semantics and vectors.
 
-For ordinary resource/skill content writes, `vectors_only` skips VLM and SemanticQueue.
-Existing summaries are preserved and can become stale. Memory writes and existing semantic
-sidecar edits retain their specialized overview/embedding maintenance.
-`defer_processing=true` takes precedence and skips all index processing.
-
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
@@ -224,8 +219,8 @@ sidecar edits retain their specialized overview/embedding maintenance.
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | use_snapshot | bool | No | `false` | Save the written file as a snapshot under the content lock|
-| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` maintains file vectors without regenerating resource/skill summaries or refreshing parent semantics |
-| defer_processing | bool | No | `false` | For indexed namespaces, save content without scheduling semantic or vector processing; FILE_ONLY processing is unchanged |
+| processing_mode | string | No | `semantic_and_vectors` | Resource/skill mode: `vectors_only` maintains vectors without regenerating summaries. Memory and sidecar writes retain their existing handling |
+| defer_processing | bool | No | `false` | For indexed namespaces, save without semantic/vector work; overrides `processing_mode`. FILE_ONLY behavior is unchanged |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
 | tag_mode | string | No | `replace` | Tag update mode: `replace` overwrites tags, `append` merges by key, and `clear` removes existing tags without requiring `tags` |
