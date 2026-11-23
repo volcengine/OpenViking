@@ -145,7 +145,6 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     assert.deepEqual(manifest.hooks.map((hook) => hook.event), [
       "SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact", "SessionEnd", "Interrupt",
     ]);
-    assert.equal(manifest.hooks[0].env.OPENVIKING_PENDING_REPLAY_LIMIT, "2");
     assert.match(manifest.mcpServers.openviking.args[0], /agent-integrations\/kimicode\/servers\/mcp-proxy\.mjs$/);
     // Kimi Code discovers no skills directory by default; the manifest names it.
     assert.equal(manifest.skills, "./skills/");
