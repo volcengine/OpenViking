@@ -114,3 +114,5 @@ React imports these SVG files directly during its build. This file records where
   to the active theme. They follow this repository's license.
 
 `file-preview/history-info.svg` comes from Arco Design IconInfoCircleFill (MIT); see [Arco Design license](../react/LICENSE.arco-design).
+
+- `svg/empty/documents.svg`: document empty-state illustration supplied by the project owner on 2026-11-23 for Wiki conflicts. Original 258 × 140 geometry is retained; paints follow host theme tokens.
