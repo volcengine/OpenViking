@@ -18,21 +18,39 @@ export function useCommandConsoleAssistPosition(
     if (!open || !panel || !anchor) return;
     const dismiss = () =>
       onDismiss(anchor.querySelector('textarea')?.value ?? '');
-    const root = anchor.getRootNode();
-    const shadowHost =
-      root.nodeType === Node.DOCUMENT_FRAGMENT_NODE
-        ? (root as ShadowRoot).host
-        : null;
+    const roots: Node[] = [];
+    const hosts: Element[] = [];
+    let root = anchor.getRootNode();
+    while (true) {
+      roots.push(root);
+      if (root.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) break;
+      const host = (root as ShadowRoot).host;
+      hosts.push(host);
+      root = host.getRootNode();
+    }
     const outside = (event: Event) => {
       const path = event.composedPath();
       if (!path.includes(panel) && !path.includes(anchor)) dismiss();
     };
-    const outsideDocument = (event: Event) => {
-      // A listener outside a closed shadow root sees only its host. Let the
-      // root listener inspect the complete internal path before dismissing.
-      if (shadowHost && event.composedPath().includes(shadowHost)) return;
-      outside(event);
-    };
+    const seen = roots.map(() => new WeakSet<Event>());
+    const outsideListeners = roots.map((eventRoot, index) => {
+      const listener = (event: Event) => {
+        seen[index]!.add(event);
+        const innerHost = index ? hosts[index - 1] : null;
+        if (innerHost && event.composedPath().includes(innerHost)) {
+          // Closed roots hide their internals from outer listeners. Wait until
+          // propagation finishes: an inner root marks the event as seen, while
+          // a direct press on host whitespace has no inner listener to do so.
+          queueMicrotask(() => {
+            if (!seen[index - 1]!.has(event)) dismiss();
+          });
+          return;
+        }
+        outside(event);
+      };
+      eventRoot.addEventListener('pointerdown', listener, true);
+      return listener;
+    });
     const escape = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -44,20 +62,21 @@ export function useCommandConsoleAssistPosition(
       event.preventDefault();
       dismiss();
     };
-    // Capture outside presses both at the document and the command console's
-    // own root. A closed shadow root hides its internal path from document,
-    // while the root listener can still distinguish the panel from siblings.
-    document.addEventListener('pointerdown', outsideDocument, true);
-    if (root !== document) root.addEventListener('pointerdown', outside, true);
-    document.addEventListener('keydown', escape);
+    // Capture presses at every root boundary. Each closed root can inspect the
+    // section of the composed path hidden from its parent root.
+    anchor.ownerDocument.addEventListener('keydown', escape);
     if (!('popover' in HTMLElement.prototype)) {
       panel.removeAttribute('popover');
       panel.dataset.inline = '';
       return () => {
-        document.removeEventListener('pointerdown', outsideDocument, true);
-        if (root !== document)
-          root.removeEventListener('pointerdown', outside, true);
-        document.removeEventListener('keydown', escape);
+        roots.forEach((eventRoot, index) =>
+          eventRoot.removeEventListener(
+            'pointerdown',
+            outsideListeners[index]!,
+            true,
+          ),
+        );
+        anchor.ownerDocument.removeEventListener('keydown', escape);
       };
     }
     const nativeAnchors = CSS.supports(
@@ -118,10 +137,14 @@ export function useCommandConsoleAssistPosition(
       observer.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
-      document.removeEventListener('pointerdown', outsideDocument, true);
-      if (root !== document)
-        root.removeEventListener('pointerdown', outside, true);
-      document.removeEventListener('keydown', escape);
+      roots.forEach((eventRoot, index) =>
+        eventRoot.removeEventListener(
+          'pointerdown',
+          outsideListeners[index]!,
+          true,
+        ),
+      );
+      anchor.ownerDocument.removeEventListener('keydown', escape);
       anchor.style.setProperty('anchor-name', previousAnchor);
       if (panel.matches(':popover-open')) panel.hidePopover();
     };

@@ -79,6 +79,51 @@ test('a press outside a closed shadow host still closes the assist', async () =>
   }
 });
 
+test('a command can be picked through nested closed shadow roots', async () => {
+  const view = await mount({ value: '/' }, true, {
+    shadow: 'closed',
+    shadowDepth: 2,
+  });
+  try {
+    const option = view.container.querySelector('[role="option"]');
+    assert.ok(option);
+    await act(() =>
+      option.dispatchEvent(
+        new window.PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      ),
+    );
+    assert.ok(option.isConnected, 'nested roots keep the internal press open');
+    await act(() => option.click());
+    assert.equal(view.input.value, 'ov read ');
+  } finally {
+    await view.dispose();
+  }
+});
+
+test('a direct press on closed shadow host whitespace closes the assist', async () => {
+  const view = await mount({ value: '/' }, true, { shadow: 'closed' });
+  try {
+    assert.ok(view.container.querySelector('[role="listbox"]'));
+    await act(async () => {
+      view.hosts[0].dispatchEvent(
+        new window.PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+    assert.ok(!view.container.querySelector('[role="listbox"]'));
+  } finally {
+    await view.dispose();
+  }
+});
+
 test('Escape closes the assist after focus leaves the input', async () => {
   const view = await mount({
     value: '/find',

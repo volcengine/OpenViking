@@ -48,13 +48,16 @@ export const record = (content, id = 'one') => ({
 
 export async function mount(props = {}, controlled = true, options = {}) {
   const container = document.createElement('div');
-  const host = options.shadow ? document.createElement('div') : null;
-  if (host) {
-    host.attachShadow({ mode: options.shadow }).append(container);
-    document.body.append(host);
-  } else {
-    document.body.append(container);
+  const shadowDepth = options.shadowDepth ?? (options.shadow ? 1 : 0);
+  const hosts = [];
+  let parent = document.body;
+  for (let index = 0; index < shadowDepth; index += 1) {
+    const host = document.createElement('div');
+    hosts.push(host);
+    parent.append(host);
+    parent = host.attachShadow({ mode: options.shadow ?? 'closed' });
   }
+  parent.append(container);
   const root = createRoot(container);
   let current = { value: '', records: [], commands, ...props };
   function Host({ input }) {
@@ -80,11 +83,12 @@ export async function mount(props = {}, controlled = true, options = {}) {
   await render();
   return {
     container,
+    hosts,
     render,
     input: container.querySelector('textarea'),
     async dispose() {
       await act(() => root.unmount());
-      (host ?? container).remove();
+      (hosts[0] ?? container).remove();
     },
   };
 }
