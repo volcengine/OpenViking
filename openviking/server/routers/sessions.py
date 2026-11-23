@@ -561,14 +561,13 @@ class SessionHistoryRequest(BaseModel):
     )
     query: str = _HISTORY_TEXT
     role: str = _HISTORY_TEXT
-    tool: str = _HISTORY_TEXT
     from_id: str = _HISTORY_TEXT
     to_id: str = _HISTORY_TEXT
     id: str = _HISTORY_TEXT
     before: Optional[int] = None
     after: Optional[int] = None
     offset: int = 0
-    limit: int = 10
+    limit: Optional[int] = None
 
     model_config = {"extra": "forbid"}
 
@@ -590,7 +589,6 @@ async def session_history(
         sessions=[session_id, *request.sessions],
         query=request.query,
         role=request.role,
-        tool=request.tool,
         from_id=request.from_id,
         to_id=request.to_id,
         id=request.id,

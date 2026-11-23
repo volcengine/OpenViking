@@ -13,7 +13,9 @@ session unavailable, because numbering past the hole would be wrong.
 
 Each item renders to one canonical text (text parts verbatim, tool calls with
 their full outputs, externalized outputs filled in from the tool-result store).
-Search offsets and read offsets are character offsets into that text.
+Search prints the lines of that text that hold a match, each addressed by the
+character offset at which the printed text starts; read returns an exact
+character range of it.
 
 Files are read with ``VikingFS.read_file`` under the caller's session context
 (the permission checks of every read path), and every text then goes through
@@ -24,6 +26,7 @@ Every model-facing string lives in the "Wording" section below.
 from __future__ import annotations
 
 import asyncio
+import bisect
 import hashlib
 import json
 import re
@@ -54,11 +57,16 @@ NEIGHBOUR_TOKENS = 400
 SNIPPET_TOKENS = 60
 SCAN_BUDGET_CHARS = 32_000_000
 MAX_SESSIONS = 10
-DEFAULT_NEIGHBOURS = 2
 MAX_NEIGHBOURS = 20
-DEFAULT_LIMIT = 10
-MAX_LIMIT = 30
-READ_LEAD_CHARS = 200
+SEARCH_LINES = 20
+MAX_SEARCH_LINES = 50
+LINES_PER_ITEM = 5
+LONG_LINE_CHARS = 400
+LINE_WINDOW_CHARS = 200
+READ_CHARS = 4_000
+MAX_READ_CHARS = 16_000
+OVERVIEW_ROWS = 10
+MAX_OVERVIEW_ROWS = 30
 TARGET_MIN_TOKENS = 200
 HANDLE_CHARS = 6
 MAX_SUBAGENTS_LISTED = 20
@@ -66,7 +74,6 @@ NAME_CHARS = 120
 # Longest accepted text arguments; longer ones get a "Bad arguments" line.
 TEXT_ARG_LIMITS = {
     "query": 500,
-    "tool": 200,
     "id": 140,
     "from_id": 140,
     "to_id": 140,
@@ -83,6 +90,8 @@ _LIST_PAGE = 1_000
 _SELF_TOOL_SUFFIX = "session_history"
 _QUIET_TOOL_STATUSES = frozenset({"", "completed", "success", "succeeded", "ok", "done", "pending"})
 _TOOL_RESULT_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
+# Exactly the boundaries str.splitlines() uses, so search lines are the lines read shows.
+_LINE_BREAK_RE = re.compile("\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
 
 # ---------------------------------------------------------------------------
 # Wording (all model-facing text)
@@ -111,10 +120,6 @@ def _quote(value: Any) -> str:
     return text
 
 
-def _t_hint(**args: Any) -> str:
-    return "Next: " + ", ".join(f"{key}={_quote(value)}" for key, value in args.items())
-
-
 def _t_session_line(sid: str, handle: str, count: int, first: str, last: str, latest: str) -> str:
     if not count:
         return f"Session {sid} = {handle}: no saved items yet."
@@ -141,7 +146,7 @@ def _t_bad(what: str) -> str:
 
 T_BAD_ACTION = _t_bad('pass action="search", action="read" or action="overview".')
 T_BAD_ROLE = _t_bad('role is "user" or "assistant".')
-T_BAD_SEARCH = _t_bad('search needs query="<exact words>" (or tool="<tool name>").')
+T_BAD_SEARCH = _t_bad('search needs query="<exact words>".')
 T_BAD_READ = _t_bad('read needs id="<id>", e.g. id="3fa91c#12".')
 
 
@@ -162,17 +167,12 @@ def _t_bad_id(raw: str, ranges: Sequence[str]) -> str:
     return f"Unknown id {_quote(_safe(raw))}. Valid ids: {valid}."
 
 
-def _t_cut(id_: str, end: int, total: int, session: str) -> str:
-    hint = _t_hint(action="read", id=id_, offset=end, session=session)
-    return f"(cut at char {end} of {total}) {hint}"
+def _t_range(start: int, end: int, total: int) -> str:
+    return f"chars {start}–{end} of {total}"
 
 
-def _t_from(start: int, total: int) -> str:
-    return f"(from char {start} of {total})"
-
-
-def _t_left_out(scope: Any, items: Sequence[Any], target_id: str) -> str:
-    """One line naming the neighbours left out, with a hint to read the nearest one."""
+def _t_left_out(scope: Any, items: Sequence[Any]) -> str:
+    """One line naming the neighbours left out."""
     numbers = sorted(item.n for item in items)
     runs: List[List[int]] = []
     for number in numbers:
@@ -185,43 +185,45 @@ def _t_left_out(scope: Any, items: Sequence[Any], target_id: str) -> str:
         + (f" to {scope.fmt_id(scope.items[run[-1] - 1])}" if len(run) > 1 else "")
         for run in runs
     )
-    hint = _t_hint(
-        action="read", id=scope.fmt_id(items[0]), session=scope.session_id, before=0, after=0
-    )
-    return (
-        f"(Neighbours left out to fit: {ranges}; read them directly or with a smaller "
-        f"before/after around {target_id}.) {hint}"
-    )
+    return f"(Neighbours left out to fit: {ranges}.)"
 
 
 def _t_offset_past_end(id_: str, total: int) -> str:
     return f"Item {id_} has {total} chars; offset must be below {total}."
 
 
-def _t_hit_header(header: str, offset: int, matches: int) -> str:
-    noun = "match" if matches == 1 else "matches"
-    return f"{header} · offset {offset} · {matches} {noun}"
+def _t_line_address(id_: str, offset: int, who: str, line_chars: int) -> str:
+    text = f"[{id_} @{offset}]"
+    if who:
+        text += f" {who}"
+    if line_chars:
+        text += f" · part of a {line_chars}-char line"
+    return text
 
 
-def _t_what(query: str, tool: str) -> str:
-    what = _quote(query) if query else f"tool {_quote(tool)}"
-    if query and tool:
-        what += f" in tool {_quote(tool)}"
-    return what
+def _lines_noun(count: int) -> str:
+    return "line" if count == 1 else "lines"
 
 
-def _t_search_summary(query: str, tool: str, hits: int, shown: int, fallback: bool) -> str:
-    how = " (no exact phrase match; showing items that contain all the words)" if fallback else ""
-    noun = "item" if hits == 1 else "items"
+def _t_more_in_item(more: int, id_: str, offset: int) -> str:
+    return f"({more} more matching {_lines_noun(more)} in {id_}, from @{offset}.)"
+
+
+def _t_search_summary(query: str, lines: int, items: int, fallback: bool) -> str:
+    how = (
+        " (no exact phrase match; showing lines of the items that contain all the words)"
+        if fallback
+        else ""
+    )
+    noun = "item" if items == 1 else "items"
     return (
-        f"Search {_t_what(query, tool)}{how}: {hits} matching {noun}, newest first, "
-        f"showing {shown}."
+        f"Search {_quote(query)}{how}: {lines} matching {_lines_noun(lines)} in {items} {noun}, "
+        "oldest first."
     )
 
 
-def _t_more_hits(more: int, hint: str) -> str:
-    noun = "item" if more == 1 else "items"
-    return f"{more} older matching {noun} not shown. {hint}"
+def _t_newer_left_out(count: int, id_: str, offset: int) -> str:
+    return f"{count} newer matching {_lines_noun(count)} not shown; they start at {id_} @{offset}."
 
 
 def _t_hidden(items: int) -> str:
@@ -229,13 +231,12 @@ def _t_hidden(items: int) -> str:
     return f"Matches inside earlier history lookups were hidden in {items} {noun}."
 
 
-def _t_budget(last_id: str, hint: str) -> str:
-    return f"Scan budget used up; searched down to {last_id}. {hint}"
+def _t_budget(last_id: str, next_id: str) -> str:
+    return f"Scan budget used up: searched up to {last_id}; {next_id} and newer were not searched."
 
 
 def _t_zero_hits(
     query: str,
-    tool: str,
     items: int,
     ranges: Sequence[str],
     latest: str,
@@ -245,7 +246,7 @@ def _t_zero_hits(
 ) -> str:
     scope = "; ".join(ranges) if ranges else "none"
     where = "the searched range" if partial else f"{items} searched items ({scope})"
-    text = f"No match for {_t_what(query, tool)} in {where}; latest saved item {latest}."
+    text = f"No match for {_quote(query)} in {where}; latest saved item {latest}."
     if tried_all_terms:
         text += " No item contains all of the words either."
     return text + " Search is literal (case-insensitive); a shorter exact string may work."
@@ -262,7 +263,7 @@ def _t_first_user(snippet: str) -> str:
 
 
 def _t_more_archives(count: int) -> str:
-    return f"({count} older archives not shown; raise limit, max {MAX_LIMIT}.)"
+    return f"({count} older archives not shown; raise limit, max {MAX_OVERVIEW_ROWS}.)"
 
 
 def _t_older_archives(count: int, first: str, last: str, *, older: bool = True) -> str:
@@ -293,19 +294,22 @@ def _t_subagents(sids: Sequence[str], more: int) -> str:
     return "Subagent sessions (pass one as session to search or read it): " + names
 
 
+T_TOOL_LABEL = "[tool "
+
+
 def _t_tool_input(name: str, payload: str) -> str:
-    return f"[tool {name}] input: {payload}"
+    return f"{T_TOOL_LABEL}{name}] input: {payload}"
 
 
 def _t_tool_output(name: str, chars: int, status: str) -> str:
     extra = f", status: {status}" if status else ""
-    return f"[tool {name}] output ({chars} chars{extra}):"
+    return f"{T_TOOL_LABEL}{name}] output ({chars} chars{extra}):"
 
 
 def _t_tool_output_preview(name: str, reason: str, status: str) -> str:
     extra = f", status: {status}" if status else ""
     return (
-        f"[tool {name}] output (full output {reason}; stored preview follows, "
+        f"{T_TOOL_LABEL}{name}] output (full output {reason}; stored preview follows, "
         f"so offsets in this item are not reliable{extra}):"
     )
 
@@ -320,10 +324,6 @@ def _t_context_label(context_type: str) -> str:
 
 def _t_context(context_type: str, uri: str, abstract: str) -> str:
     return f"{_t_context_label(context_type)}{uri} — {abstract}"
-
-
-def _t_overview_next(session: str) -> str:
-    return _t_hint(action="search", query="<exact words>", session=session)
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +350,7 @@ class _Item:
     archive: str
     text: Optional[str] = None
     skip_spans: List[tuple[int, int]] = field(default_factory=list)
-    tool_spans: List[tuple[int, int, str]] = field(default_factory=list)
-    # Rendering labels such as "[tool x] input: "; matches starting there are not counted.
+    # Rendering labels such as "[tool " and "] input: "; matches starting there are not counted.
     label_spans: List[tuple[int, int]] = field(default_factory=list)
 
 
@@ -435,21 +434,6 @@ def _fit_end(text: str, start: int, max_tokens: int) -> int:
             lo = mid
         else:
             hi = mid - 1
-    return lo
-
-
-def _fit_start(text: str, end: int, max_tokens: int) -> int:
-    """Smallest start so that text[start:end] fits max_tokens."""
-    lo = max(0, end - max(0, max_tokens) * 8)
-    if _tokens(text[lo:end]) <= max_tokens:
-        return lo
-    hi = end
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if _tokens(text[mid:end]) <= max_tokens:
-            hi = mid
-        else:
-            lo = mid + 1
     return lo
 
 
@@ -851,12 +835,13 @@ async def _render(service: Any, scope: _Scope, item: _Item) -> None:
                 piece += "\n" + output
             span = add(piece)
             header_start = span[0] + len(label) + len(payload) + 1
-            item.label_spans.append((span[0], span[0] + len(label)))
-            item.label_spans.append((header_start, header_start + len(header)))
+            # The tool name inside each label is searchable; the rest of the label is not.
+            for label_start, label_len in ((span[0], len(label)), (header_start, len(header))):
+                name_start = label_start + len(T_TOOL_LABEL)
+                item.label_spans.append((label_start, name_start))
+                item.label_spans.append((name_start + len(name), label_start + label_len))
             if _is_self_tool(name):
                 item.skip_spans.append(span)
-            else:
-                item.tool_spans.append((span[0], span[1], name.lower()))
         elif isinstance(part, ContextPart):
             start, _end = add(
                 _t_context(part.context_type, part.uri, _one_line(part.abstract or ""))
@@ -877,7 +862,7 @@ async def _render_many(service: Any, pairs: Sequence[tuple[_Scope, _Item]]) -> N
             except Exception:
                 logger.warning("session_history: cannot render item %s", item.n, exc_info=True)
                 item.message, item.text = None, T_UNREADABLE_LINE
-                item.skip_spans, item.tool_spans = [], []
+                item.skip_spans = []
                 item.label_spans = [(0, len(T_UNREADABLE_LINE))]
 
     await asyncio.gather(*(one(scope, item) for scope, item in pairs))
@@ -911,32 +896,33 @@ def _estimated_chars(item: _Item) -> int:
         return len(T_UNREADABLE_LINE)
 
 
+def _who(item: _Item) -> str:
+    return f"{_role(item)} · {_fmt_time(_created_at(item))}"
+
+
 def _header(scope: _Scope, item: _Item) -> str:
-    return f"[{scope.fmt_id(item)}] {_role(item)} · {_fmt_time(_created_at(item))}"
+    return f"[{scope.fmt_id(item)}] {_who(item)}"
 
 
-def _body_block(scope: _Scope, item: _Item, start: int, max_tokens: int) -> tuple[List[str], bool]:
-    """Header, prefixed body from start within max_tokens, and a cut hint when cut."""
+def _body_block(
+    scope: _Scope, item: _Item, start: int, max_chars: int, max_tokens: int
+) -> tuple[List[str], bool]:
+    """Header and prefixed body text[start:end], end bounded by max_chars and max_tokens.
+
+    A header that shows less than the whole item states the range and the total.
+    """
     text = item.text or ""
     total = len(text)
-    lines = [_header(scope, item)]
-    if start:
-        lines.append(_t_from(start, total))
-    end = _fit_end(text, start, max(1, max_tokens))
+    end = min(total, start + max_chars, _fit_end(text, start, max(1, max_tokens)))
     if end <= start < total:
-        end = min(total, start + 1)
-    if end < total:
-        # Prefer cutting at a line end when one is reasonably close.
-        newline = text.rfind("\n", start, end)
-        if newline > start + (end - start) // 2:
-            end = newline + 1
-    cut = end < total
+        end = start + 1
+    header = _header(scope, item)
+    if start > 0 or end < total:
+        header += " · " + _t_range(start, end, total)
+    lines = [header]
     if total:
-        body = text[start:end]
-        lines.extend(_prefixed(body[:-1] if cut and body.endswith("\n") else body))
-    if cut:
-        lines.append(_t_cut(scope.fmt_id(item), end, total, scope.session_id))
-    return lines, cut
+        lines.extend(_prefixed(text[start:end]))
+    return lines, end < total
 
 
 def _ranges(scopes: Sequence[_Scope]) -> List[str]:
@@ -1035,68 +1021,82 @@ def _resolve_id(scopes: Sequence[_Scope], raw: str) -> Optional[tuple[_Scope, _I
 # ---------------------------------------------------------------------------
 
 
-def _allowed(position: int, item: _Item, tool: str) -> Optional[bool]:
+def _allowed(position: int, item: _Item) -> Optional[bool]:
     """True to count a match at position, False to drop it, None to hide it as self-echo."""
     if any(start <= position < end for start, end in item.skip_spans):
         return None
-    if any(start <= position < end for start, end in item.label_spans):
-        return False
-    if not tool:
-        return True
-    return any(start <= position < end and tool in name for start, end, name in item.tool_spans)
+    return not any(start <= position < end for start, end in item.label_spans)
 
 
-def _matches(item: _Item, pattern: re.Pattern, tool: str) -> tuple[List[int], bool]:
-    """Counted match positions, and whether any match was hidden as self-echo."""
-    kept: List[int] = []
+def _matches(item: _Item, pattern: re.Pattern) -> tuple[List[tuple[int, int]], bool]:
+    """Counted match spans, and whether any match was hidden as self-echo."""
+    kept: List[tuple[int, int]] = []
     hidden = False
     for match in pattern.finditer(item.text or ""):
-        verdict = _allowed(match.start(), item, tool)
+        verdict = _allowed(match.start(), item)
         if verdict is None:
             hidden = True
         elif verdict:
-            kept.append(match.start())
+            kept.append(match.span())
     return kept, hidden
 
 
+@dataclass
+class _Line:
+    """One printed search line: text[start:end] of an item."""
+
+    start: int
+    end: int
+    # Length of the whole line when only a window of it is printed, else 0.
+    line_chars: int
+
+
+def _matching_lines(text: str, spans: Sequence[tuple[int, int]]) -> List[_Line]:
+    """The distinct lines holding a match, in order; a long line becomes a window."""
+    breaks = [match.span() for match in _LINE_BREAK_RE.finditer(text)]
+    starts = [0, *(end for _start, end in breaks)]
+    ends = [*(start for start, _end in breaks), len(text)]
+    lines: List[_Line] = []
+    following = 0  # start of the line after the last one printed
+    for match_start, match_end in sorted(spans):
+        if lines and match_start < following:
+            continue
+        index = bisect.bisect_right(starts, match_start) - 1
+        following = starts[index + 1] if index + 1 < len(starts) else len(text) + 1
+        start, end = starts[index], ends[index]
+        if end - start > LONG_LINE_CHARS:
+            window_start = max(start, match_start - LINE_WINDOW_CHARS)
+            window_end = min(end, max(match_end, match_start + 1) + LINE_WINDOW_CHARS)
+            lines.append(_Line(window_start, window_end, end - start))
+        else:
+            lines.append(_Line(start, end, 0))
+    return lines
+
+
 def _match_all(
-    items: Sequence[_Item], query: str, tool: str, allow_fallback: bool
-) -> tuple[List[tuple[int, int, int]], int, bool, bool]:
-    """(index, offset, count) per hit, hidden items, fallback used, fallback tried."""
-    hits: List[tuple[int, int, int]] = []
+    items: Sequence[_Item], query: str, allow_fallback: bool
+) -> tuple[List[tuple[int, List[_Line]]], int, bool, bool]:
+    """(index, matching lines) per hit item, hidden items, fallback used, fallback tried."""
+    hits: List[tuple[int, List[_Line]]] = []
     hidden = 0
-    if not query:
-        for index, item in enumerate(items):
-            kept = [start for start, _end, name in item.tool_spans if tool in name]
-            if kept:
-                hits.append((index, kept[0], len(kept)))
-        return hits, 0, False, False
     pattern = re.compile(re.escape(query), re.IGNORECASE)
     for index, item in enumerate(items):
-        kept, item_hidden = _matches(item, pattern, tool)
+        kept, item_hidden = _matches(item, pattern)
         hidden += item_hidden
         if kept:
-            hits.append((index, kept[0], len(kept)))
+            hits.append((index, _matching_lines(item.text or "", kept)))
     terms = query.split()
     if hits or not allow_fallback or len(terms) < 2:
         return hits, hidden, False, False
     patterns = [re.compile(re.escape(term), re.IGNORECASE) for term in terms]
     hidden = 0
     for index, item in enumerate(items):
-        per_term = [_matches(item, term_pattern, tool) for term_pattern in patterns]
+        per_term = [_matches(item, term_pattern) for term_pattern in patterns]
         hidden += any(item_hidden for _kept, item_hidden in per_term)
         if all(kept for kept, _hidden in per_term):
-            positions = [position for kept, _hidden in per_term for position in kept]
-            hits.append((index, min(positions), len(positions)))
+            spans = [span for kept, _hidden in per_term for span in kept]
+            hits.append((index, _matching_lines(item.text or "", spans)))
     return hits, hidden, bool(hits), True
-
-
-def _snippet(text: str, offset: int) -> str:
-    left = _fit_start(text, offset, SNIPPET_TOKENS // 3)
-    right = _fit_end(text, offset, SNIPPET_TOKENS - SNIPPET_TOKENS // 3)
-    prefix = "…" if left > 0 else ""
-    suffix = "…" if right < len(text) else ""
-    return prefix + _one_line(text[left:right]) + suffix
 
 
 async def _search(
@@ -1105,20 +1105,20 @@ async def _search(
     *,
     query: str,
     role: str,
-    tool: str,
     from_id: str,
     to_id: str,
     limit: int,
-    session: str,
     notes: Sequence[str],
 ) -> HistoryResult:
-    # One newest-first sequence over all sessions in scope; to_id/from_id cut it.
-    sequence = [(scope, item) for scope in scopes for item in reversed(scope.items)]
-    rank = {id(scope): index for index, scope in enumerate(scopes)}
+    # One oldest-first sequence over all sessions in scope (the session argument is
+    # newest first); from_id/to_id cut it.
+    ordered = list(reversed(scopes))
+    rank = {id(scope): index for index, scope in enumerate(ordered)}
 
     def key(scope: _Scope, item: _Item) -> tuple[int, int]:
-        return rank[id(scope)], -item.n
+        return rank[id(scope)], item.n
 
+    sequence = [(scope, item) for scope in ordered for item in scope.items]
     for raw, is_upper in ((to_id, True), (from_id, False)):
         if not raw:
             continue
@@ -1131,7 +1131,7 @@ async def _search(
         sequence = [
             entry
             for entry in sequence
-            if (key(*entry) >= bound) == is_upper or key(*entry) == bound
+            if (key(*entry) <= bound if is_upper else key(*entry) >= bound)
         ]
     if role:
         sequence = [entry for entry in sequence if _role(entry[1]) == role]
@@ -1150,21 +1150,10 @@ async def _search(
     for start in range(0, len(scanned), _RENDER_BATCH):
         await _render_many(service, scanned[start : start + _RENDER_BATCH])
 
-    tool_key = tool.lower()
     found, hidden, fallback, tried = await asyncio.to_thread(
-        _match_all, [item for _scope, item in scanned], query, tool_key, next_entry is None
+        _match_all, [item for _scope, item in scanned], query, next_entry is None
     )
-    hits = [(scanned[index][0], scanned[index][1], offset, count) for index, offset, count in found]
-
-    args = {
-        key: value
-        for key, value in (("query", query), ("role", role), ("tool", tool), ("from_id", from_id))
-        if value
-    }
-    args["session"] = session
-
-    def more_hint(scope: _Scope, item: _Item) -> str:
-        return _t_hint(action="search", **args, to_id=scope.fmt_id(item))
+    hits = [(scanned[index][0], scanned[index][1], lines) for index, lines in found]
 
     lines = _frame(scopes, notes)
     tail: List[str] = []
@@ -1172,15 +1161,14 @@ async def _search(
         tail.append(_t_hidden(hidden))
     if next_entry is not None and scanned:
         last_scope, last_item = scanned[-1]
-        tail.append(_t_budget(last_scope.fmt_id(last_item), more_hint(*next_entry)))
+        tail.append(_t_budget(last_scope.fmt_id(last_item), next_entry[0].fmt_id(next_entry[1])))
 
     if not hits:
         ranges = _ranges(scopes)
         if from_id or to_id or role:
             ranges = (
                 [
-                    f"{scanned[0][0].fmt_id(scanned[0][1])} down to "
-                    f"{scanned[-1][0].fmt_id(scanned[-1][1])}"
+                    f"{scanned[0][0].fmt_id(scanned[0][1])} to {scanned[-1][0].fmt_id(scanned[-1][1])}"
                 ]
                 if scanned
                 else []
@@ -1188,7 +1176,6 @@ async def _search(
         lines.append(
             _t_zero_hits(
                 query,
-                tool,
                 len(scanned),
                 ranges,
                 _latest(scopes),
@@ -1200,50 +1187,57 @@ async def _search(
         lines.extend(tail)
         return HistoryResult("\n".join(lines), has_more=next_entry is not None)
 
-    # Room for the lines printed after the hits, in their longest form: the summary,
-    # the more-hits hint and the read hint (they repeat the query and session ids).
-    longest_sid = max((scope.session_id for scope in scopes), key=len)
+    total = sum(len(item_lines) for _scope, _item, item_lines in hits)
+    summary = _t_search_summary(query, total, len(hits), fallback)
+    # Room for the summary and the longest form of the "newer lines" line.
     longest_id = max(
         (scope.fmt_id(scope.items[-1]) for scope in scopes if scope.items), key=len, default=""
     )
-    many = 10 ** len(str(len(sequence)))
-    after_hits = [
-        _t_search_summary(query, tool, many, many, True),
-        _t_more_hits(many, _t_hint(action="search", **args, to_id=longest_id)),
-        _t_hint(action="read", id=longest_id, offset=10**12, session=longest_sid),
-    ]
-    reserve = _tokens("\n".join(after_hits)) + 20
+    reserve = _tokens("\n".join([summary, _t_newer_left_out(total, longest_id, 10**12)])) + 20
     budget = RESPONSE_TOKENS - _tokens("\n".join(lines + tail)) - reserve
-    shown: List[str] = []
     blocks: List[str] = []
-    for scope, item, offset, count in hits[:limit]:
-        block = [
-            _t_hit_header(_header(scope, item), offset, count),
-            "| " + _snippet(item.text or "", offset),
-        ]
-        cost = _tokens("\n".join(block))
-        if shown and cost > budget:
+    shown: List[str] = []
+    printed = 0
+    stop: Optional[tuple[int, int]] = None
+    more_in_items = False
+    for hit_index, (scope, item, item_lines) in enumerate(hits):
+        text = item.text or ""
+        id_ = scope.fmt_id(item)
+        capped = item_lines[:LINES_PER_ITEM]
+        for line_index, line in enumerate(capped):
+            block = [
+                _t_line_address(id_, line.start, "" if line_index else _who(item), line.line_chars),
+                "| " + text[line.start : line.end],
+            ]
+            more = len(item_lines) - len(capped)
+            if line_index == len(capped) - 1 and more:
+                block.append(_t_more_in_item(more, id_, item_lines[len(capped)].start))
+            cost = _tokens("\n".join(block))
+            if printed >= limit or (printed and cost > budget):
+                stop = (hit_index, line_index)
+                break
+            budget -= cost
+            blocks.extend(block)
+            printed += 1
+            if not line_index:
+                shown.append(id_)
+            more_in_items = more_in_items or (line_index == len(capped) - 1 and more > 0)
+        if stop is not None:
             break
-        budget -= cost
-        blocks.extend(block)
-        shown.append(scope.fmt_id(item))
 
-    lines.append(_t_search_summary(query, tool, len(hits), len(shown), fallback))
+    lines.append(summary)
     lines.extend(blocks)
-    more = len(hits) - len(shown)
-    if more:
-        lines.append(_t_more_hits(more, more_hint(hits[len(shown)][0], hits[len(shown)][1])))
+    if stop is not None:
+        hit_index, line_index = stop
+        left_out = sum(len(item_lines) for _s, _i, item_lines in hits[hit_index:]) - line_index
+        scope, item, item_lines = hits[hit_index]
+        lines.append(_t_newer_left_out(left_out, scope.fmt_id(item), item_lines[line_index].start))
     lines.extend(tail)
-    first_scope, first_item, first_offset, _count = hits[0]
-    lines.append(
-        _t_hint(
-            action="read",
-            id=first_scope.fmt_id(first_item),
-            offset=first_offset,
-            session=first_scope.session_id,
-        )
+    return HistoryResult(
+        "\n".join(lines),
+        ids=shown,
+        has_more=stop is not None or more_in_items or next_entry is not None,
     )
-    return HistoryResult("\n".join(lines), ids=shown, has_more=bool(more) or next_entry is not None)
 
 
 async def _read(
@@ -1254,6 +1248,7 @@ async def _read(
     before: Optional[int],
     after: Optional[int],
     offset: int,
+    limit: int,
     notes: Sequence[str],
 ) -> HistoryResult:
     if not id_.strip():
@@ -1262,36 +1257,26 @@ async def _read(
     if resolved is None:
         return HistoryResult("\n".join(_frame(scopes, notes, [_t_bad_id(id_, _ranges(scopes))])))
     scope, target = resolved
-    offset = max(0, int(offset or 0))
-    default = 0 if offset > 0 else DEFAULT_NEIGHBOURS
-    before_count = _clamp(before, default, 0, MAX_NEIGHBOURS)
-    after_count = _clamp(after, default, 0, MAX_NEIGHBOURS)
+    start = max(0, offset)
+    before_count = _clamp(before, 0, 0, MAX_NEIGHBOURS)
+    after_count = _clamp(after, 0, 0, MAX_NEIGHBOURS)
     index = target.n - 1
     previous = scope.items[max(0, index - before_count) : index]
     following = scope.items[index + 1 : index + 1 + after_count]
     await _render_many(service, [(scope, item) for item in [*previous, target, *following]])
 
     text = target.text or ""
-    if offset and offset >= len(text):
+    if start and start >= len(text):
         return HistoryResult(
             "\n".join(_frame(scopes, notes, [_t_offset_past_end(scope.fmt_id(target), len(text))]))
         )
-    start = 0
-    if offset:
-        start = max(0, offset - READ_LEAD_CHARS)
-        newline = text.find("\n", start, offset)
-        if start and newline != -1:
-            start = newline + 1
 
     lines = _frame(scopes, notes)
-    # The target comes first: its header, "(from char ...)" and cut hint lines plus at
-    # least TARGET_MIN_TOKENS of its body. Neighbours share what is left, nearest first.
-    target_lines = [
-        _header(scope, target),
-        _t_from(start, len(text)),
-        _t_cut(scope.fmt_id(target), len(text), len(text), scope.session_id),
-    ]
-    room = RESPONSE_TOKENS - _tokens("\n".join(lines)) - _tokens("\n".join(target_lines)) - 20
+    # The target comes first: its header with the longest range form plus at least
+    # TARGET_MIN_TOKENS of its body. Neighbours share what is left, nearest first.
+    longest = len(text) + start
+    target_header = _header(scope, target) + " · " + _t_range(longest, longest, longest)
+    room = RESPONSE_TOKENS - _tokens("\n".join(lines)) - _tokens(target_header) - 20
     nearest = [
         item
         for pair in zip_longest(reversed(previous), following)
@@ -1302,12 +1287,12 @@ async def _read(
     note = ""
     if left_out:
         # Reserve the longest form of the note: every neighbour left out.
-        reserve = _tokens(_t_left_out(scope, nearest, scope.fmt_id(target)))
+        reserve = _tokens(_t_left_out(scope, nearest))
         rendered, left_out = _fit_neighbours(scope, nearest, room - TARGET_MIN_TOKENS - reserve)
-        note = _t_left_out(scope, left_out, scope.fmt_id(target)) if left_out else ""
+        note = _t_left_out(scope, left_out) if left_out else ""
     used = sum(_tokens("\n".join(block)) for block, _cut in rendered.values())
     target_block, target_cut = _body_block(
-        scope, target, start, max(TARGET_MIN_TOKENS, room - used - _tokens(note))
+        scope, target, start, limit, max(TARGET_MIN_TOKENS, room - used - _tokens(note))
     )
 
     shown_before = [item for item in previous if item.n in rendered]
@@ -1335,7 +1320,7 @@ def _fit_neighbours(
         return rendered, []
     per_body = max(40, min(NEIGHBOUR_TOKENS, (room * 2 // 5) // len(nearest)))
     for index, item in enumerate(nearest):
-        block, cut = _body_block(scope, item, 0, per_body)
+        block, cut = _body_block(scope, item, 0, len(item.text or ""), per_body)
         cost = _tokens("\n".join(block))
         if cost > room:
             return rendered, list(nearest[index:])
@@ -1373,7 +1358,7 @@ def _overview_block(
     newest = list(reversed(scope.archive_ids))
 
     def not_shown(shown: int, token_stop: bool) -> str:
-        if limit < MAX_LIMIT and not token_stop:
+        if limit < MAX_OVERVIEW_ROWS and not token_stop:
             return _t_more_archives(len(newest) - shown)
         hidden = set(newest[shown:])
         older = [item for item in scope.items if item.archive in hidden]
@@ -1427,11 +1412,11 @@ def _overview_block(
 
 
 async def _overview(
-    service: Any, ctx: Any, scopes: List[_Scope], limit: int, session: str, notes: Sequence[str]
+    service: Any, ctx: Any, scopes: List[_Scope], limit: int, notes: Sequence[str]
 ) -> HistoryResult:
     lines = _frame(scopes, notes)
     has_more = False
-    # The tail (subagents, what is never saved, the next hint) is always printed in full.
+    # The tail (subagents, what is never saved) is always printed in full.
     tail: List[str] = []
     subagents, unlisted = await _subagent_sessions(service, ctx, scopes)
     if subagents or unlisted:
@@ -1443,7 +1428,7 @@ async def _overview(
         more = len(subagents) - len(listed) + unlisted
         tail.append(_t_subagents(listed, more))
         has_more = more > 0
-    tail += [NEVER_SAVED, _t_overview_next(session)]
+    tail.append(NEVER_SAVED)
     room = RESPONSE_TOKENS - _tokens("\n".join(tail)) - 20
     for index, scope in enumerate(scopes):
         later = len(scopes) - index - 1
@@ -1474,14 +1459,13 @@ async def session_history(
     sessions: Any = "",
     query: Any = "",
     role: Any = "",
-    tool: Any = "",
     from_id: Any = "",
     to_id: Any = "",
     id: Any = "",
     before: Any = None,
     after: Any = None,
     offset: Any = 0,
-    limit: Any = DEFAULT_LIMIT,
+    limit: Any = None,
 ) -> HistoryResult:
     """Answer one history request as text. Problems are answered as text, never raised.
 
@@ -1499,7 +1483,6 @@ async def session_history(
             sessions=sessions,
             query=query,
             role=role,
-            tool=tool,
             from_id=from_id,
             to_id=to_id,
             id_=id,
@@ -1523,7 +1506,6 @@ async def _answer(
     sessions: Any,
     query: Any,
     role: Any,
-    tool: Any,
     from_id: Any,
     to_id: Any,
     id_: Any,
@@ -1549,7 +1531,6 @@ async def _answer(
         "session": session_text,
         "query": _text_arg(query),
         "role": _text_arg(role),
-        "tool": _text_arg(tool),
         "id": _text_arg(id_),
         "from_id": _text_arg(from_id),
         "to_id": _text_arg(to_id),
@@ -1573,11 +1554,10 @@ async def _answer(
     if role and role not in ("user", "assistant"):
         return bad(T_BAD_ROLE)
     query = texts["query"]
-    tool = texts["tool"].strip()
     from_id, to_id, id_ = texts["from_id"], texts["to_id"], texts["id"]
     before, after = numbers["before"], numbers["after"]
     offset = numbers["offset"] or 0
-    if action == "search" and not query.strip() and not tool:
+    if action == "search" and not query.strip():
         return bad(T_BAD_SEARCH)
 
     requested, truncated = _split_sessions(
@@ -1603,24 +1583,31 @@ async def _answer(
         return HistoryResult("\n".join([FRAME, *notes]))
     _assign_handles(scopes)
 
-    limit = _clamp(numbers["limit"], DEFAULT_LIMIT, 1, MAX_LIMIT)
+    limit = numbers["limit"]
     if action == "search":
         result = await _search(
             service,
             scopes,
             query=query,
             role=role,
-            tool=tool,
             from_id=from_id,
             to_id=to_id,
-            limit=limit,
-            session=",".join(requested),
+            limit=_clamp(limit, SEARCH_LINES, 1, MAX_SEARCH_LINES),
             notes=notes,
         )
     elif action == "read":
         result = await _read(
-            service, scopes, id_=id_, before=before, after=after, offset=offset, notes=notes
+            service,
+            scopes,
+            id_=id_,
+            before=before,
+            after=after,
+            offset=offset,
+            limit=_clamp(limit, READ_CHARS, 1, MAX_READ_CHARS),
+            notes=notes,
         )
     else:
-        result = await _overview(service, ctx, scopes, limit, ",".join(requested), notes)
+        result = await _overview(
+            service, ctx, scopes, _clamp(limit, OVERVIEW_ROWS, 1, MAX_OVERVIEW_ROWS), notes
+        )
     return result

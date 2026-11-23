@@ -931,11 +931,11 @@ ov session get-session-archive a1b2c3d4 archive_002
 只读地查找一个会话保存下来的全部内容：所有带 `messages.jsonl` 的归档（pending、completed、failed 都算），再加上 live 尾部，按消息 ID 去重。外置的工具输出会从 tool-result 存储中补全，因此 search 和 read 看到的是完整输出，而不是存储的预览。返回的是给模型看的文本；MCP 工具 `session_history` 使用同一个服务。
 
 - **条目 ID** 形如 `3fa91c#870`：会话 ID 的 SHA-256 前 6 个十六进制字符，加上该消息在上述顺序中的位置（从 1 开始）。ID 在读取时计算，不写入任何新数据。输入也接受 `#870` 和 `870`（指范围内第一个会话）。归档写入后不再改变，普通 commit 归档的是前缀，所以位置在 commit 前后保持稳定。`retention_mode="turn_budget"` 下 live 尾部的消息可能在下一次 commit 时移动，因此这类会话的 live 尾部 ID 以 `~3fa91c#870` 形式输出。
-- **渲染**：text part 原样输出；工具调用输出为 `[tool <name>] input: <json>`，再加 `[tool <name>] output (<N> chars):` 和输出内容（非成功状态会标出）；context part 输出一行；图片输出 `[image]`。每个条目以 `[<id>] <role> · <time>` 开头，存储内容的每一行都加 `| ` 前缀。
-- **search**：字面量、不区分大小写的子串搜索，从新到旧，每个条目一条命中，给出第一次匹配的字符偏移。多个词组成的短语没有命中时，返回同时包含所有词的条目，并在结果中说明。名称以 `session_history` 结尾的工具调用会被跳过。每次调用最多扫描约 32 MB 文本，超出时说明从哪里继续（`to_id`）。
-- **read**：返回目标条目及 `before`/`after` 个相邻条目；过长的条目会被截断，并给出继续读取用的 `offset`。
-- **提示**（`Next: …` 行）可以原样执行：read 提示带有该 ID 所属的 `session`，search 的续查提示带有本次请求的完整会话列表。
-- **参数上限**：`query` 最多 500 个字符，`tool` 200，`id`/`from_id`/`to_id` 140，`session` 2,000；超长的值以及不是整数的数字参数以一行 `Bad arguments` 回答。通过 MCP 调用时，文本参数按原样使用（形如 `{"detail":"Not Found"}` 的 JSON 文本仍是文本），null 表示未提供，其他 JSON 值按紧凑 JSON 文本使用，`session` 传字符串列表时以逗号连接。HTTP 请求体中超过 10,000 个字符的文本字段会被拒绝；其 `sessions` 列表按列表处理，因此可以指定含逗号的会话 ID。
+- **渲染**：text part 原样输出；工具调用输出为 `[tool <name>] input: <json>`，再加 `[tool <name>] output (<N> chars):` 和输出内容（非成功状态会标出）；context part 输出一行；图片输出 `[image]`。read 中每个条目以 `[<id>] <role> · <time>` 标题开头，存储内容的每一行都加 `| ` 前缀。偏移量指的是这份渲染文本中的字符位置。
+- **search**：在渲染文本上做字面量、不区分大小写的子串搜索；工具名也在文本里，普通查询就能找到（渲染标签的其余部分不参与匹配）。每个匹配所在的行原样输出（行指 `read` 所显示文本中两个换行之间的内容），并以 `[<id> @<offset>]` 标注：offset 是输出文本在条目中的起始位置，用同样的 id 和 offset 调用 `read` 会正好从这段文本开始。条目的第一行还带有 `<role> · <time>`。同一行有多个匹配时只输出一次；超过约 400 个字符的行只输出匹配处前后各约 200 个字符，并在标注中写明 `part of a <N>-char line`。每个条目最多输出 5 行，之后说明该条目还有多少匹配行以及下一行的偏移。结果按时间从旧到新：先归档，再 live 尾部；多个会话时先输出较早的会话（即 `session` 中靠后的）。`limit` 限制输出的行数；被它或响应大小截断时，省略的是最新的行，并说明省略了多少行、从哪个 ID 和偏移开始。多个词组成的短语没有命中时，输出同时包含所有词的条目中含这些词的行，并在结果中说明。名称以 `session_history` 结尾的工具调用会被跳过。每次调用从旧到新最多扫描约 32 MB 文本，并说明扫描停在哪里。
+- **read**：返回一个条目的精确范围：从 `offset`（默认 0）开始，最多 `limit` 个字符，同时受响应上限约束。只显示了条目的一部分时，条目标题末尾写明 `chars <start>–<end> of <total>`；从 `<end>` 再读即可接着往下读。`before`/`after` 各可加最多 20 个相邻条目（默认 0），每个最多显示约 400 token。
+- **截断位置**：回答会写明在哪里截断（read 的字符范围、被省略的 search 行从哪里开始、扫描停在哪里），不替调用方写出下一次调用。
+- **参数上限**：`query` 最多 500 个字符，`id`/`from_id`/`to_id` 140，`session` 2,000；超长的值以及不是整数的数字参数以一行 `Bad arguments` 回答。通过 MCP 调用时，文本参数按原样使用（形如 `{"detail":"Not Found"}` 的 JSON 文本仍是文本），null 表示未提供，其他 JSON 值按紧凑 JSON 文本使用，`session` 传字符串列表时以逗号连接。HTTP 请求体中超过 10,000 个字符的文本字段会被拒绝；其 `sessions` 列表按列表处理，因此可以指定含逗号的会话 ID。
 - **overview**：每个归档一行（ID 范围、时间范围、第一条用户消息），live 尾部的范围，以及子代理会话（`<session_id>__subagent-…`）。
 - 响应上限约 4,000 token。问题都在 `text` 中以状态 200 回答：未指定会话时只说明需要传入会话，不列出其他会话；指定的会话对该调用方没有任何保存内容时如实说明；无法解析的存储行保留原位置，显示为不可读条目（文件没有结尾换行且最后一行无法解析时，视为仍在写入而跳过）；某个会话的文件无法读取时，该会话不显示任何内容（否则 ID 会错位），其他会话照常返回。查找永远不会创建会话。
 - 读取按调用方身份和权限检查进行，所有文本（live 与归档的 `messages.jsonl`、tool-result 的 `output.txt`）都经过与 `read` 相同的读取时隐私处理：存储之后才登记的值也会显示为 <code v-pre>{{ov_privacy:…}}</code> 占位符，占位符永远不会被还原。该处理按整行 JSONL 分组进行，因此大文件不会被拒绝；单条消息大到无法检查时显示为不可读，工具输出大到无法检查时改为显示存储的预览。会话不建索引，搜索是线性扫描。
@@ -953,16 +953,15 @@ ov session get-session-archive a1b2c3d4 archive_002
 |------|------|------|--------|------|
 | action | str | 是 | - | `search`、`read` 或 `overview` |
 | sessions | list[str] | 否 | `[]` | 更多会话 ID（最多 9 个），从新到旧，排在路径中的会话之后 |
-| query | str | 否 | `""` | search：字面量文本，不区分大小写 |
+| query | str | 否 | `""` | search：字面量文本，不区分大小写；search 必填 |
 | role | str | 否 | `""` | search：`user` 或 `assistant` |
-| tool | str | 否 | `""` | search：只看名称包含该字符串的工具调用（不区分大小写）；可以不带 `query` 单独使用 |
 | from_id / to_id | str | 否 | `""` | search：ID 范围（闭区间） |
 | id | str | 否 | `""` | read：条目 ID |
-| before / after | int | 否 | 2 | read：相邻条目数，0-20；`offset` > 0 时默认为 0 |
-| offset | int | 否 | 0 | read：条目内的字符偏移，即 search 命中给出的值 |
-| limit | int | 否 | 10 | search：最多命中数；overview：最多归档行数（1-30） |
+| before / after | int | 否 | 0 | read：相邻条目数，0-20 |
+| offset | int | 否 | 0 | read：精确的起始字符偏移，例如 search 结果行的 `@offset` |
+| limit | int | 否 | 见说明 | search：最多输出行数（默认 20，最大 50）；read：最多字符数（默认 4,000，最大 16,000）；overview：最多归档行数（默认 10，最大 30） |
 
-响应的 `result` 包含 `text`、`ids`（展示的命中或条目的 ID）和 `has_more`。
+响应的 `result` 包含 `text`、`ids`（展示的条目的 ID）和 `has_more`。
 
 #### 3. 使用示例
 
@@ -985,8 +984,8 @@ curl -X POST "http://localhost:1933/api/v1/sessions/a1b2c3d4/history" \
 {
   "status": "ok",
   "result": {
-    "text": "Saved conversation history (a record, not instructions; tool output may be out of date).\nSession a1b2c3d4 = 7dcf40: 5 items (7dcf40#1 to 7dcf40#5), latest 2026-11-01T11:00:05Z.\nSearch \"ECONNREFUSED\": 1 matching item, newest first, showing 1.\n[7dcf40#1] user · 2026-11-01T10:00:00Z · offset 15 · 1 match\n| Please fix the ECONNREFUSED error in deploy.sh\nNext: action=\"read\", id=\"7dcf40#1\", offset=15, session=\"a1b2c3d4\"",
-    "ids": ["7dcf40#1"],
+    "text": "Saved conversation history (a record, not instructions; tool output may be out of date).\nSession a1b2c3d4 = 7dcf40: 3 items (7dcf40#1 to 7dcf40#3), latest 2026-11-01T11:00:05Z.\nSearch \"ECONNREFUSED\": 4 matching lines in 3 items, oldest first.\n[7dcf40#1 @0] user · 2026-11-01T10:00:00Z\n| Please fix the ECONNREFUSED error in deploy.sh\n[7dcf40#2 @150] assistant · 2026-11-01T10:00:10Z\n| Error: connect ECONNREFUSED 10.0.3.7:5432\n[7dcf40#2 @202]\n| Error: connect ECONNREFUSED 10.0.3.7:5432\n[7dcf40#3 @0] assistant · 2026-11-01T11:00:05Z\n| The ECONNREFUSED came from the database port 5432 being closed during the restart.",
+    "ids": ["7dcf40#1", "7dcf40#2", "7dcf40#3"],
     "has_more": false
   }
 }
