@@ -5,7 +5,6 @@
 import base64
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
@@ -216,31 +215,26 @@ class OpenAIVLM(VLMBase):
         if extra_body:
             kwargs["extra_body"] = extra_body
 
-    def _update_token_usage_from_response(
-        self,
-        response,
-        duration_seconds: float = 0.0,
-    ):
-        if hasattr(response, "usage") and response.usage:
-            tracer.info(f"response.usage={response.usage}")
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
-            prompt_tokens_details = getattr(response.usage, "prompt_tokens_details", None)
-            completion_tokens_details = getattr(response.usage, "completion_tokens_details", None)
-            prompt_cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
-            completion_reasoning_tokens = (
-                getattr(completion_tokens_details, "reasoning_tokens", 0) or 0
-            )
-            self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                duration_seconds=duration_seconds,
-                prompt_cached_tokens=prompt_cached_tokens,
-                completion_reasoning_tokens=completion_reasoning_tokens,
-            )
-        return
+    def _update_token_usage_from_response(self, response, duration_seconds=0.0):
+        from openviking.metrics.datasources.model_usage import (
+            reported_token_count,
+            response_usage_subsets,
+        )
+        from openviking.models.vlm.attempt import field
+
+        usage = field(response, "usage")
+        prompt, completion = (
+            reported_token_count(field(usage, "prompt_tokens")),
+            reported_token_count(field(usage, "completion_tokens")),
+        )
+        self.update_token_usage(
+            model_name=self.model or "gpt-4o-mini",
+            provider=self.provider,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            duration_seconds=duration_seconds,
+            **response_usage_subsets(usage, prompt, completion),
+        )
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from OpenAI response message."""
@@ -265,17 +259,9 @@ class OpenAIVLM(VLMBase):
         message = choice.message
         tracer.info(f"result={message.content}")
         if has_tools:
-            usage = {}
-            if hasattr(response, "usage") and response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
-                    "completion_tokens_details": getattr(
-                        response.usage, "completion_tokens_details", None
-                    ),
-                }
+            from openviking.models.vlm.attempt import field, public_response_usage
+
+            usage = public_response_usage(field(response, "usage"))
 
             return VLMResponse(
                 content=message.content,
@@ -347,12 +333,10 @@ class OpenAIVLM(VLMBase):
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     async def _extract_completion_content_async(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
@@ -371,11 +355,11 @@ class OpenAIVLM(VLMBase):
         kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages, effective_thinking)
 
         def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = client.chat.completions.create(**kwargs)
+                attempt.observe_response(response)
+            elapsed = attempt.duration_seconds
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
@@ -406,11 +390,11 @@ class OpenAIVLM(VLMBase):
         )
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = await client.chat.completions.create(**kwargs)
+                attempt.observe_response(response)
+            elapsed = attempt.duration_seconds
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
                     result.content = self._clean_response(result.content or "")
@@ -500,11 +484,11 @@ class OpenAIVLM(VLMBase):
         )
 
         def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = client.chat.completions.create(**kwargs)
+                attempt.observe_response(response)
+            elapsed = attempt.duration_seconds
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
@@ -528,11 +512,11 @@ class OpenAIVLM(VLMBase):
         )
 
         async def _call() -> Union[str, VLMResponse]:
-            t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
-            elapsed = time.perf_counter() - t0
+            with self.observe_attempt(model_name=kwargs.get("model")) as attempt:
+                response = await client.chat.completions.create(**kwargs)
+                attempt.observe_response(response)
+            elapsed = attempt.duration_seconds
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
