@@ -23,7 +23,11 @@ from openviking.resource.watch_runtime import WatchRuntime
 from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
-from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
+from openviking.service.compile_scheduler import (
+    CompileScheduler,
+    build_credential_encryptor,
+    configure_timezone,
+)
 from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
 from openviking.service.debug_service import DebugService
@@ -767,6 +771,7 @@ class OpenVikingService:
         self._compile_service.configure_lifecycle(CompileLifecycle(compile_store, self._viking_fs))
         get_task_tracker().compile_history_cleanup = compile_store.delete_expired
         if compile_config.scheduler_enabled:
+            configure_timezone(compile_config.scheduler_timezone)
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,
                 compile_store,

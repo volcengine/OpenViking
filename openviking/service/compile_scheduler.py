@@ -30,10 +30,17 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-TZ = ZoneInfo("Asia/Shanghai")
+DEFAULT_TIMEZONE = "Asia/Shanghai"
+TZ = ZoneInfo(DEFAULT_TIMEZONE)
 COMPILE_TARGET_ITEM_TYPE = "compile_target"
 COMPENSATION_SCAN_SECONDS = 6 * 3600.0
 CREDENTIAL_PROVIDER = "encrypted_api_key"
+
+
+def configure_timezone(name: str) -> None:
+    """Set the IANA timezone used to interpret schedules (compile_api.scheduler_timezone)."""
+    global TZ
+    TZ = ZoneInfo(name or DEFAULT_TIMEZONE)
 
 
 def now_iso(now: Optional[datetime] = None) -> str:
@@ -45,7 +52,7 @@ def _period(schedule: Dict[str, Any]) -> timedelta:
 
 
 def current_slot(schedule: Dict[str, Any], now: datetime) -> datetime:
-    """Most recent Beijing-time trigger of ``schedule`` not after ``now``."""
+    """Most recent trigger (in the configured timezone) of ``schedule`` not after ``now``."""
     local = now.astimezone(TZ)
     slot = local.replace(hour=schedule["hour"], minute=schedule["minute"], second=0, microsecond=0)
     if schedule["frequency"] == "weekly":

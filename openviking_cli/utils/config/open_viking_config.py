@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -203,6 +204,8 @@ class CompileApiConfig(BaseModel):
     # Run Redis-backed Compile scheduling on this instance.
     scheduler_enabled: bool = False
     scheduler_backend: Literal["redis"] = "redis"
+    # IANA timezone used to interpret update_schedule hour/minute/weekday.
+    scheduler_timezone: str = "Asia/Shanghai"
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -212,6 +215,12 @@ class CompileApiConfig(BaseModel):
             raise ValueError("compile_api.http_timeout_seconds must be > 0")
         if self.poll_interval_ms <= 0:
             raise ValueError("compile_api.poll_interval_ms must be > 0")
+        try:
+            ZoneInfo(self.scheduler_timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(
+                "compile_api.scheduler_timezone must be a valid IANA timezone"
+            ) from exc
         self.base_url = self.base_url.rstrip("/")
         return self
 
