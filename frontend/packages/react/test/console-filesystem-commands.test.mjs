@@ -110,7 +110,7 @@ test('write and mkdir send parsed ACL JSON and the write content option', async 
 
     for (const input of [
       'ov write viking://resources/test/example.md',
-      'ov write viking://resources/test/example.md --from-file example.md',
+      'ov write viking://resources/test/example.md --from-file example.md --content duplicate',
       'ov write viking://resources/test/example.md draft --content duplicate',
       'ov write viking://resources/test/example.md --content draft --append --mode create',
     ]) {

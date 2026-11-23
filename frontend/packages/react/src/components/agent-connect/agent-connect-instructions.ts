@@ -26,19 +26,27 @@ export function getAgentConnectInstructions(
   apiKey: string,
   baseUrl: string,
   guideId?: string,
+  isEnterprise = false,
 ) {
   const text = resolveAgentConnectLabels(locale);
   const content = getAgentConnectContent(locale)[id];
   const harness = INSTALLER_HARNESSES[id];
   if (harness) {
     const instructions = (key: string) =>
-      getInstallerInstructions(content.name, harness, locale, key, baseUrl);
+      getInstallerInstructions(
+        content.name,
+        harness,
+        locale,
+        key,
+        baseUrl,
+        isEnterprise,
+      );
     return {
       fixed: true,
-      display: instructions('••••••••'),
+      display: instructions('********'),
       copy: instructions(apiKey),
       command: {
-        display: getInstallerCommand(harness, locale, '••••••••', baseUrl),
+        display: getInstallerCommand(harness, locale, '********', baseUrl),
         copy: getInstallerCommand(harness, locale, apiKey, baseUrl),
       },
     };
@@ -87,7 +95,7 @@ export function getAgentConnectInstructions(
   }
   return {
     fixed: false,
-    display: hydrate('••••••••'),
+    display: hydrate('********'),
     copy: hydrate(apiKey),
     markdown: hydrate(keyToken),
     keyToken,

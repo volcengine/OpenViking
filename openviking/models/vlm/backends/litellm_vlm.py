@@ -534,7 +534,7 @@ class LiteLLMVLMProvider(VLMBase):
             t0 = time.perf_counter()
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            self._handle_chat_completion(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
@@ -576,7 +576,7 @@ class LiteLLMVLMProvider(VLMBase):
             t0 = time.perf_counter()
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            self._handle_chat_completion(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
@@ -604,7 +604,7 @@ class LiteLLMVLMProvider(VLMBase):
             t0 = time.perf_counter()
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            self._handle_chat_completion(response, duration_seconds=elapsed)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
@@ -631,7 +631,7 @@ class LiteLLMVLMProvider(VLMBase):
             t0 = time.perf_counter()
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            self._handle_chat_completion(response, duration_seconds=elapsed)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
@@ -640,24 +640,3 @@ class LiteLLMVLMProvider(VLMBase):
             return self._clean_response(self._extract_content_from_response(response))
 
         return await _call()
-
-    def _update_token_usage_from_response(
-        self,
-        response,
-        duration_seconds: float = 0.0,
-    ) -> None:
-        """Update token usage from response."""
-        if hasattr(response, "usage") and response.usage:
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
-            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
-            completion_details = getattr(response.usage, "completion_tokens_details", None)
-            self.update_token_usage(
-                model_name=self.model or "unknown",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                duration_seconds=duration_seconds,
-                prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
-                completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
-            )

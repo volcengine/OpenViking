@@ -265,6 +265,8 @@ export interface FindOptions {
 export interface SearchOptions extends FindOptions {
   sessionId?: string;
   searchType?: "semantic" | "keywords";
+  /** Advanced keyword-search engine options; only with searchType="keywords". */
+  args?: JsonObject;
 }
 /** Server-side context assembly options. */
 export interface SearchContextOptions {

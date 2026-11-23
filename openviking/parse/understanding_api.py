@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from openviking.observability.log_safety import safe_log_fields, safe_path_for_log
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
@@ -256,7 +257,7 @@ class UnderstandingAPI(BaseParser):
             raise
         except Exception as exc:
             message = self._redact_error(str(exc))
-            logger.warning("[UnderstandingAPI] Parse failed: %s; meta=%s", message, task_meta)
+            logger.debug("Understanding parse failed error_type=%s", type(exc).__name__)
             raise UnderstandingAPIError(message, task_meta) from exc
 
         content_type = (
@@ -296,7 +297,7 @@ class UnderstandingAPI(BaseParser):
             meta={key: task_meta[key] for key in ("file_id", "response_id") if task_meta.get(key)},
         )
 
-        logger.info("[UnderstandingAPI] done")
+        logger.debug("Understanding parse completed")
         return result
 
     async def upload_file(
@@ -378,7 +379,9 @@ class UnderstandingAPI(BaseParser):
         from openviking.parse.feishu_import import recursive_wiki
 
         doc_type, _ = FeishuAccessor._parse_feishu_url(source)
-        if doc_type in {"folder", "file", "slides"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+        if doc_type in {"folder", "file", "slides"} or (
+            doc_type == "wiki" and recursive_wiki(kwargs)
+        ):
             return False
         resolved_type = kwargs.get("_feishu_resolved_type")
         if resolved_type in {"folder", "file", "slides"}:
@@ -672,7 +675,10 @@ class UnderstandingAPI(BaseParser):
                 body = self._read_api_response(rsp, context="responses api error")
                 status = body.get("status")
                 if status != last_status:
-                    logger.info(f"[UnderstandingAPI] response_id={response_id} status={status}")
+                    logger.info(
+                        "Understanding task status changed",
+                        extra=safe_log_fields({"task_id": response_id, "task_status": status}),
+                    )
                     last_status = status
                 if status == "completed":
                     return body
@@ -865,10 +871,10 @@ class UnderstandingAPI(BaseParser):
             try:
                 await writer.cleanup()
             except Exception as cleanup_exc:
-                logger.warning(
-                    "[UnderstandingAPI] Failed to clean temporary artifact %s: %s",
-                    writer.ref.root,
-                    cleanup_exc,
+                logger.info(
+                    "Understanding artifact cleanup failed path=%s error_type=%s",
+                    safe_path_for_log(str(writer.ref.root)),
+                    type(cleanup_exc).__name__,
                 )
             raise
 

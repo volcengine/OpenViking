@@ -29,7 +29,7 @@ export interface TooltipProps {
   trigger?: TooltipTrigger;
   /** 悬停后多久展示，单位毫秒。延迟只作用于 `hover`。 Hover delay in ms; `hover` only. */
   delay?: number;
-  /** 聚焦时仅在浏览器显示焦点指示时打开。 Only opens on focus when the trigger matches `:focus-visible`. */
+  /** 聚焦时仅在触发器内实际聚焦的元素显示焦点指示时打开。 Only opens on focus when the focused element within the trigger matches `:focus-visible`. */
   focusVisibleOnly?: boolean;
   /** 为真时不展示浮层。当为真，触发元素仍正常渲染。 Suppresses the surface; the trigger still renders. */
   disabled?: boolean;

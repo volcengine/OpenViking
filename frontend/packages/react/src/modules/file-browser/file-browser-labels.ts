@@ -39,7 +39,7 @@ export type ShellLabels = Omit<
 
 /** 解析后的外壳文案，外加透传给两个组件的文案。 */
 export interface ResolvedLabels extends Required<ShellLabels> {
-  workflow: FileBrowserWorkflowLabels;
+  workflow: Required<FileBrowserWorkflowLabels>;
   tree: FileTreeLabels | undefined;
   previewLabels: FileBrowserLabels['preview'];
 }
@@ -54,7 +54,7 @@ export function resolveLabels(
   return {
     ...text,
     empty: stacked ? (labels?.empty ?? STACKED_EMPTY[locale]) : text.empty,
-    workflow: resolveLocale(
+    workflow: resolveLocale<Required<FileBrowserWorkflowLabels>>(
       { 'en-US': workflowEn, 'zh-CN': workflowZh },
       locale,
       labels?.workflows,
@@ -110,6 +110,16 @@ export function resolveSummaryLabels(
     failure: text.summaryFailed,
     l0Empty: labels?.emptyL0Summary ?? sharedEmpty ?? empty.l0,
     l1Empty: labels?.emptyL1Overview ?? sharedEmpty ?? empty.l1,
+  };
+}
+
+export function resolvePaneLabels(
+  labels: FileBrowserLabels | undefined,
+  locale: Locale,
+) {
+  return {
+    summaryLabels: resolveSummaryLabels(locale, labels),
+    previewLabels: resolvePreviewLabels(resolveLabels(labels, locale)),
   };
 }
 

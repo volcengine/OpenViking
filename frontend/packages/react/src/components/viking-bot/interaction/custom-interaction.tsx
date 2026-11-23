@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useViewActive } from '../../../shared/view-activity.js';
 import type { VikingBotInteractionProps } from './types.js';
 import type { InteractionLabels } from './labels.js';
 import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
@@ -18,6 +19,7 @@ export function CustomInteraction({
   labels: InteractionLabels;
   onPrevious?: () => void;
 }) {
+  const active = useViewActive();
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>();
   const lifetime = useRef(true);
@@ -30,7 +32,7 @@ export function CustomInteraction({
   }, []);
   if (request.kind !== 'custom') return null;
   const busy = Boolean(submitting || pending);
-  const blocked = Boolean(disabled || busy);
+  const blocked = Boolean(disabled || busy || !active);
   const message =
     error ??
     (failure ? interactionError(failure, labels, 'submitFailed') : undefined);
@@ -46,29 +48,30 @@ export function CustomInteraction({
           {message}
         </ErrorNotification>
       ) : null}
-      {request.render({
-        previous: onPrevious,
-        disabled: blocked,
-        submitting: busy,
-        clearError: () => setFailure(undefined),
-        submit: async (value) => {
-          if (blocked || locked.current || !lifetime.current) return;
-          locked.current = true;
-          setPending(true);
-          setFailure(undefined);
-          try {
-            await onSubmit?.({ kind: 'custom', value });
-          } catch (cause) {
-            if (lifetime.current) setFailure(cause);
-          } finally {
-            locked.current = false;
-            if (lifetime.current) setPending(false);
-          }
-        },
-        cancel: () => {
-          if (!blocked) onCancel?.();
-        },
-      })}
+      {active &&
+        request.render({
+          previous: onPrevious,
+          disabled: blocked,
+          submitting: busy,
+          clearError: () => setFailure(undefined),
+          submit: async (value) => {
+            if (blocked || locked.current || !lifetime.current) return;
+            locked.current = true;
+            setPending(true);
+            setFailure(undefined);
+            try {
+              await onSubmit?.({ kind: 'custom', value });
+            } catch (cause) {
+              if (lifetime.current) setFailure(cause);
+            } finally {
+              locked.current = false;
+              if (lifetime.current) setPending(false);
+            }
+          },
+          cancel: () => {
+            if (!blocked) onCancel?.();
+          },
+        })}
     </>
   );
 }

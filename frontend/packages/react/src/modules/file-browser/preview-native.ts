@@ -1,10 +1,6 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { splitWikiMetadata } from './wiki-metadata.js';
-import type {
-  CompileConfig,
-  PreviewHistoryEntry,
-} from './preview-workflow-types.js';
+import type { CompileConfig } from './preview-workflow-types.js';
 
 export function savePreviewSnapshot(
   client: OvClient,
@@ -18,25 +14,6 @@ export function savePreviewSnapshot(
     body: { message, paths: [uri], branch: 'main' },
     options,
   });
-}
-
-export { readPreviewHistory } from './preview-history-data.js';
-
-export async function readHistoricalText(
-  client: OvClient,
-  entry: PreviewHistoryEntry,
-  options: OvRequestOptions,
-  wiki = false,
-) {
-  const result = await client.request<Blob>({
-    method: 'GET',
-    path: OV_PATHS.snapshotShow,
-    query: { target_ref: entry.snapshot, path: entry.path, raw: false },
-    responseType: 'blob',
-    options,
-  });
-  const text = await result.text();
-  return wiki ? splitWikiMetadata(text).document : text;
 }
 
 export function readCompileConfig(

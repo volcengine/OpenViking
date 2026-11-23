@@ -185,7 +185,7 @@ Rule search requires plugin `2.1.4` or later and an OpenViking server with
 `POST /api/v1/rules/search`. Pass `task_context` and optionally
 `rule_probability_threshold` (default `0.65`). Check each returned Rule's conditions
 and exceptions and comply with every applicable constraint.
-Session history requires plugin `2.1.5` or later and an OpenViking server with
+Session history requires plugin `2.1.7` or later and an OpenViking server with
 `POST /api/v1/sessions/{session_id}/history`; older servers answer that the lookup
 is not available. See [Session history](CONFIGURATION.md#session-history).
 Hermes catalog releases pin the plugin commit, so the catalog must point at the

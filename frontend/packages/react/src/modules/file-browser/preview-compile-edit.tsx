@@ -1,5 +1,5 @@
 import { useToast } from '../../shared/primitives/toast/use-toast.js';
-import { PreviewLoading } from './preview-query-state.js';
+import { PreviewLoading, PreviewMutationError } from './preview-query-state.js';
 import { useRef, useState } from 'react';
 import { OV_PATHS } from '../../client/paths.js';
 import { PreviewCompilePicker } from './preview-compile-picker.js';
@@ -7,7 +7,7 @@ import type { ContextPickerEntry } from '../../components/context-picker/types.j
 import { Modal } from '../../shared/primitives/modal/modal.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { usePreviewMutation } from './use-preview-mutation.js';
-import { PreviewMutationError } from './preview-query-state.js';
+import { displayNameFromUri } from '../../shared/directory-tree/rows.js';
 import {
   type CompileScheduleDraft,
   PreviewCompileSchedule,
@@ -46,7 +46,7 @@ export function PreviewCompileEdit({
   const [selection, setSelection] = useState<ContextPickerEntry[]>(
     (field === 'from' ? initial.from : [initial.skill]).map((uri) => ({
       uri,
-      name: uri.split('/').pop() ?? uri,
+      name: displayNameFromUri(uri),
       type: 'directory',
     })),
   );

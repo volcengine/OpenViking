@@ -2,8 +2,6 @@
   margin-bottom: 12px;
   overflow: hidden;
   border: 1px solid var(--ov-ui-agent-connect-border);
-  border-radius: 8px;
-  background: var(--ov-ui-agent-connect-bg);
   white-space: normal;
 }
 .ov-agent-connect__code-block:last-child {

@@ -17,7 +17,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 部分 | 作用 | 主要设置和默认值 |
 | --- | --- | --- |
 | 召回记忆 | 用每条新的用户消息检索 OpenViking，把相关内容附加到这条消息上。 | 检索范围：记忆、资源、技能 · 单条消息预算：1,600 token · 单个上下文窗口预算：30,000 token · 相关度阈值：0.35 · 超时时间：2 秒 |
-| 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 最新回复等待时长：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
+| 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 空闲提交时间：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
 | 长对话 | 对话接近上下文窗口时，让同一个模型写摘要，替换之前的消息。 | 压缩：开启 · 压缩时机：窗口的 0.9 · 摘要长度上限：8,000 token · Agent 自管上下文窗口：关闭 |
 | OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 勾选全部工具，见 [OpenViking 工具](04-openviking-tools.md) |
 
@@ -45,7 +45,8 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 设置 | 默认值 | 控制什么 |
 | --- | --- | --- |
 | **会话开头提供用户画像** | 开启 | 新对话开始时，向模型提供你的 OpenViking 用户画像。 |
-| **开头内容预算** | 4,000 token | 开头的用户画像、记忆目录和技能目录最多占用多少。 |
+| **会话开头提供 soul.md** | 开启 | 新对话开始时，向模型提供你保存在 OpenViking 的 `soul.md`，也就是你给模型的长期指令，并告诉模型遵循它。soul 全文提供。 |
+| **开头内容预算** | 4,000 token | 开头的用户画像、记忆目录和技能目录最多占用多少。soul 不计入。 |
 | **显示召回摘要** | 关闭 | 在回复开头加一行摘要，见[召回摘要](#recall-summary)。 |
 | **检索范围** | 记忆、资源、技能 | 召回时检索哪些内容。 |
 | **单条消息预算** | 1,600 token | 一条消息最多附加多少记忆。 |
@@ -58,7 +59,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 这些设置如何配合：
 
-- **开头内容。** **会话开头提供用户画像**独立于召回。提供 OpenViking 的 `read` 工具（`openviking_read`）时，开头还会提供记忆目录和技能目录。技能最多占**开头内容预算**的四分之一，预算设为 0 时全部省略。这份预算不占召回预算，见[对话开头的内容](01-how-it-works.md#the-opening-context)。
+- **开头内容。** **会话开头提供用户画像**和**会话开头提供 soul.md** 独立于召回，彼此也互不影响。提供 OpenViking 的 `read` 工具（`openviking_read`）时，开头还会提供记忆目录和技能目录。技能最多占**开头内容预算**的四分之一，预算设为 0 时省略画像和目录。soul 全文提供，不计入这份预算，只有它自己的开关能关掉它。这份预算不占召回预算，见[对话开头的内容](01-how-it-works.md#the-opening-context)。
 - **补充什么。** 召回内容由 OpenViking 在预算内选取和排版，也可能只给出 URI，供模型之后读取。
 - **检索文本。** 检索文本是去掉客户端噪声后的用户消息，最多取**检索文本长度**个字符。少于 3 个字符的消息不检索。
 - **预算。** 每条消息最多补充**单条消息预算**和**单个上下文窗口预算**剩余额度中较小的那个；剩余额度不足 64 token 时跳过检索。无论是网关还是客户端压缩了对话，单个上下文窗口预算都重新计算。这里的 token 数是偏保守的估算，不是服务商的计费数。
@@ -72,11 +73,11 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 召回摘要是回复开头的一段简短说明，写明 OpenViking 为这条新用户消息补充了什么，或者召回为什么失败。它默认关闭，在[上下文配置](#context-profiles)的**召回记忆**部分开启**显示召回摘要**即可。模型看不到摘要。示例：
 
 ```text
-> OpenViking context: user profile, memory index, skill list, earlier sessions
+> OpenViking context: soul, user profile, memory index, skill list, earlier sessions
 > OpenViking recall: 4 items (3 memories, 1 resource) — booking_duplicate_handling, user_lang_pref, +2 more
 ```
 
-- `context` 行只出现在对话的第一条回复里，列出开头实际提供的内容：用户画像、记忆目录、技能目录，以及这段对话较早部分在 OpenViking 中的位置。
+- `context` 行只出现在对话的第一条回复里，列出开头实际提供的内容：soul、用户画像、记忆目录、技能目录，以及这段对话较早部分在 OpenViking 中的位置。
 - `recall` 行按类别统计召回条数，最多列出三个条目名。检索失败时改为说明原因，例如 `> OpenViking recall failed: OpenViking unavailable`。没有找到内容、召回已关闭或预算用完时不显示这一行，所以第一条回复之后，这类消息没有摘要。
 - 工具步骤等后续请求不显示摘要；客户端重试同一条消息时，摘要和第一次相同。
 - 摘要在 Anthropic Messages 中单独占一个文本块，在 Responses 中单独占一条助手消息，在 Chat Completions 中位于回复文本开头。要求结构化输出的请求，以及 `n` 大于 1 的 Chat Completions 请求，不显示摘要。
@@ -84,18 +85,27 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 ## 保存对话 {#save-conversations}
 
-**保存对话**部分（默认开启）控制[保存](../guides/15-gateway.md#key-terms)：网关把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。网关怎样判断一轮已经完成，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。
+**保存对话**部分（默认开启）控制[保存](../guides/15-gateway.md#key-terms)：每一轮结束时，网关把它写入 OpenViking 会话，再按下面的设置提交会话，供 OpenViking 归档已保存的消息并从中提取记忆。网关什么时候写入，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。
 
 | 设置 | 默认值 | 控制什么 |
 | --- | --- | --- |
-| **最新回复等待时长** | 600 秒 | 最新一轮等待后续消息多久，之后网关保存它并提交会话。 |
-| **提交阈值** | 20,000 token | 会话中待提交的内容达到多少 token 时提交。 |
-| **保留最近消息** | 10 | 提交后会话中保留多少条消息。 |
+| **空闲提交时间** | 600 秒 | 最后一轮结束后多久没有新的一轮结束，就提交剩下的全部消息。 |
+| **提交阈值** | 20,000 token | 一轮结束时，待提交的内容达到多少 token 就提交一次。 |
+| **保留最近消息** | 10 | 按提交阈值提交时，会话中留下最近多少条消息。 |
 
-- 下一条用户消息到达时，上一轮就会保存。**最新回复等待时长**针对的是最后一轮，这样短对话也能被提交。
-- 会话中待提交的内容达到**提交阈值**时提交一次。每次提交后，OpenViking 在后台提取记忆。
-- 提交后，会话中保留最新的若干完整轮次，至少包含**保留最近消息**条消息。
-- OpenViking Server 0.5.0 及以上版本默认继承用户的记忆策略，包括[记忆类型](../api/16-memory.md)限制。要为会话策略指定类型，用管理 API 或 `X-OpenViking-Context` 请求头把 `capture_memory_types` 设为这些类型的名称，例如 `["preferences","events"]`；设为空列表时只保存对话，不提取记忆。Studio 中没有这项设置，在 Studio 中保存配置时保留原值。OpenViking 不认识的名称会使保存失败，见[配置参考](13-configuration.md#profile-saving)。
+- 默认由网关提交，任何 OpenViking Server 都适用。网关创建 OpenViking 会话时关闭 OpenViking 自己的自动提交，在每一轮结束时检查**提交阈值**，并为每段对话计时**空闲提交时间**；更新的一轮结束时重新计时，一轮中间的截断保存和失败的保存不影响正在等待的提交。每次提交后，OpenViking 在后台提取记忆。
+- 空闲提交归档全部消息，不保留最近消息；按提交阈值提交时，**保留最近消息**按消息条数计算。
+- 空闲提交失败时，到期时间保留，网关每分钟再试一次，直到成功；OpenViking 被标记为不可用期间暂停重试。被 OpenViking 拒绝的空闲提交（密钥被拒绝，或会话已不存在，即 HTTP 401、403、404）不再重试，等这段对话的下一轮结束后重新计时。按提交阈值提交失败时不单独重试，由之后的空闲提交或下一轮的阈值检查补上。提交失败只记在网关日志里（`could not commit`），不改变请求记录。
+- 空闲提交的到期时间和要使用的密钥记录 ID 随保存进度记在网关存储里，不含对话文本，所以网关重启、崩溃或 Pod 被终止都不会丢掉等待中的提交：每个网关进程每分钟检查一次，把到期已满一分钟、还没有提交的补上，因此这类提交会比到期时间晚一两分钟。空闲提交总是在执行时才从这份密钥记录里取 OpenViking 密钥：到那时记录已不存在（密钥被吊销或过期）的，这次提交不再执行，等这段对话的下一轮结束后重新计时。停机时网关不执行、也不等待空闲提交。
+- 会话已经存在时（例如由更早版本的网关或另一种提交方式创建），网关在这段对话第一次写入前，以及修改 `openviking_auto_commit` 之后的第一次写入前，把它的自动提交策略（`auto_commit_policy`）改成当前方式的设置。
+- OpenViking Server 0.5.0 及以上版本默认继承用户的记忆策略，包括[记忆类型](../api/16-memory.md)限制，网关的提交不生成 Working Memory；更早版本的 Server 上，网关创建会话时关闭 Working Memory。要为会话策略指定类型，用管理 API 或 `X-OpenViking-Context` 请求头把 `capture_memory_types` 设为这些类型的名称，例如 `["preferences","events"]`；设为空列表时只保存对话，不提取记忆。Studio 中没有这项设置，在 Studio 中保存配置时保留原值。OpenViking 不认识的名称会使这段对话的每次保存都失败，见[配置参考](13-configuration.md#profile-saving)。
+
+**交给 OpenViking 提交。** 网关配置 `openviking_auto_commit: true`（见[网关字段](13-configuration.md#gateway-fields)）时，网关不提交，也不计时，而是把这三项写入会话的 `auto_commit_policy`，由 OpenViking 的会话自动提交完成，适合开启了会话自动提交的 OpenViking Server。唯一的例外是刚打开这项设置时：之前已经在等待的空闲提交仍由网关执行，因为这些会话要等对话再保存一轮之后，OpenViking 才会自动提交。三项设置的含义不变，与默认方式的区别如下：
+
+- 按提交阈值提交在任何 Server 上都有效；如果之前的一次提交还在提取记忆，OpenViking 跳过这次提交，由之后的写入或空闲提交补上。
+- 空闲提交只在 OpenViking Server 开启 `memory.session_auto_commit.enabled`（0.4.x 版本为 `memory.session_auto_commit.idle_enabled`）时发生，开源版 Server 默认关闭，见[配置指南](../guides/01-configuration.md#session-auto-commit-配置)。没有开启时，达不到提交阈值的对话只保存为消息，不会归档，也不会提取记忆。
+- OpenViking 要求空闲提交时间至少 300 秒，低于 300 秒的值按 300 秒处理。Server 使用默认的本地扫描（`idle_backend: local`）时，每隔 `check_interval_seconds`（默认 600 秒）检查一次，提交最多再晚一个间隔；`redis` 后端按时提交。
+- OpenViking Server 0.5.0 及以上版本按用户自己的记忆策略决定是否生成 Working Memory（默认关闭）；默认方式下网关的每次提交都不生成 Working Memory。
 
 ## 长对话和 OpenViking 工具 {#long-conversations-and-tools}
 

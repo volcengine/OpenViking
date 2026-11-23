@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, TypeVar, Union
 
+from openviking.observability.log_safety import short_hash
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.storage.queuefs.message_keys import encode_enqueue, validate_message_keys
@@ -213,7 +214,12 @@ class NamedQueue:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
+            logger.info(
+                "Ack failed for %s msg_id=%s: %s",
+                short_hash(str(self.name)),
+                short_hash(str(msg_id)),
+                type(e).__name__,
+            )
 
     async def _ack(self, ctx: AckContext) -> None:
         await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
@@ -275,7 +281,7 @@ class NamedQueue:
             await self.settle_dequeued(raw_data, result)
             return data
         except Exception as e:
-            logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
+            logger.debug("Dequeue failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return None
 
     async def dequeue_raw(self) -> Optional[Dict[str, Any]]:
@@ -284,7 +290,9 @@ class NamedQueue:
         try:
             return await self._read_queue_message()
         except Exception as e:
-            logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
+            logger.debug(
+                "Dequeue raw failed for %s: %s", short_hash(str(self.name)), type(e).__name__
+            )
             return None
 
     async def process_dequeued(self, data: Dict[str, Any]) -> ProcessResult:
@@ -363,7 +371,7 @@ class NamedQueue:
             else:
                 return None
         except Exception as e:
-            logger.debug(f"[NamedQueue] Peek failed for {self.name}: {e}")
+            logger.debug("Peek failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return None
 
     async def size(self) -> int:
@@ -426,7 +434,7 @@ class NamedQueue:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")
+            logger.error("Clear failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return False
 
     async def _clear(self, ctx: ClearContext) -> None:

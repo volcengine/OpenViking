@@ -344,7 +344,9 @@ def hidden_tool_proxy(monkeypatch, tasks):
     monkeypatch.setattr(proxy, "ToolExecutor", lambda *args: object())
     monkeypatch.setattr(proxy, "HiddenToolLoop", lambda *args: Loop())
     request = proxy.ProxyRequest.__new__(proxy.ProxyRequest)
-    request.app = SimpleNamespace(state=SimpleNamespace(viking=object()))
+    request.app = SimpleNamespace(
+        state=SimpleNamespace(viking=object(), kernel=SimpleNamespace(capture=None))
+    )
     request.store = object()
     request.prepared = prepared
     request.credential = {}

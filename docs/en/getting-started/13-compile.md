@@ -23,6 +23,8 @@ ov read viking://agent/skills/llm-wiki/SKILL.md
 
 The package contains the project's LLM Wiki Skill. Compilation calls the model and writes output into a new directory.
 
+For image sources, Compile prepares a temporary model input with a long edge of at most 2,048 pixels and an inline size of at most 3.75 MiB. Images within both limits are sent as-is. Larger static images are resized or compressed when needed, and citations still point to the original resource. The source download precheck is 20 MiB, and images above 24 million pixels are rejected before raster decoding.
+
 ## Submit compilation
 
 Create a named configuration with the sources, target, Skill, and optional `--instruction` and `--args`.

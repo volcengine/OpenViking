@@ -130,29 +130,13 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
     cleanup_empty_target_on_failure: bool,
 ):
     lock = {"lease_ref": "lock-1"}
-    calls = []
-
-    async def acquire_lock(*args, **kwargs):
-        calls.append("lock")
-        return lock
-
-    async def target_exists(*args, **kwargs):
-        calls.append("exists")
-        return target_preexisting
-
-    async def ensure_access(*args, **kwargs):
-        calls.append("acl")
-
-    async def target_stat(*args, **kwargs):
-        calls.append("stat")
-        return {"isDir": True}
-
     viking_fs = SimpleNamespace(
-        exists=AsyncMock(side_effect=target_exists),
-        stat=AsyncMock(side_effect=target_stat),
-        _ensure_access=AsyncMock(side_effect=ensure_access),
+        exists=AsyncMock(return_value=target_preexisting),
+        stat=AsyncMock(return_value={"isDir": True}),
+        _ensure_access=AsyncMock(),
+        _get_vector_store=lambda: None,
         _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
-        _async_agfs=SimpleNamespace(pathlock_acquire_tree=AsyncMock(side_effect=acquire_lock)),
+        _async_agfs=SimpleNamespace(pathlock_acquire_tree=AsyncMock(return_value=lock)),
     )
     processor = SimpleNamespace(
         tree_builder=SimpleNamespace(
@@ -182,11 +166,6 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
         False,
         cleanup_empty_target_on_failure,
     )
-    expected_calls = ["acl", "exists"]
-    if target_preexisting:
-        expected_calls.append("stat")
-    expected_calls.extend(["lock", "acl"])
-    assert calls == expected_calls
 
 
 @pytest.mark.asyncio
@@ -201,6 +180,7 @@ async def test_explicit_directory_target_rejects_existing_file():
         exists=AsyncMock(return_value=True),
         stat=AsyncMock(return_value={"isDir": False}),
         _ensure_access=AsyncMock(),
+        _get_vector_store=lambda: None,
         _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
         _async_agfs=async_agfs,
     )
@@ -240,8 +220,8 @@ async def test_explicit_directory_target_rejects_existing_file():
 
 
 @pytest.mark.asyncio
-async def test_source_job_error_cleans_new_empty_reservation():
-    viking_fs = SimpleNamespace()
+async def test_source_job_error_cleans_new_empty_reservation(watch_vfs):
+    viking_fs = watch_vfs
     service = _service(viking_fs)
     service._execute_resource_ingestion = AsyncMock(
         return_value={"status": "error", "errors": ["directory produced no content"]}

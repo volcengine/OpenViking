@@ -1,6 +1,7 @@
 import { OV_PATHS } from '../../client/paths.js';
 import { ConsoleCommandError } from './command-messages.js';
 import type { Argument, ArgumentValues } from './command-parser.js';
+import { PATTERN_SEARCH_COMMAND_SPECS } from './pattern-search-command-specs.js';
 import type { CommandSpec } from './command-specs.js';
 
 const image: Argument = {
@@ -17,14 +18,6 @@ const target: Argument = {
   kind: 'uri-or-list',
   valueKey: 'target_uri',
   descriptionKey: 'search-target-uri',
-};
-
-const root: Argument = {
-  name: 'uri',
-  alias: '-u',
-  kind: 'uri',
-  defaultValue: 'viking://',
-  descriptionKey: 'search-root-uri',
 };
 
 const nodeLimit: Argument = {
@@ -77,7 +70,6 @@ const timeDecay: Argument = {
 };
 
 const retrievalOptions: readonly Argument[] = [
-  { name: 'limit', kind: 'integer', min: 1 },
   { name: 'filter', kind: 'json-object' },
   {
     name: 'include-provenance',
@@ -102,13 +94,32 @@ const sessionId: Argument = {
   descriptionKey: 'search-session-id',
 };
 
-const retrievalLimit = { ...nodeLimit, defaultValue: 10 };
-const fileLimit = { ...nodeLimit, defaultValue: 256 };
+const retrievalLimit: Argument = {
+  ...nodeLimit,
+  valueKey: 'limit',
+  aliases: ['--node_limit', '--limit'],
+  helpDefault: 10,
+};
+const contextType: Argument = {
+  name: 'context-type',
+  valueKey: 'context_type',
+  placeholder: 'type',
+};
+const searchTags: Argument = { name: 'tags', placeholder: 'k=v' };
+const readContent: Argument = {
+  name: 'read-content',
+  valueKey: 'read_content',
+  kind: 'boolean',
+};
 const query: Argument = { name: 'query', optional: true, rest: true };
 
-function retrievalRequest(name: 'find' | 'search', body: ArgumentValues) {
+function retrievalRequest(name: 'find' | 'search', values: ArgumentValues) {
+  const { context_type, tags, ...body } = values;
   const query = typeof body.query === 'string' ? body.query.trim() : '';
-  if (!query && !body.image_url && !body.filter && !body.since && !body.until)
+  const acceptsFilterOnly = name === 'find' || body.mode === 'context';
+  const filter =
+    body.filter || body.since || body.until || context_type || tags;
+  if (!query && !body.image_url && !(acceptsFilterOnly && filter))
     throw new ConsoleCommandError('missingArgument', 'query / --image');
 
   if (body.mode === 'context') {
@@ -128,27 +139,53 @@ function retrievalRequest(name: 'find' | 'search', body: ArgumentValues) {
   return {
     method: 'POST' as const,
     path: name === 'find' ? OV_PATHS.searchFind : OV_PATHS.searchQuery,
-    body,
+    body: {
+      ...body,
+      ...(typeof context_type === 'string'
+        ? { context_type: context_type.split(',') }
+        : {}),
+      ...(typeof tags === 'string' ? { tags: tags.split(',') } : {}),
+    },
   };
 }
 
 export const SEARCH_COMMAND_SPECS: readonly CommandSpec[] = [
   ...(['find', 'search'] as const).map((name): CommandSpec => {
-    const common = name === 'search' ? [image, mode, sessionId] : [image];
+    const common: Argument[] =
+      name === 'search'
+        ? [
+            image,
+            mode,
+            sessionId,
+            {
+              name: 'search-type',
+              valueKey: 'search_type',
+              choices: ['semantic', 'keywords'],
+              helpDefault: 'semantic',
+            },
+          ]
+        : [image];
     const flags = [
       ...common,
       target,
-      nodeLimit,
+      retrievalLimit,
       threshold,
       ...(name === 'find' ? [level, after, before] : [after, before, level]),
+      contextType,
+      searchTags,
+      readContent,
       timeDecay,
+      {
+        name: 'time-field',
+        valueKey: 'time_field',
+        choices: ['updated_at', 'created_at'],
+      },
     ];
     return {
       name,
       positional: [query],
       flags: [...flags, ...retrievalOptions],
       preferredFlags: flags.map((flag) => {
-        if (flag === nodeLimit) return retrievalLimit;
         if (flag === mode) return { ...mode, defaultValue: 'list' };
         return flag;
       }),
@@ -156,45 +193,5 @@ export const SEARCH_COMMAND_SPECS: readonly CommandSpec[] = [
       request: (body) => retrievalRequest(name, body),
     };
   }),
-  {
-    name: 'grep',
-    positional: [{ name: 'pattern', descriptionKey: 'grep-pattern' }],
-    flags: [
-      root,
-      {
-        name: 'ignore-case',
-        kind: 'boolean',
-        alias: '-i',
-        aliases: ['--case-insensitive', '--case_insensitive'],
-        defaultValue: false,
-        valueKey: 'case_insensitive',
-      },
-      fileLimit,
-      {
-        name: 'exclude-uri',
-        kind: 'uri',
-        alias: '-x',
-        aliases: ['--exclude_uri'],
-        valueKey: 'exclude_uri',
-      },
-      {
-        name: 'level-limit',
-        kind: 'integer',
-        alias: '-L',
-        aliases: ['--level_limit'],
-        placeholder: 'n',
-        defaultValue: 10,
-        valueKey: 'level_limit',
-      },
-    ],
-    skeleton: 'search',
-    request: (body) => ({ method: 'POST', path: OV_PATHS.searchGrep, body }),
-  },
-  {
-    name: 'glob',
-    positional: [{ name: 'pattern', descriptionKey: 'glob-pattern' }],
-    flags: [root, fileLimit],
-    skeleton: 'search',
-    request: (body) => ({ method: 'POST', path: OV_PATHS.searchGlob, body }),
-  },
+  ...PATTERN_SEARCH_COMMAND_SPECS,
 ];

@@ -5,6 +5,9 @@
 import asyncio
 import base64
 import json
+import random
+import threading
+import time
 from dataclasses import asdict
 from io import BytesIO
 from types import SimpleNamespace
@@ -13,7 +16,7 @@ from unittest.mock import AsyncMock, Mock, call
 
 import httpx
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from pydantic import BaseModel
 from vikingbot.agent.loop import AgentLoop, _inline_media_bytes
 from vikingbot.agent.tools.base import MultimodalToolResult, ToolContext
@@ -35,6 +38,13 @@ from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
+
+from openviking.utils.image_input import (
+    MAX_COMPILE_IMAGE_DOWNLOAD_BYTES,
+    MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
+)
+from openviking.utils.media_limits import DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
+from openviking_cli.exceptions import NotFoundError
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -361,9 +371,7 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
     if problem == "format":
         uri = URI.replace(".png", ".svg")
     else:
-        pipeline.client.stat.return_value = {
-            "size": VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES + 1
-        }
+        pipeline.client.stat.return_value = {"size": MAX_COMPILE_IMAGE_DOWNLOAD_BYTES + 1}
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri)
     assert caught.value.code == code
@@ -433,6 +441,224 @@ async def test_memory_image_reader_rejects_changed_original(runtime):
     assert not isinstance(result, MultimodalToolResult)
     assert "Source image changed after preparation" in result
     assert "base64," not in result
+
+
+@pytest.fixture(scope="module")
+def large_png():
+    image = Image.frombytes("RGB", (1800, 1000), random.Random(6713).randbytes(1800 * 1000 * 3))
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transparent", [False, True])
+async def test_large_image_is_compressed_without_changing_source_identity(
+    runtime, large_png, transparent
+):
+    pipeline, _ = runtime
+    original = large_png
+    if transparent:
+        with Image.open(BytesIO(original)) as image:
+            image = image.convert("RGBA")
+            image.paste((0, 0, 0, 0), (0, 0, 100, 100))
+            output = BytesIO()
+            image.save(output, format="PNG")
+            original = output.getvalue()
+    assert len(original) > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+    pipeline.client.stat.return_value = {"size": len(original)}
+    pipeline.client.download_bytes.return_value = original
+
+    result = await VikingMultiReadTool._read_image(pipeline.client, URI)
+
+    assert result["success"]
+    image_part = result["image"]
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    rendition = base64.b64decode(image_part["image_url"]["url"].split(",", 1)[1])
+    assert len(rendition) < len(original)
+    assert len(rendition) <= VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+    assert result["sha256"] == content_hash(original)
+    with Image.open(BytesIO(rendition)) as rendition_image:
+        assert rendition_image.size == (1800, 1000)
+        if transparent:
+            assert rendition_image.getpixel((50, 50)) == (255, 255, 255)
+
+
+@pytest.mark.parametrize("case", ["long_edge", "download_size"])
+async def test_compile_normalizes_images_on_preload_and_worker_reread(runtime, case):
+    pipeline, _ = runtime
+    limit = DEFAULT_IMAGE_PREVIEW_MAX_DIMENSION
+    if case == "long_edge":
+        image = Image.new("RGB", (limit * 2, 128), "white")
+    else:
+        width = limit + 52
+        pixels = random.Random(6713).randbytes(width * width * 3)
+        image = Image.frombytes("RGB", (width, width), pixels)
+    with image, BytesIO() as output:
+        image.save(output, format="PNG")
+        original = output.getvalue()
+    client = pipeline.client
+    client.stat.return_value = {"size": len(original)}
+    client.download_bytes.return_value = original
+
+    native = await VikingMultiReadTool._read_image(client, URI)
+    if case == "long_edge":
+        assert len(original) < VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+        assert native["media_bytes"] == len(original)
+    else:
+        assert MAX_IMAGE_INPUT_DOWNLOAD_BYTES < len(original) <= MAX_COMPILE_IMAGE_DOWNLOAD_BYTES
+        assert not native["success"]
+        client.download_bytes.assert_not_awaited()
+
+    source = await read_source(client, URI)
+    url = source.image["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")
+    rendition = base64.b64decode(url.split(",", 1)[1])
+    with Image.open(BytesIO(rendition)) as preview:
+        assert preview.size == (limit, 64 if case == "long_edge" else limit)
+    assert len(rendition) <= VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+    assert source.sha256 == content_hash(original)
+
+    reader = CompileImageReadTool(VikingMultiReadTool(), {URI: source.sha256})
+    result = await reader._read_image(client, URI)
+    assert result["image"] == source.image
+    assert result["media_bytes"] == len(rendition)
+    assert result["sha256"] == source.sha256
+
+
+async def test_compile_resizes_when_full_resolution_encoding_exceeds_budget(
+    runtime, large_png, monkeypatch
+):
+    pipeline, _ = runtime
+    pipeline.client.stat.return_value = {"size": len(large_png)}
+    pipeline.client.download_bytes.return_value = large_png
+    budget = 750_000
+    monkeypatch.setattr(VikingMultiReadTool, "_MAX_INLINE_MEDIA_BYTES", budget)
+
+    source = await read_source(pipeline.client, URI)
+    data = base64.b64decode(source.image["image_url"]["url"].split(",", 1)[1])
+    assert len(data) <= budget
+    with Image.open(BytesIO(data)) as preview:
+        assert preview.size == (900, 500)
+
+
+async def test_simple_compile_multi_read_delivers_normalized_image(runtime):
+    from vikingbot.compile import simple
+
+    pipeline, _ = runtime
+    client = pipeline.client
+    with Image.new("RGB", (4096, 128), "white") as original, BytesIO() as output:
+        original.save(output, format="PNG")
+        source = output.getvalue()
+    client.stat.return_value = {"size": len(source)}
+    client.download_bytes.return_value = source
+    target = pipeline.target + "/findings.md"
+    client.read_raw.side_effect = NotFoundError("missing")
+    client.write = AsyncMock(return_value={"uri": target, "content_updated": True})
+
+    async def run_agent(*, tool_registry, **kwargs):
+        reader = tool_registry.get("openviking_multi_read")
+        result = await reader.execute(ToolContext(), uris=[URI])
+        assert isinstance(result, MultimodalToolResult)
+        assert URI in result.text and content_hash(source) in result.text
+        attachment = next(part for part in result.content if part["type"] == "image_url")
+        data = base64.b64decode(attachment["image_url"]["url"].split(",", 1)[1])
+        with Image.open(BytesIO(data)) as preview:
+            assert preview.size == (2048, 64)
+        writer = tool_registry.get("openviking_write")
+        await writer.execute(ToolContext(), path="findings.md", content=f"[Source]({URI})")
+        return "Done.", None, [], {}, 1
+
+    loop = SimpleNamespace(config=Config(), max_iterations=5, _run_agent_loop=run_agent)
+    result = await simple.run(
+        loop,
+        client,
+        pipeline.request,
+        pipeline.request.from_,
+        pipeline.skill,
+        None,
+        {},
+        AsyncMock(),
+        {},
+    )
+    assert result.created == [target]
+
+
+@pytest.mark.asyncio
+async def test_image_download_budget_and_inline_passthrough(runtime, monkeypatch):
+    from vikingbot.agent.tools import ov_file
+
+    pipeline, png = runtime
+    pipeline.client.stat.return_value = {"size": ov_file.MAX_IMAGE_INPUT_DOWNLOAD_BYTES + 1}
+    result = await VikingMultiReadTool._read_image(pipeline.client, URI)
+    assert not result["success"]
+    pipeline.client.download_bytes.assert_not_awaited()
+
+    pipeline.client.stat.return_value = {"size": len(png)}
+    pipeline.client.download_bytes.return_value = png
+
+    def unexpected_decode(*args):
+        raise AssertionError("Inline-sized images must not be decoded")
+
+    monkeypatch.setattr(ov_file, "compress_image_input", unexpected_decode)
+    result = await VikingMultiReadTool._read_image(pipeline.client, URI)
+    assert result["success"]
+    assert base64.b64decode(result["image"]["image_url"]["url"].split(",", 1)[1]) == png
+
+
+@pytest.mark.asyncio
+async def test_image_pixel_budget_precedes_decode(runtime, large_png, monkeypatch):
+    pipeline, _ = runtime
+    pipeline.client.stat.return_value = {"size": len(large_png)}
+    pipeline.client.download_bytes.return_value = large_png
+    monkeypatch.setattr("openviking.utils.image_input.MAX_IMAGE_INPUT_DECODE_PIXELS", 1)
+
+    def unexpected_load(*args, **kwargs):
+        raise AssertionError("Pixel budget must be checked before decoding")
+
+    monkeypatch.setattr("PIL.PngImagePlugin.PngImageFile.load", unexpected_load)
+    with pytest.raises(ValueError, match="pixel decode budget"):
+        await VikingMultiReadTool._read_image(pipeline.client, URI)
+    with pytest.raises(CompileFailure, match="pixel decode budget") as caught:
+        await read_source(pipeline.client, URI)
+    assert caught.value.code == "SOURCE_READ_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_image_reads_share_conversion_budget(runtime, large_png, monkeypatch):
+    from vikingbot.agent.tools import ov_file
+
+    pipeline, _ = runtime
+    pipeline.client.stat.return_value = {"size": len(large_png)}
+    pipeline.client.download_bytes.return_value = large_png
+    compress, transpose = ov_file.compress_image_input, ImageOps.exif_transpose
+    ready, lock = threading.Barrier(2), threading.Lock()
+    active = peak = 0
+
+    def synchronized_compress(*args):
+        ready.wait(timeout=5)
+        return compress(*args)
+
+    def observed_transpose(image):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.02)
+            return transpose(image)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ov_file, "compress_image_input", synchronized_compress)
+    monkeypatch.setattr(ImageOps, "exif_transpose", observed_transpose)
+    results = await asyncio.gather(
+        VikingMultiReadTool._read_image(pipeline.client, URI),
+        VikingMultiReadTool._read_image(pipeline.client, URI),
+    )
+    assert all(result["success"] for result in results)
+    assert peak == 1
 
 
 @pytest.mark.asyncio

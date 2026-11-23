@@ -143,39 +143,34 @@ async def test_diff_forwards_validated_path_and_refs(svc, viking_fs_mock):
 
 
 @pytest.mark.asyncio
-async def test_log_defaults(svc, viking_fs_mock):
+@pytest.mark.parametrize(
+    ("options", "branch", "limit", "offset", "paths"),
+    [
+        ({}, "main", 20, 0, None),
+        (
+            {
+                "branch": "dev",
+                "limit": 5,
+                "offset": 2,
+                "paths": ["viking://resources/a.md", "viking://resources/docs"],
+            },
+            "dev",
+            5,
+            2,
+            ["viking://resources/a.md", "viking://resources/docs"],
+        ),
+        ({"paths": []}, "main", 20, 0, []),
+    ],
+    ids=["defaults", "explicit-page", "empty-paths"],
+)
+async def test_log_forwards_pagination_and_scope(
+    svc, viking_fs_mock, options, branch, limit, offset, paths
+):
     ctx = _ctx()
-    out = await svc.log(ctx=ctx)
-    viking_fs_mock.log.assert_awaited_once_with(branch="main", limit=20, paths=None, ctx=ctx)
-    assert len(out) == 1
+    await svc.log(ctx=ctx, **options)
 
-
-@pytest.mark.asyncio
-async def test_log_with_overrides(svc, viking_fs_mock):
-    ctx = _ctx()
-    await svc.log(
-        ctx=ctx,
-        branch="dev",
-        limit=5,
-        paths=["viking://resources/a.md", "viking://resources/docs"],
-    )
     viking_fs_mock.log.assert_awaited_once_with(
-        branch="dev",
-        limit=5,
-        paths=["viking://resources/a.md", "viking://resources/docs"],
-        ctx=ctx,
-    )
-
-
-@pytest.mark.asyncio
-async def test_log_forwards_explicit_empty_paths(svc, viking_fs_mock):
-    ctx = _ctx()
-    await svc.log(ctx=ctx, branch="dev", limit=5, paths=[])
-    viking_fs_mock.log.assert_awaited_once_with(
-        branch="dev",
-        limit=5,
-        paths=[],
-        ctx=ctx,
+        branch=branch, limit=limit, offset=offset, paths=paths, ctx=ctx
     )
 
 

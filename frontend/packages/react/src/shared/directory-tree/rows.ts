@@ -1,4 +1,5 @@
 import type { DirState, FsEntry } from './types.js';
+import { decodePathLabel } from '../path-label.js';
 
 export interface DirectoryEntryRow {
   kind: 'entry';
@@ -33,6 +34,11 @@ export function nameFromUri(uri: string): string {
   return name || trimmed;
 }
 
+/** A readable URI-derived label; the original URI and basename keep their identity. */
+export function displayNameFromUri(uri: string): string {
+  return decodePathLabel(nameFromUri(uri));
+}
+
 /**
  * 把接口返回的一行映射成树行。目录未提供子节点信息，按「可以展开」处理。
  *
@@ -60,7 +66,7 @@ export function toEntryRow(
     id: index === undefined ? entry.uri : `${entry.uri}#${index}`,
     depth,
     uri: entry.uri,
-    name: nameFromUri(entry.uri),
+    name: displayNameFromUri(entry.uri),
     type: isDir ? 'directory' : 'file',
     expanded: isDir ? expanded : undefined,
     disabled: entry.access === 'denied' || undefined,
@@ -88,19 +94,28 @@ export function flattenTree(
   depth: number,
   dirs: Record<string, DirState>,
   expanded: ReadonlySet<string>,
+  ancestors = new Set<string>(),
 ): DirectoryRow[] {
   const dir = dirs[uri];
   if (!dir) return [];
   const rows: DirectoryRow[] = [];
 
+  ancestors.add(uri);
   for (const entry of dir.entries) {
+    if (ancestors.has(entry.uri)) continue;
     const isOpen = expanded.has(entry.uri);
     // 该目录的子节点正在加载：展开态但还没有结果。
     // The directory's children are loading: expanded, but no result yet.
     const loadingChildren = isOpen && dirs[entry.uri]?.loading === true;
     rows.push(toEntryRow(entry, depth, isOpen, undefined, loadingChildren));
     if (isOpen) {
-      const children = flattenTree(entry.uri, depth + 1, dirs, expanded);
+      const children = flattenTree(
+        entry.uri,
+        depth + 1,
+        dirs,
+        expanded,
+        ancestors,
+      );
       if (children.length > 0) {
         rows.push(...children);
       } else if (loadingChildren) {
@@ -147,5 +162,6 @@ export function flattenTree(
       loading: dir.loading,
     });
   }
+  ancestors.delete(uri);
   return rows;
 }

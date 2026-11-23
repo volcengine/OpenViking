@@ -369,6 +369,8 @@ async def test_partial_import_only_commits_fresh_targets_and_preserves_acl(
                 },
             ]
         )
+    for record in records:
+        record["updated_at"] = 1
     backend = _RealAclMemoryTransferBackend(records)
     fs.vector_store, fs.acl_manager = backend, backend.acl_manager
     _patch_viking_fs(monkeypatch, fs)

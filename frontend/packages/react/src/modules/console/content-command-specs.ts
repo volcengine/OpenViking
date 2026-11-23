@@ -1,4 +1,5 @@
 import { OV_PATHS } from '../../client/paths.js';
+import { selectCommandFile } from './command-files.js';
 import { ConsoleCommandError } from './command-messages.js';
 import type { Argument } from './command-parser.js';
 import type { CommandSpec } from './command-specs.js';
@@ -37,6 +38,42 @@ const mode: Argument = {
   placeholder: 'replace|append|create',
 };
 
+export const processingMode: Argument = {
+  name: 'processing-mode',
+  valueKey: 'processing_mode',
+  choices: ['semantic_and_vectors', 'vectors_only'],
+  helpDefault: 'semantic_and_vectors',
+};
+export const tags: Argument = { name: 'tags', placeholder: 'k=v' };
+export const tagMode: Argument = {
+  name: 'tag-mode',
+  valueKey: 'tag_mode',
+  choices: ['replace', 'append', 'clear'],
+  helpDefault: 'replace',
+};
+const fromFile: Argument = { name: 'from-file', placeholder: 'path' };
+const writeFlags: readonly Argument[] = [
+  content,
+  fromFile,
+  append,
+  { ...mode, helpDefault: 'replace' },
+  wait,
+  { name: 'use-snapshot', valueKey: 'use_snapshot', kind: 'boolean' },
+  processingMode,
+  { name: 'defer-processing', valueKey: 'defer_processing', kind: 'boolean' },
+  tags,
+  tagMode,
+  acl,
+];
+
+export function tagFields(raw: unknown, mode: unknown) {
+  if (typeof raw !== 'string' && mode !== 'clear') return {};
+  return {
+    tags: typeof raw === 'string' ? raw.split(',') : [],
+    tag_mode: mode ?? 'replace',
+  };
+}
+
 export const CONTENT_COMMAND_SPECS: readonly CommandSpec[] = [
   {
     name: 'read',
@@ -73,40 +110,53 @@ export const CONTENT_COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'write',
     positional: [uri, { name: 'legacy-content', optional: true }],
     preferredPositional: [uri],
-    flags: [content, append, mode, acl, wait],
-    preferredFlags: [
-      { ...content, required: true },
-      append,
-      { ...mode, defaultValue: 'replace' },
-      acl,
-      wait,
-    ],
+    flags: writeFlags,
     skeleton: 'write',
-    request: ({
-      'legacy-content': legacy,
-      content,
-      append,
-      mode,
-      wait,
-      ...body
-    }) => {
-      if (legacy !== undefined && content !== undefined)
-        throw new ConsoleCommandError('duplicateArgument', '--content');
-      const text = content ?? legacy;
-      if (text === undefined)
-        throw new ConsoleCommandError('missingArgument', '--content');
-      if (append === true && mode !== undefined && mode !== 'append')
+    execute: async (
+      {
+        'legacy-content': legacy,
+        'from-file': source,
+        content,
+        append,
+        mode,
+        wait,
+        tags,
+        tag_mode,
+        ...body
+      },
+      request,
+      execution,
+    ) => {
+      if (
+        [legacy, content, source].filter((value) => value !== undefined)
+          .length > 1
+      )
+        throw new ConsoleCommandError(
+          'duplicateArgument',
+          '--content / --from-file',
+        );
+      if (append === true && mode !== undefined)
         throw new ConsoleCommandError('invalidArgument', '--append / --mode');
-      return {
+      const text =
+        typeof source === 'string'
+          ? await (await selectCommandFile(execution, source)).text()
+          : (content ?? legacy);
+      if (text === undefined)
+        throw new ConsoleCommandError(
+          'missingArgument',
+          '--content / --from-file',
+        );
+      return request({
         method: 'POST',
         path: OV_PATHS.contentWrite,
         body: {
           ...body,
+          ...tagFields(tags, tag_mode),
           content: text,
           mode: append === true ? 'append' : (mode ?? 'replace'),
           ...(wait === true ? { wait } : {}),
         },
-      };
+      });
     },
   },
 ];

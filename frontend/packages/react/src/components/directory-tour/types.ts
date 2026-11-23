@@ -70,6 +70,8 @@ export interface DirectoryTourProps {
   locateTimeout?: number;
   className?: string;
   style?: CSSProperties;
+  /** Shows the default card's close button when onClose is provided. Default false. */
+  showCloseButton?: boolean;
   /** Host loads/expands the path and resolves only after the row is rendered.
    * Must respect cancellation. No network or business DTO belongs to the tour. */
   locateTarget?: (
