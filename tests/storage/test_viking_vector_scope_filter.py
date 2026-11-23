@@ -96,6 +96,31 @@ async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("acl_enabled", [False, True])
+async def test_count_prunes_only_the_visible_root_for_a_required_uri_scope(acl_enabled):
+    ctx = _ctx()
+    adapter = SimpleNamespace(count=AsyncMock(return_value=4))
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = AclManager(backend, _AclConfigReader(acl_enabled))
+    backend._get_backend_for_context = AsyncMock(return_value=adapter)
+    scope = PathScope("uri", "viking://resources/docs", depth=1)
+    request = And([scope, Eq("level", 2)])
+
+    assert await backend.count(filter=request, ctx=ctx) == 4
+    account_filter = Eq("account_id", "acct")
+    expected = (
+        And([account_filter, acl_filter(ctx, AclAction.READ)]) if acl_enabled else account_filter
+    )
+    adapter.count.assert_awaited_once_with(filter=And([request, expected]))
+
+    for unproven in (Eq("level", 2), Or([scope, Eq("level", 2)])):
+        await backend.count(filter=unproven, ctx=ctx)
+        assert adapter.count.await_args.kwargs["filter"] == And(
+            [unproven, _tenant_filter(ctx, acl_enabled=acl_enabled)]
+        )
+
+
+@pytest.mark.asyncio
 async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, tmp_path):
     ctx = _ctx()
     backend = vector_backend_factory(
@@ -144,6 +169,15 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
         assert next_cursor is None
         assert [record["id"] for record in records] == ["alice-memory"]
         assert count == 1
+        own_count = await backend.count(
+            filter=And([PathScope("uri", "viking://user/alice/memories"), Eq("level", 2)]),
+            ctx=ctx,
+        )
+        other_count = await backend.count(
+            filter=PathScope("uri", "viking://user/bob/memories"), ctx=ctx
+        )
+        assert own_count == 1
+        assert other_count == 0
     finally:
         await backend.close()
 
@@ -464,6 +498,9 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
                 ctx=record_ctx,
             )
 
+        resource_scope = And([PathScope("uri", "viking://resources"), Eq("level", 2)])
+        assert await backend.count(filter=resource_scope, ctx=ctx) == 4
+
         # The same ACL predicate supports existence checks for read, write and manage.
         finance_ctx = RequestContext(user=ctx.user, role=ctx.role, group_ids=("finance",))
         account_backend = await backend.get_account_backend(ctx.account_id)
@@ -552,6 +589,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         )
 
         acl_config.enabled = False
+        assert await backend.count(filter=resource_scope, ctx=ctx) == 6
         shared = await backend.search_in_tenant(
             ctx=ctx,
             query_vector=[1.0, 0.0, 0.0, 0.0],

@@ -90,12 +90,15 @@ async def test_async_client_preserves_explicit_fs_ctx() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_client_rejects_cross_account_mv() -> None:
+async def test_async_client_rejects_cross_account_transfer() -> None:
     client = _RecordingClient()
     agfs = AsyncAGFSClient(client)
 
+    source, target = "/local/a/data/file.txt", "/local/b/data/file.txt"
     with pytest.raises(ValueError, match="cross-account"):
-        await agfs.mv("/local/a/data/file.txt", "/local/b/data/file.txt")
+        await agfs.mv(source, target)
+    with pytest.raises(ValueError, match="cross-account"):
+        await agfs._copy_file(source, target, fs_ctx={"account_id": "a", "lease_ref": "lease"})
 
 
 @pytest.mark.asyncio
@@ -179,10 +182,12 @@ async def test_async_cp_copies_bytes_using_the_supported_io(
     payload = b"firstsecond"
     files = {source: payload}
     operations = []
+    metadata_reads = []
 
     class Client:
         def stat(self, path, *, ctx=None):
             assert ctx == fs_ctx
+            metadata_reads.append(path)
             return {"isDir": path == "/local/acct/data"}
 
         def copy_within_mount(self, src, dst, *, ctx=None):
@@ -212,7 +217,17 @@ async def test_async_cp_copies_bytes_using_the_supported_io(
                 files[path] = b"".join(data)
             return path
 
-    await AsyncAGFSClient(Client()).cp(source, target, fs_ctx=fs_ctx, **options)
+    agfs = AsyncAGFSClient(Client())
+    await agfs.cp(source, target, fs_ctx=fs_ctx, **options)
 
     assert files[target] == payload
     assert operations == expected_io
+
+    if not options:
+        del files[target]
+        operations.clear()
+        metadata_reads.clear()
+        await agfs._copy_file(source, target, fs_ctx=fs_ctx)
+        assert files[target] == payload
+        assert operations == expected_io
+        assert not metadata_reads

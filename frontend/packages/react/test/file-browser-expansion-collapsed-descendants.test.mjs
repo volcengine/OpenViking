@@ -60,7 +60,11 @@ test('folding a parent retires its alias and descendant observers when the liste
   const view = await mount(element(fetch, saved, persist, client));
   try {
     await toggle(view, alias);
-    await toggle(view, child(alias));
+    // The single child is already expanded by opening its parent.
+    assert.equal(
+      row(view, child(alias))?.getAttribute('aria-expanded'),
+      'true',
+    );
     assert.ok(row(view, file(child(alias))));
     await toggle(view, alias);
     assert.equal(row(view, alias)?.getAttribute('aria-expanded'), 'false');

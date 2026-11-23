@@ -16,6 +16,8 @@ const folderName = '%E8%B5%84%E6%96%99%20%25%2F%E6%A1%A3%E6%A1%88';
 const fileName = '%E6%8A%A5%E5%91%8A%20%25%2F%E5%91%A8%E6%8A%A5.md';
 const folder = `${root}/${folderName}`;
 const file = `${folder}/${fileName}`;
+const literalFolderName = '中文目录';
+const literalFolder = `${root}/${literalFolderName}`;
 const folderLabel = '资料 %/档案';
 const fileLabel = '报告 %/周报.md';
 const row = (view, uri) =>
@@ -71,7 +73,7 @@ for (const status of [200, 503]) {
   });
 }
 
-test('encoded FileBrowser paths display readable names while all operations retain raw URIs', async (t) => {
+test('FileBrowser keeps raw names in the tree and decodes preview labels', async (t) => {
   const body = deferred();
   const summary = deferred();
   const selected = [];
@@ -79,7 +81,10 @@ test('encoded FileBrowser paths display readable names while all operations reta
     if (path === '/api/v1/fs/ls')
       return ok(
         uri === root
-          ? [{ uri: folder, isDir: true }]
+          ? [
+              { uri: folder, isDir: true },
+              { uri: literalFolder, isDir: true },
+            ]
           : [{ uri: file, isDir: false }],
       );
     if (path === '/api/v1/fs/stat')
@@ -102,18 +107,15 @@ test('encoded FileBrowser paths display readable names while all operations reta
     ),
   );
   try {
-    await t.test('tree names decode within their original URI segments', () => {
-      assert.equal(
-        row(view, folder)?.querySelector('.ov-file-tree__label')?.textContent,
-        folderLabel,
+    await t.test('tree names preserve encoded and literal URI segments', () => {
+      const names = [folder, literalFolder, file].map(
+        (uri) =>
+          row(view, uri)?.querySelector('.ov-file-tree__label')?.textContent,
       );
-      assert.equal(
-        row(view, file)?.querySelector('.ov-file-tree__label')?.textContent,
-        fileLabel,
-      );
+      assert.deepEqual(names, [folderName, literalFolderName, fileName]);
       assert.equal(
         view.container.querySelectorAll('[role="treeitem"]').length,
-        2,
+        3,
       );
     });
 

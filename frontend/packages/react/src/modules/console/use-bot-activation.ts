@@ -26,15 +26,14 @@ function createBotActivation({
   enabled: boolean;
   signal?: AbortSignal;
 }) {
-  let state: BotActivationState = {
-    status: !enabled
-      ? 'disabled'
-      : activation
-        ? scopeSignal?.aborted
-          ? 'cancelled'
-          : 'checking'
-        : 'ready',
-  };
+  const initialState = activation?.initialState;
+  let state: BotActivationState;
+  if (!enabled) state = { status: 'disabled' };
+  else if (!activation) state = { status: 'ready' };
+  else if (scopeSignal?.aborted) state = { status: 'cancelled' };
+  else if (initialState?.status === 'error') {
+    state = { status: 'load-error', error: initialState.error };
+  } else state = { status: initialState?.status ?? 'checking' };
   let active = false;
   let request: AbortController | undefined;
   const listeners = new Set<() => void>();
@@ -111,7 +110,15 @@ function createBotActivation({
       if (scopeSignal?.aborted) suspend();
       else {
         scopeSignal?.addEventListener('abort', suspend, { once: true });
-        void run('load');
+        // A disconnected store retains its pending state even after cleanup
+        // aborts the request. Recheck the server without issuing another start.
+        if (
+          !initialState ||
+          state.status === 'starting' ||
+          state.status === 'checking'
+        ) {
+          void run('load');
+        }
       }
       return () => {
         active = false;

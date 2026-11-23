@@ -20,6 +20,7 @@ export function TourStep({
   locateTimeout = 10000,
   placement = 'right',
   onClose,
+  showCloseButton = false,
   labels,
   locale: localeProp,
   className,
@@ -151,6 +152,7 @@ export function TourStep({
           titleId={titleId}
           bodyId={bodyId}
           onClose={onClose ? reportClose : undefined}
+          showCloseButton={showCloseButton}
           advance={() => advance(unavailable)}
           unavailable={unavailable}
           renderContent={anchor && !unavailable ? renderContent : undefined}

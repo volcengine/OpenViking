@@ -64,10 +64,10 @@ const messages = {
   telemetryResult: (value: string) => `Telemetry: ${value}`,
   taskResult: 'Task result',
   memoryCommit: {
-    idle: 'Commit session',
-    pending: 'Committing session',
-    submitted: 'Committing session',
-    success: 'Session committed',
+    idle: 'Extract long-term memory',
+    pending: 'Extract long-term memory',
+    submitted: 'Extract long-term memory',
+    success: 'Long-term memory extracted',
     empty: 'There are no new messages to extract memories from.',
     skipped: 'No new memories were generated.',
     failed: 'Could not submit the session',
@@ -90,6 +90,8 @@ const messages = {
   commands,
   localResourceImportHelp:
     'Enter a web or repository URL to import it directly. Run the command by itself or with only a local path to open the Local upload page and choose files or folders.',
+  localResourceImportSummary:
+    'Import a web URL or repository, or open Local upload for files and folders',
   commandGuides: {
     'add-resource': {
       description:

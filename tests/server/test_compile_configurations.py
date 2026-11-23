@@ -339,6 +339,16 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
         ]["runs"]
         assert [r["task_id"] for r in runs] == [task_ids[-1]]
         assert runs[0]["params"]["instruction"] == actor.user.user_id
+        assert runs[0]["status"] == "queued"
+        cancel_path = f"/api/v1/tasks/{task_ids[-1]}/cancel"
+        cancelled = await client.post(cancel_path)
+        assert cancelled.status_code == 200, cancelled.text
+        task = cancelled.json()["result"]
+        run = await service.compile.get_run(name, task_ids[-1], actor)
+        assert task["status"] == run["status"] == "cancelled"
+        assert run["finished_at"] == task["updated_at"]
+        assert (await client.post(cancel_path)).status_code == 200
+        assert await service.compile.get_run(name, task_ids[-1], actor) == run
     assert task_ids[0] != task_ids[1]
     foreign_run = await client.get(
         f"/api/v1/compile/runs/{task_ids[0]}", params={"compile_name": name}

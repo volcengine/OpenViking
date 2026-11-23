@@ -50,6 +50,7 @@ export default {
   addedLines: 'Added content',
   removedLines: 'Removed content',
   copyPath: 'Copy file path',
+  pathCopied: 'Node path copied',
   copyOriginal: 'Copy source',
   copied: 'Copied',
   historyView: 'Historical version content view',
@@ -82,6 +83,7 @@ export default {
   noSchedule: 'Do not update',
   daily: 'Daily',
   weekly: 'Weekly',
+  weeklySchedule: (weekday: string) => `Every ${weekday}`,
   time: 'Run time (Beijing time)',
   weekday: 'Day of week',
 } satisfies FileBrowserWorkflowLabels;

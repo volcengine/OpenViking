@@ -3,6 +3,7 @@ import type { FileBrowserExperienceDataSource } from './experience-data-source.j
 import { createDashboardTab } from './dashboard-tab.js';
 import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
+import { isMemoryUri } from './fs-memory-fields.js';
 import { type ReactNode, useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isOvClientError } from '../../client/errors.js';
@@ -12,7 +13,7 @@ import { useWikiConflictIndicators } from './wiki-conflict-indicators.js';
 import {
   useWikiConflictIndex,
   useDashboardHint,
-  previewDashboardOptions,
+  usePreviewDashboardHint,
 } from './use-dashboard-metadata.js';
 import {
   type FileBrowserDashboard,
@@ -73,7 +74,8 @@ export function useBrowserDashboards({
   const { hint, canonicalUri, knownRows, isFile } = useDashboardHint({
     uri,
     rows: metadataRows.filter((row) => row.kind !== 'entry' || !row.disabled),
-    enabled: wikiEnabled,
+    enabled:
+      wikiEnabled && !(uri && resourceType !== 'directory' && isMemoryUri(uri)),
     generation,
     requestOptions,
   });
@@ -181,13 +183,9 @@ export function useBrowserDashboards({
         onOpenDashboard: open,
       })
     : undefined;
+  const readPreviewHint = usePreviewDashboardHint(uri, resolved?.kind, hint);
   return {
-    previewOptions: previewDashboardOptions(
-      uri,
-      resourceType,
-      resolved?.kind,
-      hint,
-    ),
+    previewOptions: { readDashboardHint: readPreviewHint },
     dashboards,
     current,
     tab,

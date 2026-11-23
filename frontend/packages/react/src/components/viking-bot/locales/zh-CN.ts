@@ -41,6 +41,8 @@ const messages = {
   send: '发送',
   stop: '停止',
   attach: '添加资源',
+  attachmentLimit: (limit: number) =>
+    `单次最多上传 ${new Intl.NumberFormat('zh-CN').format(limit)} 个附件`,
   removeAttachment: '移除附件',
   uploadingAttachment: '上传中…',
   attachmentUploadFailed: '附件上传失败',

@@ -5,7 +5,7 @@ import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { Radio } from '../../shared/primitives/radio/radio.js';
 import { formatVikingUriLabel } from '../../shared/path-label.js';
 import { FileBrowserSearchScopePicker } from './file-browser-search-scope-picker.js';
-import { isSearchScopeAllowed } from './search-model.js';
+import { isSearchScopeAllowed, setSearchScope } from './search-model.js';
 import type { ScopeOption, SearchFilters } from './search-types.js';
 import type { FilterAvailability } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
@@ -54,9 +54,7 @@ export function FileBrowserSearchScopes({
     }
     onChange({
       ...filters,
-      scopes: selected
-        ? filters.scopes.filter((item) => item !== uri)
-        : [...filters.scopes, uri],
+      scopes: setSearchScope(filters.scopes, uri, !selected),
     });
   };
 

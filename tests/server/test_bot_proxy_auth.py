@@ -384,6 +384,8 @@ _COMPILE_RUNTIME_ARGS = {
             "cancel",
             "cancel_immediate",
             "poll_failure",
+            "connect_timeout",
+            "read_timeout",
             "restart",
             "restart_cancel",
             "conflict",
@@ -580,6 +582,10 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     rejected_id = None
     rejected_submissions = []
     rejection_code = "OperationConflict" if "conflict" in finish else "INVALID_ARGUMENT"
+    submit_timeout = {
+        "connect_timeout": httpx.ConnectTimeout,
+        "read_timeout": httpx.ReadTimeout,
+    }.get(finish)
 
     async def runtime_request(_client, method, url, headers, json):
         nonlocal polls
@@ -589,6 +595,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             task_id = headers["Idempotency-Key"]
             if task_id == rejected_id:
                 rejected_submissions.append(task_id)
+                if submit_timeout is not None:
+                    assert len(rejected_submissions) <= 3
+                    raise submit_timeout("")
                 return FakeResponse(
                     {"error": {"code": rejection_code, "message": "submission rejected"}},
                     status_code=409 if "conflict" in finish else 422,
@@ -596,6 +605,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             submitted.append(task_id)
             return FakeResponse({"session_id": task_id})
         task_id = json["session_id"]
+        assert not (submit_timeout is not None and task_id == rejected_id)
         assert json == {"session_id": task_id, **({"args": args} if args else {})}
         if url.endswith("/runtime/v1/tasks/archive"):
             archived.append(task_id)
@@ -738,9 +748,10 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     await queue.dequeue()
     failed = await state(rejected)
     assert failed.status == TaskStatus.FAILED
-    assert failed.error.startswith(rejection_code + ":")
+    assert failed.error.startswith(("UNAVAILABLE" if submit_timeout else rejection_code) + ":")
     assert "cleanup_error" not in failed.meta
-    assert rejected_submissions.count(rejected_id) == (0 if finish == "recovered_conflict" else 1)
+    expected_submissions = 0 if finish == "recovered_conflict" else 1
+    assert len(rejected_submissions) == (3 if submit_timeout else expected_submissions)
     assert not await queue.snapshot()
     after_rejection = await create()
     await queue.dequeue()

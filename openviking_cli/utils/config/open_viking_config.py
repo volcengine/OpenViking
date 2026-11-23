@@ -56,7 +56,6 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .queue_worker_config import QueueWorkersConfig
-from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .rules_config import RulesConfig
@@ -351,11 +350,6 @@ class OpenVikingConfig(BaseModel):
     queue_workers: QueueWorkersConfig = Field(
         default_factory=QueueWorkersConfig,
         description="Queue worker runtime configuration",
-    )
-
-    reindex: ReindexConfig = Field(
-        default_factory=ReindexConfig,
-        description="Admin reindex runtime configuration",
     )
 
     parser_api: ParserApiConfig = Field(

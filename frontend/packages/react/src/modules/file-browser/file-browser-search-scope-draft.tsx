@@ -5,6 +5,7 @@ import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { formatVikingUriLabel } from '../../shared/path-label.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import { FileBrowserSearchScopeTree } from './file-browser-search-scope-tree.js';
+import { setSearchScope } from './search-model.js';
 import type { ScopeOption } from './search-types.js';
 
 export function FileBrowserSearchScopeDraft({
@@ -36,16 +37,7 @@ export function FileBrowserSearchScopeDraft({
     }
     // A parent covers its subtree. The search API has no exclusions, so inherited
     // child checks remain disabled until that parent is deselected.
-    setDraft(
-      checked
-        ? [
-            ...draft.filter(
-              (item) => item !== uri && !item.startsWith(`${uri}/`),
-            ),
-            uri,
-          ]
-        : draft.filter((item) => item !== uri),
-    );
+    setDraft((current) => setSearchScope(current, uri, checked));
   }
 
   return (

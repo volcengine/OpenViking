@@ -12,6 +12,8 @@ from typing import TypeVar
 T = TypeVar("T")
 R = TypeVar("R")
 
+FILE_TASK_CONCURRENCY = 8
+
 
 async def bounded_map(
     items: Iterable[T],
