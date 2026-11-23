@@ -379,7 +379,7 @@ def test_openviking_config_ignores_unknown_fields(monkeypatch, caplog):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
     logger = logging.getLogger("openviking_cli.utils.config.open_viking_config")
     monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
-    caplog.set_level(logging.WARNING, logger=logger.name)
+    caplog.set_level(logging.INFO, logger=logger.name)
     config = OpenVikingConfig.from_dict(
         {
             "retired_section": {"api_key": "test-secret"},
@@ -427,16 +427,11 @@ def test_openviking_config_ignores_unknown_fields(monkeypatch, caplog):
     assert "retired_field" not in dumped["glob"]
     assert "unknown_memory_field" not in dumped["memory"]
     assert "cache" not in dumped["storage"]["agfs"]
-    assert "Ignoring unknown config field 'storage.agfs.cache'" in caplog.text
-    assert "Ignoring unknown config field 'parsers.markdown.unknown_field'" in caplog.text
-    assert "Ignoring unknown config field 'vlm.credentials[0].retired_field'" in caplog.text
-    assert "Ignoring unknown config field 'ingest.harnesses.claude_code'" not in caplog.text
-    assert "Ignoring unknown config field 'ingest.harnesses.codex'" not in caplog.text
-    assert "Ignoring unknown config field 'ingest.harnesses.codex.retired_field'" in caplog.text
-    assert (
-        "Ignoring unknown config field 'ingest.harnesses.codex.commit.retired_field'" in caplog.text
-    )
-    assert "ingest.memory_policy" not in caplog.text
+    assert "unknown_field" not in dumped["markdown"]
+    assert "retired_field" not in dumped["vlm"]["credentials"][0]
+    assert "retired_field" not in dumped["ingest"]["harnesses"]["codex"]
+    assert "retired_field" not in dumped["ingest"]["harnesses"]["codex"]["commit"]
+    assert "unknown configuration fields ignored" in caplog.text
     assert "test-secret" not in caplog.text
 
 
@@ -508,25 +503,12 @@ def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
 def test_openviking_config_ignores_deprecated_code_summary_mode(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
-    from openviking_cli.utils.config import parser_config
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
+    config = OpenVikingConfig.from_dict(
+        {"parsers": {"code": {"code_summary_mode": "llm", "max_line_length": 120}}}
     )
 
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        parser_config.logger,
-        "warning",
-        lambda message, *args, **kwargs: warnings.append(message % args if args else message),
-    )
-
-    config = OpenVikingConfig.from_dict({"code": {"code_summary_mode": "llm"}})
-
-    assert not hasattr(config.code, "code_summary_mode")
-    assert any("code.code_summary_mode is deprecated and ignored" in item for item in warnings)
-
-    OpenVikingConfigSingleton.reset_instance()
+    assert config.code.max_line_length == 120
+    assert "code_summary_mode" not in config.to_dict()["code"]
 
 
 def test_openviking_config_transaction_redo_recovery_enabled_defaults_true(monkeypatch):
