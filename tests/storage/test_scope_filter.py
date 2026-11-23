@@ -1,5 +1,5 @@
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
-from openviking.storage.scope_filter import build_scope_filter, infer_uri_scopes, merge_filters
+from openviking.storage.scope_filter import build_scope_filter, merge_filters
 
 
 def test_build_scope_filter_preserves_order_and_depth():
@@ -37,34 +37,3 @@ def test_merge_filters_preserves_existing_empty_and_behavior():
         RawDSL({"op": "and", "conds": []}),
         {"op": "must", "field": "uri", "conds": ["viking://resources/a.md"]},
     ) == RawDSL({"op": "must", "field": "uri", "conds": ["viking://resources/a.md"]})
-
-
-def test_uri_scope_proof_is_conservative():
-    scope = PathScope("uri", "viking://resources/docs/", depth=1)
-    exact = Eq("uri", "viking://resources/docs/a.md")
-    raw = RawDSL({"op": "must", "field": "uri", "conds": ["/resources/docs"]})
-    assert infer_uri_scopes(scope) == (scope,)
-    assert infer_uri_scopes(And([raw, exact])) == (PathScope("uri", exact.value, depth=0),)
-    assert infer_uri_scopes(Or([scope, exact, scope])) == (
-        scope,
-        PathScope("uri", exact.value, depth=0),
-    )
-    for invalid in (
-        raw,
-        raw.payload,
-        Or([scope, Eq("level", 2)]),
-        PathScope("parent_uri", scope.path),
-        PathScope("uri", scope.path, depth=True),
-        PathScope("uri", scope.path, depth=-2),
-    ):
-        assert infer_uri_scopes(invalid) is None
-    for uri in (
-        "/resources/docs",
-        "viking://resources//docs",
-        "viking://resources/../user/alice",
-        "viking://resources/./docs",
-        "viking://resources/docs?x=1",
-        "viking://resources/docs#part",
-        "viking://resources\\docs",
-    ):
-        assert infer_uri_scopes(PathScope("uri", uri)) is None
