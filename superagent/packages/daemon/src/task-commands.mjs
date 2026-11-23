@@ -49,8 +49,16 @@ function said(text) {
   return String(text ?? '').replace(/^\[[^\]]*\]\s*/, '');
 }
 
+const SOURCE = { lark: '飞书', weixin: '微信', slack: 'Slack', telegram: 'Telegram', qq: 'QQ', onebot: 'QQ', email: '邮件' };
+
+// Where a task was asked: a group by its name (clipped), a direct chat as one
+// (it has no name; the requester says with whom), a mail by its source. A
+// group whose name is not known yet shows the end of its id.
 function where(task) {
-  const chat = task.chatName ?? (task.origin_chat ? `chat ${task.origin_chat.slice(-6)}` : task.origin_source);
+  const source = SOURCE[task.origin_source] ?? task.origin_source ?? '';
+  const chat = task.chatName ? oneLine(task.chatName, 20)
+    : task.origin_chat_type === 'p2p' ? `${source}私聊`
+      : task.origin_chat ? `${source}群 …${task.origin_chat.slice(-6)}` : source;
   return `${chat}${task.origin_thread ? ' · 话题' : ''}`;
 }
 
@@ -155,6 +163,9 @@ function overviewText(view, now) {
 
 // ---- the overview as a card (Lark, Card JSON 2.0) ----------------------------
 
+// The callback value on a card control that runs a command (commands.mjs).
+export const CARD_COMMAND = 'superagent_command';
+
 // A task's status as a coloured tag.
 const TAG = {
   running: ['运行中', 'blue'], queued: ['排队', 'wathet'], waiting: ['等待回复', 'orange'], done: ['完成', 'green'],
@@ -221,10 +232,95 @@ function overviewCard(view, now) {
     elements.push({ tag: 'div', text: plain(`久未回复（${view.dormantDays} 天以上无动静，router 的任务提示里不再出现）：${shown.join('、')}`
       + `${parts.dormant.length > LIVE_SHOWN ? ` 等 ${parts.dormant.length} 个` : ''}`) });
   }
+  // Choosing a task sends its card, as /tasks <id> would (commands.mjs,
+  // commandCandidate): every task the card lists, the dormant ones too.
+  const listed = [...parts.sections.flatMap(([, tasks]) => tasks.slice(0, LIVE_SHOWN)), ...parts.dormant.slice(0, LIVE_SHOWN)];
+  if (listed.length) {
+    elements.push({
+      tag: 'select_static', placeholder: plain('查看任务详情…'), width: 'fill',
+      options: listed.map((task) => ({ text: plain(`${task.id}「${oneLine(task.title, 30)}」`), value: task.id })),
+      behaviors: [{ type: 'callback', value: { [CARD_COMMAND]: '/tasks' } }],
+    });
+  }
   elements.push({ tag: 'div', text: plain('/tasks <编号> 查看详情 · /tasks stop <编号> [原因] 停止任务', grey) });
   return {
     schema: '2.0', config: { update_multi: true },
     header: { template: 'blue', title: plain('后台任务'), subtitle: plain(parts.slots) },
+    body: { elements },
+  };
+}
+
+// ---- one task as a card ------------------------------------------------------
+
+const HEADER = { running: 'blue', queued: 'wathet', waiting: 'orange', done: 'green', blocked: 'red', failed: 'carmine', dropped: 'violet', stopped: 'violet' };
+const REPORT_TAG = { done: ['完成', 'green'], needs_user: ['提问', 'orange'], blocked: ['受阻', 'red'], dropped: ['无需处理', 'violet'], failed: ['失败', 'carmine'] };
+const INPUT_TAG = { 追加: 'blue', 已退回: 'violet', 背景: 'wathet', 备注: 'green' };
+
+// A detail table: its text wraps in the cell (up to a few lines), so a request
+// or a result can be read without opening it.
+function detailTable(columns, rows) {
+  return {
+    tag: 'table', page_size: 10, row_height: 'auto', row_max_height: '124px',
+    header_style: { background_style: 'grey', bold: true },
+    columns: columns.map(([name, display_name, width, data_type = 'text']) => ({ name, display_name, data_type, ...(width ? { width } : {}) })),
+    rows,
+  };
+}
+
+function detailCard(task, parts, now, { live }) {
+  const facts = [
+    ['状态', parts.state],
+    ['请求人', task.requester_name ?? '未知'],
+    ['位置', where(task)],
+    ['创建于', clock(task.created_at_ms)],
+    ...(task.parent_id ? [['跟进自', task.parent_id]] : []),
+    ...(parts.children ? [['后续任务', parts.children]] : []),
+    ...(parts.runtime ? [['Runtime', parts.runtime]] : []),
+    ...(task.note ? [['router 备注', oneLine(task.note, 400)]] : []),
+    ...(parts.artifacts.length ? [['产出', parts.artifacts.join('、')]] : []),
+    ...(task.lastError ? [['最近一次失败', `${clock(task.lastError.occurred_at_ms)} ${oneLine(task.lastError.summary, 400)}`]] : []),
+    ['worker 运行次数', String(task.turns)],
+    ['目录', parts.dir],
+  ];
+  // Round 1 is the request the task was created with; the rest reopened it.
+  const first = task.rounds.find((round) => round.round === 1);
+  const rounds = [
+    { round: '第 1 次', at: clock(task.created_at_ms), requester: first?.requester_name ?? task.requester_name ?? '未知',
+      text: parts.request.join('\n'), outcome: first?.outcome ? STATUS[first.outcome] ?? first.outcome : task.round === 1 ? STATUS[task.status] ?? task.status : '' },
+    ...parts.rounds.map((round) => ({ round: `第 ${round.round} 次`, at: clock(round.at), requester: round.requester, text: round.text, outcome: round.outcome })),
+  ].slice(-10);
+  const elements = [
+    detailTable([['key', '项目', '110px'], ['value', '内容']], facts.map(([key, value]) => ({ key, value: cardText(oneLine(value, 600)) }))),
+    { tag: 'markdown', content: '**请求**' },
+    detailTable([['round', '轮次', '80px'], ['at', '时间', '110px'], ['requester', '请求人'], ['text', '内容', '320px'], ['outcome', '结果']],
+      rounds.map((round) => ({ ...round, requester: cardText(round.requester), text: cardText(oneLine(round.text, 600)) }))),
+  ];
+  const note = (text) => ({ tag: 'div', text: plain(text, { text_size: 'notation', text_color: 'grey' }) });
+  if (parts.followUps.length) {
+    elements.push({ tag: 'markdown', content: `**${FOLLOW_UPS}（${parts.followUps.length}）**` }, note(FOLLOW_UPS_NOTE),
+      detailTable([['round', '轮次', '80px'], ['at', '时间', '110px'], ['tag', '类型', '100px', 'options'], ['text', '内容', '320px'], ['read', 'worker']],
+        parts.followUps.slice(-10).map((input) => ({ round: `第 ${input.round} 轮`, at: clock(input.at),
+          tag: [{ text: input.tag, color: INPUT_TAG[input.tag] ?? 'blue' }], text: cardText(oneLine(input.text, 600)), read: READ(input.read) }))));
+  }
+  if (parts.reports.length) {
+    elements.push({ tag: 'markdown', content: '**结果**' }, note(REPORTS_NOTE),
+      detailTable([['round', '轮次', '80px'], ['at', '时间', '110px'], ['state', '类型', '100px', 'options'], ['delivery', '投递'], ['text', '内容', '320px']],
+        parts.reports.slice(-5).map((report) => {
+          const [label, color] = REPORT_TAG[report.state] ?? [STATE[report.state] ?? report.state, 'blue'];
+          return { round: `第 ${report.round} 轮`, at: clock(report.at), state: [{ text: label, color }], delivery: report.delivery,
+            text: cardText(oneLine(report.text, 600)) };
+        })));
+  }
+  if (parts.handovers.length) {
+    elements.push({ tag: 'markdown', content: '**Runtime 交接**' },
+      detailTable([['at', '时间', '110px'], ['round', '轮次', '80px'], ['move', '交接'], ['reason', '原因']],
+        parts.handovers.slice(-5).map((handover) => ({ at: clock(handover.at), round: `第 ${handover.round} 轮`, move: `${handover.from} → ${handover.to}`,
+          reason: `${handover.reason}${handover.pending ? '；新 worker 还没完成一次运行' : ''}` }))));
+  }
+  elements.push({ tag: 'div', text: plain(`${live ? `/tasks stop ${task.id} [原因] 停止任务 · ` : ''}/tasks 查看全部任务`, { text_size: 'notation', text_color: 'grey' }) });
+  return {
+    schema: '2.0', config: { update_multi: true },
+    header: { template: HEADER[task.status] ?? 'blue', title: plain(`${task.id}「${oneLine(task.title, 80)}」`), subtitle: plain(state(task, now)) },
     body: { elements },
   };
 }
@@ -235,57 +331,95 @@ function overview(tasks, now) {
   return { ok: true, text: overviewText(view, now), card: overviewCard(view, now) };
 }
 
-function detailText(tasks, taskId, now) {
-  const task = tasks.detail(taskId);
-  if (!task) return { ok: false, text: `没有任务 ${taskId}。\n${USAGE}` };
-  const owner = task.inputs.filter((input) => input.role === 'owner');
-  const request = owner.filter((input) => input.seq === task.origin_seq);
+const FOLLOW_UPS = '用户追加消息与额外上下文';
+const FOLLOW_UPS_NOTE = '追加：请求方补充、修改要求或回答提问，worker 必须处理；背景：任务附近的对话，仅供参考；备注：router 写给 worker 的说明；已退回：worker 判断不属于本任务，交回 router 重新处理';
+const REPORTS_NOTE = '每轮结束时 worker 的最终回复；被新的追加打断的旧回复不再发出，标为“未投递（被后续结果取代）”';
+const READ = (read) => (read === null ? '—' : read ? '已读' : '未读');
+
+const DORMANT_NOTE = '（久未回复：router 的任务提示里不再出现，回复它的消息、在它的话题里或按编号仍能找到）';
+
+// One task, as both forms show it: what it is, where it was asked, its
+// requests round by round, what came in on top, its results and their
+// delivery, and its runtime moves. The lists keep their full length here;
+// each form shows the last few.
+function detailParts(task, now) {
   // A later round's request is listed with its round, not as a follow-up.
   const reopenedBy = new Set(task.rounds.filter((round) => round.round > 1).map((round) => round.origin_seq));
-  const followUps = task.inputs.filter((input) => (input.seq !== task.origin_seq && !reopenedBy.has(input.seq)) || input.role !== 'owner');
+  const roundText = (round) => task.inputs.find((input) => input.seq === round.origin_seq && input.role === 'owner')?.text;
+  return {
+    state: `${state(task, now)}${task.dormant ? DORMANT_NOTE : ''}`,
+    request: task.inputs.filter((input) => input.role === 'owner' && input.seq === task.origin_seq).map((input) => said(input.text)),
+    rounds: task.rounds.filter((round) => round.round > 1).map((round) => ({
+      at: round.opened_at_ms, round: round.round, requester: round.requester_name ?? '未知', text: said(roundText(round)),
+      outcome: round.outcome === 'handed_back' ? '已退回' : round.outcome ? STATUS[round.outcome] ?? round.outcome : '进行中',
+    })),
+    followUps: task.inputs.filter((input) => (input.seq !== task.origin_seq && !reopenedBy.has(input.seq)) || input.role !== 'owner')
+      .map((input) => ({
+        at: input.created_at_ms, text: said(input.text),
+        round: input.round ?? 1,
+        tag: input.handed_back_at_ms ? '已退回' : input.role === 'owner' ? '追加' : input.role === 'context' ? '背景' : '备注',
+        // Whether its worker has seen it; a line handed back is no longer its.
+        read: input.handed_back_at_ms ? null : Boolean(input.seen_at_ms || input.delivered_at_ms),
+      })),
+    reports: task.reports.filter((report) => report.state !== 'progress').map((report) => ({
+      at: report.created_at_ms, round: report.round ?? 1, state: report.state, text: report.draft || report.question || report.summary,
+      delivery: report.settled_at_ms ? DELIVERY[report.settled_by === 'stay_silent' ? 'silent' : report.settled_by === 'unrelayed' ? 'unrelayed' : report.settled_by ? 'sent' : 'settled']
+        : report.inbox_id ? `待 router 转发${report.offers ? `（已重投 ${report.offers} 次）` : ''}`
+          : report.relayed_at_ms === null && report.offers === null ? '未投递（被后续结果取代）' : '待投递',
+    })),
+    handovers: (task.handovers ?? []).map((handover) => ({
+      at: handover.created_at_ms, round: handover.round, from: handover.from_runtime, to: handover.to_runtime,
+      reason: HANDOVER_REASON[handover.reason] ?? handover.reason, pending: !handover.taken_at_ms,
+    })),
+    children: task.children.map((child) => `${child.id}（${STATUS[child.status] ?? child.status}）`).join('、'),
+    runtime: task.runtime ? `${task.runtime}${task.model ? ` · 模型 ${task.model}` : ''}${task.effort ? ` · 档位 ${task.effort}` : ''}` : '',
+    artifacts: JSON.parse(task.artifacts_json || '[]').slice(0, 5),
+    dir: `${task.workdir}${task.dir?.removed_at_ms ? '（已清理）' : task.dir?.pruned_at_ms ? '（依赖目录已清理）' : ''}`,
+  };
+}
+
+function detailText(task, parts) {
   const lines = [
     `${task.id}「${task.title}」`,
-    `状态：${state(task, now)}${task.dormant ? '（久未回复：router 的任务提示里不再出现，回复它的消息、在它的话题里或按编号仍能找到）' : ''}`,
+    `状态：${parts.state}`,
     `请求人：${task.requester_name ?? '未知'} · ${where(task)} · 创建于 ${clock(task.created_at_ms)}`,
     ...(task.parent_id ? [`跟进自：${task.parent_id}`] : []),
-    ...(task.children.length ? [`后续任务：${task.children.map((child) => `${child.id}（${STATUS[child.status] ?? child.status}）`).join('、')}`] : []),
+    ...(parts.children ? [`后续任务：${parts.children}`] : []),
     ...(task.note ? [`router 备注：${oneLine(task.note, 120)}`] : []),
-    ...(task.runtime ? [`Runtime：${task.runtime}${task.model ? ` · 模型 ${task.model}` : ''}${task.effort ? ` · 档位 ${task.effort}` : ''}`] : []),
-    ...(task.handovers ?? []).slice(-5).map((handover) => `  ${clock(handover.created_at_ms)} 第 ${handover.round} 轮从 ${handover.from_runtime} 交接到 ${handover.to_runtime}（${HANDOVER_REASON[handover.reason] ?? handover.reason}${handover.taken_at_ms ? '' : '；新 worker 还没完成一次运行'}）`),
+    ...(parts.runtime ? [`Runtime：${parts.runtime}`] : []),
+    ...parts.handovers.slice(-5).map((handover) => `  ${clock(handover.at)} 第 ${handover.round} 轮从 ${handover.from} 交接到 ${handover.to}（${handover.reason}${handover.pending ? '；新 worker 还没完成一次运行' : ''}）`),
     '请求：',
-    ...request.map((input) => `  ${oneLine(said(input.text), 200)}`),
+    ...parts.request.map((text) => `  ${oneLine(text, 200)}`),
   ];
-  const later = task.rounds.filter((round) => round.round > 1);
-  if (later.length) {
-    lines.push(`之后的请求（${later.length}）：`);
-    for (const round of later.slice(-10)) {
-      const text = task.inputs.find((input) => input.seq === round.origin_seq && input.role === 'owner')?.text;
-      const outcome = round.outcome === 'handed_back' ? '已退回' : round.outcome ? STATUS[round.outcome] ?? round.outcome : '进行中';
-      lines.push(`  ${clock(round.opened_at_ms)} 第 ${round.round} 次 · ${round.requester_name ?? '未知'}（${outcome}）：${oneLine(said(text), 80)}`);
+  if (parts.rounds.length) {
+    lines.push(`之后的请求（${parts.rounds.length}）：`);
+    for (const round of parts.rounds.slice(-10)) {
+      lines.push(`  ${clock(round.at)} 第 ${round.round} 次 · ${round.requester}（${round.outcome}）：${oneLine(round.text, 80)}`);
     }
   }
-  if (followUps.length) {
-    lines.push(`追加（${followUps.length}）：`);
-    for (const input of followUps.slice(-10)) {
-      const tag = input.handed_back_at_ms ? '已退回' : input.role === 'owner' ? '追加' : input.role === 'context' ? '背景' : '备注';
-      const seen = input.handed_back_at_ms || input.role !== 'owner' ? '' : input.seen_at_ms || input.delivered_at_ms ? '' : ' · worker 未读';
-      lines.push(`  ${clock(input.created_at_ms)} ${tag}${seen}：${oneLine(said(input.text), 80)}`);
+  if (parts.followUps.length) {
+    lines.push(`${FOLLOW_UPS}（${parts.followUps.length}）：`, `  （${FOLLOW_UPS_NOTE}）`);
+    for (const input of parts.followUps.slice(-10)) {
+      lines.push(`  ${clock(input.at)} 第 ${input.round} 轮 · ${input.tag} · ${READ(input.read)}：${oneLine(input.text, 80)}`);
     }
   }
-  const reports = task.reports.filter((report) => report.state !== 'progress');
-  if (reports.length) {
-    lines.push('结果：');
-    for (const report of reports.slice(-5)) {
-      const delivery = report.settled_at_ms ? DELIVERY[report.settled_by === 'stay_silent' ? 'silent' : report.settled_by === 'unrelayed' ? 'unrelayed' : report.settled_by ? 'sent' : 'settled'] : report.inbox_id ? `待 router 转发${report.offers ? `（已重投 ${report.offers} 次）` : ''}` : report.relayed_at_ms === null && report.offers === null ? '未投递（被后续结果取代）' : '待投递';
-      lines.push(`  ${clock(report.created_at_ms)} ${STATE[report.state] ?? report.state} · ${delivery}：${oneLine(report.draft || report.question || report.summary, 80)}`);
+  if (parts.reports.length) {
+    lines.push('结果：', `  （${REPORTS_NOTE}）`);
+    for (const report of parts.reports.slice(-5)) {
+      lines.push(`  ${clock(report.at)} 第 ${report.round} 轮 · ${STATE[report.state] ?? report.state} · ${report.delivery}：${oneLine(report.text, 80)}`);
     }
   }
-  const artifacts = JSON.parse(task.artifacts_json || '[]');
-  if (artifacts.length) lines.push(`产出：${artifacts.slice(0, 5).join('、')}`);
+  if (parts.artifacts.length) lines.push(`产出：${parts.artifacts.join('、')}`);
   if (task.lastError) lines.push(`最近一次失败（${clock(task.lastError.occurred_at_ms)}）：${oneLine(task.lastError.summary, 160)}`);
-  const dir = task.dir?.removed_at_ms ? '（已清理）' : task.dir?.pruned_at_ms ? '（依赖目录已清理）' : '';
-  lines.push(`worker 运行次数：${task.turns} · 目录：${task.workdir}${dir}`);
-  return { ok: true, text: lines.join('\n') };
+  lines.push(`worker 运行次数：${task.turns} · 目录：${parts.dir}`);
+  return lines.join('\n');
+}
+
+function detail(tasks, taskId, now) {
+  const task = tasks.detail(taskId);
+  if (!task) return { ok: false, text: `没有任务 ${taskId}。\n${USAGE}` };
+  const parts = detailParts(task, now);
+  return { ok: true, text: detailText(task, parts), card: detailCard(task, parts, now, { live: tasks.isLive(task) }) };
 }
 
 export function executeTasksCommand(command, { event, connectors, tasks, now = Date.now() }) {
@@ -295,7 +429,7 @@ export function executeTasksCommand(command, { event, connectors, tasks, now = D
   if (!tasks) return { ok: false, text: '这个实例没有启用 workers 调度（agents[].scheduler = "workers"），没有后台任务。' };
   const [verb = '', ...rest] = String(command.arg ?? '').trim().split(/\s+/).filter(Boolean);
   if (!verb) return overview(tasks, now);
-  if (TASK_ID.test(verb.toLowerCase()) && rest.length === 0) return detailText(tasks, verb.toLowerCase(), now);
+  if (TASK_ID.test(verb.toLowerCase()) && rest.length === 0) return detail(tasks, verb.toLowerCase(), now);
   if (verb.toLowerCase() === 'stop' && TASK_ID.test(String(rest[0] ?? '').toLowerCase())) {
     const taskId = rest[0].toLowerCase();
     const task = tasks.get(taskId);

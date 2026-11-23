@@ -584,8 +584,18 @@ in one line; slots; whether each result reached the requester). On Lark the
 overview is a card (Card JSON 2.0, Lark 7.20 or later): a table per group of
 tasks, with the status as a coloured tag, every @ of what people wrote shown
 as ＠ (Lark refuses a bot message with an email address in it); elsewhere,
-and when Lark refuses the card, it is the text. The owner sees one task with
-`/tasks t12` (text), and stops one with `/tasks stop t12`; `/status` counts the tasks
+and when Lark refuses the card, it is the text. A group shows by its name
+(clipped), a direct chat as `飞书私聊` / `微信私聊` (it has no name). At the
+end of the card a dropdown lists every task it shows: choosing one sends that
+task's card, exactly as `/tasks t12` would. The choice comes back as a card
+callback on a card this daemon registered when it sent it, and runs as that
+command only in a direct chat, only `/tasks` and only a task id, with the
+owner checks of a typed command and without the model. `/tasks t12` is a card
+too: its facts, its requests round by round, the user's additions and extra
+context (each with its round, its kind and whether its worker has read it),
+its results (one per round, plus any a newer addition superseded) and its
+runtime moves; the text says the same. The owner stops a task with
+`/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort). The Core answers these without the model.
 

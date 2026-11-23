@@ -6,6 +6,7 @@
 // reaches codex. Any unambiguous prefix of a command name works (/h → /help,
 // /m gpt-5.5 → /model gpt-5.5); effort levels match by prefix too.
 
+import { CARD_COMMAND } from './task-commands.mjs';
 import {
   DEFAULT_RUNTIME_ID,
   MODEL_ID_MAX_LENGTH,
@@ -50,6 +51,14 @@ export function matchPrefix(token, candidates) {
 // or null when the message is not eligible (it then flows to codex as a normal
 // message).
 export function commandCandidate(event) {
+  // A choice on a card the Core answered a command with runs the command it
+  // names, in the direct chat the card is in: the task picked in /tasks opens
+  // as /tasks <id>. Only that command and a task id: never text anyone wrote.
+  if (event.kind === 'message.action' && event.messageType === 'card_action') {
+    const { value, option } = event.data?.interaction ?? {};
+    if (event.chatType !== 'p2p' || !event.chatId || !event.replyRoute) return null;
+    return value?.[CARD_COMMAND] === '/tasks' && /^t[0-9]{1,6}$/.test(option ?? '') ? `/tasks ${option}` : null;
+  }
   if (event.kind !== 'message.created' || !event.chatId || !event.messageId
     || !event.replyRoute || !['text', 'post'].includes(event.messageType)) return null;
   const text = String(event.content ?? '').trim();
