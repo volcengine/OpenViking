@@ -81,7 +81,7 @@ test("capture is opt-in and host options cannot replace the connection", async (
   const f = await fixture(t);
   const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, { autoCapture: false, baseUrl: "http://wrong", apiKey: "wrong", nativeAgents: ["pi"] });
   assert.equal(cfg.autoCapture, false); assert.equal(cfg.baseUrl, f.file.url); assert.equal(cfg.apiKey, "fixture");
-  assert.deepEqual(cfg.nativeAgents, ["pi"]);
+  assert.deepEqual(cfg.nativeAgents, ["pi", "openviking-models"]);
 });
 
 test("duplicate snapshots, concurrent workers and process restarts send one copy", async (t) => {

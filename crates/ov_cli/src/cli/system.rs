@@ -49,12 +49,18 @@ pub(crate) enum SnapshotCmd {
         #[arg(long)]
         author_email: Option<String>,
     },
-    /// Restore a project directory or the full account tree to a past snapshot (forward commit)
+    /// Restore a file, project directory, or full account tree to a past snapshot
     Restore {
-        /// Commit oid, branch, or tag
+        /// Source commit (full 40-character ID for --file); directories also accept a branch or tag
         source_commit: String,
         /// Optional viking:// directory or relative tree path; omit for full-tree restore
         project_dir: Option<String>,
+        /// Restore only this file URI on main
+        #[arg(long, conflicts_with_all = ["project_dir", "branch", "message", "author_name", "author_email"])]
+        file: Option<String>,
+        /// Require this file’s latest commit to match the given commit ID
+        #[arg(long, requires = "file")]
+        current_commit_id: Option<String>,
         #[arg(long, default_value = "main")]
         branch: String,
         #[arg(long)]
@@ -82,6 +88,8 @@ pub(crate) enum SnapshotCmd {
         branch: String,
         #[arg(long, default_value_t = 20)]
         limit: u32,
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
         /// Show only commits touching any of these viking:// URIs (comma-separated); accepts files and directories.
         #[arg(long, value_delimiter = ',')]
         paths: Option<Vec<String>>,

@@ -156,7 +156,7 @@ The **Routing** section sets how the gateway chooses between upstreams. For each
 
 Turning an upstream off moves the conversations that were using it to the next candidate. That costs one provider cache miss and drops earlier Claude thinking blocks, and those requests are flagged **Upstream switched** (see [Issues on degraded requests](12-troubleshooting.md#issues-on-degraded-requests)). Turn an upstream off instead of deleting it if you may want it back.
 
-The gateway does not fail over: when the chosen upstream returns an error, the client receives it, and an unreachable provider returns 502 "Model upstream is unavailable".
+The gateway does not fail over: when the chosen upstream returns an error, the client receives it, an unreachable provider returns 502 `upstream_unreachable`, and one that does not answer in time returns 504 `upstream_timeout`.
 
 ### Pick the upstream per request {#upstream-url-header}
 

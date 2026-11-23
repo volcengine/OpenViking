@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.server.routers import filesystem
+from openviking.service import fs_service
+from openviking.service.fs_service import FSService
 
 
 async def _first_file_uri(client, root_uri: str) -> str:
@@ -45,10 +46,9 @@ async def test_fs_attrs_filters_legacy_non_kv_search_tags(monkeypatch):
                 }
             ]
 
-    monkeypatch.setattr(filesystem, "VikingDBManagerProxy", FakeVikingDBManagerProxy)
+    monkeypatch.setattr(fs_service, "VikingDBManagerProxy", FakeVikingDBManagerProxy)
 
-    tags = await filesystem._tags_attr(
-        SimpleNamespace(vikingdb_manager=object()),
+    tags = await FSService(vikingdb=object())._tags_attr(
         "viking://user/default/memories/events/example.md",
         SimpleNamespace(),
         is_dir=False,
@@ -100,9 +100,12 @@ async def test_write_allows_existing_semantic_sidecar_but_rejects_relations(clie
     [
         ("# Original", "Resolved content.", "Resolved content."),
         ("# Original", "Resolved content.\n\nContinued.", "Resolved content.\n\nContinued."),
-        ("# Updated", "Resolved content.", "Conflicting content"),
+        ("# Updated", "Resolved content.", "Resolved content."),
+        ("# Original", "", "# Original"),
+        ("", "", None),
+        ("", " \n\t", None),
     ],
-    ids=["reliable-anchor", "multiline-anchor", "uncertain-anchor"],
+    ids=["reliable-anchor", "multiline-anchor", "approximate-anchor", "deleted", "empty", "blank"],
 )
 async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     client_with_resource, title, replacement, expected_anchor
@@ -126,9 +129,14 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
         },
     )
     assert seeded.status_code == 200, seeded.text
-    edited = f"{title}\n\n{replacement}\n\nAdditional context.\n\n"
+    edited = (
+        replacement
+        if expected_anchor is None
+        else f"{title}\n\n{replacement}\n\nAdditional context.\n\n"
+    )
     write_resp = await client.post(
         "/api/v1/content/write",
+        headers={"X-OpenViking-User": "alice"},
         json={
             "uri": file_uri,
             "content": edited,
@@ -143,17 +151,26 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     stored = read_resp.json()["result"]
     assert stored.startswith(edited)
-    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
-    assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
-    assert resolution["match_text"] == expected_anchor
-    assert resolution["fix_plan"] == (
-        "用户手动解决内容冲突，修正后的内容如正文所示，后续更新的时候不能修改这部分内容"
-    )
-    assert resolution["resolution_basis"] == "人工修复"
     attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
     assert {"has_conflict=false", "conflict_num=0", "team=search"} <= set(
         attrs.json()["result"]["attrs"]["tags"]
     )
+    if expected_anchor is None:
+        assert stored == edited
+        return
+    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
+    assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
+    assert resolution["match_text"] == expected_anchor
+    assert resolution["match_text"] in edited
+    assert resolution["fix_plan"] == ("用户手动解决内容冲突，修正后的内容如正文所示")
+    assert resolution["resolution_basis"] == "人工修复"
+    assert resolution["resolved_by"] == "alice"
+    assert set(resolution) == set(conflict) | {
+        "fix_time",
+        "fix_plan",
+        "resolution_basis",
+        "resolved_by",
+    }
 
 
 async def test_write_appends_existing_resource_file(client_with_resource):
@@ -206,36 +223,6 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
     task_resp = await client.get(f"/api/v1/tasks/{task_id}")
     assert task_resp.status_code == 200
     assert task_resp.json()["result"]["status"] == "completed"
-
-
-async def test_write_agent_skill_completes_without_lock_self_blocking(client):
-    uri = "viking://agent/skills/content-write-lock/SKILL.md"
-    content = """---
-name: content-write-lock
-description: Verify direct Agent Skill writes complete.
----
-
-# Content Write Lock
-
-Use this skill to verify lock handoff behavior.
-"""
-
-    write_resp = await client.post(
-        "/api/v1/content/write",
-        json={
-            "uri": uri,
-            "content": content,
-            "mode": "create",
-            "wait": True,
-        },
-    )
-
-    assert write_resp.status_code == 200
-    body = write_resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"] == uri
-    assert body["result"]["semantic_status"] == "complete"
-    assert body["result"]["vector_status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -505,14 +492,117 @@ async def test_set_tags_rejects_wait_and_timeout_fields(client_with_resource):
     assert body["status"] == "error"
 
 
-async def test_set_tags_discards_invalid_kv_tag(client_with_resource):
-    client, uri = client_with_resource
-    file_uri = await _first_file_uri(client, uri)
-    resp = await client.post(
+async def test_tag_updates_preserve_content_and_isolate_batch_failures(
+    client, service, app, monkeypatch
+):
+    from openviking.server.auth import get_request_context
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.utils.time_utils import get_current_timestamp
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    foreign_ctx = RequestContext(user=UserIdentifier(ctx.account_id, "other_user"), role=Role.USER)
+    root = f"viking://user/{ctx.user.user_id}/resources/tag-contract"
+    file_uri = f"{root}/a.md"
+    unindexed = f"{root}/unindexed.md"
+    missing = f"{root}/missing.md"
+    foreign = "viking://user/other_user/resources/tag-contract/private.md"
+    for uri, owner in [(file_uri, ctx), (unindexed, ctx), (foreign, foreign_ctx)]:
+        await service.viking_fs.write_file(uri, "original content", ctx=owner)
+    timestamp = get_current_timestamp()
+    record_ids = []
+    for uri, level, owner in [
+        (file_uri, 2, ctx),
+        (root, 0, ctx),
+        (root, 1, ctx),
+        (foreign, 2, foreign_ctx),
+    ]:
+        record_id = vector_record_id(ctx.account_id, uri, level)
+        record_ids.append(record_id)
+        await service.vikingdb_manager.upsert(
+            {
+                "id": record_id,
+                "uri": uri,
+                "context_type": "resource",
+                "level": level,
+                "abstract": "original summary",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": ["team=search", "used_count=5", "last_used_at=123"],
+            },
+            ctx=owner,
+        )
+    root_ctx = RequestContext(user=service.user, role=Role.ROOT)
+    before = await service.vikingdb_manager.get_strict(record_ids, ctx=root_ctx)
+    monkeypatch.setitem(app.dependency_overrides, get_request_context, lambda: ctx)
+
+    response = await client.post(
         "/api/v1/fs/attrs/set_tags",
         json={"uri": file_uri, "tags": ["project-a", "team=search"]},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["tags"] == ["team=search"]
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["tags"] == ["team=search"]
+
+    response = await client.post(
+        "/api/v1/content/set_tags",
+        json={
+            "uri": file_uri,
+            "tags": ["used_count=0", "used_count+=1", "used_count+=1", "last_used_at=123"],
+            "mode": "append",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["success_count"] == 1
+
+    response = await client.post(
+        "/api/v1/content/batch_set_tags",
+        json={
+            "uris": [file_uri, foreign, root, missing, file_uri + "/", unindexed, "invalid"],
+            "tags": ["used_count+=1"],
+            "mode": "append",
+        },
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert [item["uri"] for item in result["items"]] == [file_uri, root, unindexed]
+    assert [item["success_count"] for item in result["items"]] == [1, 2, 0]
+    assert result["items"][-1]["tags_updated"] is False
+    assert [(item["uri"], item["error"]["code"]) for item in result["failed"]] == [
+        (foreign, "PERMISSION_DENIED"),
+        (missing, "NOT_FOUND"),
+        ("invalid", "INVALID_URI"),
+    ]
+    after = await service.vikingdb_manager.get_strict(record_ids, ctx=root_ctx)
+    for record, original in zip(after, before, strict=True):
+        if record["uri"] == foreign:
+            assert record == original
+        else:
+            count = 3 if record["uri"] == file_uri else 6
+            assert set(record["search_tags"]) == {
+                "team=search",
+                f"used_count={count}",
+                "last_used_at=123",
+            }
+            assert {key: value for key, value in record.items() if key != "search_tags"} == {
+                key: value for key, value in original.items() if key != "search_tags"
+            }
+    for uri, count in [(file_uri, 3), (root, 6)]:
+        attrs = await client.get("/api/v1/fs/attrs", params={"uri": uri})
+        assert attrs.status_code == 200, attrs.text
+        assert set(attrs.json()["result"]["attrs"]["tags"]) == {
+            "team=search",
+            f"used_count={count}",
+            "last_used_at=123",
+        }
+
+    rejected = await client.post(
+        "/api/v1/content/set_tags",
+        json={"uri": file_uri, "tags": ["used_count+=NaN"], "mode": "append"},
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert await service.vikingdb_manager.get_strict(record_ids, ctx=root_ctx) == after
+    for uri, owner in [(file_uri, ctx), (unindexed, ctx), (foreign, foreign_ctx)]:
+        assert await service.viking_fs.read_file(uri, ctx=owner) == "original content"

@@ -63,11 +63,23 @@ type AddSkillOptions struct {
 	TargetURI any
 }
 
-// CompileOptions controls Compile.
-type CompileOptions struct {
-	Instruction string
-	Args        map[string]any
-	Extra       map[string]any
+// CompileInput contains full compilation inputs. Args may contain scheduling
+// controls only when creating a persistent configuration.
+type CompileInput struct {
+	FromURIs    []string       `json:"from,omitempty"`
+	To          string         `json:"to,omitempty"`
+	Skill       string         `json:"skill"`
+	Instruction string         `json:"instruction,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+}
+
+// CompileRequest selects one saved configuration or supplies independent full inputs.
+// CompileName and Input are mutually exclusive.
+type CompileRequest struct {
+	CompileName string
+	Input       *CompileInput
+	// Args uses only owner_user_id for named runs; full runs use Input.Args.
+	Args map[string]any
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
@@ -281,33 +293,41 @@ type WriteOptions struct {
 	Mode string
 	Wait bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
-	Timeout        *float64
-	Telemetry      any
-	ProcessingMode string
-	Tags           []string
-	TagMode        string
-	Extra          map[string]any
+	Timeout          *float64
+	Telemetry        any
+	ProcessingMode   string
+	Tags             []string
+	TagMode          string
+	UseSnapshot      bool
+	ResolveConflicts bool
+	DeferProcessing  bool
+	Extra            map[string]any
 }
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string   `json:"uri"`
-	Content       *string  `json:"content,omitempty"`
-	ContentBase64 *string  `json:"content_base64,omitempty"`
-	Mode          string   `json:"mode,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	TagMode       string   `json:"tag_mode,omitempty"`
-	ACL           *ACLSpec `json:"acl,omitempty"`
+	URI              string   `json:"uri"`
+	Content          *string  `json:"content,omitempty"`
+	ContentBase64    *string  `json:"content_base64,omitempty"`
+	Mode             string   `json:"mode,omitempty"`
+	ExpectedSHA256   *string  `json:"expected_sha256,omitempty"`
+	IfAbsent         bool     `json:"if_absent,omitempty"`
+	ResolveConflicts bool     `json:"resolve_conflicts,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	TagMode          string   `json:"tag_mode,omitempty"`
+	ACL              *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
+	UseSnapshot     bool
 	DeferProcessing bool
 	Wait            *bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
+	SkipConflicts  bool
 	Extra          map[string]any
 }
 

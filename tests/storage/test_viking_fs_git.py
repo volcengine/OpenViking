@@ -46,19 +46,6 @@ async def test_show_without_limit_preserves_existing_binding_call():
     ]
 
 
-@pytest.mark.skip(reason="needs git-enabled VikingFS fixture")
-async def test_show_blob_raw_returns_envelope(viking_fs_with_two_commits):
-    """show_blob_raw must return the full {oid, size, bytes} dict, not strip it."""
-    vfs, _account, commit_oid, sample_path, sample_bytes = viking_fs_with_two_commits
-
-    raw = await vfs.show_blob_raw(commit_oid, path=sample_path)
-
-    assert isinstance(raw, dict)
-    assert raw["bytes"] == sample_bytes
-    assert raw["size"] == len(sample_bytes)
-    assert isinstance(raw["oid"], str) and len(raw["oid"]) == 40
-
-
 async def test_diff_reads_blobs_from_resolved_commit_oids():
     from_oid = "a" * 40
     to_oid = "b" * 40
@@ -246,34 +233,24 @@ async def test_diff_checks_access_before_reading_snapshot_content():
     assert show_calls == []
 
 
-async def test_diff_rejects_excessive_line_count_before_building_diff(monkeypatch):
-    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_LINES", 2, raising=False)
-    vfs = _DiffVikingFS(b"a\nb\nc\n", b"a\nb\nd\n")
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\u2028"])
+async def test_diff_enforces_line_budget_at_boundary(monkeypatch, separator):
+    monkeypatch.setattr(viking_fs_module, "SNAPSHOT_DIFF_MAX_LINES", 2)
+    before = f"a{separator}b{separator}".encode()
+    after = f"a{separator}c".encode()
+    path = "viking://user/user/memories/experiences/example.md"
+    ctx = _request_context()
 
+    accepted = _DiffVikingFS(before, after)
+    result = await VikingFS.diff(accepted, path=path, from_ref="from", to_ref="to", ctx=ctx)
+    assert result["change_type"] == "modified"
+    assert accepted._async_agfs.calls[-1][0] == "git_diff_text"
+
+    over_budget = _DiffVikingFS(before, f"a{separator}b{separator}c".encode())
     with pytest.raises(ResourceExhaustedError, match="line count limit"):
-        await VikingFS.diff(
-            vfs,
-            path="viking://user/user/memories/experiences/example.md",
-            from_ref="from",
-            to_ref="to",
-            ctx=_request_context(),
-        )
+        await VikingFS.diff(over_budget, path=path, from_ref="from", to_ref="to", ctx=ctx)
 
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "",
-        "one line",
-        "one line\n",
-        "one\r\ntwo\r\n",
-        "one\rtwo",
-        "one\u2028two\u2029",
-        "\n\n",
-    ],
-)
-async def test_snapshot_line_count_matches_splitlines(text):
-    assert viking_fs_module._snapshot_line_count(text) == len(text.splitlines())
+    assert all(operation != "git_diff_text" for operation, _ in over_budget._async_agfs.calls)
 
 
 async def test_diff_rejects_output_over_size_limit(monkeypatch):

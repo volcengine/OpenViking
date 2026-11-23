@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -96,7 +97,7 @@ class StoragePath:
 
         file_path = images_dir / f"{filename}{extension}"
         file_path.write_bytes(image_data)
-        logger.debug(f"Saved image: {file_path}")
+        logger.debug("image saved path=%s", safe_path_for_log(str(file_path)))
         return file_path
 
     def save_table_image(
@@ -126,7 +127,7 @@ class StoragePath:
 
         file_path = tables_dir / f"{filename}{extension}"
         file_path.write_bytes(image_data)
-        logger.debug(f"Saved table image: {file_path}")
+        logger.debug("table image saved path=%s", safe_path_for_log(str(file_path)))
         return file_path
 
     def cleanup_resource_media(self, resource_name: str) -> None:
@@ -141,20 +142,20 @@ class StoragePath:
 
         if resource_dir.exists():
             shutil.rmtree(resource_dir)
-            logger.info(f"Cleaned up media for resource: {resource_name}")
+            logger.debug("resource media cleaned resource_hash=%s", short_hash(str(resource_name)))
 
     def cleanup_downloads(self) -> None:
         """Remove all downloaded files."""
         if self.downloads_dir.exists():
             shutil.rmtree(self.downloads_dir)
             self.downloads_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("Cleaned up downloads directory")
+            logger.debug("cleaned up downloads directory")
 
     def cleanup_all(self) -> None:
         """Remove all OpenViking storage."""
         if self.openviking_dir.exists():
             shutil.rmtree(self.openviking_dir)
-            logger.info("Cleaned up all OpenViking storage")
+            logger.debug("cleaned up all OpenViking storage")
 
     def get_all_resource_media(self, resource_name: str) -> dict:
         """

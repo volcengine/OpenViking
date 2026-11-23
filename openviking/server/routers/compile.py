@@ -4,9 +4,10 @@
 
 import asyncio
 import math
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Path, Query, status
-from fastapi import Response as HTTPResponse
+from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -17,28 +18,37 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.service.compile_service import (
     CompileConfigUpdate,
+    CompileCreateRequest,
     CompileRequest,
 )
+from openviking.service.compile_targets import CompileName
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["compile"])
 
 
-@router.post(
-    "/compile",
-    status_code=status.HTTP_202_ACCEPTED,
-    responses={status.HTTP_200_OK: {"description": "Compile update settings saved"}},
-)
+@router.post("/compile/create")
+async def create_compile_task(
+    body: CompileCreateRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Create a tagged, account-scoped configuration without running Compile."""
+    return Response(
+        status="ok", result=await get_service().compile.create_compile_task(body, ctx=ctx)
+    )
+
+
+@router.post("/compile", status_code=status.HTTP_202_ACCEPTED)
 async def create_compile(
     body: CompileRequest,
-    response: HTTPResponse,
+    response: FastAPIResponse,
     ctx: RequestContext = Depends(get_request_context),
     idempotency_key: str | None = Header(
         None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9:._-]+$"
     ),
     x_request_id: str | None = Header(None),
 ):
-    """Save explicit update settings, or queue a task with the caller's forwarding identity."""
+    """Queue a saved configuration or a full request with the caller's forwarding identity."""
     connection = {"api_key": ctx.api_key} if ctx.api_key else {}
     connection.update(account_id=ctx.account_id, user_id=ctx.user.user_id)
     if ctx.actor_peer_id:
@@ -52,9 +62,13 @@ async def create_compile(
         ctx=ctx,
         **({"idempotency_key": idempotency_key} if idempotency_key else {}),
     )
-    if isinstance(result, dict):
-        response.status_code = status.HTTP_200_OK
-        return Response(status="ok", result=result)
+    if body.compile_name is None and not body.is_memory_mode:
+        # RFC 9745 date for the full-input request form (2026-11-07 UTC).
+        response.headers["Deprecation"] = "@1794009600"
+        response.headers["Link"] = (
+            "<https://docs.openviking.ai/en/api/23-agent-runtime#execute-compile>; "
+            'rel="deprecation"; title="POST /api/v1/compile/create, then POST /api/v1/compile with compile_name"'
+        )
     return Response(status="ok", result=result.to_dict())
 
 
@@ -63,10 +77,10 @@ __all__ = ["router"]
 
 @router.get("/compile/config")
 async def get_compile_config(
-    to: str = Query(..., min_length=1),
+    compile_name: Annotated[CompileName, Query()],
     ctx: RequestContext = Depends(get_request_context),
 ):
-    return Response(status="ok", result=await get_service().compile.get_config(to, ctx))
+    return Response(status="ok", result=await get_service().compile.get_config(compile_name, ctx))
 
 
 @router.post("/compile/config/update")
@@ -81,53 +95,54 @@ async def update_compile_config(
 async def list_compile_configs(
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
+    scope: Literal["user", "account"] = Query("user"),
+    compile_name: CompileName | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """List the caller's configurations, or all configurations in the account for ADMIN."""
     return Response(
         status="ok",
-        result=await get_service().compile.list_configs(ctx, limit=limit, cursor=cursor),
+        result=await get_service().compile.list_configs(
+            ctx, limit=limit, cursor=cursor, scope=scope, compile_name=compile_name
+        ),
     )
 
 
-@router.get("/compile/operations")
-async def list_compile_operations(
-    to: str = Query(..., min_length=1),
+@router.get("/compile/runs")
+async def list_compile_runs(
+    compile_name: Annotated[CompileName, Query()],
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    result = await get_service().compile.list_operations(to, ctx, limit=limit, cursor=cursor)
+    result = await get_service().compile.list_runs(compile_name, ctx, limit=limit, cursor=cursor)
     return Response(status="ok", result=result)
 
 
-@router.get("/compile/operations/{operation_id}")
-async def get_compile_operation(
-    operation_id: str = Path(
-        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$"
-    ),
-    to: str = Query(..., min_length=1),
+@router.get("/compile/runs/{task_id}")
+async def get_compile_run(
+    compile_name: Annotated[CompileName, Query()],
+    task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Read one operation using to for authorization and the history's public field set."""
-    result = await get_service().compile.get_operation(to, operation_id, ctx)
+    """Read a frozen run without exposing execution credentials or private checkpoints."""
+    result = await get_service().compile.get_run(compile_name, task_id, ctx)
     return Response(status="ok", result=result)
 
 
-@router.get("/compile/operations/{operation_id}/outputs")
-async def operation_outputs(
-    operation_id: str = Path(
-        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$"
-    ),
-    to: str = Query(..., min_length=1),
+@router.get("/compile/runs/{task_id}/outputs")
+async def run_outputs(
+    compile_name: Annotated[CompileName, Query()],
+    task_id: str = Path(..., min_length=1, max_length=128, pattern=r"^cmp_[0-9a-f]+$"),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List one operation's output files and frozen version references."""
+    """Derive a run's changed output files from its frozen snapshots."""
     return Response(
         status="ok",
-        result=await get_service().compile.operation_outputs(
-            to, operation_id, ctx, limit=limit, cursor=cursor
+        result=await get_service().compile.run_outputs(
+            compile_name, task_id, ctx, limit=limit, cursor=cursor
         ),
     )
 
@@ -164,10 +179,10 @@ class CompileEmbeddingRequest(BaseModel):
     expected_model: str | None = None
 
     @model_validator(mode="after")
-    def bound_text(self):
-        """Bound each routing description and the total before contacting the provider."""
-        if any(not text.strip() or len(text) > 1024 for text in self.texts):
-            raise ValueError("Compile embedding texts require 1..1024 characters")
+    def validate_texts(self):
+        """Reject blank texts; the embedder applies the configured input token budget."""
+        if any(not text.strip() for text in self.texts):
+            raise ValueError("Compile embedding texts must not be blank")
         return self
 
 
@@ -184,6 +199,7 @@ async def compile_embeddings(
     """
     from openviking.core.namespace import classify_uri
     from openviking.models.embedder.base import embed_compat
+    from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 
     target = validate_request_viking_uri(resolve_path_variables(request.target_uri), _ctx)
     classification = classify_uri(target)
@@ -201,9 +217,10 @@ async def compile_embeddings(
     # Small chunks also bound providers whose embed_async implementation has no limiter.
     vectors = []
     for start in range(0, len(request.texts), 4):
-        batch = await asyncio.gather(
-            *(embed_compat(embedder, text) for text in request.texts[start : start + 4])
-        )
+        with bind_dashboard_token_source_type("compile"):
+            batch = await asyncio.gather(
+                *(embed_compat(embedder, text) for text in request.texts[start : start + 4])
+            )
         for result in batch:
             vector = result.dense_vector
             if not vector or len(vector) > 8192 or not all(math.isfinite(x) for x in vector):

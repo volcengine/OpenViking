@@ -14,7 +14,6 @@ from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import SlackChannelConfig
-from vikingbot.channels.utils import extract_image_paths, read_image_file
 
 
 class SlackChannel(BaseChannel):

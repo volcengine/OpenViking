@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.output import (
     ARTIFACT_MANIFEST_NAME as ARTIFACT_MANIFEST_NAME,
@@ -222,7 +223,11 @@ async def upload_directory(
             try:
                 target = sanitize_relative_viking_path(target)
             except ValueError as exc:
-                logger.warning(f"Skipping {file_path}: {exc}")
+                logger.debug(
+                    "Unsafe artifact path rejected path=%s error_type=%s",
+                    safe_path_for_log(str(file_path)),
+                    type(exc).__name__,
+                )
                 continue
             files_to_upload.append((file_path, target))
             if "/" in target:
@@ -235,7 +240,11 @@ async def upload_directory(
         try:
             await store.mkdir(artifact_ref, rel_dir)
         except Exception as e:
-            logger.warning(f"Failed to create artifact directory {rel_dir}: {e}")
+            logger.debug(
+                "Artifact directory creation failed; relying on write to create parents path=%s error_type=%s",
+                safe_path_for_log(rel_dir),
+                type(e).__name__,
+            )
 
     # --- Phase 3: Upload files concurrently ---
     sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)
@@ -264,7 +273,7 @@ async def upload_directory(
     for err in errors:
         if err:
             warnings.append(err)
-            logger.warning(err)
+            logger.debug("Artifact upload failed error_code=ARTIFACT_UPLOAD_FAILED")
 
     # Persist the md5 manifest at the artifact root so the incremental diff can
     # compare fingerprints without re-reading files. Only write it when every file
@@ -273,4 +282,10 @@ async def upload_directory(
         await write_artifact_manifest(store, artifact_ref, md5_by_target)
 
     uploaded_count = sum(1 for e in errors if e is None)
+    if uploaded_count < len(errors):
+        logger.info(
+            "Artifact upload incomplete total=%d failed=%d degraded=true",
+            len(errors),
+            len(errors) - uploaded_count,
+        )
     return uploaded_count, warnings

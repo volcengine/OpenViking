@@ -207,6 +207,12 @@ impl MemoryMockProvider {
         self.max_active_sets.load(Ordering::Relaxed)
     }
 
+    /// Return the remaining lifetime of one key when the provider tracks an expiration.
+    pub async fn expiration_remaining(&self, key: &str) -> Option<Duration> {
+        let deadline = *self.expirations.read().await.get(key)?;
+        Some(deadline.saturating_duration_since(Instant::now()))
+    }
+
     fn ensure_open(&self) -> CacheResult<()> {
         if self.closed.load(Ordering::Acquire) {
             Err(CacheError::Unavailable(

@@ -37,6 +37,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
+    "markdown-it-py>=3,<5",
     "jsonschema>=4.23.0",
     "httpx>=0.25.0",
     "pdfplumber>=0.10.0",
@@ -63,7 +64,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.102.4,<1.102.5",
+    "litellm>=1.103.10,<1.103.11",
     "python-multipart>=0.0.31",
     # Pin the parsing stack to avoid unvalidated upstream API and grammar changes.
     "tree-sitter==0.25.2",
@@ -96,12 +97,23 @@ dependencies = [
 
 
 [project.optional-dependencies]
+sqlite = [
+    "aiosqlite>=0.20,<1",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+]
+reporting = [
+    "kafka-python>=3.0.12,<4",
+]
 expiry = [
   "redis>=5.3.1,<7",
 ]
 gateway-fast = [
     "uvloop>=0.21; sys_platform != 'win32'",
     "httptools>=0.6",
+]
+postgres = [
+    "psycopg[binary]>=3.2,<4",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
 mysql = [
     "aiomysql>=0.2.0,<1",
@@ -114,6 +126,7 @@ redis-mysql = [
   "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
 test = [
+  "aiosqlite>=0.20,<1",
   "SQLAlchemy[asyncio]>=2.0,<2.1",
   "redis>=5.3.1,<7",
   "pytest>=7.0.0",
@@ -221,6 +234,10 @@ opengauss = [
   "psycopg2-binary>=2.9,<3",
 ]
 
+pgvector = [
+    "psycopg2-binary>=2.9,<3",
+]
+
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
 Documentation = "https://openviking.ai"
@@ -261,6 +278,7 @@ openviking = [
     "bin/ov.exe",
     "server/account_stores/sql/*.sql",
     "server/account_stores/sql/changes/*.sql",
+    "server/account_stores/sql/postgres/*.sql",
     "service/sql/*.sql",
     "service/sql/changes/*.sql",
     "storage/vectordb/engine/*.abi3.so",

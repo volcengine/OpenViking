@@ -9,7 +9,6 @@ and mapping LDAP attributes to OpenViking identities.
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,8 +20,9 @@ from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import UnauthenticatedError
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Try to import LDAP library, provide helpful error if missing
 try:
@@ -32,7 +32,7 @@ try:
     LDAP_AVAILABLE = True
 except ImportError:
     LDAP_AVAILABLE = False
-    logger.warning(
+    logger.debug(
         "LDAP library not available. LDAP authentication will not work. "
         "Install with: uv pip install python-ldap"
     )
@@ -157,19 +157,13 @@ class LDAPAuthPlugin(AuthPlugin):
             attributes = await asyncio.to_thread(
                 self._authenticate_ldap, username, password
             )
-            logger.debug("Successfully authenticated LDAP user: %s", username)
-            # Log available attributes for debugging
+            logger.debug("LDAP credentials authenticated")
             if attributes:
-                logger.debug(
-                    "Available LDAP attributes: %s", list(attributes.keys())
-                )
+                logger.debug("LDAP attributes received", extra={"total": len(attributes)})
         except ldap.LDAPError as e:
-            error_code = getattr(e, "args", [None])[0] if e.args else None
-            logger.debug(
-                "LDAP authentication failed for user %s - Error: %s, Code: %s",
-                username,
-                str(e),
-                error_code,
+            logger.info(
+                "LDAP authentication rejected",
+                extra={"error_type": type(e).__name__, "error_code": "UNAUTHENTICATED"},
             )
             raise UnauthenticatedError(f"LDAP authentication failed: {e}") from e
 
@@ -191,14 +185,15 @@ class LDAPAuthPlugin(AuthPlugin):
                 claims={}, attributes=normalized_attrs, dn=dn
             )
         except ValueError as e:
-            logger.error("Failed to map LDAP attributes: %s", e)
+            logger.info(
+                "LDAP identity mapping rejected",
+                extra={"error_type": type(e).__name__, "error_code": "UNAUTHENTICATED"},
+            )
             raise UnauthenticatedError(f"Failed to map attributes: {e}") from e
 
         logger.debug(
-            "Successfully authenticated LDAP user: account=%s, user=%s, role=%s",
-            account_id,
-            user_id,
-            Role.USER,
+            "LDAP identity mapped",
+            extra={"role": Role.USER},
         )
 
         return ResolvedIdentity(role=Role.USER, account_id=account_id, user_id=user_id)
@@ -263,11 +258,7 @@ class LDAPAuthPlugin(AuthPlugin):
         search_base = (
             self._config.user_search_base or self._config.base_dn
         )
-        logger.debug(
-            "Searching for user with filter: %s, base: %s",
-            search_filter,
-            search_base,
-        )
+        logger.debug("LDAP user attribute search started")
 
         result = conn.search_s(
             search_base,
@@ -368,10 +359,9 @@ class LDAPAuthPlugin(AuthPlugin):
                     if found_attrs:
                         user_attrs = found_attrs
                 except ldap.LDAPError as e:
-                    logger.debug(
-                        "Direct bind: unable to read own attributes for %s: %s",
-                        username,
-                        e,
+                    logger.info(
+                        "LDAP direct bind attribute read failed; falling back to DN attributes",
+                        extra={"error_type": type(e).__name__},
                     )
             finally:
                 try:
@@ -445,32 +435,32 @@ class LDAPAuthPlugin(AuthPlugin):
     def validate_config(self, config) -> None:
         """Validate LDAP configuration."""
         if config.ldap is None:
-            logger.error(
+            print(
                 "auth_mode=ldap but 'ldap' section missing in config. "
-                "Please configure the LDAP server settings."
+                "Please configure the LDAP server settings.",
+                file=sys.stderr,
+                flush=True,
             )
             sys.exit(1)
 
         if not config.ldap.host:
-            logger.error("LDAP config missing 'host'")
+            print("LDAP config missing 'host'", file=sys.stderr, flush=True)
             sys.exit(1)
 
         if not config.ldap.base_dn:
-            logger.error("LDAP config missing 'base_dn'")
+            print("LDAP config missing 'base_dn'", file=sys.stderr, flush=True)
             sys.exit(1)
 
         if not config.ldap.bind_dn and not config.ldap.user_dn_pattern:
-            logger.error(
-                "LDAP config requires either 'bind_dn'/'bind_password' or "
-                "'user_dn_pattern'"
+            print(
+                "LDAP config requires either 'bind_dn'/'bind_password' or 'user_dn_pattern'",
+                file=sys.stderr,
+                flush=True,
             )
             sys.exit(1)
 
         if config.ldap.bind_dn and not config.ldap.bind_password:
-            logger.warning(
-                "LDAP config has 'bind_dn' but missing 'bind_password' — "
-                "searches may fail"
-            )
+            logger.info("LDAP config has 'bind_dn' but missing 'bind_password' — searches may fail")
 
         logger.info("LDAP config validated successfully")
 
@@ -486,9 +476,7 @@ class LDAPAuthPlugin(AuthPlugin):
         # here. Operators can still override via the `identity` config block.
         self._mapper = IdentityMapper(self._config.identity)
 
-        logger.info(
-            "LDAP auth plugin initialized with host=%s", self._config.host
-        )
+        logger.info("LDAP auth plugin initialized")
 
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         """LDAP does not declare bot-proxy compatibility until VikingBot

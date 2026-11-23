@@ -18,6 +18,10 @@ runs:
       shell: bash
       run: npm run lint --prefix frontend
 
+    - name: Test UI library
+      shell: bash
+      run: npm test --prefix frontend
+
     - name: Build UI library and docs
       shell: bash
       run: npm run build --prefix frontend

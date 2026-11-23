@@ -1,17 +1,32 @@
 import type { FileTreeLabels } from './types.js';
+import type { ResolvedLabels } from './file-tree-row-context.js';
+import {
+  mergeLabels,
+  resolveLocale,
+  type Locale,
+} from '../../shared/locale.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 
-/** 组件内置文案，宿主可通过 `labels` 逐项覆盖。 */
-export const DEFAULT_LABELS: Required<FileTreeLabels> = {
-  empty: 'No files yet',
-  error: 'Failed to load',
-  retry: 'Retry',
-  loadMore: 'Load more',
-  loading: 'Loading…',
-  expand: 'Expand {name}',
-  collapse: 'Collapse {name}',
-};
+const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
 
-/** 用节点名替换文案里的 `{name}` 占位。 */
-export function fillName(template: string, name: string) {
-  return template.replace('{name}', name);
+export function resolveFileTreeLabels(
+  locale: Locale = 'en-US',
+  labels?: FileTreeLabels,
+): ResolvedLabels {
+  const defaults = resolveLocale(LOCALES, locale);
+  return {
+    ...mergeLabels<ResolvedLabels>(defaults, labels),
+    info: {
+      description: mergeLabels(
+        defaults.info.description,
+        labels?.info?.description,
+      ),
+      triggerBehavior: mergeLabels(
+        defaults.info.triggerBehavior,
+        labels?.info?.triggerBehavior,
+      ),
+      field: mergeLabels(defaults.info.field, labels?.info?.field),
+    },
+  };
 }

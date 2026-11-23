@@ -1,23 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""``search`` must refuse a context-only argument in ``mode="list"``.
-
-``POST /search`` already does: ``SearchRequest._validate_mode`` rejects any of
-``CONTEXT_ONLY_FIELDS`` supplied in list mode. The MCP tool did not, so the two faces of
-the same feature disagreed — and the tool refuses the mirror case (``read_content`` and
-``target_uri`` in ``mode="context"``), so the gap was only in this direction.
-
-Everything the context path consumes is read only inside that branch, and the list path
-calls ``SearchService.search``, whose signature has no parameter for any of them, so
-passing one in list mode did nothing and said nothing. For ``exclude_uris`` that is not a
-tuning knob going unused: the caller gets back the URIs it asked to exclude.
-
-These tests take no service fixture. A stub service records what the list path forwards,
-which is also how the "these never reach the search service" half is pinned.
-"""
+"""MCP search mode validation and context assembly through the tool entrypoint."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -25,6 +12,7 @@ import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve.types import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
 CTX = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.ROOT)
@@ -86,8 +74,9 @@ async def test_list_mode_names_every_context_only_argument_it_refuses():
         await mcp_endpoint.search(query="anything", **CONTEXT_ONLY_ARGS)
 
     message = str(excinfo.value)
-    assert all(name in message for name in CONTEXT_ONLY_ARGS), message
-    assert "require mode='context'" in message
+    names, _, reason = message.partition(" require ")
+    assert set(names.split(", ")) == set(CONTEXT_ONLY_ARGS)
+    assert reason.startswith("mode='context'")
 
 
 @pytest.mark.asyncio
@@ -103,29 +92,72 @@ async def test_list_mode_is_unchanged_without_context_only_arguments():
 
 
 @pytest.mark.asyncio
-async def test_list_mode_forwards_keywords_search_type():
+async def test_list_mode_forwards_keyword_search_and_args():
     with pytest.raises(_SearchCalled) as excinfo:
-        await mcp_endpoint.search(query="anything", search_type="keywords")
+        await mcp_endpoint.search(
+            query="anything",
+            search_type="keywords",
+            args={"bm25_b": 0.2},
+        )
 
-    assert excinfo.value.kwargs["search_type"] == "keywords"
+    forwarded = excinfo.value.kwargs
+    assert forwarded["search_type"] == "keywords"
+    assert forwarded["args"] == {"bm25_b": 0.2}
 
 
 @pytest.mark.asyncio
-async def test_context_mode_still_accepts_them():
-    # The guard is list-mode only; reaching assemble_context (which this stub service
-    # cannot satisfy) is enough to show the arguments were not refused up front.
-    with pytest.raises(Exception) as excinfo:
-        await mcp_endpoint.search(query="anything", mode="context", **CONTEXT_ONLY_ARGS)
+async def test_context_mode_applies_valid_context_only_arguments(monkeypatch):
+    root = "viking://user/test_user/memories/preferences"
+    kept = f"{root}/kept.md"
+    excluded = f"{root}/excluded.md"
+    hits = [
+        MatchedContext(
+            uri=uri,
+            context_type=ContextType.MEMORY,
+            score=score,
+            abstract=summary,
+        )
+        for uri, score, summary in (
+            (excluded, 0.9, "Excluded result"),
+            (kept, 0.8, "Keep this fact"),
+        )
+    ]
+    storage_result = FindResult(memories=hits, resources=[], skills=[])
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=AsyncMock(return_value=storage_result)),
+        fs=SimpleNamespace(read=AsyncMock(return_value="# Summary\nOverview of kept result")),
+    )
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
 
-    assert "require mode='context'" not in str(excinfo.value)
+    result = await mcp_endpoint.mcp.call_tool(
+        "search",
+        {
+            "query": "preferences",
+            "mode": "context",
+            "max_tokens": 256,
+            "quotas": {"preferences": 2},
+            "detail_by_category": {"preferences": "overview"},
+            "exclude_uris": ["viking://~/memories/preferences/excluded.md"],
+            "peer_scope": "actor",
+        },
+    )
+
+    assert isinstance(result, tuple), result
+    blocks, structured = result
+    [block] = blocks
+    assert structured["result"] == block.text
+    assert kept in block.text
+    assert "Overview of kept result" in block.text
+    assert excluded not in block.text
+    assert "Excluded result" not in block.text
 
 
 @pytest.mark.asyncio
 async def test_context_mode_still_refuses_list_only_arguments():
-    with pytest.raises(InvalidArgumentError, match="only supported in mode='list'"):
+    with pytest.raises(InvalidArgumentError, match="read_content.*only supported in mode='list'"):
         await mcp_endpoint.search(query="anything", mode="context", read_content=True)
 
-    with pytest.raises(InvalidArgumentError, match="not supported in mode='context'"):
+    with pytest.raises(InvalidArgumentError, match="target_uri.*not supported in mode='context'"):
         await mcp_endpoint.search(
             query="anything", mode="context", target_uri="viking://user/test_user"
         )
@@ -150,36 +182,3 @@ async def test_the_tool_covers_every_field_the_rest_validator_rejects():
         "detail_by_category",
         "other_peer_penalties",
     }
-
-
-def test_both_faces_share_one_definition_of_the_refusal():
-    """A field added to CONTEXT_ONLY_FIELDS has to reach the MCP tool without a second edit.
-
-    The point of routing this through ``context_only_fields_error`` rather than restating
-    the list is that the two faces cannot drift. Pin that by asking the helper directly
-    with a field the tool has no parameter for: the router owns the names, so the message
-    still names it.
-    """
-    from openviking.server.routers.search import CONTEXT_ONLY_FIELDS, context_only_fields_error
-
-    for field in CONTEXT_ONLY_FIELDS:
-        message = context_only_fields_error({field})
-        assert message is not None, f"{field} is context-only but produced no refusal"
-        assert field in message
-
-    assert context_only_fields_error(set()) is None
-    assert context_only_fields_error({"query", "limit"}) is None
-
-
-def test_the_refusal_names_what_the_caller_typed():
-    """The tool splits two router fields in two, and the caller has to hear their own name."""
-    from openviking.server.routers.search import context_only_fields_error
-
-    message = context_only_fields_error({"detail": {"detail_by_category"}},
-                                        as_named_by_caller={"detail": {"detail_by_category"}})
-    assert "detail_by_category" in message
-
-    both = context_only_fields_error({"detail": {"detail", "detail_by_category"}},
-                                     as_named_by_caller={"detail": {"detail", "detail_by_category"}})
-    assert "detail_by_category" in both and "detail" in both
-

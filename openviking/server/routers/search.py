@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_types import SearchType
+from openviking.core.search_args import validate_search_args
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.retrieve.context_assembler import (
@@ -71,7 +72,7 @@ def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
     return node_limit if node_limit is not None else limit
 
 
-def _resolve_search_filter(
+def resolve_search_filter(
     request_filter: Optional[Dict[str, Any]],
     context_type: Optional[SearchContextTypeInput],
     since: Optional[str],
@@ -242,6 +243,7 @@ class SearchRequest(BaseModel):
     read_content: bool = False
     telemetry: TelemetryRequest = False
     events_time_decay_protection: Optional[str] = None
+    args: Optional[Dict[str, Any]] = None
 
     mode: Literal["list", "context"] = "list"
 
@@ -265,6 +267,14 @@ class SearchRequest(BaseModel):
                 raise ValueError("query must not be empty when search_type='keywords'")
             if self.image_url:
                 raise ValueError("image_url is not supported when search_type='keywords'")
+        if self.args is not None:
+            if self.mode != "list":
+                raise ValueError("args are only supported in mode='list'")
+            self.args = validate_search_args(
+                self.args,
+                search_type=self.search_type,
+                limit=_resolve_search_limit(self.limit, self.node_limit),
+            )
         if self.mode == "list":
             error = context_only_fields_error(self.model_fields_set)
             if error:
@@ -379,7 +389,7 @@ async def find(
     """Semantic search without session context."""
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
-    effective_filter = _resolve_search_filter(
+    effective_filter = resolve_search_filter(
         request.filter,
         request.context_type,
         request.since,
@@ -487,7 +497,7 @@ async def search(
     """Semantic search with optional session context."""
     service = get_service()
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
-    effective_filter = _resolve_search_filter(
+    effective_filter = resolve_search_filter(
         request.filter,
         request.context_type,
         request.since,
@@ -528,6 +538,7 @@ async def search(
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
             events_time_decay_protection=request.events_time_decay_protection,
+            args=request.args,
         )
 
     execution = await run_operation(

@@ -72,7 +72,11 @@ def warn_unknown_fields(
         # a diagnostic must never be the reason loading fails.
         messages.append(f"Ignoring unknown config field '{field_path!s}'")
     if messages:
-        logger.warning("%s", "\n".join(messages))
+        logger.info(
+            "unknown configuration fields ignored skipped=%d",
+            len(messages),
+            extra={"degraded": True},
+        )
 
 
 def _child_model_type(annotation: Any) -> Optional[type[BaseModel]]:

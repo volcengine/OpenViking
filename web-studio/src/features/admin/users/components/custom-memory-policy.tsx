@@ -36,7 +36,7 @@ export function CustomMemoryPolicy({
   )
   const [extra, setExtra] = useState('')
   const [extensions, setExtensions] = useState(() =>
-    (policy.memory_types ?? []).filter(
+    (normalizeMemoryPolicy(policy).memory_types ?? []).filter(
       (type) => !builtinMemoryTypes.includes(type),
     ),
   )

@@ -16,6 +16,7 @@ pub struct CommitRequest {
 
 #[derive(Debug, Clone)]
 pub enum CommitResponse {
+    /// A persisted commit; `changed` is zero for an empty initial snapshot.
     Created {
         commit_oid: ObjectId,
         changed: usize,
@@ -23,8 +24,7 @@ pub enum CommitResponse {
         /// Existing hardcoded system pruning is not included.
         ignored: usize,
     },
-    /// No path produced an editor change; ref untouched. `commit_oid` is the
-    /// existing HEAD (or `ObjectId::null` if the branch did not exist).
+    /// No path changed on an existing branch; ref untouched. `commit_oid` is HEAD.
     Noop {
         commit_oid: ObjectId,
         /// Number of candidate paths skipped by user `.ovgitignore` rules.
@@ -62,6 +62,8 @@ pub struct LogRequest {
     pub branch: String,
     /// Maximum number of matching commits to return.
     pub limit: usize,
+    /// Number of matching commits to skip, at most `i64::MAX`.
+    pub offset: usize,
     /// Optional account-relative paths. File paths match exactly; directory
     /// paths match commits whose subtree changed.
     pub paths: Option<Vec<String>>,
@@ -132,6 +134,9 @@ pub struct RestoreRequest {
     /// What to restore from. Same resolution rules as `ShowRequest::target_ref`:
     /// 40-hex commit OID / short branch name / full `refs/heads/xxx`.
     pub source_commit: String,
+    /// Treat a missing scoped source subtree as empty; a source file remains invalid.
+    /// Compile rollback uses this for output directories with no versioned baseline files.
+    pub allow_missing_source: bool,
     /// If `true`, compute and return the diff but write nothing — no VFS
     /// writes, no new objects in the object store, no ref update.
     pub dry_run: bool,

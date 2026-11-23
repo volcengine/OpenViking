@@ -384,7 +384,7 @@ async def test_phase2_processes_only_current_archive(
     )
     seen_message_ids: list[list[str]] = []
 
-    async def fake_summary(messages, latest_archive_overview=""):
+    async def fake_summary(messages, latest_archive_overview="", **_kwargs):
         assert latest_archive_overview == ""
         seen_message_ids.append([message.id for message in messages])
         return "# Session Summary\n\n## Current State\nCurrent archive is covered."
@@ -412,7 +412,11 @@ async def test_phase2_processes_only_current_archive(
         messages=[current],
         first_message_id=current.id,
         last_message_id=current.id,
-        memory_policy={"working_memory": {"enabled": True}},
+        memory_policy={
+            "working_memory": {"enabled": True},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
         agent_evolution_enabled=True,
     )
 
@@ -452,7 +456,7 @@ async def test_phase2_retry_does_not_repeat_completed_current_archive_steps(
     summary_inputs: list[list[str]] = []
     long_term_inputs: list[list[str]] = []
 
-    async def fake_summary(messages, latest_archive_overview=""):
+    async def fake_summary(messages, latest_archive_overview="", **_kwargs):
         assert latest_archive_overview == ""
         summary_inputs.append([message.id for message in messages])
         return "# Session Summary\n\n## Current State\nCurrent message is summarized."
@@ -642,6 +646,7 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
         messages,
         latest_archive_overview="",
         checkpoint_requests=None,
+        **_kwargs,
     ):
         nonlocal calls
         calls += 1
@@ -679,7 +684,11 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
         messages=[anchor, early],
         first_message_id="u1",
         last_message_id="a1",
-        memory_policy={"working_memory": {"enabled": True}},
+        memory_policy={
+            "working_memory": {"enabled": True},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
     )
 
     meta = json.loads(
@@ -1248,7 +1257,11 @@ async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
         messages=[anchor, early],
         first_message_id="u1",
         last_message_id="a1",
-        memory_policy={"working_memory": {"enabled": True}},
+        memory_policy={
+            "working_memory": {"enabled": True},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
     )
 
     assert not await session._viking_fs.exists(f"{archive_uri}/.done", ctx=session.ctx)
@@ -1789,7 +1802,7 @@ async def test_queue_enqueue_failure_keeps_published_archive_and_fails_task(
     session.add_message("user", [TextPart("do not lose me")])
 
     class FailingQueueManager:
-        async def enqueue(self, _queue_name, data):
+        async def enqueue(self, _queue_name, data, *, group_key):
             raise RuntimeError("queue unavailable")
 
     monkeypatch.setattr(
@@ -2039,7 +2052,7 @@ async def test_stale_worker_uses_lock_snapshot_memory_policy_for_queue_message(
     queued: list[dict] = []
 
     class CapturingQueueManager:
-        async def enqueue(self, _queue_name, data):
+        async def enqueue(self, _queue_name, data, *, group_key):
             queued.append(data)
 
     monkeypatch.setattr(

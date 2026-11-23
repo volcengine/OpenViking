@@ -106,10 +106,12 @@ def create_redis_client(raw_params: dict[str, object], **options: Any) -> RedisC
         )
 
     if config.mode == "cluster":
-        from redis.asyncio.cluster import ClusterNode, RedisCluster
+        from redis.asyncio.cluster import ClusterNode
+
+        from openviking.scheduling.redis_cluster import SeededRedisCluster
 
         return RedisClientHandle(
-            RedisCluster(
+            SeededRedisCluster(
                 startup_nodes=[ClusterNode(host, port) for host, port in _endpoint_parts(config)],
                 db=0,
                 **common,

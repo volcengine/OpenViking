@@ -11,6 +11,7 @@ Provides a four-level resolution chain for locating config files:
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -18,6 +19,53 @@ from .consts import (
     DEFAULT_CONFIG_DIR,
     SYSTEM_CONFIG_DIR,
 )
+
+_JSON_TOKENS = re.compile(r'"(?:\\.|[^"\\])*"|\$\{[^}]*\}|%[^%]*%|[{}\[\],:]')
+_REPORTING_PATH = ("server", "observability", "reporting")
+
+
+def expand_config_environment(raw: str) -> str:
+    """Expand config references while preserving inline KMS reporting literals."""
+    # Locate strings by JSON path without parsing the full document first:
+    # other sections may use unquoted environment references for numeric values.
+    frames: list[tuple[tuple[str | None, ...], bool, str | None]] = []
+    parts: list[str] = []
+    offset = 0
+    for match in _JSON_TOKENS.finditer(raw):
+        token = match.group()
+        path, is_object, key = frames[-1] if frames else ((), False, None)
+        if token.startswith('"'):
+            if is_object and key is None:
+                try:
+                    key = json.loads(token)
+                except json.JSONDecodeError:
+                    # Preserve the original expansion/validation behavior for
+                    # templates whose keys become valid JSON after expansion.
+                    key = ""
+                frames[-1] = (path, is_object, key)
+            elif is_object:
+                path += (key,)
+            if path[: len(_REPORTING_PATH)] == _REPORTING_PATH:
+                # JSON decoding restores the exact dollars/percents afterwards.
+                # Neither POSIX nor Windows expandvars can reinterpret them.
+                parts.extend(
+                    (
+                        raw[offset : match.start()],
+                        token.replace("$", r"\u0024").replace("%", r"\u0025"),
+                    )
+                )
+                offset = match.end()
+        elif token in ("{", "["):
+            if frames:
+                path += (key if is_object else None,)
+            frames.append((path, token == "{", None))
+        elif token in ("}", "]"):
+            if frames:
+                frames.pop()
+        elif token == "," and is_object:
+            frames[-1] = (path, is_object, None)
+    parts.append(raw[offset:])
+    return os.path.expandvars("".join(parts))
 
 
 def resolve_config_path(
@@ -83,9 +131,7 @@ def load_json_config(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8-sig") as f:
         raw = f.read()
 
-    # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
-    # Unset variables are left unchanged by expandvars().
-    raw = os.path.expandvars(raw)
+    raw = expand_config_environment(raw)
 
     try:
         # print(f"Loading config file: {path}")

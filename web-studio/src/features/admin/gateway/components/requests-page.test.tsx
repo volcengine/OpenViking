@@ -126,6 +126,19 @@ const RECORDS: LogRecord[] = [
     capture_status: 'active',
   },
   {
+    time: NOW - 100,
+    request_id: 'req-unsaved',
+    kind: 'user',
+    model: 'unsaved-model',
+    status: 200,
+    session: SESSION,
+    protocol: 'chat',
+    credential_id: 'k1',
+    capture_status: 'failed',
+    capture_reason: 'openviking_http_503',
+  },
+  {
+    // Written by an earlier gateway version.
     time: NOW - 120,
     kind: 'capture',
     session: 'b'.repeat(64),
@@ -264,7 +277,9 @@ describe('RequestsPage', () => {
     const router = renderPage('/admin/gateway/requests?filter=issues')
     expect(await screen.findByText('deepseek-chat')).toBeTruthy()
     expect(screen.getByText('claude-sonnet')).toBeTruthy()
-    expect(screen.getByText('Paused')).toBeTruthy()
+    expect(within(rowOf('unsaved-model')).getByText('Failed')).toBeTruthy()
+    // Statuses from earlier versions are no longer flagged.
+    expect(screen.queryByText('Paused')).toBeNull()
     expect(screen.queryByText('gpt-5')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /New messages/ }))
@@ -410,6 +425,46 @@ describe('RequestsPage', () => {
     ])
   })
 
+  it('explains a turn that was not saved and what a saved turn wrote', async () => {
+    api.listLogs.mockResolvedValue([
+      {
+        time: NOW - 30,
+        request_id: 'req-unsaved',
+        kind: 'user',
+        model: 'unsaved-model',
+        status: 200,
+        capture_status: 'failed',
+        capture_reason: 'save_timeout',
+      },
+      {
+        time: NOW - 60,
+        request_id: 'req-saved',
+        kind: 'user',
+        model: 'saved-model',
+        status: 200,
+        capture_status: 'active',
+        capture_messages: 4,
+        openviking_session: 'ov-session-0123456789abcdef',
+      },
+    ])
+    renderPage()
+    await screen.findByText('unsaved-model')
+
+    expand('saved-model')
+    expect(screen.getByText('4 messages written')).toBeTruthy()
+    expect(screen.getByText('ov-session-01234…')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Copy OpenViking session ID' }),
+    ).toBeTruthy()
+    expect(screen.queryByText('Learn more')).toBeNull()
+
+    expand('unsaved-model')
+    expect(screen.getByText('Saving to OpenViking timed out')).toBeTruthy()
+    expect(hrefsOf('Learn more')).toEqual([
+      gatewayDocsUrl('savingStatus', 'en'),
+    ])
+  })
+
   it('shows how full the context window was and what replaced earlier history', async () => {
     api.listLogs.mockResolvedValue([
       {
@@ -519,7 +574,7 @@ describe('RequestsPage', () => {
       { session: SESSION, protocol: 'chat' },
     )
     expect(toast.success).toHaveBeenCalledWith(
-      'The conversation will be saved again with its next message.',
+      'The conversation will be saved again when its next turn ends.',
     )
   })
 
@@ -536,7 +591,7 @@ describe('RequestsPage', () => {
         "The gateway key this conversation used has been revoked, so it can't be resynced.",
       ),
     ).toBeTruthy()
-    // Paused saving links the docs on saving states and resyncing.
+    // Saving states from earlier versions still link the docs on them.
     expect(hrefsOf('Learn more')).toEqual([
       gatewayDocsUrl('savingStatus', 'en'),
     ])

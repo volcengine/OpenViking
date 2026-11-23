@@ -3,6 +3,10 @@
 
 node_modules/
 dist/
+
+# Playwright CLI 的会话快照与日志，不属于源码。
+# Playwright CLI session snapshots and logs, not source.
+.playwright-cli/
 doc_build/
 .rspress/
 .rspress-cache/
