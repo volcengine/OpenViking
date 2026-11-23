@@ -2,17 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Dependency injection for OpenViking HTTP Server."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
-    from openviking.service.core import OpenVikingService
 
-_service: Optional["OpenVikingService"] = None
+_service: Any | None = None
 _server_config: Optional["ServerConfig"] = None
 
 
-def get_service() -> "OpenVikingService":
+def get_service() -> Any:
     """Get the OpenVikingService instance.
 
     Returns:
@@ -26,12 +25,12 @@ def get_service() -> "OpenVikingService":
     return _service
 
 
-def get_service_or_none() -> Optional["OpenVikingService"]:
+def get_service_or_none() -> Any | None:
     """Return the registered OpenVikingService, or None if not set."""
     return _service
 
 
-def set_service(service: Optional["OpenVikingService"]) -> None:
+def set_service(service: Any | None) -> None:
     """Set (or clear) the OpenVikingService instance.
 
     Args:
