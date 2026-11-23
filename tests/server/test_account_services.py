@@ -790,9 +790,9 @@ async def test_file_concurrent_batch_group_removals_preserve_all_updates(monkeyp
         await store.add_group_members("acme", "engineering", ["alice", "bob", "carol"])
         write = store._write_groups_json
 
-        async def yielding_write(account_id, groups):
+        async def yielding_write(account_id, groups, **kwargs):
             await asyncio.sleep(0)
-            await write(account_id, groups)
+            await write(account_id, groups, **kwargs)
 
         monkeypatch.setattr(store, "_write_groups_json", yielding_write)
         assert await asyncio.gather(
@@ -805,6 +805,38 @@ async def test_file_concurrent_batch_group_removals_preserve_all_updates(monkeyp
         assert await store.get_user_group_ids("acme", "bob") == ()
     finally:
         await store.close()
+
+
+async def test_file_group_adds_from_two_store_instances_keep_both_members():
+    """A whole-file group write must not drop another instance's membership change."""
+    agfs = InMemoryAGFS()
+    fs = SimpleNamespace(agfs=agfs)
+    first = FileStore(cast(VikingFS, fs))
+    second = FileStore(cast(VikingFS, fs))
+    await first.load()
+    try:
+        await first.create_account_with_api_key("acme", "alice", "alice-key")
+        for user_id in ("bob", "carol"):
+            await first.create_user("acme", user_id, "user")
+        await first.create_group("acme", "engineering")
+        await first.add_group_members("acme", "engineering", ["alice"])
+        # Both instances cache the same snapshot before either mutation runs.
+        await second.load()
+        try:
+            assert await asyncio.gather(
+                first.add_group_members("acme", "engineering", ["bob"]),
+                second.add_group_members("acme", "engineering", ["carol"]),
+            ) == [True, True]
+        finally:
+            await second.close()
+
+        persisted = json.loads(agfs._files["/local/acme/_system/groups.json"])
+        assert persisted["groups"]["engineering"]["members"] == ["alice", "bob", "carol"]
+        await first.load()
+        assert await first.get_group_members("acme", "engineering") == ["alice", "bob", "carol"]
+        assert await first.get_user_group_ids("acme", "carol") == ("engineering",)
+    finally:
+        await first.close()
 
 
 @pytest.mark.parametrize("fails", [False, True])
