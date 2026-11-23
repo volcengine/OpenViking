@@ -25,7 +25,8 @@ export function getInstallerCommand(
   baseUrl: string,
 ) {
   return (
-    'curl -fsSL https://openviking.ai/install | bash -s -- --yes' +
+    'curl -fsSL -H "x-tt-env: pre" -H "x-volc-env: grayscale"' +
+    ' https://openviking.ai/install | bash -s -- --yes' +
     ` --lang ${locale === 'zh-CN' ? 'zh' : 'en'} --harness ${harness},cli` +
     ` --url ${shellArgument(baseUrl)} --api-key ${shellArgument(apiKey)}`
   );

@@ -73,6 +73,7 @@ import '@openviking/react/components/agent-connect/style.css';
 - DeerFlow 和 CLI 的详情带有说明页签：DeerFlow 为 MemoryManager 与 MCP，CLI 为「手动终端安装」与「通过 AI Agent 安装」。默认选中第一个，复制的是当前选中的说明。
 - 切换条目、说明页签、语言、`apiKey`、`baseUrl` 或 `isEnterprise` 后，密钥显示和复制反馈恢复初始状态。此前发起的复制完成后不再更新界面，也不调用 `onCopy`。
 - TRAE 的安装命令面向国际版。
+- 官方安装器命令的 `curl` 请求携带 `x-tt-env: pre` 和 `x-volc-env: grayscale` 请求头。
 - Hermes 使用自定义 `baseUrl`（不同于默认地址）时，说明改用 Custom 连接步骤。
 - 「境外」标签显示在详情标签行的末尾，按 Agent 产品的归属标记，不根据它使用的模型推断部署地区。`showOverseasTag` 为 `true` 时，除 Codex 和 Claude Code 外，还标记 Cursor、OpenClaw、Hermes Agent、OpenCode 和 pi。
 - 类型从 `@openviking/react/components/agent-connect` 导出，包根入口只导出组件和 `AgentConnectProps`。
