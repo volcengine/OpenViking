@@ -3529,9 +3529,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not sessions:
             return tool_error("No OpenViking session for this conversation yet; pass session.")
         body = {key: args[key] for key in _HISTORY_FIELDS if args.get(key) is not None}
-        body["sessions"] = sessions[1:_HISTORY_MAX_SESSIONS]
+        body["session"] = ",".join(sessions[:_HISTORY_MAX_SESSIONS])
         try:
-            result = self._unwrap_result(self._client.post(f"/api/v1/sessions/{quote(sessions[0], safe='')}/history", body))
+            result = self._unwrap_result(self._client.post("/api/v1/sessions/history", body))
         except Exception as e:
             if _status_code_from_error(e) in (404, 405):
                 return _HISTORY_UNSUPPORTED

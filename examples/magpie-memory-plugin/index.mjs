@@ -84,9 +84,9 @@ export default async function OpenViking(input, options = {}) {
         limit: { type: "integer", minimum: 1, maximum: 16000, description: "search: max lines (default 20, max 50); read: max chars (default 4000, max 16000); overview: max archive rows (default 10, max 30)" },
       }, ["action", "session"], async ({ session, ...args }, ctx) => {
         const cfg = await toolConfig(process.env, options);
-        const [first, ...sessions] = requiredText({ session }, "session").split(",").map((id) => id.trim()).filter(Boolean);
-        if (!first) throw new PluginError("invalid");
-        const result = await request(cfg, `/api/v1/sessions/${encodeURIComponent(first)}/history`, { body: { ...args, sessions }, signal: ctx.abort });
+        const ids = requiredText({ session }, "session").split(",").map((id) => id.trim()).filter(Boolean);
+        if (!ids.length) throw new PluginError("invalid");
+        const result = await request(cfg, "/api/v1/sessions/history", { body: { ...args, session: ids.join(",") }, signal: ctx.abort });
         if (typeof result?.text !== "string") throw new PluginError("invalid");
         return result.text;
       }),

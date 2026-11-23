@@ -357,7 +357,7 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | `read` | Read up to 200 lines from a `viking://` URI |
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
-| `session_history` | Search and read a captured conversation's saved record (`POST /api/v1/sessions/{id}/history`); `session` is required |
+| `session_history` | Search and read a captured conversation's saved record (`POST /api/v1/sessions/history`); `session` is required; a server without that route fails with `unsupported` |
 
 `rule_search` takes `task_context` and optional `rule_probability_threshold`
 (default `0.65`), requires a server with `POST /api/v1/rules/search`, and preserves

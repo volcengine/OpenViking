@@ -475,8 +475,11 @@ test("tools require opt-in, validate arguments and use the same file connection"
   assert.ok(f.calls.every((c) => c.headers.authorization === "Bearer test-secret"));
 });
 
-test("session_history requires session and posts the rest to the first session's history", async (t) => {
-  const f = await fixture(t, () => ({ text: "1 match", ids: ["a#1"], has_more: false }));
+test("session_history requires session and posts it to the session history route", async (t) => {
+  const f = await fixture(t, (call, res) => {
+    if (call.body?.session === "magpie-old") res.statusCode = 405;
+    return { text: "1 match", ids: ["a#1"], has_more: false };
+  });
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
@@ -489,8 +492,9 @@ test("session_history requires session and posts the rest to the first session's
   }
   assert.equal(f.calls.length, 0);
   assert.equal(await tool.session_history.execute({ action: "search", query: "ECONNREFUSED", limit: 3, session: "magpie-a, magpie-b" }, ctx), "1 match");
-  assert.equal(f.calls[0].path, "/api/v1/sessions/magpie-a/history");
-  assert.deepEqual(f.calls[0].body, { action: "search", query: "ECONNREFUSED", limit: 3, sessions: ["magpie-b"] });
+  assert.equal(f.calls[0].path, "/api/v1/sessions/history");
+  assert.deepEqual(f.calls[0].body, { action: "search", query: "ECONNREFUSED", limit: 3, session: "magpie-a,magpie-b" });
+  await assert.rejects(tool.session_history.execute({ action: "overview", session: "magpie-old" }, ctx), { code: "unsupported", status: 405 });
 });
 
 test("Rule search preserves complete constraints, opt-in, identity and errors", async (t) => {

@@ -64,14 +64,14 @@ def test_tool_defaults_to_the_compression_lineage(history_provider):
 
     assert _history_calls(client) == [
         (
-            "/api/v1/sessions/sid-1/history",
-            {"action": "search", "query": "ECONNREFUSED", "sessions": []},
+            "/api/v1/sessions/history",
+            {"action": "search", "query": "ECONNREFUSED", "session": "sid-1"},
         ),
         (
-            "/api/v1/sessions/sid-2/history",
-            {"action": "read", "id": "a#3", "offset": 10, "sessions": ["sid-1"]},
+            "/api/v1/sessions/history",
+            {"action": "read", "id": "a#3", "offset": 10, "session": "sid-2,sid-1"},
         ),
-        ("/api/v1/sessions/other/history", {"action": "overview", "sessions": ["older"]}),
+        ("/api/v1/sessions/history", {"action": "overview", "session": "other,older"}),
     ]
 
 
@@ -83,10 +83,9 @@ def test_lineage_keeps_ten_sessions_and_resets_on_new(history_provider):
     provider.on_session_switch("fresh", reset=True, reason="new_session")
     provider.handle_tool_call("viking_session_history", {"action": "overview"})
 
-    (path, body), (fresh_path, fresh_body) = _history_calls(client)
-    assert path == "/api/v1/sessions/sid-13/history"
-    assert body["sessions"] == [f"sid-{n}" for n in range(12, 3, -1)]
-    assert (fresh_path, fresh_body["sessions"]) == ("/api/v1/sessions/fresh/history", [])
+    (_, body), (_, fresh_body) = _history_calls(client)
+    assert body["session"] == ",".join(f"sid-{n}" for n in range(13, 3, -1))
+    assert fresh_body["session"] == "fresh"
 
 
 def test_branch_keeps_the_parent_and_current_id_means_the_lineage(history_provider):
@@ -98,8 +97,8 @@ def test_branch_keeps_the_parent_and_current_id_means_the_lineage(history_provid
     provider.handle_tool_call("viking_session_history", {"action": "overview"})
 
     assert _history_calls(client) == [
-        ("/api/v1/sessions/sid-3/history", {"action": "overview", "sessions": ["sid-2", "sid-1"]}),
-        ("/api/v1/sessions/sid-4/history", {"action": "overview", "sessions": []}),
+        ("/api/v1/sessions/history", {"action": "overview", "session": "sid-3,sid-2,sid-1"}),
+        ("/api/v1/sessions/history", {"action": "overview", "session": "sid-4"}),
     ]
 
 
