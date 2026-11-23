@@ -2,7 +2,7 @@
 
 [Overview](../README.md) · [Quick start](../install.md)
 
-Connect your local coding agent to Feishu / Lark, WeChat, Telegram, Slack, QQ (official bot or OneBot), and email events. Core maintains a shared Agent session and OpenViking space; independent Connector subprocesses handle message sources.
+Connect your local coding agent to Feishu / Lark, WeChat, Telegram, Slack, QQ (official bot or OneBot), DingTalk groups, and email events. Core maintains a shared Agent session and OpenViking space; independent Connector subprocesses handle message sources.
 
 OpenViking SuperAgent makes Codex, TraeX, Claude, Pi, DeepSeek Harness (DSH), OpenCode, or Antigravity a long-term collaborator. OpenViking retains context so you need not re-explain projects, while code, credentials, and local tools remain on your machine.
 

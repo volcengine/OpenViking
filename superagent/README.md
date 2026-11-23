@@ -4,7 +4,7 @@
 
 Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
 
-OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ (an official bot, or a personal account through OneBot), and email. The CLI command is `ov-superagent`.
+OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ (an official bot, or a personal account through OneBot), DingTalk groups, and email. The CLI command is `ov-superagent`.
 
 [Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
