@@ -6,8 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -1063,8 +1063,12 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
     ],
 )
 async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_actions(
-    monkeypatch, user_reply, done_result, terminated
+    monkeypatch, tmp_path, user_reply, done_result, terminated
 ):
+    from vikingbot.agent.loop import AgentLoop
+    from vikingbot.agent.tools.filesystem import ReadFileTool
+    from vikingbot.bus.queue import MessageBus
+    from vikingbot.config.schema import Config
     from vikingbot.providers.base import LLMResponse, ToolCallRequest
 
     import benchmark.tau2.train.rollout_executor_vikingbot as module
@@ -1072,6 +1076,7 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
 
     observed = {}
     real_imports = module._vikingbot_imports()
+    workspace = tmp_path / "workspace"
 
     class FakeSandbox:
         content = ""
@@ -1086,7 +1091,7 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
 
     class FakeSandboxManager:
         def get_workspace_path(self, session_key):
-            return Path("/tmp/fake-workspace")
+            return workspace
 
         def to_workspace_id(self, session_key):
             return "workspace"
@@ -1145,26 +1150,6 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
         def get_default_model(self):
             return "fake"
 
-    class FakeAgent(real_imports["AgentLoop"]):
-        def __init__(self):
-            from vikingbot.agent.tools.filesystem import ReadFileTool
-            from vikingbot.agent.tools.registry import ToolRegistry
-
-            self.sandbox_manager = FakeSandboxManager()
-            self.context = FakeContextBuilder(Path("/tmp/fake-workspace"))
-            self.tools = ToolRegistry()
-            self.tools.register(ReadFileTool())
-            self.tools.register(_DoneTool())
-            self.tools.register(_CommunicateTool())
-            self.provider = FakeProvider()
-            self.model = "fake"
-            self.temperature = None
-            self.max_iterations = 3
-
-        async def _run_agent_loop(self, **kwargs):
-            observed["inject_write_experience"] = kwargs["inject_write_experience"]
-            return await super()._run_agent_loop(**kwargs)
-
     class _DoneTool:
         @property
         def name(self):
@@ -1213,9 +1198,23 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
         "_vikingbot_imports",
         lambda: {**real_imports, "ContextBuilder": FakeContextBuilder},
     )
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    agent = AgentLoop(
+        bus=MessageBus(),
+        provider=FakeProvider(),
+        workspace=workspace,
+        max_iterations=3,
+        sandbox_manager=FakeSandboxManager(),
+        config=Config(storage_workspace=str(tmp_path), hooks=[]),
+    )
+    agent.tools.register(ReadFileTool())
+    agent.tools.register(_DoneTool())
+    agent.tools.register(_CommunicateTool())
+    run_loop = AsyncMock(wraps=agent._run_agent_loop)
+    monkeypatch.setattr(agent, "_run_agent_loop", run_loop)
 
     result = await module._run_agent(
-        agent=FakeAgent(),
+        agent=agent,
         system_prompt="tau2 policy",
         user_prompt="user query",
         session_key=SimpleNamespace(safe_name=lambda: "session"),
@@ -1243,7 +1242,8 @@ async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_ac
     assert "read_experience" in messages[tool_result_index]["content"]
     assert tools_used[0]["tool_name"] == "read_file"
     assert tools_used[0]["required_skill"] == "experience_loader"
-    assert observed["inject_write_experience"] is False
+    run_loop.assert_awaited_once()
+    assert run_loop.await_args.kwargs["inject_write_experience"] is False
     hard_stop = user_reply in ("###TRANSFER###", "###OUT-OF-SCOPE###") or (
         user_reply is not None and user_reply.strip() == "Task Terminated"
     )
