@@ -8,7 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, Index, Integer, UniqueConstraint
+from sqlalchemy import JSON as SQLJSON
+from sqlalchemy import Boolean, Double, Index, Integer, UniqueConstraint
 from sqlalchemy import String as SQLString
 from sqlalchemy import Text as SQLText
 from sqlalchemy.dialects import mysql, postgresql
@@ -49,18 +50,24 @@ def make_task_store_models(
     table_prefix: str = "ov_tasks", dialect: str = "mysql"
 ) -> TaskStoreModels:
     """Build isolated mappings for one configured table namespace."""
-    if dialect not in {"mysql", "postgresql"}:
+    if dialect not in {"mysql", "postgresql", "sqlite"}:
         raise ValueError(f"Unsupported Task/Work SQL dialect: {dialect}")
     table_prefix = validate_table_prefix(table_prefix, dialect)
     postgres = dialect == "postgresql"
-    DOUBLE = postgresql.DOUBLE_PRECISION if postgres else mysql.DOUBLE
-    JSON = postgresql.JSONB if postgres else mysql.JSON
+    sqlite = dialect == "sqlite"
+    DOUBLE = Double if sqlite else postgresql.DOUBLE_PRECISION if postgres else mysql.DOUBLE
+    JSON = SQLJSON if sqlite else postgresql.JSONB if postgres else mysql.JSON
+
+    def resolve_collation(collation: str | None) -> str | None:
+        if collation is None:
+            return None
+        return "BINARY" if sqlite else "C" if postgres else collation
 
     def String(length: int, collation: str | None = None):
-        return SQLString(length, collation="C" if postgres and collation else collation)
+        return SQLString(length, collation=resolve_collation(collation))
 
     def Text(collation: str | None = None):
-        return SQLText(collation="C" if postgres and collation else collation)
+        return SQLText(collation=resolve_collation(collation))
 
     work_table = f"{table_prefix}_works"
     event_table = f"{table_prefix}_execution_events"
@@ -82,6 +89,7 @@ def make_task_store_models(
                 "account_id",
                 "user_id",
                 "created_at",
+                *(("task_id",) if sqlite else ()),
             ),
             Index(
                 f"ix_{table_prefix}_account_created",
@@ -109,6 +117,7 @@ def make_task_store_models(
                 "user_id",
                 "is_internal",
                 "created_at",
+                *(("task_id",) if sqlite else ()),
             ),
             Index(
                 f"ix_{table_prefix}_acct_type_created",

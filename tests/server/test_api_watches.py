@@ -85,15 +85,15 @@ async def _seed(
     )
 
 
-async def test_list_empty(client: httpx.AsyncClient):
-    resp = await client.get("/api/v1/watches")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"] == {"tasks": [], "total": 0}
-
-
 async def test_list_cursor_pagination(client: httpx.AsyncClient, watch_manager):
+    empty = {"tasks": [], "total": 0}
+    response = await client.get("/api/v1/watches")
+    assert response.status_code == 200
+    assert response.json()["result"] == empty
+    response = await client.get("/api/v1/watches", params={"limit": 2})
+    assert response.status_code == 200
+    assert response.json()["result"] == {**empty, "has_more": False, "next_cursor": None}
+
     tasks = [
         await _seed(watch_manager, to_uri=f"viking://resources/test/page-{index}")
         for index in range(5)
@@ -121,17 +121,6 @@ async def test_list_cursor_pagination(client: httpx.AsyncClient, watch_manager):
     assert response.json()["result"]["has_more"] is False
     legacy = (await client.get("/api/v1/watches")).json()["result"]
     assert set(legacy) == {"tasks", "total"}
-
-
-async def test_list_pagination_empty(client: httpx.AsyncClient):
-    response = await client.get("/api/v1/watches", params={"limit": 10})
-    assert response.status_code == 200
-    assert response.json()["result"] == {
-        "tasks": [],
-        "total": 0,
-        "has_more": False,
-        "next_cursor": None,
-    }
 
 
 @pytest.mark.parametrize(
@@ -255,11 +244,13 @@ async def test_patch_credential_state(client: httpx.AsyncClient, watch_manager):
     assert response.status_code == 400
 
 
-async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypatch):
+async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, watch_tracker, watch_vfs):
     task = await _seed(watch_manager, source_type="url")
+    watch_manager._tracker = watch_tracker
+    await watch_vfs.mkdir(task.to_uri, exist_ok=True)
 
     # List
-    resp = await client.get("/api/v1/watches")
+    resp = await client.get("/api/v1/watches", params={"active_only": True})
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["total"] == 1
@@ -296,22 +287,35 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     assert resp.json()["result"]["next_execution_time"] is None
     assert resp.json()["result"]["watch_interval"] == 4320
 
-    # POST trigger
-    triggered = []
+    active = await client.get("/api/v1/watches", params={"active_only": True})
+    assert active.json()["result"]["tasks"] == []
+    all_watches = await client.get("/api/v1/watches", params={"active_only": False})
+    assert [item["task_id"] for item in all_watches.json()["result"]["tasks"]] == [task.task_id]
 
-    async def fake_trigger(_self, task_id):
-        triggered.append(task_id)
-        return True
+    owner = {"account_id": task.account_id, "user_id": task.user_id}
 
-    monkeypatch.setattr(
-        "openviking.resource.watch_manager.WatchManager.trigger",
-        fake_trigger,
-    )
+    async def submit_refresh(*, to, on_task_created, **kwargs):
+        record = await watch_tracker.create("add_resource", resource_id=to, **owner)
+        await on_task_created(record)
+        return {"task_id": record.task_id}
+
+    watch_manager._resource_service.refresh_resource.side_effect = submit_refresh
     resp = await client.post(f"/api/v1/watches/{task.task_id}/trigger")
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["result"]["scheduled"] is True
-    assert triggered == [task.task_id]
+    expected = {"task_id": task.task_id, "to_uri": task.to_uri, "scheduled": True}
+    assert resp.json()["result"] == expected
+    resp = await client.post("/api/v1/watches/trigger", params={"to_uri": task.to_uri})
+    assert resp.status_code == 200
+    assert resp.json()["result"] == expected
+
+    [refresh] = await watch_tracker.list_tasks(**owner)
+    assert refresh.resource_id == task.to_uri
+    await watch_tracker.complete(refresh.task_id, {}, **owner)
+    assert await watch_manager.settle(task.task_id, refresh.task_id)
+    resp = await client.get(f"/api/v1/watches/{task.task_id}")
+    assert resp.json()["result"]["last_task_id"] == refresh.task_id
+    assert resp.json()["result"]["last_status"] == "completed"
+    assert resp.json()["result"]["is_active"] is False
 
     # DELETE
     resp = await client.delete(f"/api/v1/watches/{task.task_id}")
@@ -347,37 +351,13 @@ async def test_list_exposes_last_execution_result(client: httpx.AsyncClient, wat
     assert result["last_error"] == "pull failed"
 
 
-async def test_active_only_filter(client: httpx.AsyncClient, watch_manager):
-    active = await _seed(watch_manager, to_uri="viking://resources/test/active")
-    paused = await _seed(watch_manager, to_uri="viking://resources/test/paused")
-    await watch_manager.update_task(paused.task_id, "default", "default", "root", is_active=False)
-
-    resp = await client.get("/api/v1/watches", params={"active_only": "true"})
-    ids = {t["task_id"] for t in resp.json()["result"]["tasks"]}
-    assert active.task_id in ids
-    assert paused.task_id not in ids
-
-    resp = await client.get("/api/v1/watches", params={"active_only": "false"})
-    ids = {t["task_id"] for t in resp.json()["result"]["tasks"]}
-    assert active.task_id in ids
-    assert paused.task_id in ids
-
-
-async def test_dual_key_matching_accepted(client: httpx.AsyncClient, watch_manager):
-    """When both {task_id} and ?to_uri= are supplied and resolve to the SAME task,
-    the request succeeds (useful as a cross-key sanity check from clients that
-    have both pieces of information)."""
-    task = await _seed(watch_manager, to_uri="viking://resources/test/dual-ok")
-    resp = await client.get(f"/api/v1/watches/{task.task_id}", params={"to_uri": task.to_uri})
-    assert resp.status_code == 200
-    assert resp.json()["result"]["task_id"] == task.task_id
-
-
 async def test_dual_key_mismatch_returns_400(client: httpx.AsyncClient, watch_manager):
-    """When {task_id} and ?to_uri= refer to DIFFERENT tasks, return 400."""
     a = await _seed(watch_manager, to_uri="viking://resources/test/dual-a")
     b = await _seed(watch_manager, to_uri="viking://resources/test/dual-b")
-    # Use a's task_id but b's to_uri — they disagree.
+    resp = await client.get(f"/api/v1/watches/{a.task_id}", params={"to_uri": a.to_uri})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["task_id"] == a.task_id
+
     resp = await client.get(f"/api/v1/watches/{a.task_id}", params={"to_uri": b.to_uri})
     assert resp.status_code == 400
 
@@ -419,24 +399,6 @@ async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_mana
         json={"to_uri": "viking://resources/test/other"},
     )
     assert resp.status_code == 400
-
-
-async def test_trigger_by_uri(client: httpx.AsyncClient, watch_manager, monkeypatch):
-    task = await _seed(watch_manager, to_uri="viking://resources/test/trig")
-
-    triggered = []
-
-    async def fake_trigger(_self, task_id):
-        triggered.append(task_id)
-        return True
-
-    monkeypatch.setattr(
-        "openviking.resource.watch_manager.WatchManager.trigger",
-        fake_trigger,
-    )
-    resp = await client.post("/api/v1/watches/trigger", params={"to_uri": task.to_uri})
-    assert resp.status_code == 200
-    assert triggered == [task.task_id]
 
 
 async def test_home_alias_to_uri_resolves_to_canonically_keyed_task(

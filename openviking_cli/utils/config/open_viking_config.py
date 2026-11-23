@@ -56,7 +56,6 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .queue_worker_config import QueueWorkersConfig
-from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .rules_config import RulesConfig
@@ -351,11 +350,6 @@ class OpenVikingConfig(BaseModel):
     queue_workers: QueueWorkersConfig = Field(
         default_factory=QueueWorkersConfig,
         description="Queue worker runtime configuration",
-    )
-
-    reindex: ReindexConfig = Field(
-        default_factory=ReindexConfig,
-        description="Admin reindex runtime configuration",
     )
 
     parser_api: ParserApiConfig = Field(
@@ -962,6 +956,10 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
+    if not config.vlm.model:
+        errors.append(
+            "A VLM is required. Configure the vlm section in ov.conf or run openviking-server init."
+        )
 
     if errors:
         error_message = "Invalid OpenViking configuration:\n" + "\n".join(

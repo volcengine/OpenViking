@@ -23,8 +23,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from pdfminer.pdfparser import PDFSyntaxError
 from pdfminer.pdftypes import resolve1
-from pdfminer.psparser import LIT
+from pdfminer.psparser import LIT, PSEOF
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.base import (
@@ -36,6 +37,7 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
@@ -112,7 +114,7 @@ class PDFParser(BaseParser):
 
         Raises:
             FileNotFoundError: If PDF file doesn't exist
-            ValueError: If conversion fails with all strategies
+            InvalidArgumentError: If the PDF structure is invalid
         """
         start_time = time.time()
         pdf_path = Path(source)
@@ -172,6 +174,8 @@ class PDFParser(BaseParser):
 
             return result
 
+        except OpenVikingError:
+            raise
         except Exception as e:
             logger.info(
                 "PDF parsing failed; returning empty result path=%s error_type=%s degraded=true",
@@ -203,7 +207,7 @@ class PDFParser(BaseParser):
             Tuple of (markdown_content, metadata_dict)
 
         Raises:
-            ValueError: If all conversion strategies fail
+            ValueError: If the configured strategy is unknown
         """
         if self.config.strategy == "local":
             return await self._convert_local(pdf_path, resource_name=resource_name)
@@ -222,10 +226,7 @@ class PDFParser(BaseParser):
                 if self.config.mineru_endpoint:
                     logger.info("Local PDF conversion unavailable; falling back to MinerU API")
                     return await self._convert_mineru(pdf_path, resource_name=resource_name)
-                else:
-                    raise ValueError(
-                        f"Local conversion failed and no MinerU endpoint configured: {e}"
-                    )
+                raise
 
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
@@ -245,6 +246,7 @@ class PDFParser(BaseParser):
         该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
         """
         pdfplumber = lazy_import("pdfplumber")
+        from pdfplumber.utils.exceptions import PdfminerException
 
         # Import storage utilities
         if storage is None:
@@ -435,6 +437,12 @@ class PDFParser(BaseParser):
             return markdown_content, meta
 
         except Exception as e:
+            # pdfplumber wraps the original pdfminer error as its first argument.
+            error = e.args[0] if isinstance(e, PdfminerException) else e
+            if isinstance(error, (PDFSyntaxError, PSEOF)):
+                raise InvalidArgumentError(
+                    f"Invalid PDF file: {pdf_path.name}. Error: {error}"
+                ) from e
             logger.debug("Local PDF conversion failed error_type=%s", type(e).__name__)
             raise
 

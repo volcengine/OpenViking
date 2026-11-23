@@ -1,6 +1,6 @@
 use crate::cli::preprocess::{
-    find_command_index, first_command_token, named_compile_conflict, plain_help_misuse,
-    pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_privacy_args,
+    CliInvocation, find_command_index, first_command_token, named_compile_conflict,
+    plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_privacy_args,
 };
 use crate::cli::tests::os_args;
 use crate::output::OutputFormat;
@@ -22,7 +22,7 @@ fn pre_parse_output_options_preserve_json_config_errors() {
         os_args(&["ov", "ls", "-ojson"]),
         os_args(&["ov", "ls", "-o=json"]),
     ] {
-        assert_eq!(pre_parse_output_options(&args).0, OutputFormat::Json);
+        assert_eq!(CliInvocation::parse(args).output, OutputFormat::Json);
     }
 }
 

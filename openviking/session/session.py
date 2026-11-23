@@ -63,13 +63,13 @@ from openviking.session.checkpoints import (
     CheckpointRequest as _CheckpointRequest,
 )
 from openviking.session.extraction_batch import (
-    ExtractionBatchLimits,
-    bound_oversized_extraction_messages,
+    ExtractionMessageBatch,
     estimate_extraction_message_tokens,
-    plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
-from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
+from openviking.session.memory.constants import (
+    AGENT_EVOLUTION_MEMORY_TYPES,
+)
 from openviking.session.memory.memory_updater import MemoryUpdateError
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
@@ -2285,7 +2285,7 @@ class Session:
             memory_diff_exists = await fs.exists(
                 f"{state.archive_uri}/memory_diff.json", ctx=self.ctx
             )
-            if memory_diff_exists and not completed_memory_steps.get("long_term"):
+            if memory_diff_exists and not any(completed_memory_steps.values()):
                 raise FailedPreconditionError(
                     "Archive has memory_diff.json without durable long-term completion progress"
                 )
@@ -2556,41 +2556,21 @@ class Session:
     async def _extract_long_term_memories_with_batching(
         self,
         *,
-        messages: List[Message],
-        limits: ExtractionBatchLimits,
+        batches: list[tuple[str, Optional[set[str]], ExtractionMessageBatch]],
         archive_uri: str,
-        extract_batch: Callable[[List[Message]], Awaitable[Any]],
+        extract_batch: Callable[[List[Message], Optional[set[str]]], Awaitable[Any]],
         record_batch: Callable[
             [str, str, List[Message], Callable[[], Awaitable[Any]]],
             Awaitable[Any],
         ],
     ) -> Any:
-        messages, trimmed = bound_oversized_extraction_messages(messages, limits)
-        if trimmed:
-            logger.warning(
-                "Trimmed %s over-ceiling message(s) to the extraction prompt budget "
-                "(%s estimated tokens) so the model receives a request it can answer",
-                trimmed,
-                limits.max_message_tokens,
-            )
-        batches = plan_extraction_batches(messages, limits)
-        still_oversized = [batch for batch in batches if batch.oversized]
-        if still_oversized:
-            logger.warning(
-                "Phase 2 extraction still has %s pass(es) above the prompt budget "
-                "(%s estimated tokens, budget %s): the reducible text is not enough to "
-                "meet it",
-                len(still_oversized),
-                max(batch.estimated_tokens for batch in still_oversized),
-                limits.max_message_tokens,
-            )
         if not batches:
             return []
 
         logger.debug(
             "long-term memory extraction planned batches=%d estimated_tokens=%d",
             len(batches),
-            estimate_extraction_message_tokens(messages),
+            sum(batch.estimated_tokens for _, _, batch in batches),
         )
         contexts: List[Any] = []
         skills: List[Dict[str, Any]] = []
@@ -2610,14 +2590,15 @@ class Session:
                     raise
                 previous_diff_raw = ""
 
-        for batch_number, batch in enumerate(batches, start=1):
+        for batch_number, (step, types, batch) in enumerate(batches, start=1):
             batch_messages = list(batch.messages)
 
             async def _extract_and_merge(
                 batch_messages: List[Message] = batch_messages,
+                types: Optional[set[str]] = types,
             ) -> Any:
                 nonlocal previous_diff_raw
-                result = await extract_batch(batch_messages)
+                result = await extract_batch(batch_messages, types)
                 if not self._viking_fs:
                     return result
                 try:
@@ -2644,8 +2625,8 @@ class Session:
                 return result
 
             result = await record_batch(
-                f"long_term_memory_extraction_batch_{batch_number}",
-                "long_term",
+                f"{step}_memory_extraction_batch_{batch_number}",
+                step,
                 batch_messages,
                 _extract_and_merge,
             )
@@ -2866,13 +2847,10 @@ class Session:
                             operation_name=operation_name,
                         )
 
-                    async def _run_recorded_memory_step(
-                        operation_name: str,
+                    async def _record_memory_step(
                         step: str,
                         step_messages: List[Message],
-                        fn: Callable[[], Awaitable[Any]],
-                    ) -> Any:
-                        result = await _run_retryable_phase2_step(operation_name, fn)
+                    ) -> None:
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2889,6 +2867,15 @@ class Session:
                                 )
                             },
                         )
+
+                    async def _run_recorded_memory_step(
+                        operation_name: str,
+                        step: str,
+                        step_messages: List[Message],
+                        fn: Callable[[], Awaitable[Any]],
+                    ) -> Any:
+                        result = await _run_retryable_phase2_step(operation_name, fn)
+                        await _record_memory_step(step, step_messages)
                         return result
 
                     # Summary and V3 long-term memory extraction run concurrently.
@@ -2934,22 +2921,19 @@ class Session:
 
                         if self._session_compressor and long_term_has_work:
 
-                            async def _run_long_term_memory_extraction(
-                                batch_messages: Optional[List[Message]] = None,
+                            async def _extract_batch(
+                                batch_messages: List[Message],
+                                memory_types: Optional[set[str]],
                             ) -> Any:
                                 return await self._session_compressor.extract_long_term_memories(
-                                    messages=(
-                                        long_term_messages
-                                        if batch_messages is None
-                                        else batch_messages
-                                    ),
+                                    messages=batch_messages,
                                     user=self.user,
                                     session_id=self.session_id,
                                     ctx=self.ctx,
                                     strict_extract_errors=True,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
-                                    allowed_memory_types=long_term_memory_types,
+                                    allowed_memory_types=memory_types,
                                     agent_evolution_enabled=agent_evolution_enabled,
                                     allow_self_memory=self_memory_enabled,
                                     peer_memory_enabled=peer_memory_enabled,
@@ -2957,25 +2941,34 @@ class Session:
                                     event_search_tags=event_search_tags,
                                 )
 
-                            if extraction_batch_limits.enabled:
-                                extraction_tasks.append(
-                                    self._extract_long_term_memories_with_batching(
-                                        messages=long_term_messages,
-                                        limits=extraction_batch_limits,
-                                        archive_uri=archive_uri,
-                                        extract_batch=_run_long_term_memory_extraction,
-                                        record_batch=_run_recorded_memory_step,
-                                    )
-                                )
-                            else:
-                                extraction_tasks.append(
-                                    _run_recorded_memory_step(
+                            async def _run_long_term_memory_extraction() -> Any:
+                                if not extraction_batch_limits.enabled:
+                                    return await _run_recorded_memory_step(
                                         "long_term_memory_extraction",
                                         "long_term",
                                         long_term_messages,
-                                        _run_long_term_memory_extraction,
+                                        lambda: _extract_batch(
+                                            long_term_messages, long_term_memory_types
+                                        ),
                                     )
+
+                                batches = self._session_compressor.plan_long_term_extraction(
+                                    long_term_messages,
+                                    extraction_batch_limits,
+                                    allowed_memory_types=long_term_memory_types,
+                                    agent_evolution_enabled=agent_evolution_enabled,
+                                    completed_memory_steps=completed_memory_steps,
                                 )
+                                result = await self._extract_long_term_memories_with_batching(
+                                    batches=batches,
+                                    archive_uri=archive_uri,
+                                    extract_batch=_extract_batch,
+                                    record_batch=_run_recorded_memory_step,
+                                )
+                                await _record_memory_step("long_term", long_term_messages)
+                                return result
+
+                            extraction_tasks.append(_run_long_term_memory_extraction())
                             extraction_labels.append("long_term")
 
                         _results = await asyncio.gather(
@@ -3041,7 +3034,7 @@ class Session:
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its
                     # persisted diff instead of reporting an empty task result.
-                    if completed_memory_steps.get("long_term") and self._viking_fs:
+                    if any(completed_memory_steps.values()) and self._viking_fs:
                         candidate_memory_diff_uri = f"{archive_uri}/memory_diff.json"
                         if await self._viking_fs.exists(
                             candidate_memory_diff_uri,

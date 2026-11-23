@@ -1,0 +1,94 @@
+.ov-path-copy-button {
+  appearance: none;
+  display: inline-flex;
+  flex: none;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+
+.ov-path-copy-button:hover:not(:disabled),
+.ov-path-copy-button[data-copied] {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-plain-button-hover-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+
+.ov-path-copy-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.ov-path-copy-button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+
+.ov-path-copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ov-popover.ov-path-copy-hint {
+  padding: 6px 8px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: var(--ov-ui-color-tooltip-bg, var(--ov-ui-tooltip-bg-default));
+  color: var(--ov-ui-color-tooltip-text, var(--ov-ui-tooltip-text-default));
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.ov-popover.ov-path-copy-feedback {
+  max-width: calc(100vw - 16px);
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.ov-path-copy-feedback__content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-path-copy-feedback__icon {
+  flex: none;
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
+
+.ov-path-copy-feedback::after {
+  position: absolute;
+  left: calc(var(--ov-ui-path-copy-arrow-x, 50%) - 4px);
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--ov-ui-popover-border);
+  background: var(--ov-ui-popover-bg);
+  content: '';
+}
+
+.ov-path-copy-feedback[data-placement='top']::after {
+  bottom: -5px;
+  border-top: 0;
+  border-left: 0;
+  transform: rotate(45deg);
+}
+
+.ov-path-copy-feedback[data-placement='bottom']::after {
+  top: -5px;
+  border-right: 0;
+  border-bottom: 0;
+  transform: rotate(45deg);
+}

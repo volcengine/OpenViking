@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from openviking.observability.log_safety import safe_log_fields
 from openviking.scheduling.expiry import (
     SESSION_ITEM_TYPE,
     CallbackRequest,
@@ -103,11 +104,21 @@ class SessionExpiryAdapter:
             self.record_report_failure("unregister_failed", exc)
 
     def record_report_failure(self, reason: str, exc: Exception | None = None) -> None:
-        logger.warning(
-            "Session expiry operation failed reason=%s error=%s",
+        error_type = type(exc).__name__ if exc is not None else "unknown"
+        error_code = (
+            safe_log_fields({"error_code": getattr(exc, "code", None)}).get("error_code") or reason
+        )
+        (logger.error if reason == "report_failed" else logger.info)(
+            "session expiry operation failed reason=%s error_code=%s error_type=%s",
             reason,
-            type(exc).__name__ if exc is not None else "unknown",
-            exc_info=exc is not None,
+            error_code,
+            error_type,
+            extra={
+                "degraded": True,
+                "operation": "session.expiry",
+                "error_code": error_code,
+                "error_type": error_type,
+            },
         )
 
 

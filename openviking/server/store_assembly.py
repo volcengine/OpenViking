@@ -96,11 +96,15 @@ def build_account_store(
             )
         except ImportError:
             raise RuntimeError(
-                "Redis MySQL account storage requires openviking[redis-mysql]"
+                "Redis MySQL account storage requires openviking[mysql]"
             ) from None
+        if viking_fs is None:
+            raise InvalidArgumentError("redis_mysql account storage requires VikingFS")
+        cache_instance = RedisMySQLAccountStore.cache_instance_from_params(account_store_params)
         return RedisMySQLAccountStore(
             service_name=service_name,
             params=account_store_params,
+            cache_runtime=viking_fs.agfs.cache_runtime(cache_instance),
         )
     raise InvalidArgumentError(
         f"Unknown account store provider '{account_store_provider}'. "

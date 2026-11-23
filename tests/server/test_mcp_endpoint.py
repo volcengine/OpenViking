@@ -12,6 +12,7 @@ import json
 import re
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
@@ -407,20 +408,21 @@ async def test_rule_search_returns_rendered_rules(service, monkeypatch):
     assert search_rules.await_args.kwargs["ctx"] == DEFAULT_CTX
 
 
-async def test_search_returns_formatted_results(service, client_with_resource):
+async def test_search_returns_scoped_hits_until_min_score_excludes_them(client_with_resource):
     _, root_uri = client_with_resource
-    result = await search(query="resource management semantic search", limit=3)
-    assert "Found" in result or "No matching" in result
+    arguments: dict[str, Any] = {
+        "query": "resource management semantic search",
+        "context_type": "resource",
+        "target_uri": root_uri,
+        "level": [2],
+        "limit": 1,
+    }
+    result = await search(**arguments)
+    assert "Found 1 item(s)" in result
+    assert f"[resource 100%] {root_uri}/sample.md" in result
 
-
-async def test_search_with_target_uri(service):
-    result = await search(query="test", target_uri="viking://resources", limit=3)
-    assert isinstance(result, str)
-
-
-async def test_search_respects_min_score(service):
-    result = await search(query="test", min_score=0.35)
-    assert isinstance(result, str)
+    filtered = await search(**arguments, min_score=1.0)
+    assert filtered == "No matching context found."
 
 
 async def test_search_tools_expose_only_context_type_parameter():
@@ -691,24 +693,6 @@ async def test_find_tool_points_skill_hits_at_their_skill_md(service, monkeypatc
     assert read_uris == ["viking://agent/skills/deploy-runbook/SKILL.md"]
 
 
-async def test_find_tool_points_an_auxiliary_file_hit_at_the_skill_md(service, monkeypatch):
-    hit = SimpleNamespace(
-        uri="viking://user/test_user/skills/pdf-forms/scripts/fill.py",
-        abstract="Fill a PDF form field by field",
-        score=0.52,
-    )
-
-    async def fake_find_skills(**kwargs):
-        return SimpleNamespace(memories=[], resources=[], skills=[hit])
-
-    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
-
-    result = await mcp_endpoint.find(query="fill a pdf", context_type="skill")
-
-    assert "- [skill 52%] viking://user/test_user/skills/pdf-forms/SKILL.md" in result
-    assert "scripts/fill.py" not in result
-
-
 async def test_find_tool_keeps_same_named_skills_from_both_roots(service, monkeypatch):
     hits = [
         SimpleNamespace(
@@ -784,7 +768,7 @@ async def test_find_tool_forwards_its_bounds_to_find_skills(service, monkeypatch
     assert captured["limit"] == 3
     assert captured["score_threshold"] == 0.5
     assert captured["level"] == [0]
-    # find_skills restricts by context type itself and takes no filter.
+    # Skill-only scope needs no extra filter when the caller supplies no tags.
     assert "filter" not in captured
 
 
@@ -855,12 +839,12 @@ async def test_find_tool_keeps_a_filter_only_skill_query_on_the_generic_find(ser
 async def test_find_tool_leaves_a_uri_outside_a_skill_package_alone(service, monkeypatch, hit_uri):
     hit = SimpleNamespace(uri=hit_uri, abstract="Not an installed skill", score=0.4)
 
-    async def fake_find_skills(**kwargs):
+    async def fake_find(**kwargs):
         return SimpleNamespace(memories=[], resources=[], skills=[hit])
 
-    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
+    monkeypatch.setattr(service.search, "find", fake_find)
 
-    result = await mcp_endpoint.find(query="review", context_type="skill")
+    result = await mcp_endpoint.find(query="review", context_type=["skill", "memory"])
 
     assert f"- [skill 40%] {hit_uri} tags=[]\n" in result
     assert "SKILL.md/SKILL.md" not in result
@@ -886,6 +870,8 @@ async def test_find_tool_describes_a_package_file_hit_with_the_skill_abstract(se
 
     result = await mcp_endpoint.find(query="fill a pdf", context_type="skill")
 
+    assert "- [skill 52%] viking://agent/skills/pdf-forms/SKILL.md" in result
+    assert "scripts/fill.py" not in result
     assert abstract_uris == ["viking://agent/skills/pdf-forms"]
     assert "description: Fill in a PDF form" in result
     assert "AcroForm" not in result
@@ -992,11 +978,6 @@ async def test_find_tool_inlines_visible_content_when_requested(service, monkeyp
 
     assert "full visible content" in result
     assert "Use the read tool" not in result
-
-
-async def test_search_tool_rejects_read_content_in_context_mode():
-    with pytest.raises(InvalidArgumentError, match="read_content"):
-        await mcp_endpoint.search(query="visible", mode="context", read_content=True)
 
 
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
@@ -1107,15 +1088,6 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
     }
     assert params.rewrite == "auto"
     assert params.rewrite_max_bullets == 4
-
-
-async def test_search_context_mode_rejects_target_uri():
-    with pytest.raises(InvalidArgumentError, match="target_uri.*mode='context'"):
-        await search(
-            query="what happened",
-            mode="context",
-            target_uri="viking://resources",
-        )
 
 
 async def test_search_mode_defaults_preserve_list_threshold_but_not_context_threshold(

@@ -215,7 +215,7 @@ Configurations are stored in account and user directories. Public APIs locate co
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
-Successful Compile finalization publishes output snapshots and advances the incremental baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+Successful Compile finalization publishes output snapshots. The incremental baseline advances when the target diff reports at least one file added, modified, or deleted. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
 
 ### Check Compile availability
 

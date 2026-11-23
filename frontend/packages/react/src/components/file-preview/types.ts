@@ -94,6 +94,8 @@ export interface FilePreviewTabBase {
    * What the tab row shows. It can be plain text or a node with styling or icons.
    */
   title?: ReactNode;
+  /** Positive count shown beside the title, capped at 99+. The label explains its unit. */
+  badge?: { count: number; label: string };
   /**
    * 页签图标，由宿主提供；省略时该页签只显示标题，不占图标位。
    *

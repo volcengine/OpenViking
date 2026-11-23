@@ -20,7 +20,7 @@ def _fail_package_summaries(monkeypatch, name):
 
     async def fail_selected(self, file_path, *args, **kwargs):
         if any(file_path.endswith(f"/skills/{name}/{path}") for path in failed_paths):
-            raise ValueError("injected file summary failure")
+            raise RuntimeError("injected file summary failure")
         return await original(self, file_path, *args, **kwargs)
 
     monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", fail_selected)
@@ -85,13 +85,8 @@ async def test_update_with_multiple_file_failures_keeps_replacement_and_settles_
     name = "update-multiple-file-failures"
     root = (await _add_skill(client, name, "Original"))["root_uri"]
     failed_paths, original = _fail_package_summaries(monkeypatch, name)
-    upload = await _upload_package(
-        client,
-        tmp_path,
-        name,
-        "Failed replacement",
-        {"references/a.md": "First attachment", "references/b.md": "Second attachment"},
-    )
+    attachments = {"references/a.md": "First attachment", "references/b.md": "Second attachment"}
+    upload = await _upload_package(client, tmp_path, name, "Failed replacement", attachments)
 
     response = await client.put(
         f"/api/v1/skills/{name}",
@@ -102,8 +97,8 @@ async def test_update_with_multiple_file_failures_keeps_replacement_and_settles_
         assert path in response.json()["error"]["message"]
     before = await _assert_failed_package_settled(client, failed_paths)
     assert b"Failed replacement" in await _download(client, f"{root}/SKILL.md")
-    for path in ("references/a.md", "references/b.md"):
-        assert await _indexed_record(client, f"{root}/{path}", 2) == []
+    for path, text in attachments.items():
+        assert await _download(client, f"{root}/{path}") == text.encode()
 
     monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", original)
     retry = await client.put(
@@ -111,5 +106,8 @@ async def test_update_with_multiple_file_failures_keeps_replacement_and_settles_
         json={"data": _skill_md(name, "Successful replacement"), "wait": True},
     )
     assert retry.status_code == 200, retry.text
+    assert b"Successful replacement" in await _download(client, f"{root}/SKILL.md")
+    for path in attachments:
+        assert await _indexed_record(client, f"{root}/{path}", 2) == []
     after = await _assert_failed_package_settled(client, failed_paths)
     assert after.processed > before.processed

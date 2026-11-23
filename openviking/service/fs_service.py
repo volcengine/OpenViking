@@ -38,10 +38,14 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.pyagfs.exceptions import (
+    AGFSAlreadyExistsError,
+    AGFSNotADirectoryError,
+    AGFSNotFoundError,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -131,7 +135,6 @@ def _visible_grep_content(content: str, uri: str) -> str:
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
-    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
     from openviking.storage import VikingDBManager
 
 
@@ -143,7 +146,6 @@ class FSService:
         viking_fs: Optional[VikingFS] = None,
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
-        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
         watch_manager: Optional["WatchManager"] = None,
     ):
@@ -153,7 +155,6 @@ class FSService:
         self._privacy_sanitizer = privacy_sanitizer or (
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
-        self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
 
     def set_dependencies(
@@ -161,7 +162,6 @@ class FSService:
         viking_fs: VikingFS,
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
-        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
         watch_manager: Optional["WatchManager"] = None,
     ) -> None:
@@ -172,7 +172,6 @@ class FSService:
         self._privacy_sanitizer = privacy_sanitizer or (
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
-        self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
 
     def _ensure_initialized(self) -> VikingFS:
@@ -355,6 +354,59 @@ class FSService:
             source_offset += len(entries)
         return ListingPage(entries=result[:node_limit], has_more=len(result) > node_limit)
 
+    async def _list_directory_or_file(
+        self,
+        uri: str,
+        read_directory: Callable[[], Awaitable[List[Dict[str, Any]]]],
+        *,
+        ctx: RequestContext,
+        offset: int,
+        node_limit: Optional[int],
+        recursive: bool = False,
+        directories_only: bool = False,
+        file_formatter: Optional[
+            Callable[[List[Dict[str, Any]]], Awaitable[List[Dict[str, Any]]]]
+        ] = None,
+    ) -> List[Dict[str, Any]]:
+        """Accept file targets at the public boundary, preserving core directory reads."""
+        retry_directory = False
+        try:
+            entries = await read_directory()
+        except (AGFSNotADirectoryError, NotADirectoryError):
+            entries = []
+            retry_directory = True
+        if entries or node_limit == 0:
+            return entries
+        if not retry_directory and (offset > 0 or directories_only) and ctx.role != Role.GLOBAL:
+            # A file could not appear in this page. Restricted views still need
+            # stat to distinguish traversable directories from files.
+            return entries
+
+        # Object stores can return an empty list for a file target. Probe only
+        # empty public results so internal directory operations add no stat.
+        viking_fs = self._ensure_initialized()
+        try:
+            entry = dict(
+                await viking_fs.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False)
+            )
+        except NotFoundError:
+            if retry_directory:
+                raise
+            # Preserve backends' successful empty listing for missing prefixes.
+            return entries
+        if entry.get("isDir", True):
+            return await read_directory() if retry_directory else entries
+        if (
+            offset > 0
+            or directories_only
+            or any(is_storage_internal_name(part) for part in uri_parts(uri))
+        ):
+            return []
+        entry.setdefault("name", uri_leaf_name(uri))
+        if recursive:
+            entry["rel_path"] = entry["name"]
+        return await file_formatter([entry]) if file_formatter is not None else [entry]
+
     async def ls(
         self,
         uri: str,
@@ -376,10 +428,10 @@ class FSService:
         include_tags: bool = False,
         offset: int = 0,
     ) -> ListingPage:
-        """List directory contents.
+        """List a directory's children or return one file entry.
 
         Args:
-            uri: Viking URI
+            uri: File or directory Viking URI
             recursive: List all subdirectories recursively
             simple: Return only relative path list
             output: str = "original" or "agent"
@@ -415,7 +467,9 @@ class FSService:
             include_overview = False
         use_simple_paths = simple and not extra_fields
 
-        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+        async def fetch_directory_page(
+            page_offset: int, page_limit: Optional[int]
+        ) -> List[Dict[str, Any]]:
             """Fetch and return one pre-tag page."""
             if recursive:
                 return await viking_fs.tree(
@@ -448,6 +502,16 @@ class FSService:
                 sort_by=sort_by,
                 sort_order=sort_order,
                 extra_fields=None,
+            )
+
+        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+            return await self._list_directory_or_file(
+                uri,
+                partial(fetch_directory_page, page_offset, page_limit),
+                ctx=ctx,
+                offset=page_offset,
+                node_limit=page_limit,
+                recursive=recursive,
             )
 
         if tags:
@@ -662,7 +726,6 @@ class FSService:
                 result["vector_status"] = "skipped"
             return result
 
-        cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
@@ -698,24 +761,10 @@ class FSService:
                     ctx=ctx,
                     force_refresh=wait,
                 )
-            if self._resource_memory_link_service and context_type == "resource":
-                cleanup_result = await self._resource_memory_link_service.before_resource_delete(
-                    ctx=ctx,
-                    resource_uri=uri,
-                    recursive=recursive,
-                )
             if memory_overview_uri:
                 await MemoryUpdater.refresh_schema_overview(
                     viking_fs=viking_fs,
                     directory_uri=memory_overview_uri,
-                    ctx=ctx,
-                )
-            for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
-                cleanup_result
-            ):
-                await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
-                    directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
             if (
@@ -726,8 +775,6 @@ class FSService:
                 queue_status = await self._wait_for_refresh()
         finally:
             pass
-        if cleanup_result is not None and isinstance(result, dict):
-            result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
             if refresh_action is FreshnessAction.NOOP:
@@ -797,30 +844,6 @@ class FSService:
         if not MemoryUpdater.memory_type_from_uri(parent.uri):
             return None
         return parent.uri
-
-    @classmethod
-    def _memory_overview_parent_uris_from_cleanup(
-        cls,
-        cleanup_result: Optional[Dict[str, Any]],
-    ) -> List[str]:
-        if not isinstance(cleanup_result, dict):
-            return []
-
-        overview_uris: List[str] = []
-        for field in ("memory_uris", "deleted_memory_uris"):
-            values = cleanup_result.get(field)
-            if not isinstance(values, list):
-                continue
-            for memory_uri in values:
-                if not isinstance(memory_uri, str):
-                    continue
-                overview_uri = cls._memory_overview_parent_uri(
-                    memory_uri,
-                    context_type_for_uri(memory_uri),
-                )
-                if overview_uri:
-                    overview_uris.append(overview_uri)
-        return list(dict.fromkeys(overview_uris))
 
     async def _enqueue_delete_refresh(
         self,
@@ -1418,7 +1441,7 @@ class FSService:
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
     ) -> ListingPage:
-        """Get directory tree."""
+        """List directory descendants or return a file as a single-node tree."""
         viking_fs = self._ensure_initialized()
         if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             await viking_fs._ensure_access(uri, ctx)
@@ -1439,22 +1462,48 @@ class FSService:
             include_abstract = False
             include_overview = False
 
-        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+        listing_format = {
+            "output": "original" if tags else output,
+            "abs_limit": abs_limit,
+            "extra_fields": None if tags else extra_fields,
+            "include_abstract": None if tags else include_abstract,
+            "include_overview": False if tags else include_overview is True,
+            "overview_limit": overview_limit,
+        }
+
+        async def format_file_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            return await viking_fs._finalize_listing_entries(
+                entries,
+                recursive=True,
+                ctx=ctx,
+                **listing_format,
+            )
+
+        async def fetch_directory_page(
+            page_offset: int, page_limit: Optional[int]
+        ) -> List[Dict[str, Any]]:
             """Fetch and return one pre-tag tree page."""
             return await viking_fs.tree(
                 uri,
                 ctx=ctx,
-                output="original" if tags else output,
-                abs_limit=abs_limit,
-                include_abstract=None if tags else include_abstract,
-                include_overview=False if tags else include_overview is True,
-                overview_limit=overview_limit,
                 show_all_hidden=show_all_hidden,
                 directories_only=directories_only,
                 node_limit=page_limit,
                 level_limit=level_limit,
-                extra_fields=None if tags else extra_fields,
                 offset=page_offset,
+                **listing_format,
+            )
+
+        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+            return await self._list_directory_or_file(
+                uri,
+                partial(fetch_directory_page, page_offset, page_limit),
+                ctx=ctx,
+                offset=page_offset,
+                node_limit=page_limit,
+                recursive=True,
+                directories_only=directories_only,
+                file_formatter=format_file_entries,
             )
 
         if tags:

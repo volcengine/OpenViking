@@ -97,6 +97,10 @@ dependencies = [
 
 
 [project.optional-dependencies]
+sqlite = [
+    "aiosqlite>=0.20,<1",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+]
 reporting = [
     "kafka-python>=3.0.12,<4",
 ]
@@ -116,12 +120,8 @@ mysql = [
     "PyMySQL>=1.1,<1.2",
     "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
-redis-mysql = [
-  "aiomysql>=0.2.0,<1",
-  "redis>=5.3.1,<7",
-  "SQLAlchemy[asyncio]>=2.0.54,<2.1",
-]
 test = [
+  "aiosqlite>=0.20,<1",
   "SQLAlchemy[asyncio]>=2.0,<2.1",
   "redis>=5.3.1,<7",
   "pytest>=7.0.0",
@@ -276,6 +276,7 @@ openviking = [
     "server/account_stores/sql/postgres/*.sql",
     "service/sql/*.sql",
     "service/sql/changes/*.sql",
+    "observability/usage_audit/sql/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]

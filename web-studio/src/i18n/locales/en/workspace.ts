@@ -49,6 +49,9 @@ const workspace = {
       unavailable: 'Administration unavailable',
       unavailableDescription:
         'This connection does not provide administration access. Check your connection credentials.',
+      devUnavailable: 'Administration is unavailable in dev mode',
+      devUnavailableDescription:
+        'This service uses dev authentication. Enable api_key mode in ov.conf to manage accounts, users, and server configuration.',
       checking: 'Checking permissions…',
       makeDefault: 'Use as default',
       isDefault: 'Default entry',

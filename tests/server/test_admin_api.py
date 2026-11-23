@@ -2934,30 +2934,46 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 
 
 async def test_register_user(admin_client: httpx.AsyncClient):
-    """ROOT can register a user in an account."""
+    """Both user creation paths provision memory directories with their summaries."""
     acct = _uid()
-    await admin_client.post(
+    account = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    resp = await admin_client.post(
+    assert account.status_code == 200, account.text
+    user = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["result"]["user_id"] == "bob"
-    assert "user_key" in body["result"]
+    assert user.status_code == 200, user.text
+    assert user.json()["result"]["user_id"] == "bob"
 
-    # Bob's key should work
-    bob_key = body["result"]["user_key"]
-    resp = await admin_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={"X-API-Key": bob_key},
-    )
-    assert resp.status_code == 200
+    for user_id, created in (("alice", account), ("bob", user)):
+        listing = await admin_client.get(
+            "/api/v1/fs/ls",
+            params={
+                "uri": f"viking://user/{user_id}/memories",
+                "output": "original",
+                "include_abstract": True,
+                "include_overview": True,
+            },
+            headers={"X-API-Key": created.json()["result"]["user_key"]},
+        )
+        assert listing.status_code == 200, listing.text
+        directories = [entry for entry in listing.json()["result"] if entry["isDir"]]
+        assert {entry["name"] for entry in directories} == {
+            "preferences",
+            "entities",
+            "events",
+            "cases",
+            "trajectories",
+            "experiences",
+        }
+        for directory in directories:
+            assert directory["abstract"] and directory["abstract"] != "[.abstract.md is not ready]"
+            assert directory["overview"] and directory["overview"] != "[.overview.md is not ready]"
 
 
 async def test_root_can_register_admin_role_user(
@@ -3658,6 +3674,69 @@ async def test_user_list_hides_other_prefixes_and_mismatched_keys():
         "acme", hide_other_keys=True, viewer_account_id="acme", viewer_user_id="alice"
     )
     assert page["users"] == [{"user_id": "alice"}, {"user_id": "hashed"}]
+
+
+@pytest.mark.parametrize("scope", ["account", "user"])
+async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
+    admin_client, admin_service, admin_app, monkeypatch, tmp_path, scope
+):
+    from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+    from openviking.service.task_tracker import TaskTracker, set_task_tracker
+    from tests.service.test_task_store_sql_deletion import _LimitedConnection, _seed, _snapshot
+
+    original_tracker = get_task_tracker()
+    store = SQLiteTaskWorkStore(params={"path": str(tmp_path / "tasks.db"), "maxsize": 1})
+    store._engine_options["connect_args"]["factory"] = _LimitedConnection
+    await store.load()
+    set_task_tracker(TaskTracker(store))
+    try:
+        await admin_app.state.deletion_service.initialize()
+        acct = _uid()
+        response = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": acct, "admin_user_id": "alice"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        response = await admin_client.post(
+            f"/api/v1/admin/accounts/{acct}/users",
+            json={"user_id": "bob", "role": "user"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        await _seed(store, [f"task-{i:03}" for i in range(80)], account=acct, user="bob")
+        await _seed(store, ["alice-task"], account=acct, user="alice")
+        ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+        uri = "viking://user/bob/memories/private.md"
+        await admin_service.viking_fs.write_file(uri, "private", ctx=ctx)
+        await _agfs_write(admin_service, "/local/other/resources/keep.md", "keep")
+
+        vectors = admin_service.viking_fs.vector_store
+        method = "delete_account_data" if scope == "account" else "delete_user_data"
+        delete_vectors = AsyncMock(wraps=getattr(vectors, method))
+        monkeypatch.setattr(vectors, method, delete_vectors)
+        endpoint = f"/api/v1/admin/accounts/{acct}"
+        if scope == "user":
+            endpoint += "/users/bob"
+        response = await admin_client.delete(endpoint, headers=root_headers())
+        assert response.status_code == 202, response.text
+        task = await _wait_for_task(admin_client, response.json()["result"]["task_id"])
+        assert task["status"] == "completed", task
+        assert task["result"] == {"deleted": True}
+        assert delete_vectors.await_count == 1
+        assert not await admin_service.viking_fs.exists(uri, ctx=ctx)
+        assert await _agfs_exists(admin_service, "/local/other/resources/keep.md")
+        manager = admin_app.state.api_key_manager
+        assert not await manager.has_user(acct, "bob")
+        assert await manager.get_deletion(acct, None if scope == "account" else "bob") is None
+        snapshot = await _snapshot(store)
+        for rows in snapshot.values():
+            assert not any(row["task_id"].startswith("task-") for row in rows)
+        alice = await store.get_task("alice-task", account_id=acct, user_id="alice")
+        assert (alice is None) == (scope == "account")
+    finally:
+        set_task_tracker(original_tracker)
+        await store.close()
 
 
 async def test_remove_user(
@@ -4841,3 +4920,127 @@ async def test_user_point_read_sees_peer_process_writes_without_a_list(
         assert rerole.json()["result"] == {"user_id": "bob", "role": "admin"}
     finally:
         await writer.close()
+
+
+@pytest_asyncio.fixture
+async def acl_account_client(monkeypatch, tmp_path):
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.model_validate({"storage": {"workspace": str(tmp_path)}})
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
+    app = _build_lightweight_admin_test_app()
+    await app.state.fake_service.runtime_config_manager.initialize()
+    await app.state.api_key_manager.load()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        yield app, client
+
+
+@pytest.mark.parametrize("operation", ["grant", "revoke", "set"])
+async def test_acl_principals_are_account_scoped(acl_account_client, monkeypatch, operation):
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.routers import acl as acl_router
+    from openviking.service.fs_service import FSService
+    from openviking.storage.viking_fs import VikingFS
+    from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend, _record
+
+    app, client = acl_account_client
+    manager = app.state.api_key_manager
+    owner_key = await manager.create_account("acct", "alice")
+    await manager.create_account("other", "bob")
+    await manager.create_group("other", "outsiders")
+    await manager.register_user("acct", "carol")
+    uri = "viking://resources/photo.txt"
+    backend = _RealAclMemoryTransferBackend([_record("photo", uri)])
+    monkeypatch.setattr(backend, "get_strict", backend.get)
+    agfs = _FakeAGFS()
+    agfs.write("/local/acct/resources/photo.txt", b"photo")
+    fs = VikingFS(agfs=agfs, vector_store=backend, acl_manager=backend.acl_manager)
+    service = app.state.fake_service
+    service.viking_fs = fs
+    service.fs = FSService(viking_fs=fs)
+    monkeypatch.setattr(
+        "openviking.server.auth.plugins.api_key.build_api_key_manager", lambda **kwargs: manager
+    )
+    app.state.service_name = "test"
+    plugin = ApiKeyAuthPlugin()
+    await plugin.initialize(app, service, app.state.config)
+    app.state.auth_plugin = plugin
+    app.include_router(acl_router.router)
+
+    async def mutate(principal):
+        if operation == "set":
+            return await client.put(
+                "/api/v1/acl",
+                json={"uri": uri, "entries": [{"principal": principal, "level": "read"}]},
+                headers={"X-API-Key": owner_key},
+            )
+        return await client.post(
+            f"/api/v1/acl/{operation}",
+            json={
+                "uri": uri,
+                "principal": principal,
+                **({"level": "read"} if operation == "grant" else {}),
+            },
+            headers={"X-API-Key": owner_key, "X-OpenViking-User": "bob"},
+        )
+
+    # The same URI resolves only in the caller's account, even after an ACL mutation.
+    other = RequestContext(user=UserIdentifier("other", "bob"), role=Role(Role.ADMIN))
+    with pytest.raises(OpenVikingError, match="File not found"):
+        await fs.read(uri, ctx=other)
+    before = deepcopy(backend.records)
+    response = await mutate("user:bob")
+    assert response.status_code == 400, response.text
+    assert "cross-account" in response.json()["error"]["message"]
+    assert backend.records == before
+
+    for principal in ("user:missing", "group:missing", "group:outsiders"):
+        response = await mutate(principal)
+        assert response.status_code == 400, response.text
+    await manager.create_group("acct", "readers")
+    for principal in ("user:carol", "user:*", "group:readers"):
+        response = await mutate(principal)
+        assert response.status_code == 200, response.text
+
+    # Validate ingestion ACLs before content mutation, including mixed valid/invalid entries.
+    owner = RequestContext(user=UserIdentifier("acct", "alice"), role=Role(Role.ADMIN))
+    before = deepcopy(backend.records)
+    with pytest.raises(OpenVikingError, match="cross-account"):
+        await fs.prepare_acl_update(
+            "viking://resources/new.txt",
+            {"entries": [{"principal": "user:bob", "level": "read"}]},
+            owner,
+        )
+    with pytest.raises(OpenVikingError, match="cross-account"):
+        await fs.set_acl(
+            uri,
+            [
+                {"principal": "user:carol", "level": "read"},
+                {"principal": "user:bob", "level": "read"},
+            ],
+            ctx=owner,
+        )
+    assert backend.records == before
+    from openviking.storage.acl import AclMode
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    local = RequestContext(user=UserIdentifier("acct", "carol"), role=Role(Role.USER))
+    await fs.set_acl(uri, [], acl_mode=AclMode.RESTRICTED, ctx=owner)
+    with pytest.raises(PermissionDeniedError):
+        await fs.read(uri, ctx=local)
+    await fs.grant_acl(uri, "user:carol", "read", ctx=owner)
+    assert await fs.read(uri, ctx=local) == b"photo"
+    await fs.revoke_acl(uri, "user:carol", ctx=owner)
+    with pytest.raises(PermissionDeniedError):
+        await fs.read(uri, ctx=local)
+    # An identical user id in both accounts still refers only to the local member.
+    await manager.register_user("acct", "bob")
+    response = await mutate("user:bob")
+    assert response.status_code == 200, response.text
+    with pytest.raises(OpenVikingError, match="File not found"):
+        await fs.read(uri, ctx=other)

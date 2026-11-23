@@ -9,6 +9,7 @@ import pytest
 from openviking.message import ContextPart, Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.session.checkpoints import CheckpointRequest
+from openviking.session.compressor_v3 import SessionCompressorV3
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
     bound_oversized_extraction_messages,
@@ -770,7 +771,7 @@ async def test_long_term_memory_batches_follow_the_planned_limit():
     messages = [_message("u1"), _message("u2"), _message("u3")]
     recorded_batches = []
 
-    async def extract(batch):
+    async def extract(batch, memory_types):
         return [batch[0].id]
 
     async def record(operation_name, step, batch, fn):
@@ -779,8 +780,11 @@ async def test_long_term_memory_batches_follow_the_planned_limit():
         return result
 
     result = await session._extract_long_term_memories_with_batching(
-        messages=messages,
-        limits=ExtractionBatchLimits(max_messages=1),
+        batches=SessionCompressorV3.plan_long_term_extraction(
+            messages,
+            ExtractionBatchLimits(max_messages=1),
+            allowed_memory_types={"events"},
+        ),
         archive_uri="viking://user/default/sessions/s1/history/archive_001",
         extract_batch=extract,
         record_batch=record,
@@ -801,7 +805,7 @@ async def test_long_term_memory_batches_bound_an_oversized_message_before_extrac
     messages = [_message("u1", text="word " * 4000), _message("u2", text="small")]
     delivered = []
 
-    async def extract(batch):
+    async def extract(batch, memory_types):
         delivered.append(sum(message.estimated_tokens for message in batch))
         return []
 
@@ -809,8 +813,11 @@ async def test_long_term_memory_batches_bound_an_oversized_message_before_extrac
         return await fn()
 
     await session._extract_long_term_memories_with_batching(
-        messages=messages,
-        limits=ExtractionBatchLimits(max_message_tokens=1000),
+        batches=SessionCompressorV3.plan_long_term_extraction(
+            messages,
+            ExtractionBatchLimits(max_message_tokens=1000),
+            allowed_memory_types={"events"},
+        ),
         archive_uri="viking://user/default/sessions/s1/history/archive_001",
         extract_batch=extract,
         record_batch=record,
@@ -962,7 +969,7 @@ async def test_nothing_above_the_ceiling_reaches_the_extraction_callback(message
         for part in message.parts
     ]
 
-    async def extract(batch):
+    async def extract(batch, memory_types):
         delivered.append(sum(item.estimated_tokens for item in batch))
         return []
 
@@ -970,8 +977,11 @@ async def test_nothing_above_the_ceiling_reaches_the_extraction_callback(message
         return await fn()
 
     await session._extract_long_term_memories_with_batching(
-        messages=[message],
-        limits=ExtractionBatchLimits(max_message_tokens=4000),
+        batches=SessionCompressorV3.plan_long_term_extraction(
+            [message],
+            ExtractionBatchLimits(max_message_tokens=4000),
+            allowed_memory_types={"events"},
+        ),
         archive_uri="viking://user/default/sessions/s1/history/archive_001",
         extract_batch=extract,
         record_batch=record,

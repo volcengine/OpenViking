@@ -81,7 +81,7 @@ async def test_reindex_single_file_keeps_concurrent_chunk_named_file(monkeypatch
     monkeypatch.setattr(reindex_module, "get_service", lambda: service)
     monkeypatch.setattr(reindex_module, "get_viking_fs", lambda: fs)
     executor = ReindexExecutor()
-    monkeypatch.setattr(executor, "_effective_file_vectorization_concurrency", lambda: 1)
+    monkeypatch.setattr(reindex_module, "FILE_TASK_CONCURRENCY", 1, raising=False)
     ctx = RequestContext(user=UserIdentifier("test", "bob"), role=Role.USER)
 
     result = await executor._run(uri=uri, object_type="memory", mode="vectors_only", ctx=ctx)

@@ -11,6 +11,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -25,7 +26,12 @@ def processing():
         pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "package"}),
         pathlock_release=AsyncMock(),
     )
-    fs = SimpleNamespace(_async_agfs=agfs, _uri_to_path=lambda uri, **kw: uri)
+    fs = SimpleNamespace(
+        _async_agfs=agfs,
+        _uri_to_path=lambda uri, **kw: uri,
+        read=AsyncMock(side_effect=NotFoundError("skill history", "file")),
+        exists=AsyncMock(return_value=False),
+    )
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     prepared = SkillProcessingPreparation(
         skill_dict={"name": "config-cancellation", "description": "Example", "content": "body"},

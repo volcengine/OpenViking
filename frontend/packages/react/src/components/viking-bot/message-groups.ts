@@ -1,4 +1,5 @@
 import type { VikingBotMessage, VikingBotMessagePart } from './model.js';
+import { retainMessageTimestampSource } from './message-timestamp-source.js';
 
 const URI_RE = /viking:\/\/[^\s<>"'`)\]]+/gu;
 
@@ -47,6 +48,8 @@ export function groupMessages(
       previous.turnId ??= message.turnId;
       previous.streaming = previous.streaming || message.streaming;
       previous.createdAt = message.createdAt ?? previous.createdAt;
+      if (message.createdAt != null)
+        retainMessageTimestampSource(previous, message);
       // 动作与原始消息身份属于各自的消息，不能随合并转移：带动作的后继消息
       // 若被并进前一条，动作会挂到错误的 messageId 上或直接丢失。
       if (actions?.length) {
@@ -54,11 +57,13 @@ export function groupMessages(
       }
       continue;
     }
-    groups.push({
+    const grouped = {
       ...message,
       parts: [...message.parts],
       actions,
-    });
+    };
+    retainMessageTimestampSource(grouped, message);
+    groups.push(grouped);
   }
   return groups;
 }

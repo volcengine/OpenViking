@@ -205,7 +205,11 @@ class JsonQueueHandler(DroppingQueueHandler):
 
 
 def configure_logging(path=None, max_bytes=LOG_MAX_BYTES):
-    """Own standalone application output; request-record sinks retain their schema."""
+    """Own standalone application output; request-record sinks retain their schema.
+
+    Logging policy:
+    https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
+    """
     channel = queue.Queue(maxsize=QUEUE_SIZE)
     handler = JsonQueueHandler(channel)
     handler.setLevel(logging.INFO)

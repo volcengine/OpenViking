@@ -44,6 +44,23 @@ INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "研发周报"}
 
 
+@pytest.mark.parametrize("source", ["viking://resources", "viking://user/"])
+@pytest.mark.parametrize("saved", [False, True])
+async def test_compile_rejects_root_sources(service, client, source, saved):
+    """Reject a namespace root in any source position and suggest concrete directories."""
+    service.compile.configure_local_backend("http://localhost:1", "")
+    path = "/api/v1/compile/create" if saved else "/api/v1/compile"
+    body = {**(SAVED_INPUTS if saved else INPUTS), "from": [SOURCE, source]}
+
+    response = await client.post(path, json=body)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["message"] == (
+        "Compile --from rejects viking://resources and viking://user. Use a "
+        "subdirectory such as viking://resources/test or viking://user/default/resources."
+    )
+
+
 @pytest.mark.parametrize("body", [b'{"error":{"message":"Ark unavailable"}}', b"unavailable"])
 async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
     """Runtime 424 preserves request context even when the response is not JSON."""
@@ -339,6 +356,16 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
         ]["runs"]
         assert [r["task_id"] for r in runs] == [task_ids[-1]]
         assert runs[0]["params"]["instruction"] == actor.user.user_id
+        assert runs[0]["status"] == "queued"
+        cancel_path = f"/api/v1/tasks/{task_ids[-1]}/cancel"
+        cancelled = await client.post(cancel_path)
+        assert cancelled.status_code == 200, cancelled.text
+        task = cancelled.json()["result"]
+        run = await service.compile.get_run(name, task_ids[-1], actor)
+        assert task["status"] == run["status"] == "cancelled"
+        assert run["finished_at"] == task["updated_at"]
+        assert (await client.post(cancel_path)).status_code == 200
+        assert await service.compile.get_run(name, task_ids[-1], actor) == run
     assert task_ids[0] != task_ids[1]
     foreign_run = await client.get(
         f"/api/v1/compile/runs/{task_ids[0]}", params={"compile_name": name}
@@ -550,13 +577,16 @@ async def test_compile_admission_rejects_invalid_inputs_before_publication(
 
 
 @pytest.mark.parametrize(
-    ("role", "cancel_424"),
-    [(Role.USER, False), (Role.ADMIN, False), (Role.GLOBAL, False), (Role.USER, True)],
+    ("role", "runtime_failure"),
+    [(role, None) for role in (Role.USER, Role.ADMIN, Role.GLOBAL)]
+    + [(Role.USER, ("cancel", 424))]
+    + [(Role.USER, (method, 404)) for method in ("create", "get", "cancel")],
 )
 async def test_configuration_runs_full_isolation_and_failure_recovery(
-    service, app, client, monkeypatch, role, cancel_424
+    service, app, client, monkeypatch, role, runtime_failure
 ):
     ensure_target = service.fs.ensure_compile_target
+    runtime_client = service.compile._client
     ctx, runtime = await prepare(service, app, monkeypatch)
     ctx.role, ctx.group_ids = Role(role), ("reviewers",)
     commit = AsyncMock(wraps=service.viking_fs.commit)
@@ -596,7 +626,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         )
         assert response.status_code == 202, response.text
         task_id = response.json()["result"]["task_id"]
-        if cancel_424 and runtime.status == "failed":
+        failure = runtime_failure if runtime.status == "failed" else None
+        cancelling = failure is not None and failure[0] == "cancel"
+        if cancelling:
             await tracker.register_work(task_id, "compile", "ExternalTask", **owner)
             await tracker.start_work(task_id, "compile", **owner)
 
@@ -605,13 +637,18 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
                 raise asyncio.CancelledError()
 
             runtime.get.side_effect = interrupt_poll
-            runtime.cancel = AsyncMock(
-                side_effect=CompileDependencyFailure(
-                    "CompileDependencyFailed", "HTTP 424 cancel: Ark unavailable", transient=False
-                )
-            )
-        await service.compile._tasks.execute(task_id, **owner)
-        if cancel_424 and runtime.status == "failed":
+        with monkeypatch.context() as fault:
+            if failure:
+                method, status = failure
+                code = "ResourceNotExist" if status == 404 else "CompileDependencyFailed"
+                body = {"error": {"code": code, "message": "Runtime request failed"}}
+                request = AsyncMock(return_value=httpx.Response(status, json=body))
+                fault.setattr(httpx.AsyncClient, "request", request)
+                fault.setattr(runtime, method, getattr(runtime_client(), method), raising=False)
+            await service.compile._tasks.execute(task_id, **owner)
+            if failure:
+                request.assert_awaited_once()
+        if cancelling:
             await tracker.mark_work_done(task_id, "compile", **owner)
         for call in commit.await_args_list:
             executor = call.kwargs["ctx"]
@@ -709,12 +746,13 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     failed_run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, failed.task_id)
     assert failed_run["meta"]["finish_snapshot"] is not None
 
-    if cancel_424:
+    if runtime_failure:
         assert failed_run["status"] == "failed"
-        assert "Ark unavailable" in failed.error and "Ark unavailable" in failed_run["error"]
+        reason = f"HTTP {runtime_failure[1]}"
+        assert reason in failed.error and reason in failed_run["error"]
         runtime.status, runtime.get.side_effect = "completed", None
         runtime.get.return_value = CompileSessionStatus(status="completed", stage="done")
-        successor = await execute({"compile_name": compile_name}, "compile-after-424")
+        successor = await execute({"compile_name": compile_name}, "compile-after-runtime-failure")
         assert successor.status == "completed"
         assert await service.fs.read(f"{TARGET}/page.md", ctx) != preserved
 

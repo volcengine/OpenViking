@@ -10,7 +10,7 @@ import type {
   WikiFileData,
 } from '../../components/wiki-dashboard/types.js';
 
-type WikiDashboardResult =
+export type WikiDashboardResult =
   | { kind: 'directory'; data: WikiDirectoryData }
   | { kind: 'file'; data: WikiFileData };
 

@@ -287,6 +287,8 @@ export function createMemoryOpenVikingContextEngine(params: {
   }) => void;
   queryConfigStore?: RuntimeQueryConfigStore;
   traceRecorder?: { record(entry: RecallTraceEntry): void; recordAndFlush?: (entry: RecallTraceEntry) => Promise<unknown> };
+  /** Auto-recall runs in before_prompt_build instead of assemble. */
+  recallViaPromptHook?: boolean;
 }): ContextEngineWithCommit {
   const {
     id,
@@ -299,6 +301,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     rememberSessionAgentId,
     queryConfigStore,
     traceRecorder,
+    recallViaPromptHook,
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
@@ -399,6 +402,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         tokenBudget,
         runtimeContext: assembleParams.runtimeContext,
         isMainAssemble,
+        recallViaPromptHook,
         cfg,
         getClient,
         logger,

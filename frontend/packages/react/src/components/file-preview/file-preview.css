@@ -169,6 +169,29 @@
   color: inherit;
 }
 
+.ov-file-preview__tab-badge {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding-inline: 4px;
+  border-radius: 99px;
+  background: var(
+    --ov-ui-color-warning-light,
+    var(--ov-ui-file-preview-badge-bg-default)
+  );
+  color: var(
+    --ov-ui-color-warning,
+    var(--ov-ui-file-preview-badge-text-default)
+  );
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
 .ov-file-preview__panel {
   display: flex;
   flex: 1 1 auto;
@@ -398,40 +421,6 @@
 .ov-file-preview__action {
   flex: none;
   box-sizing: border-box;
-}
-
-.ov-file-preview__action--copy-path {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ov-ui-file-preview-text-path);
-  cursor: pointer;
-  transition:
-    color 160ms ease,
-    background-color 160ms ease,
-    opacity 160ms ease;
-}
-
-.ov-file-preview__action--copy-path:hover:not(:disabled) {
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-plain-button-hover-default));
-  color: var(--ov-ui-file-preview-text);
-}
-
-.ov-file-preview__action--copy-path:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
-}
-
-.ov-file-preview__action--copy-path:focus-visible {
-  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
-  outline-offset: 2px;
 }
 
 /* 动作组里的按钮：带描边与浅色底槽，与宿主的次级按钮一致。 */

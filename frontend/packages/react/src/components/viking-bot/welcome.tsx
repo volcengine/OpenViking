@@ -2,6 +2,20 @@ import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import type { VikingBotQuickInput } from './capabilities.js';
 import type { VikingBotLabels } from './model.js';
 import { QuickInputs } from './quick-inputs.js';
+import type { ComponentProps, ReactNode } from 'react';
+
+export function VikingBotEmptyState({
+  content,
+  ...props
+}: ComponentProps<typeof VikingBotWelcome> & { content?: ReactNode }) {
+  return (
+    <div
+      className={`ov-viking-bot__empty${content === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
+    >
+      {content === undefined ? <VikingBotWelcome {...props} /> : content}
+    </div>
+  );
+}
 
 export function VikingBotWelcome({
   labels,

@@ -307,6 +307,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+| `watch_store.provider` | `file`、`mysql`、`postgres` | `file` | Watch 元数据和运行占用；关系型 provider 共享持久化记录 |
+
+PostgreSQL Watch 存储需要安装 `openviking[postgres]`，并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql` 建表。在
+`storage.watch_store.params` 中配置连接字段和所有节点共用的
+`credential_encryption_key`（base64 编码的 32 字节密钥）。
+它独立于 Task/Work、Account、PathLock 和向量存储。
+完整示例、TLS 参数与部署要求见[Watch 存储配置](../guides/01-configuration.md#watch-store)。
 
 同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
 `{"provider":"sqlite"}`。数据库默认位于
@@ -476,10 +484,8 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | 同时消费的完整 AddResource 作业数，必须大于 `0`；修改后需重启服务 |
-| `file_operation_concurrency` | integer | `16` | 单个 AddResource 作业内文件级提交和 fallback 比较操作的最大并发数，必须大于 `0`；修改后需重启服务 |
-| `file_vectorization_concurrency` | integer | `8` | 当目录 AddResource 使用 `processing_mode="vectors_only"` 时，单个作业内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
-`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_operation_concurrency` 控制单个 AddResource 作业内文件提交和 fallback 比较操作的并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。
+`max_concurrent` 控制相互独立的 AddResource 作业并发。每个作业内的文件级工作使用内部固定的有界并发。
 
 ### `queue_workers.reindex`
 
@@ -534,6 +540,57 @@ Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`
 安全操作审计落库记为独立功能待办。
 SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
 
+## Usage/Audit PostgreSQL 配置
+
+`server.observability.usage_audit.backend` 支持 `sqlite`（默认）和 `postgres`。
+共享 PostgreSQL 用于多实例的 Token、检索、上下文写入及 HTTP 请求审计投影，
+Console API 和读端时区口径保持一致。
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+安装 `openviking[postgres]`，由管理员一次性执行
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql`；
+runtime 只验证 schema，不创建或迁移表。自定义 schema 时替换脚本中的 schema 名，
+只接受 1–63 字符的小写 SQL 标识符。runtime role 需要 schema `USAGE`、
+表 `SELECT/INSERT/UPDATE/DELETE`、sequence `USAGE/SELECT`。
+连接参数支持 `sslrootcert`、`sslcert`、`sslkey`，不接受 DSN；
+生产环境应按数据库要求设置 `verify-ca` 或 `verify-full`。
+
+schema 当前为 v2。已有预览版 v1 时，先停止全部 writer，由管理员执行
+`openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`，
+再重启全部实例；不混跑旧 writer。`lock_timeout_ms` 默认 `1000`，范围 `1..60000`，
+限制写入和删除事务的单次数据库锁等待；超时回滚，worker 按 best-effort 语义丢弃该批。
+删除会持久化账号/用户删除版本，拒绝其他实例队列中的旧版本事件。
+远端 writer 刷新版本前接收的同范围新事件也会保守丢弃；每次写入刷新版本后，
+新接收事件（包括重新创建的同名身份）正常写入。版本判断不依赖机器时钟。
+
+保留配置与 SQLite 相同，`0` 关闭对应裁剪。切换后端不会迁移历史数据；
+事件仍经进程内队列异步写入，不保证重启恢复或 exactly-once。
+这只共享 Usage/Audit 数据，其他业务存储和分布式锁需单独配置。
+完整口径见[模块说明](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md)。
+
 ## Compile API 配置
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -544,14 +601,6 @@ SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](h
 | `poll_interval_ms` | integer | `30000` | 外部任务状态轮询间隔 |
 
 配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。
-
-## Reindex 配置
-
-### `reindex`
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | 单个 resource/skill reindex 任务内并发读取、计算指纹和准备文件的数量，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
 ## HTTP 服务配置
 

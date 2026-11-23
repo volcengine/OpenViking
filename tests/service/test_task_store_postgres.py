@@ -94,10 +94,9 @@ async def test_concurrent_task_id_is_idempotent_and_case_sensitive(task_stores):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_cancelled_creation_rolls_back_task_and_events(task_stores, monkeypatch):
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Transaction rollback is a relational store contract")
     original = first._append_event_history
 
     async def cancel_after_events(*args, **kwargs):
@@ -116,10 +115,9 @@ async def test_cancelled_creation_rolls_back_task_and_events(task_stores, monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["postgres"], indirect=True)
 async def test_non_unique_integrity_error_is_not_an_active_task_conflict(task_stores):
     first, second = task_stores
-    if not isinstance(first, PostgresTaskWorkStore):
-        pytest.skip("PostgreSQL SQLSTATE classification contract")
 
     async def add_constraint():
         async with first._transaction() as session:
@@ -143,12 +141,11 @@ async def test_non_unique_integrity_error_is_not_an_active_task_conflict(task_st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["postgres"], indirect=True)
 async def test_outcome_other_unique_constraint_is_not_a_business_conflict(task_stores):
     from openviking.service.task_tracker import TaskTracker
 
     first, second = task_stores
-    if not isinstance(first, PostgresTaskWorkStore):
-        pytest.skip("PostgreSQL constraint classification contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     await writer.create("content_write", "source", task_id="source", **OWNER)
     await observer.create("content_write", "target", task_id="target", **OWNER)

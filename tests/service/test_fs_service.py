@@ -9,12 +9,13 @@ from unittest.mock import ANY, AsyncMock, call
 
 import pytest
 
+from openviking.core.global_policy import PolicyPathScope, PolicyScopePlan
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSIoError, AGFSNotFoundError
 from openviking.resource.watch_manager import WatchManager, WatchPathLocks
 from openviking.resource.watch_store import WatchMoveResult
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import DataAccessScope, RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service import fs_service as fs_module
 from openviking.service.fs_service import FSService, ListingPage
@@ -505,16 +506,6 @@ class _FakeWatchManager:
         return [SimpleNamespace(task_id="watch-1")]
 
 
-class _FakeResourceMemoryLinkService:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
-
-    async def before_resource_delete(self, *, ctx, resource_uri, recursive=False):
-        self.calls.append({"ctx": ctx, "resource_uri": resource_uri, "recursive": recursive})
-        return self.result
-
-
 class _FakeQueueManager:
     SEMANTIC = "semantic"
 
@@ -738,7 +729,9 @@ async def test_grep_projects_tags_when_include_tags_is_requested(request_context
 
 
 @pytest.mark.asyncio
-async def test_plain_listing_reads_only_requested_page_summaries(request_context, monkeypatch):
+async def test_plain_listing_preserves_visibility_and_limits_storage_reads(
+    request_context, monkeypatch
+):
     selected = {"uri": "viking://resources/docs", "isDir": True}
     entries = [selected, {"uri": "viking://resources/probe", "isDir": True}]
     viking_fs = VikingFS(agfs=SimpleNamespace())
@@ -779,6 +772,33 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
         any_order=True,
     )
     assert summary.await_count == 2
+
+    monkeypatch.setattr(viking_fs, "_ls_original", AsyncMock(return_value=[]))
+    monkeypatch.setattr(viking_fs, "_tree_original", AsyncMock(return_value=[]))
+    metadata = AsyncMock(side_effect=AGFSNotFoundError("missing"))
+    monkeypatch.setattr(viking_fs._async_agfs, "stat", metadata)
+    missing_uri = "viking://resources/missing"
+    empty_page = ListingPage(entries=[], has_more=False)
+    assert await service.ls(missing_uri, ctx=request_context) == empty_page
+    metadata.reset_mock()
+    assert await service.tree(missing_uri, ctx=request_context, directories_only=True) == empty_page
+    metadata.assert_not_awaited()
+
+    container_uri = "viking://user/owner/container"
+    scope = DataAccessScope(
+        owner_user_id="owner",
+        operation=AclAction.READ,
+        plan=PolicyScopePlan("allowed", (PolicyPathScope("container/child.md", False),), ()),
+        policy_hash=None,
+        request_root=container_uri,
+        requested_targets=(container_uri,),
+        effective_targets=(f"{container_uri}/child.md",),
+    )
+    ctx = replace(request_context, role=Role.GLOBAL, data_access=scope)
+    metadata.side_effect = None
+    metadata.return_value = {"isDir": False}
+    with pytest.raises(PermissionDeniedError, match="only directories are traversable"):
+        await service.tree(container_uri, ctx=ctx, directories_only=True)
 
 
 @pytest.mark.asyncio
@@ -1835,18 +1855,11 @@ async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(request_context):
+async def test_resource_rm_does_not_refresh_parent_if_resource_delete_fails(request_context):
     delete_error = RuntimeError("delete failed")
     viking_fs = _FakeVikingFS(rm_error=delete_error)
-    cleanup = {
-        "status": "success",
-        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/越前龙马.md"],
-    }
-    link_service = _FakeResourceMemoryLinkService(cleanup)
-    service = FSService(
-        viking_fs=viking_fs,
-        resource_memory_link_service=link_service,
-    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_delete_refresh = AsyncMock()
 
     with pytest.raises(RuntimeError, match="delete failed"):
         await service.rm(
@@ -1855,28 +1868,22 @@ async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(requ
             recursive=True,
         )
 
-    assert link_service.calls == []
+    service._enqueue_delete_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("wait", [False, True])
+async def test_resource_rm_skips_memory_reference_cleanup(
     request_context,
     monkeypatch,
+    recursive,
+    wait,
 ):
-    cleanup = {
-        "status": "success",
-        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/不二周助-write-test.md"],
-        "deleted_memory_uris": [
-            "viking://user/ryoma/memories/entities/动漫角色/不二周助-link-test2.md"
-        ],
-    }
-    viking_fs = _FakeVikingFS()
-    link_service = _FakeResourceMemoryLinkService(cleanup)
-    service = FSService(
-        viking_fs=viking_fs,
-        resource_memory_link_service=link_service,
-    )
-    service._enqueue_delete_refresh = AsyncMock()
+    viking_fs = _FakeVikingFS(is_dir=recursive)
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_delete_refresh = AsyncMock(return_value=fs_module.FreshnessAction.REFRESH_NOW)
+    service._wait_for_refresh = AsyncMock(return_value={})
 
     refreshed = []
 
@@ -1889,17 +1896,15 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
     )
 
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
-    result = await service.rm(uri, ctx=request_context, recursive=True)
+    result = await service.rm(uri, ctx=request_context, recursive=recursive, wait=wait)
 
-    assert link_service.calls == [{"ctx": request_context, "resource_uri": uri, "recursive": True}]
-    assert refreshed == [
-        {
-            "viking_fs": viking_fs,
-            "directory_uri": "viking://user/ryoma/memories/entities/动漫角色",
-            "ctx": request_context,
-        }
-    ]
-    assert result["memory_cleanup"] == cleanup
+    assert refreshed == []
+    assert "memory_cleanup" not in result
+    assert viking_fs.rm_calls[0]["uri"] == uri
+    assert viking_fs.rm_calls[0]["recursive"] is recursive
+    service._enqueue_delete_refresh.assert_awaited_once()
+    assert service._enqueue_delete_refresh.await_args.kwargs["force_refresh"] is wait
+    assert service._wait_for_refresh.await_count == int(wait)
 
 
 @pytest.mark.asyncio
