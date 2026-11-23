@@ -572,7 +572,7 @@ class _GrepMixin:
         """Execute regex matching in specified file list (vikingdb_then_fs Step 2)."""
         compiled_pattern = await _compile_grep_pattern(pattern, case_insensitive)
 
-        results = []
+        results: List[Dict[str, Any]] = []
         files_scanned = 0
 
         for file_uri in file_uris:
