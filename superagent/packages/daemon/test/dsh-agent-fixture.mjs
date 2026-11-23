@@ -11,6 +11,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { after } from 'node:test';
 import { DshAgent } from '../src/dsh.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -57,7 +58,7 @@ function baseConfig(overrides = {}) {
     connectors: ['lark'],
     larkCliBin: '/fake-lark/lark-cli',
     slackCliBin: '/fake-slack/slack',
-    actionSocketPath: path.join(dataDir, 'actions.sock'),
+    actionSocketPath: localSocketPath(dataDir),
     actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
     sendTimeoutMs: 5_000,
     maxReplyChars: 1_000,

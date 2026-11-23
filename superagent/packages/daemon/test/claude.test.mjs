@@ -3,6 +3,7 @@
 
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
@@ -391,7 +392,7 @@ describe('ClaudeAgent persistent stream-json runtime', () => {
     assert.ok(args.includes('--session-id'));
     assert.ok(!args.includes('--resume'));
     assert.ok(calls.every((call) => call.options.env.LARKSUITE_CLI_PROFILE === 'test-profile'));
-    assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
+    assert.ok(calls.every((call) => call.options.env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter))));
 
     agent.deliver('[chat=oc_now12345678 msg=om_now12345678] current request', 7);
     const first = JSON.parse(persistent[0].writes[0]);

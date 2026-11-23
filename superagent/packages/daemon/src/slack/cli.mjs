@@ -1,13 +1,33 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { SlackError, validToken } from './api.mjs';
-import { findExecutable, hostPlatformId, systemEnvironmentKeys } from '../platform/index.mjs';
+// Platform execFile, like every other CLI client: Windows starts a `.cmd` shim
+// or a Node entrypoint through its own interpreter, and cannot run an
+// extensionless script the way POSIX does.
+import { execFile, findExecutable, hostPlatformId, systemEnvironmentKeys } from '../platform/index.mjs';
+
+const RETRYABLE_REMOVE = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
+
+// A Windows temp directory can still be held by the child's handles right after
+// it exits; cleanup must not turn a completed query into a failure. Retry the
+// transient codes without blocking the daemon, then leave the directory to the
+// OS temp sweep rather than fail a read that already succeeded.
+async function removeTempDir(directory) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try { fs.rmSync(directory, { recursive: true, force: true }); return; }
+    catch (error) {
+      // A real permission failure is not ours to hide.
+      if (!RETRYABLE_REMOVE.has(error.code)) throw error;
+      await delay(50);
+    }
+  }
+}
 
 export const SLACK_CLI_VERSION = '4.10.0';
 export const bundledSlackCli = ({ host = hostPlatformId, env = process.env } = {}) => host.startsWith('termux-')
@@ -54,7 +74,7 @@ export class SlackCli {
       if (error || result?.ok !== true) throw new Error('Slack CLI query failed or returned invalid JSON');
       return result;
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      await removeTempDir(directory);
     }
   }
 }

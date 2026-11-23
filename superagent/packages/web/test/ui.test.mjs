@@ -167,5 +167,5 @@ test('API key：登录页、localStorage、Bearer、401 回到登录', () => {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(js, /headers\.authorization = `Bearer \$\{key\}`/);
-  assert.doesNotMatch(js.replace(/async function apiFetch[\s\S]*?\n\}\n/, ''), /\bfetch\(/);
+  assert.doesNotMatch(js.replace(/async function apiFetch[\s\S]*?\r?\n\}\r?\n/, ''), /\bfetch\(/);
 });

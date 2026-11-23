@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getConfig, projectDir } from '../src/config.mjs';
 import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
@@ -193,7 +193,9 @@ function fakeLarkSource(dir) {
 // logged to INPUT_LOG with the turn id as text) | 'reply-loop' (the same with
 // the identical reply_message "mock reply" in place of stay_silent, for an
 // instance without explicitSilence).
-const ACTION_CLIENT = fileURLToPath(new URL('../src/actions/client.mjs', import.meta.url));
+// The fixture is generated source that imports this module: a URL, not a bare
+// path. `D:\...` reads as the `d:` scheme to ESM and fails on a Windows host.
+const ACTION_CLIENT = pathToFileURL(fileURLToPath(new URL('../src/actions/client.mjs', import.meta.url))).href;
 
 function fakeCodexSource(dir, { behavior, failBlob }) {
   return `

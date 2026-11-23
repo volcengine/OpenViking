@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,25 @@ function promptDir(config) {
   return config?.promptDir || DEFAULT_PROMPT_DIR;
 }
 
+// The policy reaches a runtime as one text, and a stored session is resumed by
+// the hash of that text. Both must be the same on every host: prompt files, the
+// soul and connector sections can come back with CRLF from a Windows checkout, a
+// local file an editor wrote, or OpenViking. Normalize at the boundary, so
+// neither the text nor the hash depends on who produced the line endings.
+export function normalizePolicyText(text) {
+  return String(text ?? '').replace(/\r\n?/g, '\n');
+}
+
+// The policyHash of an assembled policy: its normalized text followed by what the
+// stored session was started with (workspace, policy version). Normalizing here
+// rather than only where the text is read means a caller that assembled or
+// loaded policy text elsewhere still hashes it the same way.
+export function policyHashOf(text, ...parts) {
+  const hash = createHash('sha256').update(normalizePolicyText(text));
+  for (const part of parts) hash.update('\0').update(part);
+  return hash.digest('hex');
+}
+
 // Where the soul is kept unless the instance names another place
 // (agents[].soulUri): its own OV user's memories.
 export const OV_SOUL_URI = 'viking://~/memories/soul.md';
@@ -38,7 +58,13 @@ export function isLocalSoul(uri) {
 // soul with.
 export function rolePresetText(name, dir = DEFAULT_PROMPT_DIR) {
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(String(name ?? ''))) throw new Error(`Unknown role preset: ${name}`);
-  return fs.readFileSync(path.join(dir, 'roles', `${name}.md`), 'utf8');
+  return readPromptText(path.join(dir, 'roles', `${name}.md`));
+}
+
+// Every prompt file comes through here, so the text is host-independent before
+// it is split, joined or substituted.
+function readPromptText(file) {
+  return normalizePolicyText(fs.readFileSync(file, 'utf8'));
 }
 
 function agentName(config) {
@@ -78,11 +104,11 @@ export function substitutePromptPlaceholders(text, config = {}) {
 }
 
 function renderPrompt(config, name) {
-  return substitutePromptPlaceholders(fs.readFileSync(path.join(promptDir(config), name), 'utf8'), config).trim();
+  return substitutePromptPlaceholders(readPromptText(path.join(promptDir(config), name)), config).trim();
 }
 
 function joinSections(parts) {
-  return parts.map((part) => String(part || '').trim()).filter(Boolean).join('\n\n');
+  return normalizePolicyText(parts.map((part) => String(part || '').trim()).filter(Boolean).join('\n\n'));
 }
 
 // Policy tests and tools pass partial configs; a running daemon always lists its connectors.
@@ -99,7 +125,7 @@ function connectorSections(config) {
 // The soul as loaded, without its HTML comments (notes for whoever edits
 // it). An instance without one runs on the Core's defaults.
 export function rolePrompt(config = {}) {
-  const text = String(config.soulText ?? '').replace(/<!--[\s\S]*?-->/g, '');
+  const text = normalizePolicyText(config.soulText).replace(/<!--[\s\S]*?-->/g, '');
   return substitutePromptPlaceholders(text, config).trim();
 }
 
@@ -239,7 +265,8 @@ function ownDirectories(config) {
   const project = config.projectDir || PACKAGE_DIR;
   const install = path.basename(path.dirname(project)) === 'releases' ? path.dirname(path.dirname(project)) : project;
   const inside = (dir, parent) => { const relative = path.relative(parent, dir); return !relative.startsWith('..') && !path.isAbsolute(relative); };
-  return [install, config.dataDir].filter(Boolean).map((dir) => path.resolve(dir))
+  const resolve = (dir) => (String(dir).startsWith('/') ? path.posix.resolve(dir) : path.resolve(dir));
+  return [install, config.dataDir].filter(Boolean).map(resolve)
     .filter((dir, index, all) => all.indexOf(dir) === index && !all.some((other) => other !== dir && inside(dir, other)));
 }
 

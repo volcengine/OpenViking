@@ -1,12 +1,14 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { SlackApi, SlackError } from '../src/slack/api.mjs';
 import { SlackState } from '../src/slack/state.mjs';
 import { loginSlack } from '../src/slack/auth.mjs';
@@ -23,6 +25,7 @@ import { formatInboundLine } from '../src/runtime-input.mjs';
 import { Store } from '../src/store.mjs';
 import { Harness } from '../src/harness.mjs';
 import { ActionService } from '../src/actions/service.mjs';
+import { installNodeCommand } from './fake-executable.mjs';
 
 const BOT_TOKEN = 'xoxb-1111-2222-abcdefghijklmnop';
 const APP_TOKEN = 'xapp-1-A0APP-3333-abcdefghijklmnop';
@@ -40,7 +43,7 @@ const payload = (event = {}, extra = {}) => ({
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-'));
   const state = new SlackState(dir);
-  t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { state.close(); removeTempDir(dir); });
   return { dir, state };
 }
 
@@ -454,8 +457,8 @@ test('binds the owner by a one-time code in a direct message and stages messages
   const saved = state.account();
   assert.equal(saved.ownerChannel, 'D0OWNER');
   assert.equal(saved.botToken, BOT_TOKEN);
-  assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
+  if (supportsFileModes) assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
   assert.deepEqual(state.pending(account.teamId), []);
 
   // Binding again on the same app keeps what the agent should still hear.
@@ -548,7 +551,7 @@ test('uploads and downloads files only through Slack hosts without redirects', a
   const { media } = await c.getMedia({ message_id: 'sl:T0TEAM:C0GENERAL:1.000001', key: 'F0FILE' });
   assert.deepEqual(fs.readFileSync(media[0].path), bytes);
   assert.equal(media[0].name, 'a.txt');
-  assert.equal(fs.statSync(media[0].path).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(media[0].path).mode & 0o777, 0o600);
   const api = new SlackApi(BOT_TOKEN, { fetchImpl: async () => assert.fail('must not fetch') });
   for (const url of ['https://evil.test/file', 'http://files.slack.com/x', 'https://slack.com.evil.test/x']) {
     await assert.rejects(api.download(url, AbortSignal.timeout(1000)), /not on Slack/);
@@ -670,8 +673,9 @@ test('Harness delivers named lines and the outbox keeps one reply per decision',
 test('real connector worker supports check/start/pause/reply/stop and releases its lease', async (t) => {
   const { dir, state } = fixture(t);
   state.saveAccount(account);
-  const slackCliBin = path.join(dir, 'slack-cli');
-  fs.writeFileSync(slackCliBin, `#!${process.execPath}
+  // The worker starts this the way it starts a real CLI: a shebang script on
+  // POSIX, a Node entrypoint on Windows.
+  const slackCliBin = installNodeCommand(dir, 'slack-cli', { body: `#!${process.execPath}
     const method = process.argv[3];
     const params = Object.fromEntries(new URLSearchParams(process.argv[process.argv.indexOf('--data') + 1]));
     const result = {
@@ -682,7 +686,7 @@ test('real connector worker supports check/start/pause/reply/stop and releases i
       'conversations.replies': { messages: [{ ts: '${ts(1)}', user: 'U0ALICE', text: 'root' }] },
     }[method];
     console.log(JSON.stringify({ ok: true, ...result }));
-  `, { mode: 0o755 });
+  ` });
   const workerFile = path.join(dir, 'worker.mjs');
   fs.writeFileSync(workerFile, `
     globalThis.fetch = async (url, init) => {

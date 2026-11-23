@@ -6,10 +6,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { getConfig } from '../src/config.mjs';
 import { LarkClient } from '../src/lark.mjs';
 import { prepareLarkMediaDirectory, pruneLarkMedia } from '../src/lark-media.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
+import { directoryLink, fileLink } from './symlink-fixture.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 
@@ -33,8 +35,8 @@ test('downloads and reads images outside /root, retaining them until maintenance
   const lark = new LarkClient(config, {
     async run(command, args, { cwd }) {
       assert.equal(cwd, path.join(tempDir, 'media'));
-      assert.equal(fs.statSync(tempDir).mode & 0o777, 0o700);
-      assert.equal(fs.statSync(cwd).mode & 0o777, 0o700);
+      if (supportsFileModes) assert.equal(fs.statSync(tempDir).mode & 0o777, 0o700);
+      if (supportsFileModes) assert.equal(fs.statSync(cwd).mode & 0o777, 0o700);
       const output = args[args.indexOf('--output') + 1];
       assert.equal(path.isAbsolute(output), false);
       const saved = `${output}.png`;
@@ -57,17 +59,21 @@ test('downloads and reads images outside /root, retaining them until maintenance
   assert.equal(fs.existsSync(item.path), false);
 });
 
-test('rejects shared or symlinked download directories without changing their permissions', (t) => {
+test('rejects shared or symlinked download directories without changing their permissions', {
+  // A 0700 mode check and a link owned by someone else are POSIX semantics;
+  // the Windows adapter refuses a shared directory without inspecting modes.
+  skip: process.platform === 'win32' ? 'needs POSIX directory modes and unprivileged symlinks' : false,
+}, (t) => {
   const root = temporaryRoot(t);
   const shared = path.join(root, 'shared');
   fs.mkdirSync(shared);
   fs.chmodSync(shared, 0o755);
   assert.throws(() => prepareLarkMediaDirectory(shared), /mode 0700/);
-  assert.equal(fs.statSync(shared).mode & 0o777, 0o755);
+  if (supportsFileModes) assert.equal(fs.statSync(shared).mode & 0o777, 0o755);
   const link = path.join(root, 'link');
-  fs.symlinkSync(shared, link);
+  directoryLink(shared, link);
   assert.throws(() => prepareLarkMediaDirectory(link), /owned by the daemon user/);
-  fs.symlinkSync(shared, path.join(root, 'media'));
+  directoryLink(shared, path.join(root, 'media'));
   assert.throws(() => prepareLarkMediaDirectory(root), /owned by the daemon user/);
 });
 
@@ -87,9 +93,9 @@ test('prunes only expired Lark files, leaving current downloads, other files and
   const current = write(name, false);
   const unrelated = write('keep.txt');
   const linked = path.join(directory, `${name}.jpg`);
-  fs.symlinkSync(unrelated, linked);
+  const linkedCreated = fileLink(unrelated, linked);
   assert.equal(pruneLarkMedia(root, 60_000, now), 1);
   assert.equal(fs.existsSync(expired), false);
-  for (const file of [current, unrelated, linked]) assert.equal(fs.existsSync(file), true);
+  for (const file of [current, unrelated, ...(linkedCreated ? [linked] : [])]) assert.equal(fs.existsSync(file), true);
   assert.equal(pruneLarkMedia(path.join(root, 'missing'), 60_000, now), 0);
 });

@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -86,7 +87,7 @@ test('the account file is private', (t) => {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'email', 'primary', 'email-qq.json');
   writeEmailAccount(file, { address: 'a@qq.com', password: 'p' });
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+  if (supportsFileModes) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['email-qq.json']);
 });

@@ -158,7 +158,14 @@ test('all processes are checked before removal: duplicates, foreign scripts and 
     if (invalid === 'other-instance') daemon.pm2_env.OV_SUPERAGENT_INSTANCE_ID = 'beta';
     if (invalid === 'symlink') {
       fs.unlinkSync(daemon.pm2_env.pm_exec_path);
-      fs.symlinkSync(f.options.configPath, daemon.pm2_env.pm_exec_path);
+      try {
+        fs.symlinkSync(f.options.configPath, daemon.pm2_env.pm_exec_path);
+      } catch (error) {
+        // Creating a symlink needs a privilege Windows does not grant by
+        // default; the other invalid manifests still cover the check.
+        if (error.code === 'EPERM' || error.code === 'EACCES') continue;
+        throw error;
+      }
     }
     await assert.rejects(removeManagedApps(['updater', 'alpha', 'web'], f.controlOptions));
     assert.deepEqual(f.commands, [['jlist']], invalid);

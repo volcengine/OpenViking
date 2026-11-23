@@ -10,7 +10,11 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
 // A real daemon, a fake Codex app-server that works on a HOLD request until it
 // is interrupted, and the same fake serving TraeX. The owner switches runtimes
 // in the middle of that work and sends nothing else.
-describe('/runtime in the middle of a turn', () => {
+// The handover waits for the previous runtime's child to be interrupted and to
+// answer once more. Windows terminates a child through taskkill rather than a
+// signal, which this fake process cannot observe; the case is POSIX-only until
+// the switch has a Windows live-runtime test.
+describe('/runtime in the middle of a turn', { skip: process.platform === 'win32' ? 'the fake runtime cannot be interrupted the way Windows terminates a tree' : false }, () => {
   it('goes on with the interrupted request on the new runtime, once, with no new message', async () => {
     const env = await startMockEnv({ codex: { behavior: 'switch' } });
     try {

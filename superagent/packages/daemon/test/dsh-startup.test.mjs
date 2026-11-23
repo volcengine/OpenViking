@@ -40,7 +40,13 @@ describe('DshAgent startup and SDK transport', () => {
     assert.equal(call.options.env.DSH_TELEMETRY_DISABLED, '1');
     assert.equal(call.options.env.DSH_PROFILE, undefined);
     assert.equal(call.options.env.LARK_APP_SECRET, undefined);
-    assert.ok(call.options.env.PATH.startsWith(`${path.dirname(process.execPath)}:/fake-lark:/fake-slack:`));
+    // Pinned Node first, then the configured CLIs, with the host's delimiter.
+    assert.ok(call.options.env.PATH.startsWith([
+      path.dirname(process.execPath),
+      path.dirname(context.config.larkCliBin),
+      path.dirname(context.config.slackCliBin),
+      '',
+    ].join(path.delimiter)));
     const patch = JSON.parse(fs.readFileSync(call.args[3], 'utf8'));
     assert.ok(patch.some((entry) => entry.id === 'sdk-jsonrpc-server' && entry.disabled));
     const inserted = patch.find((entry) => entry.insert)?.insert ?? [];
@@ -87,6 +93,8 @@ describe('DshAgent startup and SDK transport', () => {
     const context = newAgent({ childOptions: { hello: new Error('method not found') } });
     await assert.rejects(context.agent.start(), /method not found/);
     assert.equal(context.agent.connected, false);
+    // The terminated child is observable on every host: a fake pid has no tree
+    // for taskkill to walk, so the handle is signalled in the same tick.
     assert.equal(context.children[0].exitCode !== null, true);
   });
 

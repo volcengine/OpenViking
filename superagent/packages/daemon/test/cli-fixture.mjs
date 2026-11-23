@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { terminateProcessTree } from '../src/process-utils.mjs';
+import { installNodeCommand } from './fake-executable.mjs';
 
 // A throwaway "installation" for CLI end-to-end tests: a deployment manifest
 // with one or more instances, a temp HOME (so ~/.ov-superagent is never touched), and a
@@ -81,12 +82,10 @@ export function createCliFixture(tests, { instances = ['qa'] } = {}) {
   fs.mkdirSync(home, { mode: 0o700 });
   const binDirectory = path.join(root, 'bin');
   fs.mkdirSync(binDirectory, { mode: 0o700 });
-  // The fake keeps the executable bit and its shebang, so the CLI's own spawn
-  // path (DSH_BIN or `dsh` on PATH) exercises a real executable, not a shell
-  // wrapper this fixture invented.
-  const fakeDsh = path.join(binDirectory, 'dsh');
-  fs.copyFileSync(FAKE_DSH, fakeDsh);
-  fs.chmodSync(fakeDsh, 0o755);
+  // The fake is installed the way a real CLI is: a shebang script on POSIX, a
+  // `.cmd` shim on Windows, so the product's own spawn path (DSH_BIN or `dsh`
+  // on PATH) is exercised on every platform.
+  const fakeDsh = installNodeCommand(binDirectory, 'dsh', { file: FAKE_DSH });
 
   const directoryOf = (id) => ({
     dataDir: path.join(root, 'data', id),
