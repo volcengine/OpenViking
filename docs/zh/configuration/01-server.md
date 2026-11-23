@@ -540,6 +540,48 @@ Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`
 安全操作审计落库记为独立功能待办。
 SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
 
+## Usage/Audit PostgreSQL 配置
+
+`server.observability.usage_audit.backend` 支持 `sqlite`（默认）和 `postgres`。
+共享 PostgreSQL 用于多实例的 Token、检索、上下文写入及 HTTP 请求审计投影，
+Console API 和读端时区口径保持一致。
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+安装 `openviking[postgres]`，由管理员一次性执行
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql`；
+runtime 只验证 schema，不创建或迁移表。自定义 schema 时替换脚本中的 schema 名，
+只接受 1–63 字符的小写 SQL 标识符。runtime role 需要 schema `USAGE`、
+表 `SELECT/INSERT/UPDATE/DELETE`、sequence `USAGE/SELECT`。
+连接参数支持 `sslrootcert`、`sslcert`、`sslkey`，不接受 DSN；
+生产环境应按数据库要求设置 `verify-ca` 或 `verify-full`。
+
+保留配置与 SQLite 相同，`0` 关闭对应裁剪。切换后端不会迁移历史数据；
+事件仍经进程内队列异步写入，不保证重启恢复或 exactly-once。
+这只共享 Usage/Audit 数据，其他业务存储和分布式锁需单独配置。
+完整口径见[模块说明](../../../openviking/observability/usage_audit/README.md)。
+
 ## Compile API 配置
 
 | 字段 | 类型 | 默认值 | 说明 |

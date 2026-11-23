@@ -17,6 +17,7 @@ from pydantic import (
     StrictStr,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 # Import auth plugin registry for config validation
@@ -317,8 +318,9 @@ class UsageAuditConfig(BaseModel):
     """Product usage and audit projection configuration."""
 
     enabled: bool = True
-    backend: Literal["sqlite"] = "sqlite"
+    backend: Literal["sqlite", "postgres"] = "sqlite"
     sqlite_path: Optional[str] = None
+    postgres: Dict[str, object] = Field(default_factory=dict)
     queue_size: int = Field(10_000, gt=0)
     batch_size: int = Field(500, gt=0)
     flush_interval_seconds: float = Field(1.0, gt=0)
@@ -328,6 +330,27 @@ class UsageAuditConfig(BaseModel):
     audit_retention_per_account: int = Field(1000, ge=0)
     timezone: str = "local"
     inventory_ttl_seconds: float = Field(10.0, ge=0)
+
+    @field_validator("postgres")
+    @classmethod
+    def validate_postgres(cls, value: Dict[str, object]) -> Dict[str, object]:
+        if value:
+            from openviking.observability.usage_audit.postgres_schema import (
+                DEFAULT_SCHEMA,
+                validate_schema,
+            )
+            from openviking.storage.postgres_config import postgres_connection_options
+
+            values = dict(value)
+            validate_schema(values.pop("schema", DEFAULT_SCHEMA))
+            postgres_connection_options(values, context="usage/audit")
+        return value
+
+    @model_validator(mode="after")
+    def require_postgres_connection(self) -> "UsageAuditConfig":
+        if self.enabled and self.backend == "postgres" and not self.postgres:
+            raise ValueError("PostgreSQL usage/audit requires postgres connection settings")
+        return self
 
 
 class UsageReporterSinkConfig(BaseModel):
