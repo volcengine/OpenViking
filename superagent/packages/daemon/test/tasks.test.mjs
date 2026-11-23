@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
-import { moveToTrash, scanDir } from '../src/task-dirs.mjs';
+import { moveToTrash, scanDir, unsavedWork } from '../src/task-dirs.mjs';
 
 // A worker that finishes when the test says so, after doing what the test
 // scripted for that turn (a report, an input arriving mid-turn, ...).
@@ -194,6 +194,70 @@ describe('TaskManager', () => {
     tasks.stop('t1', 'Alice said stop');
     assert.equal(tasks.rounds('t1').at(-1).outcome, 'stopped');
     assert.throws(() => tasks.route('t1', [row()], 'owner'), (error) => error.code === 'task_ended' && /t1 was stopped\. Work on it again is a new task: task_create with follows=t1/.test(error.message));
+  });
+
+  it('ends a round its worker reports blocked, and takes the task up again when what blocked it is cleared', async (t) => {
+    const { tasks, executor, relayed, activities } = setup(t);
+    tasks.create({ rows: [row({ thread_id: 'omt_1', content: '修一下 slugify 并推到 main' })], title: 'slugify 修复', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'blocked', summary: '没有仓库写权限，修复在本地分支 fix/slugify 上推不上去', draft: '修好了，但没有写权限，推不上去', artifacts: ['fix/slugify'] });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    const task = tasks.get('t1');
+    assert.equal(task.status, 'blocked');
+    assert.ok(task.ended_at_ms, 'the round is over');
+    assert.equal(tasks.isLive(task), false);
+    assert.deepEqual(tasks.rounds('t1').map((round) => round.outcome), ['blocked']);
+    assert.match(relayed[0].item.text, /^\[task report\] task=t1 state=blocked title="slugify 修复" requester=Alice\n/);
+    assert.equal(tasks.heldDirs().has(task.workdir), false, 'its directory is swept like any ended task\'s');
+    assert.match(tasks.hintFor({ chatId: 'oc_a', threadId: 'omt_1', content: 'x', senderId: 'ou_alice' }),
+      /t1 \[blocked 0m ago\] "slugify 修复" last asked: "修一下 slugify 并推到 main" \(same thread\)/);
+    assert.throws(() => tasks.route('t1', [row({ thread_id: 'omt_1' })], 'context'), (error) => error.code === 'task_ended');
+    tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' });
+
+    assert.equal(tasks.route('t1', [row({ thread_id: 'omt_1', content: '权限开好了，再推一下' })], 'owner', { requester: 'Alice' }).status, 'running');
+    assert.deepEqual(activities.filter((entry) => entry.kind === 'task.reopened').map((entry) => entry.metadata),
+      [{ task: 't1', round: 2, from: 'blocked', workdir: 'kept', session: 'kept' }]);
+    assert.match(executor.turns[1].prompt, new RegExp([
+      '^\\[task t1\\] Round 2: a new request on this task, from Alice\\. Your previous round ended blocked, and the requester was told why; this request takes the same work up again\\.',
+      '\\[chat=oc_a msg=om_\\d+ event=e\\d+\\] 权限开好了，再推一下',
+      'Why the previous round ended:',
+      '\\| 没有仓库写权限，修复在本地分支 fix/slugify 上推不上去',
+      'Before you start, check whether what stopped the previous round is resolved, [^\\n]*If it still stands in the way, report blocked again with what is missing now\\.',
+    ].join('\\n')));
+    assert.equal(executor.turns[1].task.native_session, tasks.get('t1').session_id, 'the session carries on');
+  });
+
+  it('ends the tasks a daemon from before left blocked, with their round, when their worker last moved them', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { db, tasks, executor, inbox, workspace } = setup(t, { now: () => now });
+    for (const [index, state] of ['blocked', 'needs_user', 'blocked'].entries()) {
+      tasks.create({ rows: [row()], title: state, runtime: 'pi' });
+      tasks.report(`t${index + 1}`, { state, summary: 'x', question: state === 'needs_user' ? '选 A 还是 B？' : '' });
+      executor.turns[index].finish({ text: '' });
+      await settle();
+      now += day;
+    }
+    // What a daemon from before left: blocked tasks live with their round
+    // open, and t3 from before rounds, with none.
+    db.exec("UPDATE tasks SET ended_at_ms = NULL WHERE status = 'blocked'");
+    db.exec("UPDATE task_rounds SET ended_at_ms = NULL, outcome = NULL WHERE task_id = 't1'");
+    db.exec("DELETE FROM task_rounds WHERE task_id = 't3'");
+    const moved = ['t1', 't3'].map((id) => tasks.get(id).updated_at_ms);
+    now += 10 * day;
+    const logged = [];
+    const logger = { info: (event, fields) => logged.push([event, fields]), warn() {}, error() {} };
+    const restarted = new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '', now: () => now, logger });
+    t.after(() => restarted.shutdown());
+    assert.deepEqual(['t1', 't2', 't3'].map((id) => [restarted.get(id).status, restarted.get(id).ended_at_ms]),
+      [['blocked', moved[0]], ['waiting', null], ['blocked', moved[1]]]);
+    assert.deepEqual(['t1', 't3'].map((id) => restarted.rounds(id).map((round) => [round.outcome, round.ended_at_ms])),
+      [[['blocked', moved[0]]], [['blocked', moved[1]]]]);
+    assert.deepEqual(logged, [['tasks_blocked_ended', { tasks: 2 }]]);
+    assert.deepEqual(restarted.overview().live.map((task) => task.id), ['t2'], 'only the question waiting for a person is live');
+    assert.deepEqual(restarted.workingSet().map((task) => task.id), ['t2', 't3', 't1']);
+    new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '', logger }).shutdown();
+    assert.equal(logged.length, 1, 'once');
   });
 
   it('starts a round from the task record when its directory and session were cleaned up, or its session grew too large', async (t) => {
@@ -511,6 +575,75 @@ describe('TaskManager', () => {
     tasks.config.taskDirBudgetGb = 0;
     assert.deepEqual(await tasks.sweepDirs().then(({ pruned, removed }) => [pruned, removed]), [[], []], '0 turns the budget off');
   });
+
+  it('keeps a directory whose repository holds work that exists nowhere else past its age, and deletes it last past the budget',
+    { skip: spawnSync('git', ['--version']).status !== 0 && 'no git' }, async (t) => {
+      const day = 86_400_000;
+      let now = Date.parse('2026-11-01T00:00:00Z');
+      const warned = [];
+      const logger = { info() {}, warn: (event, fields) => warned.push([event, fields]), error() {} };
+      const { tasks, executor, workspace } = setup(t, { now: () => now, logger });
+      const git = (cwd, ...args) => {
+        const result = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args],
+          { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull } });
+        assert.equal(result.status, 0, result.stderr);
+      };
+      const remote = path.join(workspace, 'remote.git');
+      const seed = path.join(workspace, 'seed');
+      git(workspace, 'init', '-q', '--bare', remote);
+      git(workspace, 'clone', '-q', remote, seed);
+      fs.writeFileSync(path.join(seed, 'a.js'), 'a');
+      fs.writeFileSync(path.join(seed, '.gitignore'), 'node_modules/\n');
+      git(seed, 'add', '.');
+      git(seed, 'commit', '-qm', 'a');
+      git(seed, 'push', '-q', 'origin', 'HEAD:main');
+      // A commit of each task's own (the same content in the same second
+      // would be the commit another task pushed).
+      const commit = (repo) => {
+        git(repo, 'checkout', '-qb', 'fix');
+        fs.writeFileSync(path.join(repo, 'b.js'), repo);
+        git(repo, 'add', '.');
+        git(repo, 'commit', '-qm', 'b');
+      };
+      // What each task left in its clone.
+      const leaves = [
+        ['pushed', (repo) => { commit(repo); git(repo, 'push', '-q', 'origin', 'fix'); }],
+        ['unpushed', commit],
+        ['uncommitted', (repo) => fs.writeFileSync(path.join(repo, 'a.js'), 'changed')],
+        ['untracked', (repo) => fs.writeFileSync(path.join(repo, 'notes.md'), 'n')],
+      ];
+      for (const [index, [title, leave]] of leaves.entries()) {
+        tasks.create({ rows: [row()], title, runtime: 'pi' });
+        const repo = path.join(tasks.get(`t${index + 1}`).workdir, 'repo');
+        git(workspace, 'clone', '-q', '-b', 'main', remote, repo);
+        fs.mkdirSync(path.join(repo, 'node_modules'));
+        fs.writeFileSync(path.join(repo, 'node_modules', 'dep.js'), 'x');
+        leave(repo);
+        tasks.report(`t${index + 1}`, { state: 'blocked', summary: title });
+        executor.turns[index].finish({ text: '' });
+        await settle();
+        now += 60_000;
+      }
+      now += 15 * day;
+      const swept = await tasks.sweepDirs();
+      assert.deepEqual([swept.removed, swept.kept, swept.pruned], [['t1'], ['t2', 't3', 't4'], ['t2', 't3', 't4']],
+        'only what is pushed goes for its age; the others lose their dependency folders only');
+      assert.deepEqual(warned, []);
+      tasks.config.taskDirBudgetGb = 1e-12;
+      assert.deepEqual((await tasks.sweepDirs()).removed, ['t2', 't3', 't4'], 'past the budget, the longest ended first');
+      assert.deepEqual(warned.map(([event, fields]) => [event, path.basename(fields.dir), fields.repos.map((repo) => repo.reason)]),
+        [['task_dir_removed_unsaved', 't2', ['unpushed']], ['task_dir_removed_unsaved', 't3', ['uncommitted']], ['task_dir_removed_unsaved', 't4', ['uncommitted']]]);
+
+      // A worktree or submodule is a repository too; a repository git cannot
+      // answer for may hold such work, a `.git` it does not take for one holds none.
+      const worktree = path.join(workspace, 'wt');
+      fs.mkdirSync(worktree);
+      fs.writeFileSync(path.join(worktree, '.git'), 'gitdir: /elsewhere\n');
+      assert.deepEqual((await scanDir(workspace)).repos.filter((repo) => repo === worktree), [worktree]);
+      const failing = (stderr) => async () => { throw Object.assign(new Error('git failed'), { stderr }); };
+      assert.deepEqual(await unsavedWork(['/r'], { git: failing('') }), [{ repo: '/r', reason: 'unknown' }]);
+      assert.deepEqual(await unsavedWork(['/r'], { git: failing('fatal: not a git repository (or any of the parent directories): .git') }), []);
+    });
 
   it('answers a progress question: what one person asked for, how long it has worked and what became of its result', async (t) => {
     const { tasks, executor, db } = setup(t);

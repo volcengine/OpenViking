@@ -56,7 +56,6 @@ function state(task, now) {
   }
   if (task.status === 'queued') return `排队 ${since(task.updated_at_ms, now)}`;
   if (task.status === 'waiting') return `等 ${task.requester_name ?? '请求人'} 回复 ${since(task.updated_at_ms, now)}`;
-  if (task.status === 'blocked') return `受阻 ${since(task.updated_at_ms, now)}`;
   return `${STATUS[task.status] ?? task.status} · ${since(task.ended_at_ms ?? task.updated_at_ms, now)}前`;
 }
 
@@ -66,31 +65,41 @@ function line(task, now) {
   return `${task.id} ${state(task, now)}「${oneLine(task.title, 40)}」${task.requester_name ?? '未知'} · ${where(task)}${task.round > 1 ? ` · ${task.round} 次请求` : ''}${task.parent_id ? ` · 跟进 ${task.parent_id}` : ''}${delivery}`;
 }
 
+// The tasks that have not ended, by what they are doing: a worker on them
+// (running, or queued for a slot), or a question waiting for a person.
+function liveCounts(live) {
+  const count = (...statuses) => live.filter((task) => statuses.includes(task.status)).length;
+  return [['运行中', count('running')], ['排队', count('queued')], ['等待回复', count('waiting')]];
+}
+
 // The one line /status adds when there are tasks at work.
 export function taskStatusLine(tasks) {
   if (!tasks) return '';
   const { live } = tasks.overview({ recent: 0 });
   if (live.length === 0) return '';
-  const count = (status) => live.filter((task) => task.status === status).length;
-  const parts = [['运行中', count('running')], ['排队', count('queued')], ['等待回复', count('waiting')], ['受阻', count('blocked')]]
-    .filter(([, n]) => n > 0).map(([label, n]) => `${label} ${n}`);
+  const parts = liveCounts(live).filter(([, n]) => n > 0).map(([label, n]) => `${label} ${n}`);
   return `后台任务：${parts.join(' · ')}（/tasks 查看）`;
 }
 
+function section(lines, title, tasks, now) {
+  if (tasks.length === 0) return;
+  lines.push('', title);
+  for (const task of tasks.slice(0, LIVE_SHOWN)) lines.push(line(task, now));
+  if (tasks.length > LIVE_SHOWN) lines.push(`…另有 ${tasks.length - LIVE_SHOWN} 个`);
+}
+
+// Tasks with a worker on them first, then the questions waiting for a
+// person, the latest asked first: a question nobody answers never takes the
+// place of work being done.
 function overviewText(tasks, now) {
   const { live, ended, total, slots, disk } = tasks.overview({ recent: RECENT });
   if (total === 0) return `还没有后台任务。\n${USAGE}`;
-  const lines = [`后台任务：进行中 ${live.length} · 共 ${total} 个 · worker 槽位 ${slots.used}/${slots.of}（跟进预留 ${slots.reserved}/${slots.reservedOf}）`];
+  const counts = liveCounts(live).map(([label, n]) => `${label} ${n}`).join(' · ');
+  const lines = [`后台任务：${counts} · 共 ${total} 个 · worker 槽位 ${slots.used}/${slots.of}（跟进预留 ${slots.reserved}/${slots.reservedOf}）`];
   if (disk) lines.push(`任务目录占用 ${formatBytes(disk.bytes)}${disk.budget > 0 ? `（上限 ${formatBytes(disk.budget)}）` : ''}`);
-  if (live.length) {
-    lines.push('', '进行中');
-    for (const task of live.slice(0, LIVE_SHOWN)) lines.push(line(task, now));
-    if (live.length > LIVE_SHOWN) lines.push(`…另有 ${live.length - LIVE_SHOWN} 个`);
-  }
-  if (ended.length) {
-    lines.push('', '最近结束');
-    for (const task of ended) lines.push(line(task, now));
-  }
+  section(lines, '进行中', [...live.filter((task) => task.status === 'running'), ...live.filter((task) => task.status === 'queued')], now);
+  section(lines, '等待回复', live.filter((task) => task.status === 'waiting').sort((a, b) => b.updated_at_ms - a.updated_at_ms), now);
+  section(lines, '最近结束', ended, now);
   lines.push('', USAGE);
   return lines.join('\n');
 }
@@ -160,7 +169,7 @@ export function executeTasksCommand(command, { event, connectors, tasks, now = D
     const taskId = rest[0].toLowerCase();
     const task = tasks.get(taskId);
     if (!task) return { ok: false, text: `没有任务 ${taskId}。` };
-    if (['done', 'dropped', 'failed', 'stopped'].includes(task.status)) {
+    if (!tasks.isLive(task)) {
       return { ok: false, text: `${taskId} 已结束（${STATUS[task.status] ?? task.status}），无需停止。` };
     }
     const reason = rest.slice(1).join(' ');
