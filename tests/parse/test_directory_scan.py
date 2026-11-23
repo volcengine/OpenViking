@@ -134,17 +134,45 @@ class TestScanDirectoryClassification:
     def test_processable_includes_parser_files(
         self, tmp_tree: Path, registry: ParserRegistry
     ) -> None:
-        result: DirectoryScanResult = scan_directory(tmp_tree, registry=registry, strict=False)
-        processable_rel = [f.rel_path for f in result.processable]
-        assert "readme.md" in processable_rel
-        assert "doc.html" in processable_rel
-        assert "note.txt" in processable_rel
-        # AnyDoc Office/EPUB and Zip parsers
-        assert "report.docx" in processable_rel
-        assert "data.xlsx" in processable_rel
-        assert "book.epub" in processable_rel
-        assert "slides.pptx" in processable_rel
-        assert "bundle.zip" in processable_rel
+        additional_files = {
+            "docs/spec.markdown",
+            "docs/readme.mdown",
+            "web/page.htm",
+            "text/log.text",
+            "media/image.bmp",
+        } | {
+            f"office/document.{ext}"
+            for ext in (
+                "doc",
+                "docm",
+                "odt",
+                "rtf",
+                "xls",
+                "xlsm",
+                "xlsb",
+                "ods",
+                "csv",
+                "ppt",
+                "pps",
+            )
+        }
+        for relative in additional_files:
+            path = tmp_tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"sample")
+
+        result = scan_directory(tmp_tree, registry=registry, strict=False)
+        expected = {
+            "readme.md",
+            "doc.html",
+            "note.txt",
+            "report.docx",
+            "data.xlsx",
+            "book.epub",
+            "slides.pptx",
+            "bundle.zip",
+        } | additional_files
+        assert expected <= {item.rel_path for item in result.processable}
 
     def test_processable_includes_code_or_config(
         self, tmp_tree: Path, registry: ParserRegistry

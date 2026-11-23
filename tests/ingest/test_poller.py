@@ -1,103 +1,59 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""One failing session must not stop ingest for every other session."""
+"""A failed session append must leave other logs free to advance."""
 
-from __future__ import annotations
+from contextlib import closing
 
-from types import SimpleNamespace
-
-from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
+from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.poller import IngestPoller
+from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking.ingest.sources.hermes import HermesSource
+from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
+from tests.ingest.test_replay import _FakeSDK
 
 
-class _Source:
-    cursor_kind = BYTE_OFFSET
+async def test_tick_keeps_polling_other_sessions_when_one_fails(tmp_path, monkeypatch):
+    for name in ("bad", "good"):
+        (tmp_path / f"{name}.jsonl").write_text(
+            f'{{"role": "user", "content": "{name} message"}}\n'
+        )
+    config = IngestHarnessConfig(enabled=True, paths=[str(tmp_path)])
+    source = HermesSource(config, fallback_user="tester")
+    sdk = _FakeSDK()
+    append = sdk.batch_add_messages
+    failures = {"import__hermes__bad", "import__hermes__good"}
+    attempted = []
 
-    def __init__(self, refs):
-        self.refs = refs
-        self.reads = []
+    async def flaky_append(session_id, messages):
+        attempted.append(session_id)
+        if session_id in failures:
+            raise ConnectionError("session backend unavailable")
+        return await append(session_id, messages)
 
-    def discover_sessions(self):
-        return list(self.refs)
+    monkeypatch.setattr(sdk, "batch_add_messages", flaky_append)
+    with closing(CursorStore(tmp_path / "state")) as store:
+        replayer = SessionReplayer(ConversationReplayClient(sdk), store)
+        poller = IngestPoller([("hermes", config, source)], replayer)
+        await poller._tick()
+        assert set(attempted) == failures
+        assert sdk.batches == []
+        for name in ("bad", "good"):
+            item = store.get("hermes", name)
+            assert item is not None
+            assert item.cursor.offset == 0
+            assert item.pending_count == 1
+            assert not item.needs_commit
 
-    def read_messages(self, ref, cursor, limit):
-        self.reads.append(ref.native_session_id)
-        offset = cursor.offset if cursor else 0
-        # One message on the first read, then EOF so _poll_session terminates.
-        if self.reads.count(ref.native_session_id) == 1:
-            message = NormalizedMessage(role="user", text="hello")
-            return [message], Cursor(BYTE_OFFSET, {"offset": offset + 1})
-        return [], Cursor(BYTE_OFFSET, {"offset": offset})
-
-
-class _Store:
-    def __init__(self):
-        self.cursors = {}
-
-    def get_cursor(self, harness, native_session_id, cursor_kind):
-        return self.cursors.get((harness, native_session_id))
-
-    def get(self, harness, native_session_id):
-        return None
-
-
-class _Replayer:
-    def __init__(self, failing):
-        self.failing = failing
-        self.attempted = []
-        self.appended = []
-        self.store = _Store()
-
-    def ov_session_id(self, harness, native_session_id):
-        return f"import__{harness}__{native_session_id}"
-
-    async def reconcile(self, harness, ref):
-        return True
-
-    async def append_batch(self, harness, ref, messages, from_cursor, new_cursor):
-        self.attempted.append(ref.native_session_id)
-        if ref.native_session_id in self.failing:
-            raise RuntimeError("session backend unavailable")
-        self.appended.append(ref.native_session_id)
-        return len(messages)
-
-    async def maybe_commit_on_threshold(self, harness, ref, threshold, keep_recent_count=0):
-        return False
-
-
-def _config():
-    return SimpleNamespace(
-        poll_interval_seconds=5.0,
-        commit=SimpleNamespace(commit_token_threshold=6000, keep_recent_count=0),
-    )
-
-
-def _ref(native_session_id):
-    return SessionRef(
-        harness="hermes",
-        native_session_id=native_session_id,
-        locator=f"/tmp/{native_session_id}.jsonl",
-    )
-
-
-async def test_tick_keeps_polling_other_sessions_when_one_fails():
-    source = _Source([_ref("bad"), _ref("good")])
-    replayer = _Replayer(failing={"bad"})
-    poller = IngestPoller([("hermes", _config(), source)], replayer)
-
-    await poller._tick()
-
-    assert replayer.attempted == ["bad", "good"]
-    assert replayer.appended == ["good"]
-    assert ("hermes", "good") in poller._dirty
-
-
-async def test_tick_returns_when_every_session_fails():
-    source = _Source([_ref("bad")])
-    replayer = _Replayer(failing={"bad"})
-    poller = IngestPoller([("hermes", _config(), source)], replayer)
-
-    await poller._tick()
-
-    assert replayer.attempted == ["bad"]
-    assert poller._dirty == {}
+        failures.remove("import__hermes__good")
+        await poller._tick()
+        [(session_id, messages)] = sdk.batches
+        assert session_id == "import__hermes__good"
+        assert [message["parts"][0]["text"] for message in messages] == ["good message"]
+        good = store.get("hermes", "good")
+        bad = store.get("hermes", "bad")
+        assert good is not None and bad is not None
+        assert good.cursor.offset == (tmp_path / "good.jsonl").stat().st_size
+        assert good.pending_count == 0
+        assert good.needs_commit
+        assert bad.cursor.offset == 0
+        assert bad.pending_count == 1

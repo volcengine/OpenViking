@@ -52,10 +52,9 @@ async def test_sdk_health(http_client):
 # ===================================================================
 
 
-async def test_sdk_add_resource(http_client):
+async def test_sdk_add_resource(http_client, tmp_path):
     client, service = http_client
-    f = TEST_TMP_DIR / "sdk_sample.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_sample.md"
     f.write_text(SAMPLE_MD_CONTENT)
 
     result = await client.add_resource(path=str(f), wait=True)
@@ -109,10 +108,9 @@ def test_sdk_maps_conflict_error_envelope():
     assert exc_info.value.code == "CONFLICT"
 
 
-async def test_sdk_add_skill_from_local_file(http_client):
+async def test_sdk_add_skill_from_local_file(http_client, tmp_path):
     client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_skill.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_skill.md"
     f.write_text(
         """---
 name: sdk-skill
@@ -124,24 +122,24 @@ description: SDK localhost upload test
     )
 
     result = await client.add_skill(data=str(f), wait=True)
-    assert "root_uri" in result
-    assert "uri" in result
-    assert result["root_uri"] == result["uri"]
-    assert result["uri"].startswith("viking://user/sdk_test_user/skills/")
+    root = "viking://user/sdk_test_user/skills/sdk-skill"
+    assert result["root_uri"] == result["uri"] == root
+    assert "# SDK Skill" in await client.read(f"{root}/SKILL.md")
 
 
-async def test_sdk_import_ovpack_from_local_file(http_client):
+async def test_sdk_import_ovpack_from_local_file(http_client, tmp_path):
     client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_import.ovpack"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_import.ovpack"
     f.write_bytes(build_ovpack_bytes())
 
-    uri = await client.import_ovpack(
-        str(f),
-        parent="viking://resources/imported/",
-        on_conflict="overwrite",
-    )
-    assert uri.startswith("viking://resources/imported/")
+    parent = "viking://resources/imported"
+    uri = await client.import_ovpack(str(f), parent=parent)
+    assert uri == f"{parent}/pkg"
+    assert await client.read(f"{uri}/content.md") == "# Demo\n"
+
+    f.write_bytes(build_ovpack_bytes(files={"content.md": b"# Replacement\n"}))
+    assert await client.import_ovpack(str(f), parent=parent, on_conflict="skip") == uri
+    assert await client.read(f"{uri}/content.md") == "# Demo\n"
 
 
 async def test_sdk_wait_processed(http_client):
@@ -181,8 +179,8 @@ async def test_sdk_mkdir_with_description_sets_abstract(http_client):
 
     assert await client.abstract(uri) == description
 
-    await client.mkdir(uri)
-
+    with pytest.raises(ConflictError):
+        await client.mkdir(uri)
     assert await client.abstract(uri) == description
 
 

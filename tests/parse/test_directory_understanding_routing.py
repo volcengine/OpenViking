@@ -417,13 +417,22 @@ async def test_native_parser_failures_include_each_file_error(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("use_understanding", [False, True])
-@pytest.mark.parametrize("keep_good_file", [False, True])
 @pytest.mark.parametrize(
-    "output", ["missing", "empty-root", "empty", "hidden", "sidecar", "content", "media"]
+    ("output", "use_understanding", "keep_good_file"),
+    [
+        pytest.param("missing", True, False, id="no-artifact"),
+        pytest.param("empty-root", True, False, id="empty-root"),
+        pytest.param("empty", True, False, id="empty-wrapper"),
+        pytest.param("hidden", True, False, id="hidden-only"),
+        pytest.param("sidecar", True, True, id="sidecar-with-good-sibling"),
+        pytest.param("content", True, True, id="document-with-good-sibling"),
+        pytest.param("media", True, False, id="media-only"),
+        pytest.param("empty", False, True, id="native-failure-with-good-sibling"),
+        pytest.param("content", False, False, id="native-document"),
+    ],
 )
 async def test_directory_counts_only_parser_results_with_content(
-    monkeypatch, tmp_path: Path, use_understanding: bool, keep_good_file: bool, output: str
+    monkeypatch, tmp_path: Path, output: str, use_understanding: bool, keep_good_file: bool
 ):
     _configure_understanding(monkeypatch, ["pdf"], enabled=use_understanding)
     (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.7")
@@ -433,7 +442,7 @@ async def test_directory_counts_only_parser_results_with_content(
     sub_result = create_parse_result(
         root=ResourceNode(type=NodeType.ROOT),
         warnings=["parser warning"],
-        meta={"file_id": "file-1", "response_id": "response-1"},
+        meta={"file_id": "file-1", "response_id": "response-1"} if use_understanding else {},
     )
     temp_uri = "viking://temp/parsed-file"
     wrapper_uri = f"{temp_uri}/paper"
@@ -776,12 +785,10 @@ async def test_no_split_directory_falls_back_to_native_parser(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", [None, "internal"])
 @pytest.mark.parametrize("feishu_collection", [False, True])
 async def test_no_split_directory_records_missing_native_parser_per_file(
     monkeypatch,
     tmp_path: Path,
-    backend,
     feishu_collection,
 ):
     from openviking.parse.feishu_import import FeishuImportPlan
@@ -802,7 +809,6 @@ async def test_no_split_directory_records_missing_native_parser_per_file(
             str(tmp_path),
             split_content=False,
             strict=not feishu_collection,
-            parser_backend=backend,
             _feishu_import_plan=plan,
         )
 

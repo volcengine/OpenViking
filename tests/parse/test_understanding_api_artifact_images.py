@@ -176,9 +176,10 @@ async def test_unpack_artifact_supports_local_output_store(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("title", ["Title ", "Title\t\n", "Title\u00a0\u3000"])
 @pytest.mark.parametrize("backend", ["agfs", "local"])
-async def test_title_whitespace_uses_one_artifact_root(tmp_path, title, backend):
+async def test_title_whitespace_uses_one_artifact_root(tmp_path, backend):
+    title = "Title \t\n\u00a0\u3000"
+
     class TrimmingFS(_FakeVikingFS):
         async def mkdir(self, uri, exist_ok=False):
             self.dirs.add(uri.strip())
