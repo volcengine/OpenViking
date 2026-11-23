@@ -16,6 +16,10 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
     parse_remote_search_result,
 )
+from openviking.storage.vectordb.collection.vikingdb_catalog import VikingDBCatalog
+from openviking.storage.vectordb.collection.vikingdb_item_search import (
+    prepare_vikingdb_data_request,
+)
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
     ClientForDataApiWithApiKey,
@@ -46,6 +50,7 @@ class VolcengineApiKeyCollection(ICollection):
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
         self.index_name = self.meta_data.get("IndexName", "default")
+        self._catalog = VikingDBCatalog(self, self.index_name)
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> ConnectionError:
@@ -172,7 +177,10 @@ class VolcengineApiKeyCollection(ICollection):
             normalized["op"] = "time_range"
         return normalized
 
-    def _data_post(self, path: str, data: Dict[str, Any]):
+    def _data_post(self, path: str, data: Dict[str, Any], *, include_catalog: bool = False):
+        data = prepare_vikingdb_data_request(
+            path, data, meta=None, hide_catalog=not include_catalog
+        )
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
@@ -238,13 +246,17 @@ class VolcengineApiKeyCollection(ICollection):
                 result.agg = data
         return result
 
-    def _base_data_payload(self, index_name: Optional[str] = None) -> Dict[str, Any]:
+    def _base_data_payload(
+        self, index_name: Optional[str] = None, *, partition_by: str | None = None
+    ) -> Dict[str, Any]:
         payload = {
             "project": self.project_name,
             "collection_name": self.collection_name,
         }
         if index_name:
             payload["index_name"] = index_name
+        if partition_by is not None:
+            payload["partition_by"] = partition_by
         return payload
 
     def update(
@@ -272,6 +284,12 @@ class VolcengineApiKeyCollection(ICollection):
             "ScalarIndex": schema.get("ScalarIndex", []),
             "FullText": schema.get("FullText", []),
         }
+
+    def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        return self._catalog.execute(request)
+
+    def search_item_groups(self, index_name: str, **kwargs: Any) -> Dict[str, Any]:
+        return self._catalog.search_item_groups(index_name, **kwargs)
 
     def close(self):
         pass
@@ -328,29 +346,31 @@ class VolcengineApiKeyCollection(ICollection):
         }
         return self._data_post(path, data)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/update"
         data = {
-            **self._base_data_payload(),
+            **self._base_data_payload(partition_by=partition_by),
             "data": data_list,
             "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
-    def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
+    def fetch_data(
+        self, primary_keys: List[Any], *, partition_by: str | None = None
+    ) -> FetchDataInCollectionResult:
         path = "/api/vikingdb/data/fetch_in_collection"
         data = {
-            **self._base_data_payload(),
+            **self._base_data_payload(partition_by=partition_by),
             "ids": primary_keys,
             "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/delete"
         data = {
-            **self._base_data_payload(),
+            **self._base_data_payload(partition_by=partition_by),
             "ids": primary_keys,
         }
         return self._data_post(path, data)

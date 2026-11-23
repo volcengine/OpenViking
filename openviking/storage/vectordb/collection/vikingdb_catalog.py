@@ -74,8 +74,19 @@ def _eq(field: str, values: list[Any]) -> dict[str, Any]:
 
 
 class VikingDBCatalog:
-    def __init__(self, collection):
+    def __init__(self, collection, index_name: str, *, schema: dict[str, Any] | None = None):
         self.collection = collection
+        self.index_name = index_name
+        self._schema = schema
+        self._empty_text = (
+            {"content": ""}
+            if schema is None
+            else {
+                field["FieldName"]: ""
+                for field in schema.get("Fields", [])
+                if field.get("FieldType") == "text"
+            }
+        )
         self._locks_guard = threading.Lock()
         self._scope_locks = WeakValueDictionary()
 
@@ -119,7 +130,10 @@ class VikingDBCatalog:
             result = self.collection._data_post(
                 "/api/vikingdb/data/fetch_in_collection",
                 self._body(
-                    partition_by=scope, ids=ids[start : start + _BATCH_SIZE], output_fields=fields
+                    partition_by=scope,
+                    ids=ids[start : start + _BATCH_SIZE],
+                    output_fields=fields,
+                    ignore_unknown_fields=True,
                 ),
             )
             if not isinstance(result.get("fetch"), list):
@@ -134,8 +148,8 @@ class VikingDBCatalog:
         result = self.collection._data_post(
             "/api/vikingdb/data/search/scalar",
             self._body(
-                index_name=self.collection.catalog_index_name,
-                field="id",
+                index_name=self.index_name,
+                field="level",
                 order="asc",
                 filter=_and(_eq("account_id", [scope]), _eq("level", [CATALOG_LEVEL]), condition),
                 **kwargs,
@@ -170,14 +184,14 @@ class VikingDBCatalog:
         return self._scan(scope, {**_eq("uri", [uri]), "para": "-d=-1"})
 
     def _write(self, rows: list[dict[str, Any]]) -> None:
-        empty_text = {
-            f["FieldName"]: ""
-            for f in self.collection.meta_data.get("Fields", [])
-            if f.get("FieldType") == "text"
-        }
         for start in range(0, len(rows), _BATCH_SIZE):
-            self.collection.upsert_data(
-                [{**empty_text, **row} for row in rows[start : start + _BATCH_SIZE]]
+            self.collection._data_post(
+                "/api/vikingdb/data/upsert",
+                self._body(
+                    data=[{**self._empty_text, **row} for row in rows[start : start + _BATCH_SIZE]],
+                    ttl=0,
+                    ignore_unknown_fields=self._schema is not None,
+                ),
             )
 
     def _delete(self, scope: str, ids: list[str]) -> None:
@@ -192,18 +206,18 @@ class VikingDBCatalog:
         pending = dict(expected)
         delay = 0.1
         while pending:
-            keys = list(pending)
-            for start in range(0, len(keys), _BATCH_SIZE):
-                ids = keys[start : start + _BATCH_SIZE]
+            uris = list(pending)
+            for start in range(0, len(uris), _BATCH_SIZE):
+                batch = uris[start : start + _BATCH_SIZE]
                 page = self._search(
                     scope,
-                    _eq("id", ids),
+                    {**_eq("uri", batch), "para": "-d=0"},
                     limit=_BATCH_SIZE,
                     output_fields=["id", "uri", "item_uuids", "item_attrs"],
                 )
                 indexed = {str(item["id"]): item.get("fields", {}) for item in page}
-                for key in ids:
-                    row, visible = pending[key], indexed.get(key)
+                for uri in batch:
+                    row, visible = pending[uri], indexed.get(_id(scope, uri))
                     if row is None:
                         matches = visible is None
                     else:
@@ -218,7 +232,7 @@ class VikingDBCatalog:
                             and visible.get("item_attrs") == row.get("item_attrs")
                         )
                     if matches:
-                        pending.pop(key)
+                        pending.pop(uri)
             if pending:
                 if time.monotonic() >= deadline:
                     raise VikingDBException(
@@ -234,24 +248,28 @@ class VikingDBCatalog:
         if node_type not in ("file", "dir"):
             raise ValueError("Invalid Catalog node_type")
         row = {
+            **self._empty_text,
             "id": _id(scope, uri),
             "account_id": scope,
             "uri": uri,
             "level": CATALOG_LEVEL,
             "type": node_type,
         }
-        for field in self.collection.meta_data.get("Fields", []):
-            if field.get("FieldType") == "text":
-                row[field["FieldName"]] = ""
+        if self._schema is None:
+            # Reject unsupported declarations at the first write on the data API.
+            row.update(item_uuids=[], item_attrs=[])
         return row
 
-    def _resolve(self, scope: str, uris: list[str], mode: str) -> dict[str, Any]:
+    def _resolve(self, scope: str, uris: list[str], mode: str | None) -> dict[str, Any]:
         chains = {}
         for uri in uris:
             chain = []
             current = uri
             while current:
                 chain.append(current)
+                if mode is None:
+                    # API-key callers only need to check the exact declared root.
+                    break
                 current = current.rsplit("/", 1)[0]
             chains[uri] = chain
         ids = list(dict.fromkeys(_id(scope, uri) for chain in chains.values() for uri in chain))
@@ -277,10 +295,10 @@ class VikingDBCatalog:
         rows = undo["rows"]
         for row in rows:
             self._validate_row(scope, row)
-        added = [_id(scope, _uri(uri)) for uri in undo["added_uris"]]
+        added = [_uri(uri) for uri in undo["added_uris"]]
         self._write(rows)
-        self._delete(scope, added)
-        self._wait_visible(scope, {**dict.fromkeys(added), **{r["id"]: r for r in rows}})
+        self._delete(scope, [_id(scope, uri) for uri in added])
+        self._wait_visible(scope, {**dict.fromkeys(added), **{r["uri"]: r for r in rows}})
 
     def _move_subtree(self, scope: str, source: str, target: str) -> dict[str, Any]:
         if source == target:
@@ -327,11 +345,55 @@ class VikingDBCatalog:
         try:
             self._write(list(moved.values()))
             self._delete(scope, source_ids)
-            self._wait_visible(scope, {**dict.fromkeys(source_ids), **moved})
+            self._wait_visible(
+                scope,
+                {
+                    **dict.fromkeys(previous[key]["uri"] for key in source_ids),
+                    **{row["uri"]: row for row in moved.values()},
+                },
+            )
         except Exception:
             self._restore(scope, undo)
             raise
         return {"moved_nodes": len(moved), "undo": undo}
+
+    def search_item_groups(
+        self,
+        index_name: str,
+        *,
+        dense_vector: list[float] | None = None,
+        sparse_vector: dict[str, float] | None = None,
+        filters: dict[str, Any] | None = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: float | None = None,
+        filter_only: bool = False,
+    ) -> dict[str, Any]:
+        from .vikingdb_item_search import (
+            _has_item_attrs,
+            build_item_group_request,
+            parse_item_group_result,
+        )
+
+        request = build_item_group_request(
+            self._schema,
+            project=self.collection.project_name,
+            collection_name=self.collection.collection_name,
+            index_name=index_name,
+            dense_vector=dense_vector,
+            sparse_vector=sparse_vector,
+            filters=filters,
+            max_groups=max_groups,
+            aggregation=aggregation,
+            filter_only=filter_only,
+        )
+        if _has_item_attrs(filters):
+            compiled = self.compile_item_filter(request["partition"], filters)
+            if compiled is False:
+                return {"groups": []}
+            request["filter"] = compiled
+        result = self.collection._data_post("/api/vikingdb/data/search/vector", request)
+        return parse_item_group_result(result, score_threshold=score_threshold)
 
     def compile_item_filter(self, scope: str, condition: dict[str, Any]) -> dict[str, Any] | bool:
         """Translate root-attribute predicates into effective identity predicates.
@@ -396,9 +458,11 @@ class VikingDBCatalog:
 
         return rewrite(condition)
 
-    def _schema_mode(self) -> str:
-        mode = catalog_mode(self.collection.meta_data)
-        fields = {f["FieldName"]: f for f in self.collection.meta_data.get("Fields", [])}
+    def _schema_mode(self) -> str | None:
+        if self._schema is None:
+            return None
+        mode = catalog_mode(self._schema)
+        fields = {f["FieldName"]: f for f in self._schema.get("Fields", [])}
         required = {"id": "string", "account_id": "string", "level": "int64", "type": "string"}
         if mode is None or any(
             fields.get(name, {}).get("FieldType") != kind for name, kind in required.items()
@@ -416,9 +480,13 @@ class VikingDBCatalog:
         with self._scope_lock(scope):
             return self._execute(request, scope, mode)
 
-    def _execute(self, request: dict[str, Any], scope: str, mode: str) -> dict[str, Any]:
+    def _execute(self, request: dict[str, Any], scope: str, mode: str | None) -> dict[str, Any]:
         op = request["op"]
         if op in ("capabilities", "configure"):
+            if mode is None:
+                raise NotImplementedError(
+                    "VikingDB API keys only support record-level Catalog operations"
+                )
             if request.get("item_identity_mode", mode) != mode:
                 raise NotImplementedError(
                     "VikingDB inheritance mode is fixed by the pre-created collection schema"
@@ -469,7 +537,10 @@ class VikingDBCatalog:
         if op not in ("declare_item", "validate_resource_update", "delete_subtree"):
             raise NotImplementedError(f"VikingDB Catalog operation is not supported: {op}")
         uri = _uri(request["uri"])
-        own = self._fetch(scope, [_id(scope, uri)]).get(_id(scope, uri))
+        own = None
+        if op != "delete_subtree":
+            node_id = _id(scope, uri)
+            own = self._fetch(scope, [node_id]).get(node_id)
         if op == "declare_item":
             if own is None or own.get("type") != "dir":
                 raise ValueError("Item declarations require a directory Catalog node")
@@ -489,7 +560,7 @@ class VikingDBCatalog:
             else:
                 own = {**own, "item_uuids": ids, "item_attrs": attrs}
                 self._write([own])
-            self._wait_visible(scope, {own["id"]: own})
+            self._wait_visible(scope, {uri: own})
             return {
                 "uri": uri,
                 "item_uuid": own["item_uuids"][0],
@@ -512,10 +583,10 @@ class VikingDBCatalog:
                     ):
                         raise ValueError("item_attrs cannot change after an Item is declared")
                 return {"valid": True, "has_item": bool(own and own.get("item_uuids"))}
-            ids = [
-                r["id"] for r in rows if not (request.get("preserve_item_root") and r["uri"] == uri)
+            removed = [
+                r for r in rows if not (request.get("preserve_item_root") and r["uri"] == uri)
             ]
-            self._delete(scope, ids)
-            self._wait_visible(scope, dict.fromkeys(ids))
+            self._delete(scope, [r["id"] for r in removed])
+            self._wait_visible(scope, dict.fromkeys(r["uri"] for r in removed))
             return {}
         raise NotImplementedError(f"VikingDB Catalog operation is not supported: {op}")

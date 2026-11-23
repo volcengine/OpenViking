@@ -11,6 +11,9 @@ from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb.collection.volcengine_clients import ClientForDataApiWithApiKey
+from openviking.storage.vectordb_adapters import create_collection_adapter
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 def matches(row, condition):
@@ -166,6 +169,44 @@ def test_declarations_are_stable_and_separate_from_semantic_upserts(collection):
     assert [r.id for r in result.data] == [record_id]
     assert collection.aggregate_data("catalog-index", filters=account_filter).agg == {"_total": 1}
     assert collection.client.calls[-1][2]["partition_by"] == "a"
+
+
+def test_api_key_catalog_declares_and_replays_exact_root(monkeypatch):
+    records = RecordAPI()
+    monkeypatch.setattr(ClientForDataApiWithApiKey, "do_req", records.do_req)
+    adapter = create_collection_adapter(
+        VectorDBBackendConfig(
+            backend="volcengine",
+            index_name="catalog-index",
+            volcengine={"api_key": "test-only", "host": "https://unused.invalid"},
+        )
+    )
+    root = "viking://resources/declared"
+    expected = {"uri": root, "item_uuid": "uuid-a", "item_attrs": ["kind=case"]}
+    assert declare(adapter, root, "uuid-a", item_attrs=["kind=case"]) == expected
+    assert declare(adapter, root, "retry") == expected
+    assert call(adapter, "resolve", uris=[root])["data"][0]["item_uuid"] == "uuid-a"
+    assert call(adapter, "resolve", scope="other", uris=[root])["data"][0]["item_uuids"] == []
+
+    assert all(path.startswith("/api/vikingdb/data/") for _, path, _ in records.calls)
+    writes = [body for _, path, body in records.calls if path.endswith("/upsert")]
+    assert len(writes) == 2
+    assert not any(body["ignore_unknown_fields"] for body in writes)
+    assert writes[-1]["data"][0]["item_uuids"] == ["uuid-a"]
+    assert writes[-1]["data"][0]["item_attrs"] == ["kind=case"]
+    fetches = [body for _, path, body in records.calls if path.endswith("/fetch_in_collection")]
+    assert all(len(body["ids"]) == 1 for body in fetches)
+    assert {body["partition_by"] for body in fetches} == {"a", "other"}
+    for _, path, body in records.calls:
+        if path.endswith("/search/scalar"):
+            assert body["partition"] == "a"
+            assert body["field"] == "level"
+            assert body["filter"]["conds"][-1] == {
+                "op": "must",
+                "field": "uri",
+                "conds": ["/resources/declared"],
+                "para": "-d=0",
+            }
 
 
 @pytest.mark.parametrize("mode,expected", [("union", ["child", "parent"]), ("shadow", ["child"])])

@@ -8,7 +8,11 @@ import math
 from typing import Any
 
 from openviking.storage.errors import VikingDBException
-from openviking.storage.vectordb.collection.vikingdb_catalog import catalog_mode
+from openviking.storage.vectordb.collection.vikingdb_catalog import (
+    CATALOG_LEVEL,
+    catalog_mode,
+    is_account_sharded,
+)
 
 
 def _partition_values(condition: Any) -> set[str]:
@@ -30,6 +34,34 @@ def _partition_values(condition: Any) -> set[str]:
     return set()
 
 
+def prepare_vikingdb_data_request(
+    path: str, data: dict[str, Any], *, meta: dict[str, Any] | None, hide_catalog: bool
+) -> dict[str, Any]:
+    is_search = path.startswith("/api/vikingdb/data/search/")
+    is_query = is_search or path == "/api/vikingdb/data/agg"
+    # The API-key client forwards the known scope. The platform owns the schema.
+    sharded = is_account_sharded(meta) if meta is not None else None
+    if is_query and sharded is not False:
+        scopes = _partition_values(data.get("filter"))
+        scope = scopes.pop() if len(scopes) == 1 else None
+        partition_key = "partition" if is_search else "partition_by"
+        if (sharded and scope is None) or data.get(partition_key, scope) != scope:
+            raise ValueError("VikingDB partitioned queries require one account_id scope")
+        if scope is None:
+            return data
+        data = {**data, partition_key: scope}
+    elif sharded and ("ids" in data or path.endswith("/update")) and not data.get("partition_by"):
+        raise ValueError("VikingDB partitioned point operations require partition_by")
+    if is_query and hide_catalog:
+        hidden = {"op": "must_not", "field": "level", "conds": [CATALOG_LEVEL]}
+        condition = data.get("filter")
+        data = {
+            **data,
+            "filter": {"op": "and", "conds": [condition, hidden]} if condition else hidden,
+        }
+    return data
+
+
 def _has_item_attrs(condition: Any) -> bool:
     if isinstance(condition, list):
         return any(_has_item_attrs(c) for c in condition)
@@ -40,7 +72,7 @@ def _has_item_attrs(condition: Any) -> bool:
 
 
 def build_item_group_request(
-    meta: dict[str, Any],
+    meta: dict[str, Any] | None,
     *,
     project: str,
     collection_name: str,
@@ -61,16 +93,17 @@ def build_item_group_request(
     if type(max_groups) is not int or max_groups <= 0:
         raise ValueError("Item group limit must be a positive integer")
 
-    mode = catalog_mode(meta)
-    if mode is None:
-        raise NotImplementedError(
-            "VikingDB Item search requires a pre-created account-partitioned collection "
-            "with inherited item_uuids and non-inherited item_attrs"
-        )
-    if mode != "union":
-        raise NotImplementedError(
-            "The VikingDB group_by protocol currently requires union inheritance"
-        )
+    if meta is not None:
+        mode = catalog_mode(meta)
+        if mode is None:
+            raise NotImplementedError(
+                "VikingDB Item search requires a pre-created account-partitioned collection "
+                "with inherited item_uuids and non-inherited item_attrs"
+            )
+        if mode != "union":
+            raise NotImplementedError(
+                "The VikingDB group_by protocol currently requires union inheritance"
+            )
     partitions = _partition_values(filters)
     if len(partitions) != 1:
         raise ValueError("VikingDB Item search requires one unconditional account_id equality")

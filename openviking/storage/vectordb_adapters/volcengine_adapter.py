@@ -54,6 +54,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         self._api_key = api_key
         self._host = host
         self._project_name = project_name
+        self.supports_partition_scope = bool(api_key)
 
     @classmethod
     def from_config(cls, config: Any):
@@ -186,10 +187,12 @@ class VolcengineCollectionAdapter(CollectionAdapter):
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         data_list = [self._normalize_record_for_write(item) for item in data_list]
         collection = self.get_collection()
-        result = collection.update_data(data_list)
+        result = collection.update_data(
+            data_list, **({"partition_by": partition_by} if partition_by is not None else {})
+        )
         if isinstance(result, dict):
             updated = result.get("updated")
             primary_keys = result.get("primary_keys")

@@ -9,9 +9,12 @@ from openviking.storage.errors import VikingDBException
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb.collection.volcengine_clients import ClientForDataApiWithApiKey
+from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
     VikingDBPrivateCollectionAdapter,
 )
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 class RecordingClient:
@@ -63,19 +66,34 @@ def group(item_id="a", score=1.7, attrs=None):
     }
 
 
+@pytest.mark.parametrize("backend", ["vikingdb", "volcengine"])
 @pytest.mark.parametrize("aggregation", ["max", "sum"])
-def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggregation):
+def test_adapter_uses_platform_groups_without_extra_io(
+    collection, aggregation, backend, monkeypatch
+):
     typed_group = group()
     typed_group["found_records"][0]["fields"] = {"context_type": "skill"}
     collection.client.result = {"groups": [typed_group, group("b", 0.8, ["kind=child"])]}
-    adapter = VikingDBPrivateCollectionAdapter(
-        host="https://unused.invalid",
-        headers=None,
-        project_name="project",
-        collection_name="context",
-        index_name="index",
-    )
-    adapter._collection = Collection(collection)
+    if backend == "volcengine":
+        monkeypatch.setattr(ClientForDataApiWithApiKey, "do_req", collection.client.do_req)
+        adapter = create_collection_adapter(
+            VectorDBBackendConfig(
+                backend="volcengine",
+                name="context",
+                project="project",
+                index_name="index",
+                volcengine={"api_key": "test-only", "host": "https://unused.invalid"},
+            )
+        )
+    else:
+        adapter = VikingDBPrivateCollectionAdapter(
+            host="https://unused.invalid",
+            headers=None,
+            project_name="project",
+            collection_name="context",
+            index_name="index",
+        )
+        adapter._collection = Collection(collection)
     result = adapter.search_item_groups(
         query_vector=[0.1, 0.2],
         sparse_query_vector={"1": 0.7},
@@ -87,6 +105,9 @@ def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggre
     method, path, request = collection.client.calls[0]
     assert (method, path) == ("POST", "/api/vikingdb/data/search/vector")
     assert request["partition"] == "tenant-a"
+    assert request["collection_name"] == "context"
+    assert request["project"] == "project"
+    assert request["index_name"] == "index"
     assert "partition_by" not in request
     assert request["sparse_vector"] == {"1": 0.7}
     assert request["group_by"] == {
@@ -99,7 +120,11 @@ def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggre
     }
     assert "limit" not in request
     assert "udf" not in request
-    assert request["filter"]["conds"][0] == {
+    condition = request["filter"]
+    if backend == "volcengine":
+        condition, hidden = condition["conds"]
+        assert hidden == {"op": "must_not", "field": "level", "conds": [-1]}
+    assert condition["conds"][0] == {
         "op": "must",
         "field": "account_id",
         "conds": ["tenant-a"],
