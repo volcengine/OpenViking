@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mount, key, act } from './helpers/command-console-dom.mjs';
+
+const findCommand = {
+  name: 'find',
+  inputText: 'ov find',
+  description: 'Find resources',
+  usage: 'ov find <query>',
+  params: [{ label: '<query>', description: 'Query', required: true }],
+};
+
+test('outside press closes the assist before host handlers stop propagation', async () => {
+  const view = await mount({ value: '/' });
+  const outside = document.createElement('button');
+  document.body.append(outside);
+  outside.addEventListener('pointerdown', (event) => event.stopPropagation());
+  try {
+    assert.ok(view.container.querySelector('[role="listbox"]'));
+    await act(() =>
+      outside.dispatchEvent(
+        new window.PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      ),
+    );
+    assert.ok(!view.container.querySelector('[role="listbox"]'));
+    assert.equal(view.input.value, '/');
+  } finally {
+    outside.remove();
+    await view.dispose();
+  }
+});
+
+test('Escape closes the assist after focus leaves the input', async () => {
+  const view = await mount({
+    value: '/find',
+    commands: [findCommand],
+  });
+  const outside = document.createElement('button');
+  document.body.append(outside);
+  try {
+    await key(view.input, 'ArrowDown');
+    await act(() => outside.focus());
+    assert.ok(document.activeElement === outside);
+    assert.ok(
+      view.container.querySelector('.ov-command-console__assist-detail'),
+    );
+    assert.equal((await key(outside, 'Escape')).defaultPrevented, true);
+    assert.ok(
+      !view.container.querySelector('.ov-command-console__assist-detail'),
+    );
+    assert.equal(view.input.value, '/find');
+    await act(() => view.input.focus());
+    await key(view.input, 'ArrowDown');
+    assert.ok(
+      view.container.querySelector('.ov-command-console__assist-detail'),
+    );
+  } finally {
+    outside.remove();
+    await view.dispose();
+  }
+});

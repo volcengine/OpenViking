@@ -19,31 +19,30 @@ export function useCommandConsoleAssistPosition(
     const dismiss = () =>
       onDismiss(anchor.querySelector('textarea')?.value ?? '');
     const outside = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !panel.contains(event.target) &&
-        !anchor.contains(event.target)
-      )
-        dismiss();
+      const path = event.composedPath();
+      if (!path.includes(panel) && !path.includes(anchor)) dismiss();
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) return;
       if (
-        event.key === 'Escape' &&
-        (anchor.contains(document.activeElement) ||
-          panel.contains(document.activeElement))
-      ) {
-        event.preventDefault();
-        dismiss();
-      }
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.key !== 'Escape'
+      )
+        return;
+      event.preventDefault();
+      dismiss();
     };
-    document.addEventListener('pointerdown', outside);
+    // Capture outside presses before host shells can stop propagation. The
+    // composed path also keeps clicks inside a shadow-root host from being
+    // mistaken for outside interaction.
+    document.addEventListener('pointerdown', outside, true);
     document.addEventListener('keydown', escape);
     if (!('popover' in HTMLElement.prototype)) {
       panel.removeAttribute('popover');
       panel.dataset.inline = '';
       return () => {
-        document.removeEventListener('pointerdown', outside);
+        document.removeEventListener('pointerdown', outside, true);
         document.removeEventListener('keydown', escape);
       };
     }
@@ -105,7 +104,7 @@ export function useCommandConsoleAssistPosition(
       observer.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
-      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('pointerdown', outside, true);
       document.removeEventListener('keydown', escape);
       anchor.style.setProperty('anchor-name', previousAnchor);
       if (panel.matches(':popover-open')) panel.hidePopover();
