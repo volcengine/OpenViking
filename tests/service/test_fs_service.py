@@ -1889,9 +1889,13 @@ async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(requ
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("wait", [False, True])
+async def test_resource_rm_skips_memory_reference_cleanup(
     request_context,
     monkeypatch,
+    recursive,
+    wait,
 ):
     cleanup = {
         "status": "success",
@@ -1900,13 +1904,14 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
             "viking://user/ryoma/memories/entities/动漫角色/不二周助-link-test2.md"
         ],
     }
-    viking_fs = _FakeVikingFS()
+    viking_fs = _FakeVikingFS(is_dir=recursive)
     link_service = _FakeResourceMemoryLinkService(cleanup)
     service = FSService(
         viking_fs=viking_fs,
         resource_memory_link_service=link_service,
     )
-    service._enqueue_delete_refresh = AsyncMock()
+    service._enqueue_delete_refresh = AsyncMock(return_value=fs_module.FreshnessAction.REFRESH_NOW)
+    service._wait_for_refresh = AsyncMock(return_value={})
 
     refreshed = []
 
@@ -1919,17 +1924,16 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
     )
 
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
-    result = await service.rm(uri, ctx=request_context, recursive=True)
+    result = await service.rm(uri, ctx=request_context, recursive=recursive, wait=wait)
 
-    assert link_service.calls == [{"ctx": request_context, "resource_uri": uri, "recursive": True}]
-    assert refreshed == [
-        {
-            "viking_fs": viking_fs,
-            "directory_uri": "viking://user/ryoma/memories/entities/动漫角色",
-            "ctx": request_context,
-        }
-    ]
-    assert result["memory_cleanup"] == cleanup
+    assert link_service.calls == []
+    assert refreshed == []
+    assert "memory_cleanup" not in result
+    assert viking_fs.rm_calls[0]["uri"] == uri
+    assert viking_fs.rm_calls[0]["recursive"] is recursive
+    service._enqueue_delete_refresh.assert_awaited_once()
+    assert service._enqueue_delete_refresh.await_args.kwargs["force_refresh"] is wait
+    assert service._wait_for_refresh.await_count == int(wait)
 
 
 @pytest.mark.asyncio
