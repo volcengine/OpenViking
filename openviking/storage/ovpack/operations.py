@@ -7,7 +7,7 @@ import json
 import os
 import zipfile
 from dataclasses import replace
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from openviking.core.namespace import (
     content_owner_context_for_uri,
@@ -272,6 +272,7 @@ async def import_ovpack(
     vector_mode: Optional[str] = None,
     vector_store=None,
     vector_config_resolver=None,
+    on_write: Callable[[str, bool], Awaitable[None]] | None = None,
 ) -> str:
     """
     Import .ovpack file to the specified parent path.
@@ -340,6 +341,8 @@ async def import_ovpack(
                 ctx=ctx,
             )
 
+        if on_write is not None:
+            await on_write(root_uri, False)
         if parent != "viking://" and not target_exists:
             await _ensure_parent_exists(viking_fs, parent, ctx)
 
@@ -360,6 +363,8 @@ async def import_ovpack(
             data = zf.read(safe_zip_path)
             await viking_fs.write_file_bytes(target_file_uri, data, ctx=import_ctx)
 
+    if on_write is not None:
+        await on_write(root_uri, True)
     logger.debug(
         "Successfully imported %s to %s",
         safe_path_for_log(str(file_path)),
@@ -664,6 +669,7 @@ async def restore_ovpack(
     vector_mode: Optional[str] = None,
     vector_store=None,
     vector_config_resolver=None,
+    on_write: Callable[[str, bool], Awaitable[None]] | None = None,
 ) -> str:
     """Restore a backup package to its original public scope roots."""
     if not os.path.exists(file_path):
@@ -731,6 +737,8 @@ async def restore_ovpack(
         ]
         content_members.sort(key=lambda member: (member[2] != "directory", member[3].count("/")))
 
+        if on_write is not None:
+            await on_write(root_uri, False)
         for _, safe_zip_path, kind, rel_path in content_members:
             manifest_entry = manifest_entries[rel_path]
             target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entry)
@@ -760,6 +768,8 @@ async def restore_ovpack(
                 }
             )
 
+    if on_write is not None:
+        await on_write(root_uri, True)
     logger.debug("Successfully restored backup %s", safe_path_for_log(str(file_path)))
 
     if vector_action == "restore":

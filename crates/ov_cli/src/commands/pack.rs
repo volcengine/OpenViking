@@ -7,6 +7,7 @@ pub async fn export(
     uri: &str,
     to: &str,
     include_vectors: bool,
+    async_task: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -15,6 +16,7 @@ pub async fn export(
             uri,
             to,
             include_vectors,
+            async_task,
             matches!(format, OutputFormat::Table),
         )
         .await?;
@@ -33,11 +35,17 @@ pub async fn backup(
     client: &HttpClient,
     to: &str,
     include_vectors: bool,
+    async_task: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let file_path = client
-        .backup_ovpack(to, include_vectors, matches!(format, OutputFormat::Table))
+        .backup_ovpack(
+            to,
+            include_vectors,
+            async_task,
+            matches!(format, OutputFormat::Table),
+        )
         .await?;
 
     let result = serde_json::json!({
@@ -55,6 +63,7 @@ pub async fn import(
     target: &str,
     on_conflict: Option<&str>,
     vector_mode: Option<&str>,
+    async_task: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -64,6 +73,7 @@ pub async fn import(
             target,
             on_conflict,
             vector_mode,
+            async_task,
             matches!(format, OutputFormat::Table),
         )
         .await?;
@@ -76,6 +86,7 @@ pub async fn restore(
     file_path: &str,
     on_conflict: Option<&str>,
     vector_mode: Option<&str>,
+    async_task: bool,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -84,6 +95,7 @@ pub async fn restore(
             file_path,
             on_conflict,
             vector_mode,
+            async_task,
             matches!(format, OutputFormat::Table),
         )
         .await?;

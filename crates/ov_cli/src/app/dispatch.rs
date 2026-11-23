@@ -358,22 +358,36 @@ pub(super) async fn dispatch(
             uri,
             to,
             include_vectors,
-        } => handlers::handle_export(uri, to, include_vectors, ctx).await,
+            async_task,
+        } => handlers::handle_export(uri, to, include_vectors, async_task, ctx).await,
         Commands::Backup {
             to,
             include_vectors,
-        } => handlers::handle_backup(to, include_vectors, ctx).await,
+            async_task,
+        } => handlers::handle_backup(to, include_vectors, async_task, ctx).await,
         Commands::Import {
             file_path,
             target_uri,
             on_conflict,
             vector_mode,
-        } => handlers::handle_import(file_path, target_uri, on_conflict, vector_mode, ctx).await,
+            async_task,
+        } => {
+            handlers::handle_import(
+                file_path,
+                target_uri,
+                on_conflict,
+                vector_mode,
+                async_task,
+                ctx,
+            )
+            .await
+        }
         Commands::Restore {
             file_path,
             on_conflict,
             vector_mode,
-        } => handlers::handle_restore(file_path, on_conflict, vector_mode, ctx).await,
+            async_task,
+        } => handlers::handle_restore(file_path, on_conflict, vector_mode, async_task, ctx).await,
         Commands::Wait => {
             let client = ctx.get_client();
             commands::system::wait(&client, ctx.output_format, ctx.compact).await

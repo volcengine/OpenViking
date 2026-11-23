@@ -1025,6 +1025,9 @@ pub(crate) enum Commands {
         /// Include dense vector snapshot when compatible metadata is available
         #[arg(long, default_value_t = false, help_heading = "Common options")]
         include_vectors: bool,
+        /// Run on the server as a task and wait for its result
+        #[arg(long = "async", help_heading = "Common options")]
+        async_task: bool,
     },
     /// [Data] Back up public OpenViking scopes as a restore-only .ovpack
     Backup {
@@ -1034,6 +1037,9 @@ pub(crate) enum Commands {
         /// Include dense vector snapshot when compatible metadata is available
         #[arg(long, default_value_t = false, help_heading = "Common options")]
         include_vectors: bool,
+        /// Run on the server as a task and wait for its result
+        #[arg(long = "async", help_heading = "Common options")]
+        async_task: bool,
     },
     /// [Data] Import .ovpack into target URI
     Import {
@@ -1059,6 +1065,9 @@ pub(crate) enum Commands {
             help_heading = "Common options"
         )]
         vector_mode: Option<String>,
+        /// Run on the server as a task and wait for its result
+        #[arg(long = "async", help_heading = "Common options")]
+        async_task: bool,
     },
     /// [Data] Restore a backup .ovpack to original public scope roots
     Restore {
@@ -1081,6 +1090,9 @@ pub(crate) enum Commands {
             help_heading = "Common options"
         )]
         vector_mode: Option<String>,
+        /// Run on the server as a task and wait for its result
+        #[arg(long = "async", help_heading = "Common options")]
+        async_task: bool,
     },
     // --- Interactive Tools ---
     /// [Interactive] Interactive TUI file explorer

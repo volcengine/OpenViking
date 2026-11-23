@@ -203,6 +203,10 @@ async def _initialize_runtime_state(
 
     async def install_write_guards():
         await _initialize_auth_plugin(app, service, config)
+        manager = app.state.api_key_manager
+        if manager is not None and config.get_effective_auth_mode() == "api_key":
+            service.pack.tasks.resolve_role = manager.get_registered_user_role
+            service.pack.tasks.resolve_groups = manager.get_user_group_ids
         await _initialize_ttl_adapter(app, service, config)
         from openviking.service.deletion import setup_deletion
 

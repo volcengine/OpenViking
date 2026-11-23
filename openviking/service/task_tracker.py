@@ -33,6 +33,7 @@ from openviking.service.task_domain import (
     SENSITIVE_TASK_KEYS,
     TERMINAL_TASK_STATUSES,
     TERMINAL_WORK_STATES,
+    DeletedTask,
     DeleteExpiredResult,
     QueueWorkSummary,
     TaskPatch,
@@ -326,6 +327,7 @@ class TaskTracker:
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
         # Bound after Compile storage initialization; shares the cleanup clock and batch size.
         self.compile_history_cleanup: Optional[Callable[..., Awaitable[int]]] = None
+        self.pack_artifact_cleanup: Optional[Callable[[DeletedTask], Awaitable[None]]] = None
         self._cancel_poll_task: Optional[asyncio.Task[Any]] = None
         self._work_index = TaskWorkIndex()
         self._running: ContextVar[tuple[str, str, str, bool] | None] = ContextVar(
@@ -467,6 +469,11 @@ class TaskTracker:
             limit=self.CLEANUP_BATCH,
         )
         for deleted in result.deleted:
+            if self.pack_artifact_cleanup is not None:
+                try:
+                    await self.pack_artifact_cleanup(deleted)
+                except Exception:
+                    logger.exception("Failed to clean up pack artifact for task %s", deleted.task_id)
             logger.info(
                 "[TaskTracker] deleted expired task task_id=%s account_id=%s user_id=%s",
                 deleted.task_id,

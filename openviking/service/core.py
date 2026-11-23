@@ -685,6 +685,7 @@ class OpenVikingService:
             vector_store=self._vikingdb_manager,
             vector_config_resolver=self._vector_config_resolver,
         )
+        get_task_tracker().pack_artifact_cleanup = self._pack_service.tasks.cleanup_expired
         self._search_service.set_viking_fs(self._viking_fs)
         self._resource_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -798,6 +799,11 @@ class OpenVikingService:
             self._queue_manager.get_queue(
                 self._queue_manager.REINDEX,
                 dequeue_handler=ReindexProcessor(self._viking_fs),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.PACK,
+                dequeue_handler=self._pack_service.tasks,
                 allow_create=True,
             )
             self._queue_manager.get_queue(

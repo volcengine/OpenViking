@@ -2,6 +2,18 @@
 
 OVPack API 用于导入、导出、备份和恢复 OpenViking 数据。
 
+## 异步执行
+
+四个接口默认在当前请求中返回文件或 URI。请求 JSON 显式传 `"wait": false` 时，返回
+`result.task_id`，使用 `GET /api/v1/tasks/{task_id}` 查询处理结果。
+异步导入和恢复通过 `POST /api/v1/resources/temp_upload` 上传文件时传
+`upload_mode=shared`。文件写入和所需的索引完成后，任务结果返回 URI。
+
+异步导出和备份完成后，任务结果包含 `download_path`、`filename` 和 `size`（字节数）。
+提交者使用原有鉴权向 `download_path` 发起 GET 请求下载包，包随成功任务保留 24 小时。
+CLI 的 `export`、`backup`、`import`、`restore` 可使用 `--async`，
+CLI 会等待任务完成，导出和备份会再下载到指定文件。
+
 ## API 参考
 
 ### export_ovpack

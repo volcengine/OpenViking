@@ -226,7 +226,7 @@ async fn stops_after_ten_failures_and_resets_counter_after_success() {
         }
         let count = replies.len();
         let (client, peer) = server(replies).await;
-        let result = bounded(client.wait_for_resource_task(
+        let result = bounded(client.wait_for_task_result(
             "task-import",
             std::future::pending(),
             Duration::from_millis(1),
@@ -260,7 +260,7 @@ async fn authentication_and_malformed_status_errors_include_recovery_command() {
         (200, json!({"status":"ok","result":{"status":"completed"}})),
     ] {
         let (client, peer) = server(vec![(status, response, 0)]).await;
-        let error = bounded(client.wait_for_resource_task(
+        let error = bounded(client.wait_for_task_result(
             "task-import",
             std::future::pending(),
             Duration::from_millis(1),
@@ -287,7 +287,7 @@ async fn authentication_and_malformed_status_errors_include_recovery_command() {
 #[tokio::test]
 async fn failed_tasks_are_terminal() {
     let (client, peer) = server(vec![(200, task("failed"), 0)]).await;
-    let error = bounded(client.wait_for_resource_task(
+    let error = bounded(client.wait_for_task_result(
         "task-import",
         std::future::pending(),
         Duration::from_millis(1),
@@ -309,7 +309,7 @@ async fn cancelled_tasks_surface_a_cancelled_code() {
         0,
     )])
     .await;
-    let error = bounded(client.wait_for_resource_task(
+    let error = bounded(client.wait_for_task_result(
         "task-import",
         std::future::pending(),
         Duration::from_millis(1),
@@ -344,7 +344,7 @@ async fn connection_failures_are_bounded() {
         None,
     );
     drop(listener);
-    let error = bounded(client.wait_for_resource_task(
+    let error = bounded(client.wait_for_task_result(
         "task-import",
         std::future::pending(),
         Duration::from_millis(1),

@@ -5,9 +5,10 @@
 import os
 import tempfile
 from typing import Literal, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.background import BackgroundTask
 
@@ -34,6 +35,7 @@ class ExportRequest(BaseModel):
 
     uri: str
     include_vectors: bool = False
+    wait: bool = True
 
 
 class BackupRequest(BaseModel):
@@ -42,6 +44,7 @@ class BackupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_vectors: bool = False
+    wait: bool = True
 
 
 class ImportRequest(BaseModel):
@@ -59,6 +62,7 @@ class ImportRequest(BaseModel):
     parent: str
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
     vector_mode: Optional[Literal["auto", "recompute", "require"]] = None
+    wait: bool = True
 
 
 class RestoreRequest(BaseModel):
@@ -69,6 +73,7 @@ class RestoreRequest(BaseModel):
     temp_file_id: str
     on_conflict: Optional[Literal["fail", "overwrite", "skip"]] = None
     vector_mode: Optional[Literal["auto", "recompute", "require"]] = None
+    wait: bool = True
 
 
 @router.post("/export")
@@ -83,6 +88,11 @@ async def export_ovpack(
 
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(body.uri), ctx)
+    if not body.wait:
+        result = await service.pack.tasks.submit(
+            "export", {"uri": uri, "include_vectors": body.include_vectors}, ctx
+        )
+        return Response(status="ok", result=result)
 
     # Create temp file for export
     temp_dir = tempfile.gettempdir()
@@ -134,6 +144,11 @@ async def backup_ovpack(
 ):
     """Back up all public OpenViking scopes as a restore-only .ovpack file."""
     service = get_service()
+    if body is not None and not body.wait:
+        result = await service.pack.tasks.submit(
+            "backup", {"include_vectors": body.include_vectors}, ctx
+        )
+        return Response(status="ok", result=result)
     temp_dir = tempfile.gettempdir()
     temp_file = os.path.join(temp_dir, f"backup_{os.urandom(16).hex()}.ovpack")
 
@@ -180,6 +195,11 @@ async def import_ovpack(
     parent = validate_request_viking_uri(
         resolve_path_variables(body.parent), ctx, field_name="parent"
     )
+    if not body.wait:
+        args = body.model_dump(exclude={"wait"})
+        args["parent"] = parent
+        result = await service.pack.tasks.submit("import", args, ctx)
+        return Response(status="ok", result=result)
 
     resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
     try:
@@ -205,6 +225,9 @@ async def restore_ovpack(
 ):
     """Restore a backup .ovpack file."""
     service = get_service()
+    if not body.wait:
+        result = await service.pack.tasks.submit("restore", body.model_dump(exclude={"wait"}), ctx)
+        return Response(status="ok", result=result)
     store = TempUploadStore.build(request.app.state.config)
     resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
 
@@ -221,3 +244,19 @@ async def restore_ovpack(
         await resolved.cleanup()
 
     return Response(status="ok", result={"uri": result})
+
+
+@router.get("/download/{task_id}")
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
+async def download_ovpack(
+    request: Request, task_id: str, ctx: RequestContext = Depends(get_request_context)
+):
+    filename, size, stream = await get_service().pack.tasks.download(task_id, ctx)
+    return StreamingResponse(
+        stream,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "Content-Length": str(size),
+        },
+    )

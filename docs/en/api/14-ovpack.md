@@ -2,6 +2,21 @@
 
 The OVPack API imports, exports, backs up, and restores OpenViking data.
 
+## Asynchronous operations
+
+By default, the four endpoints return the file or URI in the original response. Set
+`"wait": false` in the request JSON to receive `result.task_id` and query the outcome
+with `GET /api/v1/tasks/{task_id}`. For asynchronous import and restore, upload with
+`upload_mode=shared` on `POST /api/v1/resources/temp_upload`. The completed task
+returns the URI once files and required indexes are ready.
+
+Completed export and backup tasks return `download_path`, `filename`, and `size`
+in bytes. The submitting identity can GET `download_path` with standard
+authentication. The archive is retained with the completed task for 24 hours.
+The CLI's `export`, `backup`, `import`, and `restore` commands accept `--async`
+and wait for the result. Export and backup also download the archive to the
+specified local path.
+
 ## API Reference
 
 ### export_ovpack
