@@ -64,37 +64,47 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
             DirectoryDefinition(
                 path="memories",
                 abstract="User's long-term memory storage. Contains memory types like preferences, entities, events, managed hierarchically by type.",
-                overview="Browse user preferences, entities, events, and task memories, including cases, execution trajectories, and reusable experiences.",
+                overview="Use this directory to access user's personalized memories. Contains three main categories: "
+                "1) preferences-user preferences, 2) entities-entity memories, 3) events-event records.",
                 children=[
                     DirectoryDefinition(
                         path="preferences",
-                        abstract="User preferences organized by topic.",
-                        overview="Access when adapting communication, code style, workflows, or other choices to the user's preferences.",
+                        abstract="User's personalized preference memories. Stores preferences by topic (communication style, code standards, domain interests, etc.), "
+                        "one subdirectory per preference type, same-type preferences can be appended.",
+                        overview="Access when adjusting output style, following user habits, or providing personalized services. "
+                        "Examples: user prefers concise communication, code needs type annotations, focus on certain tech domains. "
+                        "Preferences organized by topic, same-type preferences aggregated in same subdirectory.",
                     ),
                     DirectoryDefinition(
                         path="entities",
-                        abstract="Long-term knowledge about people, projects, organizations, and other entities.",
-                        overview="Access for facts about a specific entity and its relationships to other entities.",
+                        abstract="Entity memories from user's world. Each entity has its own subdirectory, including projects, people, concepts, etc. "
+                        "Entities are important objects in user's world, can append additional information.",
+                        overview="Access when referencing user-related projects, people, concepts. "
+                        "Examples: OpenViking project, colleague Zhang San, certain technical concept. "
+                        "Each entity stored independently, can append updates.",
                     ),
                     DirectoryDefinition(
                         path="events",
-                        abstract="Records of important events, decisions, and milestones.",
-                        overview="Access when reviewing what happened, when it happened, or the context for a past decision.",
+                        abstract="User's event records. Each event has its own subdirectory, recording important events, decisions, milestones, etc. "
+                        "Events are time-independent, historical records not updated.",
+                        overview="Access when reviewing user history, understanding event context, or tracking user progress. "
+                        "Examples: decided to refactor memory system, completed a project, attended an event. "
+                        "Events are historical records, not updated once created.",
                     ),
                     DirectoryDefinition(
                         path="cases",
-                        abstract="Concrete task cases for training and evaluation.",
-                        overview="Access when looking for examples of comparable tasks, their context, and expected outcomes.",
+                        abstract="User's case memories. Stores concrete problem contexts and resolutions learned from sessions.",
+                        overview="Access when handling similar future problems. Cases are specific examples, separate from reusable patterns.",
                     ),
                     DirectoryDefinition(
                         path="trajectories",
-                        abstract="Recorded execution trajectories for completed tasks.",
-                        overview="Access to review how a task was carried out and what results it produced.",
+                        abstract="User's execution trajectory records. Stores end-to-end task execution traces when trajectory memory is enabled.",
+                        overview="Access when reviewing how a previous task was executed.",
                     ),
                     DirectoryDefinition(
                         path="experiences",
-                        abstract="Reusable experience distilled from task execution trajectories.",
-                        overview="Access for lessons from previous executions that can guide similar tasks.",
+                        abstract="User's generalized experience memories distilled from execution trajectories.",
+                        overview="Access when applying lessons learned from repeated execution trajectories.",
                     ),
                 ],
             ),
