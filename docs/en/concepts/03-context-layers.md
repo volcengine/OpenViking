@@ -148,11 +148,11 @@ API authentication guide covering OAuth 2.0, JWT tokens, and API keys.
 - `unsampled_entries`: direct entries not sampled, with `sampled + unsampled = total`.
 - `pending_child_changes`: direct-child change events not yet reflected in the current body (repeated changes to one child count separately).
 
-When the direct-entry count exceeds 32, OpenViking uses deterministic, order-preserving stable sampling. Repeated refreshes of an unchanged tree choose the same sample, reducing differences caused by sampling. Model-generated text can still change between refreshes.
+When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic, order-preserving stable sampling. Repeated refreshes of an unchanged tree choose the same sample, reducing differences caused by sampling. Model-generated text can still change between refreshes.
 
 `pending_child_changes > 0` means the body is still readable but is known to lag behind lower-level changes. A successful parent refresh resets the value to 0 as part of the new coverage metadata.
 
-Resource/skill parent refreshes are freshness-aware. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most 32. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
+Resource/skill parent refreshes are freshness-aware. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most `semantic.overview_sample_limit`. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
 
 ## Write Protection
 

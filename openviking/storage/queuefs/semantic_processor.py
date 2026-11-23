@@ -48,7 +48,6 @@ from openviking.service.task_tracker import get_task_tracker, run_tracked_operat
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context, get_task_context
 from openviking.storage.abstract_overview import (
-    DIRECTORY_SAMPLE_LIMIT,
     AbstractOverviewWriteResult,
     body_for_preview,
     deterministic_sample,
@@ -91,6 +90,8 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMHandle, VLMResolver
 
 logger = get_logger(__name__)
+
+_OVERVIEW_PROMPT_CHAR_BUDGET = 60_000
 
 _PERMANENT_STORAGE_ERRORS = (
     FileNotFoundError,
@@ -438,6 +439,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 # refresh/ingest bypasses the threshold for its requested root,
                 # not for every ancestor reached afterwards.
                 force_refresh=False,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
                 lock_timeout_secs=1.0,
             )
@@ -1171,7 +1173,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         completed_summaries = [s for s in file_summaries if s is not None]
-        sampled_summaries = deterministic_sample(completed_summaries, DIRECTORY_SAMPLE_LIMIT)
+        sampled_summaries = deterministic_sample(
+            completed_summaries, get_openviking_config().semantic.overview_sample_limit
+        )
         generated_content = await self._generate_overview(
             dir_uri,
             sampled_summaries,
@@ -1808,7 +1812,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
-        over_budget = estimated_size > semantic.max_overview_prompt_chars
+        over_budget = estimated_size > _OVERVIEW_PROMPT_CHAR_BUDGET
         entry_count = len(file_summaries) + len(children_abstracts)
         many_entries = entry_count > semantic.overview_batch_size
 
@@ -1840,8 +1844,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 estimated_size,
                 len(file_summaries),
             )
-            budget = semantic.max_overview_prompt_chars
-            budget -= len(children_abstracts_str)
+            budget = _OVERVIEW_PROMPT_CHAR_BUDGET - len(children_abstracts_str)
             per_file = max(100, budget // max(len(file_summaries), 1))
             truncated_lines = []
             for idx, item in enumerate(file_summaries, 1):

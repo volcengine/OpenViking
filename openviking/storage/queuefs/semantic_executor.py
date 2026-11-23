@@ -26,7 +26,6 @@ from openviking.service.task_work_index import (
     get_task_context,
 )
 from openviking.storage.abstract_overview import (
-    DIRECTORY_SAMPLE_LIMIT,
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
     body_for_preview,
@@ -44,6 +43,7 @@ from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
 from openviking_cli.utils import VikingURI
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -682,7 +682,9 @@ class SemanticTreeExecutor:
                 + [("file", uri) for uri in file_paths],
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
-            sampled_entries = deterministic_sample(direct_entries, DIRECTORY_SAMPLE_LIMIT)
+            sampled_entries = deterministic_sample(
+                direct_entries, get_openviking_config().semantic.overview_sample_limit
+            )
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
@@ -928,7 +930,9 @@ class SemanticTreeExecutor:
             [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
             key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
         )
-        primary = deterministic_sample(candidates, DIRECTORY_SAMPLE_LIMIT)
+        primary = deterministic_sample(
+            candidates, get_openviking_config().semantic.overview_sample_limit
+        )
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 

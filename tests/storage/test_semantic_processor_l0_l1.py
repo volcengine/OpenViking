@@ -62,6 +62,7 @@ async def test_memory_directory_write_error_contract(monkeypatch, error, expecte
             semantic=SimpleNamespace(
                 abstract_max_chars=256,
                 overview_max_chars=4000,
+                overview_sample_limit=32,
             )
         ),
     )

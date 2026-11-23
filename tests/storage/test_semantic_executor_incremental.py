@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import re
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,6 +20,14 @@ from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
+
+
+@pytest.fixture(autouse=True)
+def _semantic_config(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
 
 
 class _FakeVikingFS:
@@ -1195,7 +1204,7 @@ async def test_recursive_transfer_rebuild_generates_subtree_vectors(monkeypatch)
 @pytest.mark.asyncio
 async def test_content_copy_loads_only_sampled_existing_summaries(monkeypatch):
     root_uri = "viking://resources/archive"
-    file_paths = [f"{root_uri}/file-{idx:03}.txt" for idx in range(40)]
+    file_paths = [f"{root_uri}/{name}.txt" for name in "abcde"]
     fake_fs = _FakeVikingFS(
         tree={root_uri: [{"name": path.rsplit("/", 1)[-1], "isDir": False} for path in file_paths]},
         file_contents={path: path for path in file_paths},
@@ -1207,6 +1216,10 @@ async def test_content_copy_loads_only_sampled_existing_summaries(monkeypatch):
         fake_fs,
         transfer_summaries={path: f"summary-{path.rsplit('/', 1)[-1]}" for path in file_paths},
     )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=2)),
+    )
     executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
@@ -1215,23 +1228,19 @@ async def test_content_copy_loads_only_sampled_existing_summaries(monkeypatch):
         incremental_update=True,
         target_uri=root_uri,
         recursive=False,
-        changes={"added": [file_paths[4]]},
+        changes={"added": [file_paths[2]]},
         generation_trigger="content_copy",
     )
 
     await executor.run(root_uri)
 
-    (sampled_paths,) = processor.transfer_summary_calls
-    assert len(sampled_paths) == 32
-    assert sampled_paths[0] == file_paths[0]
-    assert sampled_paths[-1] == file_paths[-1]
-    assert file_paths[4] not in sampled_paths
+    assert processor.transfer_summary_calls == [[file_paths[0], file_paths[-1]]]
     assert processor.summarized_files == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
-    assert "file-000.txt" in overview.body
-    assert "file-039.txt" in overview.body
-    assert "file-004.txt" not in overview.body
-    assert overview.metadata["freshness"] == freshness_metadata(40, 32)
+    assert "a.txt" in overview.body
+    assert "e.txt" in overview.body
+    assert "c.txt" not in overview.body
+    assert overview.metadata["freshness"] == freshness_metadata(5, 2)
 
 
 @pytest.mark.asyncio

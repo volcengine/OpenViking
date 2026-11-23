@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
-DIRECTORY_SAMPLE_LIMIT = 32
 EMBEDDING_METADATA_FIELDS = ("directory",)
 _METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
 _MARKDOWN_URI_SAFE_ASCII = frozenset(
@@ -698,6 +697,7 @@ async def plan_abstract_overview_refresh(
     ctx: Optional[RequestContext],
     l0_body_changed: bool = True,
     force_refresh: bool = False,
+    overview_sample_limit: int = 32,
     refresh_ratio: float = 0.10,
     lock_timeout_secs: float = 0.0,
 ) -> FreshnessDecision:
@@ -737,6 +737,7 @@ async def plan_abstract_overview_refresh(
             total_entries=0,
             pending_before=0,
             current_change_count=changed_entries,
+            overview_sample_limit=overview_sample_limit,
             refresh_ratio=refresh_ratio,
             force_refresh=force_refresh,
         )
@@ -760,6 +761,7 @@ async def plan_abstract_overview_refresh(
                 total_entries=0,
                 pending_before=0,
                 current_change_count=changed_entries,
+                overview_sample_limit=overview_sample_limit,
                 refresh_ratio=refresh_ratio,
                 force_refresh=force_refresh,
             )
@@ -773,6 +775,7 @@ async def plan_abstract_overview_refresh(
             # counter is safer than losing an already-observed change.
             pending_before=max(int(item["pending_child_changes"]) for item in baselines),
             current_change_count=changed_entries,
+            overview_sample_limit=overview_sample_limit,
             refresh_ratio=refresh_ratio,
             force_refresh=force_refresh,
         )

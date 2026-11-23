@@ -50,7 +50,6 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     config = SimpleNamespace(
         vlm=vlm,
         semantic=SimpleNamespace(
-            max_overview_prompt_chars=20,
             overview_batch_size=2,
         ),
         output_language_override="en",
@@ -67,7 +66,7 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
             f"files={values['file_summaries']}|children={values['children_abstracts']}"
         ),
     )
-    children = [{"name": f"child-{index}", "abstract": "x" * 20} for index in range(3)]
+    children = [{"name": f"child-{index}", "abstract": "x" * 20_000} for index in range(3)]
 
     overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/root",
@@ -90,7 +89,6 @@ async def test_sampled_overview_prompt_describes_full_directory_coverage(monkeyp
     config = SimpleNamespace(
         vlm=vlm,
         semantic=SimpleNamespace(
-            max_overview_prompt_chars=10_000,
             overview_batch_size=32,
         ),
         output_language_override="en",
@@ -129,7 +127,6 @@ async def test_batched_overview_resolves_links_and_reuses_summaries_by_filename(
     config = SimpleNamespace(
         vlm=vlm,
         semantic=SimpleNamespace(
-            max_overview_prompt_chars=1,
             overview_batch_size=1,
         ),
         output_language_override="en",
@@ -149,7 +146,7 @@ async def test_batched_overview_resolves_links_and_reuses_summaries_by_filename(
     overview = await processor._generate_overview(
         "viking://resources/业务 docs",
         file_summaries=[
-            {"name": "first file (approved).md", "summary": "first summary"},
+            {"name": "first file (approved).md", "summary": "first summary " + "x" * 60_000},
             {"name": "第二章#file.md", "summary": "second summary"},
         ],
         children_abstracts=[],

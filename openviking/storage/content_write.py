@@ -1482,6 +1482,7 @@ class ContentWriteCoordinator:
                 dir_uri=root_uri,
                 changed_entries=changed_entries,
                 ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
                 force_refresh=force_refresh,
             )
