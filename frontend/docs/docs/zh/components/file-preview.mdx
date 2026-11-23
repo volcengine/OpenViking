@@ -437,7 +437,7 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### 路径与面包屑
 
-- 层级：`source.path` 按 `/` 拆成层级，协议前缀（如 `viking://`）显示在首层，最后一级是当前文件名。
+- 层级：`source.path` 按 `/` 拆成层级，协议前缀（如 `viking://`）显示在首层，最后一级是当前文件名。一级目录没有祖先层级，前缀显示在末段，例如 `viking://user` 显示为 `viking://user`。
 - URI 名称：URI 路径的每一段仅解码一次用于显示，编码的斜杠不会拆出新层级，无效编码保持原样。导航使用原始路径，普通文件路径及显式传入的标题、文件名按原文显示。
 - 没有路径：省略 `source.path` 时面包屑只显示文件名，也没有复制路径按钮。
 - 导航：每个祖先层级都是按钮，点击时把该层级的完整 URI（如 `viking://a/b`）传给 `operations.openParent`，不限于直接父级；没有 `operations.openParent` 时按钮禁用。
