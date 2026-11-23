@@ -48,7 +48,13 @@ export const record = (content, id = 'one') => ({
 
 export async function mount(props = {}, controlled = true, options = {}) {
   const container = document.createElement('div');
-  document.body.append(container);
+  const host = options.shadow ? document.createElement('div') : null;
+  if (host) {
+    host.attachShadow({ mode: options.shadow }).append(container);
+    document.body.append(host);
+  } else {
+    document.body.append(container);
+  }
   const root = createRoot(container);
   let current = { value: '', records: [], commands, ...props };
   function Host({ input }) {
@@ -78,7 +84,7 @@ export async function mount(props = {}, controlled = true, options = {}) {
     input: container.querySelector('textarea'),
     async dispose() {
       await act(() => root.unmount());
-      container.remove();
+      (host ?? container).remove();
     },
   };
 }
