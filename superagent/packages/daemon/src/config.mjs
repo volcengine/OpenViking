@@ -360,6 +360,10 @@ export function getConfig() {
     taskDirPruneDays: intEnv('OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS', 3, { min: 0, max: 3_650 }),
     taskDirRemoveDays: intEnv('OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS', 14, { min: 0, max: 3_650 }),
     taskDirBudgetGb: intEnv('OV_SUPERAGENT_TASK_DIR_BUDGET_GB', 20, { min: 0, max: 1_000_000 }),
+    // A task waiting for a person's answer with nothing for this many days
+    // leaves the working set the router's task hints draw on: only a reply
+    // to its messages, its thread or its id still finds it. 0 turns it off.
+    taskDormantDays: intEnv('OV_SUPERAGENT_TASK_DORMANT_DAYS', 5, { min: 0, max: 3_650 }),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),

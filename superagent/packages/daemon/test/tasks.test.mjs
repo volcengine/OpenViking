@@ -255,7 +255,8 @@ describe('TaskManager', () => {
       [[['blocked', moved[0]]], [['blocked', moved[1]]]]);
     assert.deepEqual(logged, [['tasks_blocked_ended', { tasks: 2 }]]);
     assert.deepEqual(restarted.overview().live.map((task) => task.id), ['t2'], 'only the question waiting for a person is live');
-    assert.deepEqual(restarted.workingSet().map((task) => task.id), ['t2', 't3', 't1']);
+    assert.deepEqual(restarted.workingSet().map((task) => task.id), ['t3', 't1'], 'and t2, waiting ten days, is dormant');
+    assert.equal(restarted.isDormant(restarted.get('t2')), true);
     new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '', logger }).shutdown();
     assert.equal(logged.length, 1, 'once');
   });
@@ -726,9 +727,9 @@ describe('TaskManager', () => {
     executor.turns[0].finish({ text: '' });
     await settle();
     const inThread = { chatId: 'oc_a', threadId: 'omt_9', senderId: 'ou_alice', scopeKey: origin.scope_key, content: '要' };
-    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice] "排查飞书名字泄露问题" now on: "排查飞书名字泄露" (same thread, waiting for this person)');
+    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice for 0m] "排查飞书名字泄露问题" now on: "排查飞书名字泄露" (same thread, waiting for this person)');
     const reply = { chatId: 'oc_a', threadId: null, senderId: 'ou_bob', scopeKey: 'lark:oc_a:', content: 'ok', parentId: origin.message_id };
-    assert.match(tasks.hintFor(reply, {}), /t1 \[waiting for Alice\] .*\(replies to its message\)/);
+    assert.match(tasks.hintFor(reply, {}), /t1 \[waiting for Alice for 0m\] .*\(replies to its message\)/);
     const sameChat = { chatId: 'oc_a', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_a:', content: '飞书名字泄露那个怎么样了' };
     assert.equal(tasks.hintFor(sameChat, {}), '', 'similar words alone point nowhere');
     const elsewhere = { chatId: 'oc_b', senderId: 'ou_alice', scopeKey: 'lark:oc_b:', content: '飞书名字泄露那个怎么样了' };
@@ -737,6 +738,58 @@ describe('TaskManager', () => {
     tasks.report('t1', { state: 'done', draft: 'ok' });
     tasks.setStatus('t1', 'done');
     assert.match(tasks.hintFor(inThread, {}), /t1 \[done 0m ago\] "排查飞书名字泄露问题" last asked: "排查飞书名字泄露" \(same thread\)/);
+  });
+
+  it('takes a question nobody answered for days out of the working set, and finds it again by a reply, its id or its answer', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-06T10:00:00Z');
+    const { tasks, executor, ingest } = setup(t, { now: () => now });
+    // On a Friday Alice asks in a direct chat, and the worker asks her back.
+    const dm = { chat_id: 'oc_dm', chat_type: 'p2p', scope_key: 'lark:oc_dm:' };
+    const origin = row({ ...dm, content: '帮我把飞书账号改名' });
+    ingest(origin);
+    tasks.create({ rows: [origin], title: '飞书账号改名', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'needs_user', question: '是哪个账号？' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    const fromAlice = (content, fields = {}) => ({ chatId: 'oc_dm', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_dm:', content, ...fields });
+    now += 3 * day;
+    assert.match(tasks.hintFor(fromAlice('工作号那个')), /t1 \[waiting for Alice for 3d\] "飞书账号改名" .*\(waiting for this person\)$/, 'on Monday it is still near');
+
+    now += 2 * day + 60_000;
+    assert.equal(tasks.isDormant(tasks.get('t1')), true);
+    assert.deepEqual(tasks.workingSet().map((task) => task.id), []);
+    assert.equal(tasks.hintFor(fromAlice('工作号那个')), '', 'not on every word she says in the chat');
+    assert.equal(tasks.hintFor({ ...fromAlice('飞书账号改名那个呢'), chatId: 'oc_b', scopeKey: 'lark:oc_b:' }, { owner: true }), '', 'nor on similar words elsewhere');
+    assert.match(tasks.hintFor(fromAlice('工作号那个', { parentId: origin.message_id })),
+      /t1 \[waiting for Alice for 5d\] .*\(replies to its message, waiting for this person\)$/);
+    assert.deepEqual(tasks.overview().live.map((task) => [task.id, task.dormant]), [['t1', true]], 'still live');
+    assert.equal(tasks.heldDirs().has(tasks.get('t1').workdir), true, 'its directory stays');
+    assert.deepEqual(tasks.list(), ['Also waiting, with nothing for days: t1 (5d). task_id= shows one.']);
+    assert.match(tasks.list({ query: '飞书账号改名' })[0], /^t1 \[waiting\] "飞书账号改名"/, 'a search looks past the working set');
+    tasks.config.taskDormantDays = 0;
+    assert.deepEqual(tasks.workingSet().map((task) => task.id), ['t1'], '0 turns it off');
+    delete tasks.config.taskDormantDays;
+
+    // Her answer goes on in the same round, and the task is back.
+    assert.equal(tasks.route('t1', [row({ ...dm, content: '工作号那个' })], 'owner').status, 'running');
+    assert.equal(tasks.get('t1').round, 1);
+    assert.deepEqual(tasks.workingSet().map((task) => task.id), ['t1']);
+  });
+
+  it('ranks tasks of equal weight by when they last moved, not when they were created', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, executor } = setup(t, { now: () => now });
+    for (const [index, state] of ['needs_user', 'done'].entries()) {
+      tasks.create({ rows: [row({ chat_id: `oc_${index}`, scope_key: `lark:oc_${index}:` })], title: '飞书账号改名', runtime: 'pi' });
+      tasks.report(`t${index + 1}`, { state, question: state === 'needs_user' ? '哪个账号？' : '', draft: 'x' });
+      executor.turns[index].finish({ text: '' });
+      await settle();
+      now += 2 * day;
+    }
+    const hint = tasks.hintFor({ chatId: 'oc_x', senderId: 'ou_owner', scopeKey: 'lark:oc_x:', content: '飞书账号改名' }, { owner: true });
+    assert.match(hint, /near this input: t2 \[done 2d ago\] [^·]*· t1 \[waiting for the requester for 4d\] /);
   });
 
   it('knows a reply to the message that relayed a task\'s result, whatever input the router decided it on', async (t) => {
