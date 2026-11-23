@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 import pytest
 
 from openviking.core.namespace_policy import (
+    SYSTEM_COMPILE_GLOBAL_ROOT,
     SYSTEM_EXAMPLE_SKILLS_ROOT,
     SYSTEM_FIXED_DIRECTORIES,
     SYSTEM_MEMORY_BUILTIN_ROOT,
@@ -107,6 +108,7 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
     assert all(
         viking_fs._uri_to_path(uri, ctx=ctx) in agfs.directories for uri in SYSTEM_FIXED_DIRECTORIES
     )
+    assert viking_fs._uri_to_path(SYSTEM_COMPILE_GLOBAL_ROOT, ctx=ctx) not in agfs.directories
     assert sorted(agfs.writes) == sorted([paths[reference_target], paths[memory_target]])
     assert agfs.files[paths[reference_target]] == b"\x00guide"
     assert agfs.files[paths[memory_target]] == b"new profile"

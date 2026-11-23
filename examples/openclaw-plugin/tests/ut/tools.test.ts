@@ -2051,10 +2051,10 @@ describe("Tool: ov_recall_trace", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 14 default tools", () => {
+  it("registers all 15 default tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(14);
+    expect(api.registerTool).toHaveBeenCalledTimes(15);
   });
 
   it("registers only resource query tools when enabledTools is resource_query", () => {

@@ -18,6 +18,17 @@ def tool_protocol(protocol: str) -> type[ToolProtocol]:
     return PROTOCOLS[protocol]
 
 
+def stream_failure(protocol: str, body: dict, reason: str, response_id: str = "") -> bytes:
+    """The error event that ends a relayed stream the provider broke off."""
+    adapter = tool_protocol(protocol)(body or {})
+    adapter.begin()
+    if response_id:
+        # The client knows the reply by the provider's ID, not by one the gateway makes up.
+        adapter.identifier = response_id
+    message = f"{reason}: the model provider stopped before the reply finished"
+    return b"".join(adapter.encode(event) for event in adapter.error(message, kind=reason))
+
+
 @dataclass
 class ResponseCapture:
     """The reply relayed to the client, as bookkeeping reads it.

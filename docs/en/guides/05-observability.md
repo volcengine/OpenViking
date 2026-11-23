@@ -572,6 +572,68 @@ The most common labels you will use while investigating dashboards are:
 - To inspect why one specific request was slow, where tokens went, or which stage blocked resource processing, use `telemetry`
 - To inspect whether request volume, error rates, or latency are degrading over time, use `/metrics`
 
+## Optional Kafka event reporting
+
+Install `openviking[reporting]` and enable both `server.observability.reporting.enabled`
+and `server.observability.reporting.telemetry.enabled` in `ov.conf`.
+The exporter reads Kafka connection, authentication and topic settings from
+`reporting.kafka`, and queue and deployment settings from `reporting.telemetry`.
+Reporting is disabled by default and export failures do not interrupt business requests.
+
+The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
+integer (default `1024`). Full queues, exhausted delivery retries and process
+termination can lose events. Delivery failures and dropped events produce sampled
+warnings containing counts only. This exporter is suitable for best-effort analytics;
+it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
+drain the queue before stopping the process.
+
+Deployments may set `account_id`, `resource_id` and `region` in `reporting.telemetry.deployment`.
+`OV_METRICS_ACCOUNT_ID`, `OV_RESOURCE_ID` and `OV_REGION` remain fallback values.
+Original space and member identities remain in `ov_account_id` and `ov_user_id`.
+Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
+only when the deployment knows who owns its model credentials. Otherwise the
+owner stays `unknown`. For mixed credentials, trusted provisioning should set
+`cost_bearer` (`ov`, `customer`, or `unknown`) on each VLM or embedding credential.
+The selected credential's metadata follows successful and failed calls, including
+failover candidates. An explicit `unknown` remains unknown; endpoint rules or a
+deployment default cannot relabel it. Only legacy calls without credential metadata
+use precise `telemetry.model_cost_bearers` rules and then the deployment default;
+conflicting rules stay `unknown`. Events exclude document content, prompts and API keys.
+
+Shared memory batches derive reporting ownership from the current input requests,
+not the long-lived timer's inherited request context. A model call shared by several
+commits is exported once with `source_task_ids` listing the known input Tasks;
+`task_id` and `request_id` are empty when there is no single confirmed owner. Do
+not fan out that call or charge its full token usage to every listed Task. File
+changes recover their trusted operation source when it is unambiguous; a write
+that actually combines multiple Tasks uses the same multi-source representation.
+Space/member identity still comes from the batch's request context. Incremental
+resource re-imports also emit a deletion event after each planned deletion succeeds.
+
+When ROOT provisions or rotates account model credentials through the configuration API,
+`cost_bearer` is persisted with each credential and reaches the selected VLM or embedding
+client. Model sections remain ROOT-only; account admins and members cannot set billing
+ownership through the configuration API.
+
+Example value for `server.observability.reporting` in `ov.conf`:
+
+```json
+{
+  "enabled": true,
+  "kafka": {
+    "bootstrap_servers": "broker.example:9092",
+    "topic": "metric-log"
+  },
+  "telemetry": {
+    "enabled": true
+  }
+}
+```
+
+To migrate from Nacos or an external reporting JSON file, move its `kafka` and
+`telemetry` sections into `ov.conf` and restart the kernel. Supply literal strings
+in `reporting`, including any Kafka credentials.
+
 ## Related Documentation
 
 - [Deployment](03-deployment.md) - server setup

@@ -66,7 +66,7 @@ def install_ttl_hook(viking_fs: "VikingFS", adapter: Optional["TTLAdapter"]) -> 
     if adapter is None:
         return
     viking_fs.set_post_write_hook(adapter.on_post_write)
-    logger.info("Installed TTL post-write hook")
+    logger.info("ttl post-write hook installed")
 
 
 def _entry_uri(entry: Any) -> Optional[str]:
@@ -99,8 +99,13 @@ async def attach_expires_at(
         return
     try:
         resolved = await adapter.resolve_expires_at(uris, ctx)
-    except Exception:  # noqa: BLE001 - echo-back must never break stat/ls/tree
-        logger.exception("TTL adapter resolve_expires_at() failed; omitting expires_at echo")
+    except Exception as exc:  # noqa: BLE001 - echo-back must never break stat/ls/tree
+        logger.info(
+            "ttl expiry resolution failed; omitting expiry fields total=%d error_type=%s",
+            len(uris),
+            type(exc).__name__,
+            extra={"degraded": True, "total": len(uris), "error_type": type(exc).__name__},
+        )
         return
     for entry in entries:
         uri = _entry_uri(entry)

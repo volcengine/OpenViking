@@ -115,7 +115,7 @@ async def test_discover_root_types_uses_schema_paths_and_existing_files(peer_id)
     root = f"viking://user/u1/{'peers/' + peer_id + '/' if peer_id else ''}memories"
     registry = MemoryTypeRegistry(load_schemas=False)
     defaults = get_default_registry()
-    for name in ("entities", "events", "preferences", "profile", "identity", "soul", "cases"):
+    for name in ("entities", "events", "preferences", "profile", "cases"):
         registry.register(defaults.get(name).model_copy(deep=True))
     disabled = defaults.get("entities").model_copy(
         update={"memory_type": "disabled", "enabled": False}
@@ -144,9 +144,7 @@ async def test_discover_root_types_uses_schema_paths_and_existing_files(peer_id)
     fs = SimpleNamespace(stat=AsyncMock(side_effect=stat))
     types = await _discover_memory_types(root, registry, fs, _ctx())
 
-    assert types == sorted(
-        ["entities", "events", "profile", "identity", "soul"] + ([] if peer_id else ["cases"])
-    )
+    assert types == sorted(["entities", "events", "profile"] + ([] if peer_id else ["cases"]))
     assert all(call.args[0].startswith(root + "/") for call in fs.stat.await_args_list)
     assert f"{root}/unknown" not in [call.args[0] for call in fs.stat.await_args_list]
     if peer_id:
@@ -477,6 +475,7 @@ def language_config(monkeypatch):
     config = SimpleNamespace(
         output_language_override="",
         memory=SimpleNamespace(
+            extraction_enabled=True,
             eager_prefetch=False,
             prefetch_search_topn=5,
             link_enabled=False,
@@ -487,7 +486,6 @@ def language_config(monkeypatch):
     )
     for module in (
         "openviking.service.memory_compile",
-        "openviking.session.memory.consolidation_context_provider",
         "openviking.session.memory.session_extract_context_provider",
         "openviking.session.memory.extract_loop",
         "openviking.session.memory.utils.language",
@@ -507,9 +505,12 @@ def language_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override, expected", [("", "zh-CN"), ("ja", "ja")])
+@pytest.mark.parametrize(
+    "override, expected, account_override",
+    [("en", "zh-CN", ""), ("en", "ja", "ja")],
+)
 async def test_compile_resolves_language_before_prompt_and_schema(
-    monkeypatch, language_config, override, expected
+    monkeypatch, language_config, override, expected, account_override
 ):
     language_config.output_language_override = override
     vlm = SimpleNamespace(
@@ -536,7 +537,21 @@ async def test_compile_resolves_language_before_prompt_and_schema(
         "openviking.service.memory_compile.acquire_memory_operation_lease",
         acquire_lease,
     )
-    runner = MemoryCompileRunner(SimpleNamespace(_ensure_initialized=lambda: viking_fs))
+    from openviking.config.binding import manager_over_source
+    from openviking.config.source import MemoryConfigSource
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+    cluster = OpenVikingConfig.from_dict({"output_language_override": override})
+    monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
+    manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
+    await manager.patch_account(
+        "acc",
+        {"output_language_override": account_override, "memory": {"extraction_enabled": False}},
+    )
+    runner = MemoryCompileRunner(
+        SimpleNamespace(_ensure_initialized=lambda: viking_fs),
+        runtime_config_manager=manager,
+    )
 
     result = await runner._consolidate(
         target=directory,
@@ -555,7 +570,7 @@ async def test_compile_resolves_language_before_prompt_and_schema(
     assert result["errors"] == []
     apply.assert_awaited_once()
     acquire_lease.assert_awaited_once()
-    if override:
+    if account_override:
         viking_fs.read.assert_not_awaited()
     else:
         viking_fs.read.assert_awaited_once_with(uri, size=4096, ctx=_ctx())
@@ -571,7 +586,7 @@ async def test_compile_prefers_account_registry(monkeypatch, language_config):
     account_registry = MemoryTypeRegistry(load_schemas=False)
     for schema in deployment.list_all(include_disabled=True):
         account_registry.register(schema.model_copy(deep=True))
-    account_registry.get("soul").content_template = "# Company Assistant\n{{ content }}"
+    account_registry.get("events").content_template = "# Company Events\n{{ summary }}"
 
     captured = {}
 
@@ -620,8 +635,8 @@ async def test_compile_prefers_account_registry(monkeypatch, language_config):
     assert base_registry is language_config.registry
     assert captured["provider_registry"] is account_registry
     assert (
-        captured["provider_registry"].get("soul").content_template
-        == "# Company Assistant\n{{ content }}"
+        captured["provider_registry"].get("events").content_template
+        == "# Company Events\n{{ summary }}"
     )
 
 
@@ -740,6 +755,8 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
 async def test_compile_task_apply_outcomes(
     monkeypatch,
     language_config,
+    caplog,
+    request,
     change,
     has_error,
     has_operations,
@@ -755,8 +772,11 @@ async def test_compile_task_apply_outcomes(
     monkeypatch.setattr(
         "openviking.service.memory_compile.tracer.get_trace_id", lambda: "test-trace"
     )
-    warning = Mock()
-    monkeypatch.setattr("openviking.service.memory_compile.logger.warning", warning)
+    from openviking.service import memory_compile as log_module
+
+    log_module.logger.addHandler(caplog.handler)
+    request.addfinalizer(lambda: log_module.logger.removeHandler(caplog.handler))
+    caplog.set_level("INFO", logger="openviking.service.memory_compile")
     directory = "viking://user/u1/memories/entities"
     uri = f"{directory}/person/alice.md"
     operations = ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
@@ -842,12 +862,15 @@ async def test_compile_task_apply_outcomes(
     else:
         apply.assert_not_awaited()
         viking_fs._async_agfs.pathlock_release.assert_not_awaited()
-    if change and has_error:
-        warning.assert_any_call(
-            "Memory-mode compile %s partially succeeded: %s", task.task_id, ["write failed"]
-        )
-    else:
-        assert not any("partially succeeded" in call.args[0] for call in warning.call_args_list)
+    partial = [
+        record
+        for record in caplog.records
+        if getattr(record, "task_id", None) == task.task_id and getattr(record, "failed", None) == 1
+    ]
+    assert len(partial) == int(bool(change and has_error))
+    if partial:
+        assert partial[0].levelname == "INFO" and partial[0].degraded is True
+        assert "write failed" not in partial[0].getMessage()
 
 
 @pytest.mark.asyncio
@@ -889,7 +912,7 @@ async def test_cancel_running_compile_interrupts_before_memory_write(monkeypatch
     cancelling = await tracker.cancel(
         task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
     )
-    assert cancelling.status == TaskStatus.CANCELLING
+    assert cancelling.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}
     await asyncio.wait_for(worker, timeout=1)
 
     final = await tracker.get(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)

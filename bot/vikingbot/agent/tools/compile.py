@@ -61,7 +61,7 @@ class CompileImageReadTool(VikingMultiReadTool):
         await self.reader._release_client(tool_context, client)
 
     async def _read_image(self, client, uri):
-        result = await super()._read_image(client, uri)
+        result = await super()._read_image(client, uri, for_compile=True)
         if result["success"]:
             if uri in self.hashes and result["sha256"] != self.hashes[uri]:
                 return {
@@ -254,6 +254,8 @@ class CompileChildTool(Tool):
     merge_only confines file access to the child's fresh output directory. Skills,
     originals, shared drafts and tool results are not readable; assigned fragments,
     checkpoints and task-specific output requirements are supplied in the prompt.
+    readonly_paths maps explicit input aliases to task-owned files outside that
+    output directory. Only read_file can access them; inputs/ is reserved for aliases.
     """
 
     def __init__(
@@ -262,12 +264,14 @@ class CompileChildTool(Tool):
         draft_root: str,
         *,
         merge_only: bool = False,
+        readonly_paths: Mapping[str, str] | None = None,
     ):
         if merge_only and tool.name not in {"read_file", "write_file", "edit_file"}:
             raise ValueError("Merge children accept only bound file tools")
         self.tool = tool
         self.draft_root = draft_root
         self.merge_only = merge_only
+        self.readonly_paths = dict(readonly_paths or {})
 
     @property
     def name(self) -> str:
@@ -283,6 +287,13 @@ class CompileChildTool(Tool):
         parameters = deepcopy(self.tool.parameters)
         field = "working_dir" if self.name == "exec" else "path"
         if self.merge_only:
+            if self.readonly_paths:
+                parameters["properties"][field]["description"] = (
+                    "Output path relative to the publication destination. Use the same path "
+                    "to write, read and edit an output. assignment.json and the assigned "
+                    "inputs/ paths are read-only inputs; other workspace paths are unavailable."
+                )
+                return parameters
             parameters["properties"][field]["description"] = (
                 "File path relative to the current working directory; use a relative path within this directory."
             )
@@ -325,6 +336,15 @@ class CompileChildTool(Tool):
             return await self.tool.execute(tool_context, **kwargs)
         if COMPILE_STAGING_ROOT.casefold() in relative.casefold().split("/"):
             raise ValueError("Use paths relative to your draft root, without staging directories")
+        if self.readonly_paths:
+            if relative in self.readonly_paths:
+                if self.name != "read_file":
+                    raise ValueError(f"Assigned input is read-only: {relative}")
+                return await self.tool.execute(
+                    tool_context, **{**kwargs, field: self.readonly_paths[relative]}
+                )
+            if relative == "inputs" or relative.startswith("inputs/"):
+                raise ValueError(f"Input path is not assigned: {relative}")
         kwargs[field] = posixpath.join(self.draft_root, relative)
         result = await self.tool.execute(tool_context, **kwargs)
         if (
@@ -529,6 +549,7 @@ class SubmitWikiBundleTool(Tool):
         link_errors: list[str] = []
         warnings: list[str] = []
         valid_links: list[Any] = []
+        spans_by_page: dict[int, list[tuple[int, int]]] = {}
         for index, link in enumerate(bundle.links):
             prefix = f"links[{index}]"
             if link.f is None or link.t is None:
@@ -544,11 +565,16 @@ class SubmitWikiBundleTool(Tool):
                 warnings.append(f"{prefix} has no match_text and was dropped")
                 continue
             source_page = page_by_id[link.f]
+            if link.f not in spans_by_page:
+                spans_by_page[link.f] = LinkRenderer.protected_markdown_spans(
+                    source_page.body_markdown
+                )
             if not LinkRenderer.can_render_link(
                 source_page.body_markdown,
                 link.match_text,
                 page_uris[link.f],
                 page_uris[link.t],
+                protected_spans=spans_by_page[link.f],
             ):
                 warnings.append(
                     f"{prefix} anchor {link.match_text!r} was not found and the link was dropped"

@@ -321,7 +321,7 @@ def _messages(messages: list[Message], recorded: set[str]) -> list[dict[str, Any
                         )
                         if is_result
                         else "",
-                        "tool_status": ("error" if content.exception else "completed")
+                        "tool_status": ("error" if content.exception is not None else "completed")
                         if is_result
                         else "pending",
                     }

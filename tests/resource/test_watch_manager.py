@@ -15,7 +15,6 @@ from openviking.resource.watch_types import (
     STORAGE_TIMESTAMPS_TZ_UTC,
     WATCH_TIMESTAMP_FIELDS,
     WatchAuthority,
-    WatchRunResult,
     WatchTask,
 )
 from openviking.storage.errors import ResourceBusyError
@@ -129,30 +128,42 @@ class TestWatchManager:
         assert await watch_manager.get_task(task.task_id) is not None
 
     @pytest.mark.asyncio
-    async def test_create_for_missing_target_locks_existing_ancestor(
+    async def test_create_for_missing_target_does_not_block_sibling(
         self, watch_manager: WatchManager, watch_vfs, tmp_path
     ):
-        await _create(watch_manager, "viking://resources/pending/doc.md")
-
-        assert not await watch_vfs.exists("viking://resources/pending")
-        assert not list((tmp_path / "agfs").rglob("pending"))
-
         await watch_vfs.mkdir("viking://resources/held")
         async with watch_manager.locks.tree(TEST_ACCOUNT_ID, "viking://resources/held"):
+            await _create(watch_manager, "viking://resources/pending")
+
+            assert not await watch_vfs.exists("viking://resources/pending")
+            assert not list((tmp_path / "agfs").rglob("pending"))
+
             with pytest.raises(ResourceBusyError):
                 await _create(watch_manager, "viking://resources/held/new/doc.md")
 
     @pytest.mark.asyncio
-    async def test_finish_run_records_sanitized_result(self, watch_vfs, watch_manager):
-        task = await _create(watch_manager, initial_run_id="ingest-task-1")
+    async def test_partial_run_preserves_checkpoint_and_sanitizes_result(
+        self, watch_vfs, watch_manager
+    ):
+        checkpoint = {"kind": "git", "head_sha": "previous", "instruction": ""}
+        task = WatchTask(
+            path="/test/path", to_uri="viking://resources/test", source_checkpoint=checkpoint
+        )
+        await watch_manager.store.create_task(task, initial_run_id="ingest-task-1")
 
         applied = await watch_manager.finish_run(
             task.task_id,
             "ingest-task-1",
-            WatchRunResult(
-                status="failed",
-                execution_task_id="ingest-task-1",
-                error="pull failed with Bearer secret-token",
+            watch_manager.result(
+                task,
+                "completed",
+                {
+                    "task_id": "ingest-task-1",
+                    "import_complete": False,
+                    "source_checkpoint": {"kind": "git", "head_sha": "new"},
+                    "meta": {"resolved_head_sha": "new"},
+                },
+                "pull failed with Bearer secret-token",
             ),
         )
 
@@ -164,7 +175,9 @@ class TestWatchManager:
         finally:
             await reopened.close()
         assert loaded.last_task_id == "ingest-task-1"
-        assert loaded.last_status == "failed"
+        assert loaded.last_status == "partial"
+        assert loaded.source_checkpoint == checkpoint
+        assert await watch_manager.store.running() == []
         assert loaded.last_error == "pull failed with Bearer [REDACTED]"
 
     @pytest.mark.asyncio

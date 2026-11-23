@@ -15,8 +15,10 @@ from typing import Any
 
 from loguru import logger
 
-from openviking.models.model_error import model_error_kind
+from openviking.models.model_error import chat_finish_error, model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
+from openviking.models.vlm.base import ToolResultMediaMode, bind_vlm_usage_error
+from openviking.utils.message_format import tool_images_as_user_messages
 from openviking.utils.model_retry import effective_max_retries, retry_async
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
@@ -296,8 +298,13 @@ class VLMProviderAdapter(LLMProvider):
                 if reasoning_effort is not None and self._vlm.provider == "volcengine"
                 else {}
             )
+            request_messages = (
+                tool_images_as_user_messages(messages)
+                if self._tool_result_media_mode(self._vlm) == "user_message"
+                else messages
+            )
             result = await self._vlm.get_completion_async(
-                messages=messages,
+                messages=request_messages,
                 thinking=thinking if thinking is not None else getattr(self._vlm, "thinking", None),
                 tools=response_tools,
                 tool_choice="auto" if response_tools else None,
@@ -487,6 +494,7 @@ class VLMProviderAdapter(LLMProvider):
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
+        finish_error = None
         usage: dict[str, int] = {}
         start_time = time.perf_counter()
 
@@ -508,7 +516,10 @@ class VLMProviderAdapter(LLMProvider):
                     continue
                 choice = choices[0]
                 if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason or finish_reason
+                    finish_reason = choice.finish_reason
+                    finish_error = chat_finish_error(finish_reason, vlm.provider)
+                    if finish_error is not None:
+                        break
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
@@ -532,8 +543,14 @@ class VLMProviderAdapter(LLMProvider):
                         fallback_index=fallback_index,
                     )
 
+        duration = time.perf_counter() - start_time
         if usage:
-            self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
+            with bind_vlm_usage_error(finish_error):
+                self._record_vlm_usage(vlm, usage, duration)
+        elif finish_error:
+            vlm.record_failed_call(duration_seconds=duration, error=finish_error)
+        if finish_error:
+            raise finish_error
 
         yield LLMStreamEvent(
             type="response",
@@ -556,6 +573,8 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None,
         temperature: float | None,
     ) -> dict[str, Any]:
+        if self._tool_result_media_mode(vlm) == "user_message":
+            messages = tool_images_as_user_messages(messages)
         provider = getattr(vlm, "provider", None)
         configured_max_tokens = getattr(vlm, "max_tokens", None)
         effective_max_tokens = max_tokens if max_tokens is not None else configured_max_tokens
@@ -701,30 +720,18 @@ class VLMProviderAdapter(LLMProvider):
         return self._default_model
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Return true only for backends with native rich tool-result support."""
-        return self._backend_supports_tool_result_media(self._vlm)
+        """Accept image evidence without predicting the endpoint's model capabilities."""
+        return True
 
-    @classmethod
-    def _backend_supports_tool_result_media(cls, vlm: Any) -> bool:
-        instances = getattr(vlm, "_vlm_instances", None)
-        if instances is not None:
-            return bool(instances) and all(
-                cls._backend_supports_tool_result_media(item) for item in instances
-            )
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Keep ordinary chats native-only; Compile's scoped providers opt in."""
+        return self._tool_result_media_mode(self._vlm) == "native"
 
-        primary = getattr(vlm, "primary", None)
-        backup = getattr(vlm, "backup", None)
-        if primary is not None and backup is not None:
-            return cls._backend_supports_tool_result_media(
-                primary
-            ) and cls._backend_supports_tool_result_media(backup)
-
-        resolve_provider = getattr(vlm, "resolved_provider", None)
-        provider = (
-            resolve_provider() if callable(resolve_provider) else getattr(vlm, "provider", "")
-        )
-        provider = str(provider or "").lower()
-        return provider in {"anthropic", "openai-codex"}
+    @staticmethod
+    def _tool_result_media_mode(vlm: Any) -> ToolResultMediaMode:
+        capability = getattr(vlm, "tool_result_media_mode", None)
+        mode = capability() if callable(capability) else None
+        return "native" if mode == "native" else "user_message"
 
     # ------------------------------------------------------------------
     # Langfuse helpers

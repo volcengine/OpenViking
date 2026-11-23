@@ -48,6 +48,7 @@ ENV CARGO_TARGET_DIR=/cargo-target
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 ENV UV_NO_DEV=1
+ENV OPENVIKING_TREE_SITTER_CACHE_DIR=/app/.cache/tree-sitter-language-pack
 WORKDIR /app
 
 # Copy source required for setup.py artifact builds and native extension build.
@@ -83,19 +84,48 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql --extra reporting \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql --extra reporting \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
             exit 2 \
             ;; \
     esac
+
+# Preload every tree-sitter grammar at build time. The build network can reach
+# GitHub, while production usually cannot, so the populated cache is copied into
+# the runtime image and the first code parse never blocks on a download. Fail the
+# build if any language is missing instead of shipping an incomplete cache.
+RUN rm -rf "${OPENVIKING_TREE_SITTER_CACHE_DIR}" \
+ && mkdir -p "${OPENVIKING_TREE_SITTER_CACHE_DIR}" \
+ && /app/.venv/bin/python - <<'PY'
+import os
+from typing import get_args
+
+from tree_sitter_language_pack import (
+    PackConfig,
+    SupportedLanguage,
+    configure,
+    download_all,
+    downloaded_languages,
+)
+
+cache_dir = os.environ["OPENVIKING_TREE_SITTER_CACHE_DIR"]
+configure(PackConfig(cache_dir=cache_dir))
+download_all()
+missing = sorted(set(get_args(SupportedLanguage)) - set(downloaded_languages()))
+if missing:
+    raise SystemExit(
+        "tree-sitter parser preload incomplete; missing "
+        f"{len(missing)} languages: {', '.join(missing[:20])}"
+    )
+PY
 
 # Stage 4: runtime
 FROM python:3.13-slim-trixie
@@ -112,6 +142,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app/.openviking
 
 COPY --from=py-builder /app/.venv /app/.venv
+# Grammar cache preloaded in the builder stage; read directly at runtime.
+COPY --from=py-builder /app/.cache/tree-sitter-language-pack /app/.cache/tree-sitter-language-pack
 # Exercise SVG rendering so missing Python or Cairo runtime dependencies fail the build.
 RUN /app/.venv/bin/python -I - <<'PYCODE'
 import cairosvg
@@ -132,6 +164,7 @@ RUN mkdir -p /app/.openviking \
  && chmod +x /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health
 ENV HOME="/app" \
     PATH="/app/.venv/bin:$PATH" \
+    OPENVIKING_TREE_SITTER_CACHE_DIR="/app/.cache/tree-sitter-language-pack" \
     OPENVIKING_CONFIG_FILE="/app/.openviking/ov.conf" \
     OPENVIKING_CLI_CONFIG_FILE="/app/.openviking/ovcli.conf"
 

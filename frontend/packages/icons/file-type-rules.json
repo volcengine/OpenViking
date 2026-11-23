@@ -1,0 +1,444 @@
+{
+  "names": {
+    ".babelrc": "babel",
+    ".babelrc.json": "babel",
+    ".bash_profile": "bash",
+    ".bashrc": "bash",
+    ".browserslistrc": "browserslist",
+    ".dockerignore": "docker",
+    ".eslintignore": "eslint",
+    ".eslintrc": "eslint",
+    ".eslintrc.cjs": "eslint",
+    ".eslintrc.js": "eslint",
+    ".eslintrc.json": "eslint",
+    ".eslintrc.yaml": "eslint",
+    ".eslintrc.yml": "eslint",
+    ".gitattributes": "git",
+    ".gitignore": "git",
+    ".gitkeep": "git",
+    ".gitmodules": "git",
+    ".oxlintrc.json": "oxc",
+    ".postcssrc": "postcss",
+    ".postcssrc.json": "postcss",
+    ".postcssrc.yaml": "postcss",
+    ".postcssrc.yml": "postcss",
+    ".prettierignore": "prettier",
+    ".prettierrc": "prettier",
+    ".prettierrc.cjs": "prettier",
+    ".prettierrc.js": "prettier",
+    ".prettierrc.json": "prettier",
+    ".prettierrc.mjs": "prettier",
+    ".prettierrc.toml": "prettier",
+    ".prettierrc.yaml": "prettier",
+    ".prettierrc.yml": "prettier",
+    ".stylelintignore": "stylelint",
+    ".stylelintrc": "stylelint",
+    ".stylelintrc.cjs": "stylelint",
+    ".stylelintrc.js": "stylelint",
+    ".stylelintrc.json": "stylelint",
+    ".stylelintrc.mjs": "stylelint",
+    ".stylelintrc.yaml": "stylelint",
+    ".stylelintrc.yml": "stylelint",
+    ".terraform.lock.hcl": "terraform",
+    ".zprofile": "bash",
+    ".zshenv": "bash",
+    ".zshrc": "bash",
+    "babel.config.cjs": "babel",
+    "babel.config.js": "babel",
+    "babel.config.json": "babel",
+    "babel.config.mjs": "babel",
+    "biome.json": "biome",
+    "biome.jsonc": "biome",
+    "bootstrap.bundle.js": "bootstrap",
+    "bootstrap.bundle.min.js": "bootstrap",
+    "bootstrap.css": "bootstrap",
+    "bootstrap.js": "bootstrap",
+    "bootstrap.min.css": "bootstrap",
+    "bootstrap.min.js": "bootstrap",
+    "bun.lock": "bun",
+    "bun.lockb": "bun",
+    "bunfig.toml": "bun",
+    "claude.md": "claude",
+    "compose.yaml": "docker",
+    "compose.yml": "docker",
+    "docker-compose.override.yml": "docker",
+    "docker-compose.yaml": "docker",
+    "docker-compose.yml": "docker",
+    "dockerfile": "docker",
+    "eslint.config.cjs": "eslint",
+    "eslint.config.js": "eslint",
+    "eslint.config.mjs": "eslint",
+    "eslint.config.mts": "eslint",
+    "eslint.config.ts": "eslint",
+    "gemfile": "ruby",
+    "next.config.js": "nextjs",
+    "next.config.mjs": "nextjs",
+    "next.config.mts": "nextjs",
+    "next.config.ts": "nextjs",
+    "postcss.config.cjs": "postcss",
+    "postcss.config.js": "postcss",
+    "postcss.config.mjs": "postcss",
+    "postcss.config.ts": "postcss",
+    "prettier.config.cjs": "prettier",
+    "prettier.config.js": "prettier",
+    "prettier.config.mjs": "prettier",
+    "rakefile": "ruby",
+    "readme.md": "markdown",
+    "stylelint.config.cjs": "stylelint",
+    "stylelint.config.js": "stylelint",
+    "stylelint.config.mjs": "stylelint",
+    "svgo.config.cjs": "svgo",
+    "svgo.config.js": "svgo",
+    "svgo.config.mjs": "svgo",
+    "svgo.config.ts": "svgo",
+    "tailwind.config.cjs": "tailwind",
+    "tailwind.config.js": "tailwind",
+    "tailwind.config.mjs": "tailwind",
+    "tailwind.config.ts": "tailwind",
+    "vite.config.js": "vite",
+    "vite.config.mjs": "vite",
+    "vite.config.mts": "vite",
+    "vite.config.ts": "vite",
+    "webpack.config.babel.js": "webpack",
+    "webpack.config.cjs": "webpack",
+    "webpack.config.js": "webpack",
+    "webpack.config.mjs": "webpack",
+    "webpack.config.ts": "webpack"
+  },
+  "extensions": {
+    "7z": "zip",
+    "astro": "astro",
+    "AUTHORS": "text",
+    "avif": "image",
+    "bash": "bash",
+    "bmp": "image",
+    "bz2": "zip",
+    "c": "c",
+    "cc": "cpp",
+    "cfg": "text",
+    "CHANGELOG": "text",
+    "cjs": "javascript",
+    "code-workspace": "vscode",
+    "conf": "text",
+    "CONTRIBUTORS": "text",
+    "cpp": "cpp",
+    "csh": "bash",
+    "css": "css",
+    "csv": "table",
+    "cts": "typescript",
+    "cxx": "cpp",
+    "db": "database",
+    "editorconfig": "text",
+    "env": "text",
+    "env.development": "text",
+    "env.local": "text",
+    "env.production": "text",
+    "eot": "font",
+    "erb": "ruby",
+    "fish": "bash",
+    "gemspec": "ruby",
+    "gif": "image",
+    "go": "go",
+    "gql": "graphql",
+    "graphql": "graphql",
+    "gz": "zip",
+    "h": "c",
+    "hh": "cpp",
+    "hpp": "cpp",
+    "htm": "html",
+    "html": "html",
+    "hxx": "cpp",
+    "icns": "image",
+    "ico": "image",
+    "ini": "text",
+    "inl": "cpp",
+    "jar": "zip",
+    "jpeg": "image",
+    "jpg": "image",
+    "js": "javascript",
+    "json": "json",
+    "json5": "json",
+    "jsonc": "json",
+    "jsonl": "json",
+    "jsx": "react",
+    "ksh": "bash",
+    "less": "css",
+    "LICENSE": "text",
+    "log": "text",
+    "markdown": "markdown",
+    "mcp": "mcp",
+    "md": "markdown",
+    "mdx": "markdown",
+    "mdx.tsx": "markdown",
+    "mjs": "javascript",
+    "mm": "cpp",
+    "mts": "typescript",
+    "ods": "table",
+    "otf": "font",
+    "png": "image",
+    "postcss": "css",
+    "py": "python",
+    "pyi": "python",
+    "pyw": "python",
+    "pyx": "python",
+    "rake": "ruby",
+    "rar": "zip",
+    "rb": "ruby",
+    "rs": "rust",
+    "rst": "text",
+    "rtf": "text",
+    "sass": "sass",
+    "scss": "sass",
+    "sh": "bash",
+    "sql": "database",
+    "sqlite": "database",
+    "sqlite3": "database",
+    "styl": "css",
+    "svelte": "svelte",
+    "svg": "svg",
+    "swift": "swift",
+    "tar": "zip",
+    "tf": "terraform",
+    "tfstate": "terraform",
+    "tfvars": "terraform",
+    "tgz": "zip",
+    "tif": "image",
+    "tiff": "image",
+    "ts": "typescript",
+    "tsv": "table",
+    "tsx": "react",
+    "ttf": "font",
+    "txt": "text",
+    "vue": "vue",
+    "war": "zip",
+    "wasm": "wasm",
+    "wast": "wasm",
+    "wat": "wasm",
+    "webp": "image",
+    "woff": "font",
+    "woff2": "font",
+    "xhtml": "html",
+    "xls": "table",
+    "xlsx": "table",
+    "xz": "zip",
+    "yaml": "yml",
+    "yml": "yml",
+    "zig": "zig",
+    "zip": "zip",
+    "zsh": "bash"
+  },
+  "colors": {
+    "bash": {
+      "light": "#199f43",
+      "dark": "#5ecc71"
+    },
+    "c": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "cpp": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "css": {
+      "light": "#693acf",
+      "dark": "#9d6afb"
+    },
+    "database": {
+      "light": "#a631be",
+      "dark": "#d568ea"
+    },
+    "default": {
+      "light": "#84848a",
+      "dark": "#adadb1"
+    },
+    "font": {
+      "light": "#84848a",
+      "dark": "#adadb1"
+    },
+    "git": {
+      "light": "#ff8c5b",
+      "dark": "#d5512f"
+    },
+    "go": {
+      "light": "#1ca1c7",
+      "dark": "#68cdf2"
+    },
+    "html": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "image": {
+      "light": "#d32a61",
+      "dark": "#ff678d"
+    },
+    "javascript": {
+      "light": "#d5a910",
+      "dark": "#ffd452"
+    },
+    "json": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "markdown": {
+      "light": "#199f43",
+      "dark": "#5ecc71"
+    },
+    "mcp": {
+      "light": "#17a5af",
+      "dark": "#64d1db"
+    },
+    "python": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "ruby": {
+      "light": "#d52c36",
+      "dark": "#ff6762"
+    },
+    "rust": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "swift": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "table": {
+      "light": "#17a5af",
+      "dark": "#64d1db"
+    },
+    "text": {
+      "light": "#84848a",
+      "dark": "#adadb1"
+    },
+    "typescript": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "zip": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "astro": {
+      "light": "#a631be",
+      "dark": "#d568ea"
+    },
+    "babel": {
+      "light": "#d5a910",
+      "dark": "#ffd452"
+    },
+    "biome": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "bootstrap": {
+      "light": "#693acf",
+      "dark": "#9d6afb"
+    },
+    "browserslist": {
+      "light": "#d5a910",
+      "dark": "#ffd452"
+    },
+    "bun": {
+      "light": "#594c5b",
+      "dark": "#79697b"
+    },
+    "claude": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "docker": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "eslint": {
+      "light": "#693acf",
+      "dark": "#9d6afb"
+    },
+    "graphql": {
+      "light": "#d32a61",
+      "dark": "#ff678d"
+    },
+    "nextjs": {
+      "light": "#84848a",
+      "dark": "#adadb1"
+    },
+    "npm": {
+      "light": "#d52c36",
+      "dark": "#ff6762"
+    },
+    "oxc": {
+      "light": "#1ca1c7",
+      "dark": "#68cdf2"
+    },
+    "postcss": {
+      "light": "#d52c36",
+      "dark": "#ff6762"
+    },
+    "prettier": {
+      "light": "#17a5af",
+      "dark": "#64d1db"
+    },
+    "react": {
+      "light": "#1ca1c7",
+      "dark": "#68cdf2"
+    },
+    "sass": {
+      "light": "#d32a61",
+      "dark": "#ff678d"
+    },
+    "stylelint": {
+      "light": "#84848a",
+      "dark": "#adadb1"
+    },
+    "svelte": {
+      "light": "#d52c36",
+      "dark": "#ff6762"
+    },
+    "svg": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    },
+    "svgo": {
+      "light": "#199f43",
+      "dark": "#5ecc71"
+    },
+    "tailwind": {
+      "light": "#1ca1c7",
+      "dark": "#68cdf2"
+    },
+    "terraform": {
+      "light": "#693acf",
+      "dark": "#9d6afb"
+    },
+    "vite": {
+      "light": "#a631be",
+      "dark": "#d568ea"
+    },
+    "vscode": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "vue": {
+      "light": "#199f43",
+      "dark": "#5ecc71"
+    },
+    "wasm": {
+      "light": "#693acf",
+      "dark": "#9d6afb"
+    },
+    "webpack": {
+      "light": "#1a85d4",
+      "dark": "#69b1ff"
+    },
+    "yml": {
+      "light": "#d52c36",
+      "dark": "#ff6762"
+    },
+    "zig": {
+      "light": "#d47628",
+      "dark": "#ffa359"
+    }
+  }
+}

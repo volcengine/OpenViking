@@ -260,7 +260,7 @@ class VolcEngineVLM(OpenAIVLM):
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
         elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:
@@ -324,7 +324,7 @@ class VolcEngineVLM(OpenAIVLM):
                 self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
                 raise
             elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            self._handle_chat_completion(response, duration_seconds=elapsed)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
@@ -348,7 +348,11 @@ class VolcEngineVLM(OpenAIVLM):
         - JPEG, PNG, GIF, WEBP, BMP, TIFF, ICO, DIB, ICNS, SGI, JPEG2000, HEIC, HEIF
         """
         if len(data) < 12:
-            logger.warning(f"[VolcEngineVLM] Image data too small: {len(data)} bytes")
+            logger.info(
+                "image input too small; using png format total=%d degraded=true",
+                len(data),
+                extra={"total": len(data), "degraded": True},
+            )
             return "image/png"
 
         # PNG: 89 50 4E 47 0D 0A 1A 0A
@@ -401,7 +405,9 @@ class VolcEngineVLM(OpenAIVLM):
             )
 
         # Unknown format - log and default to PNG
-        logger.warning(f"[VolcEngineVLM] Unknown image format, magic bytes: {data[:16].hex()}")
+        logger.info(
+            "image format unknown; using png format degraded=true", extra={"degraded": True}
+        )
         return "image/png"
 
     def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:
@@ -409,8 +415,11 @@ class VolcEngineVLM(OpenAIVLM):
         if isinstance(image, bytes):
             b64 = base64.b64encode(image).decode("utf-8")
             mime_type = self._detect_image_format(image)
-            logger.info(
-                f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}"
+            logger.debug(
+                "image prepared total=%d file_type=%s",
+                len(image),
+                mime_type,
+                extra={"total": len(image), "file_type": mime_type},
             )
             return {
                 "type": "image_url",
@@ -497,7 +506,7 @@ class VolcEngineVLM(OpenAIVLM):
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
         elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:
@@ -551,7 +560,7 @@ class VolcEngineVLM(OpenAIVLM):
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
         elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:

@@ -3,8 +3,8 @@
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
 import asyncio
-import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
@@ -23,7 +23,12 @@ from openviking.server.auth import (
     require_auth_root_or_admin,
     should_expose_user_key,
 )
-from openviking.server.config import UserConfig
+from openviking.server.config import (
+    ServerConfig,
+    UserConfig,
+    UserSettingsPatch,
+    validate_config_input,
+)
 from openviking.server.dependencies import get_service
 from openviking.server.identity import (
     ACCOUNT_USER_ASSIGNABLE_ROLES,
@@ -33,8 +38,9 @@ from openviking.server.identity import (
 from openviking.server.models import Response
 from openviking.server.user_config import (
     read_user_config,
-    validate_add_targets,
-    validate_user_memory_policy,
+    resolve_add_targets,
+    resolve_user_add_targets,
+    resolve_user_privacy,
     write_user_config,
 )
 from openviking.session.memory.account_templates import (
@@ -51,7 +57,6 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
-    UnimplementedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
@@ -60,8 +65,6 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
-
-_TTL_UNSUPPORTED_MESSAGE = "Redis-backed TTL is not enabled in this deployment."
 
 
 class CreateAccountRequest(BaseModel):
@@ -145,29 +148,9 @@ class ConfigPatchRequest(BaseModel):
     content: str | None = None
 
 
-def _reject_unsupported_ttl_config(
-    settings: Mapping[str, object] | None = None,
-    content: str | None = None,
-) -> None:
-    """Reject explicit TTL settings unless the built-in Redis runtime is enabled."""
-
-    from openviking.ttl.wiring import ttl_config_supported
-
-    if ttl_config_supported():
-        return
-    if settings is not None and "ttl" in settings:
-        raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
-    if content is None:
-        return
-    try:
-        parsed = json.loads(content.lstrip("\ufeff"))
-    except (TypeError, ValueError):
-        return
-    if isinstance(parsed, dict) and "ttl" in parsed:
-        raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
-
-
-_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
+_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset(
+    {"vlm", "query_planner", "embedding", "vectordb", "parser_api"}
+)
 
 
 def _authorize_account_config_patch(
@@ -177,29 +160,24 @@ def _authorize_account_config_patch(
     restricted = _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS.intersection(settings)
     if restricted and ctx.role != Role.ROOT:
         fields = ", ".join(sorted(restricted))
-        raise PermissionDeniedError(
-            f"Only ROOT can modify account configuration fields: {fields}"
-        )
+        raise PermissionDeniedError(f"Only ROOT can modify account configuration fields: {fields}")
 
 
-def _visible_account_config(
+async def _account_configuration_settings(
     ctx: RequestContext,
-    settings: Mapping[str, object],
+    account_id: str,
 ) -> dict[str, object]:
+    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
+    settings["agent_evolution"] = {
+        "enabled": await get_service().sessions.get_agent_evolution_enabled(account_id)
+    }
     if ctx.role == Role.ROOT:
-        return dict(settings)
+        return settings
     return {
         key: value
         for key, value in settings.items()
         if key not in _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS
     }
-
-
-class UserSettingsPatch(BaseModel):
-    memory_policy: Optional[dict] = None
-    ttl: Optional[dict] = None
-
-    model_config = {"extra": "forbid"}
 
 
 def _agent_evolution_account_id(ctx: RequestContext) -> str:
@@ -251,9 +229,12 @@ async def set_agent_evolution_status(
     )
 
 
-def _get_api_key_manager(request: Request):
+def _get_api_key_manager(request: Request, *, for_write: bool = False):
     """Return API key management operations for compatibility callers."""
-    return get_api_key_manager_or_raise(request)
+    manager = get_api_key_manager_or_raise(request)
+    if for_write:
+        manager.require_writable()
+    return manager
 
 
 def _get_runtime_config_manager():
@@ -331,9 +312,7 @@ async def _account_settings_result(
     """
     enabled = await get_service().sessions.get_agent_evolution_enabled(account_id)
     legacy_overrides = {
-        key: overrides[key]
-        for key in ("agent_evolution", "acl")
-        if key in overrides
+        key: overrides[key] for key in ("agent_evolution", "acl") if key in overrides
     }
     return {
         "account_id": account_id,
@@ -349,48 +328,34 @@ async def _account_settings_result(
     }
 
 
-def _has_add_targets(user_config: UserConfig | None) -> bool:
-    return bool(
-        user_config and (user_config.add_targets.resource_uri or user_config.add_targets.skill_uri)
-    )
-
-
 def _has_initial_user_config(user_config: UserConfig | None) -> bool:
     return bool(
-        _has_add_targets(user_config)
-        or (user_config and (user_config.memory_policy or user_config.ttl is not None))
-    )
-
-
-async def _validate_initial_user_config(
-    service,
-    user_ctx: RequestContext,
-    user_config: UserConfig | None,
-) -> None:
-    if not _has_initial_user_config(user_config):
-        return
-    if service.viking_fs is None:
-        raise FailedPreconditionError("OpenViking service is not initialized.")
-    if _has_add_targets(user_config):
-        await validate_add_targets(
-            user_config.add_targets,
-            ctx=user_ctx,
-            viking_fs=service.viking_fs,
+        user_config
+        and (
+            user_config.add_targets.resource_uri
+            or user_config.add_targets.skill_uri
+            or user_config.memory_policy
+            or user_config.ttl is not None
+            or user_config.privacy.model_dump(exclude_none=True)
         )
-    if user_config is not None:
-        if user_config.ttl is not None:
-            _reject_unsupported_ttl_config({"ttl": {}})
-        validate_user_memory_policy(user_config.memory_policy)
+    )
 
 
 async def _write_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
+    *,
+    lease_ref: object | None = None,
 ) -> None:
     if not _has_initial_user_config(user_config):
         return
-    await write_user_config(service.viking_fs, user_ctx, user_config)
+    await write_user_config(
+        service.viking_fs,
+        user_ctx,
+        user_config,
+        lease_ref=lease_ref,
+    )
 
 
 async def _rollback_account_creation(
@@ -411,10 +376,10 @@ async def _rollback_account_creation(
         try:
             await deletion_service.delete_now(account_id, actor=actor)
             return
-        except Exception:
-            logger.exception(
-                "Synchronous account cleanup failed for %s; durable deletion remains queued",
-                account_id,
+        except Exception as exc:
+            logger.info(
+                "Synchronous account cleanup failed; durable deletion remains queued",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
             )
             return
 
@@ -423,13 +388,19 @@ async def _rollback_account_creation(
         await service.release_account_vector_resources(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to release vector resources for account %s", account_id)
+        logger.debug(
+            "Account rollback vector resource release failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
     if runtime_config is not None:
         try:
             await runtime_config.delete_account(account_id)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back runtime config for account %s", account_id)
+            logger.debug(
+                "Account rollback runtime config cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     viking_fs = getattr(service, "viking_fs", None)
     agfs = getattr(viking_fs, "_async_agfs", None)
@@ -438,54 +409,68 @@ async def _rollback_account_creation(
             await agfs.rm(f"/local/{account_id}", recursive=True)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back workspace for account %s", account_id)
+            logger.debug(
+                "Account rollback workspace cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     try:
         await manager.delete_account(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to roll back account registry entry for %s", account_id)
+        logger.debug(
+            "Account rollback registry cleanup failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
 
     if rollback_errors:
         logger.error(
-            "Account creation rollback for %s completed with %d error(s)",
-            account_id,
-            len(rollback_errors),
+            "Account creation rollback incomplete",
+            extra={
+                "account_id": account_id,
+                "failed": len(rollback_errors),
+                "error_type": type(rollback_errors[0]).__name__,
+            },
         )
 
 
-async def _check_user_exists(
-    request: Request, account_id: str, user_id: str, manager=None
-) -> None:
+async def _check_user_exists(request: Request, account_id: str, user_id: str, manager=None) -> None:
     manager = manager or _get_api_key_manager(request)
     if await manager.get_user_for_management(account_id, user_id) is None:
         raise NotFoundError(user_id, "user")
 
 
 def _user_settings_result(
-    account_id: str,
-    user_id: str,
+    ctx: RequestContext,
     user_config: UserConfig,
-    default_memory_policy: Optional[dict] = None,
+    server_config: ServerConfig,
 ) -> dict:
     memory_policy_config = (
         user_config.memory_policy
         if user_config.memory_policy is not None
-        else default_memory_policy
+        else server_config.user_config_defaults.memory_policy
     )
-    policy = MemoryPolicy.from_dict(memory_policy_config)
-    known_memory_types = set(get_default_registry().list_names(include_disabled=False))
-    policy.validate_memory_types(known_memory_types)
-    memory_policy = policy.to_dict()
-    if policy.memory_types is None:
-        memory_policy["memory_types"] = sorted(known_memory_types)
+    memory_policy = MemoryPolicy.default().to_dict()
+    memory_policy.update(memory_policy_config or {})
+    if memory_policy.get("memory_types") is None:
+        memory_policy["memory_types"] = sorted(
+            get_default_registry().list_names(include_disabled=False)
+        )
+    add_targets = resolve_add_targets(resolve_user_add_targets(user_config, server_config), ctx=ctx)
     return {
-        "account_id": account_id,
-        "user_id": user_id,
+        "account_id": ctx.account_id,
+        "user_id": ctx.user.user_id,
+        "add_targets": {
+            "resource_uri": add_targets.resource_uri,
+            "skill_uri": add_targets.skill_uri,
+        },
         "memory_policy": memory_policy,
         "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
         if user_config.ttl is not None
         else None,
+        "privacy": asdict(
+            resolve_user_privacy(user_config.privacy, server_config.user_config_defaults.privacy)
+        ),
     }
 
 
@@ -500,13 +485,13 @@ async def create_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new account (workspace) with its first admin user."""
-    _reject_unsupported_ttl_config(body.settings)
+    validate_config_input(body.settings)
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
-    await _validate_initial_user_config(service, account_ctx, body.user_config)
+    validate_config_input(body.user_config)
     # Reject bad initial config before any storage is created, so a failed
     # create leaves nothing behind. This validates the active account runtime
     # field surface and inherited vector configuration without persisting.
@@ -515,31 +500,43 @@ async def create_account(
         runtime_config.validate_initial_settings(body.account_id, body.settings or {})
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(
-        body.account_id,
-        body.admin_user_id,
-        seed=body.seed,
-    )
+    manager = _get_api_key_manager(request, for_write=True)
+    user_key = None
+    account_created = False
     try:
-        if body.settings and runtime_config is not None:
-            # Persist the pre-validated override.
-            await runtime_config.patch_account(
+        async with service.account_workspace_lock(account_ctx) as lease:
+            user_key = await manager.create_account(
                 body.account_id,
-                body.settings,
-                creating=True,
+                body.admin_user_id,
+                seed=body.seed,
+                lease_ref=lease,
             )
-        await service.initialize_account_workspace(account_ctx)
-        await _write_initial_user_config(service, account_ctx, body.user_config)
+            account_created = True
+            if body.settings and runtime_config is not None:
+                # Persist the pre-validated override.
+                await runtime_config.patch_account(
+                    body.account_id,
+                    body.settings,
+                    creating=True,
+                    lease_ref=lease,
+                )
+            await service.initialize_account_workspace(account_ctx, lease_ref=lease)
+            await _write_initial_user_config(
+                service,
+                account_ctx,
+                body.user_config,
+                lease_ref=lease,
+            )
     except BaseException:
-        await _rollback_account_creation(
-            service,
-            manager,
-            body.account_id,
-            runtime_config,
-            deletion_service=getattr(request.app.state, "deletion_service", None),
-            actor=ctx,
-        )
+        if account_created:
+            await _rollback_account_creation(
+                service,
+                manager,
+                body.account_id,
+                runtime_config,
+                deletion_service=getattr(request.app.state, "deletion_service", None),
+                actor=ctx,
+            )
         raise
     result = {
         "account_id": body.account_id,
@@ -565,6 +562,26 @@ async def list_accounts(
         name_filter=name, limit=limit, page=page, query_filter=query
     )
     return Response(status="ok", result=accounts)
+
+
+@router.get("/metric-inventory")
+@require_auth_root
+async def metric_inventory(
+    request: Request,
+    account_id: str | None = None,
+    page_size: int = Query(500, ge=1, le=1000),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Stream metadata only for an offline scan; requires the existing ROOT authentication."""
+    from fastapi.responses import StreamingResponse
+
+    from openviking.observability.reporting.inventory import inventory_lines
+
+    manager = _get_api_key_manager(request)
+    return StreamingResponse(
+        inventory_lines(get_service(), manager, account_id=account_id, page_size=page_size),
+        media_type="application/x-ndjson",
+    )
 
 
 @router.get("/accounts/{account_id}")
@@ -599,6 +616,7 @@ async def delete_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Revoke an account and submit durable cleanup of its data."""
+    _get_api_key_manager(request, for_write=True)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -669,13 +687,12 @@ async def get_account_configuration(
     path: Optional[str] = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return this account layer's explicit runtime configuration."""
+    """Return account settings with the effective Agent Evolution switch."""
     _check_account_access(ctx, account_id)
     manager = await _check_account_exists(request, account_id)
-    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
     result = {
         "account_id": account_id,
-        "settings": _visible_account_config(ctx, settings),
+        "settings": await _account_configuration_settings(ctx, account_id),
     }
     if path is not None:
         from openviking.config.ttl import resolve_effective_ttl, validate_ttl_root
@@ -824,7 +841,7 @@ async def patch_account_configuration(
     _check_account_access(ctx, account_id)
     await _check_account_exists(request, account_id)
     _authorize_account_config_patch(ctx, body.settings)
-    _reject_unsupported_ttl_config(body.settings)
+    validate_config_input(body.settings)
     try:
         if "ttl" in body.settings:
             from openviking.ttl.wiring import get_ttl_adapter
@@ -834,12 +851,11 @@ async def patch_account_configuration(
             await _get_runtime_config_manager().patch_account(account_id, body.settings)
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
     return Response(
         status="ok",
         result={
             "account_id": account_id,
-            "settings": _visible_account_config(ctx, settings),
+            "settings": await _account_configuration_settings(ctx, account_id),
         },
     )
 
@@ -960,7 +976,7 @@ async def patch_cluster_configuration(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
-    _reject_unsupported_ttl_config(body.settings, body.content)
+    validate_config_input(body.settings, body.content)
     if dry_run and (source != "file" or body.content is None):
         raise InvalidArgumentError("dry_run requires source=file and full file content")
     if source == "file":
@@ -1026,8 +1042,8 @@ async def register_user(
         user=UserIdentifier(account_id, body.user_id),
         role=resolved_role,
     )
-    await _validate_initial_user_config(service, user_ctx, body.user_config)
-    manager = _get_api_key_manager(request)
+    validate_config_input(body.user_config)
+    manager = _get_api_key_manager(request, for_write=True)
     user_key = await manager.register_user(
         account_id,
         body.user_id,
@@ -1128,15 +1144,17 @@ async def get_user(
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def get_user_settings(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return the configured and effective memory policy for one User."""
+    """Return effective User settings and explicit TTL."""
     _check_account_access(ctx, account_id)
+    if ctx.role == Role.USER and user_id != ctx.user.user_id:
+        raise PermissionDeniedError("USER can only access their own settings")
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
@@ -1151,16 +1169,15 @@ async def get_user_settings(
     return Response(
         status="ok",
         result=_user_settings_result(
-            account_id,
-            user_id,
+            user_ctx,
             user_config,
-            request.app.state.config.user_config_defaults.memory_policy,
+            request.app.state.config,
         ),
     )
 
 
 @router.patch("/accounts/{account_id}/users/{user_id}/settings")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def patch_user_settings(
     body: UserSettingsPatch,
     request: Request,
@@ -1168,8 +1185,10 @@ async def patch_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Patch the allowlisted User memory and TTL policies without restarting."""
+    """Patch User settings without restarting."""
     _check_account_access(ctx, account_id)
+    if ctx.role == Role.USER and user_id != ctx.user.user_id:
+        raise PermissionDeniedError("USER can only access their own settings")
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
@@ -1182,16 +1201,14 @@ async def patch_user_settings(
     )
     from openviking.server.user_config import patch_user_config
 
-    patch = body.model_dump(exclude_unset=True)
-    _reject_unsupported_ttl_config(patch)
-    user_config = await patch_user_config(service.viking_fs, user_ctx, patch)
+    validate_config_input(body)
+    user_config = await patch_user_config(service.viking_fs, user_ctx, body)
     return Response(
         status="ok",
         result=_user_settings_result(
-            account_id,
-            user_id,
+            user_ctx,
             user_config,
-            request.app.state.config.user_config_defaults.memory_policy,
+            request.app.state.config,
         ),
     )
 
@@ -1207,6 +1224,7 @@ async def remove_user(
     """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    _get_api_key_manager(request, for_write=True)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -1237,7 +1255,7 @@ async def set_user_role(
     role = body.role.lower()
     if role not in ACCOUNT_USER_ASSIGNABLE_ROLES:
         raise InvalidArgumentError("set_user_role only supports user and admin roles.")
-    await _get_api_key_manager(request).set_role(account_id, user_id, role)
+    await _get_api_key_manager(request, for_write=True).set_role(account_id, user_id, role)
     return Response(
         status="ok",
         result={
@@ -1265,7 +1283,7 @@ async def regenerate_key(
             raise PermissionDeniedError("USER can only regenerate their own API key")
         if not is_personal_api_key_auth(request, ctx):
             raise PermissionDeniedError("Self-service key rotation requires a personal API key")
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     new_key = await manager.regenerate_key(
         account_id,
         user_id,
@@ -1287,7 +1305,7 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(
+    result = await _get_api_key_manager(request, for_write=True).create_group(
         account_id, body.group_id
     )
     return Response(status="ok", result=result)
@@ -1314,7 +1332,7 @@ async def delete_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     for member_id in await manager.get_group_members(account_id, group_id):
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
     await manager.delete_group(account_id, group_id)
@@ -1330,9 +1348,7 @@ async def list_group_members(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    members = await _get_api_key_manager(request).get_group_members(
-        account_id, group_id
-    )
+    members = await _get_api_key_manager(request).get_group_members(account_id, group_id)
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 
@@ -1349,7 +1365,7 @@ async def add_group_members(
     _check_account_access(ctx, account_id)
     for member_id in body.user_ids:
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
-    added = await _get_api_key_manager(request).add_group_members(
+    added = await _get_api_key_manager(request, for_write=True).add_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"added": added})
@@ -1368,7 +1384,7 @@ async def remove_group_members(
     _check_account_access(ctx, account_id)
     for member_id in body.user_ids:
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
-    removed = await _get_api_key_manager(request).remove_group_members(
+    removed = await _get_api_key_manager(request, for_write=True).remove_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"removed": removed})

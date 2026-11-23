@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.storage.viking_fs._base import LS_ALL_NODES
 from openviking_cli.utils.uri import VikingURI
 
@@ -59,6 +60,8 @@ class _SyncMixin:
         Hidden entries (names starting with ``.``) are skipped on both sides.
         Name conflicts (file vs. directory at the same name) are resolved by
         deleting the target-side entry before moving the source in place.
+        Move/remove failures propagate to the caller without deleting the remaining
+        staging tree. Changes already applied before a failure are not rolled back.
 
         Args:
             root_uri: Source (typically a temp/staging tree). Must exist.
@@ -139,38 +142,25 @@ class _SyncMixin:
 
                 if root_file and name in target_dirs:
                     target_conflict_dir = target_dirs[name]
-                    try:
-                        await self.rm(
-                            target_conflict_dir,
-                            recursive=True,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                        diff.deleted_dirs.append(target_conflict_dir)
-                        target_dirs.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete directory for file conflict: {target_conflict_dir}, error={e}"
-                        )
+                    await self.rm(
+                        target_conflict_dir,
+                        recursive=True,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
+                    )
+                    diff.deleted_dirs.append(target_conflict_dir)
+                    target_dirs.pop(name, None)
                     target_file = None
 
                 if target_file and name in root_dirs and not root_file:
-                    try:
-                        await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
-                        diff.deleted_files.append(target_file)
-                        target_files.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
-                        )
+                    await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
+                    diff.deleted_files.append(target_file)
+                    target_files.pop(name, None)
                     continue
 
                 if target_file and not root_file:
-                    try:
-                        await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
-                        diff.deleted_files.append(target_file)
-                    except Exception as e:
-                        logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
+                    await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
+                    diff.deleted_files.append(target_file)
                     continue
 
                 if root_file and target_file:
@@ -181,45 +171,32 @@ class _SyncMixin:
                         try:
                             changed = await check_changed(root_file, target_file)
                         except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to compare file content for {root_file}: {e}, treating as unchanged"
+                            logger.info(
+                                "Failed to compare file content for %s: %s, treating as unchanged",
+                                type(root_file).__name__,
+                                type(e).__name__,
                             )
                             changed = False
                     if changed:
+                        await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
+                        await self.mv(
+                            root_file,
+                            target_file,
+                            ctx=ctx,
+                            lease_ref=lease_ref,
+                        )
                         diff.updated_files.append(target_file)
-                        try:
-                            await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
-                        except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
-                            )
-                        try:
-                            await self.mv(
-                                root_file,
-                                target_file,
-                                ctx=ctx,
-                                lease_ref=lease_ref,
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
-                            )
                     continue
 
                 if root_file and not target_file:
                     target_file_uri = VikingURI(target_dir).join(name).uri
+                    await self.mv(
+                        root_file,
+                        target_file_uri,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
+                    )
                     diff.added_files.append(target_file_uri)
-                    try:
-                        await self.mv(
-                            root_file,
-                            target_file_uri,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
-                        )
 
             dir_names = set(root_dirs.keys()) | set(target_dirs.keys())
             for name in sorted(dir_names):
@@ -228,49 +205,34 @@ class _SyncMixin:
 
                 if root_subdir and name in target_files:
                     target_conflict_file = target_files[name]
-                    try:
-                        await self.rm(
-                            target_conflict_file,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                        diff.deleted_files.append(target_conflict_file)
-                        target_files.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete file for dir conflict: {target_conflict_file}, error={e}"
-                        )
+                    await self.rm(
+                        target_conflict_file,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
+                    )
+                    diff.deleted_files.append(target_conflict_file)
+                    target_files.pop(name, None)
                     target_subdir = None
 
                 if target_subdir and not root_subdir:
-                    try:
-                        await self.rm(
-                            target_subdir,
-                            recursive=True,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                        diff.deleted_dirs.append(target_subdir)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete directory: {target_subdir}, error={e}"
-                        )
+                    await self.rm(
+                        target_subdir,
+                        recursive=True,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
+                    )
+                    diff.deleted_dirs.append(target_subdir)
                     continue
 
                 if root_subdir and not target_subdir:
                     target_subdir_uri = VikingURI(target_dir).join(name).uri
+                    await self.mv(
+                        root_subdir,
+                        target_subdir_uri,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
+                    )
                     diff.added_dirs.append(target_subdir_uri)
-                    try:
-                        await self.mv(
-                            root_subdir,
-                            target_subdir_uri,
-                            ctx=ctx,
-                            lease_ref=lease_ref,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
-                        )
                     continue
 
                 if root_subdir and target_subdir:
@@ -286,8 +248,8 @@ class _SyncMixin:
                     ctx=ctx,
                     lease_ref=lease_ref,
                 )
-            diff.added_dirs.append(target_uri)
             await self.mv(root_uri, target_uri, ctx=ctx, lease_ref=lease_ref)
+            diff.added_dirs.append(target_uri)
             return diff
 
         await sync_dir(root_uri, target_uri)
@@ -295,5 +257,9 @@ class _SyncMixin:
             try:
                 await self.delete_temp(root_uri, ctx=ctx)
             except Exception as e:
-                logger.error(f"[SyncDiff] Failed to delete temp root {root_uri}: {e}")
+                logger.info(
+                    "Failed to delete temp root %s: %s",
+                    safe_uri_for_log(str(root_uri)),
+                    type(e).__name__,
+                )
         return diff

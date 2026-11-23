@@ -15,7 +15,8 @@ use crate::crypto;
 
 use super::codec::LockTokenCodec;
 use super::types::{
-    HandoffRecoveryReason, LockToken, PathLockError, PathLockKind, PathLockRequest, PathLockResult,
+    HandoffRecoveryReason, LockHolder, LockToken, PathLockError, PathLockKind, PathLockRequest,
+    PathLockResult,
 };
 
 /// Representation used for handles stored in a PathLock lease.
@@ -68,6 +69,50 @@ pub struct AtomicAcquisitionResult {
 /// Storage abstraction for lock tokens. Only `PathLockManager` should call these methods.
 #[async_trait]
 pub trait PathLockProvider: Send + Sync {
+    /// Undo a handoff by removing only its new holder and restoring a still-live
+    /// source. Preserve concurrent sibling renewals. Backends that store their
+    /// own timestamps must override this and judge expiry using the same clock;
+    /// `stale_before` is only authoritative for client-clock storage.
+    async fn replace_holder(
+        &self,
+        path: &str,
+        owner: &str,
+        holder: &str,
+        restored: LockHolder,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        let started_at = std::time::Instant::now();
+        for _ in 0..16 {
+            let Some(current) = self.read_token(path).await? else {
+                return Ok(());
+            };
+            if current.owner_id != owner || !current.holders.iter().any(|h| h.id == holder) {
+                return Ok(());
+            }
+            let stale_before = stale_before.saturating_add(started_at.elapsed().as_nanos());
+            let mut next = current.clone();
+            next.holders
+                .retain(|h| h.id != holder && h.time_ns >= stale_before);
+            if restored.time_ns >= stale_before && !next.holders.iter().any(|h| h.id == restored.id)
+            {
+                next.holders.push(restored.clone());
+            }
+            next.recompute();
+            let changed = if next.holders.is_empty() {
+                self.compare_and_remove_token(path, &current).await?
+            } else {
+                self.compare_and_write_token(path, &current, &next).await?
+            };
+            if changed {
+                return Ok(());
+            }
+        }
+        Err(PathLockError::Busy {
+            lock_path: path.into(),
+            operation: "holder rollback".into(),
+        })
+    }
+
     /// Atomic conflict check plus holder insertion/replacement. A supplied source
     /// must exist, be live and match the requested kind before any mutation.
     /// None selects the filesystem CAS protocol; transactional backends override.
@@ -189,7 +234,7 @@ pub trait PathLockProvider: Send + Sync {
     }
 
     /// Legacy v1 rollback. Holder acquisitions roll back the individual holder
-    /// and handoff source through the manager.
+    /// and handoff source through `mutate_holder` and `replace_holder`.
     async fn rollback_acquisitions_atomic(
         &self,
         _acquisitions: &[AtomicAcquisition],

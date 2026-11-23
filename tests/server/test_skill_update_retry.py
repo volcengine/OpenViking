@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from tests.server.test_api_skills import _add_skill, _skill_md
@@ -24,7 +25,9 @@ def _fail_first_run(monkeypatch, root, *, block_retries=False):
         if root_uri == root:
             attempts.append(root_uri)
             if len(attempts) == 1:
-                raise RuntimeError("one transient failure after adopting the package lock")
+                raise LockAcquisitionError(
+                    "one transient lock failure after adopting the package lock"
+                )
             if block_retries:
                 await asyncio.Event().wait()
         return await original(self, root_uri)
@@ -59,12 +62,11 @@ async def test_update_wait_true_retries_transient_failure_without_conflicting_wi
 
 
 @pytest.mark.parametrize("enqueue_committed", [False, True])
-async def test_update_cancellation_waits_for_retry_handoff_to_settle_before_restoring(
+async def test_update_cancellation_settles_retry_handoff_without_restoring(
     client, service, monkeypatch, enqueue_committed
 ):
     name = f"update-cancel-retry-enqueue-{enqueue_committed}"
     root = (await _add_skill(client, name, "Original"))["root_uri"]
-    old_content = await _download(client, f"{root}/SKILL.md")
     # A published retry may already be running while its enqueue is returning.
     # Keep that work pending so this case actually exercises request cancellation.
     _fail_first_run(monkeypatch, root, block_retries=enqueue_committed)
@@ -79,17 +81,17 @@ async def test_update_cancellation_waits_for_retry_handoff_to_settle_before_rest
         retry_started.set()
         assert resume_enqueue.wait(5)
 
-    async def slow_retry_enqueue(msg):
+    async def slow_retry_enqueue(msg, **kwargs):
         nonlocal enqueues
         if msg.uri == root:
             enqueues += 1
             if enqueues == 2:
                 if enqueue_committed:
-                    result = await original_enqueue(msg)
+                    result = await original_enqueue(msg, **kwargs)
                     await asyncio.to_thread(pause)
                     return result
                 await asyncio.to_thread(pause)
-        return await original_enqueue(msg)
+        return await original_enqueue(msg, **kwargs)
 
     monkeypatch.setattr(queue, "enqueue", slow_retry_enqueue)
     updating = asyncio.create_task(
@@ -102,12 +104,12 @@ async def test_update_cancellation_waits_for_retry_handoff_to_settle_before_rest
         await _wait_until(retry_started.is_set)
         updating.cancel()
         await asyncio.sleep(0)
-        assert not updating.done(), "Rollback must wait for the started retry enqueue"
+        assert not updating.done(), "Cancellation must wait for the started retry enqueue"
         await _assert_locked(service.viking_fs, root)
         resume_enqueue.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(updating, 10)
-        assert await _download(client, f"{root}/SKILL.md") == old_content
+        assert b"Replacement" in await _download(client, f"{root}/SKILL.md")
         await _assert_unlocked(service.viking_fs, root)
     finally:
         resume_enqueue.set()

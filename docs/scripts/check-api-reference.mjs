@@ -81,7 +81,6 @@ const internalRouterFiles = new Set([
   'console.py',
   'debug.py',
   'stats.py',
-  'user_settings.py',
 ])
 const routerFiles = fs.readdirSync(routerDir)
   .filter((name) => name.endsWith('.py') && !internalRouterFiles.has(name))
@@ -141,6 +140,15 @@ for (const routerFile of routerFiles) {
     )
     const query = new Map()
     for (const parameter of splitTopLevel(signature)) {
+      // Annotated Query declarations preserve constraints carried by shared parameter types.
+      const annotatedQuery = parameter.match(
+        /^([A-Za-z_]\w*)\s*:\s*Annotated\[[\s\S]*,\s*Query\(([\s\S]*)\)\s*,?\s*\](?:\s*=\s*([\s\S]+))?$/
+      )
+      if (annotatedQuery) {
+        const alias = annotatedQuery[2].match(/\balias\s*=\s*["']([^"']+)["']/)?.[1]
+        query.set(alias ?? annotatedQuery[1], annotatedQuery[3] === undefined)
+        continue
+      }
       const queryMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*Query\(([\s\S]*)\)$/)
       if (queryMatch) {
         const alias = queryMatch[2].match(/\balias\s*=\s*["']([^"']+)["']/)?.[1]
@@ -231,7 +239,7 @@ function tableReferences(source) {
       (match) => match[1]
     )
     const paths = Array.from(
-      cells[1].matchAll(/`(\/[A-Za-z0-9_{}./:-]+)`/g),
+      cells[1].matchAll(/`(\/[^`\s]+)`/g),
       (match) => match[1]
     )
     for (const method of methods) {

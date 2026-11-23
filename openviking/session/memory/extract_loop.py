@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
@@ -144,7 +146,7 @@ class ExtractLoop:
             vlm: VLM instance (from openviking.models.vlm.base)
             viking_fs: VikingFS instance for storage operations
             model: Model name to use
-            max_iterations: Maximum number of ReAct iterations (default: 5)
+            max_iterations: Maximum number of ReAct iterations (default: 3)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Per-call thinking override for this extraction loop. True/False
@@ -199,7 +201,8 @@ class ExtractLoop:
         Run the simplified ReAct loop for memory updates.
 
         Returns:
-            Tuple of (final operations, tools_used list)
+            Tuple of (final operations, tools_used list). Exhausted format errors
+            return None when no validated operations can be retained.
         """
         iteration = 0
         max_iterations = self.max_iterations
@@ -211,6 +214,7 @@ class ExtractLoop:
         patch_repair_count = 0
         resolution_repair_count = 0
         pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
+        resolution_repair_ranges_only = True
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -220,6 +224,7 @@ class ExtractLoop:
         self.schema_model_generator = SchemaModelGenerator(
             schemas,
             template_context={"language": output_language},
+            consolidation=getattr(self.context_provider, "is_consolidation", False),
             # include_decision_reasoning=(
             #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
             # ),
@@ -260,6 +265,7 @@ class ExtractLoop:
             page_id_map=self._extract_context.page_id_map,
             read_file_contents=self.context_provider.read_file_contents,
             link_enabled=self._link_enabled,
+            consolidation=getattr(self.context_provider, "is_consolidation", False),
             role_scope=role_scope,
             available_tools=tuple(allowed_tools),
             template_context={"language": output_language},
@@ -336,6 +342,7 @@ class ExtractLoop:
                     operations = self._event_resolution_repair_subset(
                         operations,
                         pending_resolution_repair[0],
+                        ranges_only=resolution_repair_ranges_only,
                     )
                 candidate_operations, candidate_links = await self.resolve_operations(operations)
                 if pending_resolution_repair is not None:
@@ -345,31 +352,15 @@ class ExtractLoop:
                         candidate_operations,
                     )
                     raw_links = base_links
-                    pending_resolution_repair = None
+                    # Refetch and patch retries must keep using the validated base.
                 else:
                     final_operations = candidate_operations
                     raw_links = candidate_links
-                resolution_issues = self._retryable_resolution_issues(final_operations)
-                if resolution_issues and resolution_repair_count == 0:
-                    resolution_repair_count += 1
-                    pending_resolution_repair = (final_operations, raw_links)
-                    max_iterations += 1
-                    self._disable_tools_for_iteration = True
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": self._build_resolution_repair_instruction(resolution_issues),
-                        }
-                    )
-                    tracer.info(
-                        "Extended max_iterations to "
-                        f"{max_iterations} for retry memory target resolution",
-                        console=True,
-                    )
-                    continue
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
+                    # New file context may require changes beyond the Event's ranges.
+                    resolution_repair_ranges_only = False
                     tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
@@ -384,6 +375,7 @@ class ExtractLoop:
                     continue
                 patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
+                    resolution_repair_ranges_only = False
                     patch_repair_count += 1
                     max_iterations += 1
                     self._disable_tools_for_iteration = True
@@ -397,14 +389,42 @@ class ExtractLoop:
                         f"Extended max_iterations to {max_iterations} for retry patch repair"
                     )
                     continue
+                # Only cache a fallback after reads and patch validation have completed.
+                resolution_issues = self._retryable_resolution_issues(final_operations)
+                if not patch_errors and resolution_issues and resolution_repair_count == 0:
+                    resolution_repair_count += 1
+                    pending_resolution_repair = (final_operations, raw_links)
+                    resolution_repair_ranges_only = True
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_resolution_repair_instruction(resolution_issues),
+                        }
+                    )
+                    tracer.info(
+                        "Extended max_iterations to "
+                        f"{max_iterations} for retry memory target resolution",
+                        console=True,
+                    )
+                    continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
-            failure_preview = _preview_text(self._last_llm_failure_content)
             parse_error = self._last_parse_error
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
             if failure_kind == "budget_exhausted":
+                if pending_resolution_repair is not None:
+                    final_operations, raw_links = pending_resolution_repair
+                    pending_resolution_repair = None
+                    tracer.info(
+                        "Event resolution repair response was cut off by the output budget; "
+                        "keeping the validated first-pass operations",
+                        console=True,
+                    )
+                    break
                 # Truncation is not an ordinary format mistake: a same-cap format
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
@@ -420,22 +440,26 @@ class ExtractLoop:
 
             # A failure is only terminal when no retry attempt remains after it.
             retry_remaining = iteration < max_iterations
-            failure_message = (
-                "Failed to parse memory operations "
-                f"(iteration {iteration}/{max_iterations}) "
-                f"failure_kind={failure_kind} error={parse_error} "
-                f"response_preview={failure_preview!r}"
-            )
             if retry_remaining:
                 # Recoverable: another attempt will run. Keep it in the trace only,
                 # not the console/log stream.
-                tracer.info(failure_message)
+                logger.info(
+                    "memory operations parse failed; retrying error_code=%s attempt=%d retry_limit=%d",
+                    failure_kind,
+                    iteration,
+                    max_iterations,
+                    extra={"degraded": True},
+                )
             else:
                 # ERROR: no attempt remains to repair the invalid response.
-                tracer.error(failure_message)
+                logger.debug(
+                    "memory operations parse exhausted error_code=%s attempt=%d retry_limit=%d",
+                    failure_kind,
+                    iteration,
+                    max_iterations,
+                )
 
             # Preserve a valid first pass when only its resolution repair failed.
-            # Otherwise propagate failure so the archive is not marked completed.
             if not retry_remaining:
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
@@ -446,6 +470,12 @@ class ExtractLoop:
                         console=True,
                     )
                     break
+                if failure_kind == "parse_error":
+                    logger.info(
+                        "memory operations parse exhausted; returning empty result",
+                        extra={"degraded": True},
+                    )
+                    return None, tools_used
                 raise RuntimeError(
                     "Final response could not be parsed as operations "
                     f"after {max_iterations} iterations "
@@ -540,9 +570,8 @@ class ExtractLoop:
         try:
             return bool(has_writable_target())
         except Exception:
-            logger.warning(
-                "Unable to determine writable message targets; preserving resolution repair",
-                exc_info=True,
+            logger.info(
+                "unable to determine writable message targets; preserving resolution repair"
             )
             return True
 
@@ -595,8 +624,10 @@ class ExtractLoop:
         cls,
         operations: Any,
         original: ResolvedOperations,
+        *,
+        ranges_only: bool = True,
     ) -> _EventRepairOperations:
-        """Keep only one range repair for each failed Event and preserve its original fields."""
+        """Keep one response per failed Event; limit the initial repair to ranges."""
         failed_events = {
             operation.page_id: operation
             for operation in original.upsert_operations
@@ -614,26 +645,27 @@ class ExtractLoop:
             page_candidates = candidates.get(page_id, [])
             if len(page_candidates) != 1:
                 if page_candidates:
-                    logger.warning(
-                        "Ignoring ambiguous Event repair response for page_id=%s: count=%s",
-                        page_id,
+                    logger.info(
+                        "ambiguous event repair ignored page_hash=%s total=%d",
+                        short_hash(str(page_id)),
                         len(page_candidates),
+                        extra={"degraded": True},
                     )
                 continue
 
             candidate = page_candidates[0]
             expected_name = failed_operation.memory_fields.get("event_name")
             if candidate.get("event_name") != expected_name or candidate.get("ranges") is None:
-                logger.warning(
-                    "Ignoring mismatched Event repair response for page_id=%s",
-                    page_id,
+                logger.info(
+                    "mismatched event repair ignored page_hash=%s",
+                    short_hash(str(page_id)),
+                    extra={"degraded": True},
                 )
                 continue
 
+            fields = failed_operation.memory_fields if ranges_only else candidate
             repaired_item = {
-                key: value
-                for key, value in failed_operation.memory_fields.items()
-                if key not in {"memory_type", "user_id"}
+                key: value for key, value in fields.items() if key not in {"memory_type", "user_id"}
             }
             repaired_item["ranges"] = candidate["ranges"]
             repaired_item["page_id"] = page_id
@@ -735,10 +767,11 @@ class ExtractLoop:
                 if normalized_page_id != raw_page_id:
                     updates[field_name] = normalized_page_id
             if ambiguous:
-                logger.warning(
-                    "Skipping ambiguous memory link after page_id normalization: f=%s, t=%s",
-                    link.f,
-                    link.t,
+                logger.info(
+                    "ambiguous normalized memory link skipped from_hash=%s to_hash=%s",
+                    short_hash(str(link.f)),
+                    short_hash(str(link.t)),
+                    extra={"degraded": True},
                 )
                 continue
             normalized_links.append(link.model_copy(update=updates) if updates else link)
@@ -804,6 +837,21 @@ class ExtractLoop:
         role_scope = self._isolation_handler.get_read_scope()
         page_id_map = getattr(self._extract_context, "page_id_map", None)
         schemas = list(self.context_provider.get_memory_schemas(self.ctx))
+        if getattr(self.context_provider, "is_consolidation", False):
+            payload = {}
+            for schema in schemas:
+                value = getattr(operations, schema.memory_type, None)
+                if value:
+                    items = value if isinstance(value, list) else [value]
+                    payload[schema.memory_type] = [dict(item) for item in items]
+            ExtractionOutputContext(
+                operations_model=type(operations),
+                schemas=tuple(schemas),
+                page_id_map=page_id_map,
+                read_file_contents=self.context_provider.read_file_contents,
+                link_enabled=False,
+                consolidation=True,
+            ).validate_creates(payload)
         assigned_page_ids, page_id_assignments = self._assign_response_page_ids(
             operations,
             schemas,
@@ -928,14 +976,24 @@ class ExtractLoop:
                         reason_code=MemoryOperationSkipCode.INVALID_URI_TEMPLATE_VARS,
                         reason=str(exc),
                     )
-                    logger.warning(
-                        "Skipping memory operation with unrenderable URI: "
-                        "memory_type=%s page_id=%s error=%s",
-                        memory_type,
-                        page_id,
-                        exc,
+                    logger.info(
+                        "unrenderable memory operation skipped type_hash=%s page_hash=%s error_type=%s",
+                        short_hash(str(memory_type)),
+                        short_hash(str(page_id)),
+                        type(exc).__name__,
+                        extra={"degraded": True, "error_type": type(exc).__name__},
                     )
 
+                if (
+                    getattr(self.context_provider, "is_consolidation", False)
+                    and schema.requires_messages()
+                    and resolved_op.uris
+                    and (
+                        resolved_op.old_memory_file_content is None
+                        or resolved_op.uris != [resolved_op.old_memory_file_content.uri]
+                    )
+                ):
+                    raise ValueError(f"Cannot create {memory_type} without original messages")
                 upsert_operations.append(resolved_op)
 
         delete_replacements: dict[str, str] = {}
@@ -946,6 +1004,12 @@ class ExtractLoop:
             delete_uri = page_id_map.resolve(delete_id.delete_page_id)
             if not delete_uri:
                 continue
+            if is_static_agent_memory(delete_uri):
+                logger.debug(
+                    "static agent memory automatic deletion skipped uri=%s",
+                    safe_uri_for_log(delete_uri),
+                )
+                continue
             old_content = self.context_provider.read_file_contents.get(delete_uri)
             if not old_content:
                 continue
@@ -953,11 +1017,10 @@ class ExtractLoop:
             replacement_uri = None
             if replacement_page_id is not None:
                 if replacement_page_id in invalid_reference_page_ids:
-                    logger.warning(
-                        "Skipping delete with type-mismatched replacement page_id: "
-                        "delete_page_id=%s, replacement_page_id=%s",
-                        delete_id.delete_page_id,
-                        delete_id.replacement_page_id,
+                    logger.info(
+                        "memory delete replacement type mismatch; skipping page_hash=%s replacement_hash=%s",
+                        short_hash(str(delete_id.delete_page_id)),
+                        short_hash(str(delete_id.replacement_page_id)),
                     )
                     continue
                 replacement_page_id, ambiguous = self._normalize_page_id_reference(
@@ -966,11 +1029,10 @@ class ExtractLoop:
                     page_id_map,
                 )
                 if ambiguous:
-                    logger.warning(
-                        "Skipping delete with ambiguous replacement page_id: "
-                        "delete_page_id=%s, replacement_page_id=%s",
-                        delete_id.delete_page_id,
-                        delete_id.replacement_page_id,
+                    logger.info(
+                        "memory delete replacement ambiguous; skipping page_hash=%s replacement_hash=%s",
+                        short_hash(str(delete_id.delete_page_id)),
+                        short_hash(str(delete_id.replacement_page_id)),
                     )
                     continue
                 replacement_uri = next(
@@ -983,6 +1045,23 @@ class ExtractLoop:
                 )
                 if not replacement_uri:
                     replacement_uri = page_id_map.resolve(replacement_page_id)
+                if not replacement_uri:
+                    errors.append(
+                        f"Unresolved replacement page_id {replacement_page_id} for {delete_uri}"
+                    )
+                    continue
+                if replacement_uri == delete_uri:
+                    # Distinct proposed pages can resolve to the same existing file.
+                    if replacement_page_id == delete_id.delete_page_id or not any(
+                        op.page_id == replacement_page_id
+                        and op.uris == [delete_uri]
+                        and not op.resolution_skip
+                        for op in upsert_operations
+                    ):
+                        errors.append(
+                            f"Delete references its own URI without a surviving update: {delete_uri}"
+                        )
+                    continue
 
             if all(file.uri != old_content.uri for file in delete_file_contents):
                 delete_file_contents.append(old_content)
@@ -1173,7 +1252,7 @@ class ExtractLoop:
                 has_unknown_tool = True
             # Skip if arguments is None
             if tool_call.arguments is None:
-                tracer.error(f"Tool call {tool_call.name} has no arguments, skipping")
+                logger.debug("memory operation failed stage=%s", "_execute_tool_calls")
                 continue
 
             tools_used.append(
@@ -1268,10 +1347,7 @@ class ExtractLoop:
             self._last_llm_failure_content = content
             self._last_parse_error = self._budget_exhausted_error(response, content)
             tracer.set("memory.extraction.parse_error", self._last_parse_error)
-            logger.debug(
-                "Response truncated by output-token budget "
-                f"failure_kind=budget_exhausted error={self._last_parse_error}"
-            )
+            logger.debug("memory response truncated by output budget error_code=budget_exhausted")
             return (None, None)
 
         # Case 0: Handle string response (when tools are not provided) or None
@@ -1298,7 +1374,7 @@ class ExtractLoop:
         if content:
             try:
                 # print(f'LLM response content: {content}')
-                logger.debug(f"[assistant]\n{content}")
+                logger.debug("memory response received response_chars=%d", len(content))
 
                 operations, error = self._output_protocol.parse(content, self._output_context)
 
@@ -1312,9 +1388,9 @@ class ExtractLoop:
                     tracer.set("memory.extraction.parse_error", error)
                     # Diagnostic only; the run loop emits the WARNING/ERROR decision.
                     logger.debug(
-                        "Failed to parse memory operations "
-                        f"failure_kind={failure_kind} error={error} "
-                        f"response_preview={_preview_text(content)!r}"
+                        "memory operations parse failed error_code=%s response_chars=%d",
+                        failure_kind,
+                        len(content),
                     )
                     return (None, None)
 
@@ -1322,7 +1398,11 @@ class ExtractLoop:
             except Exception as e:
                 self._last_parse_error = str(e)
                 tracer.set("memory.extraction.parse_error", self._last_parse_error)
-                logger.debug(f"Error parsing operations: {e}")
+                logger.debug(
+                    "memory operations parse failed error_type=%s",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
 
         # Case 3: No tool calls and no parsable operations
         self._last_llm_failure_kind = "empty_response" if not content else "parse_error"
@@ -1333,9 +1413,9 @@ class ExtractLoop:
                 self._last_parse_error = empty_error
                 tracer.set("memory.extraction.parse_error", empty_error)
         logger.debug(
-            "No tool calls or operations parsed "
-            f"failure_kind={self._last_llm_failure_kind} "
-            f"response_preview={_preview_text(self._last_llm_failure_content)!r}"
+            "memory response has no operations error_code=%s response_chars=%d",
+            self._last_llm_failure_kind,
+            len(self._last_llm_failure_content or ""),
         )
         return (None, None)
 
@@ -1356,7 +1436,12 @@ class ExtractLoop:
                     # execute_tool(MemoryReadTool) 已经返回 parsed dict，直接使用
                     refetch_uris[uri] = content
                 except Exception as e:
-                    tracer.error("read tool execute fail", e)
+                    logger.debug(
+                        "memory operation failed stage=%s error_type=%s",
+                        "_check_unread_existing_files",
+                        type(e).__name__,
+                        extra={"error_type": type(e).__name__},
+                    )
         return refetch_uris
 
     def _add_format_error_message(self, messages: List[Dict[str, Any]]) -> None:

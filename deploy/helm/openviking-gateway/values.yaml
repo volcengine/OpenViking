@@ -13,8 +13,7 @@ imagePullSecrets: []
 existingSecret: ""
 config:
   openviking_url: http://openviking:1933
-  # Seven-day retention for sessions and Responses state.
-  session_ttl_seconds: 604800
+  # Seven-day retention for Responses state.
   response_ttl_seconds: 604800
   storage:
     kernel: sqlite

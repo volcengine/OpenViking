@@ -9,12 +9,15 @@ from unittest.mock import ANY, AsyncMock, call
 
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
+from openviking.core.global_policy import PolicyPathScope, PolicyScopePlan
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSIoError, AGFSNotFoundError
 from openviking.resource.watch_manager import WatchManager, WatchPathLocks
 from openviking.resource.watch_store import WatchMoveResult
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import DataAccessScope, RequestContext, Role
+from openviking.server.user_config import ResolvedPrivacyConfig
+from openviking.service import fs_service as fs_module
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
 from openviking.storage.abstract_overview import body_for_preview
@@ -25,6 +28,7 @@ from openviking_cli.exceptions import (
     ConflictError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -50,6 +54,7 @@ class _FakePathLockAGFS:
         self.requests = []
         self.held = 0
         self.events = events
+        self.stat = AsyncMock(side_effect=AGFSNotFoundError("target not found"))
 
     async def pathlock_acquire_batch(self, requests, timeout_secs=0.0, owner_lease_ref=None):
         del timeout_secs, owner_lease_ref
@@ -114,7 +119,8 @@ class _FakeVikingFS:
         return {"isDir": self.is_dir}
 
     async def rm(self, uri, recursive=False, ctx=None, lease_ref=None):
-        assert lease_ref is not None and self._async_agfs.held
+        if lease_ref is not None:
+            assert self._async_agfs.held
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
         if self.rm_error:
             raise self.rm_error
@@ -177,6 +183,71 @@ async def test_stat_forwards_optional_fields_without_changing_defaults(request_c
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_uri",
+    [
+        "viking://user/default/memories/notes.md",
+        "viking://system/memory/memory_templates/custom/demo.md",
+    ],
+)
+async def test_stat_resolves_record_id_before_namespace_policy(request_context, resolved_uri):
+    record_id = "0123456789abcdef0123456789abcdef"
+    metadata = {"uri": resolved_uri, "isDir": False}
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(return_value=metadata),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.stat(record_id, request_context, include_lock_status=True)
+
+    assert result == metadata
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    kwargs = {"ctx": request_context, "skip_count": False, "include_lock_status": True}
+    if resolved_uri.startswith("viking://system/"):
+        kwargs.update(skip_count=True, include_vector_fields=False)
+    viking_fs.stat.assert_awaited_once_with(resolved_uri, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_stat_missing_record_id_preserves_not_found(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    error = NotFoundError(record_id, "file")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(side_effect=error),
+        stat=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(NotFoundError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.resolve_uri.assert_awaited_once_with(record_id, ctx=request_context)
+    viking_fs.stat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stat_by_record_id_preserves_access_denial(request_context):
+    record_id = "0123456789abcdef0123456789abcdef"
+    resolved_uri = "viking://user/other/memories/private.md"
+    error = PermissionDeniedError("Access denied")
+    viking_fs = SimpleNamespace(
+        resolve_uri=AsyncMock(return_value=resolved_uri),
+        stat=AsyncMock(side_effect=error),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        await service.stat(record_id, request_context)
+
+    assert exc_info.value is error
+    viking_fs.stat.assert_awaited_once_with(
+        resolved_uri, ctx=request_context, skip_count=False, include_lock_status=False
+    )
+
+
 class _MkdirPathlockAGFS:
     """One conflicting scope at a time, waiting up to the requested timeout."""
 
@@ -184,6 +255,7 @@ class _MkdirPathlockAGFS:
         self._lock = asyncio.Lock()
         self.held = False
         self.requests = []
+        self.stat = AsyncMock(side_effect=AGFSNotFoundError("target not found"))
 
     async def pathlock_acquire_batch(self, requests, timeout_secs=0.0, owner_lease_ref=None):
         del owner_lease_ref
@@ -204,6 +276,7 @@ class _MkdirVikingFS:
     def __init__(self):
         self.directory_exists = False
         self.abstract_content = None
+        self._ensure_access = AsyncMock()
         self._async_agfs = _MkdirPathlockAGFS()
         self._uri_to_path = _local_path
 
@@ -229,6 +302,18 @@ class _MkdirVikingFS:
 async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_context):
     viking_fs = _MkdirVikingFS()
     vectorized = []
+    probes = 0
+    both_probed = asyncio.Event()
+
+    async def probe_missing_target(*_args, **_kwargs):
+        nonlocal probes
+        probes += 1
+        if probes == 2:
+            both_probed.set()
+        await both_probed.wait()
+        raise AGFSNotFoundError("target not found")
+
+    viking_fs._async_agfs.stat.side_effect = probe_missing_target
 
     async def record_vectorization(**kwargs):
         assert viking_fs._async_agfs.held
@@ -251,10 +336,109 @@ async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_con
 
     assert body_for_preview(viking_fs.abstract_content) == "# shared"
     assert vectorized == ["# shared"]
-    # The directory does not exist yet, so its existing parent is locked instead.
+    assert len(viking_fs._async_agfs.requests) == 2
+    # Lock the intended directory without extending its scope to the parent.
     assert viking_fs._async_agfs.requests[0] == [
-        {"path": "/local/default/resources", "kind": "tree"}
+        {"path": "/local/default/resources/shared", "kind": "tree"}
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "uri,is_dir",
+    [
+        ("viking://resources/existing", True),
+        ("viking://resources/existing/", True),
+        ("viking://resources/existing.md", False),
+        ("viking://system/memory/memory_templates/custom/existing", True),
+    ],
+)
+async def test_mkdir_existing_target_skips_tree_lock(monkeypatch, request_context, uri, is_dir):
+    viking_fs = _FakeVikingFS()
+    viking_fs._async_agfs.stat.side_effect = None
+    viking_fs._async_agfs.stat.return_value = {"isDir": is_dir}
+    viking_fs.mkdir = AsyncMock()
+    viking_fs.write_file = AsyncMock()
+    viking_fs.prepare_acl_update = AsyncMock()
+    vectorize = AsyncMock()
+    monkeypatch.setattr(fs_module, "vectorize_directory_meta", vectorize)
+    watch_manager = SimpleNamespace(has_running_overlap=AsyncMock())
+    service = FSService(viking_fs=viking_fs, watch_manager=watch_manager)
+
+    with pytest.raises(AGFSAlreadyExistsError):
+        await service.mkdir(uri, ctx=request_context)
+
+    directory_uri = uri.rstrip("/")
+    viking_fs._ensure_access.assert_awaited_once_with(
+        directory_uri, request_context, action=AclAction.WRITE
+    )
+    viking_fs._async_agfs.stat.assert_awaited_once_with(
+        _local_path(directory_uri), bypass_cache=True
+    )
+    assert viking_fs._async_agfs.requests == []
+    watch_manager.has_running_overlap.assert_not_awaited()
+    viking_fs.mkdir.assert_not_awaited()
+    viking_fs.write_file.assert_not_awaited()
+    viking_fs.prepare_acl_update.assert_not_awaited()
+    vectorize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://resources/existing",
+        "viking://system/memory/memory_templates/custom/existing",
+    ],
+)
+async def test_mkdir_permission_denied_skips_existence_probe(request_context, uri):
+    viking_fs = _FakeVikingFS()
+    viking_fs._ensure_access.side_effect = PermissionDeniedError("write denied")
+    viking_fs.mkdir = AsyncMock()
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(PermissionDeniedError):
+        await service.mkdir(uri, ctx=request_context)
+
+    viking_fs._async_agfs.stat.assert_not_awaited()
+    assert viking_fs._async_agfs.requests == []
+    viking_fs.mkdir.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [{"description": "unsupported"}, {"acl": {}}])
+async def test_file_only_mkdir_rejects_options_before_existence_probe(request_context, kwargs):
+    viking_fs = _FakeVikingFS()
+    viking_fs.mkdir = AsyncMock()
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError):
+        await service.mkdir(
+            "viking://system/memory/memory_templates/custom/existing",
+            ctx=request_context,
+            **kwargs,
+        )
+
+    viking_fs._ensure_access.assert_awaited_once()
+    viking_fs._async_agfs.stat.assert_not_awaited()
+    assert viking_fs._async_agfs.requests == []
+    viking_fs.mkdir.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mkdir_existence_probe_propagates_storage_error(request_context):
+    viking_fs = _FakeVikingFS()
+    error = AGFSIoError("metadata service not found")
+    viking_fs._async_agfs.stat.side_effect = error
+    viking_fs.mkdir = AsyncMock()
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(AGFSIoError) as raised:
+        await service.mkdir("viking://resources/existing", ctx=request_context)
+
+    assert raised.value is error
+    assert viking_fs._async_agfs.requests == []
+    viking_fs.mkdir.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -322,16 +506,6 @@ class _FakeWatchManager:
         return [SimpleNamespace(task_id="watch-1")]
 
 
-class _FakeResourceMemoryLinkService:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
-
-    async def before_resource_delete(self, *, ctx, resource_uri, recursive=False):
-        self.calls.append({"ctx": ctx, "resource_uri": resource_uri, "recursive": recursive})
-        return self.result
-
-
 class _FakeQueueManager:
     SEMANTIC = "semantic"
 
@@ -358,7 +532,9 @@ def request_context():
 @pytest.mark.asyncio
 async def test_read_visible_strips_memory_metadata_before_slicing(request_context):
     raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret":"hidden"}\n-->'
-    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw))
+    viking_fs = SimpleNamespace(
+        read_file=AsyncMock(return_value=raw), authorize_read=lambda ctx, targets: ctx
+    )
     service = FSService(viking_fs=viking_fs)
     uri = "viking://user/ryoma/memories/notes/private.md"
 
@@ -381,7 +557,9 @@ async def test_read_visible_strips_supported_memory_metadata_trailers(
 ):
     uri = "viking://user/ryoma/memories/notes/private.md"
     service = FSService(
-        viking_fs=SimpleNamespace(read_file=AsyncMock(return_value=raw)),
+        viking_fs=SimpleNamespace(
+            read_file=AsyncMock(return_value=raw), authorize_read=lambda ctx, targets: ctx
+        ),
     )
 
     assert await service.read_visible(uri, ctx=request_context) == "visible"
@@ -399,6 +577,7 @@ async def test_read_visible_preserves_non_memory_content(request_context):
         viking_fs=viking_fs,
         privacy_sanitizer=SimpleNamespace(
             max_content_bytes=len(raw.encode()),
+            settings_for_uri=AsyncMock(return_value=ResolvedPrivacyConfig(mode="auto_strict")),
             sanitize=AsyncMock(return_value=SimpleNamespace(content=raw)),
         ),
     )
@@ -550,7 +729,9 @@ async def test_grep_projects_tags_when_include_tags_is_requested(request_context
 
 
 @pytest.mark.asyncio
-async def test_plain_listing_reads_only_requested_page_summaries(request_context, monkeypatch):
+async def test_plain_listing_preserves_visibility_and_limits_storage_reads(
+    request_context, monkeypatch
+):
     selected = {"uri": "viking://resources/docs", "isDir": True}
     entries = [selected, {"uri": "viking://resources/probe", "isDir": True}]
     viking_fs = VikingFS(agfs=SimpleNamespace())
@@ -591,6 +772,33 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
         any_order=True,
     )
     assert summary.await_count == 2
+
+    monkeypatch.setattr(viking_fs, "_ls_original", AsyncMock(return_value=[]))
+    monkeypatch.setattr(viking_fs, "_tree_original", AsyncMock(return_value=[]))
+    metadata = AsyncMock(side_effect=AGFSNotFoundError("missing"))
+    monkeypatch.setattr(viking_fs._async_agfs, "stat", metadata)
+    missing_uri = "viking://resources/missing"
+    empty_page = ListingPage(entries=[], has_more=False)
+    assert await service.ls(missing_uri, ctx=request_context) == empty_page
+    metadata.reset_mock()
+    assert await service.tree(missing_uri, ctx=request_context, directories_only=True) == empty_page
+    metadata.assert_not_awaited()
+
+    container_uri = "viking://user/owner/container"
+    scope = DataAccessScope(
+        owner_user_id="owner",
+        operation=AclAction.READ,
+        plan=PolicyScopePlan("allowed", (PolicyPathScope("container/child.md", False),), ()),
+        policy_hash=None,
+        request_root=container_uri,
+        requested_targets=(container_uri,),
+        effective_targets=(f"{container_uri}/child.md",),
+    )
+    ctx = replace(request_context, role=Role.GLOBAL, data_access=scope)
+    metadata.side_effect = None
+    metadata.return_value = {"isDir": False}
+    with pytest.raises(PermissionDeniedError, match="only directories are traversable"):
+        await service.tree(container_uri, ctx=ctx, directories_only=True)
 
 
 @pytest.mark.asyncio
@@ -1086,6 +1294,27 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
 
 @pytest.mark.asyncio
+async def test_resource_rm_skips_refresh_when_freshness_lock_is_busy(request_context, monkeypatch):
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+    queue_manager = _FakeQueueManager()
+    monkeypatch.setattr(fs_module, "get_queue_manager", lambda: queue_manager)
+    monkeypatch.setattr(
+        fs_module,
+        "plan_abstract_overview_refresh",
+        AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy")),
+    )
+    service._wait_for_refresh = AsyncMock()
+
+    result = await service.rm("viking://resources/docs/a.md", ctx=request_context, wait=True)
+
+    assert len(viking_fs.rm_calls) == 1
+    assert result["semantic_status"] == "skipped"
+    assert queue_manager.messages == []
+    service._wait_for_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     service = FSService(viking_fs=_FakeVikingFS())
     service._enqueue_delete_refresh = AsyncMock()
@@ -1242,7 +1471,7 @@ async def test_resource_mv_watch_write_failure_preserves_existing_target_files(
     if target_preexisting:
         await viking_fs.write_file(target + "/keep.txt", "keep", ctx=request_context)
     watch = await manager.create_task("source", to_uri=source + "/doc")
-    write = viking_fs.write_file
+    write = viking_fs.write_file_bytes
     failure = OSError("Watch metadata write failed")
 
     async def fail_watch_write(uri, *args, **kwargs):
@@ -1250,7 +1479,7 @@ async def test_resource_mv_watch_write_failure_preserves_existing_target_files(
             raise failure
         return await write(uri, *args, **kwargs)
 
-    monkeypatch.setattr(viking_fs, "write_file", fail_watch_write)
+    monkeypatch.setattr(viking_fs, "write_file_bytes", fail_watch_write)
     with pytest.raises(OSError) as raised:
         await service.mv(source, target, ctx=request_context)
     assert raised.value is failure
@@ -1626,18 +1855,11 @@ async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(request_context):
+async def test_resource_rm_does_not_refresh_parent_if_resource_delete_fails(request_context):
     delete_error = RuntimeError("delete failed")
     viking_fs = _FakeVikingFS(rm_error=delete_error)
-    cleanup = {
-        "status": "success",
-        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/越前龙马.md"],
-    }
-    link_service = _FakeResourceMemoryLinkService(cleanup)
-    service = FSService(
-        viking_fs=viking_fs,
-        resource_memory_link_service=link_service,
-    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_delete_refresh = AsyncMock()
 
     with pytest.raises(RuntimeError, match="delete failed"):
         await service.rm(
@@ -1646,28 +1868,22 @@ async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(requ
             recursive=True,
         )
 
-    assert link_service.calls == []
+    service._enqueue_delete_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("wait", [False, True])
+async def test_resource_rm_skips_memory_reference_cleanup(
     request_context,
     monkeypatch,
+    recursive,
+    wait,
 ):
-    cleanup = {
-        "status": "success",
-        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/不二周助-write-test.md"],
-        "deleted_memory_uris": [
-            "viking://user/ryoma/memories/entities/动漫角色/不二周助-link-test2.md"
-        ],
-    }
-    viking_fs = _FakeVikingFS()
-    link_service = _FakeResourceMemoryLinkService(cleanup)
-    service = FSService(
-        viking_fs=viking_fs,
-        resource_memory_link_service=link_service,
-    )
-    service._enqueue_delete_refresh = AsyncMock()
+    viking_fs = _FakeVikingFS(is_dir=recursive)
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_delete_refresh = AsyncMock(return_value=fs_module.FreshnessAction.REFRESH_NOW)
+    service._wait_for_refresh = AsyncMock(return_value={})
 
     refreshed = []
 
@@ -1680,17 +1896,15 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
     )
 
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
-    result = await service.rm(uri, ctx=request_context, recursive=True)
+    result = await service.rm(uri, ctx=request_context, recursive=recursive, wait=wait)
 
-    assert link_service.calls == [{"ctx": request_context, "resource_uri": uri, "recursive": True}]
-    assert refreshed == [
-        {
-            "viking_fs": viking_fs,
-            "directory_uri": "viking://user/ryoma/memories/entities/动漫角色",
-            "ctx": request_context,
-        }
-    ]
-    assert result["memory_cleanup"] == cleanup
+    assert refreshed == []
+    assert "memory_cleanup" not in result
+    assert viking_fs.rm_calls[0]["uri"] == uri
+    assert viking_fs.rm_calls[0]["recursive"] is recursive
+    service._enqueue_delete_refresh.assert_awaited_once()
+    assert service._enqueue_delete_refresh.await_args.kwargs["force_refresh"] is wait
+    assert service._wait_for_refresh.await_count == int(wait)
 
 
 @pytest.mark.asyncio
@@ -1841,7 +2055,6 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     )
     _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
-    service.compile_lifecycle = SimpleNamespace(move_target=AsyncMock())
     service._refresh_move_parents = AsyncMock()
 
     await service.mv(source, target, ctx=request_context)
@@ -1853,7 +2066,6 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     viking_fs.mv.assert_awaited_once_with(
         source, target, ctx=replace(request_context, bypass_acl=True), lease_ref=ANY
     )
-    service.compile_lifecycle.move_target.assert_awaited_once_with(source, target, request_context)
     service._refresh_move_parents.assert_awaited_once_with(
         from_uri=source,
         to_uri=target,
@@ -2195,6 +2407,34 @@ def local_fs_service(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_local_mkdir_existing_directory_preserves_initialization(
+    request_context, local_fs_service, monkeypatch
+):
+    service, viking_fs = local_fs_service
+    uri = "viking://resources/new_directory"
+    vectorize = AsyncMock()
+    monkeypatch.setattr(fs_module, "vectorize_directory_meta", vectorize)
+
+    await viking_fs.mkdir(uri, ctx=request_context)
+    abstract_uri = f"{uri}/.abstract.md"
+    await viking_fs._async_agfs.write(
+        viking_fs._uri_to_path(abstract_uri, ctx=request_context),
+        b"# original description",
+        auto_pathlock=False,
+    )
+    original_abstract = await viking_fs.read_file(abstract_uri, ctx=request_context)
+    acquire = AsyncMock(wraps=viking_fs._async_agfs.pathlock_acquire_batch)
+    monkeypatch.setattr(viking_fs._async_agfs, "pathlock_acquire_batch", acquire)
+
+    with pytest.raises(AGFSAlreadyExistsError):
+        await service.mkdir(uri, ctx=request_context, description="replacement description")
+
+    acquire.assert_not_awaited()
+    assert await viking_fs.read_file(abstract_uri, ctx=request_context) == original_abstract
+    vectorize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_transfer_into_missing_parent_fails_without_creating_it(
     request_context, local_fs_service
 ):
@@ -2215,5 +2455,34 @@ async def test_rm_of_missing_path_does_not_create_it(request_context, local_fs_s
     service, viking_fs = local_fs_service
     await viking_fs.mkdir("viking://resources", ctx=request_context)
 
-    await service.rm("viking://resources/gone", ctx=request_context, recursive=True)
+    await service.rm("viking://resources/gone/leaf.md", ctx=request_context, recursive=True)
     assert not await viking_fs.exists("viking://resources/gone", ctx=request_context)
+
+
+@pytest.mark.parametrize("error, visible, reads", [(0, True, 4), (0, False, 3), (1, False, 2)])
+async def test_directory_index_visibility(monkeypatch, request_context, error, visible, reads):
+    uri = "viking://resources/output"
+    fs = FSService()
+    vfs = AsyncMock(_uri_to_path=lambda uri, **_: uri)
+    vfs.stat.return_value = {"isDir": True}
+    vfs.read_file.side_effect = FileNotFoundError()
+    monkeypatch.setattr(fs, "_viking_fs", vfs)
+    records = AsyncMock(return_value=[])
+    monkeypatch.setattr(fs, "_directory_index_records", records)
+    monkeypatch.setattr(
+        fs, "_wait_for_refresh", AsyncMock(return_value={"Embedding": {"error_count": error}})
+    )
+    monkeypatch.setattr(fs_module, "vectorize_directory_meta", AsyncMock(return_value={0}))
+    monkeypatch.setattr(fs_module, "_DIRECTORY_INDEX_VISIBILITY_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        fs_module, "_DIRECTORY_INDEX_VISIBILITY_TIMEOUT_SECONDS", 60 if visible else 0
+    )
+    if visible:
+        records.side_effect = [[], [], [], [{"level": 0}]]
+        result = await fs.ensure_directory_index(uri, request_context, "Output")
+        assert result["indexed_levels"] == [0] and result["vector_status"] == "complete"
+    else:
+        message = "processing failed" if error else "is not readable"
+        with pytest.raises(fs_module.OpenVikingError, match=message):
+            await fs.ensure_directory_index(uri, request_context, "Output")
+    assert records.await_count == reads

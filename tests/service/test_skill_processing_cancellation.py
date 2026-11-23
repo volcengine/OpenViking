@@ -22,7 +22,7 @@ from tests.test_task_tracker import _FakeAgfs
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["complete", "fail"])
-async def test_skill_rollback_persists_cancellation_for_finished_work(monkeypatch, outcome):
+async def test_skill_update_cleanup_persists_cancellation_for_finished_work(monkeypatch, outcome):
     store = PersistentTaskStore(_FakeAgfs())
     tracker = TaskTracker(store=store)
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
@@ -44,7 +44,7 @@ async def test_skill_rollback_persists_cancellation_for_finished_work(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_skill_rollback_prevents_late_ack_failure_from_replaying_new_index(monkeypatch):
+async def test_skill_update_cleanup_prevents_late_ack_failure_from_replaying_index(monkeypatch):
     tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
@@ -74,7 +74,7 @@ async def test_cancel_during_skill_task_creation_settles_persisted_record(monkey
     async def slow_create(task, **kwargs):
         started.set()
         await resume.wait()
-        await original_create(task, **kwargs)
+        return await original_create(task, **kwargs)
 
     monkeypatch.setattr(store, "create", slow_create)
     tracker = TaskTracker(store=store)

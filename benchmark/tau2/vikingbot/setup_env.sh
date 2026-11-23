@@ -3,13 +3,13 @@
 #
 # Does everything in a single step:
 #   1. creates a fresh .venv at the OpenViking repo root (if missing)
-#   2. clones tau2-bench into ./tau2-bench (if missing; external dependency)
+#   2. clones the deferred-STOP Tau Gym into .generated/tau2-bench (if missing)
 #   3. installs openviking + vikingbot  (pip install -e .[bot]  -> runs the Cargo build;
 #      the [bot] extra provides prompt_toolkit/mcp/... needed by the runner and
 #      `openviking-server --with-bot`)
 #   4. ensures the ragfs_python native binding is built (via maturin) and bundled into
 #      openviking/lib/ (the editable install can skip it under pip build isolation)
-#   5. installs tau2-bench with the gym extra (pip install -e ./tau2-bench[gym] -> gymnasium)
+#   5. installs Tau Gym and its text runner's import-time dependencies
 #   6. installs smolagents
 #   7. activates the venv and exports the runtime env vars
 #
@@ -21,9 +21,9 @@
 # (or when --reinstall is passed); later sources just activate + export.
 #
 # Overridable via env vars (export before sourcing):
-#   TAU2_BENCH_ROOT   tau2-bench checkout location   (default ./tau2-bench)
-#   TAU2_BENCH_REPO   git URL to clone tau2-bench    (default sierra-research/tau2-bench)
-#   TAU2_BENCH_REF    git ref/branch/tag to check out after clone (default: repo default)
+#   TAU2_BENCH_ROOT   existing compatible checkout or destination for a new clone
+#   TAU2_BENCH_REPO   alternative Tau repository supporting deferred user STOP
+#   TAU2_BENCH_REF    git ref to check out after cloning
 #   VIKINGBOT_ROOT    vikingbot package dir          (default REPO_ROOT/bot)
 #   OPENVIKING_CONFIG_FILE, OPENVIKING_PROVISION_API_KEY, OPENAI_API_KEY / ARK_API_KEY, OPENAI_API_BASE
 
@@ -35,8 +35,11 @@ SETUP_MARKER="${VENV}/.tau2_setup_complete"
 
 # tau2-bench checkout (external dependency; gitignored). Resolved early so the
 # install phase can clone/install it and the exports can derive TAU2_DATA_ROOT.
-TAU2_BENCH_ROOT="${TAU2_BENCH_ROOT:-${SCRIPT_DIR}/tau2-bench}"
-TAU2_BENCH_REPO="${TAU2_BENCH_REPO:-https://github.com/sierra-research/tau2-bench}"
+TAU2_BENCH_ROOT="${TAU2_BENCH_ROOT:-${SCRIPT_DIR}/.generated/tau2-bench}"
+if [[ -z "${TAU2_BENCH_REPO:-}" ]]; then
+  TAU2_BENCH_REPO="https://github.com/yeshion23333/tau2-bench.git"
+  TAU2_BENCH_REF="${TAU2_BENCH_REF:-548d5c51abfe3867d890e7f6cbd44e74b3a8409b}"
+fi
 
 # Detect source vs execute so errors abort cleanly without killing the user's shell.
 (return 0 2>/dev/null) && _SOURCED=1 || _SOURCED=0
@@ -44,11 +47,7 @@ _abort() { echo "[setup_env] ERROR: $*" >&2; if [[ "${_SOURCED}" -eq 1 ]]; then 
 
 _tau2_user_simulator_ready() {
   local py="$1"
-  "${py}" - <<'PYEOF' >/dev/null 2>&1
-from tau2.gym.gym_agent import AgentGymEnv
-import gymnasium  # noqa: F401
-assert AgentGymEnv is not None
-PYEOF
+  "${py}" "${SCRIPT_DIR}/../common/tau2_env/check_gym.py" "${TAU2_BENCH_ROOT}"
 }
 
 # --- parse args ---
@@ -71,20 +70,19 @@ _setup_install() {
 
   if [[ -f "${SETUP_MARKER}" && "${REINSTALL}" -eq 0 ]]; then
     local PY="${VENV}/bin/python"
-    if [[ -x "${PY}" ]] && _tau2_user_simulator_ready "${PY}"; then
+    if [[ -x "${PY}" ]] && _tau2_user_simulator_ready "${PY}" >/dev/null 2>&1; then
       return 0  # already installed; nothing to do
     fi
-    echo "[setup_env] Existing setup marker found, but tau2 gym user simulator is missing; repairing tau2-bench[gym] install."
+    echo "[setup_env] Existing setup marker found; repairing the Tau Gym installation."
     if [[ ! -x "${PY}" ]]; then
       echo "[setup_env] venv python not found at ${PY}; continuing with full setup."
     else
       if [[ ! -d "${TAU2_BENCH_ROOT}" ]]; then
         echo "[setup_env] tau2-bench checkout missing at ${TAU2_BENCH_ROOT}; continuing with full setup."
       else
-        echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
-        "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench gym repair failed"; return 1; }
+        "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym,knowledge,voice]" 'audioop-lts; python_version >= "3.13"' || { echo "[setup_env] tau2-bench gym repair failed"; return 1; }
         if ! _tau2_user_simulator_ready "${PY}"; then
-          echo "[setup_env] tau2 gym user simulator still unavailable after repair; try: source ${BASH_SOURCE[0]} --reinstall"
+          echo "[setup_env] Incompatible Tau checkout at ${TAU2_BENCH_ROOT}. Set TAU2_BENCH_ROOT to a new directory and source setup_env.sh to install the pinned version."
           return 1
         fi
         return 0
@@ -170,11 +168,11 @@ PYEOF
     echo "[setup_env] ragfs_python native binding present"
   fi
 
-  # tau2-bench: install the [gym] extra so tau2.gym (gymnasium) is available to the runner.
-  echo "[setup_env] Installing tau2-bench with gym extra (pip install -e ${TAU2_BENCH_ROOT}[gym])"
-  "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]" || { echo "[setup_env] tau2-bench install failed"; return 1; }
+  # This revision imports the voice and knowledge modules even for text tasks.
+  echo "[setup_env] Installing Tau Gym from ${TAU2_BENCH_ROOT}"
+  "${PY}" -m pip install -e "${TAU2_BENCH_ROOT}[gym,knowledge,voice]" 'audioop-lts; python_version >= "3.13"' || { echo "[setup_env] tau2-bench install failed"; return 1; }
   if ! _tau2_user_simulator_ready "${PY}"; then
-    echo "[setup_env] tau2 gym user simulator is unavailable after installing tau2-bench[gym]"
+    echo "[setup_env] Tau Gym is unavailable or incompatible after installation."
     return 1
   fi
 

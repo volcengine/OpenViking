@@ -7,8 +7,11 @@ to VikingFS, so removing the block from the stored body loses the fields for goo
 These tests pin the contract: parse always, remove only when explicitly configured.
 """
 
+from pathlib import Path
+
 import pytest
 
+from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking_cli.utils.config.parser_config import MarkdownConfig, ParserConfig
 
@@ -61,15 +64,48 @@ async def test_frontmatter_is_kept_when_config_omits_the_option() -> None:
         MarkdownParser(config=MarkdownConfig(extract_frontmatter=True)),
     ],
 )
-async def test_frontmatter_is_removed_only_when_explicitly_requested(
+@pytest.mark.parametrize(
+    ("document", "expected_body", "expected_frontmatter"),
+    [
+        pytest.param(
+            DOCUMENT, BODY, {"id": "stuck-pr-watch", "name": "PR watch"}, id="yaml-mapping"
+        ),
+        pytest.param(
+            "---\n\n# Release notes\n\nDry runs are now supported.\n\n---\n\nSee the guide.\n",
+            None,
+            None,
+            id="horizontal-rules",
+        ),
+        pytest.param(
+            "---\n\n**Change**: Dry runs are now supported.\n\n---\n\nSee the guide.\n",
+            None,
+            None,
+            id="markdown-not-yaml",
+        ),
+    ],
+)
+async def test_only_valid_frontmatter_is_removed_when_explicitly_requested(
     parser: MarkdownParser,
+    document: str,
+    expected_body: str | None,
+    expected_frontmatter: dict[str, str] | None,
+    tmp_path: Path,
 ) -> None:
-    layout = await parser._compute_layout(
-        DOCUMENT, "viking://temp/test", source_path="/tmp/stuck-pr-watch.md"
+    source = tmp_path / "notes.md"
+    source.write_text(document, encoding="utf-8")
+    output = tmp_path / "artifacts"
+
+    result = await parser.parse(
+        source,
+        split_content=False,
+        parse_output_store=LocalParseOutputStore(str(output)),
     )
 
-    assert _written(layout) == [BODY]
-    assert layout.meta["frontmatter"] == {"id": "stuck-pr-watch", "name": "PR watch"}
+    [stored_document] = output.rglob("*.md")
+    assert stored_document.read_text(encoding="utf-8") == (
+        document if expected_body is None else expected_body
+    )
+    assert result.meta.get("frontmatter") == expected_frontmatter
 
 
 @pytest.mark.asyncio

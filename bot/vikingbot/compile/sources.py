@@ -58,7 +58,7 @@ class CompileSourceRange:
         return len(self.content) + len(self.context)
 
 
-async def read_source(client, uri, provider) -> str | CompileSourceRange:
+async def read_source(client, uri) -> str | CompileSourceRange:
     """Keep text reads intact; consume image sources through multi-read's native reader."""
     if get_media_type(urlsplit(uri).path, None) != "image":
         return await client.read_raw(uri)
@@ -66,13 +66,7 @@ async def read_source(client, uri, provider) -> str | CompileSourceRange:
         raise CompileFailure(
             "INVALID_ARGUMENT", f"Unsupported Compile image format: {uri}", stage="pipeline"
         )
-    if not provider.supports_tool_result_media():
-        raise CompileFailure(
-            "UNSUPPORTED_MEDIA",
-            f"Compile provider cannot deliver image evidence: {uri}",
-            stage="pipeline",
-        )
-    result = await VikingMultiReadTool._read_image(client, uri)
+    result = await VikingMultiReadTool._read_image(client, uri, for_compile=True)
     if not result["success"]:
         raise CompileFailure("SOURCE_READ_FAILED", f"{uri}: {result['content']}", stage="pipeline")
     return CompileSourceRange(uri, 0, 0, 0, 0, "", image=result["image"], sha256=result["sha256"])

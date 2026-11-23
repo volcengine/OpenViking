@@ -9,7 +9,7 @@ import { EventEmitter } from "node:events";
 import { loadConfig } from "../config.mjs";
 import { queueCapture, nativeOwner, captureDirectory, finishCapture, prepareCapture } from "../capture.mjs";
 import { captureMessages, completedReply } from "../capture-messages.mjs";
-import { runCaptureWorker } from "../capture-worker.mjs";
+import { deliverSnapshot, runCaptureWorker } from "../capture-worker.mjs";
 import { connectionScope } from "../scope.mjs";
 import { onRequest, onResponse } from "../hooks.mjs";
 import { recallRequest } from "../runtime.mjs";
@@ -81,7 +81,7 @@ test("capture is opt-in and host options cannot replace the connection", async (
   const f = await fixture(t);
   const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, { autoCapture: false, baseUrl: "http://wrong", apiKey: "wrong", nativeAgents: ["pi"] });
   assert.equal(cfg.autoCapture, false); assert.equal(cfg.baseUrl, f.file.url); assert.equal(cfg.apiKey, "fixture");
-  assert.deepEqual(cfg.nativeAgents, ["pi"]);
+  assert.deepEqual(cfg.nativeAgents, ["pi", "openviking-models"]);
 });
 
 test("duplicate snapshots, concurrent workers and process restarts send one copy", async (t) => {
@@ -597,13 +597,164 @@ test("bypass pauses existing snapshots until removed, without affecting other se
 });
 
 
-test("sessionless hooks never queue capture even when enabled", async (t) => {
+for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
+  test(`${protocol}: opt-in sessionless capture appends across model changes and leaves recall stateless`, async (t) => {
+    const f = await fixture(t);
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+    t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ status: "ok", result: { rendered: "Recalled preference" } }), { headers: { "content-type": "application/json" } }));
+    const wire = (messages, model = "a") => protocol === "gemini"
+      ? { model, contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : m.role, parts: [{ text: m.content }] })) }
+      : protocol === "responses" ? { model, store: false, input: messages } : { model, messages };
+    const reply = (content) => protocol === "gemini" ? { candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: content }] } }] }
+      : protocol === "responses" ? { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] }] }
+      : protocol === "anthropic" ? { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: content }] }
+      : { choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] };
+    const context = () => ({ ...f.ctx, protocol, session: "", success: true, query: "My preference?", state: {}, options: { captureWithoutSession: true } });
+    const first = context();
+    assert.match(JSON.stringify(await onRequest(wire([f.messages[0]]), first)), /Recalled preference/);
+    assert.equal(first.session, "");
+    const session = first.state.capture.session;
+    assert.match(session, /^derived-[a-f0-9]{64}$/);
+    await onResponse(reply(f.messages[1].content), first);
+    const second = context();
+    const history = [...f.messages, { role: "user", content: "Another preference" }];
+    await onRequest(wire(history, "b"), second);
+    assert.equal(second.state.capture.session, session);
+    await onResponse(reply("Second reply"), second);
+    await f.drain();
+    assert.equal(f.creates.length, 1);
+    assert.equal(f.writes.flat().length, 4);
+    assert.deepEqual((await readdir(f.cfg.dataDir)).sort(), ["capture", "capture-workers"]);
+    for (const patch of [{ cwd: "/other" }, { agent: "other" }]) {
+      const other = { ...context(), ...patch };
+      await onRequest(wire([f.messages[0]]), other);
+      assert.notEqual(other.state.capture.session, session);
+    }
+    const different = context();
+    await onRequest(wire([{ role: "user", content: "Different opening" }]), different);
+    assert.notEqual(different.state.capture.session, session);
+    const real = { ...context(), session: "real-session" };
+    await onRequest(wire([f.messages[0]]), real);
+    assert.equal(real.state.capture.session, undefined);
+    assert.equal(real.state.capture.scope, connectionScope(f.cfg, real));
+  });
+}
+
+for (const takeover of ["system-envelope", "user-envelope", "nativeAgents", "disabled-opt-in"]) {
+  test(`sessionless ${takeover} takeover clears pending capture and persists ownership`, async (t) => {
+    const f = await fixture(t);
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+    t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ status: "ok", result: { rendered: "Recalled preference" } }), { headers: { "content-type": "application/json" } }));
+    const context = () => ({ ...f.ctx, session: "", state: {}, success: true, query: "My preference?", options: { captureWithoutSession: true } });
+    const first = context();
+    await onRequest({ messages: [f.messages[0]] }, first);
+    await onResponse(finalChat(f.messages[1].content), first);
+    const directory = captureDirectory(f.cfg, { ...first, session: first.state.capture.session });
+    const pending = join(directory, "pending");
+    const names = await readdir(pending);
+    assert.equal(names.length, 1);
+    // Retain a worker's already-read copy to test the ownership check too.
+    const snapshot = JSON.parse(await readFile(join(pending, names[0]), "utf8"));
+    const native = context();
+    const messages = [...f.messages, { role: "user", content: "Next question" }];
+    const envelope = "<openviking-context>\nNative memory\n</openviking-context>";
+    if (takeover === "system-envelope") messages.unshift({ role: "system", content: envelope });
+    else if (takeover === "user-envelope") messages[0] = { ...messages[0], content: `${messages[0].content}\n\n${envelope}` };
+    else if (takeover === "disabled-opt-in") {
+      native.options.captureWithoutSession = false;
+      messages.unshift({ role: "system", content: envelope });
+    } else native.options.nativeAgents = [native.agent];
+    assert.equal(await onRequest({ messages }, native), undefined);
+    assert.equal(native.state.nativeOwner, true);
+    assert.equal(native.session, "");
+    assert.equal(native.state.capture, undefined);
+    await assert.rejects(readdir(pending), { code: "ENOENT" });
+    await readFile(join(directory, "native-owner"));
+    assert.equal(await deliverSnapshot(f.cfg.dataDir, snapshot, { call: f.call }), "native");
+    const later = context();
+    await onRequest({ messages: [f.messages[0]] }, later);
+    assert.equal(later.state.nativeOwner, true);
+    assert.equal(later.state.capture, undefined);
+    await f.drain();
+    assert.equal(f.creates.length, 0);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.commits.length, 0);
+  });
+}
+
+test("disabling file opt-in pauses queued snapshots even with a null host option", async (t) => {
+  const f = await fixture(t);
+  f.file.plugin.magpie.captureWithoutSession = true;
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  const options = { captureWithoutSession: null };
+  const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, options);
+  const ctx = { ...f.ctx, session: "", state: {}, success: true, options };
+  await prepareCapture({ messages: [f.messages[0]] }, ctx, cfg, options);
+  const reply = { choices: [{ finish_reason: "stop", message: f.messages[1] }] };
+  await finishCapture(reply, ctx, cfg);
+  f.file.plugin.magpie.captureWithoutSession = false;
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  const disabled = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath });
+  await finishCapture(reply, ctx, disabled);
+  await f.drain();
+  assert.equal(f.creates.length, 0);
+  f.file.plugin.magpie.captureWithoutSession = true;
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  await f.drain();
+  assert.equal(f.creates.length, 1);
+  assert.equal(f.writes.flat().length, 2);
+});
+
+test("a conflicting derived snapshot does not block the original conversation", async (t) => {
+  const f = await fixture(t);
+  const options = { captureWithoutSession: true };
+  const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, options);
+  const capture = async (messages, reply) => {
+    const ctx = { ...f.ctx, session: "", state: {}, success: true, options };
+    await prepareCapture({ messages }, ctx, cfg, options);
+    await finishCapture(finalChat(reply), ctx, cfg);
+    await f.drain();
+    return captureDirectory(cfg, { ...ctx, session: ctx.state.capture.session });
+  };
+
+  await capture([f.messages[0]], f.messages[1].content);
+  const conflict = { role: "assistant", content: "A different first reply" };
+  const directory = await capture([...f.messages.slice(0, 1), conflict, { role: "user", content: "Other conversation" }], "Other answer");
+  assert.deepEqual(await readdir(join(directory, "pending")), []);
+  assert.equal(f.writes.flat().length, 2);
+
+  await capture([...f.messages, { role: "user", content: "Original conversation continues" }], "Original answer");
+  assert.equal(f.writes.flat().length, 4);
+});
+
+test("sessionless hooks warn once without masking recall or queuing capture", async (t) => {
   const f = await fixture(t);
   const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
   process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
   t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
-  const ctx = { ...f.ctx, session: "", query: "Latest question", state: {} };
-  await onRequest({ model: "m", messages: [f.messages[0]] }, ctx);
+  const warning = t.mock.method(console, "warn", () => {});
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ status: "ok", result: { rendered: "Recalled preference" } }), { headers: { "content-type": "application/json" } }));
+  const reports = [];
+  const ctx = { ...f.ctx, session: "", query: "Latest question", state: {}, report: (...args) => reports.push(args) };
+  const body = { model: "m", messages: [f.messages[0]] };
+  for (const options of [{ autoCapture: false, captureWithoutSession: true }, { nativeAgents: [ctx.agent], captureWithoutSession: false }]) {
+    await onRequest(body, { ...ctx, state: {}, options });
+  }
+  for (const patch of [{ origin: "remote" }, { kind: "auxiliary" }]) {
+    await onRequest(body, { ...ctx, ...patch, state: {} });
+  }
+  assert.equal(warning.mock.callCount(), 0);
+  assert.match(JSON.stringify(await onRequest(body, ctx)), /Recalled preference/);
+  assert.equal(reports.at(-1)[0], "ready");
+  await onRequest(body, { ...ctx, state: {} });
+  assert.equal(warning.mock.callCount(), 1);
+  const message = warning.mock.calls[0].arguments[0];
+  assert.match(message, /no-session.*host did not provide a session ID/);
+  assert.ok(!message.includes(f.file.api_key) && !message.includes(f.messages[0].content));
   assert.equal(ctx.state.capture, undefined);
   await onResponse({ choices: [{ message: { role: "assistant", content: "Reply" }, finish_reason: "stop" }] }, ctx);
   assert.equal(f.writes.length, 0);

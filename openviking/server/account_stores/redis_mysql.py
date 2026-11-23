@@ -9,10 +9,12 @@ import base64
 import hashlib
 import json
 import secrets
+import weakref
 from collections.abc import Awaitable, Callable, Coroutine
+from threading import Lock
 from typing import Any, TypeVar
-from urllib.parse import parse_qs, unquote, urlsplit
 
+from openviking.pyagfs.protocols import CacheRuntimeHandleProtocol
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
@@ -23,10 +25,6 @@ from openviking.server.account_stores.models import (
     UserSummary,
 )
 from openviking.server.account_stores.mysql import MySQLAccountStore
-from openviking.server.account_stores.redis_client import (
-    RedisClientHandle,
-    create_redis_client,
-)
 from openviking.server.account_stores.redis_runtime import (
     get_shared_redis_runtime,
     wait_redis_cleanup,
@@ -34,6 +32,7 @@ from openviking.server.account_stores.redis_runtime import (
 from openviking.server.identity import Role
 from openviking_cli.exceptions import InvalidArgumentError, UnavailableError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.cache_config import validate_cache_instance_name
 from openviking_cli.utils.config.config_utils import normalize_service_name
 
 logger = get_logger(__name__)
@@ -86,6 +85,15 @@ redis.call('SET', KEYS[1], ARGV[1])
 return 1
 """
 
+_ACCOUNT_STORE_SCRIPTS = (
+    ("accountstore.v2.read_generations", _READ_GENERATIONS_SCRIPT),
+    ("accountstore.v2.set_if_generations", _SET_IF_GENERATIONS_SCRIPT),
+    ("accountstore.v2.bump_generation", _BUMP_GENERATION_SCRIPT),
+)
+_script_registration_lock = Lock()
+_registered_script_runtimes: dict[int, weakref.ReferenceType[Any]] = {}
+_registered_native_runtime_ids: set[int] = set()
+
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
@@ -105,45 +113,24 @@ def _decode(raw: str | bytes | None) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _legacy_redis_cache_params(values: dict[str, object]) -> dict[str, object]:
-    url = values.pop("url", None)
-    if not isinstance(url, str) or not url:
-        raise InvalidArgumentError("redis.url must be a non-empty string")
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
-        raise InvalidArgumentError("redis.url must use a redis:// or rediss:// URL")
-    try:
-        port = parsed.port or 6379
-    except ValueError as exc:
-        raise InvalidArgumentError("redis.url port is invalid") from exc
-    host = parsed.hostname
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    params: dict[str, object] = {
-        "mode": "standalone",
-        "endpoints": [f"{parsed.scheme}://{host}:{port}"],
-        **values,
-    }
-    if parsed.username and "username" not in params:
-        params["username"] = unquote(parsed.username)
-    if parsed.password and "password" not in params:
-        params["password"] = unquote(parsed.password)
-    if parsed.path not in {"", "/"} and "db" not in params:
+def _register_runtime_scripts(cache_runtime: CacheRuntimeHandleProtocol) -> None:
+    """Register Account Store scripts once for each CacheRuntime handle."""
+    runtime_id = id(cache_runtime)
+    with _script_registration_lock:
         try:
-            params["db"] = int(parsed.path.lstrip("/"))
-        except ValueError as exc:
-            raise InvalidArgumentError("redis.url database path is invalid") from exc
-    query = parse_qs(parsed.query)
-    for query_name, config_name in (
-        ("socket_connect_timeout", "connect_timeout_ms"),
-        ("socket_timeout", "command_timeout_ms"),
-    ):
-        if query_name in query and config_name not in params:
-            try:
-                params[config_name] = max(1, int(float(query[query_name][0]) * 1000))
-            except (IndexError, ValueError) as exc:
-                raise InvalidArgumentError(f"redis.url {query_name} is invalid") from exc
-    return params
+            reference = weakref.ref(cache_runtime)
+        except TypeError:
+            # ponytail: PyO3 handles lack weakrefs; AsyncAGFSClient retains each
+            # handle, so process-lifetime ids stay stable until runtime replacement exists.
+            if runtime_id in _registered_native_runtime_ids:
+                return
+            _registered_native_runtime_ids.add(runtime_id)
+        else:
+            if _registered_script_runtimes.get(runtime_id, lambda: None)() is cache_runtime:
+                return
+            _registered_script_runtimes[runtime_id] = reference
+        for script_id, script in _ACCOUNT_STORE_SCRIPTS:
+            cache_runtime.register_script(script_id, script)
 
 
 class RedisMySQLAccountStore(AccountStore):
@@ -152,7 +139,7 @@ class RedisMySQLAccountStore(AccountStore):
     Persistent account/user generations reject obsolete fills after a successful
     bump. MySQL commits precede best-effort Redis invalidation, so this is not a
     strongly consistent cache: failed invalidation retains fixed-TTL staleness.
-    Local fills share tasks on the dedicated Redis loop, without Redis locks.
+    Local fills share tasks on a private loop, without Redis locks.
 
     The fixed TTL starts at fill time, not mutation time. Rollout requires every
     writer to use this v2 generation protocol: v1 entries are ignored, but v1
@@ -163,7 +150,6 @@ class RedisMySQLAccountStore(AccountStore):
     initialize generations. A later read fills the payload using captured tokens;
     the preverification result can never be published under newer generations.
 
-    Legacy lock_ttl_seconds and lock_wait_seconds are accepted but ignored.
     """
 
     def __init__(
@@ -172,7 +158,7 @@ class RedisMySQLAccountStore(AccountStore):
         service_name: str,
         params: dict[str, object] | None = None,
         mysql_store: MySQLAccountStore | None = None,
-        redis_client: Any | None = None,
+        cache_runtime: CacheRuntimeHandleProtocol | None = None,
     ) -> None:
         try:
             normalized_service_name = normalize_service_name(service_name)
@@ -181,7 +167,6 @@ class RedisMySQLAccountStore(AccountStore):
         values = dict(params or {})
         mysql_params = values.pop("mysql", None)
         cache_spec = values.pop("cache", None)
-        legacy_redis_params = values.pop("redis", None)
         if values:
             names = ", ".join(sorted(values))
             raise InvalidArgumentError(f"Unknown Redis MySQL account store parameters: {names}")
@@ -196,57 +181,25 @@ class RedisMySQLAccountStore(AccountStore):
             raise InvalidArgumentError(
                 "Redis and MySQL account stores must use the same service_name"
             )
-        if cache_spec is None and legacy_redis_params is not None:
-            if not isinstance(legacy_redis_params, dict):
-                raise InvalidArgumentError("redis_mysql account storage requires cache parameters")
-            legacy_values = dict(legacy_redis_params)
-            cache_spec = {
-                "provider": "redis",
-                "params": _legacy_redis_cache_params(legacy_values),
-            }
-        if not isinstance(cache_spec, dict):
-            raise InvalidArgumentError("redis_mysql account storage requires cache parameters")
-        unknown_cache_fields = set(cache_spec) - {"provider", "params"}
-        if unknown_cache_fields:
-            names = ", ".join(sorted(unknown_cache_fields))
-            raise InvalidArgumentError(f"Unknown Redis cache fields: {names}")
-        cache_provider = cache_spec.get("provider")
-        cache_params = cache_spec.get("params")
-        if cache_provider != "redis" or not isinstance(cache_params, dict):
-            raise InvalidArgumentError(
-                "redis_mysql account storage cache must use provider='redis' with a params object"
-            )
-        redis_values = dict(cache_params)
-        self._key_prefix = redis_values.pop("key_prefix", "ov:account-cache")
-        self._ttl_seconds = redis_values.pop(
-            "ttl_seconds",
-            redis_values.get("default_ttl_seconds", 60),
-        )
-        # Compatibility only: generation caching has no distributed lease.
-        redis_values.pop("lock_ttl_seconds", None)
-        redis_values.pop("lock_wait_seconds", None)
-        redis_values.setdefault("connect_timeout_ms", 5000)
-        redis_values.setdefault("command_timeout_ms", 5000)
-        if not isinstance(self._key_prefix, str) or not self._key_prefix:
-            raise InvalidArgumentError("cache.params.key_prefix must be a non-empty string")
-        if "{" in self._key_prefix or "}" in self._key_prefix:
-            raise InvalidArgumentError(
-                "cache.params.key_prefix must not contain Redis hash-tag characters"
-            )
+        self.cache_instance_from_params({"cache": cache_spec})
+        if cache_runtime is None:
+            raise InvalidArgumentError("redis_mysql account storage requires CacheRuntime")
+        self._key_prefix = "ov:account-cache"
+        runtime_ttl = cache_runtime.default_ttl_seconds
         if (
-            isinstance(self._ttl_seconds, bool)
-            or not isinstance(self._ttl_seconds, int)
-            or self._ttl_seconds <= 0
+            isinstance(runtime_ttl, bool)
+            or not isinstance(runtime_ttl, (int, float))
+            or runtime_ttl <= 0
+            or (isinstance(runtime_ttl, float) and not runtime_ttl.is_integer())
         ):
-            raise InvalidArgumentError("cache.params.ttl_seconds must be a positive integer")
+            raise InvalidArgumentError(
+                "CacheRuntime default_ttl_seconds must be a positive integer"
+            )
 
         self._mysql = mysql_store
         self._service_name = normalized_service_name
-        self._provided_redis = redis_client
-        self._redis: Any | None = None
-        self._redis_config = redis_values
-        self._redis_handle: RedisClientHandle | None = None
-        self._owns_redis = redis_client is None
+        self._cache_runtime = cache_runtime
+        self._ttl_seconds = int(runtime_ttl)
         self._redis_runtime = get_shared_redis_runtime()
         self._redis_lease = False
         self._closing = False
@@ -255,6 +208,29 @@ class RedisMySQLAccountStore(AccountStore):
         self._fill_tasks: dict[tuple[str, str, str], asyncio.Task[Any]] = {}
         self._mysql_tasks: set[asyncio.Task[Any]] = set()
         self._redis_lifecycle_lock: tuple[asyncio.AbstractEventLoop, asyncio.Lock] | None = None
+        _register_runtime_scripts(self._cache_runtime)
+
+    @staticmethod
+    def cache_instance_from_params(params: dict[str, object] | None) -> str:
+        """Return the sole CacheRuntime instance selected by Redis MySQL settings."""
+        cache = dict(params or {}).get("cache")
+        if not isinstance(cache, dict):
+            raise InvalidArgumentError("redis_mysql account storage requires cache.instance")
+        unknown = set(cache) - {"instance"}
+        if unknown:
+            raise InvalidArgumentError(
+                f"Unknown Redis MySQL account store cache parameters: {', '.join(sorted(unknown))}"
+            )
+        instance = cache.get("instance")
+        if not isinstance(instance, str) or not instance:
+            raise InvalidArgumentError("redis_mysql account storage requires cache.instance")
+        try:
+            return validate_cache_instance_name(
+                instance,
+                "redis_mysql account storage cache.instance",
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from None
 
     async def load(self) -> None:
         await self._run_lifecycle(self._load_store)
@@ -282,7 +258,7 @@ class RedisMySQLAccountStore(AccountStore):
                 # Both steps run on the Redis loop without a cancellation point.
                 await self._redis_runtime.acquire()
                 self._redis_lease = True
-            await self._load_redis()
+            await self._cache_runtime.ping()
         except BaseException:
             # Keep the lifecycle lock until failed-load cleanup has completed.
             await wait_redis_cleanup(self._close_store())
@@ -310,40 +286,16 @@ class RedisMySQLAccountStore(AccountStore):
     async def _close_resources(self) -> None:
         try:
             if self._redis_lease:
-                try:
-                    await self._close_redis()
-                finally:
-                    self._redis_lease = False
-                    await self._redis_runtime.release()
+                self._redis_lease = False
+                await self._redis_runtime.release()
         finally:
             await self._mysql.close()
 
-    async def _load_redis(self) -> None:
-        if self._redis is None:
-            if self._provided_redis is not None:
-                self._redis = self._provided_redis
-            else:
-                try:
-                    self._redis_handle = create_redis_client(self._redis_config)
-                except ImportError:
-                    raise RuntimeError(
-                        "Redis MySQL account storage requires openviking[redis-mysql]"
-                    ) from None
-                self._redis = self._redis_handle.client
-        await self._redis.ping()
-
-    async def _close_redis(self) -> None:
-        try:
-            if self._redis_handle is not None and self._owns_redis:
-                await self._redis_handle.close()
-        finally:
-            self._redis = None
-            self._redis_handle = None
-
-    async def _redis_call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+    async def _execute_script(
+        self, script_id: str, keys: list[str], args: list[bytes]
+    ) -> Any:
         async def invoke() -> Any:
-            assert self._redis is not None
-            return await getattr(self._redis, method)(*args, **kwargs)
+            return await self._cache_runtime.execute_script(script_id, keys, args)
 
         return await self._redis_runtime.run(invoke)
 
@@ -437,16 +389,15 @@ class RedisMySQLAccountStore(AccountStore):
         self, account_id: str, user_id: str | None, key: str, *, initialize: bool = True
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Atomically read a hit; read-only mode preserves partially missing generations."""
-        result = await self._redis_call(
-            "eval",
-            _READ_GENERATIONS_SCRIPT,
-            3,
-            *self._generation_keys(account_id, user_id),
-            key,
-            secrets.token_hex(24),
-            secrets.token_hex(24),
-            int(user_id is not None),
-            int(initialize),
+        result = await self._execute_script(
+            "accountstore.v2.read_generations",
+            [*self._generation_keys(account_id, user_id), key],
+            [
+                secrets.token_hex(24).encode(),
+                secrets.token_hex(24).encode(),
+                str(int(user_id is not None)).encode(),
+                str(int(initialize)).encode(),
+            ],
         )
         if not isinstance(result, (list, tuple)) or len(result) != 3:
             raise ValueError("Invalid Redis generation read response")
@@ -476,17 +427,19 @@ class RedisMySQLAccountStore(AccountStore):
         value: dict[str, Any],
     ) -> bool:
         return bool(
-            await self._redis_call(
-                "eval",
-                _SET_IF_GENERATIONS_SCRIPT,
-                3,
-                *self._generation_keys(account_id, user_id),
-                self._generation_cache_key(key, account_generation, user_generation),
-                account_generation,
-                user_generation,
-                int(user_id is not None),
-                json.dumps(value, separators=(",", ":")),
-                self._ttl_seconds,
+            await self._execute_script(
+                "accountstore.v2.set_if_generations",
+                [
+                    *self._generation_keys(account_id, user_id),
+                    self._generation_cache_key(key, account_generation, user_generation),
+                ],
+                [
+                    account_generation.encode(),
+                    user_generation.encode(),
+                    str(int(user_id is not None)).encode(),
+                    json.dumps(value, separators=(",", ":")).encode(),
+                    str(self._ttl_seconds).encode(),
+                ],
             )
         )
 
@@ -496,7 +449,11 @@ class RedisMySQLAccountStore(AccountStore):
             if user_id is None
             else self._user_generation_key(account_id, user_id)
         )
-        await self._redis_call("eval", _BUMP_GENERATION_SCRIPT, 1, key, secrets.token_hex(24))
+        await self._execute_script(
+            "accountstore.v2.bump_generation",
+            [key],
+            [secrets.token_hex(24).encode()],
+        )
 
     async def _read_mysql(self, loader: Callable[[], Awaitable[T]]) -> T:
         """Track all MySQL reads; leave backpressure to the real MySQL pool."""
@@ -541,8 +498,11 @@ class RedisMySQLAccountStore(AccountStore):
                 hit, value = read_payload(payload)
                 if hit:
                     return value
-            except Exception:
-                logger.exception("Redis cache read failed; reading %s from MySQL", key)
+            except Exception as exc:
+                logger.info(
+                    "Redis account cache read failed; reading from MySQL",
+                    extra={"error_type": type(exc).__name__},
+                )
                 # Redis read failure cannot authorize a cache write.
                 return await self._read_mysql(loader)
 
@@ -611,8 +571,11 @@ class RedisMySQLAccountStore(AccountStore):
         # earlier payload under these newly captured generations.
         try:
             await self._read_generations(account_id, user_id, key)
-        except Exception:
-            logger.exception("Redis snapshot initialization failed for %s", key)
+        except Exception as exc:
+            logger.info(
+                "Redis snapshot initialization failed; using MySQL result",
+                extra={"error_type": type(exc).__name__},
+            )
         return verified
 
     async def _fill_cache(
@@ -639,8 +602,11 @@ class RedisMySQLAccountStore(AccountStore):
                 user_generation,
                 make_payload(value),
             )
-        except Exception:
-            logger.exception("Failed to populate Redis account cache for %s", key)
+        except Exception as exc:
+            logger.info(
+                "Redis account cache population failed; using MySQL result",
+                extra={"error_type": type(exc).__name__},
+            )
         return value
 
     async def _mutate_account(
@@ -657,8 +623,11 @@ class RedisMySQLAccountStore(AccountStore):
             # bump on every attempted mutation and settle cleanup before returning.
             try:
                 await wait_redis_cleanup(self._bump_generation(account_id, user_id))
-            except Exception:
-                logger.exception("Failed to bump Redis cache generation for %s", account_id)
+            except Exception as exc:
+                logger.error(
+                    "Redis account cache generation update failed",
+                    extra={"account_id": account_id, "error_type": type(exc).__name__},
+                )
 
     async def verify_api_key(
         self,
@@ -773,7 +742,10 @@ class RedisMySQLAccountStore(AccountStore):
         self,
         account_id: str,
         admin_user_id: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         await self._mutate_account(
             account_id,
             lambda: self._mysql.create_account(account_id, admin_user_id),
@@ -784,7 +756,10 @@ class RedisMySQLAccountStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         api_key: str,
+        *,
+        lease_ref: object | None = None,
     ) -> None:
+        del lease_ref
         await self._mutate_account(
             account_id,
             lambda: self._mysql.create_account_with_api_key(

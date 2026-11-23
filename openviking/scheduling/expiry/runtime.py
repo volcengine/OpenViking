@@ -341,10 +341,14 @@ class ExpiryRuntime:
                 startup.cancel()
             try:
                 await self.close()
-            except BaseException:
+            except BaseException as exc:
                 # Preserve the original failure/cancellation. Ownership and the
                 # startup task remain available for a later close retry.
-                logger.warning("Expiry partial startup cleanup did not complete", exc_info=True)
+                logger.info(
+                    "expiry startup cleanup incomplete; retaining ownership error_type=%s",
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
             raise
         self._storage_start_task = None
         self._storage_started = True

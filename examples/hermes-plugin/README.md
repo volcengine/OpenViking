@@ -173,11 +173,19 @@ Hermes calls these tools when needed. You do not need to run them yourself.
 | Tool | What it does |
 |------|--------------|
 | `viking_search` | Search memories and knowledge. |
+| `viking_rule_search` | Check task-specific constraints before an action or response; return complete Rules with conditions and exceptions. |
 | `viking_read` | Read content at a `viking://` address. |
 | `viking_browse` | List files and directories. |
 | `viking_remember` | Submit a fact for memory extraction. |
 | `viking_forget` | Delete one exact memory file. |
 | `viking_add_resource` | Add a URL or document to the knowledge base. |
+
+Rule search requires plugin `2.1.4` or later and an OpenViking server with
+`POST /api/v1/rules/search`. Pass `task_context` and optionally
+`rule_probability_threshold` (default `0.65`). Check each returned Rule's conditions
+and exceptions and comply with every applicable constraint.
+Hermes catalog releases pin the plugin commit, so the catalog must point at the
+updated code before a catalog update can deliver this tool.
 
 ## Remove
 

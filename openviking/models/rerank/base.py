@@ -6,7 +6,6 @@ RerankBase: Base class for all rerank clients.
 Provides common token usage tracking functionality.
 """
 
-import logging
 from typing import Any, Dict
 
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -86,14 +85,11 @@ class RerankBase:
             )
         except Exception as e:
             # Telemetry must never break rerank execution.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "rerank.update_token_usage telemetry emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "rerank telemetry unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
         try:
             from openviking.metrics.datasources import RerankEventDataSource
             from openviking.observability.context import get_root_observability_context
@@ -110,14 +106,11 @@ class RerankBase:
             )
         except Exception as e:
             # Metrics must never break rerank execution.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "rerank.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
-                    provider,
-                    model_name,
-                    type(e).__name__,
-                    e,
-                )
+            logger.info(
+                "rerank metrics unavailable; continuing without observation error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
 
     def _extract_and_update_token_usage(
         self,

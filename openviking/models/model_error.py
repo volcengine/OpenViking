@@ -45,6 +45,18 @@ class ModelError(Exception):
         self.code = code
 
 
+def chat_finish_error(finish_reason: str | None, provider: str) -> ModelError | None:
+    """Classify explicit content filtering in a Chat Completions choice."""
+    if finish_reason in ("content_filter", "sensitive"):
+        return ModelError(
+            ModelErrorKind.CONTENT_SAFETY,
+            f"Model output was filtered (finish_reason={finish_reason}).",
+            provider=provider,
+            code=finish_reason,
+        )
+    return None
+
+
 _CODE_KINDS = {
     # Authentication and authorization.
     "APIKEYINVALID": ModelErrorKind.AUTHENTICATION_ERROR,
@@ -55,6 +67,7 @@ _CODE_KINDS = {
     "ACCESSDENIED": ModelErrorKind.PERMISSION_DENIED,
     # Quota and billing exhaustion.
     "INSUFFICIENTQUOTA": ModelErrorKind.QUOTA_EXHAUSTED,
+    "CREDITBALANCEEXHAUSTED": ModelErrorKind.QUOTA_EXHAUSTED,
     "ACCOUNTQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "MODELQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "QUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
