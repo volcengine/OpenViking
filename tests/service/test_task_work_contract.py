@@ -646,9 +646,19 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
 ):
     first, second = task_stores
     tracker, observer = TaskTracker(first), TaskTracker(second)
+    account_id = OWNER["account_id"]
+    teammate = {"account_id": account_id, "user_id": "teammate"}
+    other_account = {"account_id": "other", "user_id": OWNER["user_id"]}
+    for task_id, owner in (("teammate", teammate), ("outside", other_account)):
+        await tracker.create("compile", task_id=task_id, **owner)
+        await tracker.register_work(task_id, "work", "Semantic", **owner)
     await tracker.create("compile", task_id="task", **OWNER)
     await tracker.register_work("task", "root", root_queue, **OWNER)
     await tracker.register_work("task", "child", "Embedding", **OWNER)
+    expected = {"Semantic": {"pending": 1, "running": 0}, "Embedding": {"pending": 1, "running": 0}}
+    if root_queue != "Inline":
+        expected[root_queue] = {"pending": 1, "running": 0}
+    assert await observer.get_queue_work_counts(account_id=account_id) == expected
     if running:
         assert (await tracker.start_work("task", "root", **OWNER)).is_applied
         assert (await observer.start_work("task", "root", **OWNER)).is_applied
@@ -667,12 +677,23 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
     assert await observer.get_work_state("task", "root", **OWNER) is (
         WorkState.RUNNING if running and root_queue != "Inline" else WorkState.CANCELLED
     )
+    expected = {"Semantic": {"pending": 1, "running": 0}}
+    if running and root_queue != "Inline":
+        expected[root_queue] = {"pending": 0, "running": 1}
+    if child_running:
+        expected["Embedding"] = {"pending": 0, "running": 1}
+    assert await observer.get_queue_work_counts(account_id=account_id) == expected
     await observer.cancel("task", **OWNER)
     await tracker.mark_work_done("task", "root", **OWNER)
     if child_running:
         assert (await observer.get("task", **OWNER)).status is TaskStatus.CANCELLING
         await tracker.mark_work_done("task", "child", **OWNER)
     assert not await observer.has_work("task", **OWNER)
+    assert await observer.has_work(account_id=account_id, exclude_inline=True)
+    await tracker.mark_work_done("teammate", "work", **teammate)
+    assert not await observer.has_work(account_id=account_id, exclude_inline=True)
+    assert await observer.get_queue_work_counts(account_id=account_id) == {}
+    assert await observer.has_work(account_id="other", exclude_inline=True)
     assert (await observer.wait("task", timeout=0, **OWNER)).status is TaskStatus.CANCELLED
     assert await observer.get_work_state("task", "root", **OWNER) is WorkState.CANCELLED
     cancelled = await observer.get("task", **OWNER)
@@ -910,6 +931,8 @@ async def test_relational_requeue_and_concurrent_completion_are_durable(
         )
         assert isolated_task is not None
         await isolated.register_work(task_id, "semantic", "Semantic", **OWNER)
+        assert not await observer.has_work(account_id=OWNER["account_id"], exclude_inline=True)
+        assert await observer.get_queue_work_counts(account_id=OWNER["account_id"]) == {}
 
         assert (await second.withdraw_unaccepted(task_id, **OWNER)).is_applied
         assert await observer.get(task_id, **OWNER) is None

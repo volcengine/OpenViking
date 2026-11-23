@@ -4,8 +4,11 @@
 """Tests for observer endpoints (/api/v1/observer/*)."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import httpx
+
+from openviking.service.debug_service import ComponentStatus
 
 
 async def test_observer_queue(client: httpx.AsyncClient):
@@ -85,14 +88,26 @@ async def test_observer_system(client: httpx.AsyncClient):
     assert isinstance(result["components"], dict)
 
 
-async def test_observer_system_structured(client: httpx.AsyncClient):
+async def test_observer_system_structured(client: httpx.AsyncClient, service, monkeypatch):
+    monkeypatch.setattr(
+        service.debug.observer,
+        "get_filesystem_status_async",
+        AsyncMock(return_value=ComponentStatus("filesystem", False, True, {})),
+    )
     async with asyncio.timeout(10):
-        response, models = await asyncio.gather(
+        runtime, account, models = await asyncio.gather(
             client.get("/api/v1/observer/system", params={"format": "json"}),
+            client.get("/api/v1/observer/system", params={"format": "json", "scope": "account"}),
             client.get("/api/v1/observer/models", params={"format": "json"}),
         )
-    assert response.status_code == models.status_code == 200
-    components = response.json()["result"]["components"]
+    assert runtime.status_code == account.status_code == models.status_code == 200
+    runtime, account = runtime.json()["result"], account.json()["result"]
+    components = runtime["components"]
     assert isinstance(components["queue"]["status"], dict)
     assert components["models"]["status"] == models.json()["result"]["status"]
     assert isinstance(components["models"]["status"]["vlm"], list)
+    assert runtime["is_healthy"] is False
+    assert "filesystem has errors" in runtime["errors"]
+    assert account["is_healthy"] is True
+    assert account["errors"] == []
+    assert account["components"]["filesystem"] == components["filesystem"]
