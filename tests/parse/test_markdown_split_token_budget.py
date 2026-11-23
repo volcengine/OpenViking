@@ -1,6 +1,7 @@
 """Native section limits use characters, independently of legacy token settings."""
 
 import pytest
+from markdown_it import MarkdownIt
 
 from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.markdown import MarkdownParser
@@ -77,3 +78,70 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bordered", [True, False])
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "",
+        "\n> End note",
+        "\n- End note",
+        "\n***\nEnd note",
+        "\n\n> End note",
+        "\n\n- End note",
+        "\n\n***\nEnd note",
+    ],
+)
+async def test_table_rows_survive_following_blocks(bordered, tail):
+    values = [f"ROW_{i:02d} " + chr(65 + i) * 690 for i in range(4)]
+    rows = [f"| {value} |" if bordered else value for value in values]
+    content = "| Column |\n| --- |\n" + "\n".join(rows) + tail
+    layout = await MarkdownParser()._compute_layout(
+        content, "viking://temp/table-blocks", resource_name="sample"
+    )
+    parts = [op.content for op in layout.ops if op.kind == "write"]
+    assert all(len(part) <= 2000 for part in parts)
+    cells = []
+    for part in parts:
+        tokens = MarkdownIt("commonmark").enable("table").parse(part)
+        cells.extend(
+            token.content
+            for previous, token in zip(tokens, tokens[1:], strict=False)
+            if previous.type == "td_open" and token.type == "inline"
+        )
+    assert cells == values
+    if tail:
+        combined = "\n\n".join(parts)
+        assert combined.count("End note") == 1
+        assert tail.strip() in combined
+        assert combined.index(values[-1]) < combined.index("End note")
+
+
+@pytest.mark.asyncio
+async def test_adjacent_tables_keep_all_rows_and_following_note():
+    values = [f"ROW_{i:02d} " + chr(65 + i) * 690 for i in range(8)]
+    tables = [
+        "| Column |\n| --- |\n" + "\n".join(f"| {value} |" for value in values[i : i + 4])
+        for i in (0, 4)
+    ]
+    content = "\n***\n".join(tables) + "\n> End note"
+    layout = await MarkdownParser()._compute_layout(
+        content, "viking://temp/adjacent-tables", resource_name="sample"
+    )
+    parts = [op.content for op in layout.ops if op.kind == "write"]
+    assert all(len(part) <= 2000 for part in parts)
+    cells = []
+    for part in parts:
+        tokens = MarkdownIt("commonmark").enable("table").parse(part)
+        cells.extend(
+            token.content
+            for previous, token in zip(tokens, tokens[1:], strict=False)
+            if previous.type == "td_open" and token.type == "inline"
+        )
+    assert cells == values
+    combined = "\n\n".join(parts)
+    assert combined.count("***") == 1
+    assert combined.count("> End note") == 1
+    assert combined.index(values[-1]) < combined.index("> End note")
