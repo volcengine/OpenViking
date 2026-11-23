@@ -442,6 +442,12 @@ def _combine_apply_results(
 ) -> PolicyApplyResult:
     if not results:
         return PolicyApplyResult(updated_policy_set=fallback_policy_set)
+    errors_by_uri: dict[str, list[str]] = {}
+    for result in results:
+        for uri, errors in result.metadata.get("errors_by_uri", {}).items():
+            errors_by_uri.setdefault(uri, []).extend(
+                error for error in errors if error in result.errors
+            )
     return PolicyApplyResult(
         updated_policy_set=results[-1].updated_policy_set,
         written_uris=[uri for result in results for uri in result.written_uris],
@@ -450,6 +456,7 @@ def _combine_apply_results(
         metadata={
             "chunk_count": len(results),
             "chunk_metadata": [dict(result.metadata or {}) for result in results],
+            "errors_by_uri": errors_by_uri,
         },
     )
 
@@ -480,6 +487,7 @@ def _scope_training_result_to_submitter(
     scoped_apply_result = _scope_apply_result_to_plan(
         result.apply_result,
         scoped_plan,
+        batch_plan=result.plan,
     )
     metadata = dict(result.metadata or {})
     metadata.update(
@@ -558,12 +566,48 @@ def _plan_item_belongs_to_trajectories(
 def _scope_apply_result_to_plan(
     apply_result: PolicyApplyResult,
     plan: PolicyUpdatePlan,
+    *,
+    batch_plan: PolicyUpdatePlan,
 ) -> PolicyApplyResult:
     plan_uris = {
         _plan_item_uri(item, getattr(apply_result.updated_policy_set, "root_uri", ""))
         for item in getattr(plan, "items", []) or []
     }
     metadata = dict(getattr(apply_result, "metadata", {}) or {})
+    errors = list(apply_result.errors)
+    if errors:
+        errors_by_uri = metadata.get("errors_by_uri", {})
+
+        def related_uris(items: list[Any]) -> set[str]:
+            uris = {_plan_item_uri(item, apply_result.updated_policy_set.root_uri) for item in items}
+            uris.update(
+                uri for item in items for link in item.links for uri in (link.from_uri, link.to_uri)
+            )
+            for item in batch_plan.items:
+                if item.kind == "delete" and item.replacement_uri in uris:
+                    uris.add(_plan_item_uri(item, apply_result.updated_policy_set.root_uri))
+            return uris
+
+        own_uris = related_uris(plan.items)
+        owned_batch_items = [
+            item
+            for item in batch_plan.items
+            if any(
+                link.link_type == "derived_from" and "/memories/trajectories/" in link.to_uri
+                for link in item.links
+            )
+        ]
+        batch_uris = related_uris(owned_batch_items)
+        known_errors = {error for messages in errors_by_uri.values() for error in messages}
+        # Unattributed and legacy errors remain shared; only exclude failures
+        # whose owners are known to belong to other submitters.
+        own_errors = {
+            error
+            for uri, messages in errors_by_uri.items()
+            if uri in own_uris or uri not in batch_uris
+            for error in messages
+        }
+        errors = [error for error in errors if error in own_errors or error not in known_errors]
     metadata.update(
         {
             "unscoped_written_uris": list(getattr(apply_result, "written_uris", []) or []),
@@ -572,9 +616,13 @@ def _scope_apply_result_to_plan(
     )
     return PolicyApplyResult(
         updated_policy_set=apply_result.updated_policy_set,
-        written_uris=[uri for uri in getattr(apply_result, "written_uris", []) or [] if uri in plan_uris],
-        deleted_uris=[uri for uri in getattr(apply_result, "deleted_uris", []) or [] if uri in plan_uris],
-        errors=list(getattr(apply_result, "errors", []) or []),
+        written_uris=[
+            uri for uri in getattr(apply_result, "written_uris", []) or [] if uri in plan_uris
+        ],
+        deleted_uris=[
+            uri for uri in getattr(apply_result, "deleted_uris", []) or [] if uri in plan_uris
+        ],
+        errors=errors,
         metadata=metadata,
     )
 

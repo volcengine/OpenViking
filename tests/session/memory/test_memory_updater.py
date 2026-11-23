@@ -679,17 +679,13 @@ class TestMemoryUpdater:
         )
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        with patch("openviking.session.memory.memory_updater.tracer.error") as tracer_error:
-            result = await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         assert result.written_uris == [resolved_uri]
         assert len(result.errors) == 1
         error_target, error = result.errors[0]
         assert error_target == "events(page_id=102)"
         assert str(error) == "Missing resolved URI"
-        tracer_error.assert_called_once_with(
-            "Skipping unresolved memory operation: events(page_id=102): Missing resolved URI"
-        )
 
     @pytest.mark.asyncio
     async def test_apply_operations_reports_expected_empty_uri_as_skip(self):
@@ -902,10 +898,11 @@ class TestMemoryUpdater:
 
         mock_viking_fs = MagicMock()
 
+        live_uris = {deleted_uri, written_uri}
+
         async def mock_read_file(uri, **kwargs):
-            if uri == deleted_uri:
-                raise AssertionError("deleted URI should not be read")
-            return MemoryFileUtils.write(MemoryFile(uri=uri, content="new content"))
+            assert uri in live_uris, f"{uri} was read after deletion"
+            return MemoryFileUtils.write(MemoryFile(uri=uri, content="memory content"))
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
         mock_viking_fs.write_file = AsyncMock()
@@ -935,7 +932,7 @@ class TestMemoryUpdater:
             return None
 
         async def mock_apply_delete(uri, ctx, **kwargs):
-            assert uri == deleted_uri
+            live_uris.remove(uri)
 
         updater._apply_upsert = AsyncMock(side_effect=mock_apply_upsert)
         updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
@@ -946,8 +943,10 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
+        assert live_uris == {written_uri}
+        assert result.errors == []
         assert deleted_uri not in [
-            call.args[0] for call in mock_viking_fs.read_file.await_args_list
+            call.args[0] for call in mock_viking_fs.write_file.await_args_list
         ]
 
     @pytest.mark.asyncio
@@ -1112,9 +1111,10 @@ class TestMemoryUpdater:
         }
 
     @pytest.mark.asyncio
-    async def test_apply_operations_migrates_uri_and_preserves_unmodified_fields(self):
+    @pytest.mark.parametrize("rename", [False, True], ids=["update", "rename"])
+    async def test_apply_operations_preserves_unmodified_fields_on_update_or_rename(self, rename):
         source_uri = "viking://user/u/memories/entities/person/阿珍.md"
-        target_uri = "viking://user/u/memories/entities/person/陈静娴.md"
+        target_uri = "viking://user/u/memories/entities/person/陈静娴.md" if rename else source_uri
         profile_uri = "viking://user/u/memories/profile.md"
         schema = MemoryTypeSchema(
             memory_type="entities",
@@ -1148,6 +1148,8 @@ class TestMemoryUpdater:
                 "category": "person",
                 "name": "阿珍",
                 "custom_metadata": "keep",
+                "source_extraction_id": "old_extraction",
+                "last_update_trace_id": "old_trace",
                 "version": 3,
             },
             links=[
@@ -1196,9 +1198,12 @@ class TestMemoryUpdater:
             upsert_operations=[
                 ResolvedOperation(
                     old_memory_file_content=old_file,
-                    memory_fields={"category": "person", "name": "陈静娴"},
+                    memory_fields={"name": "陈静娴"} if rename else {"content": "近况更新。"},
                     memory_type="entities",
                     uris=[target_uri],
+                    source=MemoryOperationSource(
+                        extraction_id="new_extraction", trace_id="new_trace"
+                    ),
                 )
             ],
             delete_file_contents=[],
@@ -1208,19 +1213,21 @@ class TestMemoryUpdater:
         ctx = MagicMock()
         result = await updater.apply_operations(operations, ctx)
 
-        assert result.written_uris == [target_uri]
-        assert result.deleted_uris == [source_uri]
-        assert source_uri not in store
+        assert result.written_uris == ([target_uri] if rename else [])
+        assert result.deleted_uris == ([source_uri] if rename else [])
+        assert (source_uri not in store) == rename
         migrated = MemoryFileUtils.read(store[target_uri], uri=target_uri)
-        assert migrated.plain_content() == "大学室友，仗义借钱。"
+        assert migrated.plain_content() == ("大学室友，仗义借钱。" if rename else "近况更新。")
         assert migrated.extra_fields["category"] == "person"
-        assert migrated.extra_fields["name"] == "陈静娴"
+        assert migrated.extra_fields["name"] == ("陈静娴" if rename else "阿珍")
         assert migrated.extra_fields["custom_metadata"] == "keep"
+        assert migrated.extra_fields["source_extraction_id"] == "new_extraction"
+        assert migrated.extra_fields["last_update_trace_id"] == "new_trace"
         assert migrated.extra_fields["version"] == 4
         assert migrated.links[0]["from_uri"] == target_uri
         profile = MemoryFileUtils.read(store[profile_uri], uri=profile_uri)
         assert profile.backlinks[0]["from_uri"] == target_uri
-        assert operations.delete_replacements == {source_uri: target_uri}
+        assert operations.delete_replacements == ({source_uri: target_uri} if rename else {})
 
     @pytest.mark.asyncio
     async def test_apply_operations_rename_reads_latest_source_under_lock(self):
@@ -1457,14 +1464,12 @@ class TestMemoryUpdater:
         read_errors = {
             uri: error for uri, error in result.errors if isinstance(error, MemoryReadError)
         }
-        assert set(read_errors) == {
-            target_uri,
-            *operations.upsert_operations[1].uris,
-        }
+        failed_update = update_uri + ".second" if write_first else update_uri
+        assert set(read_errors) == {target_uri, failed_update}
         assert all(error.__cause__ is read_error for error in read_errors.values())
-        assert read_errors[update_uri].retryable is retryable
+        assert read_errors[failed_update].retryable is retryable
         assert mock_viking_fs.read_file.await_count == len(reads)
-        assert result.written_uris == []
+        assert result.written_uris == ([update_uri] if write_first else [])
         assert result.edited_uris == []
         assert mock_viking_fs.write_file.await_count == int(write_first)
         assert result.deleted_uris == []
@@ -1881,7 +1886,11 @@ class TestMemoryUpdater:
         registry = MagicMock()
         registry.get.return_value = schema
 
-        store = {}
+        store = {
+            profile_uri: MemoryFileUtils.write(
+                MemoryFile(uri=profile_uri, memory_type="profile", content="Caroline's profile")
+            )
+        }
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
@@ -1918,19 +1927,23 @@ class TestMemoryUpdater:
                     to_uri=caroline_uri,
                     match_text="career",
                     description="Caroline's profile references her career plans",
-                )
+                ),
+                StoredLink(
+                    from_uri="viking://user/Melanie/memories/cases/missing.md", to_uri=melanie_uri
+                ),
             ],
         )
 
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         caroline = parse_memory_file_with_fields(store[caroline_uri])
         melanie = parse_memory_file_with_fields(store[melanie_uri])
 
         assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
         assert melanie.get("backlinks", []) == []
+        assert result.errors == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_does_not_write_backlinks_to_resource_targets(self):
@@ -2180,6 +2193,7 @@ class TestApplyEditWithSearchReplacePatch:
         result = MemoryFileUtils.read(written_content)
         assert result.extra_fields["source_extraction_id"] == "extract_1"
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
+        assert result.memory_type == "test"
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
@@ -2401,6 +2415,7 @@ class TestConsecutivePatchesSameURI:
         parsed = parse_memory_file_with_fields(final_content)
         assert parsed["content"] == "Step B"
         assert parsed["version"] == 2
+        assert parsed["memory_type"] == memory_type
 
     @pytest.mark.asyncio
     async def test_apply_upsert_strips_user_id_and_sets_version(self):
@@ -2527,7 +2542,7 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):
+    async def test_apply_upsert_preserves_content_and_reports_patch_failure(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2560,11 +2575,7 @@ class TestConsecutivePatchesSameURI:
         store[uri] = existing_content
 
         trace_info = MagicMock()
-        patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr(
-            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
-        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(
@@ -2582,7 +2593,6 @@ class TestConsecutivePatchesSameURI:
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["content"] == "Original body"
-        patch_warning.assert_not_called()
         assert any(
             "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
             and f"uri={uri}" in call.args[0]

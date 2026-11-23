@@ -1,0 +1,208 @@
+import type { Locale } from '../../shared/locale.js';
+import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
+import type {
+  ViewerHandle,
+  ViewerViewModeOption,
+} from '@ark-design/ui/file-viewer/core';
+import type { HTMLAttributes } from 'react';
+
+import { FilePreviewBody } from './file-preview-body.js';
+import { FilePreviewDirectoryBody } from './file-preview-directory.js';
+import {
+  useFilePreviewReadyRef,
+  type FilePreviewPanelActions,
+} from './file-preview-edit-context.js';
+import { FilePreviewHeader } from './file-preview-header.js';
+import {
+  FilePreviewTransition,
+  needsAsyncLoad,
+  probeStatusOf,
+} from './file-preview-transition.js';
+import { TruncatedNotice } from './file-preview-state.js';
+import { FilePreviewVersionNote } from './file-preview-version-note.js';
+import type { useFilePreviewActions } from './use-file-preview-actions.js';
+import type { FilePreviewProps } from './types.js';
+import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import type {
+  FilePreviewContentTab,
+  FilePreviewDirectoryTab,
+  FilePreviewFileTab,
+  FilePreviewLabels,
+  FilePreviewTab,
+  FilePreviewViewMode,
+} from './types.js';
+
+/**
+ * 页签正文的三种渲染分支：内容页签整块交给宿主，目录页签多一层摘要切换，文件
+ * 页签走底座。
+ *
+ * 单独成文件是因为三条分支的参数加起来让主组件超出了行数上限；分支本身仍是
+ * 主组件的一次渲染，没有引入新的状态。
+ *
+ * The three ways a tab body renders: a content tab hands the whole body to the
+ * host, a directory tab adds one summary-switching layer, and a file tab goes
+ * through the base component.
+ *
+ * It lives in its own file because the three branches' parameters pushed the main
+ * component past the line limit; it is still one render of that component and
+ * introduces no state of its own.
+ */
+export interface FilePreviewPanelsProps {
+  toolbar?: FilePreviewProps['toolbar'];
+  contentTab?: FilePreviewContentTab;
+  directoryTab?: FilePreviewDirectoryTab;
+  fileTab?: FilePreviewFileTab;
+  levelKey?: string;
+  onLevelChange: (key: string) => void;
+  panelProps: HTMLAttributes<HTMLDivElement>;
+  panelClass: string;
+  text: Required<FilePreviewLabels>;
+  locale?: Locale;
+  actions: ReturnType<typeof useFilePreviewActions>;
+  actionContext: FilePreviewPanelActions;
+  editing: ReturnType<typeof useFilePreviewEditing>;
+  viewMode: FilePreviewViewMode;
+  setViewMode: (mode: FilePreviewViewMode) => void;
+  onHandleChange: (handle: ViewerHandle | null) => void;
+  onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
+  linkClickHandler?: MarkdownAdapterOptions['onLinkClick'];
+  activeTab: FilePreviewTab;
+}
+
+export function FilePreviewPanels({
+  toolbar,
+  levelKey,
+  onLevelChange,
+  contentTab,
+  directoryTab,
+  fileTab,
+  panelProps,
+  panelClass,
+  text,
+  locale,
+  actions,
+  actionContext,
+  editing,
+  viewMode,
+  setViewMode,
+  onHandleChange,
+  onViewModesChange,
+  linkClickHandler,
+  activeTab,
+}: FilePreviewPanelsProps) {
+  const toolbarOptions = {
+    viewSwitch:
+      toolbar?.viewSwitch !== false && activeTab.toolbar?.viewSwitch !== false,
+    edit: toolbar?.edit !== false && activeTab.toolbar?.edit !== false,
+    copyPath:
+      toolbar?.copyPath !== false && activeTab.toolbar?.copyPath !== false,
+  };
+  const { panelRef, attachPanel } = useFilePreviewReadyRef(
+    fileTab,
+    actionContext,
+    toolbarOptions.edit,
+  );
+  if (contentTab) {
+    // 内容页签整块交给宿主：组件只画页签行，正文不套任何容器，也没有标题行
+    // ——组件不知道该在那里显示什么，套一层只会限制宿主的排版。
+    //
+    // A content tab hands its whole body to the host: only the tab row is ours,
+    // with no container and no header in between.
+    return (
+      <div {...panelProps} className={`${panelClass} ${panelClass}--content`}>
+        {contentTab.content}
+      </div>
+    );
+  }
+
+  if (directoryTab) {
+    return (
+      <div {...panelProps} className={panelClass}>
+        <FilePreviewDirectoryBody
+          toolbar={toolbarOptions}
+          tab={directoryTab}
+          text={text}
+          locale={locale}
+          actions={actionContext}
+          editing={editing}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          onHandleChange={onHandleChange}
+          onViewModesChange={onViewModesChange}
+          onLinkClick={linkClickHandler}
+          onCancelEditing={actionContext.cancelEditing}
+        />
+      </div>
+    );
+  }
+
+  if (!fileTab) return null;
+
+  return (
+    <div {...panelProps} className={panelClass} ref={attachPanel}>
+      <FilePreviewHeader
+        levels={fileTab.levels}
+        levelKey={levelKey}
+        onLevelChange={onLevelChange}
+        path={fileTab.source.path}
+        fileName={fileTab.source.fileName}
+        canOpenParent={Boolean(fileTab.operations?.openParent)}
+        titleExtra={fileTab.slots?.titleExtra}
+        slotActions={fileTab.slots?.actions}
+        extraActions={fileTab.slots?.extraActions}
+        toolbar={toolbarOptions}
+        actionItems={fileTab.actions}
+        actions={actionContext}
+        text={text}
+        onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
+      />
+      <div className="ov-file-preview__body">
+        <FilePreviewTransition
+          identity={JSON.stringify([fileTab.key, levelKey])}
+          tab={fileTab}
+          needsLoad={needsAsyncLoad(fileTab.source)}
+          text={text}
+        >
+          {({ tab: layerTab, onProbeStatus, reports, onLoadingChange }) => (
+            <FilePreviewBody
+              fileTab={layerTab}
+              onLoadingChange={onLoadingChange}
+              text={text}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={setViewMode}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onLinkClick={linkClickHandler}
+              onCancelEditing={actionContext.cancelEditing}
+              onStateChange={(state) => onProbeStatus(probeStatusOf(state))}
+              reports={reports}
+            />
+          )}
+        </FilePreviewTransition>
+      </div>
+      {fileTab.source.truncated ? <TruncatedNotice text={text} /> : null}
+      {editing.versionNotCreated ? (
+        <p
+          className="ov-file-preview__notice ov-file-preview__notice--version"
+          role="status"
+        >
+          {text.versionNotCreated}
+        </p>
+      ) : null}
+      {fileTab.slots?.footer ? (
+        <div className="ov-file-preview__footer">{fileTab.slots.footer}</div>
+      ) : null}
+      {editing.versionNoteOpen && fileTab.editing ? (
+        <FilePreviewVersionNote
+          locale={locale}
+          text={text}
+          triggerRef={panelRef}
+          onClose={() => editing.finishVersionNote()}
+          onConfirm={editing.finishVersionNote}
+        />
+      ) : null}
+    </div>
+  );
+}

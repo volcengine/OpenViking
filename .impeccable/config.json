@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "frontend/packages/react/src/components/file-preview/file-preview-editor.css"
+        ],
+        "createdAt": "2026-11-16T17:47:47.940Z",
+        "reason": "Agent: this 3px stripe is a CodeMirror line-number gutter marker for unresolved Wiki conflicts, matching the Volcengine editor reference; it is not a card accent."
+      }
+    ]
+  }
+}

@@ -4,7 +4,8 @@ import { createFileRoute } from '@tanstack/react-router'
 export const Route = createFileRoute('/compile/')({
   validateSearch: (
     search: Record<string, unknown>,
-  ): { status?: string; q?: string } => ({
+  ): { status?: string; q?: string; tab?: 'schedules' } => ({
+    tab: search.tab === 'schedules' ? 'schedules' : undefined,
     status: typeof search.status === 'string' ? search.status : '',
     q: typeof search.q === 'string' ? search.q : '',
   }),

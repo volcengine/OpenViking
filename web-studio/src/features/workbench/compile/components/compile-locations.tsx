@@ -46,6 +46,7 @@ export function CompileLocations({
   attempted,
   sourceError,
   destinationError,
+  targetReadOnly = false,
 }: {
   sources: string
   to: string
@@ -54,6 +55,7 @@ export function CompileLocations({
   attempted: boolean
   sourceError: string
   destinationError: string
+  targetReadOnly?: boolean
 }) {
   const { t } = useTranslation('compile')
   const { identityScopeKey, connection } = useAppConnection()
@@ -176,6 +178,7 @@ export function CompileLocations({
               className="pr-10 font-mono text-xs"
               required
               value={to}
+              readOnly={targetReadOnly}
               onChange={(event) => onTarget(event.target.value)}
               placeholder={t('targetPlaceholder')}
             />
@@ -184,6 +187,7 @@ export function CompileLocations({
           <Button
             type="button"
             variant="outline"
+            disabled={targetReadOnly}
             onClick={() => setPicker('target')}
           >
             {t('browse')}

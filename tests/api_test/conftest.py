@@ -1,10 +1,28 @@
 import os
 import time
+from pathlib import Path
 
 import psutil
 import pytest
 from api.client import OpenVikingAPIClient
 from config import Config
+
+# CI excludes these provider-independent contracts using one marker. Explicit
+# manual invocations can still run them, including the live intent smoke.
+OFFLINE_CONTRACT_MODULES = frozenset(
+    {
+        "skills/test_add_skill.py",
+        "filesystem/test_fs_cp.py",
+        "filesystem/test_fs_read_write.py",
+        "retrieval/test_find.py",
+        "retrieval/test_search.py",
+        "resources/test_add_resource.py",
+        "scenarios/resources_retrieval/test_delete_sync.py",
+        "scenarios/resources_retrieval/test_resource_swap.py",
+        "scenarios/resources_retrieval/test_pack_consistency.py",
+        "scenarios/resources_retrieval/test_intent_extended_search.py",
+    }
+)
 
 TEST_CASE_DESCRIPTIONS = {
     "test_add_resource.py::TestAddResource::test_add_resource_simple": "向知识库添加资源",
@@ -456,6 +474,13 @@ def ensure_resources_dir(api_client):
 
 
 def pytest_collection_modifyitems(config, items):
+    test_root = Path(__file__).parent
+    for item in items:
+        if not item.path.is_relative_to(test_root):
+            continue
+        module = item.path.relative_to(test_root).as_posix()
+        if module in OFFLINE_CONTRACT_MODULES:
+            item.add_marker(pytest.mark.offline_contract)
     cache = config.cache
     lastfailed = cache.get("cache/lastfailed", {})
 

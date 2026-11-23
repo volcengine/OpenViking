@@ -384,7 +384,7 @@ async def test_phase2_processes_only_current_archive(
     )
     seen_message_ids: list[list[str]] = []
 
-    async def fake_summary(messages, latest_archive_overview=""):
+    async def fake_summary(messages, latest_archive_overview="", **_kwargs):
         assert latest_archive_overview == ""
         seen_message_ids.append([message.id for message in messages])
         return "# Session Summary\n\n## Current State\nCurrent archive is covered."
@@ -412,7 +412,11 @@ async def test_phase2_processes_only_current_archive(
         messages=[current],
         first_message_id=current.id,
         last_message_id=current.id,
-        memory_policy={"working_memory": {"enabled": True}},
+        memory_policy={
+            "working_memory": {"enabled": True},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
         agent_evolution_enabled=True,
     )
 
@@ -452,7 +456,7 @@ async def test_phase2_retry_does_not_repeat_completed_current_archive_steps(
     summary_inputs: list[list[str]] = []
     long_term_inputs: list[list[str]] = []
 
-    async def fake_summary(messages, latest_archive_overview=""):
+    async def fake_summary(messages, latest_archive_overview="", **_kwargs):
         assert latest_archive_overview == ""
         summary_inputs.append([message.id for message in messages])
         return "# Session Summary\n\n## Current State\nCurrent message is summarized."
@@ -642,6 +646,7 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
         messages,
         latest_archive_overview="",
         checkpoint_requests=None,
+        **_kwargs,
     ):
         nonlocal calls
         calls += 1
@@ -679,7 +684,11 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
         messages=[anchor, early],
         first_message_id="u1",
         last_message_id="a1",
-        memory_policy={"working_memory": {"enabled": True}},
+        memory_policy={
+            "working_memory": {"enabled": True},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
     )
 
     meta = json.loads(
@@ -825,6 +834,61 @@ async def test_wm_creation_detects_language_from_multiline_user_message(client, 
     assert result == "# Working Memory"
     assert len(prompts) == 1
     assert "zh-CN" in prompts[0]["prompt"]
+
+
+@pytest.mark.parametrize(
+    "retry_enabled,summary_ratio", [(False, 0.0002), (True, 0.0002), (True, None)]
+)
+async def test_wm_creation_retries_over_budget_summary_with_reasoning_effort(
+    monkeypatch, retry_enabled, summary_ratio
+):
+    session = Session(viking_fs=None)
+    calls: list[dict] = []
+    outputs = ["x" * 12000, "y" * 12000, "final compact summary"]
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, *args, **kwargs):
+            if args:
+                kwargs["prompt"] = args[0]
+            calls.append(kwargs)
+            return outputs[len(calls) - 1]
+
+    vlm = FakeVLM()
+    session._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            vlm=vlm, memory=SimpleNamespace(summary_budget_retry_enabled=retry_enabled)
+        ),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [_text_message("u1", "user", "summarize the latest deployment status")],
+        session_window_context=10000,
+        **({"summary_token_ratio": summary_ratio} if summary_ratio is not None else {}),
+        reasoning_effort="low",
+    )
+
+    if not retry_enabled:
+        assert result == outputs[0]
+        assert len(calls) == 1
+        assert calls[0]["reasoning_effort"] == "low"
+        return
+    assert result == "final compact summary"
+    from openviking.utils.token_estimation import estimate_text_tokens
+
+    assert calls[0]["max_tokens"] == 10000 - estimate_text_tokens(calls[0]["prompt"]) - 4
+    assert calls[1]["max_tokens"] < calls[0]["max_tokens"]
+    assert calls[2]["max_tokens"] == (2500 if summary_ratio is None else 2)
+    assert [call["reasoning_effort"] for call in calls] == ["low", "low", "low"]
+    assert "prompt" in calls[0]
+    assert calls[1]["messages"][0]["role"] == "system"
+    assert calls[1]["messages"][1]["content"] == outputs[0]
+    assert "tools" not in calls[2]
 
 
 async def test_wm_update_returns_two_products_in_one_model_call(
@@ -1193,7 +1257,11 @@ async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
         messages=[anchor, early],
         first_message_id="u1",
         last_message_id="a1",
-        memory_policy={"working_memory": {"enabled": True}},
+        memory_policy={
+            "working_memory": {"enabled": True},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
     )
 
     assert not await session._viking_fs.exists(f"{archive_uri}/.done", ctx=session.ctx)
@@ -1734,7 +1802,7 @@ async def test_queue_enqueue_failure_keeps_published_archive_and_fails_task(
     session.add_message("user", [TextPart("do not lose me")])
 
     class FailingQueueManager:
-        async def enqueue(self, _queue_name, data):
+        async def enqueue(self, _queue_name, data, *, group_key):
             raise RuntimeError("queue unavailable")
 
     monkeypatch.setattr(
@@ -1984,7 +2052,7 @@ async def test_stale_worker_uses_lock_snapshot_memory_policy_for_queue_message(
     queued: list[dict] = []
 
     class CapturingQueueManager:
-        async def enqueue(self, _queue_name, data):
+        async def enqueue(self, _queue_name, data, *, group_key):
             queued.append(data)
 
     monkeypatch.setattr(

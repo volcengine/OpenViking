@@ -4,28 +4,30 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
 
 class ProcessOutcome(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     REQUEUED = "requeued"
+    RETRY = "retry"
     CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
 class ProcessResult:
-    """A settled delivery that may be ACKed after middleware completes.
+    """A delivery outcome settled after middleware completes.
 
     REQUEUED means the handler already enqueued a replacement. Exceptions,
     including unhandled cancellation, leave the current delivery unacknowledged.
+    RETRY returns the original message to pending without ACK or replacement.
     """
 
     outcome: ProcessOutcome
     value: Any = None
     error: Optional[str] = None
-    errors: Optional[Tuple[str, ...]] = None
+    errors: Optional[Tuple[Union[str, dict], ...]] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, ProcessOutcome):
@@ -34,9 +36,11 @@ class ProcessResult:
             if not isinstance(self.error, str):
                 raise ValueError("failed results require an error string")
             if self.errors is not None and (
-                not self.errors or any(not isinstance(value, str) for value in self.errors)
+                not self.errors or not all(isinstance(value, (str, dict)) for value in self.errors)
             ):
-                raise ValueError("failed result errors must be a non-empty tuple of strings")
+                raise ValueError(
+                    "failed result errors must be a non-empty tuple of strings or dicts"
+                )
         elif self.error is not None or self.errors is not None:
             raise ValueError("only failed results may contain errors")
 
@@ -56,6 +60,10 @@ class ProcessResult:
     @classmethod
     def requeued(cls) -> "ProcessResult":
         return cls(ProcessOutcome.REQUEUED)
+
+    @classmethod
+    def retry(cls) -> "ProcessResult":
+        return cls(ProcessOutcome.RETRY)
 
     @classmethod
     def cancelled(cls) -> "ProcessResult":

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from openviking.core.skill_loader import SkillLoader
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -84,7 +85,12 @@ class SkillOperationUpdater:
                     result.add_edited(op_result["skill_md_uri"])
             except Exception as exc:
                 target_uri = (operation.uris or ["unknown"])[0]
-                logger.error("Failed to apply session skill operation for %s: %s", target_uri, exc)
+                logger.debug(
+                    "session skill operation failed uri=%s error_type=%s",
+                    safe_uri_for_log(target_uri),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
+                )
                 result.add_error(target_uri, exc)
 
         return result

@@ -8,8 +8,8 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
 def test_ctx_from_semantic_msg_preserves_identity_and_enables_acl_bypass(monkeypatch):
-    monkeypatch.setattr(Role, "_CUSTOM_RANK", Role._CUSTOM_RANK.copy())
-    Role.register("reviewer", 1)
+    monkeypatch.setattr(Role, "_TOKEN_ROLE_ALLOWLIST", Role._TOKEN_ROLE_ALLOWLIST.copy())
+    Role.register("reviewer")
     msg = SemanticMsg(
         uri="viking://resources/doc",
         context_type="resource",

@@ -690,7 +690,7 @@ RecallResultPtr CounterOp::_calc_topk_result(
     SPDLOG_ERROR("CounterOp::_calc_topk_result support no more than 2 fields");
     return nullptr;
   }
-  if (fields_.size() == 0) {
+  if (is_total_count()) {
     size_t count_value;
     if (valid_bitmap == nullptr) {
       count_value = field_group_set_ptr->element_size();

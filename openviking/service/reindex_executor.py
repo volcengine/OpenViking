@@ -9,8 +9,9 @@ import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY
 from openviking.core.context import (
     Context,
     ContextLevel,
@@ -28,9 +29,10 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.core.namespace_policy import namespace_policy_for_uri
+from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import bind_task_context, get_task_context
@@ -60,14 +62,12 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 _MEMORY_CHUNK_PATTERN = re.compile(r"^(?P<base>.+)#chunk_[0-9]{4,}$")
 
 REINDEX_TASK_TYPE = "admin_reindex"
 REINDEX_ENQUEUE_ERROR = "Failed to enqueue reindex processing"
-_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 _USER_REINDEX_FIXED_ROOTS = ("resources", "skills", "memories", "peers")
 _USER_REINDEX_EXCLUDED_ROOTS = frozenset({"sessions", "privacy", "settings"})
 _MEMORY_NON_SOURCE_FILENAMES = ABSTRACT_OVERVIEW_FILENAMES | {
@@ -151,17 +151,6 @@ class ReindexExecutor:
         "skill": {"vectors_only", "semantic_and_vectors"},
         "memory": {"vectors_only", "semantic_and_vectors"},
     }
-
-    @staticmethod
-    def _effective_file_vectorization_concurrency() -> int:
-        config = get_openviking_config().reindex
-        return max(
-            1,
-            min(
-                int(config.file_vectorization_concurrency),
-                _MAX_FILE_VECTORIZATION_CONCURRENCY,
-            ),
-        )
 
     async def _run_ordered_counter_batches(
         self,
@@ -343,10 +332,17 @@ class ReindexExecutor:
             )
             result = deepcopy(terminal.result or {})
             if terminal.status == TaskStatus.FAILED and not self._accept_partial_result(result):
+                work_errors = collect_queue_work_errors(result)
+                details: Dict[str, Any] = {
+                    "task_id": task.task_id,
+                    **result.get("details", {}),
+                }
+                if work_errors:
+                    details["errors"] = work_errors
                 raise OpenVikingError(
                     terminal.error or "Task processing failed",
                     code=result.get("code") or "PROCESSING_ERROR",
-                    details={"task_id": task.task_id, **result.get("details", {})},
+                    details=details,
                 )
             if terminal.status == TaskStatus.CANCELLED:
                 raise OpenVikingError(
@@ -1087,7 +1083,6 @@ class ReindexExecutor:
             ctx=run.ctx,
             request_intent=request,
             recursive=recursive,
-            source_read_concurrency=self._effective_file_vectorization_concurrency(),
             root_is_dir=resolved_root_is_dir,
             formal_inventory=(
                 (True if root_is_dir is None else root_is_dir, formal_entries, True)
@@ -1800,20 +1795,19 @@ class ReindexExecutor:
                 file_counters.warnings.append(f"{failure_message}: {exc}")
             return file_counters
 
-        concurrency = self._effective_file_vectorization_concurrency()
         if file_uris:
             logger.info(
                 "Reindex memory file vectorization: root=%s files=%d concurrency=%d",
                 uri,
                 len(file_uris),
-                concurrency,
+                FILE_TASK_CONCURRENCY,
             )
         if reconcile_only:
             counters.scanned_records += len(file_uris) + len(directory_uris)
         else:
             await self._run_ordered_counter_batches(
                 [file_uri for file_uri in file_uris if root_is_dir or file_uri == uri],
-                concurrency=concurrency,
+                concurrency=FILE_TASK_CONCURRENCY,
                 processor=process_file,
                 counters=counters,
             )
@@ -1975,6 +1969,12 @@ class ReindexExecutor:
                     bool(getattr(exc, "retryable", False)) or incomplete
                 ):
                     raise
+                VikingDBEventDataSource.record_retry(
+                    backend=str(getattr(vikingdb, "_backend_type", None) or "unknown"),
+                    operation="reindex_inventory",
+                    error=exc,
+                    delay_seconds=retry_delays[attempt],
+                )
                 logger.warning(
                     "Reindex vector inventory was rate limited; retrying uri=%s attempt=%d/%d "
                     "error=%s",

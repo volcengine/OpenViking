@@ -6,18 +6,18 @@
 
 Connect OpenViking to your coding agent with a single prompt. The agent installs the OpenViking memory plugin into the agents it finds on your machine, checks the connection, offers to bring in your recent work, and tells you how to restart. After the restart, your first question shows OpenViking at work.
 
-The agent follows a short guide published as plain Markdown, so any agent can fetch it:
+The agent follows a short guide published as plain Markdown, so any agent can fetch it. There is one for the personal edition and one for the team edition; the install command is the same, only the guide differs:
 
-- English: `https://docs.openviking.ai/agents/en/onboarding.md`
-- Chinese: `https://docs.openviking.ai/agents/zh/onboarding.md`
+- Personal: `https://docs.openviking.ai/agents/en/onboarding.md` (Chinese: replace `en` with `zh`)
+- Team: `https://docs.openviking.ai/agents/en/onboarding-team.md` (likewise)
 
 Both are also served from `docs.openviking.net`, which is usually faster from mainland China.
 
 ## The prompt
 
-Copy the prompt and replace `<API_KEY>` with your key from the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_07-agent-onboarding), under **User Management → API Key**, before you send it.
+First pick your edition in the prompt's header: **Personal** if you use OpenViking on your own, **Team** if you are a member of a team that shares folders in one OpenViking account. Copy the prompt and replace `<API_KEY>` with your key before you send it: on the personal edition, and for team admins, it is in the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_07-agent-onboarding) under **User Management → API Key**; team members get it from the OpenViking workbench their team gave them.
 
-<AgentPrompt>
+<AgentPrompt editions="Personal|Team" ids="personal|team">
 
 ```text
 Install the OpenViking memory plugin and help me start using it. OpenViking is a context database for AI agents (https://github.com/volcengine/OpenViking); the command and link below are from its official docs.
@@ -30,6 +30,17 @@ Install the OpenViking memory plugin and help me start using it. OpenViking is a
 The API key is one I created for myself in the OpenViking console; the installer stores it in ~/.openviking/ovcli.conf on this machine. Use it in the command as it is; there's no need to show it in your replies, and don't write it into any other file or rule. Talk to me in English.
 ```
 
+```text
+Install the OpenViking memory plugin and help me start using it. OpenViking is a context database for AI agents (https://github.com/volcengine/OpenViking); the command and link below are from its official docs.
+
+1. Run the official installer. It needs network access and writes to my home directory; if your sandbox blocks that, ask me for approval:
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <API_KEY>
+2. Once it's installed, read the OpenViking onboarding guide and use it to walk me through setup. The guide has you ask me before choices like importing history or adding a working rule. docs.openviking.ai and docs.openviking.net are the same docs site; use whichever loads:
+   https://docs.openviking.ai/agents/en/onboarding-team.md
+
+The API key is my own, from the OpenViking console or workbench; the installer stores it in ~/.openviking/ovcli.conf on this machine. Use it in the command as it is; there's no need to show it in your replies, and don't write it into any other file or rule. Talk to me in English.
+```
+
 </AgentPrompt>
 
 The installer sets up the plugin in every supported agent it detects on the machine, so other agents you have installed get it too; each one needs its own restart before the plugin works there. It also installs the `ov` command, which the agent uses to check the connection and add files. `--lang` sets the installer's language, and with it the language of the guide link it prints at the end. To limit the install to some agents, add `--harness` with a comma-separated list, for example `--harness claude,cli`; see [Unified installer](../agent-integrations/16-capability-reference.md#_3-1-2-unified-installer).
@@ -40,11 +51,19 @@ The installer sets up the plugin in every supported agent it detects on the mach
 
 ## Already installed
 
-If the plugin is already installed, start a new session in your agent and send:
+If the plugin is already installed, start a new session in your agent and send the line for your edition:
 
-```text
+::: code-group
+
+```text [Personal]
 Follow https://docs.openviking.ai/agents/en/onboarding.md to walk me through my first use of OpenViking.
 ```
+
+```text [Team]
+Follow https://docs.openviking.ai/agents/en/onboarding-team.md to walk me through my first use of OpenViking.
+```
+
+:::
 
 ## What the agent does
 
@@ -55,7 +74,9 @@ Follow https://docs.openviking.ai/agents/en/onboarding.md to walk me through my 
 5. **Tells you how to restart.** The plugin loads only when the agent starts again. The agent gives you the exact steps for the agent you are talking to. In Codex you first trust the OpenViking hooks (`/hooks` in the CLI, or the hooks icon below the input box in the desktop app), then quit, come back to the same conversation (`codex resume --last` in the CLI), and say "restarted"; if Codex still shows "Hooks need review", choose **Trust all and continue**. In Claude Code and the other agents you start a new session and send the first message it gives you. If the installer set up other agents too, it tells you they need a restart as well.
 6. **Shows OpenViking at work.** After the restart, your first question gets an answer drawn from recalled context, and the agent points out where that shows up: source cards in Claude Code, the OV-Usage line in Codex, and so on.
 
-The agent asks you only for decisions: what to bring in (with a confirmation after you see the counts) and whether to add the collaboration rule, each with what it gives you and what it sends or changes. Choices you have already made are not asked again.
+**What the team edition adds.** Step 1 explains the difference between your own space and the team's shared folders: your memories, sessions and personal material are visible only to you; the team's shared material is in `viking://resources/` and shared agent skills are in `viking://agent/skills/`, and the context recalled before each prompt includes them. After the history import there is one more step: the agent lists what teammates have already contributed and which skills are shared, then asks whether to contribute the design documents and a progress summary of the imported project (or the current one, if nothing was imported) to `viking://resources/<your user name>/<project>/`, where the team's members can see them. The collaboration rule stores important decisions, progress and output in your own folder in the team folder by default, and keeps drafts and anything you say not to share in your personal space; you can switch it to "personal space by default, ask me before sharing". After the restart you can choose to get to know the team's shared context.
+
+The agent asks you only for decisions: what to bring in (with a confirmation after you see the counts), on the team edition whether to contribute to the team, and whether to add the collaboration rule, each with what it gives you and what it sends or changes. Choices you have already made are not asked again.
 
 ## See also
 

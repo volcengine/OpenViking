@@ -12,6 +12,8 @@ from openviking.storage.errors import (
     HandoffRecoveryBlocked,
     HandoffRecoveryRequired,
     InvalidPathLockRequestError,
+    LockAcquisitionError,
+    ResourceBusyError,
 )
 from openviking.storage.internal_names import MULTIWRITE_PATH_LOCK_FILE
 from openviking_cli.utils.logger import get_logger
@@ -20,6 +22,32 @@ logger = get_logger(__name__)
 Requests = list[dict[str, str]]
 HANDOFF_RECOVERY_MAX_RETRIES = 8
 HANDOFF_RECOVERY_MAX_DELAY_SECS = 30.0
+
+
+def is_stale_compile_lease(error: Exception) -> bool:
+    """Identify leases that require fresh ownership."""
+    if not isinstance(error, ValueError):
+        return isinstance(error, HandoffRecoveryRequired)
+    reason = str(error)
+    return reason == "invalid lock request: pathlock lease expired during acquisition" or (
+        reason.startswith("invalid lock request: owned lease capability does not match ref '")
+    )
+
+
+def is_compile_lock_conflict(error: Exception) -> bool:
+    """Identify contention and lease loss eligible for a Compile retry."""
+    return (
+        isinstance(error, LockAcquisitionError)
+        or (isinstance(error, ResourceBusyError) and error.retryable)
+        or is_stale_compile_lease(error)
+    )
+
+
+def lock_retry_delay(retries: int, limit: int) -> float | None:
+    """Return backoff in seconds, or None when the retry limit is reached."""
+    if retries >= limit:
+        return None
+    return min(2 ** (retries - 1), HANDOFF_RECOVERY_MAX_DELAY_SECS)
 
 
 async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> dict | None:
@@ -31,7 +59,8 @@ async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> di
     retry = msg.lock_handoff_retry
     blocked = isinstance(error, HandoffRecoveryBlocked)
     limit = HANDOFF_RECOVERY_MAX_RETRIES if blocked else 2
-    exhausted = retry >= limit
+    delay = lock_retry_delay(retry, limit)
+    exhausted = delay is None
     if blocked:
         EventMetricDataSource._emit(
             "pathlock.recovery_blocked",
@@ -50,7 +79,7 @@ async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> di
     if exhausted:
         return None
     if blocked:
-        await sleep(min(0.5 * 2**retry, HANDOFF_RECOVERY_MAX_DELAY_SECS))
+        await sleep(delay)
     payload = msg.to_dict()
     payload["lock_handoff_retry"] = retry + 1
     return payload
@@ -101,7 +130,7 @@ async def adopt_or_reacquire(
     ctx: Any,
     fallback_requests: Callable[[], Awaitable[Requests]] | None = None,
 ) -> Any:
-    """Recover only typed adoption failures; acquire under a new owner.
+    """Recover complete coverage, retaining the durable handoff's logical owner.
 
     Callers must supply the complete operation scope for historic handles that
     cannot be inverted, and retain the result using a cancellation-safe guard.
@@ -116,9 +145,16 @@ async def adopt_or_reacquire(
     ):
         raise InvalidPathLockRequestError("handoff recovery requires an account context")
     kwargs = {"fs_ctx": {"account_id": account_id}}
+    owner = handoff.get("owner_id") or handoff.get("handle_id")
+    if owner is not None and (
+        not isinstance(owner, str) or not owner or any(char in owner for char in "|:,\x00")
+    ):
+        raise InvalidPathLockRequestError("invalid handoff recovery owner")
+    if handoff.get("covered_paths"):
+        _validate_requests(handoff["covered_paths"], account_id)
     try:
         return await agfs.pathlock_adopt(handoff, **kwargs)
-    except HandoffRecoveryRequired as error:
+    except HandoffRecoveryRequired as _log_error:
         operation = (
             _validate_requests(await fallback_requests(), account_id)
             if fallback_requests is not None
@@ -141,15 +177,23 @@ async def adopt_or_reacquire(
                 "handoff coverage does not cover the queued operation"
             )
         try:
-            lease = await agfs.pathlock_acquire_batch(requests, **kwargs)
+            if owner:
+                lease = await agfs.pathlock_reacquire_batch(requests, owner, **kwargs)
+            else:
+                lease = await agfs.pathlock_acquire_batch(requests, **kwargs)
         except ValueError:
             raise
         except Exception as blocked:
             raise HandoffRecoveryBlocked(str(blocked)) from blocked
         logger.info(
-            "Recovered pathlock handoff owner=%s reason=%s coverage=%s",
-            handoff.get("owner_id", handoff.get("handle_id")),
-            error.reason,
-            requests,
+            "Pathlock handoff recovered total=%d error_type=%s",
+            len(requests),
+            type(_log_error).__name__,
         )
         return lease
+    except LockAcquisitionError as blocked:
+        if not handoff.get("holder_id"):
+            raise
+        # A live-source transfer can also contend with concurrent storage work.
+        # Keep it bounded without switching to recovery or a different owner.
+        raise HandoffRecoveryBlocked(str(blocked)) from blocked

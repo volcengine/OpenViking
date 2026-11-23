@@ -200,21 +200,33 @@ The `message.compact` Hook performs this synchronization. Important settings inc
 
 | Setting | Purpose |
 |---------|---------|
-| `agents.commit_token_threshold` | Commit when pending tokens reach this value |
+| `agents.context_window_tokens` | Model context window used as the session budget source; default: `128000` |
+| `agents.async_compress_ratio` | Commit when pending tokens reach the model window multiplied by this ratio; default: `0.7` |
+| `agents.summary_token_ratio` | Target Working Memory summary budget as a ratio of the model window; default: `0.25` |
+| `agents.retained_token_ratio` | Budget for retained messages and checkpoints as a ratio of the model window; default: `0.05` |
 | `agents.commit_keep_recent_turn_count` | Maximum number of recent logical Turns retained after commit; default: `3` |
-| `agents.commit_retained_message_token_budget` | Token budget for retained messages and the checkpoint after commit; default: `6000` |
 | `agents.commit_min_raw_tail_steps` | Minimum number of trailing assistant Steps kept verbatim when the newest Turn exceeds the budget; default: `1` |
 | `agents.commit_keep_recent_count` | Deprecated physical-message setting, retained only for compatibility with existing configuration files |
 | `agents.memory_window` | Local history window, also used as a message-count commit threshold |
+| `agents.commit_token_threshold` | Deprecated fixed token trigger threshold; explicit `async_compress_ratio` takes precedence |
+| `agents.session_context_token_budget` | Deprecated independent history read budget; explicit `context_window_tokens` takes precedence |
+| `agents.commit_retained_message_token_budget` | Deprecated retained token budget; explicit `retained_token_ratio` takes precedence |
 
-A logical Turn starts with a real user query and includes every assistant Step before the next real user query. Each Step keeps the assistant text, tool calls, and corresponding tool results as an indivisible unit. The system first selects recent Turns using `commit_keep_recent_turn_count`, then applies `commit_retained_message_token_budget` to the retained content. If the newest Turn alone exceeds the budget, its user query and at least `commit_min_raw_tail_steps` latest Steps remain verbatim while earlier Steps are represented by the checkpoint generated during the same archive operation.
+VikingBot does not expose `reasoning_effort` as an `agents` setting; Working Memory summary generation uses the OpenViking server VLM provider's default reasoning effort. To tune it for a single commit, call the OpenViking server commit API directly.
 
-For migration, `commit_keep_recent_count` is not automatically converted from a physical-message count to a Turn count, and the current VikingBot Turn-aware commit path no longer reads it. The configuration model still accepts the field, so an existing `ov.conf` does not fail because of an unknown setting. If only the deprecated field is present, the three new settings use their defaults. Configure the new fields explicitly to preserve a customized retention policy:
+A logical Turn starts with a real user query and includes every assistant Step before the next real user query. Each Step keeps the assistant text, tool calls, and corresponding tool results as an indivisible unit. The system first selects recent Turns using `commit_keep_recent_turn_count`, then applies `context_window_tokens * retained_token_ratio` to the retained content. If the newest Turn alone exceeds the budget, its user query and at least `commit_min_raw_tail_steps` latest Steps remain verbatim while earlier Steps are represented by the checkpoint generated during the same archive operation.
+
+Legacy budget fields retain their independent meanings and are not cleared when the read budget is smaller than the commit threshold. When the corresponding new setting is absent, the legacy read budget remains effective; a legacy trigger within the model window is mapped to a ratio, while a larger trigger remains a fixed threshold; the legacy retained budget is mapped to a ratio. Legacy fields never redefine the model window. For example, legacy budgets of `read=3000, trigger=200000, retained=6000` continue to use those values.
+
+`commit_keep_recent_count` is not automatically converted from a physical-message count to a Turn count, and the current VikingBot Turn-aware commit path no longer reads it. Migrate to the following settings:
 
 ```yaml
 agents:
+  context_window_tokens: 128000
+  async_compress_ratio: 0.7
+  summary_token_ratio: 0.25
+  retained_token_ratio: 0.05
   commit_keep_recent_turn_count: 3
-  commit_retained_message_token_budget: 6000
   commit_min_raw_tail_steps: 1
 ```
 
@@ -222,9 +234,11 @@ Messages use local indexes for incremental synchronization, avoiding repeated ap
 
 ## Compressed Session Context
 
-By default, model history comes from the most recent `memory_window` messages in the local Session. With `agents.session_context_enabled=true`, VikingBot can load compressed history from OpenViking Session and limit it with `session_context_token_budget`.
+`agents.session_context_enabled` is enabled by default. VikingBot loads compressed history from OpenViking Session with a read budget derived from `context_window_tokens`; legacy configurations can retain an independent read budget. When disabled, model history comes from the most recent `memory_window` messages in the local Session.
 
 Before a new turn, if history reaches the threshold, AgentLoop first synchronizes and commits the OpenViking Session, then builds the new prompt context. This prevents long conversations from growing without bound.
+
+Compression material exceeding `0.7` of the model window is processed sequentially using rolling summary. The OpenViking server setting `memory.summary_budget_retry_enabled` controls the second and third generation attempts for over-budget summaries and defaults to `true`; when enabled, target-budget checks and regeneration are applied.
 
 ## Explicit Memory Commit
 

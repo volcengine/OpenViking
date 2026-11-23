@@ -46,8 +46,8 @@
 <circle cx="870" cy="202" r="13" fill="#7F3BF5"/>
 <text x="870" y="207.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
 <rect x="1250" y="200" width="196" height="84" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
-<text x="1348" y="229.07" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Queue the turn</text>
-<text x="1348" y="248.34" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">Saved to OpenViking</text>
+<text x="1348" y="229.07" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Save the turn</text>
+<text x="1348" y="248.34" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">When its reply ends</text>
 <text x="1348" y="267.19" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">one turn later</text>
 <circle cx="1252" cy="202" r="13" fill="#7F3BF5"/>
 <text x="1252" y="207.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
@@ -55,8 +55,8 @@
 <text x="742" y="351.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Search OpenViking</text>
 <text x="742" y="370.765" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">Using the user's key</text>
 <rect x="1250" y="318" width="196" height="74" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8"/>
-<text x="1348" y="341.095" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Save on the</text>
-<text x="1348" y="361.895" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">next message</text>
+<text x="1348" y="341.095" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Write to the</text>
+<text x="1348" y="361.895" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">OpenViking session</text>
 <text x="1348" y="381.165" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">Commit, then extract</text>
 <rect x="868" y="430" width="200" height="70" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
 <text x="968" y="461.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Model replies</text>
@@ -158,13 +158,13 @@
 <rect x="40" y="856" width="760" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="62" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">Across turns: save the conversation, extract memories</text>
 <rect x="62" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
-<text x="141.75" y="935" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Next message</text>
-<text x="141.75" y="954" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">arrives</text>
+<text x="141.75" y="935" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">A turn</text>
+<text x="141.75" y="954" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">ends</text>
 <polyline points="224.5,940 236.5,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
 <polygon points="245.5,940 235.5,945.5 235.5,934.5" fill="#7F3BF5"/>
 <rect x="247.5" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
-<text x="327.25" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Previous turn</text>
-<text x="327.25" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">saved to an</text>
+<text x="327.25" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">The turn is</text>
+<text x="327.25" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">written to its</text>
 <text x="327.25" y="963.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">OpenViking session</text>
 <polyline points="410,940 422,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
 <polygon points="431,940 421.0,945.5 421.0,934.5" fill="#7F3BF5"/>
@@ -178,8 +178,8 @@
 <text x="698.25" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Session commits;</text>
 <text x="698.25" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">OpenViking</text>
 <text x="698.25" y="963.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">extracts memories</text>
-<text x="62" y="1000" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">Regenerated or abandoned answers are never saved.</text>
-<text x="62" y="1019" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">The last turn is saved after 10 quiet minutes.</text>
+<text x="62" y="1000" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">A regenerated answer is saved beside the one it replaced.</text>
+<text x="62" y="1019" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">What is left is committed after 10 quiet minutes.</text>
 <rect x="830" y="856" width="630" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="852" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">Across turns: compact long conversations</text>
 <rect x="852" y="904" width="178" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>

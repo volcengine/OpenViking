@@ -21,6 +21,26 @@ beforeEach(() => vi.resetAllMocks())
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Compile terminal regressions', () => {
+  it('handles a saved plan without a task ID or a persistent recovery key', async () => {
+    api.createCompile.mockResolvedValue({
+      to: 'viking://resources/b',
+      next_run_at: '2026-11-03T09:00:00+08:00',
+    })
+    const saveKey = vi.fn()
+    const pending = { current: null }
+    const command = `compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s --args '{"auto_update":true,"update_schedule":{"frequency":"daily"}}'`
+    const result = await runCompileSubmission(
+      command,
+      pending,
+      (value) => value,
+      saveKey,
+    )
+    expect(result.taskId).toBeUndefined()
+    expect(result.body).toContain('2026-11-03T09:00:00+08:00')
+    expect(result.body).not.toContain('undefined')
+    expect(pending.current).toBeNull()
+    expect(saveKey).not.toHaveBeenCalled()
+  })
   it('keeps status filters in the executable next-page command', async () => {
     api.fetchCompileTasks
       .mockResolvedValueOnce({ items: [], next_cursor: 'signed-cursor' })

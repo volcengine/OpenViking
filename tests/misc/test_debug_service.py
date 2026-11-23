@@ -141,8 +141,7 @@ class TestObserverService:
         mock_get_queue_manager.return_value = mock_queue_manager
 
         mock_observer = MagicMock()
-        mock_observer.get_status_table_async = AsyncMock(return_value="Queue Status Table")
-        mock_observer.has_active_errors_async = AsyncMock(return_value=False)
+        mock_observer.observe_async = AsyncMock(return_value=("Queue Status Table", False))
         mock_observer_cls.return_value = mock_observer
 
         service = ObserverService()
@@ -232,8 +231,7 @@ class TestObserverService:
             mock_observer.has_errors.return_value = False
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
-        mock_queue_cls.return_value.get_status_table_async = AsyncMock(return_value="OK")
-        mock_queue_cls.return_value.has_active_errors_async = AsyncMock(return_value=False)
+        mock_queue_cls.return_value.observe_async = AsyncMock(return_value=("OK", False))
 
         # Mock get_viking_fs to return a viking_fs with pathlock_observe
         mock_viking_fs = MagicMock()
@@ -282,8 +280,7 @@ class TestObserverService:
         mock_queue.is_healthy.return_value = False
         mock_queue.has_errors.return_value = True
         mock_queue.get_status_table.return_value = "Error"
-        mock_queue.get_status_table_async = AsyncMock(return_value="Error")
-        mock_queue.has_active_errors_async = AsyncMock(return_value=True)
+        mock_queue.observe_async = AsyncMock(return_value=("Error", True))
         mock_queue_cls.return_value = mock_queue
 
         # VikingDB is healthy
@@ -354,8 +351,7 @@ class TestObserverService:
             mock_observer.has_errors.return_value = False
             mock_observer.get_status_table.return_value = "OK"
             mock_cls.return_value = mock_observer
-        mock_queue_cls.return_value.get_status_table_async = AsyncMock(return_value="OK")
-        mock_queue_cls.return_value.has_active_errors_async = AsyncMock(return_value=False)
+        mock_queue_cls.return_value.observe_async = AsyncMock(return_value=("OK", False))
 
         mock_viking_fs = MagicMock()
         mock_viking_fs._async_agfs.pathlock_observe = AsyncMock(
@@ -393,7 +389,9 @@ class TestObserverService:
     def test_queue_json_status_without_dependency_is_structured(self):
         """Test queue json format returns a structured payload when uninitialized."""
         service = ObserverService()
-        with patch("openviking.service.debug_service.get_queue_manager", side_effect=RuntimeError()):
+        with patch(
+            "openviking.service.debug_service.get_queue_manager", side_effect=RuntimeError()
+        ):
             status = service.get_queue_status(format="json")
         assert isinstance(status, ComponentStatus)
         assert status.name == "queue"
@@ -508,8 +506,7 @@ class TestObserverService:
         mock_queue.is_healthy.return_value = False
         mock_queue.has_errors.return_value = True
         mock_queue.get_status_table.return_value = "Error"
-        mock_queue.get_status_table_async = AsyncMock(return_value="Error")
-        mock_queue.has_active_errors_async = AsyncMock(return_value=True)
+        mock_queue.observe_async = AsyncMock(return_value=("Error", True))
         mock_queue_cls.return_value = mock_queue
 
         # Others are healthy

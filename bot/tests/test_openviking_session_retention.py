@@ -43,11 +43,10 @@ async def test_session_context_commit_uses_turn_budget_retention():
         HookContext(event_type="message.compact", session_key=session_key),
         session,
         FakeClient(),
-        SimpleNamespace(commit_token_threshold=200_000),
+        SimpleNamespace(),
         "admin",
         force_commit=True,
         keep_recent_turn_count=3,
-        retained_message_token_budget=12_000,
         min_raw_tail_steps=1,
         commit_message_threshold=None,
     )
@@ -60,7 +59,9 @@ async def test_session_context_commit_uses_turn_budget_retention():
             "enable_working_memory": True,
             "retention_mode": "turn_budget",
             "keep_recent_turn_count": 3,
-            "retained_message_token_budget": 12_000,
+            "session_window_context": 128_000,
+            "summary_token_ratio": 0.25,
+            "retained_token_ratio": 0.05,
             "min_raw_tail_steps": 1,
             "user_id": None,
         }

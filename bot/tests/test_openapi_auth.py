@@ -60,6 +60,13 @@ class TestOpenAPIAuth:
             def __init__(self):
                 self.scope = None
                 self.idempotency_key = None
+                self.task = {
+                    "task_id": "cmp_test",
+                    "status": "running",
+                    "stage": "agent",
+                    "created_at": "2026-07-20T00:00:00Z",
+                    "updated_at": "2026-07-20T00:00:01Z",
+                }
 
             async def create_task(self, request, *, principal_scope, task_id=None):
                 self.scope = principal_scope
@@ -73,13 +80,7 @@ class TestOpenAPIAuth:
             async def get_task(self, task_id, *, principal_scope):
                 if task_id != "cmp_test" or principal_scope != self.scope:
                     return None
-                return {
-                    "task_id": task_id,
-                    "status": "running",
-                    "stage": "agent",
-                    "created_at": "2026-07-20T00:00:00Z",
-                    "updated_at": "2026-07-20T00:00:01Z",
-                }
+                return self.task
 
             async def cancel_task(self, task_id, *, principal_scope):
                 task = await self.get_task(task_id, principal_scope=principal_scope)
@@ -143,6 +144,16 @@ class TestOpenAPIAuth:
         assert session_cancelled.status_code == 200
         assert session_cancelled.json()["status"] == "cancelled"
         assert client.post("/bot/v1/compile/cmp_other/cancel").status_code == 404
+        archive = "/runtime/v1/tasks/archive"
+        task_before_archive = dict(service.task)
+        for args in ({}, {"args": {"model": "test-model"}}):
+            response = client.post(archive, json={"session_id": "cmp_test", **args})
+            assert response.status_code == 200 and response.json() == {}
+            assert service.task == task_before_archive
+        assert client.post(archive, json={"session_id": "cmp_other"}).status_code == 404
+        assert client.post(archive, json={}).status_code == 422
+        service.scope = "another-owner"
+        assert client.post(archive, json={"session_id": "cmp_test"}).status_code == 404
 
     def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
         self, message_bus, temp_workspace, monkeypatch
@@ -309,9 +320,7 @@ class TestOpenAPIAuth:
         assert agent_loop.msg.sender_id == "user-1"
         assert message_bus.inbound_size == 0
 
-    def test_steer_rejects_pending_session_without_active_turn(
-        self, message_bus, temp_workspace
-    ):
+    def test_steer_rejects_pending_session_without_active_turn(self, message_bus, temp_workspace):
         class FakeAgentLoop:
             def steer(self, msg):
                 return False
@@ -481,9 +490,9 @@ class TestOpenAPIAuth:
         assert created.status_code == 200
         session_id = created.json()["session_id"]
 
-        assert (
-            client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers).status_code == 200
-        )
+        detail = client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers)
+        assert detail.status_code == 200
+        assert detail.json()["estimated_tokens"] == 0
         assert client.get(f"/bot/v1/sessions/{session_id}", headers=bob_headers).status_code == 404
         assert client.get("/bot/v1/sessions", headers=bob_headers).json()["total"] == 0
 
@@ -936,7 +945,9 @@ class TestOpenAPIAuth:
     ):
         class FakeCompileService:
             async def create_task(self, request, *, principal_scope, task_id=None):
-                raise AssertionError("compile task must not start for keyless authenticated forwards")
+                raise AssertionError(
+                    "compile task must not start for keyless authenticated forwards"
+                )
 
         config = SimpleNamespace(
             gateway=SimpleNamespace(host="127.0.0.1", token=""),

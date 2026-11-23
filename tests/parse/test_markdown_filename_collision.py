@@ -1,85 +1,47 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for _generate_merged_filename uniqueness when headings collide."""
 
-from openviking.parse.parsers.markdown import MarkdownParser
+from pathlib import Path
+
+import pytest
+
+from openviking.parse.output import LocalParseOutputStore
+from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.config.parser_config import ParserConfig
 
 
-class TestGenerateMergedFilenameCollision:
-    def _make_parser(self) -> MarkdownParser:
-        return MarkdownParser(ParserConfig())
+async def test_repeated_headings_with_different_section_sizes_preserve_all_groups(tmp_path):
+    source = tmp_path / "notes.md"
+    sections = [f"# Repeated heading\n\nSection {i} " + ("内容" * (22 + i)) for i in range(8)]
+    source.write_text("\n\n".join(sections), encoding="utf-8")
+    store = LocalParseOutputStore(str(tmp_path / "out"))
+    registry = ParserRegistry({"markdown": ParserConfig(max_section_chars=180)})
 
-    def test_duplicate_heading_produces_unique_filenames(self):
-        """Merge groups with same first heading but different content must get unique filenames."""
-        parser = self._make_parser()
+    result = await registry.parse(source, parse_output_store=store)
 
-        group1 = [
-            ("Our Culture", "content about values", 1),
-            ("Our Culture", "content about mission", 2),
-        ]
-        group2 = [
-            ("Our Culture", "content about team", 3),
-            ("Our Culture", "content about vision", 4),
-        ]
-
-        name1 = parser._generate_merged_filename(group1)
-        name2 = parser._generate_merged_filename(group2)
-
-        assert name1 != name2, f"Filenames must be unique but both are '{name1}'"
-        assert "Our" in name1 or "Culture" in name1  # Still human-readable
-
-    def test_single_section_filename_still_works(self):
-        """Single section should still produce a readable filename."""
-        parser = self._make_parser()
-
-        sections = [("Introduction", "some content", 1)]
-        name = parser._generate_merged_filename(sections)
-
-        assert "Introduction" in name
-
-    def test_empty_sections_returns_merged(self):
-        """Empty sections list should return 'merged'."""
-        parser = self._make_parser()
-        assert parser._generate_merged_filename([]) == "merged"
+    assert result.artifact_ref is not None
+    files = list(Path(result.artifact_ref.root).rglob("*.md"))
+    assert len(files) == 4
+    assert all("Repeated_heading" in file.name for file in files)
+    bodies = [file.read_text(encoding="utf-8") for file in files]
+    assert all(sum(section in body for body in bodies) == 1 for section in sections)
 
 
-class TestMarkdownSourceNameLayout:
-    def _make_parser(self) -> MarkdownParser:
-        return MarkdownParser(ParserConfig())
+@pytest.mark.parametrize(
+    ("source_name", "output"),
+    [
+        ("notes.txt", "notes/notes.md"),
+        ("main.py", "main.py/main.md"),
+        ("style.css", "style/style.md"),
+    ],
+)
+async def test_staged_source_keeps_the_name_used_by_the_importer(tmp_path, source_name, output):
+    original = "source content"
+    staged = tmp_path / "temporary-download"
+    staged.write_text(original, encoding="utf-8")
+    store = LocalParseOutputStore(str(tmp_path / "out"))
 
-    async def test_non_code_source_name_uses_stemmed_root(self):
-        parser = self._make_parser()
+    result = await ParserRegistry().parse(staged, source_name=source_name, parse_output_store=store)
 
-        layout = await parser._compute_layout(
-            "hello world\n",
-            "viking://temp/test",
-            source_name="aa.txt",
-        )
-
-        assert layout.root_dir == "viking://temp/test/aa"
-        assert any(op.uri == "viking://temp/test/aa/aa.md" for op in layout.ops)
-
-    async def test_code_source_name_preserves_extension_in_root(self):
-        parser = self._make_parser()
-
-        layout = await parser._compute_layout(
-            "def foo():\n    return 1\n",
-            "viking://temp/test",
-            source_name="foo.py",
-        )
-
-        assert layout.root_dir == "viking://temp/test/foo.py"
-        assert any(op.uri == "viking://temp/test/foo.py/foo.md" for op in layout.ops)
-
-    async def test_unsupported_code_source_name_uses_stemmed_root(self):
-        parser = self._make_parser()
-
-        layout = await parser._compute_layout(
-            "echo hello\n",
-            "viking://temp/test",
-            source_name="script.css",
-        )
-
-        assert layout.root_dir == "viking://temp/test/script"
-        assert any(op.uri == "viking://temp/test/script/script.md" for op in layout.ops)
+    assert result.artifact_ref is not None
+    assert await store.read_bytes(result.artifact_ref, output) == original.encode()

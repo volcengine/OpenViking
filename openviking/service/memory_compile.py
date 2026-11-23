@@ -18,6 +18,7 @@ from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
+from openviking.service.compile_targets import commit_snapshot
 from openviking.service.fs_service import FSService
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskRecord, get_task_tracker
@@ -26,6 +27,7 @@ from openviking.session.memory.consolidation_context_provider import (
     ConsolidationExtractContextProvider,
     build_consolidation_isolation_handler,
 )
+from openviking.session.memory.dataclass import ResolvedOperations
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry, get_default_registry
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -35,6 +37,7 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.uri import render_template
 from openviking.telemetry import tracer
 from openviking.telemetry.span_models import create_root_span_attributes
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -100,15 +103,53 @@ async def _discover_memory_types(
     return sorted(memory_types)
 
 
+def _validate_operation_targets(
+    operations: ResolvedOperations, target: str, ctx: RequestContext
+) -> None:
+    """Reject the whole batch before locks/writes; reads may cross the target."""
+    target_parts = uri_parts(validate_request_viking_uri(normalize_storage_target_uri(target), ctx))
+    write_uris = {uri for op in operations.upsert_operations for uri in op.uris}
+    write_uris.update(
+        op.old_memory_file_content.uri
+        for op in operations.upsert_operations
+        if op.old_memory_file_content is not None
+    )
+    write_uris.update(file.uri for file in operations.delete_file_contents)
+    write_uris.update(operations.delete_replacements)
+    write_uris.update(operations.delete_replacements.values())
+    # Existing relation migration and destination backlinks remain system-managed.
+    write_uris.update(link.from_uri for link in operations.resolved_links)
+    for uri in sorted(write_uris):
+        try:
+            parts = uri_parts(validate_request_viking_uri(normalize_storage_target_uri(uri), ctx))
+        except (ValueError, OpenVikingError) as exc:
+            raise InvalidArgumentError(
+                f"Invalid memory compile write URI {uri!r} for --to {target!r}: {exc}"
+            ) from exc
+        if parts[: len(target_parts)] != target_parts:
+            raise InvalidArgumentError(
+                f"Memory compile write URI {uri!r} is outside --to {target!r}"
+            )
+
+
 class MemoryCompileRunner:
     """Own the validation and background execution of memory-mode Compile tasks."""
 
     task_type = "compile"
     task_id_prefix = "cmp_"
 
-    def __init__(self, fs: FSService, vikingdb: Any = None) -> None:
+    def __init__(
+        self,
+        fs: FSService,
+        vikingdb: Any = None,
+        *,
+        runtime_config_manager: Any = None,
+        vlm_resolver=None,
+    ) -> None:
         self._fs = fs
         self._vikingdb = vikingdb
+        self._runtime_config_manager = runtime_config_manager
+        self._vlm_resolver = vlm_resolver
         # Keep strong references so background tasks are not garbage collected.
         self._running: set[asyncio.Task[None]] = set()
 
@@ -223,7 +264,9 @@ class MemoryCompileRunner:
                     ctx.account_id,
                     ctx.user.user_id,
                     work_id=running_work_id,
+                    task_type="compile",
                 ):
+                    await self._snapshot(target, task_id, "start", ctx)
                     result = await self._consolidate(
                         target=target,
                         memory_type=memory_type,
@@ -243,10 +286,15 @@ class MemoryCompileRunner:
                             result=result,
                         )
                         return
-                    logger.warning(
-                        "Memory-mode compile %s partially succeeded: %s",
+                    logger.info(
+                        "memory compile partially succeeded task_id=%s failed=%d",
                         task_id,
-                        result["errors"],
+                        len(result["errors"]),
+                        extra={
+                            "degraded": True,
+                            "task_id": task_id,
+                            "failed": len(result["errors"]),
+                        },
                     )
                 await tracker.wait_for_task_work(
                     task_id,
@@ -267,7 +315,7 @@ class MemoryCompileRunner:
                     ctx.user.user_id,
                     work_id=running_work_id,
                 ):
-                    await self._fs.finalize_compile_directories(target, ctx)
+                    await self._snapshot(target, task_id, "finish", ctx)
                 await tracker.complete(
                     task_id,
                     result,
@@ -288,6 +336,32 @@ class MemoryCompileRunner:
             if root_token is not None and reset_root_observability_context is not None:
                 reset_root_observability_context(root_token)
             await tracker.unregister_running_task(task_id)
+
+    async def _snapshot(self, target: str, task_id: str, phase: str, ctx: RequestContext) -> None:
+        """Snapshot the target for recovery; failures are logged and cancellation propagates."""
+        try:
+            oid = await commit_snapshot(
+                self._fs._ensure_initialized(),
+                [target],
+                f"memory compile {task_id} {phase}",
+                ctx,
+                wait_busy=False,
+            )
+            if oid is None:
+                logger.info(
+                    "memory compile snapshot unavailable; continuing task_id=%s phase=%s",
+                    task_id,
+                    phase,
+                    extra={"degraded": True},
+                )
+        except Exception as exc:
+            logger.info(
+                "memory compile snapshot failed; continuing task_id=%s phase=%s error_type=%s",
+                task_id,
+                phase,
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
 
     async def _consolidate(
         self,
@@ -324,7 +398,16 @@ class MemoryCompileRunner:
         if not memory_types:
             return result
         config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
+        vlm = (
+            await self._vlm_resolver.get_vlm(ctx.account_id)
+            if self._vlm_resolver is not None
+            else config.vlm.get_vlm_instance()
+        )
+        from openviking.config.generation import get_output_language_override
+
+        output_language_override = await get_output_language_override(
+            self._runtime_config_manager, ctx.account_id, cluster_config=config
+        )
         provider = ConsolidationExtractContextProvider(
             memory_types=memory_types,
             target_directory=target,
@@ -332,6 +415,7 @@ class MemoryCompileRunner:
             memory_registry=registry,
             ctx=ctx,
             viking_fs=viking_fs,
+            output_language_override=output_language_override,
         )
 
         extract_context = provider.get_extract_context()
@@ -358,6 +442,8 @@ class MemoryCompileRunner:
         operations, _tools_used = await orchestrator.run()
         if operations is None:
             return result
+
+        _validate_operation_targets(operations, target, ctx)
 
         lease = await acquire_memory_operation_lease(operations, viking_fs, ctx)
         try:

@@ -66,9 +66,13 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(vlm=SimpleNamespace(close=lambda: events.append("vlm")))
     service._runtime_config_manager = None
+    service._compile_scheduler = None
+    service._ttl_adapter = None
+    service._expiry_runtime = None
     service._vlm_resolver = SimpleNamespace(close=lambda: events.append("resolver"))
     service._resource_service = _ResourceService()
-    service._watch_scheduler = None
+    service._watch_runtime = None
+    service._watch_manager = None
     service._session_auto_commit_scheduler = None
     service._queue_manager = _QueueManager()
     service._vikingdb_manager = _VikingDBManager()
@@ -77,12 +81,22 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     service._embedder = None
     service._initialized = True
     monkeypatch.setattr(service, "_release_data_dir_lock", lambda: None)
+    monkeypatch.setattr(
+        "openviking.service.core.get_task_tracker", lambda: SimpleNamespace(close=AsyncMock())
+    )
 
     pending = asyncio.create_task(provider.embed("account-a", "query", is_query=True))
     await started.wait()
     closing = asyncio.create_task(service.close())
     try:
-        await storage_closing.wait()
+        waiting_for_storage = asyncio.create_task(storage_closing.wait())
+        try:
+            await asyncio.wait((closing, waiting_for_storage), return_when=asyncio.FIRST_COMPLETED)
+            if closing.done():
+                await closing
+        finally:
+            waiting_for_storage.cancel()
+            await asyncio.gather(waiting_for_storage, return_exceptions=True)
         assert not closing.done()
         assert "embedder" not in events
         pending.cancel()
