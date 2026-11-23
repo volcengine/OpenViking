@@ -9,9 +9,17 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 | Intent Analysis | No | Requires session content and `retrieval.enable_intent=true` |
 | Session Context | No | Optional |
 | Query Expansion | No | When session content exists and intent analysis is enabled |
-| Reranking | No | Used for text queries when a reranker is configured |
+| Reranking | Never | `mode="list"`: text queries when a reranker is configured. `mode="context"`: only when `retrieval.apply_rerank_to_context` is on |
 | Default Limit | 10 | 10 per planned query |
 | Use Case | Simple queries | Conversational search |
+
+Reranking applies per path:
+
+- `find()` never reranks; it always uses vector scores.
+- `search(mode="list")` reranks text queries when a usable `rerank` config exists.
+- `search(mode="context")` reranks only when the server sets `retrieval.apply_rerank_to_context=true` (default `false`) and a usable `rerank` config exists. It reranks once per assembly, over the merged candidate pool before quotas and the token budget apply, for text queries only, and falls back to vector scores if the rerank call fails.
+
+Score thresholds follow one rule: a request `score_threshold` overrides everything and filters whatever scores the path produces. Without it, `rerank.threshold` (default `0.1`) filters only scores the reranker produced; vector-only paths, including `find()` and a failed rerank fallback, default to `0`.
 
 ## Retrieval Pipeline
 
@@ -54,7 +62,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | query | str | No | "" | Search query string. May be omitted for an image query or a filter-only lookup |
-| image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
+| image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
@@ -180,6 +188,8 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 ```
 
 Tags must use strict `k=v` strings. When multiple tags are provided, `find()` requires all of them; the example above only returns contexts whose explicit retrieval tags contain both `env=prod` and `team=search`.
+
+Legacy invalid stored tags are discarded when a full index record is written or an explicit tag field is updated. Reads filter invalid tags without changing storage. To repair a known affected file or directory without re-embedding or replacing its valid tags, call `POST /api/v1/content/set_tags` with `{"uri": "<affected-uri>", "tags": [], "mode": "append"}`. For directories, add `"recursive": true` only when descendants should also be repaired. Bare values such as `default` are removed, not assigned an inferred key.
 
 **Python SDK**
 
@@ -392,12 +402,14 @@ Semantic retrieval with optional session-aware query planning.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | query | str | No | "" | Search query string. Required unless `image_url` is provided |
-| image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
+| image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | search_type | `"semantic"` \| `"keywords"` | No | `"semantic"` | Retrieval type. `semantic` uses embeddings and vector recall; `keywords` uses BM25 keyword recall |
+| mode | `"list"` \| `"context"` | No | `"list"` | Return ranked hits or assembled context. CLI `--mode` maps to this field; context-specific parameters are described below |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
+| args | Dict | No | null | Advanced engine options for `search_type="keywords"` in `mode="list"`. Supported keys: `bm25_k1` (float > 0), `bm25_b` (float in `[0, 1]`), `post_process_input_limit` (int from the effective `limit`/`node_limit` up to `2000000`). Unknown keys are rejected |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | limit | int | No | 10 | Maximum results per planned query; list mode concatenates the results, so its total may exceed this value |
@@ -412,9 +424,9 @@ Semantic retrieval with optional session-aware query planning.
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index.
+`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index. `args` is accepted only with `search_type="keywords"` in `mode="list"`; it keeps engine tuning options in one map instead of adding a top-level parameter per knob.
 
-Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode uses that final score while assembling its candidates. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
+Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode assembles its candidates with vector scores, or with the model score when `retrieval.apply_rerank_to_context` is on. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
 
 New and updated memories produced by memory extraction automatically receive a `memory_type=<type>` search tag. With decay enabled, both local and cloud backends recall records tagged `memory_type=events` separately and merge them with the complementary untagged/non-event branch; both branches preserve the original scope, permission and level filters, without requiring a peer ID. Existing data is not backfilled; untagged memories keep their original scores. Direct content refreshes and ordinary tag updates preserve the existing memory type without inferring it from the URI.
 
@@ -467,7 +479,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
         "query": "hnsw",
         "search_type": "keywords",
         "target_uri": "viking://resources/docs",
-        "limit": 10
+        "limit": 10,
+        "args": {
+            "bm25_k1": 1.2,
+            "bm25_b": 0.75,
+            "post_process_input_limit": 100
+        }
     }'
 ```
 
@@ -568,6 +585,12 @@ fmt.Println(result.Total)
 # Search with session ID
 ov search "best practices" --session-id abc123
 
+# Assemble context using the server defaults, with event time decay
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+
+# Return the complete context result as JSON
+ov -o json search "best practices" --mode context
+
 # Limit to a context type
 ov search "best practices" --context-type skill
 
@@ -584,6 +607,10 @@ ov search "how to implement OAuth 2.0 authorization code flow"
 # BM25 keyword retrieval
 ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
 
+# BM25 keyword retrieval with engine tuning
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs" \
+  --args '{"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":100}'
+
 # Limit to specific level(s) (L0 only)
 ov search "best practices" --level 0
 
@@ -593,6 +620,8 @@ ov search "how to implement OAuth" -L 1,2
 # Image queries also use --image; they use direct retrieval and skip session planning
 ov search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
+
+`ov search --mode list` is the default and returns the usual hit list. With `--mode context`, the default terminal output prints the assembled `rendered` text (or a non-empty `digest` when returned); `-o json` preserves the full result, including `entries`, `rendered`, `digest`, and `stats`. The CLI uses server defaults for context-specific options such as `max_tokens`, `detail`, and `rewrite`; it does not expose flags for these options yet. Context mode rejects `--uri` and `--read-content`; the server ignores `--level` because assembly selects content tiers.
 
 **Response Example**
 
@@ -648,7 +677,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 **Pipeline**:
 1. **L1 query understanding**: optional bounded intent expansion from the session's recent messages (at most 3 queries, timeout fuse, falls back to the original query)
-2. **L0 retrieval**: bucketed per `quotas`, or a single whole-scope search when quotas are off
+2. **L0 retrieval**: bucketed per `quotas`, or a single whole-scope search when quotas are off. Hits carry vector scores, as in `find()`; when the server enables `retrieval.apply_rerank_to_context` and has a usable `rerank` config, the merged candidates are reranked once against the original query and its expansions before quotas and the budget apply (see below)
 3. **L2 assembly**: tier filling inside the token budget (everyone at their category's default tier first, then leftover budget deepens in score order); an oversized tier falls back instead of being truncated
 4. **L3 rewrite**: optional digest with URI citations (timeout fuse; on failure the unrewritten `rendered` is still returned; an exact `NO_RELEVANT_MEMORY` result is reported as `stats.rewrite="no_relevant"` so Coding Agent clients inject nothing instead of falling back to `rendered`)
 
@@ -660,7 +689,9 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 #### 2. Parameters
 
-**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the per-category quotas are the only candidate ceilings. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
+**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the sum of the per-category quotas is the candidate ceiling. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
+
+**Optional rerank**: with `retrieval.apply_rerank_to_context` on and a usable `rerank` config, text queries make one rerank call per request over the merged, deduplicated candidates, scored against the original `query` joined with its expanded queries, so a hit only an expansion recalled is judged on the topic that expansion named. Quota-free retrieval recalls `2 × limit` candidates for it; bucketed retrieval reranks up to `2 × quota` per bucket, giving room a short bucket leaves to the others. A Skill is scored on its package abstract. A reranked candidate's `score` becomes its rerank score, and `other_peer_penalty` still applies on top. `score_threshold` then filters the final scores instead of recall; without it, `rerank.threshold` filters only model scores. Candidates the model did not score (empty text, or a failed rerank call) keep their vector scores. Image queries skip rerank. `stats.rerank` reports `used`, `candidates` (sent to the model) and `capped` (left out by the per-bucket cap)
 
 **L1 query understanding**
 
@@ -675,11 +706,11 @@ Injecting context every turn used to mean searching per type, reading each hit b
 |-----------|------|---------|-------------|
 | `limit` | int | 10 | Candidate ceiling for quota-free retrieval only; ignored when `purpose` or `quotas` enables bucketed retrieval |
 | `max_tokens` | int | 1600 | The single budget parameter, estimated with a CJK-aware heuristic (codepoint ≥ 0x3000 counts 1.5 tok/char, otherwise chars/4) |
-| `quotas` | object | None | Absolute per-bucket limits; keys are `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`. Explicit quotas ignore `limit` |
-| `purpose` | `chat` \| `coding` | None | Enables six-domain bucket sampling with the absolute preset quotas below. Applies only when `quotas` is not given |
+| `quotas` | object | None | Per-bucket first-pass limits whose sum caps the candidates; slots a bucket leaves unused go to the best remaining hits of the other buckets, and `0` turns a bucket off. Keys are `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`. Explicit quotas ignore `limit` |
+| `purpose` | `chat` \| `coding` | None | Enables six-domain bucket sampling with the preset quotas below. Applies only when `quotas` is not given |
 | `detail` | `abstract` \| `overview` \| `full` \| object | None | Requests one starting/maximum tier for every entry. Entries whose requested tier is unavailable or does not fit step down instead of being truncated. Omitted, each category takes its default tier (below). Also accepts a per-category object such as `{"events":"overview","preferences":"abstract"}`; categories left out keep their default. `"auto"` is a deprecated spelling and behaves as if omitted |
 | `dedup_turns` | int | 0 | Cooldown window in turns; needs `session_id`. Ledger lives at `{session_uri}/.recall_log.json` |
-| `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns` |
+| `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns`. A directory URI excludes its whole subtree, so echo a served directory as its `.abstract.md` and `.overview.md` URIs to exclude just that node; `dedup_turns` cools served URIs exactly |
 | `peer_scope` | `actor` \| `all` | `all` | `actor` excludes other peers while keeping global, self-owned and current-actor content |
 | `other_peer_penalty` | number \| object | per-category defaults | Score penalty applied to other-peer hits |
 
@@ -692,8 +723,8 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 **Tier rules**
 
-- **Purpose presets**: `chat` uses `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`; `coding` uses `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`. These are absolute per-category ceilings, not weights. Results are deduplicated and globally sorted after gathering, but are not truncated by a second global `limit`
-- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Among file entries, only `events` needs a body read at its default tier. Directory hits read `.overview.md`
+- **Purpose presets**: `chat` uses `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`; `coding` uses `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`. Each bucket first takes up to its own quota; when a bucket finds fewer matches, its unused slots go to the best remaining hits of the other buckets, so the total (10 for either preset) is never exceeded. Results are deduplicated and globally sorted after gathering, but are not truncated by a second global `limit`
+- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Among file entries, only `events` needs a body read at its default tier. Directory hits read `.overview.md`. Preset scope directories (`viking://resources`, `viking://agent` and its preset children, the user root and its first-level directories) serve only for navigation and are never returned as entries, even after their `.overview.md` has been regenerated from their contents
 
   | Category | Default tier | Leftover budget may reach | Why |
   |----------|--------------|---------------------------|-----|
@@ -707,7 +738,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 - **Floor**: every result carries at least its `uri`. When a memory abstract is unavailable or busts the per-entry cap, the entry falls back to overview: the memory writer stores the whole body in that scalar, so for memory categories overview sits *below* abstract on the content ladder and the substitute discloses less. A `resources` or `skills` abstract is the short generated summary instead, so the same substitution would read a body the caller never asked for — those two degrade to a bare `uri` rather than deepen
 - **Explicit `detail`**: sets that tier as both the requested start and ceiling; entries that do not fit still step down a tier rather than being truncated. The memory overview substitute above is the one case where the served `detail` can outrank the pin, and only because it carries less content than the pinned tier would
 - **Overview by source type**: memory files use the leading `# Summary` section, code files use class and function signatures (reusing `code_outline`), long documents use the heading tree plus first paragraph
-- **Per-entry cap**: `max_tokens ÷ candidate_count × 2`, applied to every tier except the bare `uri`; a tier exceeding it falls back to the previous tier rather than being truncated. If budget is still left over, one final deepening pass ignores the cap and is bounded only by `max_tokens`
+- **Per-entry cap**: `max_tokens ÷ candidate_count × 2`, applied to every tier except the bare `uri`; a tier exceeding it falls back to the previous tier rather than being truncated. If budget is still left over, the final full-tier pass ignores the cap and is bounded only by `max_tokens`; whole abstracts and overviews can then use any remaining budget within each category's ceiling
 
 #### 3. Examples
 
@@ -798,7 +829,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | `entries[].text` | string | Body for that tier; empty at the `uri` tier |
 | `rendered` | string | Flat XML context block, ready to inject; empty when rewrite reports `no_relevant` |
 | `digest` | string | Digest when the rewrite succeeded, empty string on failure or when the compressor reports no relevant memory |
-| `stats` | object | Budget usage, tier distribution, expansion and rewrite status (`off`, `ok`, `no_relevant`, `failed` or `timeout`), dedup ledger state; carries `retrieval_errors` when a retrieval scope failed, so a broken index is distinguishable from having no relevant memories |
+| `stats` | object | Budget usage, tier distribution, expansion and rewrite status (`off`, `ok`, `no_relevant`, `failed` or `timeout`), dedup ledger state; carries `retrieval_errors` when a retrieval scope failed, so a broken index is distinguishable from having no relevant memories, and `rerank` when context rerank applied to the request |
 
 When `stats.rewrite` is `no_relevant`, the response keeps `entries` for
 inspection but returns both `digest` and `rendered` as empty strings. This makes
@@ -845,7 +876,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
-| level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
+| level_limit | int | No | 10 | Maximum directory depth to traverse. HTTP SDKs use the server default when omitted. |
 | tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
 | before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |
@@ -854,6 +885,10 @@ The `grep()` method performs regex pattern matching search in the file system, u
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 
 Entries in `matches` include `tags` when `tags` filtering is used or `include_tags=true` is requested; files without retrieval tags then return an empty array (`[]`). Plain grep omits `tags` to avoid an unnecessary VectorDB read.
+
+Native filesystem grep applies `node_limit` before ACL filtering and returns a boolean `limit_reached`. When true, results may be incomplete even if `matches` contains fewer than `node_limit` entries or is empty. This flag does not confirm that more visible matches exist; increase `node_limit` or narrow the scope/pattern to check. Returned matches and their counts remain permission-filtered. Other grep implementations and older servers may omit this field; its absence does not guarantee completeness.
+
+When BM25 returns as many candidate files as grep requested, grep sets `candidate_limit_reached: true`. Other files may have been left out even when `matches` is empty. Narrow the URI or read a promising candidate directly to check the evidence.
 
 #### 3. Usage Examples
 

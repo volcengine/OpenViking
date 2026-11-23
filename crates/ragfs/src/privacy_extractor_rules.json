@@ -1,0 +1,152 @@
+{
+  "detectors": [
+    {
+      "id": "volcengine_ak",
+      "pattern": "(?:AKLT|AKAP|AKTP)[A-Za-z0-9]{20,70}",
+      "reject_repeated": true,
+      "positive": [
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKAP", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKTP", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT"],
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5"]
+      ],
+      "negative": [
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4s"],
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5g"],
+        ["AKLT", "EXAMPLE", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKLT", "AAAAAA", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "ark_api_key",
+      "pattern": "ark-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-[A-Za-z0-9]{1,16}",
+      "positive": [
+        ["ark-", "1234abcd-5678-90ef-ab12-34567890abcd", "-a1b2c"],
+        ["ark-", "00000000-0000-0000-0000-000000000000", "-a"]
+      ],
+      "negative": [
+        ["ark-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ark-", "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-a1b2c"],
+        ["ark-", "1234abcd-5678-90ef-ab12-34567890abcd"],
+        ["ark-", "1234abcd-5678-90ef-ab12-34567890abcd-", "aB3dE5gH7jK9mN2pQ"]
+      ]
+    },
+    {
+      "id": "jwt",
+      "pattern": "ey[A-Za-z0-9_-]{17,}\\.ey[A-Za-z0-9_-]{17,}\\.[A-Za-z0-9_-]{10,}",
+      "positive": [
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"],
+        ["eyAiYWxnIjogIkhTMjU2IiB9", ".", "eyAic3ViIjogInByaXZhY3ktdGVzdCIgfQ", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"]
+      ],
+      "negative": [
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", "."],
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", ".", "short"],
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "********", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"]
+      ]
+    },
+    {
+      "id": "pem_private_key",
+      "pattern": "-----BEGIN (?P<begin_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----\\r?\\n(?:[A-Za-z0-9+/]+={0,2}\\r?\\n)+-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
+      "positive": [
+        ["-----BEGIN PRIVATE KEY-----\n", "YWJjZGVmZw==\n", "-----END PRIVATE KEY-----"],
+        ["-----BEGIN RSA PRIVATE KEY-----\r\n", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n", "-----END RSA PRIVATE KEY-----"],
+        ["-----BEGIN ENCRYPTED PRIVATE KEY-----\n", "YWJjZGVmZw==\n", "-----END ENCRYPTED PRIVATE KEY-----"]
+      ],
+      "negative": [
+        ["-----BEGIN PUBLIC KEY-----\n", "YWJjZGVmZw==\n", "-----END PUBLIC KEY-----"],
+        ["-----BEGIN RSA PRIVATE KEY-----\n", "YWJjZGVmZw==\n", "-----END EC PRIVATE KEY-----"],
+        ["-----BEGIN PRIVATE KEY-----\n", "${PRIVATE_KEY}\n", "-----END PRIVATE KEY-----"],
+        ["-----BEGIN PRIVATE KEY-----\\n", "YWJjZGVmZw==\\n", "-----END PRIVATE KEY-----"]
+      ]
+    },
+    {
+      "id": "github",
+      "pattern": "(?:(?:ghp|gho|ghu|ghr)_[A-Za-z0-9]{30,}|ghs_[A-Za-z0-9_.-]{29,}[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]{30,})",
+      "reject_repeated": true,
+      "positive": [
+        ["ghp_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["gho_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghu_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghr_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghs_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["github_pat_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghs_", "12345_", "eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"]
+      ],
+      "negative": [
+        ["ghp_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF"],
+        ["github_pat_", "EXAMPLE", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghp_", "aaaaaa", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "anthropic",
+      "pattern": "sk-ant-(?:api03|admin01|api01)-[A-Za-z0-9_-]{20,}",
+      "reject_repeated": true,
+      "positive": [
+        ["sk-ant-api03-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-admin01-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-api01-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ],
+      "negative": [
+        ["sk-ant-api03-", "aB3dE5gH7jK9mN2pQ4s"],
+        ["sk-ant-api03-", "your_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-api03-", "000000", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-api99-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "openai",
+      "pattern": "sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20})",
+      "reject_repeated": true,
+      "positive": [
+        ["sk-proj-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-svcacct-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-admin-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-", "aB3dE5gH7jK9mN2pQ4sT", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT"]
+      ],
+      "negative": [
+        ["sk-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-proj-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-other-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-proj-", "aaaaaa", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-proj-", "aB3dE5gH7jK9mN2pQ4s", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "slack",
+      "pattern": "(?:xoxb|xoxp|xapp|xwfp|xoxe\\.xapp)-[A-Za-z0-9-]{10,}",
+      "reject_repeated": true,
+      "positive": [
+        ["xoxb-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xapp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xwfp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxe.xapp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ],
+      "negative": [
+        ["xoxb-", "aB3dE5gH7"],
+        ["xoxa-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxr-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxs-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxb-", "EXAMPLE", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxb-", "000000", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "aws_access_key_id",
+      "pattern": "(?:AKIA|ASIA)[A-Z2-7]{16}",
+      "positive": [
+        ["AKIA", "BCDEFGHJKLMN2345"],
+        ["ASIA", "BCDEFGHJKLMN2345"]
+      ],
+      "negative": [
+        ["AKIA", "BCDEFGHJKLMN234"],
+        ["AKIA", "BCDEFGHJKLMN23456"],
+        ["AKIA", "BCDEFGHIJEXAMPLE"],
+        ["AKIA", "BCDEFGHJKLMN2018"]
+      ]
+    }
+  ],
+  "reference_pattern": "\\{\\{[ \\t]*ov_privacy:[^{}\\r\\n]+\\}\\}"
+}

@@ -71,6 +71,8 @@ Operation telemetry is currently available on these endpoints:
 - `POST /api/v1/content/write`
 - `POST /api/v1/content/batch-write`
 - `POST /api/v1/content/set_tags`
+- `POST /api/v1/content/batch_set_tags`
+- `POST /api/v1/content/ensure_directory_index`
 - `POST /api/v1/skills/find`
 - `PUT /api/v1/skills/{skill_name}`
 

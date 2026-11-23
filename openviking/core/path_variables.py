@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -123,8 +124,9 @@ class PathVariableResolver:
     def _register_provider(self, provider: VariableProvider) -> None:
         """Register a variable provider."""
         if provider.namespace in self._providers:
-            logger.warning(
-                f"Provider for namespace '{provider.namespace}' already exists, overwriting"
+            logger.debug(
+                "path variable provider replaced namespace_hash=%s",
+                short_hash(provider.namespace),
             )
         self._providers[provider.namespace] = provider
 

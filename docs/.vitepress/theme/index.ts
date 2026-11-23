@@ -1,8 +1,9 @@
 import { docsLanguageEntry } from './language-entry.js'
 import { createLanguagePreference } from './language-preference.js'
-import { h, defineAsyncComponent } from 'vue'
+import { h, defineAsyncComponent, nextTick } from 'vue'
 import DefaultTheme, { VPButton } from 'vitepress/theme-without-fonts'
 import DocBreadcrumb from './components/DocBreadcrumb.vue'
+import AgentPrompt from './components/AgentPrompt.vue'
 import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
 import IngestionPipelineDiagram from './components/IngestionPipelineDiagram.vue'
 import MemoryExtractionDiagram from './components/MemoryExtractionDiagram.vue'
@@ -19,7 +20,8 @@ import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
 import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
 import { initVikingBotWidget, syncVikingBotLocale } from './vikingbot-widget'
-import { trackPageView } from './track'
+import { trackEvent, trackPageView } from './track'
+import { startDocsAttribution } from './attribution'
 import './custom.css'
 import './reading.css'
 import './header.css'
@@ -269,6 +271,7 @@ export default {
   },
   enhanceApp({ app, router }: EnhanceAppContext) {
     app.component('VPButton', VPButton)
+    app.component('AgentPrompt', AgentPrompt)
     app.component('ArchitectureDiagram', ArchitectureDiagram)
     app.component('IngestionPipelineDiagram', IngestionPipelineDiagram)
     app.component('MemoryExtractionDiagram', MemoryExtractionDiagram)
@@ -278,17 +281,26 @@ export default {
     app.component('DocsHome', defineAsyncComponent(() => import('./components/DocsHome.vue')))
     if (import.meta.env.SSR || typeof window === 'undefined') return
 
+    const attribution = startDocsAttribution(withBase('/'))
+    import.meta.hot?.dispose(attribution.dispose)
     const policy = createLanguagePreference()
     const previousBeforeHook = router.onBeforeRouteChange
     router.onBeforeRouteChange = async (to: string) => {
       if (await previousBeforeHook?.(to) === false) return false
-      const target = docsLanguageEntry(new URL(to, location.href).href, withBase('/'), policy)
+      const languageTarget = docsLanguageEntry(new URL(to, location.href).href, withBase('/'), policy)
+      const target = attribution.routeTarget(languageTarget ?? to) ?? languageTarget
       if (target) {
         void router.go(target)
         return false
       }
     }
     trackPageView(window.location.pathname)
+    document.addEventListener('click', (event) => {
+      const block = (event.target as Element).closest?.('.vp-doc div[class*="language-"] > button.copy')?.parentElement
+      if (!block) return
+      const language = [...block.classList].find(name => name.startsWith('language-'))?.slice('language-'.length) ?? ''
+      trackEvent('copy-code', { language })
+    })
     initVikingBotWidget()
 
     const previousHook = router.onAfterRouteChanged
@@ -297,6 +309,7 @@ export default {
       trackPageView(to.split('?')[0].split('#')[0])
       // Update the existing widget after VitePress applies the page language.
       syncVikingBotLocale()
+      void nextTick().then(attribution.refresh)
     }
   }
 }

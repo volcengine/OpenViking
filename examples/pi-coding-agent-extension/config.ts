@@ -38,6 +38,7 @@ export interface OVConfig {
   skillCatalog: boolean;
   skillCatalogTokenBudget: number;
   resumeContextBudget: number;
+  resumeArchiveInject: boolean;
   commitTokenThreshold: number;
   commitKeepRecentCount: number;
   takeoverEnabled: boolean;

@@ -17,6 +17,7 @@
 - [上下文提取](06-extraction.md)：原始资料如何经过解析、组织与语义处理。
 - [检索机制](07-retrieval.md)：如何查找相关上下文，`find` 与 `search` 有什么区别。
 - [会话管理](08-session.md)：消息、会话提交与记忆提取如何衔接。
+- [规则（Beta）](17-rule-scenarios.md)：如何编译持久强约束，并按任务召回供 Agent 核验。
 
 准备写应用时，回到[应用开发路径](../workflows/01-overview.md)选择操作流程；参数和响应查[参考文档](../reference/01-overview.md)。
 
@@ -28,7 +29,7 @@
 | 处理何时结束，失败后如何恢复？ | [任务状态](16-queue-lifecycle.md) → [路径锁与崩溃恢复](09-transaction.md) |
 | 主备写入、读取和观测有什么语义？ | [主备存储](14-multi-write-storage.md) → [指标与 Metrics](12-metrics.md) |
 | 谁能看到什么，权限如何继承？ | [多租户](11-multi-tenant.md) → [资源访问控制（ACL）](15-acl.md) |
-| 数据如何加密，Skill 隐私如何处理？ | [数据加密](10-encryption.md) → [隐私配置与 Skill 隐私提取/加载](13-privacy.md) |
+| 数据如何加密，Skill 和 Session 隐私如何处理？ | [数据加密](10-encryption.md) → [隐私配置与自动管理](13-privacy.md) |
 
 配置和部署步骤集中在[部署运维](../guides/00-overview.md)。原理页说明行为与约束，操作指南说明如何设置和验证，两者通过链接连接。
 

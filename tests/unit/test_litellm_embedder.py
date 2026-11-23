@@ -206,6 +206,7 @@ class TestLiteLLMEmbeddingFactory:
         """EmbeddingConfig factory should create LiteLLMDenseEmbedder for provider='litellm'."""
         mock_litellm.embedding.return_value = _mock_litellm_response()
 
+        from openviking.models.embedder import RetryEmbedder
         from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
 
         cfg = EmbeddingModelConfig(
@@ -217,10 +218,11 @@ class TestLiteLLMEmbeddingFactory:
         )
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("litellm", "dense", cfg)
 
-        assert isinstance(embedder, LiteLLMDenseEmbedder)
+        assert isinstance(embedder, RetryEmbedder)
+        assert isinstance(embedder.inner, LiteLLMDenseEmbedder)
         assert embedder.model_name == "openai/text-embedding-3-small"
-        assert embedder.api_key == "test-key"
-        assert embedder.api_base == "https://openrouter.ai/api/v1"
+        assert embedder.inner.api_key == "test-key"
+        assert embedder.inner.api_base == "https://openrouter.ai/api/v1"
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
     def test_factory_forwards_query_document_params(self, mock_litellm):

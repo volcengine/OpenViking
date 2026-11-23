@@ -6,7 +6,7 @@
 
 Compilation with an installed Skill needs:
 
-- `--from`: one or more source directories or files.
+- `--from`: one or more source directories.
 - `--to`: the output directory.
 - `--skill`: the URI of an installed Skill that defines the output's content and structure.
 
@@ -14,23 +14,28 @@ Use the optional `--instruction` to specify this run's scope, audience, language
 
 The configured [Agent Runtime](../api/23-agent-runtime.md) runs the compilation; local deployments can use the built-in [VikingBot](../concepts/15-vikingbot.md). It reads the sources and Skill under the requesting user's identity, then organizes and writes content in a dedicated agent loop. The task runs asynchronously and returns a `task_id` for checking progress and results.
 
-## Run it in one command
+## Create a configuration and run it
 
 First import the sources and install the Skill using the [LLM Wiki example](02-llm-wiki.md), then run:
 
 ```bash
-ov compile \
+ov compile create --compile-name research-summary \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
   --instruction "Organize the research into a knowledge base the team can search"
+ov compile --compile-name research-summary
 ```
 
 The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Agent Runtime API](../api/23-agent-runtime.md).
 
+## Reuse a saved compilation
+
+Creation requires a caller-selected `compile_name` and returns it unchanged, prepares and tags the output directory, and does not execute Compile. Each execution returns a new `cmp_...` task ID. The first run is full; later successful runs advance a shared manual/scheduled baseline. Use `/api/v1/compile/create` with scheduling controls in `args` for recurring execution. Saved configurations are independent even when they share an output directory. Ordinary file moves and deletes never update saved configuration.
+
 ## Use Web Studio
 
-Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. Playground's terminal also supports `compile` and `task`; it can hand parameters to the form.
+Studio separates saved configuration creation from one-off full execution. Saved configurations are keyed by `compile_name` and rerun with that name. Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. The Filesystem terminal also supports `compile` and `task`; it can hand parameters to the form.
 
 Task-list cursors are signed with a process-local key and bound to the caller and filters. Restarting the service invalidates old cursors; refresh the list to start again. A cursor from one replica is not portable to another. Pagination scans stored task records rather than using an index, so read cost grows with retained history.
 

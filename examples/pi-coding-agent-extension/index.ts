@@ -30,6 +30,14 @@ import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Budget for the final commit on the exit path. The host awaits
+ * session_shutdown before releasing the terminal, so this waits at most a few
+ * seconds; anything not committed by then is already in the on-disk pending
+ * queue and replays at the next session start.
+ */
+const SHUTDOWN_COMMIT_BUDGET_MS = 3000;
+
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
   const cwd = process.cwd();
@@ -49,7 +57,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- Initialize modules ---
   const client = new OVClient(config);
-  const sync = new SyncManager(client, config);
+  const sync = new SyncManager(client, config, (type, data) => pi.appendEntry(type, data));
   const recall = new RecallManager(
     client,
     config,
@@ -188,8 +196,8 @@ export default async function (pi: ExtensionAPI) {
         : [];
       if (config.takeoverEnabled) {
         takeover.restore(branch);
-        sync.restoreWatermark(takeover.state.syncedEntryCount);
       }
+      sync.restoreCapture(branch, !ctx.sessionManager.getHeader?.()?.parentSession);
 
       await sync.replayPending();
       if (config.takeoverEnabled && sync.droppedCount > 0) {
@@ -199,7 +207,7 @@ export default async function (pi: ExtensionAPI) {
       // Profile injection
       profileBlock = await buildSessionProfileBlock(client, config);
 
-      if (!config.takeoverEnabled && sync.sessionId) {
+      if (!config.takeoverEnabled && config.resumeArchiveInject && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
         archiveOverview = await fetchArchiveOverview(client, sync.sessionId, config);
       }
@@ -275,7 +283,7 @@ export default async function (pi: ExtensionAPI) {
     // Compose system prompt additions
     const parts: string[] = [];
     if (profileBlock) parts.push(profileBlock);
-    if (!config.takeoverEnabled && archiveOverview && (compacted || archiveOverview.trim())) {
+    if (!config.takeoverEnabled && config.resumeArchiveInject && archiveOverview && (compacted || archiveOverview.trim())) {
       parts.push(archiveOverview);
     }
     // Generated from what actually registered, so it can never name a tool the
@@ -380,7 +388,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!connected || bypassed) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     if (config.takeoverEnabled) {
       const deadline = Date.now() + HANDLER_BUDGET_MS;
@@ -398,7 +406,7 @@ export default async function (pi: ExtensionAPI) {
     compacted = true;
 
     // Cache archive overview for rehydration after compaction
-    if (archiveId && sync.sessionId) {
+    if (config.resumeArchiveInject && archiveId && sync.sessionId) {
       archiveOverview = await fetchArchiveOverview(
         client, sync.sessionId, config,
       );
@@ -426,8 +434,12 @@ export default async function (pi: ExtensionAPI) {
     await sync.shutdown();
     if (config.takeoverEnabled) {
       await takeover.shutdown();
-    } else {
-      await sync.commit();
+    } else if (isCaptureEnabled(config)) {
+      // The host awaits this handler before releasing the terminal, so a slow
+      // commit must not hold the quit. Cutting the wait short loses nothing:
+      // a failed or timed-out commit is written to the on-disk pending queue
+      // (sync.commit queues by default) and replayed at the next session start.
+      await sync.commit({ timeoutMs: SHUTDOWN_COMMIT_BUDGET_MS });
     }
   });
 
@@ -474,7 +486,7 @@ export default async function (pi: ExtensionAPI) {
           const reason = config.takeoverEnabled
             ? takeover.lastFailure
             : skipped
-              ? describeSkip(String(commitResult?.reason || ""), config.commitKeepRecentCount)
+              ? describeSkip(String(commitResult?.reason || ""))
               : sync.lastCommitError;
           logger.log("commit", { ok: false, manual: true, reason: reason || "unknown" });
           if (reason.startsWith("nothing")) {

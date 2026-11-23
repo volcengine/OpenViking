@@ -14,6 +14,7 @@ from openai import AsyncOpenAI, OpenAI
 from volcenginesdkarkruntime import Ark, AsyncArk
 from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
@@ -349,17 +350,21 @@ class TestOpenAIVLMClientRetries:
         assert call_kwargs["max_retries"] == 0
 
     @pytest.mark.parametrize(
-        ("status_code", "message", "expected_attempts"),
+        ("status_code", "message", "expected_kind"),
         [
-            (400, "Total tokens of multi-modal content and text exceed max message tokens.", 1),
-            (400, "The parameter model is invalid.", 1),
-            (401, "Unauthorized", 1),
-            (503, "Service Unavailable", 6),
+            (
+                400,
+                "Total tokens of multi-modal content and text exceed max message tokens.",
+                ModelErrorKind.INVALID_REQUEST,
+            ),
+            (400, "The parameter model is invalid.", ModelErrorKind.INVALID_REQUEST),
+            (401, "Unauthorized", ModelErrorKind.AUTHENTICATION_ERROR),
+            (503, "Service Unavailable", ModelErrorKind.TRANSIENT_SERVICE_ERROR),
         ],
     )
     @patch("volcenginesdkarkruntime.AsyncArk")
-    def test_volcengine_async_client_uses_shared_retry_policy(
-        self, mock_async_ark_class, status_code, message, expected_attempts
+    def test_volcengine_async_client_performs_single_request(
+        self, mock_async_ark_class, status_code, message, expected_kind
     ):
         error = ArkAPIStatusError(
             f"Error code: {status_code} - {message}",
@@ -372,6 +377,7 @@ class TestOpenAIVLMClientRetries:
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=error)
+        mock_client.post = AsyncMock(side_effect=error)
         mock_async_ark_class.return_value = mock_client
         vlm = VolcEngineVLM(
             {
@@ -382,12 +388,14 @@ class TestOpenAIVLMClientRetries:
             }
         )
 
-        with patch("openviking.utils.model_retry.asyncio.sleep", new=AsyncMock()):
-            with pytest.raises(ArkAPIStatusError) as raised:
-                asyncio.run(vlm.get_completion_async("hello"))
+        with pytest.raises(ModelError) as raised:
+            asyncio.run(vlm.get_completion_async("hello"))
 
-        assert raised.value is error
-        assert mock_client.chat.completions.create.await_count == expected_attempts
+        assert raised.value.kind == expected_kind
+        assert raised.value.__cause__ is error
+        assert mock_client.post.await_count == 1
+        assert "temperature" not in mock_client.post.call_args.kwargs["body"]
+        mock_client.chat.completions.create.assert_not_called()
         call_kwargs = mock_async_ark_class.call_args.kwargs
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0
@@ -531,7 +539,7 @@ class TestVLMExtraRequestBody:
             api_key="sk-test",
             http_client=httpx.Client(transport=httpx.MockTransport(send)),
         ) as client:
-            monkeypatch.setattr(vlm, "get_client", lambda: client)
+            monkeypatch.setattr(vlm.inner, "get_client", lambda: client)
             assert vlm.get_completion("hello") == "ok"
             assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
 
@@ -539,7 +547,7 @@ class TestVLMExtraRequestBody:
             api_key="sk-test",
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(send)),
         ) as async_client:
-            monkeypatch.setattr(vlm, "get_async_client", lambda: async_client)
+            monkeypatch.setattr(vlm.inner, "get_async_client", lambda: async_client)
             assert await vlm.get_completion_async("hello") == "ok"
             assert (
                 await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
@@ -781,6 +789,78 @@ class TestVLMExtraRequestBody:
         kwargs = vlm._build_text_kwargs(prompt="hello", thinking=False)
 
         assert kwargs["extra_body"] == {"seed": 7, "enable_thinking": False}
+
+    @pytest.mark.parametrize("message_count", [0, 1, 2])
+    async def test_litellm_responses_bridge_keeps_narration_and_tool_call(
+        self, monkeypatch, message_count
+    ):
+        texts = ["Planning. ", "Writing now."][:message_count]
+        output = [
+            {
+                "type": "message",
+                "id": f"msg_{index}",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+            for index, text in enumerate(texts)
+        ]
+        output.append(
+            {
+                "type": "function_call",
+                "id": "fc_fixture",
+                "call_id": "call_fixture",
+                "name": "emit",
+                "arguments": '{"value":"fixture"}',
+                "status": "completed",
+            }
+        )
+
+        def send(client, request, **kwargs):
+            assert request.url.path == "/v1/responses"
+            assert json.loads(request.content)["tools"][0]["name"] == "emit"
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "resp_fixture",
+                    "object": "response",
+                    "created_at": 0,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": output,
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                },
+            )
+
+        async def send_async(client, request, **kwargs):
+            return send(client, request, **kwargs)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", send_async)
+        config = VLMConfig(
+            provider="litellm",
+            model="openai/responses/gpt-6-sol",
+            api_key="sk-test",
+            api_base="https://provider.example.test/v1",
+            max_retries=0,
+        )
+        tools = [
+            {"type": "function", "function": {"name": "emit", "parameters": {"type": "object"}}}
+        ]
+        vlm = config.get_vlm_instance()
+        try:
+            results = (
+                vlm.get_completion("hello", tools=tools),
+                await vlm.get_completion_async("hello", tools=tools),
+            )
+            for result in results:
+                assert (result.content or "") == "".join(texts)
+                assert result.finish_reason == "tool_calls"
+                assert [call.name for call in result.tool_calls] == ["emit"]
+                assert result.tool_calls[0].arguments == {"value": "fixture"}
+        finally:
+            config.close()
 
 
 class TestVLMConfigExtraHeaders:
@@ -1027,3 +1107,85 @@ class TestLiteLLMVLMModelResolution:
         )
 
         assert vlm._resolve_model("zai/custom-model") == "gemini/zai/custom-model"
+
+
+@pytest.mark.parametrize(
+    "backend,sync_client,async_client",
+    [(OpenAIVLM, OpenAI, AsyncOpenAI), (VolcEngineVLM, Ark, AsyncArk)],
+)
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["ark-code-latest", "fixed-model"])
+async def test_temperature_defaults_on_the_wire(
+    backend, sync_client, async_client, temperature, model
+):
+    bodies = []
+
+    def send(request):
+        assert request.headers["X-Test"] == "sampling"
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ]
+            },
+        )
+
+    config = VLMConfig(
+        provider="openai" if backend is OpenAIVLM else "volcengine",
+        model=model,
+        api_key="test-key",
+        api_base="https://example.invalid/v1",
+        **({"temperature": temperature} if temperature != "omitted" else {}),
+        thinking=True,
+        extra_headers={"X-Test": "sampling"},
+        extra_request_body={"thinking": {"type": "enabled"}},
+    )
+    vlm = backend(config._build_vlm_config_dict())
+    options = {
+        "api_key": "test-key",
+        "base_url": config.api_base,
+        "max_retries": 0,
+    }
+    if backend is OpenAIVLM:
+        options["default_headers"] = {"X-Test": "sampling"}
+    with sync_client(
+        **options, http_client=httpx.Client(transport=httpx.MockTransport(send))
+    ) as sync:
+        async with async_client(
+            **options, http_client=httpx.AsyncClient(transport=httpx.MockTransport(send))
+        ) as asynchronous:
+            vlm.get_client = lambda: sync
+            vlm.get_async_client = lambda: asynchronous
+            assert vlm.get_completion("hello") == "ok"
+            assert await vlm.get_completion_async("hello") == "ok"
+            assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
+            assert (
+                await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
+                == "ok"
+            )
+    assert len(bodies) == 4
+    for body in bodies:
+        assert body["thinking"] == {"type": "enabled"}
+        if temperature is None or temperature == "omitted":
+            assert "temperature" not in body
+        else:
+            assert body["temperature"] == temperature
+
+
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
+def test_litellm_temperature_defaults(temperature):
+    vlm = LiteLLMVLMProvider(
+        {
+            "model": "openai/fixed-model",
+            "provider": "litellm",
+            **({"temperature": temperature} if temperature != "omitted" else {}),
+        }
+    )
+    kwargs = vlm._build_text_kwargs(prompt="hello")
+    if temperature is None or temperature == "omitted":
+        assert "temperature" not in kwargs
+    else:
+        assert kwargs["temperature"] == temperature

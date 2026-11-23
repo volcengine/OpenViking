@@ -582,20 +582,31 @@ impl FileSystem for S3FileSystem {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // Check if it's a directory
-        if key.ends_with('/') || self.client.directory_exists(&normalized).await? {
-            // Try to read as file first
-            if self.client.head_object(&key).await?.is_none() {
-                return Err(Error::IsADirectory(normalized));
-            }
+        // Preserve existing root and explicit directory-marker key handling.
+        let check_directory_first = normalized == "/" || key.ends_with('/');
+        if check_directory_first
+            && (key.ends_with('/') || self.client.directory_exists(&normalized).await?)
+            && self.client.head_object(&key).await?.is_none()
+        {
+            return Err(Error::IsADirectory(normalized));
         }
 
-        if offset == 0 && size == 0 {
-            // Full read
+        let result = if offset == 0 && size == 0 {
             self.client.get_object(&key).await
         } else {
-            // Range read
             self.client.get_object_range(&key, offset, size).await
+        };
+
+        // Successful file reads need no directory HEAD or LIST requests.
+        match result {
+            Err(error @ Error::NotFound(_)) if !check_directory_first => {
+                if self.client.directory_exists(&normalized).await? {
+                    Err(Error::IsADirectory(normalized))
+                } else {
+                    Err(error)
+                }
+            }
+            other => other,
         }
     }
 
@@ -1439,6 +1450,180 @@ plugins:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn read_fixture(prefix: &str) -> (S3FileSystem, Arc<AtomicUsize>) {
+        use crate::core::ConfigValue;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let recorded = requests.clone();
+        tokio::spawn(async move {
+            let objects = [
+                ("prefix/", "root marker"),
+                ("prefix/file", "abcdef"),
+                ("prefix/empty", ""),
+                ("prefix/marker/", ""),
+                ("prefix/nonempty/", "directory marker"),
+                ("prefix/implicit/child", "child"),
+                ("prefix/both", "file"),
+                ("prefix/both/child", "child"),
+            ];
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.windows(4).any(|chunk| chunk == b"\r\n\r\n") {
+                    let mut chunk = [0; 4096];
+                    let n = stream.read(&mut chunk).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..n]);
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                let mut parts = request.split_whitespace();
+                let method = parts.next().unwrap();
+                let target = parts.next().unwrap();
+                recorded.fetch_add(1, Ordering::SeqCst);
+                let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+                let key = url.path().strip_prefix("/test-bucket/").unwrap_or("");
+                let (mut status, mut body) = if let Some((_, prefix)) =
+                    url.query_pairs().find(|(name, _)| name == "prefix")
+                {
+                    let entry = objects
+                        .iter()
+                        .find(|(key, _)| key.starts_with(prefix.as_ref()));
+                    let contents = entry.map_or(String::new(), |(key, _)| {
+                        format!("<Contents><Key>{key}</Key></Contents>")
+                    });
+                    (
+                        "200 OK",
+                        format!("<ListBucketResult>{contents}</ListBucketResult>"),
+                    )
+                } else if key == "prefix/denied" {
+                    (
+                        "403 Forbidden",
+                        "<Error><Code>AccessDenied</Code></Error>".into(),
+                    )
+                } else if let Some((_, content)) = objects.iter().find(|(name, _)| *name == key) {
+                    ("200 OK", content.to_string())
+                } else {
+                    (
+                        "404 Not Found",
+                        "<Error><Code>NoSuchKey</Code></Error>".into(),
+                    )
+                };
+                let lowercase = request.to_ascii_lowercase();
+                if status == "200 OK" && method == "GET" {
+                    if let Some(range) = lowercase
+                        .lines()
+                        .find_map(|line| line.strip_prefix("range: bytes="))
+                    {
+                        let (start, end) = range.split_once('-').unwrap();
+                        let start = start.parse::<usize>().unwrap();
+                        let end = if end.is_empty() {
+                            body.len()
+                        } else {
+                            end.parse::<usize>().unwrap() + 1
+                        };
+                        body = body[start..end.min(body.len())].to_string();
+                        status = "206 Partial Content";
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    if method == "HEAD" { "" } else { &body }
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let config = PluginConfig {
+            params: [
+                ("bucket", "test-bucket"),
+                ("endpoint", endpoint.as_str()),
+                ("prefix", prefix),
+                ("access_key_id", "test"),
+                ("secret_access_key", "test"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.into(), ConfigValue::String(value.into())))
+            .collect(),
+            ..PluginConfig::default()
+        };
+        (S3FileSystem::new(&config).await.unwrap(), requests)
+    }
+
+    #[tokio::test]
+    async fn test_read_files_need_only_one_request() {
+        let (fs, requests) = read_fixture("prefix").await;
+        for (path, offset, size, expected) in [
+            ("/file", 0, 0, "abcdef"),
+            ("/file/", 0, 0, "abcdef"),
+            ("/file", 0, 3, "abc"),
+            ("/file", 1, 3, "bcd"),
+            ("/file", 2, 0, "cdef"),
+            ("/empty", 0, 0, ""),
+            ("/both", 0, 0, "file"),
+        ] {
+            requests.store(0, Ordering::SeqCst);
+            assert_eq!(
+                fs.read(path, offset, size).await.unwrap(),
+                expected.as_bytes()
+            );
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                1,
+                "{path} offset={offset} size={size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_preserves_directories_missing_files_and_errors() {
+        let (fs, requests) = read_fixture("prefix").await;
+        for (path, count) in [
+            ("/marker", 2),
+            ("/marker/", 2),
+            ("/nonempty", 2),
+            ("/implicit", 3),
+        ] {
+            requests.store(0, Ordering::SeqCst);
+            assert!(
+                matches!(fs.read(path, 0, 0).await, Err(Error::IsADirectory(actual)) if actual == path.trim_end_matches('/'))
+            );
+            assert_eq!(requests.load(Ordering::SeqCst), count, "{path}");
+        }
+        requests.store(0, Ordering::SeqCst);
+        assert!(
+            matches!(fs.read("/missing", 0, 0).await, Err(Error::NotFound(key)) if key == "prefix/missing")
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        for (offset, size) in [(0, 0), (1, 2)] {
+            requests.store(0, Ordering::SeqCst);
+            let error = fs.read("/denied", offset, size).await.unwrap_err();
+            assert!(error.to_string().contains("AccessDenied"));
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_preserves_root_and_marker_key_behavior() {
+        let (fs, requests) = read_fixture("prefix").await;
+        for path in ["/", ""] {
+            requests.store(0, Ordering::SeqCst);
+            assert_eq!(fs.read(path, 0, 0).await.unwrap(), b"root marker");
+            assert_eq!(requests.load(Ordering::SeqCst), 2);
+        }
+        assert_eq!(fs.read("/marker//", 0, 0).await.unwrap(), b"");
+        let (fs, requests) = read_fixture("missing-prefix").await;
+        assert!(matches!(fs.read("/", 0, 0).await, Err(Error::IsADirectory(path)) if path == "/"));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let (fs, _) = read_fixture("").await;
+        assert!(matches!(fs.read("/", 0, 0).await, Err(Error::Internal(_))));
+    }
 
     #[test]
     fn test_normalize_path() {

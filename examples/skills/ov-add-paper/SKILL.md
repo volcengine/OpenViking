@@ -64,7 +64,7 @@ python3 scripts/validate_ara.py <artifact-dir>
 Then ingest with the OV CLI:
 
 ```bash
-ov add-resource <artifact-dir> --to viking://resources/papers/<slug> --wait --timeout 300
+ov add-resource <artifact-dir> --to viking://resources/papers/<slug> --wait
 ```
 
 Before ingest, use `ov -o json stat <target-uri>` to check whether the target already exists. After ingest, verify with `ov -o json stat <target-uri>` and `ov tree <target-uri>`.
@@ -79,7 +79,7 @@ Before ingest, use `ov -o json stat <target-uri>` to check whether the target al
 
 - Do not use `ov add-skill`; this skill creates paper resources, not OV skills.
 - Do not silently skip `ov add-resource`; if ingestion fails, report the command, error, and recovery path.
-- If `ov add-resource --wait` exits with a connection error after creating the target, do not immediately retry the same URI. Run `ov stat`, `ov wait --timeout <seconds>`, `ov observer queue`, and `ov tree` to determine whether ingestion completed.
+- If `ov add-resource --wait` exits with a connection error after creating the target, do not immediately retry the same URI. Run `ov stat`, `ov wait`, `ov observer queue`, and `ov tree` to determine whether ingestion completed.
 - Do not invent claims, evidence, source refs, code, numbers, or research history.
 - Do not overwrite an explicit existing OV target unless the user asked for that target.
 - Mark unsupported or unreadable content as unavailable instead of filling it in.

@@ -4,7 +4,7 @@ OpenViking uses abstracts and overviews to locate content, then loads the body w
 
 ## Overview
 
-| Layer | Name | Storage | Default body limit | Purpose |
+| Layer | Name | Storage | Default generated-body budget | Purpose |
 | --- | --- | --- | --- | --- |
 | **L0** | Abstract | `.abstract.md` in a directory | 256 characters | Vector retrieval, quick filtering |
 | **L1** | Overview | `.overview.md` in a directory | 4000 characters | Rerank, content navigation |
@@ -14,7 +14,9 @@ L0 and L1 are **directory-level semantic sidecars**. They describe a directory; 
 
 L0 and L1 are normally generated together, but either one may exist independently. For example, `mkdir()` initially creates only L0: it uses the directory name as the default body when `description` is omitted, or the provided description otherwise. A directory with `.abstract.md` but no `.overview.md` is therefore valid. Reads and vector rebuilds process only the levels that actually exist.
 
-The body limits are configured by `semantic.abstract_max_chars` and `semantic.overview_max_chars`; the table shows their defaults. These limits apply to the Markdown body only and do not truncate sidecar metadata.
+For resource-directory summary generation, `semantic.abstract_max_chars` and `semantic.overview_max_chars` set character budgets; the table shows their defaults. The budgets apply to the generated Markdown body. Sidecar metadata is excluded.
+
+Truncation prefers complete sentences. If no sentence ends within the budget, it can retain the first complete sentence even when that sentence is longer. These settings therefore do not impose hard size limits on stored sidecars.
 
 ## L0: Abstract
 

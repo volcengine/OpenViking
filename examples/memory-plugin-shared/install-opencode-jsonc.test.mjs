@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -195,6 +195,8 @@ for (const sourceMode of ["dev", "archive"]) {
       const source = join(dir, "source");
       const files = execFileSync("git", ["ls-files", "-z", "--", "examples", "agent-plugins", ".github/scripts"], { cwd: repoRoot, encoding: "utf8" }).split("\0").filter(Boolean);
       for (const file of files) {
+        // A working-tree deletion remains in the index until it is staged.
+        if (!existsSync(join(repoRoot, file))) continue;
         mkdirSync(dirname(join(source, file)), { recursive: true });
         copyFileSync(join(repoRoot, file), join(source, file));
       }

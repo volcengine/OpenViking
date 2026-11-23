@@ -98,7 +98,7 @@ openviking-server doctor
 
 See the [OpenViking Configuration Guide](01-configuration.md) for details. VikingBot inherits the root-level `vlm` as its Agent model by default, so you normally do not need to configure `bot.agents` again.
 
-For an `api_key` server, register a User/Admin key and set it in `bot.ov_server.api_key` before starting the Bot; the root management key cannot serve as that user key. See [Authentication](04-authentication.md). In inherited `trusted` mode the Bot uses the server’s trusted identity configuration.
+For an `api_key` server, register a User/Admin key and set it in `bot.ov_server.api_key` before starting the Bot; the root API key cannot serve as that user key. See [Authentication](04-authentication.md). In inherited `trusted` mode the Bot uses the server’s trusted identity configuration.
 
 ### 2. Start Both Services
 

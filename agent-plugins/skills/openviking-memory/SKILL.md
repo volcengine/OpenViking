@@ -80,6 +80,14 @@ decisions with their rationale, and reusable procedures or fixes. What not to
 persist: secrets and credentials, transient state, speculation, or bulk
 transcript dumps — store conclusions, not scrollback.
 
+### File resources deliberately
+
+Resource directory rules do not apply to Memory; use `remember` or session
+commit and let the extraction system organize it. Before `add_resource`, keep
+the existing Resource layout and account policy, choose shared versus
+identity-private scope, and avoid duplicate source roots. Use `parent` for a new
+source and exact `to` for refresh.
+
 ## Example
 
 User asks to fix a failing deployment:

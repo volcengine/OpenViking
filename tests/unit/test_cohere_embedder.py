@@ -12,6 +12,7 @@ from openviking.models.embedder.cohere_embedders import (
     COHERE_MODEL_DIMENSIONS,
     get_cohere_model_default_dimension,
 )
+from openviking.models.model_error import ModelError
 
 
 class TestCohereDenseEmbedder:
@@ -167,7 +168,7 @@ class TestCohereDenseEmbedder:
             api_key="bad-key",
         )
 
-        with pytest.raises(RuntimeError, match="Cohere API error"):
+        with pytest.raises(ModelError, match="Cohere API error"):
             embedder.embed("Hello world")
 
     @patch("openviking.models.embedder.cohere_embedders.httpx.Client")

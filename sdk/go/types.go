@@ -25,14 +25,15 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
-	ACL                 *ACLSpec
-	To                  string
-	Parent              string
-	CreateParent        *bool
-	AddType             string
-	Reason              string
-	Instruction         string
-	Wait                bool
+	ACL          *ACLSpec
+	To           string
+	Parent       string
+	CreateParent *bool
+	AddType      string
+	Reason       string
+	Instruction  string
+	Wait         bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout             *float64
 	Strict              bool
 	IgnoreDirs          string
@@ -51,7 +52,8 @@ type AddResourceOptions struct {
 
 // AddSkillOptions controls AddSkill.
 type AddSkillOptions struct {
-	Wait      bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout   *float64
 	Telemetry any
 	Extra     map[string]any
@@ -61,11 +63,23 @@ type AddSkillOptions struct {
 	TargetURI any
 }
 
-// CompileOptions controls Compile.
-type CompileOptions struct {
-	Instruction string
-	Args        map[string]any
-	Extra       map[string]any
+// CompileInput contains full compilation inputs. Args may contain scheduling
+// controls only when creating a persistent configuration.
+type CompileInput struct {
+	FromURIs    []string       `json:"from,omitempty"`
+	To          string         `json:"to,omitempty"`
+	Skill       string         `json:"skill"`
+	Instruction string         `json:"instruction,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+}
+
+// CompileRequest selects one saved configuration or supplies independent full inputs.
+// CompileName and Input are mutually exclusive.
+type CompileRequest struct {
+	CompileName string
+	Input       *CompileInput
+	// Args uses only owner_user_id for named runs; full runs use Input.Args.
+	Args map[string]any
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
@@ -140,7 +154,8 @@ type GetSkillOptions struct {
 
 // UpdateSkillOptions controls UpdateSkill.
 type UpdateSkillOptions struct {
-	Wait           bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	SourceMetadata map[string]any
 	Telemetry      any
@@ -153,8 +168,37 @@ type DeleteSkillOptions struct {
 	TargetURI any
 }
 
+// MountMCPToolOptions controls a live context mount backed by an MCP tool.
+type MountMCPToolOptions struct {
+	Description    *string
+	TimeoutSeconds int
+	Arguments      map[string]any
+	Tags           []string
+	Wait           bool
+}
+
+// WaitOptions controls whether an asynchronous operation waits for processing.
+type WaitOptions struct {
+	Wait      bool
+	TargetURI string
+}
+
+// MCPToolMount describes one live context mount in a batch request.
+type MCPToolMount struct {
+	ToolURI        string
+	NodeURI        string
+	Title          string
+	Description    *string
+	TimeoutSeconds int
+	Arguments      map[string]any
+	Tags           []string
+}
+
 // WaitProcessedOptions controls WaitProcessed.
+//
+// Deprecated: Waiting-specific timeout options are ignored.
 type WaitProcessedOptions struct {
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout *float64 `json:"timeout,omitempty"`
 }
 
@@ -239,36 +283,58 @@ type TreePage struct {
 type RemoveOptions struct {
 	Recursive bool
 	Wait      bool
-	Timeout   *float64
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout *float64
 }
 
 // WriteOptions controls Write.
 type WriteOptions struct {
-	ACL            *ACLSpec
-	Mode           string
-	Wait           bool
-	Timeout        *float64
-	Telemetry      any
-	ProcessingMode string
-	Tags           []string
-	TagMode        string
-	Extra          map[string]any
+	ACL  *ACLSpec
+	Mode string
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout          *float64
+	Telemetry        any
+	ProcessingMode   string
+	Tags             []string
+	TagMode          string
+	UseSnapshot      bool
+	ResolveConflicts bool
+	DeferProcessing  bool
+	Extra            map[string]any
 }
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string  `json:"uri"`
-	Content       *string `json:"content,omitempty"`
-	ContentBase64 *string `json:"content_base64,omitempty"`
-	Mode          string  `json:"mode,omitempty"`
+	URI              string   `json:"uri"`
+	Content          *string  `json:"content,omitempty"`
+	ContentBase64    *string  `json:"content_base64,omitempty"`
+	Mode             string   `json:"mode,omitempty"`
+	ExpectedSHA256   *string  `json:"expected_sha256,omitempty"`
+	IfAbsent         bool     `json:"if_absent,omitempty"`
+	ResolveConflicts bool     `json:"resolve_conflicts,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	TagMode          string   `json:"tag_mode,omitempty"`
+	ACL              *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait      *bool
-	Timeout   *float64
+	UseSnapshot     bool
+	DeferProcessing bool
+	Wait            *bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout        *float64
+	Telemetry      any
+	ProcessingMode string
+	SkipConflicts  bool
+	Extra          map[string]any
+}
+
+// EnsureDirectoryIndexOptions controls readiness waiting.
+type EnsureDirectoryIndexOptions struct {
+	Wait      *bool // Nil waits for indexes to become readable.
 	Telemetry any
-	Extra     map[string]any
 }
 
 // SetTagsOptions controls SetTags.
@@ -505,11 +571,6 @@ type PackOptions struct {
 type ImportPackOptions struct {
 	OnConflict string
 	VectorMode string
-}
-
-// AdminMigrateOptions controls AdminMigrate.
-type AdminMigrateOptions struct {
-	Cleanup bool
 }
 
 // FindResult is the structured retrieval response returned by Find and Search.

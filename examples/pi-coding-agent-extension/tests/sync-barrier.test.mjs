@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SyncManager, describeCommitError } from "../sync.ts";
+import { OVClient } from "../client.ts";
 import { enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
@@ -58,6 +59,100 @@ test("syncBranch returns added token accounting and delivered status", async () 
     assert.ok(result.tokens > 0);
     assert.equal(result.allDelivered, true);
     assert.equal(sync.syncedCount, 1);
+  });
+});
+
+function captureEntry(id) {
+  return { id, type: "message", message: { role: "user", content: `Remember the project decision ${id}.` } };
+}
+
+for (const takeoverEnabled of [false, true]) {
+  test(`capture checkpoints survive restart, compaction and branch navigation (takeover=${takeoverEnabled})`, async () => {
+    await withPendingDir(async () => {
+      let branch = [captureEntry("shared"), captureEntry("a")];
+      const sent = [];
+      const c = client({ fetchJSON: async (_path, init) => {
+        sent.push(...JSON.parse(init.body).messages);
+        return { ok: true, result: {} };
+      } });
+      let sequence = 0;
+      const makeSync = async (sid = "checkpoint-session") => {
+        const sync = new SyncManager(c, config({ takeoverEnabled }), (customType, data) => {
+          branch.push({ id: `checkpoint-${++sequence}`, type: "custom", customType, data });
+        });
+        await sync.ensureSession(sid);
+        sync.restoreCapture(branch);
+        return sync;
+      };
+      await (await makeSync()).syncBranch(branch.slice());
+      const a = branch.slice();
+      const restarted = await makeSync();
+      branch.push({ id: "compact", type: "compaction", firstKeptEntryId: "a", summary: "summary" }, captureEntry("a2"));
+      assert.equal((await restarted.syncBranch(branch.slice())).added, 1);
+      // A longer sibling still has unseen entries below the old array offset.
+      branch = [a[0], ...["b", "b2", "b3", "b4", "b5"].map(captureEntry)];
+      assert.equal((await restarted.syncBranch(branch.slice())).added, 6);
+      branch = a.slice();
+      assert.equal((await restarted.syncBranch(branch.slice())).added, 0);
+      assert.equal(branch.length, a.length, "syncing a checkpoint adds no checkpoint-only chain");
+      branch.push(captureEntry("a3"));
+      assert.equal((await restarted.syncBranch(branch.slice())).added, 1);
+      assert.equal(sent.filter((p) => JSON.stringify(p).includes("decision a.")).length, 1);
+      const fork = await makeSync("fork-session");
+      assert.equal((await fork.syncBranch(branch.slice())).added, 3, "fork must capture its own inherited history");
+    });
+  });
+}
+
+test("capture migration rejects foreign, invalid and off-branch checkpoints", async () => {
+  const sync = new SyncManager(client(), config());
+  await sync.ensureSession("migration");
+  const legacy = [captureEntry("one"), { id: "legacy", type: "custom", customType: "ov-takeover", data: { syncedEntryCount: 1 } }];
+  sync.restoreCapture(legacy, true);
+  assert.equal(sync.syncedCount, 1);
+  sync.restoreCapture(legacy, false);
+  assert.equal(sync.syncedCount, 0, "fork must not trust a session-less legacy checkpoint");
+  for (const data of [
+    { sessionId: "pi-other", lastEntryId: "one" },
+    { sessionId: "pi-migration", lastEntryId: "missing" },
+    { sessionId: "pi-migration", lastEntryId: "later" },
+    { sessionId: "pi-migration" },
+  ]) {
+    sync.restoreCapture([legacy[0], { id: "invalid", type: "custom", customType: "ov-capture", data }, captureEntry("later")]);
+    assert.equal(sync.syncedCount, 0);
+  }
+  sync.restoreCapture([
+    legacy[0],
+    { id: "modern", type: "custom", customType: "ov-capture", data: { sessionId: "pi-migration", lastEntryId: "one" } },
+    { id: "stale", type: "custom", customType: "ov-takeover", data: { syncedEntryCount: 0 } },
+  ], true);
+  assert.equal(sync.syncedCount, 1, "modern progress takes precedence over legacy takeover state");
+});
+
+test("durably queued capture is checkpointed before a failed commit check", async () => {
+  await withPendingDir(async () => {
+    const branch = [captureEntry("queued")];
+    const cfg = config({ takeoverEnabled: false });
+    const unavailable = client({ fetchJSON: async () => ({ ok: false, status: 503 }) });
+    const sync = new SyncManager(unavailable, cfg, (customType, data) => {
+      branch.push({ id: "checkpoint", type: "custom", customType, data });
+    });
+    await sync.ensureSession("offline");
+    const result = await sync.syncBranch(branch.slice());
+    assert.equal(result.queued, 1);
+    assert.equal((await listPending()).length, 1);
+    const restored = new SyncManager(client(), cfg);
+    await restored.ensureSession("offline");
+    restored.restoreCapture(branch);
+    assert.equal((await restored.syncBranch(branch)).added, 0);
+    const failingCommit = new SyncManager(client({ getSession: async () => { throw new Error("commit unavailable"); } }), cfg,
+      (customType, data) => branch.push({ id: "checkpoint-2", type: "custom", customType, data }));
+    await failingCommit.ensureSession("offline");
+    failingCommit.restoreCapture(branch);
+    branch.push(captureEntry("after"));
+    await assert.rejects(failingCommit.syncBranch(branch.slice()), /commit unavailable/);
+    restored.restoreCapture(branch);
+    assert.equal((await restored.syncBranch(branch)).added, 0);
   });
 });
 
@@ -126,6 +221,36 @@ test("a failed commit keeps its status and server message for /viking commit", a
     response = { result: { status: "accepted", archive_uri: "viking://archive/1" } };
     assert.ok(await sync.commit({ queueOnFailure: false }));
     assert.equal(sync.lastCommitError, "");
+  });
+});
+
+test("a commit archives every message, both when sent and when queued for retry", async () => {
+  await withPendingDir(async () => {
+    const ov = new OVClient({
+      endpoint: "http://127.0.0.1:1933",
+      apiKey: "",
+      account: "",
+      user: "",
+      authMode: "trusted",
+      sendIdentityHeaders: false,
+      peerId: "",
+      userAgent: "test",
+    });
+    const requests = [];
+    ov.fetchJSON = async (path, init) => {
+      requests.push({ path, body: JSON.parse(init.body) });
+      return { ok: false, result: null, status: 503, error: { message: "unavailable" } };
+    };
+    const sync = new SyncManager(ov, config());
+    await sync.ensureSession("pi-keep-zero");
+
+    assert.equal(await sync.commit(), null);
+    assert.deepEqual(requests, [{
+      path: `/api/v1/sessions/${encodeURIComponent(sync.sessionId)}/commit`,
+      body: { keep_recent_count: 0 },
+    }]);
+    const queued = (await listPending()).map(({ entry }) => [entry.type, entry.payload]);
+    assert.deepEqual(queued, [["commitSession", { keep_recent_count: 0 }]]);
   });
 });
 
@@ -205,27 +330,37 @@ test("a current-session processing entry keeps the takeover barrier closed", asy
   });
 });
 
-test("restoreWatermark prevents pi -c from re-syncing already captured entries", async () => {
+test("capture cursor skips continuations and re-extracts sibling branches", async () => {
   await withPendingDir(async () => {
     const calls = [];
     const c = client({
       fetchJSON: async (_path, init) => {
-        calls.push(...JSON.parse(init.body).messages);
+        calls.push(JSON.parse(init.body).messages.map((payload) => payload.parts[0].text));
         return { ok: true, result: {} };
       },
     });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    sync.restoreWatermark(1);
+    const [root, a, b, next] = ["root", "branch-a", "branch-b", "next"].map((id) => ({
+      id, type: "message", message: { role: "user", content: id },
+    }));
+    const branchA = [root, a];
+    const branchB = [root, b];
+    sync.restoreWatermark(1, branchA);
 
-    const result = await sync.syncBranch([
-      { type: "message", message: { role: "user", content: "Already captured entry should be skipped." } },
-      { type: "message", message: { role: "user", content: "Fresh entry should be captured now." } },
+    assert.equal((await sync.syncBranch(branchA)).added, 1);
+    assert.equal((await sync.syncBranch(branchA)).added, 0);
+    await sync.syncBranch(branchB);
+    await sync.syncBranch(branchA);
+    await sync.syncBranch([...branchB, next]);
+
+    assert.equal(sync.syncedCount, 3);
+    assert.deepEqual(calls, [
+      ["branch-a"],
+      ["root", "branch-b"],
+      ["root", "branch-a"],
+      ["root", "branch-b", "next"],
     ]);
-
-    assert.equal(result.added, 1);
-    assert.equal(calls.length, 1);
-    assert.match(calls[0].parts[0].text, /Fresh entry/);
   });
 });
 
@@ -459,5 +594,29 @@ test("the takeover barrier drains only within the budget it is given", async () 
 
     assert.equal(await sync.flushForTakeover(), true);
     assert.equal(calls.length, 1);
+  });
+});
+
+test("a commit without takeover waits behind the session's queued messages", async () => {
+  await withPendingDir(async () => {
+    let commits = 0;
+    const c = client({
+      fetchJSON: async () => ({ ok: false, status: 503, error: { code: "UNAVAILABLE" } }),
+      commitSessionResponse: async () => {
+        commits++;
+        return { result: { task_id: "t-1" } };
+      },
+    });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-shutdown");
+    const sid = sync.sessionId;
+    await enqueue("addMessage", sid, { role: "user", content: "parked" }, { createdAt: Date.now() + 60_000 });
+
+    assert.equal(await sync.commit({ timeoutMs: 3000 }), null);
+    assert.equal(commits, 0, "no commit overtakes the queued message");
+    assert.deepEqual((await listPending()).map(({ entry }) => [entry.type, entry.sessionId]), [
+      ["addMessage", sid],
+      ["commitSession", sid],
+    ]);
   });
 });

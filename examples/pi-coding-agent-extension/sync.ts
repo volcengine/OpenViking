@@ -5,7 +5,15 @@ import { join } from "node:path";
 import { createLogger } from "./shared/debug-log.mjs";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
-import { claimForReplay, dequeue, enqueue, incrementRetry, listPending, replayPending } from "./shared/pending-queue.mjs";
+import {
+  claimForReplay,
+  deferCommitBehindPendingWrites,
+  dequeue,
+  enqueue,
+  incrementRetry,
+  listPending,
+  replayPending,
+} from "./shared/pending-queue.mjs";
 import { BATCH_LIMIT, sendSessionMessages } from "./shared/batch-send.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
@@ -31,6 +39,9 @@ export class SyncManager {
   private logger: ReturnType<typeof createLogger>;
   private ovSessionId: string | null = null;
   private syncedEntryCount = 0;
+  /** Entry at the numeric watermark; detects a same-length sibling branch. */
+  private syncedEntryId = "";
+  private persistEntry?: (customType: string, data: unknown) => void;
   /**
    * Messages this session lost for good: non-retryable (4xx) rejections and
    * queued entries whose retry budget ran out. They are counted as accepted so
@@ -42,7 +53,12 @@ export class SyncManager {
   /** Why the last commit request got no result, for `/viking commit` to show. */
   private lastCommitFailure = "";
 
-  constructor(client: OVClient, config: OVConfig) {
+  constructor(
+    client: OVClient,
+    config: OVConfig,
+    persistEntry?: (customType: string, data: unknown) => void,
+  ) {
+    this.persistEntry = persistEntry;
     this.client = client;
     this.config = config;
     this.logger = createLogger("pi", {
@@ -70,9 +86,41 @@ export class SyncManager {
     return extracted.payloads.length;
   }
 
-  restoreWatermark(n: number): void {
-    const next = Math.max(0, Math.floor(Number(n) || 0));
-    this.syncedEntryCount = next;
+  restoreWatermark(n: number, branch: any[]): void {
+    this.syncedEntryCount = Math.max(0, Math.floor(Number(n) || 0));
+    this.syncedEntryId = branch[this.syncedEntryCount - 1]?.id || "";
+  }
+
+  /** Restore only this OV session's progress on the active Pi branch. */
+  restoreCapture(branch: any[], allowLegacy = false): void {
+    this.restoreWatermark(0, branch);
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry = branch[i];
+      if (entry?.type !== "custom") continue;
+      if (entry.customType === "ov-capture" && entry.data?.sessionId === this.ovSessionId
+          && typeof entry.data.lastEntryId === "string" && entry.data.lastEntryId) {
+        const anchor = branch.findIndex((item) => item.id === entry.data.lastEntryId);
+        if (anchor >= 0 && anchor < i) {
+          this.syncedEntryCount = anchor + 1;
+          this.syncedEntryId = branch[anchor].id;
+          return;
+        }
+      }
+    }
+    // Published takeover checkpoints use offsets and have no session id.
+    // Migrate them only without a modern checkpoint, at unforked startup.
+    if (!allowLegacy) return;
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry = branch[i];
+      if (entry?.type === "custom" && entry.customType === "ov-takeover") {
+        const count = entry.data?.syncedEntryCount;
+        if (Number.isSafeInteger(count) && count >= 0 && count <= i) {
+          this.syncedEntryCount = count;
+          this.syncedEntryId = branch[count - 1]?.id || "";
+          return;
+        }
+      }
+    }
   }
 
   async ensureSession(piSessionId: string): Promise<boolean> {
@@ -208,8 +256,22 @@ export class SyncManager {
       return { added: 0, tokens: 0, allDelivered: true, queued: 0, permanentFailures: 0 };
     }
 
-    const extracted = extractBranchCapturePayloads(branch, this.syncedEntryCount, this.config);
-    if (extracted.resetWatermark) this.syncedEntryCount = 0;
+    // Array offsets alone cannot detect switching to a longer sibling branch.
+    if (this.syncedEntryId) {
+      const anchor = branch.findIndex((entry) => entry.id === this.syncedEntryId);
+      if (anchor >= 0) this.syncedEntryCount = anchor + 1;
+      else this.restoreCapture(branch);
+    }
+    const extracted = extractBranchCapturePayloads(
+      branch,
+      this.syncedEntryCount,
+      this.config,
+      this.syncedEntryId,
+    );
+    if (extracted.resetWatermark) {
+      this.syncedEntryCount = 0;
+      this.syncedEntryId = "";
+    }
     const sent = await this.sendPayloads(extracted.payloads);
     const added = sent.accepted;
     let tokens = 0;
@@ -219,6 +281,15 @@ export class SyncManager {
     const allDelivered = sent.delivered === added && sent.permanentFailures === 0;
     if (added === extracted.payloads.length) {
       this.syncedEntryCount = extracted.nextEntryCount;
+      const last = branch.at(-1);
+      this.syncedEntryId = extracted.nextEntryId;
+      // No checkpoint-only chain when takeover syncs the same branch again.
+      if (last?.id && !(last.type === "custom" && last.customType === "ov-capture")) {
+        this.persistEntry?.("ov-capture", {
+          sessionId: this.ovSessionId,
+          lastEntryId: last.id,
+        });
+      }
     }
     if (added > 0 && !this.config.takeoverEnabled) {
       await this.commitIfNeeded();
@@ -289,16 +360,31 @@ export class SyncManager {
   }
 
   async commit(
-    opts: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number } = {},
+    opts: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean } = {},
   ): Promise<any | null> {
     if (!this.ovSessionId) {
       this.lastCommitFailure = "no OpenViking session yet";
       return null;
     }
+    // Takeover commits only once its flush barrier has drained this session.
+    if (!this.config.takeoverEnabled) {
+      const deferred = await deferCommitBehindPendingWrites(
+        (path: string, init?: any) => this.client.fetchJSON(path, init, opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : undefined),
+        this.ovSessionId,
+        { keep_recent_count: opts.keepRecentCount ?? 0 },
+        (stage: string, data: unknown) => this.logger.log(stage, data),
+      );
+      if (deferred) {
+        this.lastCommitFailure = "messages are still queued; the commit will follow them";
+        this.logger.log("commit", { session: this.ovSessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
+        return null;
+      }
+    }
     const response = await this.client.commitSessionResponse(
       this.ovSessionId,
       opts.keepRecentCount,
       opts.timeoutMs,
+      opts.enableWorkingMemory,
     );
     const result = response.result;
     if (!result) {
@@ -312,7 +398,7 @@ export class SyncManager {
       });
       if (opts.queueOnFailure !== false) {
         await enqueue("commitSession", this.ovSessionId, {
-          keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
+          keep_recent_count: opts.keepRecentCount ?? 0,
         });
       }
       return null;

@@ -30,14 +30,16 @@ def test_storage_config_has_no_task_tracker_config():
 
 
 def test_storage_config_ignores_deprecated_task_tracker_config(monkeypatch):
-    warnings = []
-    monkeypatch.setattr(storage_config_module.logger, "warning", warnings.append)
+    messages = []
+    monkeypatch.setattr(
+        storage_config_module.logger, "info", lambda message, **kwargs: messages.append(message)
+    )
 
     config = StorageConfig(task_tracker={"backend": "memory"})
 
     assert not hasattr(config, "task_tracker")
-    assert any("task_tracker" in message for message in warnings)
-    assert any("deprecated and ignored" in message for message in warnings)
+    assert any("task_tracker" in message for message in messages)
+    assert any("deprecated and ignored" in message for message in messages)
 
 
 def test_storage_config_defaults_skip_process_lock_to_false():
@@ -54,3 +56,66 @@ def test_storage_config_builds_persistent_task_tracker():
     tracker = StorageConfig().build_task_tracker(_FakeAgfs())
     assert isinstance(tracker, TaskTracker)
     assert isinstance(tracker._store, PersistentTaskStore)
+
+
+def test_storage_config_passes_service_name_to_mysql_task_store(monkeypatch):
+    from openviking.service import task_store_mysql
+
+    created = []
+
+    class _FakeMySQLTaskWorkStore:
+        def __init__(self, *, params, service_name):
+            created.append((params, service_name))
+
+    monkeypatch.setattr(task_store_mysql, "MySQLTaskWorkStore", _FakeMySQLTaskWorkStore)
+
+    tracker = StorageConfig.model_validate(
+        {
+            "task_store": {
+                "provider": "mysql",
+                "params": {"user": "u", "password": "p", "database": "db"},
+            }
+        }
+    ).build_task_tracker(_FakeAgfs(), service_name="tenant-a")
+
+    assert isinstance(tracker, TaskTracker)
+    assert tracker._store.__class__ is _FakeMySQLTaskWorkStore
+    assert created == [({"user": "u", "password": "p", "database": "db"}, "tenant-a")]
+
+
+def test_storage_config_allows_mysql_task_store_params_service_name(monkeypatch):
+    from openviking.service import task_store_mysql
+
+    created = []
+
+    class _FakeMySQLTaskWorkStore:
+        def __init__(self, *, params, service_name):
+            created.append((params, service_name))
+
+    monkeypatch.setattr(task_store_mysql, "MySQLTaskWorkStore", _FakeMySQLTaskWorkStore)
+
+    StorageConfig.model_validate(
+        {
+            "task_store": {
+                "provider": "mysql",
+                "params": {
+                    "user": "u",
+                    "password": "p",
+                    "database": "db",
+                    "service_name": "tenant-from-params",
+                },
+            },
+        }
+    ).build_task_tracker(_FakeAgfs())
+
+    assert created == [
+        (
+            {
+                "user": "u",
+                "password": "p",
+                "database": "db",
+                "service_name": "tenant-from-params",
+            },
+            None,
+        )
+    ]

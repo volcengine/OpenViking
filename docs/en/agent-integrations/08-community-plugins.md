@@ -40,6 +40,8 @@ After restarting ZCode, verify that:
 
 Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
 
+Once installed, start a new ZCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
 ## Kimi Code memory integration
 
 Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
@@ -74,6 +76,41 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 
 The verified host contract and version are recorded in
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
+
+Once installed, start a new Kimi Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
+## Antigravity memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Antigravity integration serves the Antigravity desktop app and the `agy` CLI, which load the same plugins from `~/.gemini/config/plugins/`:
+
+- **SessionStart** injects the user profile.
+- **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
+- **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
+
+Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
+```
+
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The installer does not add an MCP server; add the OpenViking MCP server in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
+
+Restart the Antigravity app or start a new `agy` session, then verify that:
+
+- the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
+- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`.
+
+To uninstall:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
+```
 
 ## AstrBot plugin
 

@@ -189,7 +189,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 | data | Any | 否 | - | 内联 SKILL.md、结构化/MCP 数据或 Git URL；与 `temp_file_id` 选择一个 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID（通过 `temp_upload` 获取）；与 `data` 选择一个 |
 | wait | bool | 否 | False | 是否等待技能处理完成 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=True` 时生效 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 | target_uri | string | 否 | 按目标优先级解析 | 目标 skills 根，例如 `viking://~/skills` 或 `viking://agent/skills` |
 | skills | List[str] | 否 | `[]` | 从目录/Git 集合按目录名选择 Skill；空列表或 `["*"]` 选择全部 |
@@ -229,7 +229,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 单个 Skill 导入默认返回 `task_id`。通过 [任务 API](17-tasks.md) 查询状态，任务为 `completed` 后再检索；`wait=true` 则等待队列处理并返回 `queue_status`。多 Skill 导入返回 `installed` 数组，每个结果独立携带任务信息，不保证批次原子性。`list_only=true` 只返回来源中的 `skills` 与 `total`，不创建导入任务。
 
-HTTP 字段和 SDK 参数并非同名同层级：Python `add_skill(data, wait=False, timeout=None, options=None)` / `update_skill(skill_name, data, ...)` 将 `target_uri`、`telemetry` 放在 `options` 中；`skills`、`list_only`、`source_metadata`（新增）及 `from_source`（更新）等字段放在 `options["extra"]` 中。TypeScript 使用 `targetUri` 和 `extra`，Go 使用 `TargetURI` 和 `Extra`。TypeScript 的本地路径自动上传仅适用于 Node.js。
+HTTP 字段和 SDK 参数并非同名同层级：Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` 将 `target_uri`、`telemetry` 放在 `options` 中；`skills`、`list_only`、`source_metadata`（新增）及 `from_source`（更新）等字段放在 `options["extra"]` 中。TypeScript 使用 `targetUri` 和 `extra`，Go 使用 `TargetURI` 和 `Extra`。TypeScript 的本地路径自动上传仅适用于 Node.js。
 
 ```python
 # 预览本地集合；不写入 OpenViking
@@ -397,8 +397,8 @@ fmt.Println(result["task_id"])
 ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki
 
 # 查看本地技能集合，再选择导入
-ov add-skill ./examples/compile/ov-compile-skills --list
-ov add-skill ./examples/compile/ov-compile-skills --skill llm-wiki daily-report --yes
+ov add-skill ./openviking/system_assets/compile/example-skills --list
+ov add-skill ./openviking/system_assets/compile/example-skills --skill llm-wiki daily-report --yes
 
 # 添加技能（从文件或目录）
 ov add-skill ./skills/search-web/SKILL.md
@@ -488,18 +488,18 @@ task_id         uuid-xxx
 
 Python HTTP SDK 会把该响应映射为对应异常（`ProcessingError`）。
 
-具体错误码取决于失败阶段，例如名称或目标参数无效为 `INVALID_ARGUMENT` / `INVALID_URI`，找不到 Skill 为 `NOT_FOUND`，完整性清单超限为 `RESOURCE_EXHAUSTED`，等待超时为 `DEADLINE_EXCEEDED`。`wait=false` 返回成功只表示同步导入阶段完成，后台失败需通过任务状态确认。标准响应可能带可选 `telemetry` / `profile`，没有通用 `time` 字段；SDK 通常直接返回 `result` 对象。
+具体错误码取决于失败阶段，例如名称或目标参数无效为 `INVALID_ARGUMENT` / `INVALID_URI`，找不到 Skill 为 `NOT_FOUND`，完整性清单超限为 `RESOURCE_EXHAUSTED`。`wait=false` 返回成功只表示同步导入阶段完成，后台失败需通过任务状态确认。标准响应可能带可选 `telemetry` / `profile`，没有通用 `time` 字段；SDK 通常直接返回 `result` 对象。
 
 ## 技能管理操作
 
 Python HTTP SDK 和 Go SDK 都暴露专用技能管理方法。Python 方法包括
 `list_skills`、`find_skills`、`validate_skill`、`get_skill`、`update_skill`
 和 `delete_skill`；Go 方法包括 `ListSkills`、`FindSkills`、`ValidateSkill`、
-`GetSkill`、`UpdateSkill` 和 `DeleteSkill`。通用文件系统、内容和检索方法仍可用于 URI 级访问。
+`GetSkill`、`UpdateSkill` 和 `DeleteSkill`。通用文件系统和检索方法可用于 URI 级读取；通用内容写入、文件变更和快照恢复不能绕过 Skill API 修改包内容。
 
 ### 列出技能
 
-`GET /api/v1/skills` 的查询参数为 `node_limit=1000` 和可选 `target_uri`。省略目标时合并私有与共享根，同名 Skill 都保留，以 `root_uri` 区分。当前服务端实际固定每个根的目录扫描 `node_limit=1000`，尚未把请求的 `node_limit` 传到扫描层，不应依赖它作为全局条数限制或分页参数。
+`GET /api/v1/skills` 的查询参数为 `node_limit=1000` 和可选 `target_uri`。省略目标时合并私有与共享根，同名 Skill 都保留，以 `root_uri` 区分。每项包含 `owner_user_id`、`created_by/created_at`、`updated_by/updated_at` 和 `current_revision`，用于展示上传归属与最近修改。旧 Skill 没有历史记录时这些字段为 `null`。
 
 **Python SDK**：
 
@@ -586,6 +586,18 @@ fmt.Println(skill)
 curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true&include_files=true" \
   -H "X-API-Key: your-key"
 ```
+
+### 归属与修改时间线
+
+首次创建时，服务端从认证上下文写入 `owner_user_id=created_by`，后续更新不会覆盖原上传人和上传时间。create、update、delete 都会追加 `{actor_user_id, occurred_at, operation, before_hash, after_hash, request_id}`；内容 hash 不包含后台生成的 abstract/overview。删除后记录仍保留，`after_hash=null`。
+
+详情响应包含当前归属和完整 `history`。也可查询独立时间线（包括已删除 Skill）：
+
+```http
+GET /api/v1/skills/{skill_name}/audit?target_uri=viking://agent/skills&limit=50
+```
+
+`limit` 范围为 1 到 1000，默认 50；省略 `target_uri` 时先查私有根，再查共享根。
 
 ### 完整性清单与远程使用
 
@@ -706,12 +718,13 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 | `from_source` | `false` | 根据已记录的 Git 来源更新；不能与 data/temp_file_id 同用 |
 | `target_uri` | 未指定 | 优先查找的 skills 根，参见读取接口的回退规则 |
 | `source_metadata` | 自动生成 | 更新来源信息 |
-| `wait` / `timeout` | `false` / `null` | 是否等待后台处理及超时秒数 |
+| `wait` | `false` | 是否等待后台处理 |
+| `timeout` | `null` | 已废弃：兼容旧请求，传入值会被忽略 |
 | `telemetry` | `false` | 遥测配置 |
 
-必须提供新内容/上传包，或设 `from_source=true`。新内容的名称必须与 URL 中的 `skill_name` 一致；更新不是重命名或局部 patch。先解析并检查新包，再备份替换；同步失败会尝试恢复旧包。需保留的辅助文件应随新包一起提交。
+必须提供新内容/上传包，或设 `from_source=true`。新内容的名称必须与 URL 中的 `skill_name` 一致；更新不是重命名或局部 patch。先解析并检查新包，再直接替换旧包，不创建整包备份。清理旧辅助文件和索引时保留 `SKILL.md` 与 `.source.json`，待写入新内容时原位覆盖，便于失败后重试。需保留的辅助文件应随新包一起提交。
 
-更新的文件、隐私配置和任务准备完成后才启动后台。需要恢复旧包时，包括 `wait=true` 超时，先取消本次摘要和索引任务，确认已开始的写入退出，再恢复原文件、索引及隐私配置；恢复失败会明确报告。超时响应可能晚于 `timeout`，但只等待取消收尾，不继续处理完整包。`wait=false` 已成功返回后的后台失败不自动恢复；新增 Skill 的等待超时仍只结束等待。
+更新的文件、隐私配置和任务准备完成后才启动后台。更新失败或等待期间被取消时，取消本次摘要和索引任务，确认已开始的写入退出后返回错误；已写入的文件、索引和隐私配置保留当时的状态，不回滚到旧版本。`wait=false` 已成功返回后的后台失败同样不回滚。
 
 **Python SDK**：
 

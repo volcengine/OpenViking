@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import zipfile
+from dataclasses import replace
 from typing import Any, Optional
 
 from openviking.core.namespace import (
@@ -14,6 +15,7 @@ from openviking.core.namespace import (
     is_session_uri,
     relative_uri_path,
 )
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.index_consistency import check_index_consistency
@@ -126,7 +128,9 @@ async def _ensure_parent_exists(viking_fs, parent: str, ctx: RequestContext) -> 
 
 async def _remove_existing_root(viking_fs, root_uri: str, ctx: RequestContext) -> None:
     if not hasattr(viking_fs, "rm"):
-        logger.warning(f"[ovpack] Cannot remove existing resource without rm(): {root_uri}")
+        logger.info(
+            "Cannot remove existing resource without rm(): %s", safe_uri_for_log(str(root_uri))
+        )
         return
     try:
         await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
@@ -174,7 +178,7 @@ async def _filter_existing_optional_sidecars(
         if exists:
             filtered.append(entry)
         else:
-            logger.info(f"[ovpack] Skipping missing abstract overview: {uri}")
+            logger.info("Skipping missing abstract overview: %s", safe_uri_for_log(str(uri)))
     return filtered
 
 
@@ -187,7 +191,7 @@ async def _enqueue_direct_vectorization(
     entries: Optional[list[dict[str, Any]]] = None,
 ) -> None:
     if is_session_uri(uri):
-        logger.info(f"[ovpack] Skipped vectorization for session namespace: {uri}")
+        logger.debug("Skipped vectorization for session namespace: %s", safe_uri_for_log(str(uri)))
         return
 
     index_records = index_records or []
@@ -311,10 +315,12 @@ async def import_ovpack(
         index_records = validate_manifest_content(zf, manifest, infolist, base_name)
         dense_vectors = read_dense_vectors(zf, manifest, base_name, index_records)
 
-        existing_roots = [root_uri] if await _root_exists(viking_fs, root_uri, ctx) else []
+        target_exists = await viking_fs._ensure_destination_access(root_uri, ctx)
+        import_ctx = replace(ctx, bypass_acl=True)
+        existing_roots = [root_uri] if target_exists else []
         if existing_roots:
             if conflict_action == "skip":
-                logger.info(f"[ovpack] Skipped existing resource at {root_uri}")
+                logger.debug("Skipped existing resource at %s", safe_uri_for_log(str(root_uri)))
                 return root_uri
             if conflict_action == "fail":
                 resource = existing_roots[0]
@@ -335,25 +341,31 @@ async def import_ovpack(
                 ctx=ctx,
             )
 
-        if parent != "viking://":
+        if parent != "viking://" and not target_exists:
             await _ensure_parent_exists(viking_fs, parent, ctx)
 
         for existing_root in existing_roots:
-            logger.info(f"[ovpack] Overwriting existing resource at {existing_root}")
-            await _remove_existing_root(viking_fs, existing_root, ctx)
+            logger.debug(
+                "Overwriting existing resource at %s", safe_path_for_log(str(existing_root))
+            )
+            await _remove_existing_root(viking_fs, existing_root, import_ctx)
 
         for _, safe_zip_path, kind, rel_path in members:
             if kind in {"manifest", "internal"}:
                 continue
             if kind == "directory":
-                await viking_fs.mkdir(join_uri(root_uri, rel_path), exist_ok=True, ctx=ctx)
+                await viking_fs.mkdir(join_uri(root_uri, rel_path), exist_ok=True, ctx=import_ctx)
                 continue
 
             target_file_uri = join_uri(root_uri, rel_path)
             data = zf.read(safe_zip_path)
-            await viking_fs.write_file_bytes(target_file_uri, data, ctx=ctx)
+            await viking_fs.write_file_bytes(target_file_uri, data, ctx=import_ctx)
 
-    logger.info(f"[ovpack] Successfully imported {file_path} to {root_uri}")
+    logger.debug(
+        "Successfully imported %s to %s",
+        safe_path_for_log(str(file_path)),
+        safe_uri_for_log(str(root_uri)),
+    )
 
     if not is_session_uri(root_uri):
         if vector_action == "restore":
@@ -363,19 +375,21 @@ async def import_ovpack(
                 index_records,
                 dense_vectors,
                 manifest_entries_by_path(manifest),
-                ctx,
+                import_ctx,
             )
-            logger.info(f"[ovpack] Restored vector snapshot for: {root_uri}")
+            logger.debug("Restored vector snapshot for: %s", safe_uri_for_log(str(root_uri)))
         else:
             await _enqueue_direct_vectorization(
                 viking_fs,
                 root_uri,
-                ctx=ctx,
+                ctx=import_ctx,
                 index_records=index_records,
             )
-            logger.info(f"[ovpack] Enqueued direct vectorization for: {root_uri}")
+            logger.debug("Enqueued direct vectorization for: %s", safe_uri_for_log(str(root_uri)))
     else:
-        logger.info(f"[ovpack] Skipped vectorization for session namespace: {root_uri}")
+        logger.debug(
+            "Skipped vectorization for session namespace: %s", safe_uri_for_log(str(root_uri))
+        )
 
     return root_uri
 
@@ -453,7 +467,11 @@ async def _write_ovpack_archive(
                 try:
                     data = await viking_fs.read_file_bytes(full_uri, ctx=ctx)
                 except Exception as exc:
-                    logger.warning(f"Failed to export file {full_uri}: {exc}")
+                    logger.debug(
+                        "Failed to export file %s: %s",
+                        safe_uri_for_log(str(full_uri)),
+                        type(exc).__name__,
+                    )
                     raise
 
                 manifest_entry = manifest_file_entries.get(rel_path)
@@ -575,7 +593,7 @@ async def export_ovpack(
         vector_config_resolver,
     )
 
-    logger.info(f"[ovpack] Exported {uri} to {to}")
+    logger.debug("Exported %s to %s", safe_uri_for_log(str(uri)), type(to).__name__)
     return to
 
 
@@ -635,7 +653,7 @@ async def backup_ovpack(
         vector_config_resolver,
     )
 
-    logger.info(f"[ovpack] Backed up OpenViking public scopes to {to}")
+    logger.debug("Backed up OpenViking public scopes to %s", type(to).__name__)
     return to
 
 
@@ -689,7 +707,7 @@ async def restore_ovpack(
                 existing_roots.append(scope_uri)
         if existing_roots:
             if conflict_action == "skip":
-                logger.info("[ovpack] Skipped backup restore because target scopes exist")
+                logger.debug("Skipped backup restore because target scopes exist")
                 return root_uri
             if conflict_action == "fail":
                 resource = existing_roots[0]
@@ -743,7 +761,7 @@ async def restore_ovpack(
                 }
             )
 
-    logger.info(f"[ovpack] Successfully restored backup {file_path}")
+    logger.debug("Successfully restored backup %s", safe_path_for_log(str(file_path)))
 
     if vector_action == "restore":
         await restore_vector_snapshot(
@@ -754,7 +772,7 @@ async def restore_ovpack(
             manifest_entries,
             ctx,
         )
-        logger.info("[ovpack] Restored vector snapshot for backup")
+        logger.debug("Restored vector snapshot for backup")
         return root_uri
 
     vectorization_groups: dict[str, list[dict[str, Any]]] = {}
@@ -779,6 +797,6 @@ async def restore_ovpack(
             manifest_path_root_uri=root_uri,
             entries=entries,
         )
-        logger.info(f"[ovpack] Enqueued direct vectorization for: {group_uri}")
+        logger.debug("Enqueued direct vectorization for: %s", safe_uri_for_log(str(group_uri)))
 
     return root_uri

@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
@@ -50,10 +51,13 @@ from openviking.storage.vectordb.utils.path_safety import (
     safe_join_name,
 )
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+_RECOVERY_BATCH_SIZE = 1024
 
 
 class _MutationMarker:
@@ -270,29 +274,17 @@ class LocalCollection(ICollection):
     def get_meta_data(self):
         return self.meta.get_meta_data()
 
-    def _close_unlocked(self) -> None:
-        self._delete_scheduler_job()
-
-        # Shutdown scheduler
-        if self.scheduler:
-            self.scheduler.shutdown(wait=False)
-            self.scheduler = None
-
-        self.store_mgr = None
-
-        # Close all indexes
-        def close_index(name, index):
-            try:
-                index.close()
-            except Exception as e:
-                logger.warning(f"Failed to close index {name}: {e}")
-
-        self.indexes.iterate(close_index)
-        self.indexes.clear()
-
     def close(self):
         with self._index_mutation_barrier.exclusive_mutation():
-            self._close_unlocked()
+            self._persist_all_indexes()
+            self._delete_scheduler_job()
+            if self.scheduler:
+                self.scheduler.shutdown(wait=False)
+                self.scheduler = None
+            for name, index in self.indexes.get_all().items():
+                index.close()
+                self.indexes.remove(name)
+            self.store_mgr = None
 
     def begin_bulk_ingest(self) -> None:
         """Defer optional derived-index rebuilds until the outer scope exits."""
@@ -310,10 +302,10 @@ class LocalCollection(ICollection):
                 for index in reversed(suspended):
                     try:
                         index.end_bulk_ingest()
-                    except Exception:
-                        logger.warning(
-                            "Failed to roll back bulk-ingest suspension",
-                            exc_info=True,
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to roll back bulk-ingest suspension error_type=%s",
+                            type(_log_error).__name__,
                         )
                 raise
             self._bulk_ingest_depth = 1
@@ -334,7 +326,7 @@ class LocalCollection(ICollection):
                 except Exception as exc:
                     if first_error is None:
                         first_error = exc
-                    logger.warning("Failed to end bulk-ingest suspension", exc_info=True)
+                    logger.debug("Failed to end bulk-ingest suspension")
             self._bulk_ingest_depth = 0
             if first_error is not None:
                 raise first_error
@@ -388,24 +380,24 @@ class LocalCollection(ICollection):
                 # swap, so Store writes keep flowing to the new index while a
                 # possibly in-flight old build winds down.
                 self._stop_index_background_rebuild(replaced)
-            except Exception:
+            except Exception as _log_error:
                 # Publication is the commit point. Post-swap maintenance
                 # failures must not make the caller discard the installed index.
-                logger.warning(
-                    "Failed to stop background rebuild for replaced index '%s'",
-                    index_name,
-                    exc_info=True,
+                logger.info(
+                    "Failed to stop background rebuild for replaced index '%s' error_type=%s",
+                    short_hash(str(index_name)),
+                    type(_log_error).__name__,
                 )
         if start_background_rebuild:
             try:
                 self._start_index_background_rebuild(index)
-            except Exception:
+            except Exception as _log_error:
                 # Publication is the commit point. A worker-start failure must
                 # not be reported as though the old index remained installed.
-                logger.warning(
-                    "Failed to start background rebuild for installed index '%s'",
-                    index_name,
-                    exc_info=True,
+                logger.info(
+                    "Failed to start background rebuild for installed index '%s' error_type=%s",
+                    short_hash(str(index_name)),
+                    type(_log_error).__name__,
                 )
         return True
 
@@ -440,20 +432,20 @@ class LocalCollection(ICollection):
             if replaced is not None and replaced is not index:
                 try:
                     self._stop_index_background_rebuild(replaced)
-                except Exception:
-                    logger.warning(
-                        "Failed to stop background rebuild for replaced index '%s'",
-                        index_name,
-                        exc_info=True,
+                except Exception as _log_error:
+                    logger.info(
+                        "Failed to stop background rebuild for replaced index '%s' error_type=%s",
+                        short_hash(str(index_name)),
+                        type(_log_error).__name__,
                     )
             if published:
                 try:
                     self._start_index_background_rebuild(index)
-                except Exception:
-                    logger.warning(
-                        "Failed to start background rebuild for installed index '%s'",
-                        index_name,
-                        exc_info=True,
+                except Exception as _log_error:
+                    logger.info(
+                        "Failed to start background rebuild for installed index '%s' error_type=%s",
+                        short_hash(str(index_name)),
+                        type(_log_error).__name__,
                     )
         return index
 
@@ -574,14 +566,14 @@ class LocalCollection(ICollection):
             else:
                 cands_fields_payloads = self.store_mgr.fetch_cands_fields(label_list)
 
+            skipped_candidates = 0
             valid_indices = []
             for i, fields_payload in enumerate(cands_fields_payloads):
                 if fields_payload is not None:
                     valid_indices.append(i)
                 else:
-                    logger.warning(
-                        f"Candidate data is None for label index {i} (label: {label_list[i] if i < len(label_list) else 'unknown'}), skipping."
-                    )
+                    skipped_candidates += 1
+                    logger.debug("Candidate data missing; skipping index=%d", i)
 
             if len(valid_indices) < len(cands_fields_payloads):
                 cands_fields_payloads = [cands_fields_payloads[i] for i in valid_indices]
@@ -605,10 +597,11 @@ class LocalCollection(ICollection):
                     cands_fields.append(parsed_fields)
                     json_valid_indices.append(i)
                 except (json.JSONDecodeError, TypeError) as e:
-                    logger.warning(
-                        f"Failed to parse candidate fields as JSON (label={pk_list[i]}, "
-                        f"fields_len={len(fields_payload) if fields_payload else 0}), skipping. "
-                        f"Error: {e}"
+                    skipped_candidates += 1
+                    logger.debug(
+                        "Candidate JSON invalid; skipping index=%d error_type=%s",
+                        i,
+                        type(e).__name__,
                     )
 
             if len(json_valid_indices) < len(cands_fields_payloads):
@@ -619,6 +612,10 @@ class LocalCollection(ICollection):
                 scores_list = [scores_list[i] for i in json_valid_indices]
                 score_details = [score_details[i] for i in json_valid_indices]
 
+            if skipped_candidates:
+                logger.info(
+                    "Vector candidates skipped skipped=%d degraded=true", skipped_candidates
+                )
             if self.meta.primary_key:
                 pk_list = [
                     cands_field.get(self.meta.primary_key, "") for cands_field in cands_fields
@@ -742,6 +739,9 @@ class LocalCollection(ICollection):
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         """Local backend does not generate vectors from keywords.
 
@@ -847,7 +847,7 @@ class LocalCollection(ICollection):
                 try:
                     data = self.data_processor.validate_and_process(raw_data)
                 except ValueError as e:
-                    logger.error(f"Data validation failed: {e}, raw_data: {raw_data}")
+                    logger.info("Vector data rejected error_type=%s", type(e).__name__)
                     raise
             else:
                 data = raw_data
@@ -979,9 +979,13 @@ class LocalCollection(ICollection):
                     try:
                         meta_data = index.get_meta_data()
                         indexes_metadata.append((index_name, meta_data))
-                        logger.debug(f"Saved metadata for index: {index_name}")
+                        logger.debug("Saved metadata for index: %s", short_hash(str(index_name)))
                     except Exception as e:
-                        logger.error(f"Failed to get metadata for index {index_name}: {e}")
+                        logger.debug(
+                            "Failed to get metadata for index %s: %s",
+                            short_hash(str(index_name)),
+                            type(e).__name__,
+                        )
 
                 # 2. Delete all indexes
                 index_names = list(indexes_dict.keys())
@@ -990,20 +994,21 @@ class LocalCollection(ICollection):
                         index = indexes_dict.pop(index_name, None)
                         if index:
                             index.drop()
-                            logger.debug(f"Dropped index: {index_name}")
+                            logger.debug("Dropped index: %s", short_hash(str(index_name)))
                     except Exception as e:
-                        logger.error(f"Failed to drop index {index_name}: {e}")
+                        logger.debug(
+                            "Failed to drop index %s: %s",
+                            short_hash(str(index_name)),
+                            type(e).__name__,
+                        )
 
                 # 3. Clear storage data
                 try:
                     if self.store_mgr:
                         self.store_mgr.clear()
-                        logger.info(
-                            "Storage cleared successfully",
-                            extra={"collection": self.collection_name},
-                        )
+                        logger.debug("Collection storage cleared")
                 except Exception as e:
-                    logger.error(f"Failed to clear storage: {e}")
+                    logger.error("Failed to clear storage: %s", type(e).__name__)
                     raise
 
                 # 4. Rebuild empty indexes using saved metadata
@@ -1020,12 +1025,16 @@ class LocalCollection(ICollection):
                             new_index.begin_bulk_ingest()
                         indexes_dict[index_name] = new_index
                         self._start_index_background_rebuild(new_index)
-                        logger.info(f"Rebuilt index: {index_name}")
+                        logger.debug("Rebuilt index: %s", short_hash(str(index_name)))
                     except Exception as e:
-                        logger.error(f"Failed to rebuild index {index_name}: {e}")
+                        logger.debug(
+                            "Failed to rebuild index %s: %s",
+                            short_hash(str(index_name)),
+                            type(e).__name__,
+                        )
                         # Continue rebuilding other indexes, don't interrupt the process
 
-                logger.info(f"delete_all_data completed. Rebuilt {len(indexes_dict)} indexes")
+                logger.info("delete_all_data completed. Rebuilt %s indexes", len(indexes_dict))
 
     def _delete_expire_delta_record(self):
         oldest_version = 0
@@ -1065,8 +1074,10 @@ class LocalCollection(ICollection):
             try:
                 self.scheduler.remove_job(self.ttl_cleanup_job_id)
             except Exception as e:
-                logger.warning(
-                    f"Failed to remove timeout scheduler job {self.ttl_cleanup_job_id}: {e}"
+                logger.info(
+                    "Failed to remove timeout scheduler job %s: %s",
+                    short_hash(str(self.ttl_cleanup_job_id)),
+                    type(e).__name__,
                 )
             self.ttl_cleanup_job_id = None
 
@@ -1075,8 +1086,10 @@ class LocalCollection(ICollection):
                 self.scheduler.remove_job(self.index_manage_job_id)
                 self.index_manage_job_id = None
             except Exception as e:
-                logger.warning(
-                    f"Failed to remove index_manage scheduler job {self.index_manage_job_id}: {e}"
+                logger.info(
+                    "Failed to remove index_manage scheduler job %s: %s",
+                    short_hash(str(self.index_manage_job_id)),
+                    type(e).__name__,
                 )
 
     def _register_index_manage_job(self):
@@ -1096,7 +1109,7 @@ class LocalCollection(ICollection):
                 id=self.index_manage_job_id,
             )
         except Exception as e:
-            logger.error(f"Failed to register rebuild scheduler job: {e}")
+            logger.error("Failed to register rebuild scheduler job: %s", type(e).__name__)
 
     def _rebuild_indexes_if_needed(self):
         """Check and rebuild indexes that need rebuilding.
@@ -1118,7 +1131,11 @@ class LocalCollection(ICollection):
                     if index.need_rebuild():
                         self._rebuild_index(index_name, index)
             except Exception as e:
-                logger.error(f"Error checking rebuild status for index {index_name}: {e}")
+                logger.debug(
+                    "Error checking rebuild status for index %s: %s",
+                    short_hash(str(index_name)),
+                    type(e).__name__,
+                )
 
     def _rebuild_index(self, index_name: str, old_index: IIndex):
         """Rebuild a single index.
@@ -1132,7 +1149,10 @@ class LocalCollection(ICollection):
         # publication, so it cannot use the optimistic discard protocol below
         # without a separate staging directory and atomic filesystem commit.
         if not isinstance(old_index, VolatileIndex):
-            logger.debug("Skipping optimistic replacement for persistent index '%s'", index_name)
+            logger.debug(
+                "Skipping optimistic replacement for persistent index '%s'",
+                short_hash(str(index_name)),
+            )
             return
 
         new_index: Optional[IIndex] = None
@@ -1147,7 +1167,7 @@ class LocalCollection(ICollection):
             if not self._index_mutation_barrier.is_current(expected_generation):
                 logger.debug(
                     "Skipping stale replacement build for index '%s' after Store snapshot",
-                    index_name,
+                    short_hash(str(index_name)),
                 )
                 return
 
@@ -1177,7 +1197,7 @@ class LocalCollection(ICollection):
             if not installed:
                 logger.debug(
                     "Discarding stale replacement for index '%s' after a concurrent mutation",
-                    index_name,
+                    short_hash(str(index_name)),
                 )
 
             # 5. _install_index stops only the old background maintenance
@@ -1185,17 +1205,19 @@ class LocalCollection(ICollection):
             #    until concurrent readers release their references.
 
         except Exception as e:
-            logger.error(f"Failed to rebuild index {index_name}: {e}")
+            logger.debug(
+                "Failed to rebuild index %s: %s", short_hash(str(index_name)), type(e).__name__
+            )
             # Rebuild failed, keep the old index unchanged
         finally:
             if new_index is not None and not installed:
                 try:
                     new_index.close()
-                except Exception:
-                    logger.warning(
-                        "Failed to close unpublished replacement index '%s'",
-                        index_name,
-                        exc_info=True,
+                except Exception as _log_error:
+                    logger.info(
+                        "Failed to close unpublished replacement index '%s' error_type=%s",
+                        short_hash(str(index_name)),
+                        type(_log_error).__name__,
                     )
 
     def aggregate_data(
@@ -1231,14 +1253,14 @@ class LocalCollection(ICollection):
             new_filters["filter"] = filters
         index = self.indexes.get(index_name)
         if not index:
-            logger.warning(f"Index '{index_name}' does not exist")
+            logger.debug("Index '%s' does not exist", short_hash(str(index_name)))
             return AggregateResult(agg={}, op=op, field=field)
 
         # 2. Call index.aggregate to execute aggregation
         try:
             agg_data = index.aggregate(new_filters)
         except Exception as e:
-            logger.error(f"Aggregation operation failed: {e}")
+            logger.debug("Aggregation operation failed: %s", type(e).__name__)
             return AggregateResult(agg={}, op=op, field=field)
 
         # 3. Convert format: CounterOp returns "__total_count__", documentation requires "_total"
@@ -1330,12 +1352,23 @@ class PersistCollection(LocalCollection):
             except ValueError:
                 pass
         if index_count > 0:
-            logger.info("Recovering %d index(es) from %s", index_count, self.index_dir)
+            logger.info(
+                "Recovering %d index(es) from %s",
+                index_count,
+                safe_path_for_log(str(self.index_dir)),
+            )
+        skipped_indexes = 0
         for folder in os.listdir(self.index_dir):
             try:
                 index_dir = safe_join(self.index_dir, folder)
-            except ValueError:
-                logger.warning(f"Skipping invalid index directory under {self.index_dir}: {folder}")
+            except ValueError as _log_error:
+                skipped_indexes += 1
+                logger.debug(
+                    "Skipping invalid index directory under %s: %s error_type=%s",
+                    safe_path_for_log(str(self.index_dir)),
+                    safe_path_for_log(str(folder)),
+                    type(_log_error).__name__,
+                )
                 continue
 
             if not index_dir.is_dir():
@@ -1343,17 +1376,24 @@ class PersistCollection(LocalCollection):
 
             try:
                 validation.validate_name_str(folder)
-            except ValueError:
-                logger.warning(
-                    f"Skipping index directory with invalid name under {self.index_dir}: {folder}"
+            except ValueError as _log_error:
+                skipped_indexes += 1
+                logger.debug(
+                    "Skipping index directory with invalid name under %s: %s error_type=%s",
+                    safe_path_for_log(str(self.index_dir)),
+                    safe_path_for_log(str(folder)),
+                    type(_log_error).__name__,
                 )
                 continue
 
             index_name = folder
             meta_path = safe_join(index_dir, "index_meta.json")
             if not meta_path.exists():
-                logger.warning(
-                    f"Index metadata file not found at {meta_path}, skipping recovery for index {index_name}"
+                skipped_indexes += 1
+                logger.debug(
+                    "Index metadata file not found at %s, skipping recovery for index %s",
+                    safe_path_for_log(str(meta_path)),
+                    short_hash(str(index_name)),
                 )
                 continue
             meta = create_index_meta(self.meta, str(meta_path))
@@ -1383,61 +1423,61 @@ class PersistCollection(LocalCollection):
             delta_records = self.store_mgr.get_delta_data_after_ts(newest_version)
             logger.info(
                 "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
-                index_name,
+                short_hash(str(index_name)),
             )
-            upsert_list: List[DeltaRecord] = []
-            delete_list: List[DeltaRecord] = []
+            records: List[DeltaRecord] = []
+            batch_operation = "upsert"
             _processed = 0
             _seen = 0
             _last_log = 0.0
             for data in delta_records:
                 _seen += 1
                 if data.type == OpType.PUT.value:
-                    if delete_list:
-                        _processed += self._replay_recovery_records(
-                            index_name=index_name,
-                            index=index,
-                            records=delete_list,
-                            operation="delete",
-                        )
-                        delete_list = []
-                    upsert_list.append(data)
+                    operation = "upsert"
                 elif data.type == OpType.DEL.value:
-                    if upsert_list:
+                    operation = "delete"
+                else:
+                    operation = None
+                if operation is not None:
+                    # Preserve log order without retaining an entire run of PUTs or DELs.
+                    if records and (
+                        operation != batch_operation or len(records) >= _RECOVERY_BATCH_SIZE
+                    ):
                         _processed += self._replay_recovery_records(
                             index_name=index_name,
                             index=index,
-                            records=upsert_list,
-                            operation="upsert",
+                            records=records,
+                            operation=batch_operation,
                         )
-                        upsert_list = []
-                    delete_list.append(data)
+                        records = []
+                    batch_operation = operation
+                    records.append(data)
                 now = time.time()
                 if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
-                        "Delta replay progress: %d/%d records for index '%s'",
+                        "Delta replay progress: %s/%s records for index '%s'",
                         _processed,
                         _seen,
-                        index_name,
+                        short_hash(str(index_name)),
                     )
                     _last_log = now
-            if upsert_list:
+            if records:
                 _processed += self._replay_recovery_records(
                     index_name=index_name,
                     index=index,
-                    records=upsert_list,
-                    operation="upsert",
+                    records=records,
+                    operation=batch_operation,
                 )
-            if delete_list:
-                _processed += self._replay_recovery_records(
-                    index_name=index_name,
-                    index=index,
-                    records=delete_list,
-                    operation="delete",
-                )
-            logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
+            logger.info(
+                "Index '%s': replay complete (%s records)",
+                short_hash(str(index_name)),
+                _processed,
+            )
             index._start_dense_rebuild_worker()
             self.indexes.set(index_name, index)
+
+        if skipped_indexes:
+            logger.info("Index recovery incomplete skipped=%d degraded=true", skipped_indexes)
 
     def _replay_recovery_records(
         self,
@@ -1455,13 +1495,12 @@ class PersistCollection(LocalCollection):
             replay(records)
             return len(records)
         except Exception as exc:
-            logger.warning(
-                "Index '%s': failed to replay %d %s delta records as a batch: %s; "
-                "retrying individually",
-                index_name,
+            logger.info(
+                "Index '%s': failed to replay %d %s delta records as a batch: %s; retrying individually",
+                short_hash(str(index_name)),
                 len(records),
                 operation,
-                exc,
+                type(exc).__name__,
             )
 
         processed = 0
@@ -1470,14 +1509,17 @@ class PersistCollection(LocalCollection):
                 replay([record])
                 processed += 1
             except Exception as exc:
-                logger.warning(
-                    "Index '%s': skipping corrupt %s delta record label=%s type=%s: %s",
-                    index_name,
+                logger.debug(
+                    "Corrupt delta record skipped operation=%s error_type=%s",
                     operation,
-                    getattr(record, "label", None),
-                    getattr(record, "type", None),
-                    exc,
+                    type(exc).__name__,
                 )
+        if processed < len(records):
+            logger.info(
+                "Delta replay incomplete total=%d skipped=%d degraded=true",
+                len(records),
+                len(records) - processed,
+            )
         return processed
 
     def _persist_all_indexes(self):
@@ -1486,12 +1528,6 @@ class PersistCollection(LocalCollection):
         Iterates through all indexes. If they are PersistentIndex type, calls their persist() method.
         """
         self.flush_all_indexes()
-
-    def close(self):
-        """Close the collection and release resources."""
-        with self._index_mutation_barrier.exclusive_mutation():
-            self.flush_all_indexes()
-            self._close_unlocked()
 
     def flush_all_indexes(self):
         """Manually trigger persistence of all indexes.
@@ -1511,9 +1547,20 @@ class PersistCollection(LocalCollection):
                     if version > 0:
                         persisted_count += 1
                 except Exception as e:
-                    logger.error(f"Failed to flush index {index_name}: {e}")
+                    logger.error(
+                        "Failed to flush index %s: %s",
+                        short_hash(str(index_name)),
+                        type(e).__name__,
+                    )
 
         self.indexes.iterate(persist_index)
+        if persisted_count > 0:
+            # Recovery only replays deltas newer than each index's snapshot, so
+            # anything older than the oldest snapshot is dead weight.
+            try:
+                self._delete_expire_delta_record()
+            except Exception as e:
+                logger.error("Failed to prune delta records: %s", type(e).__name__)
         return persisted_count
 
     def _new_index(

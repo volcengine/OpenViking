@@ -96,9 +96,18 @@ function captureMessage(event, message, config, toolNames) {
   return payload;
 }
 
+// Recall queries use only what the user typed. Injected context (time-context,
+// job notices, other plugins' blocks, our own recall) and tool results would
+// otherwise trigger recall on their own and pollute the query text.
+function isUserInput(message) {
+  if (!message || message.role !== "user") return false;
+  if (message.source?.kind === "tool") return false;
+  return !isSyntheticUserMessage(message);
+}
+
 export function promptText(messages) {
   return (messages || [])
-    .filter(message => !isOpenVikingPluginMessage(message))
+    .filter(isUserInput)
     .map(message => extractTextFromPayload(message))
     .filter(Boolean)
     .join("\n\n")

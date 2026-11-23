@@ -77,7 +77,7 @@ OpenViking 重视聚焦且经过充分理解的改动。无论是否使用 AI �
 | Storage | RAGFS、PathLock、QueueFS 与加密 | `openviking/storage`、`openviking/pyagfs`、`openviking/crypto`、`crates/ragfs*` | `@baojun-zhang` |
 | Integration | Agent Plugin 与 MCP | `agent-plugins`、记忆插件示例、Server MCP | `@t0saki`、`@ZaynJarvis` |
 | Integration | VikingBot 与 Agent 编译 | `bot`、`ov compile` | `@yeshion23333`、`@fujiajie666` |
-| Client | SDK、CLI 与 LangChain | `sdk`、`crates/ov_cli`、`examples/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
+| Client | SDK、CLI 与 LangChain | `sdk`、`crates/ov_cli`、`integrations/frameworks/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
 | Product | Web Studio | `web-studio` | `@yufeng201`、`@ZaynJarvis` |
 | Project | 文档、CI 与 Plugin 发布 | `docs`、`.github/workflows` | `@yufeng201`、`@ZaynJarvis` |
 
@@ -194,6 +194,10 @@ uv run mypy <changed-paths>
 
 Rust、Go、TypeScript、文档和 Plugin 改动，请使用对应组件定义的格式化、Lint、类型检查
 和测试命令。
+
+新增或修改日志前阅读[开发者日志规范](LOGGING_CN.md)，遵守其中的级别、内容安全、
+输出归属和验证要求。Python 运行日志使用 `get_logger(__name__)`；bootstrap、
+交互式展示和协议输出遵守规范中的独立边界。
 
 ### 测试
 

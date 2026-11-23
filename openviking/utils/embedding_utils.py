@@ -19,6 +19,7 @@ from openviking.core.namespace import (
     is_session_uri,
     owner_space_for_uri,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.parsers.media.utils import (
     MPEG_TS_PROBE_BYTES,
     is_mpeg_ts,
@@ -33,7 +34,6 @@ from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
@@ -136,29 +136,12 @@ async def _enqueue_embedding_message(
     embedding_queue,
     embedding_msg,
     *,
-    failure_message: str,
+    failure_message: str = "Failed to enqueue embedding message",
 ) -> bool:
-    """Persist one embedding message and settle request tracking on enqueue failure."""
-    wait_tracker = get_request_wait_tracker()
-    wait_tracker.register_embedding_root(embedding_msg.telemetry_id, embedding_msg.id)
-
-    try:
-        enqueue_id = await embedding_queue.enqueue(embedding_msg)
-    except BaseException as exc:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            f"{failure_message}: {exc}",
-        )
-        raise
-
+    """Persist one embedding message."""
+    enqueue_id = await embedding_queue.enqueue(embedding_msg)
     if not enqueue_id:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            failure_message,
-        )
-        return False
+        raise RuntimeError(failure_message)
     return True
 
 
@@ -321,7 +304,11 @@ async def _build_image_data_uri(
         image_config = getattr(get_openviking_config(), "image", None)
         return image_bytes_to_model_data_uri(content, file_name, config=image_config)
     except Exception as e:
-        logger.warning(f"Failed to read image for multimodal vectorization {file_path}: {e}")
+        logger.debug(
+            "image encoding unavailable for vectorization uri=%s error_type=%s",
+            safe_uri_for_log(file_path),
+            type(e).__name__,
+        )
         return None
 
 
@@ -432,7 +419,9 @@ async def vectorize_directory_meta(
     enqueued_levels: set[int] = set()
     try:
         if not ctx:
-            logger.warning("No context provided for vectorization")
+            logger.info(
+                "directory vectorization skipped; request context missing", extra={"degraded": True}
+            )
             return enqueued_levels
 
         queue_manager = get_queue_manager()
@@ -493,18 +482,23 @@ async def vectorize_directory_meta(
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,
                         msg_abstract,
-                        failure_message=f"Failed to enqueue directory L0 vector for {uri}",
                     )
                     if enqueued:
                         enqueued_levels.add(int(ContextLevel.ABSTRACT.value))
-                        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
+                        logger.debug(
+                            "directory vectorization enqueued uri=%s level=0", safe_uri_for_log(uri)
+                        )
                 except TaskWorkRejected:
-                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                    logger.debug(
+                        "directory vectorization skipped; task cancelling uri=%s",
+                        safe_uri_for_log(uri),
+                    )
                     return enqueued_levels
                 except Exception as e:
-                    logger.error(
-                        f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
-                        exc_info=True,
+                    logger.debug(
+                        "directory vectorization enqueue failed uri=%s level=0 error_type=%s",
+                        safe_uri_for_log(uri),
+                        type(e).__name__,
                     )
                     first_enqueue_error = e
 
@@ -555,27 +549,33 @@ async def vectorize_directory_meta(
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,
                         msg_overview,
-                        failure_message=f"Failed to enqueue directory L1 vector for {uri}",
                     )
                     if enqueued:
                         enqueued_levels.add(int(ContextLevel.OVERVIEW.value))
-                        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                        logger.debug(
+                            "directory vectorization enqueued uri=%s level=1", safe_uri_for_log(uri)
+                        )
                 except TaskWorkRejected:
-                    logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
+                    logger.debug(
+                        "directory vectorization skipped; task cancelling uri=%s",
+                        safe_uri_for_log(uri),
+                    )
                     return enqueued_levels
                 except Exception as e:
-                    logger.error(
-                        f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
-                        exc_info=True,
+                    logger.debug(
+                        "directory vectorization enqueue failed uri=%s level=1 error_type=%s",
+                        safe_uri_for_log(uri),
+                        type(e).__name__,
                     )
                     if first_enqueue_error is None:
                         first_enqueue_error = e
         if first_enqueue_error is not None:
             raise first_enqueue_error
     except Exception as e:
-        logger.error(
-            f"Failed to vectorize directory metadata for {uri}: {e}",
-            exc_info=True,
+        logger.debug(
+            "directory metadata vectorization failed uri=%s error_type=%s",
+            safe_uri_for_log(uri),
+            type(e).__name__,
         )
         raise
     return enqueued_levels
@@ -608,7 +608,9 @@ async def vectorize_file(
     """
     try:
         if not ctx:
-            logger.warning("No context provided for vectorization")
+            logger.info(
+                "file vectorization skipped; request context missing", extra={"degraded": True}
+            )
             return False
 
         queue_manager = get_queue_manager()
@@ -655,8 +657,10 @@ async def vectorize_file(
             context.set_vectorize(Vectorize(text=effective_text))
         elif content_type is None:
             if summary:
-                logger.warning(
-                    f"Unsupported file type for {file_path}, falling back to summary for vectorization"
+                logger.info(
+                    "unsupported file type; vectorizing summary uri=%s",
+                    safe_uri_for_log(file_path),
+                    extra={"degraded": True},
                 )
                 context.set_vectorize(Vectorize(text=summary))
             elif is_text_file(file_name):
@@ -672,8 +676,10 @@ async def vectorize_file(
                 del content
                 context.set_vectorize(Vectorize(text=embedding_text))
             else:
-                logger.warning(
-                    f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
+                logger.info(
+                    "unsupported file type without summary; skipping vectorization uri=%s",
+                    safe_uri_for_log(file_path),
+                    extra={"degraded": True, "skipped": 1},
                 )
                 return False
         elif content_type == ResourceContentType.TEXT:
@@ -687,14 +693,25 @@ async def vectorize_file(
                         else await viking_fs.read_file(file_path, ctx=ctx)
                     )
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                    logger.debug(
+                        "file content unavailable for vectorization uri=%s error_type=%s",
+                        safe_uri_for_log(file_path),
+                        type(e).__name__,
                     )
                     if summary:
+                        logger.info(
+                            "file content unavailable; vectorizing summary uri=%s error_type=%s",
+                            safe_uri_for_log(file_path),
+                            type(e).__name__,
+                            extra={"degraded": True, "error_type": type(e).__name__},
+                        )
                         context.set_vectorize(Vectorize(text=summary))
                     else:
-                        logger.warning(
-                            f"No summary available for {file_path}, skipping vectorization"
+                        logger.info(
+                            "file content and summary unavailable; skipping vectorization uri=%s error_type=%s",
+                            safe_uri_for_log(file_path),
+                            type(e).__name__,
+                            extra={"degraded": True, "skipped": 1, "error_type": type(e).__name__},
                         )
                         return False
                 else:
@@ -712,17 +729,26 @@ async def vectorize_file(
             if image_uri:
                 context.set_vectorize(Vectorize(text=summary, images=[image_uri]))
             elif summary:
+                logger.info(
+                    "image unavailable; vectorizing summary uri=%s",
+                    safe_uri_for_log(file_path),
+                    extra={"degraded": True},
+                )
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                logger.debug(
-                    f"Skipping image {file_path} (image unreadable and no summary available)"
+                logger.info(
+                    "image and summary unavailable; skipping vectorization uri=%s",
+                    safe_uri_for_log(file_path),
+                    extra={"degraded": True, "skipped": 1},
                 )
                 return False
         elif summary:
             # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary))
         else:
-            logger.debug(f"Skipping file {file_path} (no text content or summary)")
+            logger.debug(
+                "file vectorization skipped; no text or summary uri=%s", safe_uri_for_log(file_path)
+            )
             return False
 
         # md5 fingerprints the final stored bytes so incremental diff can skip
@@ -765,17 +791,22 @@ async def vectorize_file(
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,
-            failure_message=f"Failed to enqueue file vector for {file_path}",
         )
         if not enqueued:
             return False
-        logger.debug(f"Enqueued file for vectorization: {file_path}")
+        logger.debug("file vectorization enqueued uri=%s", safe_uri_for_log(file_path))
 
     except TaskWorkRejected:
-        logger.debug("Skipped file vectorization for cancelling task: %s", file_path)
+        logger.debug(
+            "file vectorization skipped; task cancelling uri=%s", safe_uri_for_log(file_path)
+        )
         return False
     except Exception as e:
-        logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
+        logger.debug(
+            "file vectorization failed uri=%s error_type=%s",
+            safe_uri_for_log(file_path),
+            type(e).__name__,
+        )
         raise
     return True
 
@@ -796,7 +827,7 @@ async def index_resource(
     ``"resource"``.
     """
     if is_session_uri(uri):
-        logger.info("Skipping indexing for session namespace: %s", uri)
+        logger.debug("session namespace indexing skipped uri=%s", safe_uri_for_log(uri))
         return
 
     viking_fs = get_viking_fs()
@@ -854,5 +885,9 @@ async def index_resource(
             )
 
     except Exception as e:
-        logger.error(f"Failed to scan directory {uri} for indexing: {e}")
+        logger.debug(
+            "directory indexing failed uri=%s error_type=%s",
+            safe_uri_for_log(uri),
+            type(e).__name__,
+        )
         raise

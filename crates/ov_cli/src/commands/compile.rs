@@ -1,43 +1,99 @@
 use crate::client::{CompileAccepted, HttpClient};
 use crate::error::{Error, Result};
+use crate::i18n::{Language, copy};
 use crate::output::{OutputFormat, output_success};
 use serde_json::{Map, Value};
 
 /// Sentinel `--skill` value that routes to in-place memory consolidation.
 const MEMORY_COMPILE_SKILL: &str = "memory";
 
+/// Normalize complete inputs and either save configuration or queue a full execution.
 pub async fn run(
     client: &HttpClient,
     from_uris: Vec<String>,
-    to: String,
+    to: Option<String>,
     skill: String,
     instruction: Option<String>,
     args: Option<String>,
+    compile_name: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let skill = skill.trim().to_string();
     let memory_mode = skill == MEMORY_COMPILE_SKILL;
+    let to = normalize_target(to, memory_mode)?;
     let sources = normalize_sources(from_uris, memory_mode)?;
     let args = parse_args(args.as_deref())?;
     let instruction = instruction
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let accepted = client
-        .create_compile(
-            &sources,
-            to.trim(),
-            skill.as_str(),
-            instruction,
-            args.as_ref(),
-        )
-        .await?;
-    render_accepted(&accepted, to.trim(), output_format, compact);
+    if let Some(compile_name) = compile_name {
+        if memory_mode {
+            return Err(Error::Client(
+                "memory compilation does not support persistent configurations".into(),
+            ));
+        }
+        let created = client
+            .create_compile_task(
+                &compile_name,
+                &sources,
+                to.trim(),
+                &skill,
+                instruction,
+                args.as_ref(),
+            )
+            .await?;
+        if matches!(output_format, OutputFormat::Json) {
+            output_success(&created, output_format, compact);
+        } else {
+            println!("compile_name: {}", created.compile_name);
+        }
+    } else {
+        let accepted = client
+            .create_compile(&sources, to.trim(), &skill, instruction, args.as_ref())
+            .await?;
+        if !memory_mode {
+            eprintln!(
+                "{}",
+                copy(
+                    Language::current(),
+                    "ov compile --from … is no longer recommended. Use ov compile create --compile-name <name> with your inputs, then ov compile --compile-name <name>. Refer to https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
+                    "ov compile --from … 已不再推荐。请用 ov compile create --compile-name <名称> 保存参数，再用 ov compile --compile-name <名称> 运行。详情可见 https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
+                )
+            );
+        }
+        render_accepted(&accepted, to.trim(), output_format, compact);
+    }
     Ok(())
 }
 
-fn parse_args(value: Option<&str>) -> Result<Option<Map<String, Value>>> {
+/// Queue a named run with the client's identity and print its task ID.
+pub async fn run_saved(
+    client: &HttpClient,
+    compile_name: &str,
+    args: Option<String>,
+    format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let args = parse_args(args.as_deref())?;
+    let accepted = client.run_compile(compile_name, args.as_ref()).await?;
+    render_accepted(&accepted, "", format, compact);
+    Ok(())
+}
+
+/// Return the explicit target or memory root; other skills require an explicit target.
+fn normalize_target(value: Option<String>, memory_mode: bool) -> Result<String> {
+    match value {
+        Some(value) => Ok(value),
+        None if memory_mode => Ok("viking://~/memories".to_string()),
+        None => Err(Error::Client(
+            "--to is required unless --skill memory".into(),
+        )),
+    }
+}
+
+pub(crate) fn parse_args(value: Option<&str>) -> Result<Option<Map<String, Value>>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -89,13 +145,26 @@ fn render_accepted(
     } else {
         println!("task_id: {}", value.task_id);
         println!("status: {}", value.status);
-        println!("to: {}", value.to.as_deref().unwrap_or(requested_to));
+        if !requested_to.is_empty() {
+            println!("to: {requested_to}");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_sources, parse_args};
+    use super::{normalize_sources, normalize_target, parse_args};
+
+    #[test]
+    fn only_memory_mode_defaults_the_target() {
+        assert_eq!(normalize_target(None, true).unwrap(), "viking://~/memories");
+        assert!(normalize_target(None, false).is_err());
+        let target = "viking://resources/wiki";
+        assert_eq!(
+            normalize_target(Some(target.into()), false).unwrap(),
+            target
+        );
+    }
 
     #[test]
     fn expands_comma_separated_and_repeated_sources_stably() {
@@ -122,9 +191,11 @@ mod tests {
 
     #[test]
     fn memory_mode_allows_no_sources_but_rejects_any() {
-        assert!(normalize_sources(vec![], true)
-            .expect("memory mode allows empty sources")
-            .is_empty());
+        assert!(
+            normalize_sources(vec![], true)
+                .expect("memory mode allows empty sources")
+                .is_empty()
+        );
         assert!(normalize_sources(vec!["viking://resources/a".into()], true).is_err());
         assert!(normalize_sources(vec![], false).is_err());
     }

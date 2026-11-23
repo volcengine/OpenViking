@@ -59,16 +59,10 @@ def fs(monkeypatch):
     )
     monkeypatch.setattr(
         viking_fs,
-        "_read_paths",
-        lambda uri, **_kwargs: [uri.replace("viking://", "/local/test_account/").rstrip("/")],
-    )
-    monkeypatch.setattr(
-        viking_fs,
         "_path_to_uri",
         lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
     )
     monkeypatch.setattr(viking_fs, "_agfs_path_exists", _async_true)
-    monkeypatch.setattr(viking_fs, "_read_path_visible", _async_true)
     monkeypatch.setattr(viking_fs, "_ensure_access", _async_true)
     monkeypatch.setattr(viking_fs, "_is_accessible", lambda _uri, _ctx: True)
     return viking_fs

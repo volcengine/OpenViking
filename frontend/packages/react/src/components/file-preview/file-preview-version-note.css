@@ -1,0 +1,73 @@
+.ov-file-preview-version-note {
+  --ov-ui-modal-width: 440px;
+}
+.ov-file-preview-version-note .ov-modal__body {
+  padding: 20px 24px;
+}
+.ov-file-preview-version-note .ov-modal__close {
+  inset-block-start: 20px;
+  inset-inline-end: 18px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-file-preview-version-note .ov-modal__close > svg {
+  display: none;
+}
+.ov-file-preview-version-note .ov-modal__close::before {
+  width: 10.275px;
+  height: 10.275px;
+  background: currentColor;
+  mask: url('../../../../icons/svg/file-preview/version-note-close.svg') center
+    no-repeat;
+  content: '';
+}
+.ov-file-preview-version-note form {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 22px;
+}
+.ov-file-preview-version-note h2 {
+  margin: 0 28px 8px 0;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.ov-file-preview-version-note label {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-file-preview-version-note textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 112px;
+  padding: 6px 12px;
+  resize: vertical;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: inherit;
+  font: inherit;
+}
+.ov-file-preview-version-note textarea:focus {
+  border-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline: 3px solid
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-primary, var(--ov-ui-primary-default)) 15%,
+      transparent
+    );
+}
+.ov-file-preview-version-note textarea::placeholder {
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+}
+.ov-file-preview-version-note__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+.ov-file-preview__notice--version {
+  color: var(--ov-ui-color-warning, var(--ov-ui-warning-default));
+}

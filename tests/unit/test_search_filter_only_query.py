@@ -10,7 +10,7 @@ happens to produce.
 
 import pytest
 
-from openviking.service.search_service import _ensure_non_empty_query
+from openviking.service.search_service import _validate_query
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
     build_matched_context_from_record,
@@ -23,23 +23,23 @@ TAG_FILTER = {"op": "must", "field": "search_tags", "conds": ["legacy_memory_id=
 
 
 def test_empty_query_with_filter_is_accepted():
-    _ensure_non_empty_query("", None, TAG_FILTER)
-    _ensure_non_empty_query("   ", None, TAG_FILTER)
+    _validate_query("", None, TAG_FILTER)
+    _validate_query("   ", None, TAG_FILTER)
 
 
 def test_empty_query_without_filter_is_still_rejected():
     with pytest.raises(InvalidArgumentError):
-        _ensure_non_empty_query("", None, None)
+        _validate_query("", None, None)
     with pytest.raises(InvalidArgumentError):
-        _ensure_non_empty_query("   ", None, {})
+        _validate_query("   ", None, {})
 
 
 def test_non_empty_query_is_always_accepted():
-    _ensure_non_empty_query("hello", None, None)
+    _validate_query("hello 你好 🧭", None, None)
 
 
 def test_image_only_query_is_still_accepted():
-    _ensure_non_empty_query("", "https://example.com/a.png", None)
+    _validate_query("", "https://example.com/a.png", None)
 
 
 @pytest.mark.parametrize(

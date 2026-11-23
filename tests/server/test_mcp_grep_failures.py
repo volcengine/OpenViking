@@ -117,3 +117,93 @@ async def test_a_clean_multi_pattern_search_is_unchanged():
 
     assert out.startswith("Found 2 match(es) across 2 pattern(s):")
     assert "could not be searched" not in out
+
+
+@pytest.mark.asyncio
+async def test_grep_names_only_patterns_that_reach_the_limit():
+    async def grep(uri, pattern, **kwargs):
+        assert kwargs["node_limit"] == 2
+        count = 2 if pattern == "capped" else 1
+        return {
+            "matches": [
+                {"uri": f"{URI}/a.md", "line": index + 1, "content": pattern}
+                for index in range(count)
+            ],
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["capped", "complete"], node_limit=2)
+
+    assert "Result limit reached (2 matches per pattern)" in out
+    assert "more matches may exist" in out
+    assert "Capped patterns: capped\n" in out
+    assert "[complete]: complete" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible_count", [0, 1])
+async def test_grep_preserves_backend_limit_after_permission_filtering(visible_count):
+    async def grep(uri, pattern, **kwargs):
+        return {
+            "matches": [
+                {"uri": f"{URI}/a.md", "line": 1, "content": "visible hit"}
+                for _ in range(visible_count)
+            ],
+            "limit_reached": True,
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern="filtered")
+
+    assert "Capped patterns: filtered" in out
+    assert "more matches may exist" in out
+    if visible_count:
+        assert "Found 1 match(es)" in out
+        assert "visible hit" in out
+    else:
+        assert out.startswith("No matches returned for pattern(s): filtered")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible_count", [0, 1])
+async def test_grep_reports_candidate_limit_only_for_affected_pattern(visible_count):
+    async def grep(uri, pattern, **kwargs):
+        if pattern == "candidate-capped":
+            return {"matches": [], "candidate_limit_reached": True}
+        return {
+            "matches": [{"uri": f"{URI}/a.md", "line": 1, "content": "hit"}]
+            if visible_count
+            else []
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["candidate-capped", "complete"])
+
+    assert "Candidate search may have been capped for pattern(s): candidate-capped." in out
+    assert "Result limit reached" not in out
+    if visible_count:
+        assert "L1 [complete]: hit" in out
+    else:
+        assert out.startswith("No matches returned for pattern(s): candidate-capped, complete")
+
+
+@pytest.mark.asyncio
+async def test_grep_reports_matches_limits_and_errors_for_separate_patterns():
+    async def grep(uri, pattern, **kwargs):
+        if pattern == "broken":
+            raise RuntimeError("boom")
+        if pattern == "capped":
+            return {"matches": [], "limit_reached": True}
+        return {"matches": [{"uri": f"{URI}/a.md", "line": 3, "content": "hit"}]}
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["complete", "capped", "broken"])
+
+    assert out.startswith("Found 1 match(es) across 3 pattern(s):")
+    assert "L3 [complete]: hit" in out
+    assert "Capped patterns: capped\n" in out
+    assert "Patterns that could not be searched:\n  broken: RuntimeError: boom" in out

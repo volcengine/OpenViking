@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import gc
+import struct
 import threading
 import traceback
 import weakref
@@ -29,6 +30,12 @@ class FakeCuVSRuntime:
 
     def build(self, dataset):
         return [list(vector) for vector in dataset]
+
+    @staticmethod
+    def prepare_filter_words(words):
+        if isinstance(words, bytes):
+            words = [word for (word,) in struct.iter_unpack("<I", words)]
+        return tuple(bool(word & (1 << bit)) for word in words for bit in range(32))
 
     def search(self, index, query, limit, mask):
         self.search_count += 1
@@ -113,6 +120,39 @@ def _delete_without_persisting_index(path, ready, hold):
     except BaseException:
         ready.send(("error", traceback.format_exc()))
         raise
+
+
+def test_collection_upsert_rejects_native_store_failure(tmp_path, monkeypatch):
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "failed_write",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        path=str(tmp_path / "collection"),
+    )
+    try:
+        collection.create_index(
+            "default",
+            {"IndexName": "default", "VectorIndex": {"IndexType": "flat", "Distance": "ip"}},
+        )
+        assert collection.upsert_data([{"id": "seed", "vector": [1, 0, 0, 0]}]).ids == ["seed"]
+        local = collection._Collection__collection
+        index = local.indexes.get("default")
+        labels_before = index.search([1, 0, 0, 0], limit=10)[0]
+        assert len(labels_before) == 1
+        with monkeypatch.context() as failure:
+            failure.setattr(local.store_mgr.storage.storage_engine, "exec_op", lambda _ops: -1)
+            with pytest.raises(RuntimeError, match="exec_op.*-1"):
+                collection.upsert_data([{"id": "lost", "vector": [0, 1, 0, 0]}])
+        assert collection.fetch_data(["lost"]).ids_not_exist == ["lost"]
+        assert index.search([1, 0, 0, 0], limit=10)[0] == labels_before
+        result = collection.search_by_vector("default", dense_vector=[0, 1, 0, 0], limit=10)
+        assert [item.id for item in result.data] == ["seed"]
+    finally:
+        collection.close()
 
 
 def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):

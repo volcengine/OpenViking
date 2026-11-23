@@ -158,7 +158,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
 | vector_mode | string | No | auto | Vector handling: `auto`, `recompute`, or `require` |
 
-**Permission Requirements**: ROOT, ADMIN, or USER
+**Permission Requirements**: ROOT, ADMIN, or USER. When ACL is enabled, importing to a new path requires `write` on its parent; overwriting an existing directory requires `manage` on that directory, without checking descendants individually.
 
 **Behavior Notes**:
 - The API no longer accepts `vectorize` or `force`.
