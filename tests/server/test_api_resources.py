@@ -730,9 +730,56 @@ async def test_shared_temp_upload_can_be_added_repeatedly(
         assert read.json()["result"].strip() == "# shared upload"
 
 
-async def test_shared_upload_cannot_be_created_as_a_watch(
-    client: httpx.AsyncClient, service, upload_temp_dir
+async def test_add_resource_creates_paused_git_watch_and_rejects_shared_upload_watch(
+    client: httpx.AsyncClient, service, upload_temp_dir, tmp_path, monkeypatch
 ):
+    from openviking.parse.accessors.base import LocalResource, SourceType
+    from openviking.parse.accessors.git_accessor import GitAccessor
+
+    repository_path = tmp_path / "repo"
+    repository_path.mkdir()
+    (repository_path / "README.md").write_text("# Watched repository\n")
+    source = "https://github.com/team/watched.git"
+    target = "viking://resources/watched-repository"
+    revision = "a" * 40
+    monkeypatch.setattr(
+        "openviking.utils.network_guard._resolve_host_addresses", lambda _host: {"140.82.121.4"}
+    )
+    process = AsyncMock(returncode=0)
+    process.communicate.return_value = (f"{revision}\tHEAD\n".encode(), b"")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    monkeypatch.setattr(
+        GitAccessor,
+        "access",
+        AsyncMock(
+            return_value=LocalResource(
+                path=repository_path,
+                source_type=SourceType.GIT,
+                original_source=source,
+                meta={"repo_name": "team/watched", "resolved_head_sha": revision},
+                is_temporary=False,
+            )
+        ),
+    )
+    response = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": source,
+            "to": target,
+            "watch_interval": 5,
+            "is_active": False,
+            "wait": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["root_uri"] == target
+    response = await client.get("/api/v1/watches", params={"to_uri": target})
+    assert response.status_code == 200, response.text
+    watch = response.json()["result"]
+    assert watch["is_active"] is False
+    assert watch["watch_interval"] == 5
+    assert watch["next_execution_time"] is None
+
     upload_resp = await client.post(
         "/api/v1/resources/temp_upload",
         files={"file": ("watched.md", b"# watched upload\n", "text/markdown")},

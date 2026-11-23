@@ -23,7 +23,7 @@ def mcp_context(monkeypatch: pytest.MonkeyPatch):
         role=Role(Role.USER),
     )
     token = mcp_endpoint._mcp_ctx.set(ctx)
-    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: object())
+    monkeypatch.setattr(mcp_endpoint, "get_service", object)
     upload_token_store.clear()
     try:
         yield

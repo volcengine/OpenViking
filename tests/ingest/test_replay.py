@@ -3,8 +3,9 @@
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
 from contextlib import closing
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+from openviking import AsyncHTTPClient
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
 from openviking.ingest.orchestrator import IngestOrchestrator
@@ -60,7 +61,8 @@ async def test_append_chunks_at_100():
     sdk = _FakeSDK(existing={"s1"})
     client = ConversationReplayClient(sdk)
     messages = [{"role": "user", "content": str(i)} for i in range(250)]
-    assert await client.append("s1", messages) == len(messages)
+    added = await client.append("s1", messages)
+    assert added == len(messages)
     assert sdk.batches == [
         ("s1", messages[:100]),
         ("s1", messages[100:200]),
@@ -72,6 +74,7 @@ class _FakeReplay(ConversationReplayClient):
     """Stand-in for ConversationReplayClient used by SessionReplayer."""
 
     def __init__(self, pending=0, count=0):
+        super().__init__(AsyncMock(spec=AsyncHTTPClient))
         self.pending = pending
         self.count = count
         self.ensured = []
@@ -129,8 +132,10 @@ async def test_append_batch_confirms_cursor_and_marks_needs_commit(tmp_path):
     with closing(CursorStore(tmp_path)) as store:
         assert store.get_cursor("claude_code", "s1", BYTE_OFFSET) == cursor
         replayer = SessionReplayer(fake, store)
-        assert await replayer.commit_if_needed("claude_code", ref)
-        assert not await replayer.commit_if_needed("claude_code", ref)
+        committed = await replayer.commit_if_needed("claude_code", ref)
+        repeated = await replayer.commit_if_needed("claude_code", ref)
+        assert committed
+        assert not repeated
         assert fake.committed == ["import__claude_code__s1"]
         assert fake.appended == [("import__claude_code__s1", 2)]
 
