@@ -18,6 +18,30 @@ import { DshAgent } from '../src/dsh.mjs';
 const logger = { warn() {}, info() {}, error() {}, child() { return logger; } };
 const config = (overrides = {}) => ({ dataDir: os.tmpdir(), workspace: os.tmpdir(), ...overrides });
 
+function writeNodeShim(directory, script) {
+  const entry = path.join(directory, 'node_modules', 'fakedsh', 'lib', 'bin.js');
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, script);
+  // The shim npm writes for a global CLI: the platform launcher reads the
+  // entrypoint it names instead of handing the .cmd to CreateProcess.
+  const shim = path.join(directory, 'dsh.cmd');
+  fs.writeFileSync(shim, [
+    '@ECHO off',
+    'SETLOCAL',
+    'SET "_prog=node"',
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\\node_modules\\fakedsh\\lib\\bin.js" %*',
+    '',
+  ].join('\r\n'));
+  return shim;
+}
+
+function writePosixShim(directory, script) {
+  const shim = path.join(directory, 'dsh');
+  fs.writeFileSync(shim, `#!/bin/sh\n${script}\n`);
+  fs.chmodSync(shim, 0o755);
+  return shim;
+}
+
 describe('the DSH runtime launches its binary through the platform launcher', () => {
   it('does not default to a raw child_process.spawn', () => {
     const agent = new DshAgent(config(), {}, logger);
@@ -27,21 +51,24 @@ describe('the DSH runtime launches its binary through the platform launcher', ()
   it('probes the version through an npm-style .cmd shim', { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-shim-'));
     try {
-      const entry = path.join(directory, 'node_modules', 'fakedsh', 'lib', 'bin.js');
-      fs.mkdirSync(path.dirname(entry), { recursive: true });
-      fs.writeFileSync(entry, "process.stdout.write('0.2.2-rc.1\\n');\n");
-      // The shim npm writes for a global CLI: the platform launcher reads the
-      // entrypoint it names instead of handing the .cmd to CreateProcess.
-      const shim = path.join(directory, 'dsh.cmd');
-      fs.writeFileSync(shim, [
-        '@ECHO off',
-        'SETLOCAL',
-        'SET "_prog=node"',
-        'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\\node_modules\\fakedsh\\lib\\bin.js" %*',
-        '',
-      ].join('\r\n'));
+      const shim = writeNodeShim(directory, "process.stdout.write('0.2.2-rc.1\\n');\n");
       const agent = new DshAgent(
         config({ dshBin: shim, dataDir: directory, workspace: directory }), {}, logger,
+      );
+      assert.equal(await agent._probeVersion(process.env), '0.2.2-rc.1');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a version DSH logs on stderr instead of stdout', { timeout: 30_000 }, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-stderr-'));
+    try {
+      const bin = process.platform === 'win32'
+        ? writeNodeShim(directory, "process.stderr.write('0.2.2-rc.1\\n');\n")
+        : writePosixShim(directory, "printf '0.2.2-rc.1\\n' >&2");
+      const agent = new DshAgent(
+        config({ dshBin: bin, dataDir: directory, workspace: directory }), {}, logger,
       );
       assert.equal(await agent._probeVersion(process.env), '0.2.2-rc.1');
     } finally {

@@ -14,7 +14,7 @@ import {
   bridgeHelloSupports, isDshNotReady, retryDshNotReady,
   buildDshPatch, compareDshVersions, dshCommand, dshProfilePatchHash, dshProfilePatchPath,
   escapeDshTemplate, parseDshModel, parseDshVersion, prepareDshEnvironment, sanitizeDshEnv,
-  writeDshPatch,
+  writeDshPatch, dshVersionText,
 } from '../src/dsh-runtime.mjs';
 
 function temp(t) {
@@ -240,4 +240,10 @@ test('NOT_READY is the only retried error and it stops at the budget', async () 
     (error) => isDshNotReady(error),
   );
   assert.ok(clock <= 1000, `retried past the ceiling: ${clock}ms`);
+});
+
+test('DSH version text comes from stdout or a version logged to stderr', () => {
+  assert.equal(dshVersionText('0.2.2-rc.5\n', ''), '0.2.2-rc.5');
+  assert.equal(dshVersionText('', 'warning: dsh 0.2.2-rc.5\n'), '0.2.2-rc.5');
+  assert.equal(dshVersionText('', ''), '');
 });

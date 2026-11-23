@@ -140,6 +140,14 @@ function numeric(value, version) {
   return number;
 }
 
+// DSH Desktop's Electron launcher sometimes prints nothing on stdout and logs
+// the version to stderr; setup and the daemon read version text the same way.
+export function dshVersionText(stdout, stderr = '') {
+  const direct = String(stdout ?? '').trim();
+  if (direct) return direct;
+  return String(stderr ?? '').match(/\b0\.2\.\d+(?:-[\w.]+)?\b/)?.[0] ?? '';
+}
+
 export function parseDshVersion(value) {
   const raw = String(value ?? '').trim();
   const match = SEMVER.exec(raw);
