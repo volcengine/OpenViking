@@ -10,9 +10,10 @@ import binascii
 import hashlib
 import hmac
 import secrets
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import timezone
-from functools import lru_cache
+from functools import lru_cache, wraps
 from typing import AsyncGenerator, cast
 from uuid import uuid4
 
@@ -131,6 +132,17 @@ def _substring_pattern(value: str) -> str:
 def _credential_digest(api_key: str) -> str:
     """Return the lookup digest for a high-entropy API key."""
     return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def _admit_auth_reads(
+    method: Callable[..., Awaitable[AuthSnapshot | None]],
+) -> Callable[..., Awaitable[AuthSnapshot | None]]:
+    @wraps(method)
+    async def admitted(self: SQLAccountStore, *args, **kwargs) -> AuthSnapshot | None:
+        async with self._auth_read_slot():
+            return await method(self, *args, **kwargs)
+
+    return admitted
 
 
 _DIGEST_CREDENTIAL_PREFIX = "sha256:v1:"
@@ -1319,31 +1331,24 @@ class SQLAccountStore(AccountStore):
                     )
                 )
 
-    async def get_auth_snapshot(
-        self,
-        api_key: str,
-        *,
-        account_id_hint: str | None = None,
-        user_id_hint: str | None = None,
-    ) -> AuthSnapshot | None:
+    @asynccontextmanager
+    async def _auth_read_slot(self) -> AsyncGenerator[None, None]:
         """Queue live auth reads before they contend for pooled connections."""
         capacity = cast(int, self._engine_options["pool_size"])
         # SQLAlchemy treats pool_size=0 as unlimited (accepted by MySQL).
         if capacity <= 0:
-            return await self._read_auth_snapshot(
-                api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
-            )
+            yield
+            return
         loop = asyncio.get_running_loop()
         state = self._auth_admission
         if state is None or state[0] is not loop:
             state = (loop, asyncio.Semaphore(capacity))
             self._auth_admission = state
         async with state[1]:
-            return await self._read_auth_snapshot(
-                api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
-            )
+            yield
 
-    async def _read_auth_snapshot(
+    @_admit_auth_reads
+    async def get_auth_snapshot(
         self,
         api_key: str,
         *,
