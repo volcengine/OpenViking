@@ -785,6 +785,70 @@ async def test_simple_incremental_delivery_preserves_rejections(
         assert ("completion_status" in public) != recovered
 
 
+@pytest.mark.parametrize(
+    "retry_args,expected_status",
+    [
+        ({"offset": 40, "limit": 20}, "partial"),
+        ({"offset": 20, "limit": 10}, "partial"),
+        ({"offset": 20}, None),
+    ],
+)
+async def test_simple_incremental_diff_failure_tracks_page(
+    pipeline, agent_loop, retry_args, expected_status
+):
+    loop, session_key, _ = agent_loop
+    pipeline.client.write = AsyncMock(
+        side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
+    )
+    pipeline.client.diff_paths = AsyncMock(
+        side_effect=[
+            {"changes": [], "has_more": True, "next_offset": 20},
+            ConnectionError("Source diff page unavailable"),
+            {"changes": [], "has_more": False},
+        ]
+    )
+    request = pipeline.request.model_copy(
+        update={
+            "changes": {
+                "execution": {"mode": "incremental"},
+                "base": "base",
+                "head": "head",
+                "full_dirs": [],
+                "diff_dirs": pipeline.request.from_,
+            }
+        }
+    )
+    calls = [
+        ("openviking_diff_paths", {}),
+        ("openviking_diff_paths", {"offset": 20, "limit": 20}),
+        ("openviking_diff_paths", retry_args),
+        ("openviking_write", {"path": "good.md", "content": "# Good"}),
+    ]
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            *(
+                LLMResponse(content="", tool_calls=[ToolCallRequest(str(i), name, args, 0)])
+                for i, (name, args) in enumerate(calls)
+            ),
+            LLMResponse(content="Done"),
+        ]
+    )
+
+    result = await simple.run(
+        loop,
+        pipeline.client,
+        request,
+        request.from_,
+        pipeline.skill,
+        session_key,
+        None,
+        AsyncMock(),
+        {},
+    )
+    assert result.updated == [pipeline.target + "/good.md"]
+    assert result.completion_status == expected_status
+
+
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
     pipeline.evidence["input"] = {"uri": "viking://resources/source/a.md"}
     pipeline.status["input"] = "prepared"

@@ -252,6 +252,9 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         name = call["tool_name"]
         args = call["resolved_args"]
         resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
+        if name == CompileDiffTool.name:
+            # Only retrying the same diff page can clear its failure.
+            resources = [(args.get("offset", 0), args.get("limit", 20))]
         tracked = [
             (name, str(resource))
             for resource in resources
