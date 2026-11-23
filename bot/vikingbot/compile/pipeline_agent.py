@@ -162,6 +162,8 @@ def agent_runner(loop, session_key, connection, limits):
         )
         if final is None:
             raise ValueError("Compile worker exhausted its tool rounds before completion")
+        if (runtime.changes or {}).get("recovery_sources"):
+            runtime.recovery_evidence.update(evidence.delivered)
         return output_root
 
     return run

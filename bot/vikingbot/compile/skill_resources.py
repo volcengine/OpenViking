@@ -211,6 +211,8 @@ class EvidenceReader(Tool):
             raise ValueError("Supply both start_line and end_line, or neither")
         spans = [] if start_line is None else [(start_line, end_line)]
         value = await self.read(source_range, spans, include_image=True)
+        if value["complete"]:
+            self.delivered.add(source_range)
         image = value.pop("image", None)
         text = json.dumps(value, ensure_ascii=False)
         if image:

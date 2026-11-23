@@ -58,6 +58,7 @@ class Pipeline:
         self.tools, self.tool_context = {}, None
         self.sources: dict[str, Source] = {}
         self.evidence, self.status, self.old = {}, {}, {}
+        self.recovery_evidence: set[str] = set()
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False

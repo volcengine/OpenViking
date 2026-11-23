@@ -219,7 +219,7 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照。目标目录的统计中只要有文件新增、修改或删除，就推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 成功收尾时发布产物快照。完整交付且目标有文件新增、修改或删除时推进增量基线。部分交付后的增量恢复也可在目标零变更时推进基线，但仅限本轮所有新增或修改的来源均已处理，且能核对实际读取内容与冻结源快照一致。涉及未验证来源、删除或全量扫描时，零变更结果保留原基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
 ### 检查 Compile 可用性
 

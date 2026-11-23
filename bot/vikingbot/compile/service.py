@@ -43,6 +43,7 @@ from vikingbot.agent.tools.compile import (
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.compile import file_ops, simple
+from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -68,7 +69,12 @@ from vikingbot.compile.renderer import (
     validate_declared_okf_markdown,
 )
 from vikingbot.compile.sandbox import CompileSandboxManager
-from vikingbot.compile.sources import CompileSourceRange, pack_source_batches, read_source
+from vikingbot.compile.sources import (
+    CompileSourceRange,
+    pack_source_batches,
+    read_source,
+    verify_recovery_sources,
+)
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import SandboxBackend, SandboxMode, SessionKey
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -361,7 +367,9 @@ class BotCompileService:
             if not runner_started:
                 await self._release_admission(principal_scope)
 
-    async def get_task(self, task_id: str, *, principal_scope: str) -> dict[str, Any] | None:
+    async def get_task(
+        self, task_id: str, *, principal_scope: str, include_recovery_proof: bool = False
+    ) -> dict[str, Any] | None:
         await self.start()
         try:
             task = await self.store.get(task_id)
@@ -369,7 +377,7 @@ class BotCompileService:
             return None
         if task is None or task.principal_scope != principal_scope:
             return None
-        return task.public_dict()
+        return task.public_dict(include_recovery_proof=include_recovery_proof)
 
     async def cancel_task(self, task_id: str, *, principal_scope: str) -> dict[str, Any] | None:
         """Request cooperative cancellation of one principal-owned Compile task."""
@@ -1141,6 +1149,8 @@ class BotCompileService:
         source_limits = self.limits.model_copy(
             update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
         )
+        recovery = (request.changes or {}).get("recovery_sources")
+        source_hashes: dict[str, str] = {}
 
         async def source_batches():
             """Retain at most one read batch of source bodies while seeding task shards."""
@@ -1160,6 +1170,8 @@ class BotCompileService:
                     elif isinstance(content, BaseException):
                         raise content
                     else:
+                        if recovery and isinstance(content, str):
+                            source_hashes[uri] = content_hash(content)
                         readable.append((uri, content))
                 for batch in pack_source_batches(readable, source_limits):
                     yield batch
@@ -1204,6 +1216,18 @@ class BotCompileService:
             partial = bool(pipeline.failures or conflicts) or any(
                 counts.get(state, 0) for state in ("failed", "pending", "unreferenced", "prepared")
             )
+            recovery_proof = None
+            if (
+                recovery
+                and not partial
+                and not pipeline.warnings
+                and not rendered.operations
+                and counts.get("delivered") == len(ordered)
+                and pipeline.evidence.keys() <= pipeline.recovery_evidence
+            ):
+                recovery_proof = await verify_recovery_sources(
+                    client, request.changes, source_hashes
+                )
             summary = await pipeline.files.get("summary")
             summary["committed"] = True
             summary["warnings"] = pipeline.warnings
@@ -1228,6 +1252,7 @@ class BotCompileService:
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
                 completion_status="partial" if partial else None,
+                recovery_proof=recovery_proof,
             )
 
             def complete(task):

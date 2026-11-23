@@ -59,6 +59,7 @@ from openviking.storage.pathlock_recovery import (
     is_compile_lock_conflict,
     lock_retry_delay,
 )
+from openviking.utils.compile_recovery import source_set_digest
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -879,13 +880,23 @@ class CompileLifecycle:
         checkpoint = self._checkpoint(task)
         if "baseline" not in checkpoint:
             progress = {}
+            recovering = False
             if (
                 record is not None
                 and execution_signature(record) == request["compile"]["input_signature"]
             ):
                 progress = deepcopy(record["progress"])
+                recovering = record["execution_context"].get("partial_compile") == {
+                    "base": progress.get("source_commit"),
+                    "signature": request["compile"]["input_signature"],
+                }
             await self._save_checkpoint(
-                task, {"baseline": progress, "progress_before": progress.get("source_commit")}
+                task,
+                {
+                    "baseline": progress,
+                    "progress_before": progress.get("source_commit"),
+                    "recovering": recovering,
+                },
             )
         progress = self._checkpoint(task).get("baseline") or {}
         run["status"] = "running"
@@ -962,6 +973,9 @@ class CompileLifecycle:
             if diff_dirs
             else []
         )
+        if self._checkpoint(task).get("recovering") and incremental and not full_dirs and changes:
+            if all(change["change_type"] in {"added", "modified"} for change in changes):
+                plan["recovery_sources"] = source_set_digest(change["uri"] for change in changes)
         await self._save_run(task, run)
         await self._save_checkpoint(
             task,
@@ -1135,6 +1149,10 @@ class CompileLifecycle:
                 if partial:
                     # Finalization can resume without the original Runtime response.
                     checkpoint["partial_delivery"] = True
+                elif isinstance(snapshot.result, dict):
+                    expected = (self._checkpoint(task).get("plan") or {}).get("recovery_sources")
+                    if expected and snapshot.result.get("recovery_proof") == expected:
+                        checkpoint["verified_recovery"] = True
                 await self._save_checkpoint(task, checkpoint)
                 run["status"] = "committing"
                 await self._save_run(task, run)
@@ -1228,13 +1246,21 @@ class CompileLifecycle:
         )
 
     async def _advance_progress(self, task: Any, run: dict) -> None:
-        """Publish a successful run's baseline when target stats show changes and the predecessor still matches."""
+        """Advance a matching baseline after publication or verified recovery."""
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
             return
-        if not any((run.get("result") or {}).get(key, 0) for key in _RESULT_KEYS.values()):
+        result = run.get("result") or {}
+        partial = result.get("completion_status") == "partial"
+        checkpoint = self._checkpoint(task)
+        previous = checkpoint.get("progress_before")
+        if partial and not previous:
             return
-        if (run.get("result") or {}).get("completion_status") == "partial":
+        if not (
+            partial
+            or checkpoint.get("verified_recovery")
+            or any(result.get(key, 0) for key in _RESULT_KEYS.values())
+        ):
             return
         from openviking.service.task_tracker import get_task_tracker
 
@@ -1247,10 +1273,15 @@ class CompileLifecycle:
                 return
             if execution_signature(record) != task.meta["request"]["compile"]["input_signature"]:
                 return
-            if (record["progress"] or {}).get("source_commit") != self._checkpoint(task).get(
-                "progress_before"
-            ):
+            if (record["progress"] or {}).get("source_commit") != previous:
                 return
+            if partial:
+                record["execution_context"]["partial_compile"] = {
+                    "base": previous,
+                    "signature": task.meta["request"]["compile"]["input_signature"],
+                }
+                return
+            record["execution_context"].pop("partial_compile", None)
             record["progress"] = {
                 "source_commit": run["meta"]["start_snapshot"],
                 "processed_roots": list(run["params"]["from"]),
