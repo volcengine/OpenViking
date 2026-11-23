@@ -1,7 +1,7 @@
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { loadPage } from '../../shared/directory-tree/fs-page.js';
 import { isBinaryFile } from './fs-file-kind.js';
-import { supportsFileHistory } from './preview-policy.js';
+import { supportsWikiHistoryFile } from './preview-policy.js';
 
 /** Traverse the selected subtree; every directory page keeps its native error and abort semantics. */
 export async function readHistoryFiles(
@@ -29,7 +29,7 @@ export async function readHistoryFiles(
       for (const entry of page.entries) {
         if (entry.access === 'denied') continue;
         if (entry.isDir) directories.push(entry.uri);
-        else if (supportsFileHistory(entry.uri) && !isBinaryFile(entry.uri))
+        else if (supportsWikiHistoryFile(entry.uri) && !isBinaryFile(entry.uri))
           files.push(entry.uri);
       }
       offset += page.entries.length;

@@ -33,18 +33,6 @@ export default {
     'No compilation configuration is available for this directory in your user scope.',
   historyEmpty: 'No version history yet',
   historyLimit: 'Showing up to 500 recent snapshots.',
-  snapshotPrompt: 'Keep a snapshot?',
-  snapshotChoice:
-    'The file is saved. Would you like to keep a snapshot in version history?',
-  keepSnapshot: 'Keep a snapshot',
-  skipSnapshot: 'Skip',
-  snapshotFileSaved:
-    'The file is saved. Describe this snapshot before saving it.',
-  done: 'Done',
-  snapshotNote: 'Describe this snapshot',
-  saveSnapshot: 'Save snapshot',
-  snapshotSaved: 'Snapshot saved.',
-  snapshotUnchanged: 'The file has no changes to snapshot.',
   compareChanges: 'Show changes',
   noChanges: 'The selected versions have identical content.',
   addedLines: 'Added content',
