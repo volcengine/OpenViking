@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -67,6 +68,7 @@ _MD_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(([^)]+)\)")
 _MD_FRAGMENT_RE = re.compile(r"^([^#?]*)([#?].*)?$")
 # Extensions whose targets become directories on ingest (see _rewrite_single_link).
 _MD_DIR_EXTS = {".md", ".markdown", ".mdown", ".mkd"}
+_HEADING_INLINE_PARSER = MarkdownIt("commonmark")
 
 
 def _smart_stem(path_or_name: str | Path) -> str:
@@ -103,6 +105,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 def _gh_slug(text: str) -> str:
     """GitHub-style heading slug: lowercase, strip punctuation, spaces→'-', keep CJK."""
+    if "&" in text and "[" not in text and "]" not in text:
+        tokens = _HEADING_INLINE_PARSER.parseInline(text)[0].children or []
+        # Keep code spans and richer title syntax on the existing normalization path.
+        if all(token.type in {"text", "text_special"} for token in tokens):
+            text = "".join(token.content for token in tokens)
     s = text.strip().lower()
     s = re.sub(r"[^\w\s-]", "", s)
     # Map each whitespace character to its own hyphen (do NOT collapse runs).
