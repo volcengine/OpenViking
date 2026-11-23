@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { GoBack, Prompter } from '../src/prompt.mjs';
-import { OWNER_MESSAGE_SCOPES, connectLark, expandHome, larkMessageListener, larkScopes, offerAutostart, registerApp, setupCommand } from '../src/setup.mjs';
+import { OWNER_MESSAGE_SCOPES, configureDurable, connectLark, expandHome, larkMessageListener, larkScopes, offerAutostart, registerApp, setupCommand } from '../src/setup.mjs';
 import { superagentCommand } from '../src/manifest.mjs';
 import { stripAnsi } from '../src/ui.mjs';
 import { connectTelegram } from '../src/telegram.mjs';
@@ -856,7 +856,7 @@ test('quitting to log in to Codex or Claude Code is not a failure', async (t) =>
   const h = terminalHarness(t, { runtimes: none });
   // Pi can still be offered, so the question is reached before the answer matters.
   h.options.connect.pi = async () => {};
-  const driving = h.drive([['现在怎么办', DOWN, '\r']]);
+  const driving = h.drive([['现在怎么办', DOWN, DOWN, '\r']]);
   // The installer chains this exit code into its own: a deliberate pause must
   // not make the install look like it failed.
   assert.equal(await setupCommand(h.options), 0);
@@ -1949,4 +1949,39 @@ test('expandHome expands home prefixes without changing literal paths', () => {
   for (const literal of ['~other/workspace', 'workspace', path.join(home, 'existing')]) {
     assert.equal(expandHome(literal, home), literal);
   }
+});
+
+test('setup writes a Durable provider key to secrets.env and keeps the other keys', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-durable-key-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'secrets.env');
+  fs.writeFileSync(file, 'OPENAI_API_KEY=keep-me\n');
+  const asked = [];
+  const prompter = {
+    select: async (question, choices) => { asked.push(question); return choices[0].value; },
+    secret: async () => 'sk-test',
+    success() {},
+    warn() {},
+  };
+  assert.equal(await configureDurable({ prompter, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), true);
+  assert.equal(asked.length, 1);
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.match(saved, /^DEEPSEEK_API_KEY=sk-test$/m);
+  assert.match(saved, /^OPENAI_API_KEY=keep-me$/m);
+  const blank = { ...prompter, secret: async () => '  ' };
+  assert.equal(await configureDurable({ prompter: blank, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), false);
+  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-test$/m);
+});
+test('Durable setup writes secrets under USERPROFILE when HOME is unset', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-userprofile-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const prompter = {
+    select: async (question, choices) => choices[0].value,
+    secret: async () => 'sk-userprofile',
+    success() {},
+    warn() {},
+  };
+  assert.equal(await configureDurable({ prompter, env: { USERPROFILE: dir } }), true);
+  const file = path.join(dir, '.ov-superagent', 'secrets.env');
+  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-userprofile$/m);
 });
