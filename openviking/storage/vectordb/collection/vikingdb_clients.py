@@ -8,7 +8,9 @@ from requests.adapters import HTTPAdapter
 
 import openviking
 from openviking.storage.errors import ConnectionError
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Default request timeout (seconds)
 DEFAULT_TIMEOUT = 30
@@ -111,7 +113,7 @@ class VikingDBClient:
             )
             return response
         except requests.RequestException as e:
-            logger.error(f"Request to {url} failed: {e}")
+            logger.debug("Request to %s failed: %s", type(url).__name__, type(e).__name__)
             raise ConnectionError(
                 f"Request to {path} failed: {e}",
                 error_type="connection_error",

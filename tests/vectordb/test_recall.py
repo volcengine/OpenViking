@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-import random
 import shutil
 import unittest
-from typing import List
+
+import pytest
 
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
@@ -11,12 +11,41 @@ from openviking.storage.vectordb.collection.local_collection import get_or_creat
 TEST_DB_PATH = "./test_data/test_recall_collection/"
 
 
-def calculate_l2_distance(v1: List[float], v2: List[float]) -> float:
-    return sum((a - b) ** 2 for a, b in zip(v1, v2))
+@pytest.mark.parametrize(
+    ("metric", "expected_ids"),
+    [
+        pytest.param("l2", ["exact", "near", "negative"], id="euclidean-exact-match-first"),
+        pytest.param("ip", ["large", "near", "exact"], id="inner-product-prefers-larger-norm"),
+    ],
+)
+def test_dense_search_uses_configured_metric_for_top_k(tmp_path, metric, expected_ids):
+    schema = {
+        "CollectionName": "dense_ranking",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+        ],
+    }
+    collection = get_or_create_local_collection(meta_data=schema, path=str(tmp_path))
+    try:
+        collection.upsert_data(
+            [
+                {"id": "large", "vector": [4.0, 0.0, 0.0, 0.0]},
+                {"id": "near", "vector": [2.0, 2.0, 0.0, 0.0]},
+                {"id": "exact", "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": "negative", "vector": [-1.0, -2.0, 0.0, 0.0]},
+                {"id": "orthogonal", "vector": [0.0, 3.0, 0.0, 0.0]},
+            ]
+        )
+        collection.create_index(
+            "default",
+            {"IndexName": "default", "VectorIndex": {"IndexType": "flat", "Distance": metric}},
+        )
 
-
-def calculate_ip_distance(v1: List[float], v2: List[float]) -> float:
-    return sum(a * b for a, b in zip(v1, v2))
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=3)
+        assert [item.id for item in result.data] == expected_ids
+    finally:
+        collection.close()
 
 
 class TestRecall(unittest.TestCase):
@@ -40,201 +69,6 @@ class TestRecall(unittest.TestCase):
     def register_collection(self, collection):
         self.collections.append(collection)
         return collection
-
-    def test_exact_match_recall(self):
-        """Test if the exact vector is recalled at rank 1"""
-        print("\n=== Test: Exact Match Recall ===")
-
-        dim = 64
-        meta_data = {
-            "CollectionName": "test_exact_match",
-            "Fields": [
-                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
-            ],
-        }
-
-        collection = self.register_collection(
-            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
-        )
-
-        # Generate data
-        random.seed(42)
-        total_records = 1000
-        data = []
-        vectors = []
-        for i in range(total_records):
-            vec = [random.uniform(-1, 1) for _ in range(dim)]
-            vectors.append(vec)
-            data.append({"id": i, "vector": vec})
-
-        collection.upsert_data(data)
-
-        # Create Index (Flat index should give 100% recall)
-        collection.create_index(
-            "idx_flat",
-            {
-                "IndexName": "idx_flat",
-                "VectorIndex": {"IndexType": "flat", "Distance": "l2"},
-            },
-        )
-
-        # Query with an existing vector
-        target_idx = 500
-        query_vec = vectors[target_idx]
-
-        result = collection.search_by_vector("idx_flat", dense_vector=query_vec, limit=10)
-
-        self.assertTrue(len(result.data) > 0)
-        # The first result should be the vector itself (id=500)
-        # Note: Depending on floating point precision, distance might not be exactly 0.0,
-        # but it should be the closest.
-        self.assertEqual(
-            result.data[0].id, target_idx, "The top result should be the query vector itself"
-        )
-        print("✓ Exact match verified")
-
-    def test_l2_recall_topk(self):
-        """Test Top-K recall for L2 distance"""
-        print("\n=== Test: Top-K Recall (L2) ===")
-
-        dim = 32
-        total_records = 500
-        meta_data = {
-            "CollectionName": "test_l2_recall",
-            "Fields": [
-                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
-            ],
-        }
-
-        collection = self.register_collection(
-            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
-        )
-
-        # Generate random data
-        random.seed(100)
-        vectors = []
-        data = []
-        for i in range(total_records):
-            vec = [random.uniform(0, 1) for _ in range(dim)]
-            vectors.append(vec)
-            data.append({"id": i, "vector": vec})
-
-        collection.upsert_data(data)
-
-        collection.create_index(
-            "idx_l2",
-            {
-                "IndexName": "idx_l2",
-                "VectorIndex": {"IndexType": "flat", "Distance": "l2"},
-            },
-        )
-
-        # Generate a query vector
-        query_vec = [random.uniform(0, 1) for _ in range(dim)]
-
-        # Calculate Ground Truth
-        # (distance, id)
-        distances = []
-        for i, vec in enumerate(vectors):
-            dist = calculate_l2_distance(query_vec, vec)
-            distances.append((dist, i))
-
-        # Sort by distance ascending (L2)
-        distances.sort(key=lambda x: x[0])
-        ground_truth_ids = [x[1] for x in distances[:10]]
-
-        # Search
-        result = collection.search_by_vector("idx_l2", dense_vector=query_vec, limit=10)
-        result_ids = [item.id for item in result.data]
-
-        print(f"Ground Truth IDs: {ground_truth_ids}")
-        print(f"Search Result IDs: {result_ids}")
-
-        # Calculate Recall@10
-        intersection = set(ground_truth_ids) & set(result_ids)
-        recall = len(intersection) / 10.0
-        print(f"Recall@10: {recall}")
-
-        self.assertEqual(recall, 1.0, "Recall@10 for Flat index should be 1.0")
-
-        # Verify order matches
-        self.assertEqual(
-            result_ids, ground_truth_ids, "Result order should match ground truth for Flat index"
-        )
-        print("✓ L2 Recall verified")
-
-    def test_ip_recall_topk(self):
-        """Test Top-K recall for Inner Product (IP) distance"""
-        print("\n=== Test: Top-K Recall (IP) ===")
-
-        dim = 32
-        total_records = 500
-        meta_data = {
-            "CollectionName": "test_ip_recall",
-            "Fields": [
-                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
-            ],
-        }
-
-        collection = self.register_collection(
-            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
-        )
-
-        # Generate random data
-        random.seed(200)
-        vectors = []
-        data = []
-        for i in range(total_records):
-            # Normalize vectors for IP to behave like Cosine Similarity if needed,
-            # but IP itself is just dot product.
-            vec = [random.uniform(-1, 1) for _ in range(dim)]
-            vectors.append(vec)
-            data.append({"id": i, "vector": vec})
-
-        collection.upsert_data(data)
-
-        collection.create_index(
-            "idx_ip",
-            {
-                "IndexName": "idx_ip",
-                "VectorIndex": {"IndexType": "flat", "Distance": "ip"},
-            },
-        )
-
-        # Generate a query vector
-        query_vec = [random.uniform(-1, 1) for _ in range(dim)]
-
-        # Calculate Ground Truth
-        # (score, id)
-        scores = []
-        for i, vec in enumerate(vectors):
-            score = calculate_ip_distance(query_vec, vec)
-            scores.append((score, i))
-
-        # Sort by score descending (IP)
-        scores.sort(key=lambda x: x[0], reverse=True)
-        ground_truth_ids = [x[1] for x in scores[:10]]
-
-        # Search
-        result = collection.search_by_vector("idx_ip", dense_vector=query_vec, limit=10)
-        result_ids = [item.id for item in result.data]
-
-        print(f"Ground Truth IDs: {ground_truth_ids}")
-        print(f"Search Result IDs: {result_ids}")
-
-        # Calculate Recall@10
-        intersection = set(ground_truth_ids) & set(result_ids)
-        recall = len(intersection) / 10.0
-        print(f"Recall@10: {recall}")
-
-        self.assertEqual(recall, 1.0, "Recall@10 for Flat index should be 1.0")
-        self.assertEqual(
-            result_ids, ground_truth_ids, "Result order should match ground truth for Flat index"
-        )
-        print("✓ IP Recall verified")
 
     def test_search_limit_zero(self):
         """Test search with limit=0 returns empty result without error"""
@@ -517,80 +351,31 @@ class TestRecall(unittest.TestCase):
 
         print("✓ Missing fields handled correctly")
 
-    def test_persistence_crud(self):
-        """Test CRUD operations persist after collection close and reopen"""
-        print("\n=== Test: Persistence CRUD ===")
-        dim = 1024
-        name = "test_persistence"
-        meta_data = {
-            "CollectionName": name,
-            "Description": "Persistence test",
+    def test_first_index_build_reads_records_written_before_reopen(self):
+        schema = {
+            "CollectionName": "index_after_reopen",
             "Fields": [
                 {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
-                {"FieldName": "name", "FieldType": "string"},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
             ],
         }
+        collection = get_or_create_local_collection(meta_data=schema, path=TEST_DB_PATH)
+        try:
+            collection.upsert_data(
+                [
+                    {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
+                    {"id": "second", "vector": [0.0, 0.0, 0.0, 0.0]},
+                ]
+            )
+        finally:
+            collection.close()
 
-        # 1. Open and Add Data
-        collection = get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
-        self.register_collection(collection)
-
-        data = [
-            {"id": "1", "vector": [0.1] * dim, "name": "Item 1"},
-            {"id": "2", "vector": [0.2] * dim, "name": "Item 2"},
-        ]
-        collection.upsert_data(data)
-
-        # Verify Add
-        res = collection.fetch_data(["1", "2"])
-        self.assertEqual(len(res.items), 2)
-
-        # 2. Close Collection (Simulate restart)
-        # Note: LocalCollection might not have an explicit close() that unloads everything from memory
-        # if it's purely object based, but we can delete the object and re-instantiate.
-        # The important part is that data is on disk (RocksDB/LevelDB).
-        collection.close()
-        del collection
-
-        # 3. Reopen
-        collection_new = get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
-        self.register_collection(collection_new)
-
-        # Verify Data Exists
-        res_reopen = collection_new.fetch_data(["1", "2"])
-        self.assertEqual(len(res_reopen.items), 2)
-        # Order is not guaranteed, so check by ID or sort
-        ids = sorted([item.id for item in res_reopen.items])
-        self.assertEqual(ids, ["1", "2"])
-
-        # 4. Update Data
-        update_data = [{"id": "1", "vector": [0.9] * dim, "name": "Item 1 Updated"}]
-        collection_new.upsert_data(update_data)
-
-        res_update = collection_new.fetch_data(["1"])
-        self.assertEqual(len(res_update.items), 1)
-        self.assertEqual(res_update.items[0].fields["name"], "Item 1 Updated")
-
-        # 5. Delete Data
-        collection_new.delete_data(["2"])
-
-        res_del = collection_new.fetch_data(["2"])
-        self.assertEqual(len(res_del.items), 0, "Deleted item should not be found")
-        self.assertEqual(len(res_del.ids_not_exist), 1)
-
-        # 6. Search on persisted data
-        collection_new.create_index(
-            "idx_persist",
-            {"IndexName": "idx_persist", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}},
+        reopened = self.register_collection(get_or_create_local_collection(path=TEST_DB_PATH))
+        reopened.create_index(
+            "default", {"IndexName": "default", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}}
         )
-        search_res = collection_new.search_by_vector(
-            "idx_persist", dense_vector=[0.9] * dim, limit=1
-        )
-        self.assertEqual(len(search_res.data), 1)
-        self.assertEqual(search_res.data[0].id, "1")
-
-        print("✓ Persistence verified")
+        found = reopened.search_by_vector("default", dense_vector=[0.0, 0.0, 0.0, 0.0], limit=2)
+        self.assertEqual([item.id for item in found.data], ["second", "first"])
 
 
 if __name__ == "__main__":

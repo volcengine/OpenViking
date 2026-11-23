@@ -191,7 +191,7 @@ async function runEndpointCompressionCase({
   }
 }
 
-test("auto-recall asks the context face with the derived OpenViking session id", async () => {
+async function contextRecallCase(excludeUris) {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-state-"));
   const requests = [];
 
@@ -235,6 +235,7 @@ test("auto-recall asks the context face with the derived OpenViking session id",
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_RECALL_COMPRESS: "0",
+          OPENVIKING_RECALL_EXCLUDE_URIS: excludeUris,
           OPENVIKING_RECALL_LIMIT: "1",
           OPENVIKING_RECALL_MAX_TOKENS: "800",
           OPENVIKING_RECALL_TIMEOUT_MS: "10000",
@@ -254,6 +255,8 @@ test("auto-recall asks the context face with the derived OpenViking session id",
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].body.mode, "context");
+    assert.deepEqual(requests[0].body.exclude_uris, excludeUris
+      ? ["viking://user/default/skills", "viking://agent/skills"] : undefined);
     assert.equal(requests[0].body.session_id, "cx-codex_123");
     assert.equal(requests[0].body.purpose, "coding");
     assert.equal(requests[0].body.limit, undefined);
@@ -267,7 +270,12 @@ test("auto-recall asks the context face with the derived OpenViking session id",
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
-});
+}
+
+for (const excludeUris of ["", "viking://user/default/skills, viking://agent/skills"]) {
+  test(`auto-recall asks the context face with session identity and exclusions ${JSON.stringify(excludeUris)}`,
+    () => contextRecallCase(excludeUris));
+}
 
 test("auto-recall prefers the server recall endpoint when available", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-"));

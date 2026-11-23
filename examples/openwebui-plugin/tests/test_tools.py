@@ -9,6 +9,8 @@ headers, and returns a payload matching its Pydantic model.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -150,16 +152,45 @@ async def test_ov_add_resource_posts_resources(client: httpx.AsyncClient) -> Non
     assert '"wait":true' in raw.replace(" ", "")
 
 
-@respx.mock
-async def test_ov_session_status_gets_session(client: httpx.AsyncClient) -> None:
-    route = respx.get("http://ov.test/api/v1/sessions/sess-42").mock(
-        return_value=httpx.Response(200, json={"status": "ok", "result": {"session_id": "sess-42"}})
+@pytest.mark.parametrize(
+    ("session_id", "expected_status"),
+    [
+        ("sess-42", 200),
+        ("release.v1_42", 200),
+        ("会话-42", 200),
+        ("", 422),
+        (".", 422),
+        ("..", 422),
+        ("../admin/accounts", 422),
+        (r"..\admin\accounts", 422),
+        ("%2e%2e%2fadmin%2faccounts", 422),
+        ("sess-42?auto_create=true", 422),
+        ("sess-42#fragment", 422),
+        ("sess-42\n", 422),
+    ],
+)
+@respx.mock(assert_all_called=False)
+async def test_ov_session_status_gets_session(
+    client: httpx.AsyncClient,
+    session_id: str,
+    expected_status: int,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route = respx_mock.get().mock(
+        return_value=httpx.Response(
+            200, json={"status": "ok", "result": {"session_id": session_id}}
+        )
     )
-    resp = await client.post("/tools/ov_session_status", json={"session_id": "sess-42"})
-    assert resp.status_code == 200
+    resp = await client.post("/tools/ov_session_status", json={"session_id": session_id})
+    assert resp.status_code == expected_status
+    if expected_status == 422:
+        assert not route.called
+        return
     sent = route.calls.last.request
     _assert_headers(sent)
-    assert sent.url.path == "/api/v1/sessions/sess-42"
+    assert sent.url.path == f"/api/v1/sessions/{session_id}"
+    assert sent.url.query == b""
+    assert sent.url.fragment == ""
 
 
 @respx.mock
@@ -173,7 +204,38 @@ async def test_error_pass_through(client: httpx.AsyncClient) -> None:
     assert body["detail"]["error"]["code"] == "NOT_FOUND"
 
 
-async def test_openapi_lists_seven_tools(client: httpx.AsyncClient) -> None:
+@respx.mock
+async def test_rule_search_preserves_rules_and_identity(client: httpx.AsyncClient) -> None:
+    rendered = "完整规则\n" * 17000 + "LAST RULE"
+    route = respx.post("http://ov.test/api/v1/rules/search").mock(
+        return_value=httpx.Response(200, json={"status": "ok", "result": {"rendered": rendered}})
+    )
+    body = {"task_context": "deploy", "rule_probability_threshold": 0}
+    response = await client.post("/tools/ov_rule_search", json=body)
+    assert response.status_code == 200
+    assert response.json() == rendered
+    _assert_headers(route.calls.last.request)
+    assert json.loads(route.calls.last.request.content) == body
+
+
+@respx.mock
+async def test_rule_search_errors_are_not_empty_rules(client: httpx.AsyncClient) -> None:
+    route = respx.post("http://ov.test/api/v1/rules/search").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "judge unavailable"}})
+    )
+    response = await client.post("/tools/ov_rule_search", json={"task_context": "deploy"})
+    assert response.status_code == 503
+    route.mock(return_value=httpx.Response(200, json={"status": "ok", "result": {}}))
+    response = await client.post("/tools/ov_rule_search", json={"task_context": "deploy"})
+    assert response.status_code == 502
+    response = await client.post(
+        "/tools/ov_rule_search", json={"task_context": "deploy", "rule_probability_threshold": 2}
+    )
+    assert response.status_code == 422
+    assert route.call_count == 2
+
+
+async def test_openapi_lists_eight_tools(client: httpx.AsyncClient) -> None:
     resp = await client.get("/openapi.json")
     assert resp.status_code == 200
     spec = resp.json()
@@ -185,6 +247,7 @@ async def test_openapi_lists_seven_tools(client: httpx.AsyncClient) -> None:
     }
     expected = {
         "ov_search",
+        "ov_rule_search",
         "ov_recall_memories",
         "ov_add_memory",
         "ov_list_memories",

@@ -1,38 +1,47 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""MCP add_resource parse-mode propagation tests."""
+"""MCP add_resource parse-mode contracts."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.accessors.http_accessor import HTTPAccessor
 from openviking.server import mcp_endpoint
 from openviking.server.identity import RequestContext, Role
 from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.session.user_id import UserIdentifier
+from tests.server.test_api_resources import _wait_task_terminal
 
 
 @pytest.fixture(autouse=True)
 def mcp_context(monkeypatch: pytest.MonkeyPatch):
     ctx = RequestContext(
-        user=UserIdentifier("test_account", "test_user"),
-        role=Role.USER,
+        user=UserIdentifier.the_default_user(),
+        role=Role(Role.USER),
     )
     token = mcp_endpoint._mcp_ctx.set(ctx)
-    service = SimpleNamespace(
-        resources=SimpleNamespace(
-            add_resource=AsyncMock(
-                return_value={"root_uri": "viking://resources/test", "task_id": "task-1"}
-            )
-        )
-    )
-    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    monkeypatch.setattr(mcp_endpoint, "get_service", object)
     upload_token_store.clear()
-    yield service
-    upload_token_store.clear()
-    mcp_endpoint._mcp_ctx.reset(token)
+    try:
+        yield
+    finally:
+        upload_token_store.clear()
+        mcp_endpoint._mcp_ctx.reset(token)
+
+
+async def _assert_imported_file(client, uri, content):
+    response = await client.get("/api/v1/tasks", params={"task_type": "add_resource"})
+    assert response.status_code == 200, response.text
+    [submitted] = response.json()["result"]
+    task = await _wait_task_terminal(client, submitted["task_id"])
+    assert task["status"] == "completed", task
+    assert task["result"]["root_uri"] == uri
+    read = await client.get("/api/v1/content/read", params={"uri": uri})
+    assert read.status_code == 200, read.text
+    assert read.json()["result"].strip() == content.strip()
 
 
 @pytest.mark.asyncio
@@ -42,88 +51,53 @@ async def test_mcp_add_resource_schema_exposes_parse_mode_only_through_args(mcp_
 
     assert "parse_mode" not in schema["properties"]
     assert "args" in schema["properties"]
+    assert "create_parent" not in schema["properties"]
 
 
-@pytest.mark.asyncio
-async def test_mcp_remote_add_forwards_no_split(
-    monkeypatch: pytest.MonkeyPatch,
-    mcp_context,
-):
+@pytest.mark.usefixtures("public_resource_dns")
+async def test_mcp_remote_add_forwards_no_split(client, service, tmp_path, monkeypatch):
+    source = "https://example.com/manual.md"
+    downloaded = tmp_path / "manual.md"
+    content = "# Install\n\nFirst step.\n\n# Configure\n\nSecond step.\n"
+    downloaded.write_text(content)
+    uri = "viking://resources/manual.md"
+
+    async def download(self, path, **kwargs):
+        assert path == source
+        return LocalResource(
+            path=downloaded,
+            source_type=SourceType.HTTP,
+            original_source=source,
+            meta={"original_filename": downloaded.name},
+        )
+
+    monkeypatch.setattr(HTTPAccessor, "access", download)
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
     monkeypatch.setattr(mcp_endpoint, "_maybe_sitemap_hint", AsyncMock(return_value=""))
 
-    result = await mcp_endpoint.add_resource(
-        path="https://example.com/manual.pdf",
-        args={"parse_mode": "no_split"},
+    response = await mcp_endpoint.add_resource(
+        path=source, parent="viking://resources", args={"parse_mode": "no_split"}
     )
-
-    assert "Resource added" in result
-    assert mcp_context.resources.add_resource.await_args.kwargs["args"] == {
-        "parse_mode": "no_split"
-    }
+    assert "processing in background" in response, response
+    await _assert_imported_file(client, uri, content)
 
 
-@pytest.mark.asyncio
-async def test_mcp_temp_file_id_forwards_no_split(
-    monkeypatch: pytest.MonkeyPatch,
-    mcp_context,
-):
-    ingest = AsyncMock(return_value={"root_uri": "viking://resources/upload"})
-    monkeypatch.setattr(mcp_endpoint, "ingest_temp_upload", ingest)
-    monkeypatch.setattr(
-        mcp_endpoint.TempUploadStore,
-        "build",
-        lambda _config: object(),
+async def test_mcp_temp_file_id_forwards_no_split(client, service, upload_temp_dir, monkeypatch):
+    content = "# Usage\n\nRun once.\n\n# Cleanup\n\nRemove temporary files.\n"
+    uploaded = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("manual.md", content, "text/markdown")},
     )
+    assert uploaded.status_code == 200, uploaded.text
+    temp_file_id = uploaded.json()["result"]["temp_file_id"]
+    uri = "viking://resources/manual.md"
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
 
-    result = await mcp_endpoint.add_resource(
-        temp_file_id="upload_abcdef123.md",
-        args={"parse_mode": "no_split"},
+    response = await mcp_endpoint.add_resource(
+        temp_file_id=temp_file_id, parent="viking://resources", args={"parse_mode": "no_split"}
     )
-
-    assert "Resource added" in result
-    assert ingest.await_args.kwargs["args"] == {"parse_mode": "no_split"}
-
-
-@pytest.mark.asyncio
-async def test_mcp_local_upload_token_binds_no_split(
-    monkeypatch: pytest.MonkeyPatch,
-    mcp_context,
-):
-    monkeypatch.setattr(
-        mcp_endpoint,
-        "_resolve_public_base_url",
-        lambda: ("https://ov.example.com", "config"),
-    )
-
-    await mcp_endpoint.add_resource(
-        path="/tmp/manual.pdf",
-        args={"parse_mode": "no_split"},
-    )
-
-    assert len(upload_token_store._store) == 1
-    token_info = next(iter(upload_token_store._store.values()))
-    assert token_info.parse_mode == "no_split"
-
-
-@pytest.mark.asyncio
-async def test_mcp_local_upload_token_binds_parent(
-    monkeypatch: pytest.MonkeyPatch,
-    mcp_context,
-):
-    monkeypatch.setattr(
-        mcp_endpoint,
-        "_resolve_public_base_url",
-        lambda: ("https://ov.example.com", "config"),
-    )
-
-    await mcp_endpoint.add_resource(
-        path="/tmp/manual.pdf",
-        parent="viking://~/resources/team",
-    )
-
-    assert len(upload_token_store._store) == 1
-    token_info = next(iter(upload_token_store._store.values()))
-    assert token_info.parent == "viking://user/test_user/resources/team"
+    assert "processing in background" in response, response
+    await _assert_imported_file(client, uri, content)
 
 
 @pytest.mark.asyncio

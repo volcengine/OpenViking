@@ -102,6 +102,12 @@ class MCPToolWrapper(Tool):
     def parameters(self) -> dict[str, Any]:
         return self._parameters
 
+    @property
+    def preserve_complete_result(self) -> bool:
+        # Rule conditions and exceptions must survive the AgentLoop's ordinary
+        # head/tail preview, including dynamically discovered MCP Rules.
+        return self._original_name == "rule_search"
+
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
         # tool_context is accepted for interface compatibility with vikingbot's
         # native Tool.execute signature, but unused here since MCP servers
@@ -115,7 +121,7 @@ class MCPToolWrapper(Tool):
             )
         except asyncio.TimeoutError:
             logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
-            return f"(MCP tool call timed out after {self._tool_timeout}s)"
+            return f"Error: MCP tool call timed out after {self._tool_timeout}s"
         except asyncio.CancelledError:
             # MCP SDK's anyio cancel scopes can leak CancelledError on timeout/failure.
             # Re-raise only if our task was externally cancelled (e.g. /stop).
@@ -123,7 +129,7 @@ class MCPToolWrapper(Tool):
             if task is not None and task.cancelling() > 0:
                 raise
             logger.warning("MCP tool '{}' was cancelled by server/SDK", self._name)
-            return "(MCP tool call was cancelled)"
+            return "Error: MCP tool call was cancelled"
         except Exception as exc:
             logger.exception(
                 "MCP tool '{}' failed: {}: {}",
@@ -131,7 +137,7 @@ class MCPToolWrapper(Tool):
                 type(exc).__name__,
                 exc,
             )
-            return f"(MCP tool call failed: {type(exc).__name__})"
+            return f"Error: MCP tool call failed: {type(exc).__name__}"
 
         parts = []
         for block in result.content:
@@ -139,7 +145,12 @@ class MCPToolWrapper(Tool):
                 parts.append(block.text)
             else:
                 parts.append(str(block))
-        return "\n".join(parts) or "(no output)"
+        text = "\n".join(parts)
+        if result.isError:
+            # AgentLoop uses this prefix to classify execution failure. MCP's
+            # isError must not be lost when content blocks become plain text.
+            return f"Error: MCP tool '{self._name}' failed: {text or '(no output)'}"
+        return text or "(no output)"
 
 
 async def connect_mcp_servers(

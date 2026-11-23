@@ -12,6 +12,7 @@ import uuid
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from openviking.observability.http_observability_middleware import scope_route_template
 from openviking_cli.utils.logger import bind_log_request_id
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -34,12 +35,6 @@ def _resolve_request_id(scope: Scope) -> tuple[str, bool]:
             if _REQUEST_ID_PATTERN.fullmatch(value):
                 return value, False
     return str(uuid.uuid4()), invalid
-
-
-def _route_template(scope: Scope) -> str:
-    route = scope.get("route")
-    path = getattr(route, "path", None)
-    return str(path) if path else "/__unmatched__"
 
 
 class RequestIdMiddleware:
@@ -87,7 +82,7 @@ class RequestIdMiddleware:
             finally:
                 if scope["path"] not in _IGNORED_COMPLETION_ROUTES:
                     duration_ms = (time.perf_counter() - started_at) * 1000
-                    route = _route_template(scope)
+                    route = scope_route_template(scope)
                     _completion_logger.info(
                         "HTTP request completed method=%s route=%s status=%d duration_ms=%.1f",
                         method,

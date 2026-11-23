@@ -89,7 +89,6 @@ export type AddMessageRequest = {
  * Provides hints for how the resource should be processed.
  * wait: Whether to wait for semantic extraction and vectorization to complete.
  * Default is False (async processing).
- * timeout: Timeout in seconds when wait=True. None means no timeout.
  * strict: Whether to use strict mode for processing. Default is True.
  * ignore_dirs: Comma-separated list of directory names to ignore during parsing.
  * include: Glob pattern for files to include during parsing.
@@ -142,10 +141,6 @@ export type AddResourceRequest = {
      */
     wait?: boolean;
     /**
-     * Timeout
-     */
-    timeout?: number | null;
-    /**
      * Strict
      */
     strict?: boolean;
@@ -195,7 +190,6 @@ export type AddResourceRequest = {
  * string values as host filesystem paths.
  * temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
  * wait: Whether to wait for skill processing to complete.
- * timeout: Timeout in seconds when wait=True.
  */
 export type AddSkillRequest = {
     /**
@@ -210,10 +204,6 @@ export type AddSkillRequest = {
      * Wait
      */
     wait?: boolean;
-    /**
-     * Timeout
-     */
-    timeout?: number | null;
     /**
      * Telemetry
      */
@@ -263,6 +253,10 @@ export type BodyTempUploadApiV1ResourcesTempUploadPost = {
  * behavior.
  */
 export type CommitRequest = {
+    /**
+     * Override only Working Memory generation for this commit; null inherits policy.
+     */
+    enable_working_memory?: boolean | null;
     /**
      * Keep Recent Count
      *
@@ -733,18 +727,6 @@ export type ValidationError = {
 };
 
 /**
- * WaitRequest
- *
- * Request model for wait.
- */
-export type WaitRequest = {
-    /**
-     * Timeout
-     */
-    timeout?: number | null;
-};
-
-/**
  * WriteContentRequest
  *
  * Request to write, append, or create text content to a file.
@@ -766,10 +748,6 @@ export type WriteContentRequest = {
      * Wait
      */
     wait?: boolean;
-    /**
-     * Timeout
-     */
-    timeout?: number | null;
     /**
      * Telemetry
      */
@@ -848,7 +826,7 @@ export type GetSystemStatusResponses = {
 };
 
 export type PostSystemWaitData = {
-    body: WaitRequest;
+    body?: never;
     headers?: {
         /**
          * X-Api-Key
@@ -1406,6 +1384,148 @@ export type PostResourcesErrors = {
 export type PostResourcesError = PostResourcesErrors[keyof PostResourcesErrors];
 
 export type PostResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type DeleteResourcesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query: {
+        /**
+         * Uri
+         *
+         * URI below viking://resources/
+         */
+        uri: string;
+        /**
+         * Recursive
+         *
+         * Remove a directory recursively
+         */
+        recursive?: boolean;
+        /**
+         * Wait
+         *
+         * Wait for semantic index cleanup
+         */
+        wait?: boolean;
+    };
+    url: '/api/v1/resources';
+};
+
+export type DeleteResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteResourcesError = DeleteResourcesErrors[keyof DeleteResourcesErrors];
+
+export type DeleteResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostResourcesCpData = {
+    body: CpRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/resources/cp';
+};
+
+export type PostResourcesCpErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostResourcesCpError = PostResourcesCpErrors[keyof PostResourcesCpErrors];
+
+export type PostResourcesCpResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostResourcesMvData = {
+    body: MvRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/resources/mv';
+};
+
+export type PostResourcesMvErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostResourcesMvError = PostResourcesMvErrors[keyof PostResourcesMvErrors];
+
+export type PostResourcesMvResponses = {
     /**
      * Successful Response
      */
@@ -3212,54 +3332,6 @@ export type PostSessionIdCommitErrors = {
 export type PostSessionIdCommitError = PostSessionIdCommitErrors[keyof PostSessionIdCommitErrors];
 
 export type PostSessionIdCommitResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type PostSessionIdExtractData = {
-    body?: never;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path: {
-        /**
-         * Session Id
-         *
-         * Session ID
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/api/v1/sessions/{session_id}/extract';
-};
-
-export type PostSessionIdExtractErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostSessionIdExtractError = PostSessionIdExtractErrors[keyof PostSessionIdExtractErrors];
-
-export type PostSessionIdExtractResponses = {
     /**
      * Successful Response
      */

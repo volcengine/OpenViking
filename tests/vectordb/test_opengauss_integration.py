@@ -3,7 +3,6 @@
 
 import os
 import uuid
-from unittest.mock import patch
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -76,20 +75,19 @@ def _drop_quietly(adapter: OpenGaussCollectionAdapter | None) -> None:
         pass
 
 
-def test_opengauss_context_contract_and_dense_retrieval():
+def test_opengauss_context_retrieval_and_mutation_contract():
     collection_name = f"ov_it_{uuid.uuid4().hex[:12]}"
     adapter = _build_adapter(collection_name)
     try:
         schema = _context_schema(collection_name)
+        schema["FullText"] = [{"Field": "content"}]
         assert adapter.create_collection(
             collection_name,
             schema,
             distance="cosine",
-            sparse_weight=0.0,
+            sparse_weight=0.5,
             index_name="default",
         )
-        # ``content`` is dropped above the adapter by the storage backend when
-        # ``USE_CONTENT_FIELD`` is False, so it never reaches ``adapter.upsert``.
         adapter.upsert(
             [
                 {
@@ -98,47 +96,60 @@ def test_opengauss_context_contract_and_dense_retrieval():
                     "vector": [1.0, 0.0, 0.0],
                     "sparse_vector": {"alpha": 0.8},
                     "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-01T00:00:01Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
                     "level": 1,
                     "search_tags": ["env=prod", "team=search"],
                     "abstract": "closest",
+                    "content": "retrieval database",
                     "account_id": "acct-1",
                 },
                 {
                     "id": "farther",
                     "uri": "viking://resources/demo/farther",
                     "vector": [0.0, 1.0, 0.0],
-                    "sparse_vector": {"beta": 0.4},
+                    "sparse_vector": {"alpha": 2.0},
                     "created_at": 1767225602000,
-                    "updated_at": 1767225603000,
+                    "updated_at": 1768435200000,
                     "level": 2,
                     "search_tags": ["env=dev"],
                     "abstract": "farther",
+                    "content": "retrieval database",
                     "account_id": "acct-1",
+                },
+                {
+                    "id": "private",
+                    "uri": "viking://resources/private",
+                    "vector": [1.0, 0.0, 0.0],
+                    "sparse_vector": {"alpha": 100.0},
+                    "content": "retrieval database",
+                    "account_id": "acct-2",
                 },
             ]
         )
+        scope = {"op": "must", "field": "account_id", "conds": ["acct-1"]}
 
         fetched = adapter.get(["closest"])
         assert fetched[0]["created_at"] == 1767225600000
         assert fetched[0]["search_tags"] == ["env=prod", "team=search"]
         assert fetched[0]["sparse_vector"] == {"alpha": 0.8}
-        assert "content" not in fetched[0]
+        assert fetched[0]["content"] == "retrieval database"
         assert isinstance(fetched[0]["vector"], list)
         assert fetched[0]["vector"] == [1.0, 0.0, 0.0]
 
         projected = adapter.query(
             query_vector=[1.0, 0.0, 0.0],
+            filter=scope,
             limit=1,
             output_fields=["id", "uri", "content", "vector", "account_id"],
         )
         assert projected[0]["id"] == "closest"
-        assert projected[0]["content"] is None
+        assert projected[0]["content"] == "retrieval database"
         assert isinstance(projected[0]["vector"], list)
         assert projected[0]["vector"] == [1.0, 0.0, 0.0]
 
         results = adapter.query(
             query_vector=[1.0, 0.0, 0.0],
+            filter=scope,
             limit=2,
             output_fields=["uri", "level", "search_tags"],
         )
@@ -169,7 +180,7 @@ def test_opengauss_context_contract_and_dense_retrieval():
             output_fields=["uri", "search_tags"],
         )
         assert [record["id"] for record in filtered] == ["closest"]
-        assert adapter.count() == 2
+        assert adapter.count() == 3
         assert (
             adapter.query(
                 query_vector=[1.0, 0.0, 0.0],
@@ -180,43 +191,75 @@ def test_opengauss_context_contract_and_dense_retrieval():
             == []
         )
 
-        class _Embedding:
-            dimension = 3
+        assert adapter.delete(filter=Or([])) == 0
+        assert adapter.count() == 3
 
-        class _Cfg:
-            embedding = _Embedding()
-
-        with patch(
-            "openviking.storage.vectordb_adapters.base.get_openviking_config",
-            return_value=_Cfg(),
-        ):
-            assert adapter.delete(filter=Or([])) == 0
-        assert adapter.count() == 2
-
-        cursor = adapter._conn.cursor()
-        cursor.execute(
-            "SELECT indexdef FROM pg_indexes WHERE tablename = %s AND indexdef ILIKE '%%USING hnsw%%'",
-            (collection_name,),
+        assert [
+            row["id"]
+            for row in adapter.search_by_keywords(query="retrieval", filter=scope, limit=1)
+        ] == ["closest"]
+        assert [
+            row["id"]
+            for row in adapter.search_by_keywords(
+                query="retrieval", filter=scope, limit=1, offset=1
+            )
+        ] == ["farther"]
+        sparse = adapter.query(sparse_query_vector={"alpha": 1.0}, filter=scope, limit=2)
+        assert [row["id"] for row in sparse] == ["farther", "closest"]
+        assert [row["_score"] for row in sparse] == pytest.approx([2.0, 0.8])
+        decayed = adapter.query(
+            query_vector=[1.0, 0.0, 0.0],
+            sparse_query_vector={"alpha": 1.0},
+            filter=scope,
+            limit=1,
+            offset=1,
+            advance={"time_decay": {"protection": "0", "origin": "2026-01-15T00:00:00Z"}},
         )
-        assert cursor.fetchone() is not None
-        cursor.close()
+        assert decayed[0]["id"] == "closest"
+        assert decayed[0]["_origin_score"] == pytest.approx(0.9)
+        assert decayed[0]["_time_score"] == pytest.approx(0.25)
+        assert decayed[0]["_score"] == pytest.approx(0.225)
 
-        assert adapter.delete(ids=["farther"]) == 1
+        before = {row["id"]: row for row in adapter.get(["closest", "farther"])}
+        with pytest.raises(ValueError, match="negative sparse weights"):
+            adapter.update_data(
+                [
+                    {"id": "closest", "content": "must not persist"},
+                    {"id": "farther", "sparse_vector": {"alpha": -1.0}},
+                ]
+            )
+        assert {row["id"]: row for row in adapter.get(["closest", "farther"])} == before
+
+        adapter.update_data([{"id": "closest", "content": ""}])
+        assert adapter.get(["closest"])[0]["content"] == ""
+        assert len(adapter.query(sparse_query_vector={"alpha": 1.0}, filter=scope)) == 2
+        adapter.update_data([{"id": "closest", "sparse_vector": {}}])
+        assert [
+            row["id"] for row in adapter.query(sparse_query_vector={"alpha": 1.0}, filter=scope)
+        ] == ["farther"]
+
+        assert adapter.delete(filter={"op": "must", "field": "id", "conds": ["farther"]}) == 1
+        assert adapter.search_by_keywords(query="retrieval", filter=scope) == []
+        assert adapter.query(sparse_query_vector={"alpha": 1.0}, filter=scope) == []
+        assert adapter.get(["private"])[0]["content"] == "retrieval database"
+        assert adapter.delete(ids=["closest"]) == 1
         assert adapter.count() == 1
     finally:
         _drop_quietly(adapter)
 
 
-def test_opengauss_reconnect_rebuilds_distance_operator_class():
+def test_opengauss_reconnect_preserves_collection_data_and_indexes():
     collection_name = f"ov_it_{uuid.uuid4().hex[:12]}"
     original = _build_adapter(collection_name, distance_metric="cosine")
-    rebuilt = None
+    reopened = None
     try:
+        schema = _context_schema(collection_name)
+        schema["FullText"] = [{"Field": "content"}]
         assert original.create_collection(
             collection_name,
-            _context_schema(collection_name),
+            schema,
             distance="cosine",
-            sparse_weight=0.0,
+            sparse_weight=0.5,
             index_name="default",
         )
         original.upsert(
@@ -225,35 +268,45 @@ def test_opengauss_reconnect_rebuilds_distance_operator_class():
                     "id": "item",
                     "uri": "viking://resources/demo/item",
                     "vector": [1.0, 0.0, 0.0],
+                    "sparse_vector": {"alpha": 0.8},
+                    "content": "retrieval persisted",
                     "account_id": "acct-1",
                 }
             ]
         )
         cursor = original._conn.cursor()
         cursor.execute(
-            "SELECT indexdef FROM pg_indexes WHERE tablename=%s AND indexname=%s",
-            (collection_name, f"idx_{collection_name}_default_vec"),
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname=current_schema() AND tablename=%s ORDER BY indexname",
+            (collection_name,),
         )
-        assert "vector_cosine_ops" in cursor.fetchone()[0]
+        indexes = cursor.fetchall()
+        assert any("vector_cosine_ops" in definition for _, definition in indexes)
+        assert any("USING bm25" in definition for _, definition in indexes)
+        original._conn.commit()
         cursor.close()
         original.close()
         original = None
 
-        rebuilt = _build_adapter(collection_name, distance_metric="l2")
-        rebuilt.get_collection()
-        cursor = rebuilt._conn.cursor()
+        reopened = _build_adapter(collection_name, distance_metric="cosine")
+        reopened.get_collection()
+        cursor = reopened._conn.cursor()
         cursor.execute(
-            "SELECT indexdef FROM pg_indexes WHERE tablename=%s AND indexname=%s",
-            (collection_name, f"idx_{collection_name}_default_vec"),
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname=current_schema() AND tablename=%s ORDER BY indexname",
+            (collection_name,),
         )
-        definition = cursor.fetchone()[0]
+        assert cursor.fetchall() == indexes
+        reopened._conn.commit()
         cursor.close()
-        assert "vector_l2_ops" in definition
-        records = rebuilt.get(["item"])
+        records = reopened.get(["item"])
         assert isinstance(records[0]["vector"], list)
         assert records[0]["vector"] == [1.0, 0.0, 0.0]
+        assert records[0]["content"] == "retrieval persisted"
+        assert [row["id"] for row in reopened.search_by_keywords(query="retrieval")] == ["item"]
+        assert [row["id"] for row in reopened.query(sparse_query_vector={"alpha": 1.0})] == ["item"]
     finally:
-        _drop_quietly(rebuilt)
+        _drop_quietly(reopened)
         _drop_quietly(original)
 
 

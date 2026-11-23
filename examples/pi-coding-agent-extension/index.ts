@@ -10,7 +10,7 @@
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { createLogger } from "./shared/debug-log.mjs";
@@ -25,10 +25,18 @@ import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-gua
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
-import { HANDLER_BUDGET_MS } from "./lib/takeover-core.mjs";
+import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
 
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Budget for the final commit on the exit path. The host awaits
+ * session_shutdown before releasing the terminal, so this waits at most a few
+ * seconds; anything not committed by then is already in the on-disk pending
+ * queue and replays at the next session start.
+ */
+const SHUTDOWN_COMMIT_BUDGET_MS = 3000;
 
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
@@ -39,11 +47,17 @@ export default async function (pi: ExtensionAPI) {
   // MCP tool surface is off, while recall, sync and takeover carry on.
   const mcpEnabled = (config as any).mcpEnabled !== false;
 
+  // Installed as an extension rather than a package, so pi does not scan
+  // skills/ on its own. The skills teach the MCP tools, so they follow them.
+  if (mcpEnabled) {
+    pi.on("resources_discover", async () => ({ skillPaths: [join(EXTENSION_DIR, "skills")] }));
+  }
+
   // Env overrides
 
   // --- Initialize modules ---
   const client = new OVClient(config);
-  const sync = new SyncManager(client, config);
+  const sync = new SyncManager(client, config, (type, data) => pi.appendEntry(type, data));
   const recall = new RecallManager(
     client,
     config,
@@ -182,8 +196,8 @@ export default async function (pi: ExtensionAPI) {
         : [];
       if (config.takeoverEnabled) {
         takeover.restore(branch);
-        sync.restoreWatermark(takeover.state.syncedEntryCount);
       }
+      sync.restoreCapture(branch, !ctx.sessionManager.getHeader?.()?.parentSession);
 
       await sync.replayPending();
       if (config.takeoverEnabled && sync.droppedCount > 0) {
@@ -193,7 +207,7 @@ export default async function (pi: ExtensionAPI) {
       // Profile injection
       profileBlock = await buildSessionProfileBlock(client, config);
 
-      if (!config.takeoverEnabled && sync.sessionId) {
+      if (!config.takeoverEnabled && config.resumeArchiveInject && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
         archiveOverview = await fetchArchiveOverview(client, sync.sessionId, config);
       }
@@ -269,7 +283,7 @@ export default async function (pi: ExtensionAPI) {
     // Compose system prompt additions
     const parts: string[] = [];
     if (profileBlock) parts.push(profileBlock);
-    if (!config.takeoverEnabled && archiveOverview && (compacted || archiveOverview.trim())) {
+    if (!config.takeoverEnabled && config.resumeArchiveInject && archiveOverview && (compacted || archiveOverview.trim())) {
       parts.push(archiveOverview);
     }
     // Generated from what actually registered, so it can never name a tool the
@@ -374,7 +388,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!connected || bypassed) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     if (config.takeoverEnabled) {
       const deadline = Date.now() + HANDLER_BUDGET_MS;
@@ -392,7 +406,7 @@ export default async function (pi: ExtensionAPI) {
     compacted = true;
 
     // Cache archive overview for rehydration after compaction
-    if (archiveId && sync.sessionId) {
+    if (config.resumeArchiveInject && archiveId && sync.sessionId) {
       archiveOverview = await fetchArchiveOverview(
         client, sync.sessionId, config,
       );
@@ -420,8 +434,12 @@ export default async function (pi: ExtensionAPI) {
     await sync.shutdown();
     if (config.takeoverEnabled) {
       await takeover.shutdown();
-    } else {
-      await sync.commit();
+    } else if (isCaptureEnabled(config)) {
+      // The host awaits this handler before releasing the terminal, so a slow
+      // commit must not hold the quit. Cutting the wait short loses nothing:
+      // a failed or timed-out commit is written to the on-disk pending queue
+      // (sync.commit queues by default) and replayed at the next session start.
+      await sync.commit({ timeoutMs: SHUTDOWN_COMMIT_BUDGET_MS });
     }
   });
 
@@ -447,9 +465,11 @@ export default async function (pi: ExtensionAPI) {
         const commitResult = config.takeoverEnabled ? null : await sync.commit();
         // Manual commit freezes and confirms the boundary against the current
         // branch, exactly like the automatic path.
+        // A `skipped` result archived nothing; it is not a successful commit.
+        const skipped = commitResult?.status === "skipped";
         const ok = config.takeoverEnabled
           ? await takeover.commitAndAdvance(() => ctx.sessionManager.getBranch())
-          : commitResult !== null;
+          : commitResult !== null && !skipped;
         if (!ok && config.takeoverEnabled && takeover.state.pendingArchive) {
           ctx.ui.notify(
             "OpenViking: committed; the context is trimmed once the archive summary is ready",
@@ -462,7 +482,19 @@ export default async function (pi: ExtensionAPI) {
             "info",
           );
         } else {
-          ctx.ui.notify("OpenViking: commit failed", "error");
+          // Say why: a bare "commit failed" left users with nothing to act on.
+          const reason = config.takeoverEnabled
+            ? takeover.lastFailure
+            : skipped
+              ? describeSkip(String(commitResult?.reason || ""))
+              : sync.lastCommitError;
+          logger.log("commit", { ok: false, manual: true, reason: reason || "unknown" });
+          if (reason.startsWith("nothing")) {
+            // Not an error: the server already holds this history.
+            ctx.ui.notify(`OpenViking: ${reason}`, "warning");
+          } else {
+            ctx.ui.notify(`OpenViking: commit failed${reason ? ` — ${reason}` : ""}`, "error");
+          }
         }
         return;
       }

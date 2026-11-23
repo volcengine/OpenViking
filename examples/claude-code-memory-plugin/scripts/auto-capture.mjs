@@ -34,6 +34,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { replayPending } from "./lib/pending-queue.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
@@ -210,6 +211,15 @@ function isMissingSessionState(error) {
 // Main
 // ---------------------------------------------------------------------------
 
+// last_assistant_message is the text of the turn's final message, which
+// follows its last tool result; the transcript writes each block as a line.
+function holdsAnswer(turns, answer) {
+  const start = turns.findLastIndex((turn) => turn.role === "user") + 1;
+  const text = turns.slice(start).flatMap((turn) => turn.parts)
+    .filter((part) => part.type === "text").map((part) => part.text).join("");
+  return text.replace(/\s+/g, "") === answer.replace(/\s+/g, "");
+}
+
 async function main({ cfg, input, cwd }) {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id || "unknown";
@@ -246,6 +256,16 @@ async function main({ cfg, input, cwd }) {
   const state = await loadState(sessionId);
   await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
   const newTurns = allTurns.slice(state.capturedTurnCount);
+  // Claude Code writes the transcript asynchronously, so at Stop it may not
+  // hold the final answer yet. Taking it from the payload is left out of the
+  // cursor: should the transcript catch up later, the answer goes out twice
+  // rather than not at all.
+  const finalAnswer = cfg.captureLastAssistantOnStop
+    ? String(input.last_assistant_message || "").trim()
+    : "";
+  if (finalAnswer && !holdsAnswer(allTurns, finalAnswer)) {
+    newTurns.push({ role: "assistant", text: finalAnswer, parts: [{ type: "text", text: finalAnswer }] });
+  }
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
     : newTurns.filter(turn => turn.role === "user");
@@ -317,6 +337,13 @@ async function main({ cfg, input, cwd }) {
   const health = await fetchJSON("/health");
   let result;
   if (health.ok) {
+    // SessionStart replays at most one capped batch, so drain more of the
+    // queue here; older entries go out before this turn's messages.
+    try {
+      await replayPending(fetchJSON, log, { consumeRetries: false });
+    } catch (err) {
+      logError("pending-replay", err);
+    }
     result = await pushTurnsToOv(ovSessionId, captureTurns, effectivePeer.peerId, cfg);
   } else if (isRetryableFailure(health)) {
     logError("health_check", "server unreachable or unhealthy; enqueuing capture");
@@ -410,9 +437,7 @@ async function main({ cfg, input, cwd }) {
     totalMessageCount = Number(meta?.total_message_count || 0);
     log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
     if (pendingTokens >= cfg.commitTokenThreshold) {
-      const commitRes = await commitSession(fetchJSON, ovSessionId, {
-        keep_recent_count: cfg.commitKeepRecentCount,
-      });
+      const commitRes = await commitSession(fetchJSON, ovSessionId, { keep_recent_count: 0 });
       committed = commitRes.ok;
       commitTraceId = commitRes.traceId || commitRes.result?.trace_id || "";
       if (committed) commitCount += 1;
@@ -421,7 +446,6 @@ async function main({ cfg, input, cwd }) {
         ok: commitRes.ok,
         trace_id: commitTraceId || undefined,
         pending: pendingTokens,
-        keepRecentCount: cfg.commitKeepRecentCount,
       });
     }
   }

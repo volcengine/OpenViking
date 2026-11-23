@@ -16,8 +16,9 @@ All labels are normalized into a sorted tuple of (key, value) pairs to provide:
 
 from __future__ import annotations
 
+import hashlib
 import re
-from dataclasses import dataclass
+import struct
 from typing import Mapping
 
 _LABEL_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -32,6 +33,11 @@ FORBIDDEN_LABEL_KEYS: set[str] = {
     "path",
     "url",
 }
+
+
+def histogram_schema(bounds: tuple[float, ...]) -> str:
+    """Identify the actual bucket layout so rolling upgrades cannot mix layouts."""
+    return hashlib.sha256(struct.pack(f"!{len(bounds)}d", *bounds)).hexdigest()[:16]
 
 
 def normalize_labels(labels: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:
@@ -61,40 +67,3 @@ def normalize_labels(labels: Mapping[str, str] | None) -> tuple[tuple[str, str],
         items.append((key, str(v)))
     items.sort(key=lambda x: x[0])
     return tuple(items)
-
-
-def render_labels(normalized: tuple[tuple[str, str], ...]) -> str:
-    """
-    Render normalized labels into Prometheus exposition syntax.
-
-    Args:
-        normalized: Canonical normalized label tuple.
-
-    Returns:
-        An empty string when no labels are present, or a `{k="v",...}` block ready for text
-        exposition output.
-    """
-    if not normalized:
-        return ""
-    parts = [f'{k}="{_escape_label_value(v)}"' for k, v in normalized]
-    return "{" + ",".join(parts) + "}"
-
-
-def _escape_label_value(value: str) -> str:
-    """Escape a label value according to Prometheus text exposition rules."""
-    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
-
-
-@dataclass(frozen=True, slots=True)
-class MetricSeriesId:
-    """
-    Immutable identifier for a single metric series in the in-process registry.
-
-    Attributes:
-        name: Metric family name.
-        labels: Canonical normalized label tuple uniquely identifying one concrete series within
-            that metric family.
-    """
-
-    name: str
-    labels: tuple[tuple[str, str], ...]

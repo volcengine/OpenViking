@@ -102,7 +102,7 @@ class RagfsMetricDataSource(DomainStatsMetricDataSource):
                 or not _LABEL.fullmatch(key)
                 or key.startswith("__")
                 or key in _FORBIDDEN_LABELS
-                or (kind == "histogram" and key == "le")
+                or (kind == "histogram" and key in {"le", "bucket_schema"})
                 for key, value in labels.items()
             ):
                 raise ValueError("native metric labels are invalid or forbidden")

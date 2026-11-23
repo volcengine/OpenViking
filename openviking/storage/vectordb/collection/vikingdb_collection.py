@@ -3,20 +3,23 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
     FetchDataInCollectionResult,
-    SearchItemResult,
     SearchResult,
+    parse_remote_search_result,
 )
 from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VikingDBCollection(ICollection):
@@ -76,7 +79,7 @@ class VikingDBCollection(ICollection):
         path, method = VIKINGDB_APIS[action]
         response = self.client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
-            logger.error(f"Request to {action} failed: {response.text}")
+            logger.debug("Vector console request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
@@ -86,7 +89,13 @@ class VikingDBCollection(ICollection):
         except json.JSONDecodeError:
             return {}
 
-    def _console_get(self, params: Optional[Dict[str, Any]], action: str):
+    def _console_get(
+        self,
+        params: Optional[Dict[str, Any]],
+        action: str,
+        *,
+        raise_on_error: bool = False,
+    ):
         if params is None:
             params = {}
         path, method = VIKINGDB_APIS[action]
@@ -94,12 +103,16 @@ class VikingDBCollection(ICollection):
         response = self.client.do_req(method, path=path, req_body=params)
 
         if response.status_code != 200:
-            logger.error(f"Request to {action} failed: {response.text}")
+            if raise_on_error:
+                raise self._build_response_error(response, action)
+            logger.debug("Vector console request failed http_status=%d", response.status_code)
             return {}
         try:
             result = response.json()
             return result.get("Result", {})
         except json.JSONDecodeError:
+            if raise_on_error:
+                raise self._build_response_error(response, action)
             return {}
 
     def _data_post(self, path: str, data: Dict[str, Any]):
@@ -109,8 +122,12 @@ class VikingDBCollection(ICollection):
         try:
             result = response.json()
             return result.get("result", {})
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON response from %s", path)
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "Invalid JSON response from %s error_type=%s",
+                safe_path_for_log(str(path)),
+                type(_log_error).__name__,
+            )
             return {}
 
     def _data_get(self, path: str, params: Dict[str, Any]):
@@ -120,8 +137,12 @@ class VikingDBCollection(ICollection):
         try:
             result = response.json()
             return result.get("result", {})
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON response from %s", path)
+        except json.JSONDecodeError as _log_error:
+            logger.info(
+                "Invalid JSON response from %s error_type=%s",
+                safe_path_for_log(str(path)),
+                type(_log_error).__name__,
+            )
             return {}
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
@@ -136,12 +157,16 @@ class VikingDBCollection(ICollection):
 
         return self._console_post(data, action="UpdateVikingdbCollection")
 
-    def get_meta_data(self):
+    def get_meta_data(self, *, raise_on_error: bool = False):
         params = {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
         }
-        return self._console_get(params, action="GetVikingdbCollection")
+        return self._console_get(
+            params,
+            action="GetVikingdbCollection",
+            raise_on_error=raise_on_error,
+        )
 
     def close(self):
         pass
@@ -252,18 +277,7 @@ class VikingDBCollection(ICollection):
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
-        result = SearchResult()
-        if isinstance(data, dict) and "data" in data:
-            data_list = data.get("data", [])
-            result.data = [
-                SearchItemResult(
-                    id=item.get("id"),
-                    fields=item.get("fields"),
-                    score=item.get("score"),
-                )
-                for item in data_list
-            ]
-        return result
+        return parse_remote_search_result(data)
 
     def search_by_vector(
         self,
@@ -274,6 +288,8 @@ class VikingDBCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/vector"
         data = {
@@ -289,6 +305,10 @@ class VikingDBCollection(ICollection):
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
+        if advance is not None:
+            data["advance"] = advance
+        if return_detail_info:
+            data["return_detail_info"] = True
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 
@@ -378,6 +398,11 @@ class VikingDBCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -386,12 +411,20 @@ class VikingDBCollection(ICollection):
             "index_name": index_name,
             "keywords": keywords,
             "query": query,
+            "mode": mode,
+            "fields": fields,
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
             "ignore_unknown_fields": True,
         }
+        if bm25_k1 is not None:
+            data["bm25_k1"] = bm25_k1
+        if bm25_b is not None:
+            data["bm25_b"] = bm25_b
+        if advance is not None:
+            data["advance"] = advance
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

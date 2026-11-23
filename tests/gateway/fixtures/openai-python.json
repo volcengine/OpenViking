@@ -1,0 +1,53 @@
+{
+  "client": "openai-python",
+  "version": "2.29.0",
+  "recorded_at": "2026-10-02",
+  "requests": [
+    {
+      "path": "/v1/chat/completions",
+      "headers": {
+        "x-openviking-session": "sdk-chat-da1989e3"
+      },
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "For acceptance run sdk-chat-da1989e3, what deployment cluster does the Aurora acceptance project use? Answer briefly."
+          }
+        ],
+        "model": "model",
+        "max_tokens": 128,
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    },
+    {
+      "path": "/v1/chat/completions",
+      "headers": {
+        "x-openviking-session": "sdk-chat-da1989e3"
+      },
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "For acceptance run sdk-chat-da1989e3, what deployment cluster does the Aurora acceptance project use? Answer briefly."
+          },
+          {
+            "content": "The Aurora acceptance project uses the **cobalt-zebra-731** cluster.",
+            "role": "assistant"
+          },
+          {
+            "role": "user",
+            "content": "Repeat the deployment cluster name only."
+          }
+        ],
+        "model": "model",
+        "max_tokens": 128,
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    }
+  ]
+}

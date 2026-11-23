@@ -29,12 +29,12 @@ async def install_skills(
     names: Optional[list[str]] = None,
     list_only: bool = False,
     wait: bool = False,
-    timeout: Optional[float] = None,
     target_uri: str = "",
     source_metadata: Optional[dict[str, Any]] = None,
     allow_local_path_resolution: bool = False,
     source_path_hint: Optional[str] = None,
     telemetry: TelemetryRequest = False,
+    request_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Install the skills found in ``data``; return one result or ``{"installed", "total"}``.
 
@@ -58,11 +58,11 @@ async def install_skills(
                     data=skill_data,
                     ctx=ctx,
                     wait=wait,
-                    timeout=timeout,
                     allow_local_path_resolution=isinstance(skill_data, Path),
                     source_path_hint=source_path_hint,
                     target_uri=target_uri,
                     source_metadata=skill_source,
+                    request_id=request_id,
                 )
                 return result
 
@@ -90,6 +90,7 @@ async def ingest_temp_upload_skill(
     names: Optional[list[str]] = None,
     list_only: bool = False,
     source_type: str = "api",
+    request_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolve an uploaded SKILL.md, directory archive, or zip and install its skills."""
     resolved = await store.resolve_for_consume(temp_file_id, ctx)
@@ -111,6 +112,7 @@ async def ingest_temp_upload_skill(
             source_metadata=source_metadata,
             allow_local_path_resolution=True,
             source_path_hint=resolved.original_filename,
+            request_id=request_id,
         )
     finally:
         await resolved.cleanup()

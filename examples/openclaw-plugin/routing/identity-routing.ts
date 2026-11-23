@@ -42,11 +42,10 @@ export function resolveOpenVikingMessagePeerId(params: {
 }
 
 /**
- * Peer scoping is soft isolation. OpenClaw does not hand every path a sender
- * (context-engine assemble gets no runtimeContext; cron and heartbeat turns
- * have no sender at all), so a missing one widens to the unscoped request a
- * caller without X-OpenViking-Actor-Peer gets, with a warning, rather than
- * taking OpenViking away for the turn.
+ * Peer scoping is soft isolation. OpenClaw may not hand every path a sender
+ * (for example, cron and heartbeat turns have no sender at all), so a missing
+ * one widens to the unscoped request a caller without X-OpenViking-Actor-Peer
+ * gets, with a warning, rather than taking OpenViking away for the turn.
  */
 export function resolveOpenVikingActorPeerId(params: {
   peerRole: OpenVikingPeerRole;
