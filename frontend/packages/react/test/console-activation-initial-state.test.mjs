@@ -34,7 +34,8 @@ for (const status of ['ready', 'not-started', 'error']) {
       assert.doesNotMatch(host.text, /Checking VikingBot status/);
       if (status === 'ready')
         assert.ok(host.container.querySelector('.ov-viking-bot'));
-      if (status === 'not-started') assert.ok(host.button('Enable VikingBot'));
+      if (status === 'not-started')
+        assert.ok(host.button('Start using VikingBot'));
       if (status === 'error') {
         await host.press('Retry');
         assert.equal(lookups, 2);
