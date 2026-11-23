@@ -105,17 +105,57 @@ test('async confirmation locks both actions, retains rows after failure and perm
   }
 });
 
-test('confirmation reports a rejection without a reason', async () => {
-  const view = await mount(
+test('confirmation updates the fallback after a rejection without a reason', async () => {
+  const render = (extra = {}) =>
     h(VikingBotConfirmation, {
       rows,
       onConfirm: () => Promise.reject(),
-    }),
-  );
+      ...extra,
+    });
+  const view = await mount(render());
   try {
     await submit(view);
     await settle();
-    assert.match(notificationContent().textContent, /Submission failed/);
+    assert.equal(
+      notificationContent().textContent,
+      'Submission failed. Please try again.',
+    );
+    await view.render(render({ locale: 'zh-CN' }));
+    assert.equal(notificationContent().textContent, '提交失败，请重试');
+    await view.render(render({ labels: { submitFailed: 'Try again later' } }));
+    assert.equal(notificationContent().textContent, 'Try again later');
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('pending confirmation uses the current fallback and preserves supplied errors', async () => {
+  let reject;
+  let attempts = 0;
+  const onConfirm = () => {
+    attempts++;
+    return new Promise((_, fail) => {
+      reject = fail;
+    });
+  };
+  const render = (locale) =>
+    h(VikingBotConfirmation, { rows, onConfirm, locale });
+  const view = await mount(render('en-US'));
+  try {
+    await submit(view);
+    await view.render(render('zh-CN'));
+    await submit(view);
+    assert.equal(attempts, 1);
+    await act(async () => reject());
+    await settle();
+    assert.equal(notificationContent().textContent, '提交失败，请重试');
+
+    await submit(view);
+    assert.equal(attempts, 2);
+    await act(async () => reject(new Error('Offline')));
+    await settle();
+    await view.render(render('en-US'));
+    assert.equal(notificationContent().textContent, 'Offline');
   } finally {
     await view.unmount();
   }
