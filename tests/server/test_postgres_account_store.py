@@ -260,6 +260,25 @@ async def test_pg_credentials_groups_rotation_and_service_isolation(pg_database,
         assert (await peer.resolve_identity(user_key)).group_ids == ("engineering",)
         await writer.set_role("acme", "alice", "admin")
         assert (await peer.resolve_identity(user_key)).role == Role.ADMIN
+        for hints in (
+            {},
+            {"account_id_hint": "acme"},
+            {"user_id_hint": "alice"},
+            {"account_id_hint": "acme", "user_id_hint": "alice"},
+        ):
+            snapshot = await peer._store.get_auth_snapshot(user_key, **hints)
+            assert snapshot["user_id"] == "alice"
+            assert snapshot["group_ids"] == ("engineering",)
+            assert await other._store.get_auth_snapshot(user_key, **hints) is None
+            assert await peer._store.get_auth_snapshot("unknown-key", **hints) is None
+            assert await peer._store.get_auth_snapshot(user_key, **hints) == snapshot
+        for hints in (
+            {"account_id_hint": "missing"},
+            {"user_id_hint": "missing"},
+            {"account_id_hint": "acme", "user_id_hint": "missing"},
+            {"account_id_hint": "missing", "user_id_hint": "alice"},
+        ):
+            assert await peer._store.get_auth_snapshot(user_key, **hints) is None
         page = await peer.list_users_page("acme", name_filter="ali*", limit=1)
         assert page["total"] == 1 and page["account_total"] == 2
         assert page["manager_count"] == 2 and page["key_count"] == 2

@@ -78,6 +78,7 @@ export default {
   noSchedule: '不更新',
   daily: '每日',
   weekly: '每周',
+  weeklySchedule: (weekday: string) => `每${weekday.replace(/^星期/, '周')}`,
   time: '更新时间',
   weekday: '更新日期',
 } satisfies FileBrowserWorkflowLabels;

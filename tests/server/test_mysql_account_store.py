@@ -117,6 +117,25 @@ async def test_mysql_credentials_groups_conditional_rotation_and_service_isolati
     assert (await peer.resolve_identity(key)).group_ids == ("team",)
     await writer.set_role("acme", "alice", "admin")
     assert (await peer.resolve_identity(key)).role == "admin"
+    for hints in (
+        {},
+        {"account_id_hint": "acme"},
+        {"user_id_hint": "alice"},
+        {"account_id_hint": "acme", "user_id_hint": "alice"},
+    ):
+        snapshot = await peer._store.get_auth_snapshot(key, **hints)
+        assert snapshot["user_id"] == "alice"
+        assert snapshot["group_ids"] == ("team",)
+        assert await other._store.get_auth_snapshot(key, **hints) is None
+        assert await peer._store.get_auth_snapshot("unknown-key", **hints) is None
+        assert await peer._store.get_auth_snapshot(key, **hints) == snapshot
+    for hints in (
+        {"account_id_hint": "missing"},
+        {"user_id_hint": "missing"},
+        {"account_id_hint": "acme", "user_id_hint": "missing"},
+        {"account_id_hint": "missing", "user_id_hint": "alice"},
+    ):
+        assert await peer._store.get_auth_snapshot(key, **hints) is None
     page = await peer.list_users_page("acme", name_filter="ali*", limit=1)
     assert (page["total"], page["account_total"], page["manager_count"], page["key_count"]) == (
         1,

@@ -4,11 +4,15 @@
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
-from openviking.models.model_error import model_error_kind
+from openviking.models.model_error import chat_finish_error, model_error_kind
+from openviking.telemetry import tracer
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
@@ -22,7 +26,19 @@ from .token_usage import TokenUsageTracker
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
 
+_usage_error_code: ContextVar[str] = ContextVar("vlm_usage_error_code", default="OK")
+
 ToolResultMediaMode = Literal["native", "user_message"]
+
+
+@contextmanager
+def bind_vlm_usage_error(error: Exception | None) -> Iterator[None]:
+    """Make the call outcome available to metrics through legacy usage hooks."""
+    token = _usage_error_code.set(extract_metric_error_code(error) if error is not None else "OK")
+    try:
+        yield
+    finally:
+        _usage_error_code.reset(token)
 
 
 def _common_tool_result_media_mode(backends: List["VLMBase"]) -> ToolResultMediaMode | None:
@@ -73,6 +89,8 @@ class VLMResponse:
 
 class VLMBase(ABC):
     """VLM base abstract class"""
+
+    _default_usage_model = "unknown"
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -292,6 +310,7 @@ class VLMBase(ABC):
                 duration_seconds=float(duration_seconds),
                 prompt_tokens=int(prompt_tokens),
                 completion_tokens=int(completion_tokens),
+                error_code=_usage_error_code.get(),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
                 cost_bearer=self.cost_bearer,
@@ -347,6 +366,32 @@ class VLMBase(ABC):
 
     def close(self) -> None:
         """Release provider resources, if any."""
+
+    def _handle_chat_completion(self, response, duration_seconds: float) -> None:
+        """Account for provider usage and surface a filtered choice before parsing it."""
+        choices = getattr(response, "choices", None)
+        finish_reason = getattr(choices[0], "finish_reason", None) if choices else None
+        error = chat_finish_error(finish_reason, self.provider)
+        usage = getattr(response, "usage", None)
+        if usage:
+            tracer.info(f"response.usage={usage}")
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            completion_details = getattr(usage, "completion_tokens_details", None)
+            with bind_vlm_usage_error(error):
+                self.update_token_usage(
+                    model_name=self.model or self._default_usage_model,
+                    provider=self.provider,
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    duration_seconds=duration_seconds,
+                    prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+                    completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0)
+                    or 0,
+                )
+        elif error:
+            self.record_failed_call(duration_seconds=duration_seconds, error=error)
+        if error:
+            raise error
 
     def _extract_content_from_response(self, response) -> str:
         if isinstance(response, str):

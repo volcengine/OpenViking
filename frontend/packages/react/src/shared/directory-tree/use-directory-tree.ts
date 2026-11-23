@@ -27,6 +27,7 @@ const DIRECTORY_LOAD = 'file_browser_directory_load';
 export function useDirectoryTree({
   client,
   rootUri,
+  hideDeniedEntries,
   cacheScopeKey,
   defaultExpandedUri,
   defaultExpandedUris,
@@ -87,13 +88,8 @@ export function useDirectoryTree({
     userRootMode,
   );
   const fetchPage = useCallback(
-    async (...args: Parameters<DirectoryQueries['load']>) => {
-      try {
-        return await activeSession.current?.load(...args);
-      } catch {
-        return undefined;
-      }
-    },
+    async (...args: Parameters<DirectoryQueries['load']>) =>
+      activeSession.current?.load(...args).catch(() => undefined),
     [],
   );
   const expandForNavigation = useCallback(
@@ -151,6 +147,7 @@ export function useDirectoryTree({
     session,
     rootUri,
     dirs,
+    hideDeniedEntries,
     expanded,
     collapsed: expansion.collapsed,
     pendingEdits: expansion.pendingEdits,

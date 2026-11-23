@@ -16,7 +16,7 @@ export async function withBundledPreview(fixture, run) {
       rsbuildConfig: {
         mode: 'production',
         plugins: [pluginReact()],
-        performance: { printFileSize: false },
+        performance: { printFileSize: false, buildCache: false },
         source: {
           entry: { index: `./packages/react/test/fixtures/${fixture}.tsx` },
         },
