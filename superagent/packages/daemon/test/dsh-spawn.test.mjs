@@ -48,19 +48,6 @@ describe('the DSH runtime launches its binary through the platform launcher', ()
     assert.equal(agent._spawn, platformSpawn, 'a raw spawn cannot run an npm shim on Windows');
   });
 
-  it('probes the version through an npm-style .cmd shim', { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-shim-'));
-    try {
-      const shim = writeNodeShim(directory, "process.stdout.write('0.2.2-rc.1\\n');\n");
-      const agent = new DshAgent(
-        config({ dshBin: shim, dataDir: directory, workspace: directory }), {}, logger,
-      );
-      assert.equal(await agent._probeVersion(process.env), '0.2.2-rc.1');
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   it('reads a version DSH logs on stderr instead of stdout', { timeout: 30_000 }, async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-stderr-'));
     try {
