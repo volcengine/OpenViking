@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from collections import Counter
 from dataclasses import asdict
 from typing import Any
@@ -58,6 +59,7 @@ class Pipeline:
         self.tools, self.tool_context = {}, None
         self.sources: dict[str, Source] = {}
         self.evidence, self.status, self.old = {}, {}, {}
+        self.old_read_locks: dict[str, asyncio.Lock] = {}
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False

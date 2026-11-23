@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from typing import TYPE_CHECKING
@@ -38,23 +39,27 @@ def file_bytes(file: dict) -> bytes:
 async def load_old(runtime: Pipeline, path: str) -> str | bytes | None:
     """Read a selected target body once in this execution; only NOT_FOUND means absence."""
     path = validate_relative_file_path(path)
-    if path not in runtime.old:
-        uri = safe_join_viking_uri(runtime.target, path)
-        try:
-            entry = await runtime.client.stat(uri)
-            if entry.get("isDir"):
-                raise ValueError("Selected old target must be a file")
-            payload = await runtime.client.download_bytes(uri)
+    if path in runtime.old:
+        return runtime.old[path]
+    # The caller owns the read, so cancellation releases the path for a waiter.
+    async with runtime.old_read_locks.setdefault(path, asyncio.Lock()):
+        if path not in runtime.old:
+            uri = safe_join_viking_uri(runtime.target, path)
             try:
-                runtime.old[path] = payload.decode("utf-8")
-            except UnicodeDecodeError:
-                runtime.old[path] = payload
-            runtime.metrics["history_body_reads"] += 1
-        except OpenVikingError as exc:
-            if exc.code != "NOT_FOUND":
-                raise
-            runtime.old[path] = None
-    return runtime.old[path]
+                entry = await runtime.client.stat(uri)
+                if entry.get("isDir"):
+                    raise ValueError("Selected old target must be a file")
+                payload = await runtime.client.download_bytes(uri)
+                try:
+                    runtime.old[path] = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    runtime.old[path] = payload
+                runtime.metrics["history_body_reads"] += 1
+            except OpenVikingError as exc:
+                if exc.code != "NOT_FOUND":
+                    raise
+                runtime.old[path] = None
+        return runtime.old[path]
 
 
 def validate_skill_output(files: dict[str, str | None]) -> None:
