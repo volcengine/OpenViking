@@ -59,7 +59,7 @@ for (const status of [200, 503]) {
       );
       await settle();
       assert.equal(tabTitle(view), fileLabel);
-      assert.equal(Boolean(icon()), status === 200);
+      assert.ok(icon());
       assert.ok(
         fetch.calls.some(({ path }) => path === '/api/v1/content/read'),
       );

@@ -5,6 +5,160 @@
 Changes in stable releases of `@openviking/react`.
 
 <details className="ov-release-notes__group" name="ov-release-minors" open>
+<summary>0.3.x</summary>
+
+### 0.3.0
+
+**Minor Changes**
+
+- 8769c9e: Add `slots.activationIntro` to replace or hide the activation introduction while preserving Console's Enable, Retry and status controls. Add `labels.activationTitle` and `labels.activationDescription` for custom text, with empty strings hiding the respective text. Existing media and default presentation remain compatible, and presentation changes do not restart activation checks or reset the draft.
+
+- a5b2007: Add a responsive Console skeleton for hosts that need to resolve available modes before rendering the Console.
+
+- fc16795: Add `getOpenVikingDirectoryTourSteps(locale)` with complete English and Chinese directory explanations, and align the built-in memories, sessions and experiences illustrations. Remove copied step text from the demo. The default card no longer shows a close button; set `showCloseButton` and provide `onClose` to restore it. Escape and custom-content close actions still use `onClose`. Consumers should remove old text and illustration overrides to use the updated preset.
+
+- 8769c9e: Make VikingBot message dates keyboard-accessible copy actions for diagnostic JSON. Assistant dates copy message metadata; user dates copy metadata for the currently loaded messages. Add optional typed diagnostic identifiers to VikingBot and VikingBotMessageList, automatically include the current Console session ID, and report clipboard success or failure without fetching or exporting additional data.
+
+**Patch Changes**
+
+- 7115f1f: Recheck node permissions before opening ACL management and close the panel when access is revoked. Temporary load failures remain retryable.
+
+- 3e3fd93: Keep the ACL principal search placeholder consistent when opening and closing the picker.
+
+- 15845c2: Show the Agent connection copy action as a primary button and correct the MCP and SDK icons.
+
+- 8769c9e: Reduce developer integration icons to 16px in the list and 24px in the detail header. Extend the AgentConnect background to fill taller containers and keep its lower glow at the bottom.
+
+- ced8e8e: Keep the AgentConnect navigation visible while scrolling long desktop setup guides, with an independently scrollable agent list in short viewports. Preserve the horizontal navigation on narrow screens.
+
+- 22f4ff6: Align the terminal quick-action labels and chip styling with the Volcano Engine console.
+
+- bb770d1: - Show legacy percent-encoded directory scopes as readable text while preserving their original resource identity.
+  - Keep generated resource-name segments literal instead of pre-encoding ordinary Chinese names.
+
+- 474b402: Render Viking resource URIs as plain text while editing commands, while keeping links in command results interactive.
+
+- 2b1018a: Keep terminal JSON and code output on its original lines, using keyboard-accessible horizontal scrolling in narrow containers instead of wrapping values onto separate lines.
+
+- 826d51c: Tighten command-help spacing and align command names with descriptions in a compact two-column layout for faster scanning.
+
+- 8a19e6b: Show short command names and summaries in `ov help`, without changing the full syntax shown in parameter help. Pressing Tab now completes an exact slash command before falling back to the first fuzzy match.
+
+- 8d68b16: Replace the terminal empty state's `compile` shortcut with `compile create`, so the quick-start action opens the compile configuration flow directly.
+
+- 77278d7: Preserve user IDs containing `@` in suggested personal destinations for compilation.
+
+- ce0a168: Include built-in system Skills in the VikingBot compile Skill picker search.
+
+- ee71998: Console accepts a host-resolved VikingBot startup state, so hosts can finish their checks before showing the final tabs and panels.
+
+- 478fefc: Keep the VikingBot tab visible with compact loading while activation eligibility or runtime status is checked. Hide the tab only when eligibility is explicitly false, keep failed checks retryable in the Bot panel, and preserve the user's command-mode selection when activation becomes ready.
+
+  Use compact loading for every eligibility/status read and the enabling indicator only while `start` is pending. Show error text once in a notification, keep Retry on the card, and announce lifecycle changes through a persistent live status without repeating errors.
+
+  Preserve a failure notification's dismissed state across Bot/CLI switches until a new failure. Transfer focus from a focused Enable or Retry button to the stable Bot panel before the operation, leaving it there on failure. When eligibility removes Bot controls, transfer focus only from the removed mode switch or Bot panel to the built-in CLI editor, with a panel fallback and no change to external focus. Add optional `CommandConsole.inputRef` for its actual textarea, keeping focus on Console's own editor even with complete Consoles nested in slots.
+
+  Mount the live status region empty and announce only while visible. Supported visibility signals repeat the current state without a new request when a host-hidden Console becomes visible: ancestor attributes (including `data-state`), box-size changes when `ResizeObserver` is available, window or visual viewport resizing, and the start, end, or cancellation of ancestor CSS transitions and animations. For other CSS visibility changes without these signals, hosts should synchronize explicit state such as `hidden`.
+
+  When the scope's request signal is cancelled, keep the Bot tab with a static cancellation message instead of loading or an ineffective retry button. Check again after the host replaces the aborted signal with a fresh, non-aborted signal or removes it; changing only `scopeKey` does not restore a cancelled signal.
+
+- a5dd663: Show tracked Terminal tasks from `add-resource`, `add-skill`, `add-memory`, `session commit` and `compile` in their command records without separate task notifications, preserving original output and deduplicated links to final results. Tasks also referenced by VikingBot retain their notifications.
+
+- 7f3a141: Allow Console hosts to open their local upload page from `ov add-resource` so users can choose files or folders and configure the import.
+
+- 8769c9e: Allow empty additional instructions in the built-in VikingBot clarification flow, including when a prefilled instruction is cleared. Keep names and source, target and skill selections required, and submit the optional instruction as an empty string.
+
+- af1c240: Keep shortcuts above the terminal input after commands have been run. Selecting a shortcut fills and focuses the input without executing the command.
+
+- effca0d: Preserve regex escapes such as `\d` in double-quoted Console `grep` patterns so digit searches match the intended text.
+
+- 4e0d95c: Show background tasks and grep matches as lists in the Web Console. Grep results link to their files and display line numbers and any requested context.
+
+- a52b5d4: Add `OpenVikingProvider.userRootMode="current"` so directory trees display the resolved current user without listing every user. Load the user's contents when expanded, inherit the mode through nested Providers, and keep native listings when no user identity is available. Changing the mode cancels navigation started in the previous mode.
+
+- cfc32d6: Hide the ovpack export action for individual files, which the server does not support. Directory ovpack exports and regular file downloads remain available.
+
+- 15845c2: Open resource links from directory summaries and overviews in the file browser, including literal directory names containing `#` or `%` and targets with queries or fragments. Keep directory external links native, preserve explicit HTML heading IDs for local anchors without a host callback, and preserve file-tab `openUri` navigation.
+
+- 15845c2: Add matching dark illustrations for all six built-in DirectoryTour steps and switch them with the host's dark theme.
+
+- 5949a04: Distinguish compile dashboard actions in blue from experience dashboard actions in green, retaining conflict and unknown-status colors.
+
+- e6dc971: Start a controlled file or directory preview while the root tree is still loading, so direct links no longer serialize independent tree and preview requests.
+
+- db91788: Show a success toast after saving node permissions instead of leaving the success message inside the permissions dialog.
+
+- 2cae68e: Show stopping inherited node permissions in a separate confirmation dialog while keeping the permission list open. Cancelling leaves permissions unchanged.
+
+- f5066cf: Add the optional `FileBrowser.hideDeniedEntries` setting to hide inaccessible tree entries while keeping traversal-only directories, pagination and permission checks. The default continues to show denied entries as disabled.
+
+- 50c83b5: Restore folders using the latest saved open or close operation after alias identity recovery, preserve ordered pending edits across mounts, and retire obsolete directory subscriptions after a spelling change.
+
+  Preserve a pending reopen when a refreshed listing changes only the trailing slash of a directory URI.
+
+  Resume saved descendants on later pages after home identity resolves, and keep suspended account transitions from changing the expansion state of the committed tree.
+
+  Rebuild saved-path groups when identity resolves during restoration, and persist manual edits before pending pages finish without dropping unresolved descendants.
+
+  Keep an earlier pending resource reveal from reopening a folder after a later manual tree toggle.
+
+- 72d8e48: Show raw resource names in the FileBrowser sidebar tree, including percent escapes already present in stored paths.
+
+- 000f076: Refresh the active resource's permission label and edit action when the file tree is refreshed, including grants changed elsewhere. Outdated permission responses from earlier refreshes cannot overwrite the latest result.
+
+- 50c83b5: Decode URI-derived names once for preview tabs, search labels and FilePreview breadcrumbs, while the FileBrowser sidebar tree keeps raw resource names, including stored percent escapes. Keep original URIs for requests, selection and navigation; preserve explicit host labels and literal filesystem paths. Malformed escapes remain readable without throwing.
+
+- 15845c2: Align search result spacing and selection colors, show localized active filter counts, and keep date calendars visible above dialogs with month and year navigation.
+
+- b8ec376: Copy readable Unicode Viking paths while preserving reserved escapes, clear submitted references immediately for new messages and after acceptance for in-flight follow-ups, and show preview icons as soon as the resource type is known.
+
+- 6a0fd46: Show formatted line numbers in ordinary JSON previews and keep nested fold state when a parent is collapsed and reopened.
+
+- 51fe2b7: Pause automatic transcript scrolling while the mouse is over the transcript. Playback and transcript highlighting continue, and scrolling resumes when the mouse leaves.
+
+- cca553a: Show an AI-generated label beside file preview metadata for summaries, Wiki Compile outputs with file metadata, memory documents, identity.md and soul.md.
+
+- ced8e8e: Use consistent path-copy feedback in file, directory and history previews. Show a success bubble above the copy button with a green checkmark, remove inline copied text, and keep clipboard failures distinct from success.
+
+- 8769c9e: Restore the search directory picker with an expandable selection tree, inherited and partial checks, and explicit confirm/cancel actions. Preserve supported roots and single-directory modes. Keep the active retrieval description synchronized with the mode menu.
+
+- 4a0e0fb: Selecting a root directory in advanced search removes its subdirectories from the selected filters and the search request.
+
+- 909ac00: Show readable Chinese directory names in search scope tooltips without changing resource URIs. Clarify Grep regular expression syntax and show localized guidance for invalid patterns, with the original server error available under Error details.
+
+- 8769c9e: Keep session conversation previews when messages contain native image or context references. Show their original fields as readable text, including image URLs and detail, context URIs, types and abstracts, without loading images or opening resources. Unknown or malformed parts retain the JSON fallback.
+
+- 8769c9e: Render fully readable session `messages.jsonl` previews as role-labelled conversation bubbles with timestamps and message IDs. Preserve original JSONL source mode, file admission limits, and normal JSON previews for other or unsupported records.
+
+- 33eb54b: Simplify the default Create Wiki shortcut prompt in the Console and its interactive example, and center shortcut icons alongside their labels.
+
+- caf0f21: Shorten the Console Wiki shortcut label from "Create Wiki" to "Wiki".
+
+- aa885b9: Expand a FileBrowser directory's single-child directory chain after a user opens it. Stop at branching, files, incomplete pages, errors, or denied access; ignore stale expansion after a fold or scope change.
+
+- e1233b3: Keep file previews visible when a restored directory tree confirms the resource type already returned by the server.
+
+  Read Markdown before optional Wiki attributes resolve. Reuse directory timestamps and briefly cache ordinary memory previews within the current request scope.
+
+- 5cf9388: Explain the configured attachment limit when hovering the disabled VikingBot add-file button. Removing an attachment restores the normal hint and file picker, keeping an open tooltip anchored to the button.
+
+- 217b663: Keep VikingBot's add-file and reference icons neutral when hovered or pressed, including after sending finishes and the controls become available again.
+
+- 4a0e0fb: Use the disabled text color for the VikingBot attachment and reference buttons while they are disabled.
+
+- 8769c9e: Copy diagnostic metadata from the original assistant message that supplies a merged reply's displayed timestamp. Keep message IDs paired with their own timestamps while preserving stable display rows, message actions and streaming boundaries.
+
+- 593ce7f: Show readable directory names in VikingBot output directory suggestions and confirmations, and improve the text contrast of shortcut buttons.
+
+- 6f0db1f: Restore the VikingBot session submission status when reopening conversation history and show a green check when submission completes.
+
+- 6a0fd46: Describe the VikingBot session action as extracting long-term memory in every state.
+
+- 6454707: Clarify weekly compilation schedules as recurring updates, such as “Every Thursday 02:33”.
+
+</details>
+
+<details className="ov-release-notes__group" name="ov-release-minors">
 <summary>0.2.x</summary>
 
 ### 0.2.0

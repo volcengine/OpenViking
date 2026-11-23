@@ -53,19 +53,21 @@ test('current mode expands the user group locally and loads concrete directories
   try {
     await act(() => state.tree.toggleExpand({ uri: USER }));
     await settle();
-    assert.deepEqual(state.lists(), [ROOT]);
-    assert.deepEqual(state.uris(), [USER, ALICE]);
+    assert.deepEqual(state.lists(), [ROOT, ALICE, `${ALICE}/resources`]);
+    assert.deepEqual(state.uris(), [USER, ALICE, `${ALICE}/resources`]);
     assert.equal(
       state.tree.rows.find((row) => row.uri === ALICE).name,
       'alice@example.com',
     );
-    await act(() => state.tree.toggleExpand({ uri: ALICE }));
-    await settle();
-    assert.deepEqual(state.lists(), [ROOT, ALICE]);
-    assert.ok(state.uris().includes(`${ALICE}/resources`));
     await act(() => state.tree.open(BOB));
     await act(() => state.tree.open('viking://resources'));
-    assert.deepEqual(state.lists(), [ROOT, ALICE, BOB, 'viking://resources']);
+    assert.deepEqual(state.lists(), [
+      ROOT,
+      ALICE,
+      `${ALICE}/resources`,
+      BOB,
+      'viking://resources',
+    ]);
   } finally {
     await view.unmount();
     state.queryClient.clear();
