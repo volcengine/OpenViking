@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { preparePrivateDirectory } from '../private-temp.mjs';
-import { readWorkspaceFile } from '../workspace-file.mjs';
+import { readWorkspaceFile, resolveWorkspacePath } from '../workspace-file.mjs';
+import { readWorkspaceDirectory } from '../workspace-directory.mjs';
 import { IMAGE_ALIAS, MAX_CARD_IMAGES, MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, validateCard } from '../card-images.mjs';
 export { MAX_CARD_BYTES } from '../card-images.mjs';
 
@@ -13,7 +14,7 @@ export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 export const CONTENT_PROPERTIES = {
   markdown: { type: 'string', minLength: 1, description: 'Message text (Markdown where the connector supports it). Mutually exclusive with file_path/file_key/card/choices.' },
-  file_path: { type: 'string', minLength: 1, description: 'Local file relative to the agent workspace, at most 20 MiB; images are sent as images. No URLs, absolute paths, traversal, or symlinks escaping the workspace.' },
+  file_path: { type: 'string', minLength: 1, description: 'Local file or directory relative to the agent workspace. Files and generated directory ZIPs are at most 20 MiB; images are sent as images. Directory ZIPs preserve the top-level directory. No URLs, absolute paths, traversal, directory symlinks, or special files.' },
   file_key: { type: 'string', pattern: '^file_[A-Za-z0-9_-]{8,}$', description: 'Lark only: existing IM file key from trusted tool output, sent without uploading.' },
   card: { type: 'object', description: 'Lark only: inline interactive card JSON (Card 1.0 elements or Card 2.0 body.elements), at most 30 KiB. Callback controls arrive as user input, never executed by the daemon. For a single-choice question prefer choices.' },
   card_images: { type: 'object', minProperties: 1, maxProperties: MAX_CARD_IMAGES,
@@ -80,8 +81,8 @@ export function choiceCard(question, answer = null) {
 }
 
 // Resolves exactly one message body into the Connector payload, the canonical
-// form hashed into the idempotency key, and a journal summary. A file is frozen
-// into a private snapshot so the upload cannot change after validation; the
+// form hashed into the idempotency key, and a journal summary. A file or generated
+// directory ZIP is frozen into a private snapshot so the upload cannot change after validation; the
 // caller must call cleanup() once the delivery attempt is over.
 export function resolveContent(input, { workspace, tempDir, maxTextChars }) {
   const present = BODY_FIELDS.filter((key) => input[key] !== undefined);
@@ -106,7 +107,10 @@ export function resolveContent(input, { workspace, tempDir, maxTextChars }) {
     return { type: 'file_key', payload: { type: 'file_key', key: value }, canonical: ['file_key', value], summary: '[file attachment]', cleanup: none };
   }
   if (kind === 'file_path') {
-    const { name, bytes } = readWorkspaceFile(value, workspace);
+    const { filename } = resolveWorkspacePath(value, workspace);
+    const { name, bytes } = fs.statSync(filename).isDirectory()
+      ? readWorkspaceDirectory(value, workspace, MAX_FILE_BYTES)
+      : readWorkspaceFile(value, workspace, MAX_FILE_BYTES);
     const digest = createHash('sha256').update(bytes).digest('hex');
     // Upload from a private snapshot under the same configurable temp root
     // as downloads, even when the original workspace is under /root.

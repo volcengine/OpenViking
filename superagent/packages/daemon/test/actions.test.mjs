@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { inflateRawSync } from 'node:zlib';
 import { EDITABLE_CHARS, approvalCard, approvalNote, approvedText } from '../src/actions/approval.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
@@ -381,6 +382,52 @@ describe('agent tools', () => {
     assert.equal(seen.bytes, 'png bytes');
     assert.ok(seen.path.startsWith(path.join(directory, 'tmp', 'outbox')));
     assert.equal(fs.existsSync(seen.path), false);
+  });
+
+  it('packs a workspace directory as a ZIP snapshot, preserving its top-level directory', async (t) => {
+    let seen;
+    const { call, workspace, inbound } = setup(t, { run: (_connector, _action, input) => {
+      seen = { ...input.content, bytes: fs.readFileSync(input.content.path) };
+      return { message_id: 'om_delivered123456' };
+    } });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    fs.mkdirSync(path.join(workspace, '资料', 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, '资料', 'root.txt'), 'root bytes');
+    fs.writeFileSync(path.join(workspace, '资料', 'nested', '报告.txt'), 'nested bytes');
+    await call('send_message', { chat_id: 'oc_chat12345678', file_path: '资料', decision_id: 'message:om_decision123456' });
+
+    assert.equal(seen.name, '资料.zip');
+    const entries = new Map();
+    let offset = 0;
+    while (seen.bytes.readUInt32LE(offset) === 0x04034b50) {
+      const method = seen.bytes.readUInt16LE(offset + 8);
+      const compressedSize = seen.bytes.readUInt32LE(offset + 18);
+      const nameLength = seen.bytes.readUInt16LE(offset + 26);
+      const extraLength = seen.bytes.readUInt16LE(offset + 28);
+      const name = seen.bytes.subarray(offset + 30, offset + 30 + nameLength).toString();
+      const dataOffset = offset + 30 + nameLength + extraLength;
+      const compressed = seen.bytes.subarray(dataOffset, dataOffset + compressedSize);
+      entries.set(name, method === 8 ? inflateRawSync(compressed) : compressed);
+      offset = dataOffset + compressedSize;
+    }
+    assert.deepEqual([...entries.keys()], ['资料/', '资料/nested/', '资料/nested/报告.txt', '资料/root.txt']);
+    assert.equal(entries.get('资料/root.txt').toString(), 'root bytes');
+    assert.equal(entries.get('资料/nested/报告.txt').toString(), 'nested bytes');
+    assert.equal(fs.existsSync(seen.path), false);
+  });
+
+  it('removes a directory ZIP snapshot when the upload fails', async (t) => {
+    let snapshot;
+    const { call, workspace, inbound } = setup(t, { run: (_connector, _action, input) => {
+      snapshot = input.content.path;
+      assert.equal(fs.existsSync(snapshot), true);
+      throw new Error('network lost');
+    } });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    fs.mkdirSync(path.join(workspace, 'folder'));
+    fs.writeFileSync(path.join(workspace, 'folder', 'report.txt'), 'contents');
+    await assert.rejects(call('send_message', { chat_id: 'oc_chat12345678', file_path: 'folder', decision_id: 'message:om_decision123456' }), /network lost/);
+    assert.equal(fs.existsSync(snapshot), false);
   });
 
   it('refuses a video container Lark cannot send before any outbox entry, and still takes the mp4', async (t) => {
