@@ -266,7 +266,28 @@ function parseDaemonEnv(value, ignored) {
 
 const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot']);
 const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+// Internal event sources. `timer` is how a reminder is delivered; an external
+// program must not take that name and inherit its exemptions.
+const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);
 const EXTERNAL_CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+// The operator's rules for one external IM. The path is checked here so a typo
+// fails in the manifest, not as a bare read error while the runtime starts.
+function readablePromptFile(filePath, label) {
+  let info;
+  try {
+    info = fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${label} does not exist`);
+    throw new Error(`${label} cannot be read`);
+  }
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch {
+    throw new Error(`${label} cannot be read`);
+  }
+}
 
 // A Connector the operator supplies: an absolute command that speaks protocol
 // 0.2. Its id is listed in `connectors` like a built-in one.
@@ -281,6 +302,7 @@ function manifestExternalConnectors(value, label, ignored) {
     const id = manifestString(entry.id, `${entryLabel}.id`, { maxLength: 64 });
     if (!EXTERNAL_CONNECTOR_ID.test(id)) throw new Error(`${entryLabel}.id is invalid`);
     if (BUILTIN_CONNECTORS.includes(id)) throw new Error(`${entryLabel}.id must not reuse a built-in connector`);
+    if (RESERVED_CONNECTOR_IDS.includes(id)) throw new Error(`${entryLabel}.id is reserved`);
     if (ids.has(id)) throw new Error(`${label} has two connectors called ${id}`);
     ids.add(id);
     const command = manifestAbsolutePath(entry.command, `${entryLabel}.command`);
@@ -290,6 +312,7 @@ function manifestExternalConnectors(value, label, ignored) {
       args = entry.args.map((arg, argIndex) => manifestString(arg, `${entryLabel}.args[${argIndex}]`, { maxLength: 256 }));
     }
     const prompt = entry.prompt == null ? null : manifestAbsolutePath(entry.prompt, `${entryLabel}.prompt`);
+    if (prompt !== null) readablePromptFile(prompt, `${entryLabel}.prompt`);
     return Object.freeze({ id, command, args: Object.freeze(args), prompt });
   });
 }

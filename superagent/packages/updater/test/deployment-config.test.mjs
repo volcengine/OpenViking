@@ -450,6 +450,18 @@ test('starts an external connector program and can make it the primary channel',
   });
   for (const [name, mutate, error] of [
     ['built-in id', (agent) => { agent.externalConnectors = [{ id: 'lark', command: '/bin/true' }]; }, /built-in/],
+    ['reserved id', (agent) => {
+      agent.externalConnectors = [{ id: 'timer', command: '/bin/true' }];
+      agent.connectors = ['timer'];
+      agent.channel = 'timer';
+      delete agent.profile;
+    }, /reserved/],
+    ['missing prompt', (agent) => {
+      agent.externalConnectors = [{ ...external, prompt: '/no/such/ovsa-prompt.md' }];
+      agent.connectors = ['dingtalk'];
+      agent.channel = 'dingtalk';
+      delete agent.profile;
+    }, /does not exist/],
     ['relative command', (agent) => { agent.externalConnectors = [{ id: 'discord', command: 'ovsa-discord' }]; agent.connectors = ['lark', 'discord']; }, /absolute path/],
     ['unused program', (agent) => { agent.externalConnectors = [{ id: 'discord', command: '/usr/local/bin/ovsa-discord' }]; }, /not listed/],
     ['ark runtime', (agent) => {

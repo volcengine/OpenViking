@@ -123,15 +123,22 @@ function connectorSections(config) {
 }
 
 // One section per program the instance starts itself. The optional prompt file
-// is the operator's own rules for that IM, capped so a huge file cannot crowd
-// out the Core.
-function externalSections(config) {
+// is the operator's own rules for that IM. At most 16,384 characters are shown,
+// so a huge file cannot crowd out the Core. Config load rejects a path that is
+// missing or unreadable. A file that disappears later is skipped, with a
+// warning, instead of taking the runtime down on a bare read error.
+function externalSections(config, logger = null) {
   const declared = new Map((config.externalConnectors ?? []).map((item) => [item.id, item]));
   return connectorsOf(config).filter((id) => declared.has(id)).map((id) => {
     const item = declared.get(id);
     let extra = '';
     if (item.prompt) {
-      extra = fs.readFileSync(item.prompt, 'utf8').replace(/<!--[\s\S]*?-->/g, '').trim().slice(0, 16_384);
+      try {
+        extra = fs.readFileSync(item.prompt, 'utf8').replace(/<!--[\s\S]*?-->/g, '').trim().slice(0, 16_384);
+      } catch (error) {
+        if (!['ENOENT', 'EACCES', 'EPERM'].includes(error?.code)) throw error;
+        logger?.warn?.('external_connector_prompt_unreadable', { connector: id, code: error.code });
+      }
     }
     return [
       `## ${id}`,
@@ -332,12 +339,12 @@ function bundledCliSection(config) {
 // Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
 // through the Core tools. `runtime` names the runtime when its shell has rules
 // of its own (Pi).
-export function assembleConversationPolicy(config = {}, { runtime = null } = {}) {
+export function assembleConversationPolicy(config = {}, { runtime = null, logger = null } = {}) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
     ...connectorSections(config),
-    ...externalSections(config),
+    ...externalSections(config, logger),
     bundledCliSection(config),
     shellSection(config, { runtime }),
     renderPrompt(config, 'openviking.md'),

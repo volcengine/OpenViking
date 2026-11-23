@@ -111,7 +111,25 @@ function jsonStringArrayEnv(name, fallback = []) {
 
 const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot']);
 const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+// Internal event sources. `timer` is how a reminder is delivered.
+const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);
 const EXTERNAL_CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+function readablePromptFile(filePath, label) {
+  let info;
+  try {
+    info = fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${label} does not exist`);
+    throw new Error(`${label} cannot be read`);
+  }
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch {
+    throw new Error(`${label} cannot be read`);
+  }
+}
 
 // A program the operator starts in place of a built-in Connector. It speaks
 // protocol 0.2 on stdio. Credentials stay in that program, not in this env.
@@ -128,8 +146,10 @@ function externalConnectorsEnv() {
     const label = `OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON[${index}]`;
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${label} must be an object`);
     const id = String(entry.id ?? '');
-    if (!EXTERNAL_CONNECTOR_ID.test(id) || ids.has(id)) throw new Error(`${label}.id is invalid`);
+    if (!EXTERNAL_CONNECTOR_ID.test(id)) throw new Error(`${label}.id is invalid`);
+    if (ids.has(id)) throw new Error(`OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON has two connectors called ${id}`);
     if (BUILTIN_CONNECTORS.includes(id)) throw new Error(`${label}.id must not reuse a built-in connector`);
+    if (RESERVED_CONNECTOR_IDS.includes(id)) throw new Error(`${label}.id is reserved`);
     ids.add(id);
     const command = String(entry.command ?? '').trim();
     if (!path.isAbsolute(command)) throw new Error(`${label}.command must be an absolute path`);
@@ -140,11 +160,13 @@ function externalConnectorsEnv() {
     }
     const prompt = entry.prompt == null || entry.prompt === '' ? null : String(entry.prompt).trim();
     if (prompt !== null && !path.isAbsolute(prompt)) throw new Error(`${label}.prompt must be an absolute path`);
+    const promptPath = prompt === null ? null : path.normalize(prompt);
+    if (promptPath !== null) readablePromptFile(promptPath, `${label}.prompt`);
     return Object.freeze({
       id,
       command: path.normalize(command),
       args: Object.freeze([...args]),
-      prompt: prompt === null ? null : path.normalize(prompt),
+      prompt: promptPath,
     });
   }));
 }

@@ -44,7 +44,7 @@ import { LANGUAGES, languageChoice, list, saveLanguage, setLanguage, t } from '.
 import { releaseInfo } from './version.mjs';
 import { EmailCancelled, askEmail, emailAccountPath, emailInstanceId, mailboxesOf, writeEmailAccount } from './email.mjs';
 import { GoBack } from './prompt.mjs';
-import { IM_LABELS, connectorsOf, ignoredFieldsNotice, imList, primaryMeaning } from './instances.mjs';
+import { IM_LABELS, connectorsOf, ignoredFieldsNotice, imLabel, imList, primaryMeaning } from './instances.mjs';
 import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
@@ -492,8 +492,8 @@ function note(ctx, text) {
 function keepChannel(ctx, state) {
   if (ims(state).includes(state.channel)) return;
   const next = ims(state).includes('lark') ? 'lark' : ims(state)[0];
-  note(ctx, t(`主渠道原来是${IM_LABELS[state.channel]}，它不再接入，改成${IM_LABELS[next]}`,
-    `The primary channel was ${IM_LABELS[state.channel]}, which is no longer connected; it is now ${IM_LABELS[next]}`));
+  note(ctx, t(`主渠道原来是${imLabel(state.channel)}，它不再接入，改成${imLabel(next)}`,
+    `The primary channel was ${imLabel(state.channel)}, which is no longer connected; it is now ${imLabel(next)}`));
   state.channel = next;
 }
 
@@ -531,9 +531,12 @@ async function askIms(ctx, state) {
   let connectors;
   for (;;) {
     const choices = imChoices();
-    connectors = await ctx.prompter.multiselect(t('接入哪些 IM', 'Which IMs to connect'), choices,
-      { initial: choices.map(({ value }, index) => (state.connectors.includes(value) ? index : -1)).filter((index) => index >= 0) });
+    // An instance whose only IM is an external program can confirm this step
+    // without ticking a built-in one. The default still requires one.
     const custom = (state.externalConnectors ?? []).map((item) => item.id);
+    connectors = await ctx.prompter.multiselect(t('接入哪些 IM', 'Which IMs to connect'), choices,
+      { initial: choices.map(({ value }, index) => (state.connectors.includes(value) ? index : -1)).filter((index) => index >= 0),
+        min: custom.length > 0 ? 0 : 1 });
     if (connectors.some((connector) => connector !== 'email') || custom.length > 0) {
       connectors = [...connectors, ...custom.filter((id) => !connectors.includes(id))];
       break;
@@ -617,14 +620,14 @@ async function askChannel(ctx, state) {
   if (choices.length > 1) {
     const preferred = [state.channel, 'lark'].find((im) => choices.includes(im)) ?? choices[0];
     state.channel = await ctx.prompter.select(t(`主渠道（${primaryMeaning()}）`, `Primary channel (${primaryMeaning()})`),
-      choices.map((connector) => ({ label: IM_LABELS[connector], value: connector })),
+      choices.map((connector) => ({ label: imLabel(connector), value: connector })),
       { initial: choices.indexOf(preferred), label: t('主渠道', 'Primary channel') });
     return;
   }
   state.channel = choices[0];
   if (ctx.menu) {
-    note(ctx, t(`只接了${IM_LABELS[state.channel]}，主渠道只能是它；要换，先在「接入的 IM」里多接一个`,
-      `Only ${IM_LABELS[state.channel]} is connected, so it is the primary channel; to change that, connect another IM first`));
+    note(ctx, t(`只接了${imLabel(state.channel)}，主渠道只能是它；要换，先在「接入的 IM」里多接一个`,
+      `Only ${imLabel(state.channel)} is connected, so it is the primary channel; to change that, connect another IM first`));
   }
 }
 
@@ -772,7 +775,7 @@ const SETTINGS = [
   { key: 'ims', label: () => t('接入的 IM', 'Connected IMs'), ask: askIms, shown: (state) => imList(state.connectors) },
   { key: 'larkApp', label: () => t('飞书应用', 'Feishu/Lark app'), ask: askLarkApp,
     shown: (state, { current, larkNeeds }) => larkAppShown(state, current, larkNeeds) },
-  { key: 'channel', label: () => t('主渠道', 'Primary channel'), ask: askChannel, shown: (state) => IM_LABELS[state.channel] },
+  { key: 'channel', label: () => t('主渠道', 'Primary channel'), ask: askChannel, shown: (state) => imLabel(state.channel) },
   { key: 'mailboxes', label: () => t('邮箱', 'Mailboxes'), ask: askMailboxes,
     shown: (state) => (mailboxList(state).length ? list(mailboxList(state).map(addressOf)) : t('没有接', 'none')) },
   { key: 'ovConfig', label: () => 'OpenViking', ask: (ctx) => ctx.editOV(),
@@ -2054,7 +2057,7 @@ async function setupFlow({
     state.switches.meetingNotes = defaultMeetingNotes(state, ctx.agents, current);
     const addresses = mailPlan(state).added;
     const channels = ims(state).length > 1
-      ? t(`${imList(ims(state))}，主渠道：${IM_LABELS[state.channel]}`, `${imList(ims(state))}; primary: ${IM_LABELS[state.channel]}`)
+      ? t(`${imList(ims(state))}，主渠道：${imLabel(state.channel)}`, `${imList(ims(state))}; primary: ${imLabel(state.channel)}`)
       : imList(ims(state));
     table(prompter, t(`将添加实例 ${state.id}`, `New instance ${state.id}`), [
       [t('机器人', 'Bot'), `${state.displayName} · ${state.runtime.label}`],
@@ -2426,7 +2429,7 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     changes.push(t(`换飞书应用：${larkAppShown(state, before)}（需要扫码）`, `Another Feishu/Lark app: ${larkAppShown(state, before)} (needs a scan)`));
   }
   if ((before.channel ?? was[0]) !== after.channel) {
-    changes.push(`${t('主渠道：', 'Primary channel: ')}${IM_LABELS[before.channel ?? was[0]]} → ${IM_LABELS[after.channel]}`);
+    changes.push(`${t('主渠道：', 'Primary channel: ')}${imLabel(before.channel ?? was[0])} → ${imLabel(after.channel)}`);
   }
   for (const address of mailboxes.added) changes.push(t(`接入邮箱 ${address}`, `Add mailbox ${address}`));
   for (const address of mailboxes.updated) changes.push(t(`更新邮箱 ${address} 的密码`, `New password for ${address}`));
