@@ -31,6 +31,7 @@ import re
 import shutil
 import tempfile
 from dataclasses import dataclass
+from html.entities import html5
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse
@@ -667,6 +668,20 @@ def _extract_attr(tag: str, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _decode_feed_href(href: str) -> str:
+    """Decode terminated HTML references without changing literal query parameters."""
+
+    def replace_reference(match: re.Match[str]) -> str:
+        reference = match.group(0)
+        if reference.startswith("&#") or reference[1:] in html5:
+            return html_lib.unescape(reference)
+        return reference
+
+    return re.sub(
+        r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);", replace_reference, href
+    )
+
+
 def _extract_feed_links(html: str, base_url: str) -> List[str]:
     """Find <link rel=alternate type=rss/atom> and <link rel=sitemap> hrefs."""
     out: List[str] = []
@@ -675,6 +690,7 @@ def _extract_feed_links(html: str, base_url: str) -> List[str]:
         href = _extract_attr(tag, "href")
         if not href:
             continue
+        href = _decode_feed_href(href)
         rel = (_extract_attr(tag, "rel") or "").lower()
         typ = (_extract_attr(tag, "type") or "").lower()
         if "alternate" in rel and typ in ("application/rss+xml", "application/atom+xml"):
