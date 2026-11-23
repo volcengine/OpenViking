@@ -103,8 +103,6 @@ Each generation records direct-child coverage and uses stable sampling above `se
 | `max_sections_per_call` | 20 | `VLMProcessor` constructor parameter: sections per call; not an `ov.conf` field |
 | `semantic.overview_sample_limit` | 32 | Maximum direct-child sample used for one directory summary |
 
-Directory overview generation uses a fixed 60,000-character budget for its summary input. Existing `semantic.max_overview_prompt_chars` settings are ignored.
-
 ## Code Skeleton Extraction
 
 For code files, OpenViking uses a fixed skeleton extraction route. This route is built into the code summary pipeline and is not selected or tuned by per-language parser settings.

@@ -103,8 +103,6 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 | `max_sections_per_call` | 20 | `VLMProcessor` 构造参数：单次最大章节数，非 `ov.conf` 字段 |
 | `semantic.overview_sample_limit` | 32 | 单个目录摘要使用的直接子项样本上限 |
 
-生成目录概览时，摘要素材的预算固定为 60,000 字符。旧配置里的 `semantic.max_overview_prompt_chars` 会被忽略。
-
 ## 代码骨架提取
 
 对于代码文件，OpenViking 使用固定的代码骨架提取路线。该路线内置在代码摘要流程中，不再通过逐语言解析参数选择或调节。
