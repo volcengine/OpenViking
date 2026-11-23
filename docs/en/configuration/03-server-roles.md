@@ -23,6 +23,7 @@ Non-API nodes register no other routes and do not start MCP.
 Route business traffic to API nodes; `--with-bot` requires `api`.
 
 - OAuth uses a local SQLite store. When OAuth is enabled, run `api` and `queue_worker` together so account and user deletion can revoke grants in that store.
+- With embedded Gateway (`gateway.enabled: true`), run `api` and `queue_worker` in the same OpenViking process. A separate queue worker does not clean up Gateway data during account or user deletion.
 - For Skill Compile, the built-in VikingBot started by `--with-bot` requires `api` and `queue_worker` in the same process. If the roles run separately, configure `compile_api.base_url` on both to point to a Compile Runtime they can reach.
 
 Startup prepares storage and account capabilities, recovers tasks, then activates roles.

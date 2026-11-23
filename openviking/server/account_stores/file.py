@@ -99,11 +99,13 @@ class FileStore(AccountStore):
         api_key_hashing_enabled: bool = False,
         watch_enabled: bool = False,
         watch_interval_seconds: float = 30.0,
+        bootstrap_default_account: bool = True,
     ):
         params = dict(params or {})
         reserved = {
             "viking_fs",
             "api_key_hashing_enabled",
+            "bootstrap_default_account",
         }
         if overridden := reserved.intersection(params):
             names = ", ".join(sorted(overridden))
@@ -127,6 +129,7 @@ class FileStore(AccountStore):
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._bootstrap_default_account = bootstrap_default_account
         self._read_only = configured_read_only
         self._watch_enabled = configured_watch_enabled
         self._watch_interval_seconds = (
@@ -176,8 +179,10 @@ class FileStore(AccountStore):
             and not self._api_key_hashing_enabled
             and await self._read_json(ACCOUNTS_PATH) is not None
         ):
-            await self._reload()
-            if self._read_only and not self._accounts:
+            initialized = await self._reload()
+            if self._read_only and (
+                not initialized or (self._bootstrap_default_account and not self._accounts)
+            ):
                 raise FailedPreconditionError(
                     "Read-only account store requires an initialized registry."
                 )
@@ -186,9 +191,10 @@ class FileStore(AccountStore):
         async with self._mutation_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
-                # First run: create default account
-                now = datetime.now(timezone.utc).isoformat()
-                accounts_data = {"accounts": {"default": {"created_at": now}}}
+                accounts_data = {"accounts": {}}
+                if self._bootstrap_default_account:
+                    now = datetime.now(timezone.utc).isoformat()
+                    accounts_data["accounts"]["default"] = {"created_at": now}
                 await self._write_json(ACCOUNTS_PATH, accounts_data)
 
             accounts, account_key_indexes, user_group_ids = await self._build_state(
@@ -264,18 +270,18 @@ class FileStore(AccountStore):
                     extra={"error_type": type(exc).__name__},
                 )
 
-    async def _reload(self) -> None:
-        """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
+    async def _reload(self) -> bool:
+        """Refresh without writes or migration; return whether the registry exists."""
         async with self._mutation_lock:
-            await self._reload_unlocked()
+            return await self._reload_unlocked()
 
-    async def _reload_unlocked(self) -> None:
+    async def _reload_unlocked(self) -> bool:
         """Reload while holding ``_mutation_lock``."""
         async with self._reload_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
                 # Store not initialized yet (reader started before writer): keep state.
-                return
+                return False
 
             accounts, account_key_indexes, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=False
@@ -289,6 +295,7 @@ class FileStore(AccountStore):
                 len(self._accounts),
                 sum(len(info.users) for info in self._accounts.values()),
             )
+            return True
 
     async def _refresh_accounts_from_store_unlocked(self) -> None:
         accounts_data = await self._read_json(ACCOUNTS_PATH)

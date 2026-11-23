@@ -27,6 +27,7 @@ openviking-server --config ov.conf --roles api,queue_worker
 不含 `api` 时不注册其他路由，也不启动 MCP。业务流量只路由到 API 节点，`--with-bot` 需要 `api`。
 
 - OAuth 使用本地 SQLite。启用 OAuth 时，将 `api` 和 `queue_worker` 一起运行，确保账户或用户删除时能撤销该库中的授权。
+- 启用内嵌 Gateway（`gateway.enabled: true`）时，`api` 和 `queue_worker` 须在同一个 OpenViking 进程运行。独立的队列 Worker 在删除账户或用户时不会清理 Gateway 数据。
 - 使用 Skill Compile 时，`--with-bot` 启动的内置 VikingBot 要求 `api` 和 `queue_worker` 在同一进程运行。若拆分角色，在两端配置 `compile_api.base_url`，指向两端均可访问的 Compile Runtime。
 
 启动先准备存储和账户能力、恢复任务，再启动对应角色。SIGINT/SIGTERM 触发同一个 lifespan 清理：

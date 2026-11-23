@@ -13,6 +13,7 @@ endpoints, including `/health` and `/ready`; see
 | --- | --- | --- |
 | Cluster business models and vector configuration | Existing account overrides and cluster fallback | Optional; each business Account supplies its own settings |
 | Default local Embedding / VectorDB | Preserved | No synthesized local model or shared vector adapter |
+| `default` Account | Bootstrapped as before | Not created on startup; existing Accounts are kept |
 | Default context Collection and identity workspace | Initialized | Skipped on startup; workspaces are initialized when Accounts are created |
 | System asset synchronization | Preserved | Preserved as static AGFS file copies |
 

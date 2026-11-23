@@ -244,6 +244,7 @@ class TrustedAuthPlugin(AuthPlugin):
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
             account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
+            bootstrap_default_account=getattr(app.state, "runtime_mode", "dedicated") == "dedicated",
             issue_user_keys=False,
         )
         await manager.load()

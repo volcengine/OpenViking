@@ -263,7 +263,9 @@ def create_app(
     )
 
     app.state.config = config
-    app.state.service_name = get_openviking_config().service_name
+    ov_config = get_openviking_config()
+    app.state.service_name = ov_config.service_name
+    app.state.runtime_mode = ov_config.runtime_mode
     app.state.server_config_overrides = server_overrides or {}
     from openviking.server.restart import RestartController
 
