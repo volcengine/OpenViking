@@ -21,6 +21,11 @@ extern "C" {
 
 #define OV_CACHE_PROVIDER_ABI_V1 1u
 
+/*
+ * This V1 table is a breaking ABI revision. Every dynamic provider must be
+ * rebuilt against this header before OpenViking can load it.
+ */
+
 #define OV_CACHE_STATUS_OK 0
 #define OV_CACHE_STATUS_TIMEOUT 2
 #define OV_CACHE_STATUS_UNAVAILABLE 3
@@ -80,6 +85,45 @@ typedef struct {
     OvCacheByteSliceV1 key;
     OvCacheByteSliceV1 value;
 } OvCacheKeyValueV1;
+
+typedef struct {
+    OvCacheByteSliceV1 field;
+    OvCacheByteSliceV1 value;
+} OvCacheFieldValueV1;
+
+typedef struct {
+    OvCacheOwnedBufferV1 field;
+    OvCacheOwnedBufferV1 value;
+} OvCacheOwnedFieldValueV1;
+
+typedef struct {
+    OvCacheOwnedFieldValueV1 *items;
+    size_t len;
+} OvCacheOwnedFieldValueArrayV1;
+
+typedef struct {
+    double score;
+    OvCacheByteSliceV1 member;
+} OvCacheScoredMemberV1;
+
+typedef struct {
+    double score;
+    OvCacheOwnedBufferV1 member;
+} OvCacheOwnedScoredMemberV1;
+
+typedef struct {
+    OvCacheOwnedScoredMemberV1 *items;
+    size_t len;
+} OvCacheOwnedScoredMemberArrayV1;
+
+typedef struct {
+    double min;
+    uint8_t min_exclusive;
+    double max;
+    uint8_t max_exclusive;
+    uint64_t offset;
+    uint32_t limit;
+} OvCacheScoreRangeV1;
 
 typedef struct {
     /* -1 means no expiration; otherwise milliseconds. */
@@ -213,11 +257,17 @@ typedef int32_t (*OvCacheProviderHgetV1)(
     OvCacheOptionalOwnedBufferV1 *output,
     OvCacheOwnedBufferV1 *error);
 
+typedef int32_t (*OvCacheProviderHgetallV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheOwnedFieldValueArrayV1 *output,
+    OvCacheOwnedBufferV1 *error);
+
 typedef int32_t (*OvCacheProviderHsetV1)(
     void *provider,
     OvCacheByteSliceV1 key,
-    OvCacheByteSliceV1 field,
-    OvCacheByteSliceV1 value,
+    const OvCacheFieldValueV1 *entries,
+    size_t entries_len,
     uint64_t *added,
     OvCacheOwnedBufferV1 *error);
 
@@ -243,8 +293,8 @@ typedef int32_t (*OvCacheProviderScardV1)(
 typedef int32_t (*OvCacheProviderZaddV1)(
     void *provider,
     OvCacheByteSliceV1 key,
-    double score,
-    OvCacheByteSliceV1 member,
+    const OvCacheScoredMemberV1 *entries,
+    size_t entries_len,
     uint64_t *added,
     OvCacheOwnedBufferV1 *error);
 
@@ -259,10 +309,20 @@ typedef int32_t (*OvCacheProviderZscanV1)(
 typedef int32_t (*OvCacheProviderZrangeByScoreV1)(
     void *provider,
     OvCacheByteSliceV1 key,
-    double min,
-    double max,
-    uint32_t limit,
-    OvCacheOwnedBufferArrayV1 *output,
+    OvCacheScoreRangeV1 range,
+    OvCacheOwnedScoredMemberArrayV1 *output,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZcardV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    uint64_t *count,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderServerTimeForKeyV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    uint64_t *time_ms,
     OvCacheOwnedBufferV1 *error);
 
 typedef int32_t (*OvCacheProviderZremV1)(
@@ -397,6 +457,9 @@ typedef struct {
     OvCacheProviderZremV1 zrem;
     OvCacheProviderUnlinkV1 unlink;
     OvCacheProviderZrangeByScoreV1 zrangebyscore;
+    OvCacheProviderHgetallV1 hgetall;
+    OvCacheProviderZcardV1 zcard;
+    OvCacheProviderServerTimeForKeyV1 server_time_for_key;
 } OvCacheProviderApiV1;
 
 /* The only symbol resolved by DynamicProvider. */

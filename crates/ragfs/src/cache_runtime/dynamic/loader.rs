@@ -1,8 +1,4 @@
-use super::abi::{
-    ProviderApiV1, ProviderApiV2, ProviderEntryV1, ProviderEntryV2, ABI_VERSION_V1,
-    ABI_VERSION_V2, ENTRY_SYMBOL_V1, ENTRY_SYMBOL_V2,
-};
-use super::abi::{ProviderCloseV1, ProviderCreateV1, ProviderPingV1};
+use super::abi::{ProviderApiV1, ProviderEntryV1, ABI_VERSION_V1, ENTRY_SYMBOL_V1};
 use crate::cache_runtime::{CacheError, CacheResult};
 use libloading::{Library, Symbol};
 use std::mem::{align_of, size_of};
@@ -16,29 +12,12 @@ struct ProviderApiHeader {
     struct_size: usize,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ProviderApiRequiredV1 {
-    abi_version: u32,
-    struct_size: usize,
-    create: Option<ProviderCreateV1>,
-    ping: Option<ProviderPingV1>,
-    close: Option<ProviderCloseV1>,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ProviderApiRequiredV2 {
-    v1: ProviderApiRequiredV1,
-}
-
 pub(super) struct LoadedProviderApi {
     pub(super) library: Library,
     pub(super) api: ProviderApiV1,
-    pub(super) v2: Option<ProviderApiV2>,
 }
 
-/// Load the preferred V2 ABI, falling back only when its symbol is absent.
+/// Load and validate the breaking V1 ABI table.
 pub(super) fn load(path: &Path) -> CacheResult<LoadedProviderApi> {
     if !path.is_absolute() {
         return Err(CacheError::InvalidArgument(format!(
@@ -52,22 +31,11 @@ pub(super) fn load(path: &Path) -> CacheResult<LoadedProviderApi> {
             path.display()
         ))
     })?;
-    if let Some(api) = load_v2(&library, path)? {
-        return Ok(LoadedProviderApi {
-            library,
-            api: api.v1,
-            v2: Some(api),
-        });
-    }
     let api = load_v1(&library, path)?;
-    Ok(LoadedProviderApi {
-        library,
-        api,
-        v2: None,
-    })
+    Ok(LoadedProviderApi { library, api })
 }
 
-/// Load and validate the compatible V1 ABI table.
+/// Load one V1 table after requiring its complete breaking layout.
 fn load_v1(library: &Library, path: &Path) -> CacheResult<ProviderApiV1> {
     let entry: Symbol<ProviderEntryV1> = unsafe { library.get(ENTRY_SYMBOL_V1) }.map_err(|error| {
         CacheError::AbiMismatch(format!(
@@ -89,12 +57,7 @@ fn load_v1(library: &Library, path: &Path) -> CacheResult<ProviderApiV1> {
         )));
     }
     let header = unsafe { ptr::read(api_ptr.cast::<ProviderApiHeader>()) };
-    validate_header(
-        header,
-        ABI_VERSION_V1,
-        size_of::<ProviderApiRequiredV1>(),
-        path,
-    )?;
+    validate_header(header, path)?;
     let mut api = unsafe { std::mem::zeroed::<ProviderApiV1>() };
     let copy_len = header.struct_size.min(size_of::<ProviderApiV1>());
     unsafe {
@@ -108,72 +71,28 @@ fn load_v1(library: &Library, path: &Path) -> CacheResult<ProviderApiV1> {
     Ok(api)
 }
 
-/// Load and validate the V2 ABI table when the provider exports its entry point.
-fn load_v2(library: &Library, path: &Path) -> CacheResult<Option<ProviderApiV2>> {
-    let entry: Symbol<ProviderEntryV2> = match unsafe { library.get(ENTRY_SYMBOL_V2) } {
-        Ok(entry) => entry,
-        Err(_) => return Ok(None),
-    };
-    let api_ptr = unsafe { entry() };
-    if api_ptr.is_null() {
-        return Err(CacheError::AbiMismatch(format!(
-            "dynamic provider {} returned a null V2 API table",
-            path.display()
-        )));
-    }
-    if !(api_ptr as usize).is_multiple_of(align_of::<ProviderApiV2>()) {
-        return Err(CacheError::AbiMismatch(format!(
-            "dynamic provider {} returned a misaligned V2 API table",
-            path.display()
-        )));
-    }
-    let header = unsafe { ptr::read(api_ptr.cast::<ProviderApiHeader>()) };
-    validate_header(
-        header,
-        ABI_VERSION_V2,
-        size_of::<ProviderApiRequiredV2>(),
-        path,
-    )?;
-    let mut api = unsafe { std::mem::zeroed::<ProviderApiV2>() };
-    let copy_len = header.struct_size.min(size_of::<ProviderApiV2>());
-    unsafe {
-        ptr::copy_nonoverlapping(
-            api_ptr.cast::<u8>(),
-            (&mut api as *mut ProviderApiV2).cast::<u8>(),
-            copy_len,
-        );
-    }
-    validate_callbacks(&api.v1, path)?;
-    Ok(Some(api))
-}
-
-/// Validate an ABI table header against the selected version and required prefix.
-fn validate_header(
-    header: ProviderApiHeader,
-    expected_version: u32,
-    required_size: usize,
-    path: &Path,
-) -> CacheResult<()> {
-    if header.abi_version != expected_version {
+/// Reject legacy V1 tables that do not contain the new operation fields.
+fn validate_header(header: ProviderApiHeader, path: &Path) -> CacheResult<()> {
+    if header.abi_version != ABI_VERSION_V1 {
         return Err(CacheError::AbiMismatch(format!(
             "dynamic provider {} uses ABI {}, expected {}",
             path.display(),
             header.abi_version,
-            expected_version
+            ABI_VERSION_V1
         )));
     }
-    if header.struct_size < required_size {
+    if header.struct_size < size_of::<ProviderApiV1>() {
         return Err(CacheError::AbiMismatch(format!(
             "dynamic provider {} API table is {} bytes, expected at least {}",
             path.display(),
             header.struct_size,
-            required_size
+            size_of::<ProviderApiV1>()
         )));
     }
     Ok(())
 }
 
-/// Require lifecycle callbacks shared by V1 and V2 provider tables.
+/// Require lifecycle callbacks in the V1 provider table.
 fn validate_callbacks(api: &ProviderApiV1, path: &Path) -> CacheResult<()> {
     for (name, present) in [
         ("create", api.create.is_some()),

@@ -51,68 +51,10 @@ async fn dynamic_provider_dispatches_v1_hash_and_sorted_set_calls() {
     runtime.close().await.unwrap();
 }
 
-/// Verify a V1 dynamic provider cannot claim support for V2-only operations.
+/// Verify a breaking V1 dynamic provider forwards every new CacheRuntime operation.
 #[tokio::test]
-async fn v1_dynamic_provider_rejects_v2_operations() {
+async fn v1_dynamic_provider_forwards_new_cache_runtime_operations() {
     let runtime = CacheRuntime::dynamic(config(fixture_library()))
-        .await
-        .unwrap();
-    let range = ScoreRange {
-        min: 0.0,
-        min_exclusive: false,
-        max: 1.0,
-        max_exclusive: false,
-        offset: 0,
-        limit: 1,
-    };
-
-    assert_unsupported(runtime.hgetall("hash").await.unwrap_err(), "hgetall");
-    assert_unsupported(
-        runtime
-            .hset(
-                "hash",
-                HashMap::from([("field".to_string(), Bytes::from_static(b"value"))]),
-            )
-            .await
-            .unwrap_err(),
-        "hset",
-    );
-    assert_unsupported(
-        runtime
-            .zadd(
-                "scores",
-                vec![ScoredMember {
-                    score: 1.0,
-                    member: "member".to_string(),
-                }],
-            )
-            .await
-            .unwrap_err(),
-        "zadd",
-    );
-    assert_unsupported(
-        runtime
-            .zrangebyscore("scores", range)
-            .await
-            .unwrap_err(),
-        "zrangebyscore",
-    );
-    assert_unsupported(runtime.zcard("scores").await.unwrap_err(), "zcard");
-    assert_unsupported(
-        runtime
-            .server_time_for_key("scores")
-            .await
-            .unwrap_err(),
-        "server_time_for_key",
-    );
-
-    runtime.close().await.unwrap();
-}
-
-/// Verify a V2 dynamic provider receives batch values and returns scored members.
-#[tokio::test]
-async fn v2_dynamic_provider_forwards_cache_runtime_operations() {
-    let runtime = CacheRuntime::dynamic(config(v2_fixture_library()))
         .await
         .unwrap();
 
@@ -319,35 +261,12 @@ fn bad_length_fixture_library() -> &'static PathBuf {
 
 fn no_unlink_fixture_library() -> &'static PathBuf {
     static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
-    LIBRARY.get_or_init(|| {
-        compile_fixture(
-            "no-unlink",
-            &["OV_FIXTURE_V2", "OV_FIXTURE_NO_UNLINK"],
-        )
-    })
+    LIBRARY.get_or_init(|| compile_fixture("no-unlink", &["OV_FIXTURE_NO_UNLINK"]))
 }
 
 fn no_zrangebyscore_fixture_library() -> &'static PathBuf {
     static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
-    LIBRARY.get_or_init(|| {
-        compile_fixture(
-            "no-zrangebyscore",
-            &["OV_FIXTURE_V2", "OV_FIXTURE_NO_ZRANGEBYSCORE"],
-        )
-    })
-}
-
-fn v2_fixture_library() -> &'static PathBuf {
-    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
-    LIBRARY.get_or_init(|| compile_fixture("v2", &["OV_FIXTURE_V2"]))
-}
-
-/// Assert one operation is unavailable from a lower ABI provider.
-fn assert_unsupported(error: CacheError, expected_operation: &str) {
-    assert!(matches!(
-        error,
-        CacheError::UnsupportedOperation(operation) if operation == expected_operation
-    ));
+    LIBRARY.get_or_init(|| compile_fixture("no-zrangebyscore", &["OV_FIXTURE_NO_ZRANGEBYSCORE"]))
 }
 
 fn compile_fixture(name: &str, defines: &[&str]) -> PathBuf {

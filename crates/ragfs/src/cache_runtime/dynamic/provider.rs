@@ -45,7 +45,6 @@ pub(crate) struct DynamicProvider {
 struct DynamicState {
     _library: Library,
     api: ProviderApiV1,
-    v2: Option<ProviderApiV2>,
     handle: *mut c_void,
     calls: RwLock<()>,
     lifecycle: AtomicU8,
@@ -189,7 +188,6 @@ fn connect_state(config: DynamicProviderConfig) -> CacheResult<Arc<DynamicState>
     Ok(Arc::new(DynamicState {
         _library: loaded.library,
         api: loaded.api,
-        v2: loaded.v2,
         handle,
         calls: RwLock::new(()),
         lifecycle: AtomicU8::new(LIFECYCLE_OPEN),
@@ -217,31 +215,6 @@ impl DynamicState {
         })
     }
 
-    /// Execute a V2 callback while holding the provider lifecycle read lock.
-    fn with_v2_call<T>(
-        &self,
-        operation: &str,
-        call: impl FnOnce(&ProviderApiV2, *mut c_void) -> CacheResult<T>,
-    ) -> CacheResult<T> {
-        let _guard = self
-            .calls
-            .read()
-            .map_err(|_| CacheError::Internal("dynamic provider call lock poisoned".into()))?;
-        if self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_OPEN {
-            return Err(CacheError::Closed);
-        }
-        let api = self
-            .v2
-            .as_ref()
-            .ok_or_else(|| CacheError::UnsupportedOperation(operation.to_string()))?;
-        call(api, self.handle).map_err(|error| match error {
-            CacheError::UnsupportedOperation(_) => {
-                CacheError::UnsupportedOperation(operation.to_string())
-            }
-            other => other,
-        })
-    }
-
     fn supports(&self, operation: CacheOperation) -> bool {
         match operation {
             CacheOperation::Get => self.api.get.is_some(),
@@ -253,20 +226,12 @@ impl DynamicState {
             CacheOperation::IncrBy => self.api.incrby.is_some(),
             CacheOperation::Expire => self.api.expire.is_some(),
             CacheOperation::Hget => self.api.hget.is_some(),
-            CacheOperation::Hgetall => self.v2.as_ref().and_then(|api| api.hgetall).is_some(),
-            CacheOperation::Hset => self.v2.as_ref().and_then(|api| api.hset).is_some(),
-            CacheOperation::Zadd => self.v2.as_ref().and_then(|api| api.zadd).is_some(),
-            CacheOperation::ZrangeByScore => self
-                .v2
-                .as_ref()
-                .and_then(|api| api.zrangebyscore)
-                .is_some(),
-            CacheOperation::Zcard => self.v2.as_ref().and_then(|api| api.zcard).is_some(),
-            CacheOperation::ServerTimeForKey => self
-                .v2
-                .as_ref()
-                .and_then(|api| api.server_time_for_key)
-                .is_some(),
+            CacheOperation::Hgetall => self.api.hgetall.is_some(),
+            CacheOperation::Hset => self.api.hset.is_some(),
+            CacheOperation::Zadd => self.api.zadd.is_some(),
+            CacheOperation::ZrangeByScore => self.api.zrangebyscore.is_some(),
+            CacheOperation::Zcard => self.api.zcard.is_some(),
+            CacheOperation::ServerTimeForKey => self.api.server_time_for_key.is_some(),
             CacheOperation::Sismember => self.api.sismember.is_some(),
             CacheOperation::Smembers => self.api.smembers.is_some(),
             CacheOperation::Scard => self.api.scard.is_some(),
@@ -630,9 +595,9 @@ impl CacheProvider for DynamicProvider {
     async fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
         let key = key.to_string();
         self.call("hgetall", move |state| {
-            state.with_v2_call("hgetall", |api, handle| {
+            state.with_call("hgetall", |api, handle| {
                 let callback = required(api.hgetall, CacheOperation::Hgetall)?;
-                let mut output = OwnedFieldValueArrayV2::default();
+                let mut output = OwnedFieldValueArrayV1::default();
                 let mut error = OwnedBufferV1::default();
                 let status = unsafe {
                     callback(
@@ -661,11 +626,11 @@ impl CacheProvider for DynamicProvider {
         }
         let key = key.to_string();
         self.call("hset", move |state| {
-            state.with_v2_call("hset", |api, handle| {
+            state.with_call("hset", |api, handle| {
                 let callback = required(api.hset, CacheOperation::Hset)?;
                 let entries = values
                     .iter()
-                    .map(|(field, value)| FieldValueV2 {
+                    .map(|(field, value)| FieldValueV1 {
                         field: ByteSliceV1::from_slice(field.as_bytes()),
                         value: ByteSliceV1::from_slice(value),
                     })
@@ -756,11 +721,11 @@ impl CacheProvider for DynamicProvider {
         }
         let key = key.to_string();
         self.call("zadd", move |state| {
-            state.with_v2_call("zadd", |api, handle| {
+            state.with_call("zadd", |api, handle| {
                 let callback = required(api.zadd, CacheOperation::Zadd)?;
                 let raw_entries = entries
                     .iter()
-                    .map(|entry| ScoredMemberV2 {
+                    .map(|entry| ScoredMemberV1 {
                         score: entry.score,
                         member: ByteSliceV1::from_slice(entry.member.as_bytes()),
                     })
@@ -840,9 +805,9 @@ impl CacheProvider for DynamicProvider {
         }
         let key = key.to_string();
         self.call("zrangebyscore", move |state| {
-            state.with_v2_call("zrangebyscore", |api, handle| {
+            state.with_call("zrangebyscore", |api, handle| {
                 let callback = required(api.zrangebyscore, CacheOperation::ZrangeByScore)?;
-                let mut output = OwnedScoredMemberArrayV2::default();
+                let mut output = OwnedScoredMemberArrayV1::default();
                 let mut error = OwnedBufferV1::default();
                 let status = unsafe {
                     callback(
@@ -867,11 +832,11 @@ impl CacheProvider for DynamicProvider {
     }
 
     async fn zcard(&self, key: &str) -> CacheResult<u64> {
-        scalar_u64_v2(self, CacheOperation::Zcard, key).await
+        scalar_u64_v1(self, CacheOperation::Zcard, key).await
     }
 
     async fn server_time_for_key(&self, key: &str) -> CacheResult<u64> {
-        scalar_u64_v2(self, CacheOperation::ServerTimeForKey, key).await
+        scalar_u64_v1(self, CacheOperation::ServerTimeForKey, key).await
     }
 
     async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
@@ -1190,8 +1155,8 @@ async fn scalar_u64(
         .await
 }
 
-/// Execute a V2 scalar callback that returns one unsigned integer.
-async fn scalar_u64_v2(
+/// Execute a V1 scalar callback that returns one unsigned integer.
+async fn scalar_u64_v1(
     provider: &DynamicProvider,
     operation: CacheOperation,
     key: &str,
@@ -1199,13 +1164,13 @@ async fn scalar_u64_v2(
     let key = key.to_string();
     provider
         .call(operation.name(), move |state| {
-            state.with_v2_call(operation.name(), |api, handle| {
+            state.with_call(operation.name(), |api, handle| {
                 let callback = match operation {
                     CacheOperation::Zcard => required(api.zcard, operation)?,
                     CacheOperation::ServerTimeForKey => {
                         required(api.server_time_for_key, operation)?
                     }
-                    _ => unreachable!("scalar_u64_v2 only accepts V2 scalar operations"),
+                    _ => unreachable!("scalar_u64_v1 only accepts V1 scalar operations"),
                 };
                 let mut value = 0;
                 let mut error = OwnedBufferV1::default();
@@ -1224,9 +1189,9 @@ async fn scalar_u64_v2(
         .await
 }
 
-/// Convert one public score range into the V2 ABI representation.
-fn score_range(range: ScoreRange) -> ScoreRangeV2 {
-    ScoreRangeV2 {
+/// Convert one public score range into the V1 ABI representation.
+fn score_range(range: ScoreRange) -> ScoreRangeV1 {
+    ScoreRangeV1 {
         min: range.min,
         min_exclusive: u8::from(range.min_exclusive),
         max: range.max,
@@ -1340,7 +1305,7 @@ impl Drop for PendingBuffers {
 }
 
 struct PendingFieldValues {
-    items: std::vec::IntoIter<OwnedFieldValueV2>,
+    items: std::vec::IntoIter<OwnedFieldValueV1>,
 }
 
 impl Drop for PendingFieldValues {
@@ -1353,7 +1318,7 @@ impl Drop for PendingFieldValues {
 }
 
 struct PendingScoredMembers {
-    items: std::vec::IntoIter<OwnedScoredMemberV2>,
+    items: std::vec::IntoIter<OwnedScoredMemberV1>,
 }
 
 impl Drop for PendingScoredMembers {
@@ -1542,8 +1507,8 @@ fn take_buffer_array_with_budget(
     Ok(values)
 }
 
-/// Decode an owned V2 hash field/value array into a Rust hash map.
-fn take_field_value_array(array: OwnedFieldValueArrayV2) -> CacheResult<HashMap<String, Bytes>> {
+/// Decode an owned V1 hash field/value array into a Rust hash map.
+fn take_field_value_array(array: OwnedFieldValueArrayV1) -> CacheResult<HashMap<String, Bytes>> {
     let mut budget = DecodeBudget::default();
     if array.len == 0 {
         if array.items.is_null() {
@@ -1591,9 +1556,9 @@ fn take_field_value_array(array: OwnedFieldValueArrayV2) -> CacheResult<HashMap<
     Ok(values)
 }
 
-/// Decode owned V2 scored members while validating UTF-8 member names and scores.
+/// Decode owned V1 scored members while validating UTF-8 member names and scores.
 fn take_scored_member_array(
-    array: OwnedScoredMemberArrayV2,
+    array: OwnedScoredMemberArrayV1,
 ) -> CacheResult<Vec<ScoredMember>> {
     let mut budget = DecodeBudget::default();
     if array.len == 0 {
@@ -1892,8 +1857,8 @@ fn discard_buffer_array(array: OwnedBufferArrayV1) {
     }
 }
 
-/// Release a V2 field/value array returned alongside an error status.
-fn discard_field_value_array(array: OwnedFieldValueArrayV2) {
+/// Release a V1 field/value array returned alongside an error status.
+fn discard_field_value_array(array: OwnedFieldValueArrayV1) {
     if array.items.is_null() || array.len == 0 || array.len > MAX_ARRAY_ITEMS {
         release_registered(array.items.cast::<u8>());
         return;
@@ -1915,8 +1880,8 @@ fn discard_field_value_array(array: OwnedFieldValueArrayV2) {
     }
 }
 
-/// Release a V2 scored-member array returned alongside an error status.
-fn discard_scored_member_array(array: OwnedScoredMemberArrayV2) {
+/// Release a V1 scored-member array returned alongside an error status.
+fn discard_scored_member_array(array: OwnedScoredMemberArrayV1) {
     if array.items.is_null() || array.len == 0 || array.len > MAX_ARRAY_ITEMS {
         release_registered(array.items.cast::<u8>());
         return;
