@@ -187,6 +187,15 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
       plugins: registry.plugins.map((plugin) => (plugin.id === "openviking-memory" ? { ...plugin, enabled: false } : plugin)),
     });
     assert.deepEqual(doctorInstall(home, kimiDoctor).problems, ["Kimi Code has not loaded this plugin"]);
+    // An upgrade keeps that choice and says so.
+    const upgraded = runInstaller(home, [
+      "--harness", "kimicode", "--source", "dev", "--lang", "en",
+      "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    ]);
+    assert.equal(upgraded.status, 0, `${upgraded.stdout}\n${upgraded.stderr}`);
+    assert.match(`${upgraded.stdout}${upgraded.stderr}`, /kimicode: the plugin is switched off in Kimi Code and stays off/);
+    const kept = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
+    assert.equal(kept.plugins.find((plugin) => plugin.id === "openviking-memory").enabled, false);
     writeJson(join(home, ".kimi-code", "plugins", "installed.json"), registry);
 
     const removed = runInstaller(home, ["--harness", "kimicode", "--uninstall", "--yes"]);
@@ -1043,7 +1052,8 @@ test("Antigravity adds no second MCP server beside one the user configured", () 
   const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-mcp-"));
   const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
   const userMcp = join(home, ".gemini", "config", "mcp_config.json");
-  const own = '{\n  // my server\n  "mcpServers": { "openviking": { "url": "https://ov.example/mcp" } }\n}\n';
+  // The manual steps the docs used to give named no key for the server.
+  const own = '{\n  // my server\n  "mcpServers": { "OpenViking": { "url": "https://ov.example/mcp" } }\n}\n';
   try {
     mkdirSync(dirname(userMcp), { recursive: true });
     writeFileSync(userMcp, own);

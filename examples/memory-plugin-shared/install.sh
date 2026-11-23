@@ -3014,11 +3014,13 @@ const template = readJson(path.join(hostDir, "hooks.json"));
 const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) => [name,
   Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event, handlers.map(renderHandler)])),
 ]));
-// A server the user registered under this name stays the only one: a second
-// would hand the model every tool twice.
+// A server the user registered for OpenViking stays the only one: a second
+// would hand the model every tool twice. The manual steps this installer
+// replaced named no key for it, so any name that mentions OpenViking counts.
 let userHasServer = false;
 try {
-  userHasServer = Boolean(JSON.parse(stripJsonc(fs.readFileSync(userMcpPath, "utf8"))).mcpServers?.openviking);
+  const servers = JSON.parse(stripJsonc(fs.readFileSync(userMcpPath, "utf8"))).mcpServers || {};
+  userHasServer = Object.keys(servers).some((name) => /openviking/iu.test(name));
 } catch {}
 const capabilities = userHasServer ? ["hooks", "skills"] : ["hooks", "mcp", "skills"];
 // Stage beside plugins/, not in it, so an interrupted run leaves no second
@@ -3536,6 +3538,13 @@ EOF
         ok=0; agent_fatal=1
       fi
       info "kimicode: $(t 'native plugin installed (Hooks + MCP + skills)' '原生插件已安装（Hooks + MCP + skills）')"
+      # An upgrade keeps the plugin switched off if the user switched it off.
+      if "$NODE_BIN" -e '
+const plugins = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).plugins || [];
+process.exit(plugins.some((plugin) => plugin?.id === "openviking-memory" && plugin.enabled === false) ? 0 : 1);
+' "$kimi_home/plugins/installed.json" 2>/dev/null; then
+        warn "kimicode: $(t 'the plugin is switched off in Kimi Code and stays off; switch it on there to use it' '插件在 Kimi Code 中处于关闭状态，升级后仍保持关闭；需要在 Kimi Code 中打开才会生效')"
+      fi
     else
       warn "kimicode: $(t 'native plugin installation is incomplete' '原生插件安装不完整')"
       ok=0; agent_fatal=1
@@ -4062,7 +4071,8 @@ EOF
       "node ~/.pi/agent/extensions/openviking/scripts/ov-memory-doctor.mjs" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
   if contains_harness dsh && have_npm_dsh; then
-    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" "" \
+    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" \
+      "node $(short_path "$(dsh_home)/profiles/${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}/node_modules/$DSH_PACKAGE/scripts/ov-memory-doctor.mjs")" \
       "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} rm $DSH_PACKAGE"
   fi
   if contains_harness dsh-desktop && [ "$DSH_DESKTOP_INSTALLED" -eq 1 ]; then
