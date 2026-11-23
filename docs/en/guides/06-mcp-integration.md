@@ -196,6 +196,18 @@ portable between workers with the same key, caller scope, and visible data. This
 does not change backend process/sharing limits; full multi-instance shared-storage
 integration has not been verified. Cursors have no time-based expiry and confer no permission: each page repeats the normal authorized visible read.
 
+To rotate the key, coordinate the cutover for the entire MCP endpoint. Drain or
+pause traffic while replacing the key, then resume only when all serving workers
+and replicas use the new key, or switch traffic atomically to a set already
+using it. Do not serve old- and new-key replicas concurrently behind the same
+endpoint: a cursor issued by one may be rejected by the other. Only one key is
+active on each server; there is no old-key grace period.
+
+A cursor signed with the previous key returns `INVALID_ARGUMENT`. If a cursor
+is rejected after rotation, discard the pages already collected for that read
+and restart with the original URI and budget but without `cursor`. Do not retry
+the rejected cursor or append pages from the new read to the old ones.
+
 The result is one JSON text block containing `uri`, `content`, `version`,
 `has_more`, and `next_cursor`, without a duplicate structured result. Continue
 with the same `uri`, `max_tokens`, and returned `cursor`. Concatenate the decoded
