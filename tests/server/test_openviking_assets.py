@@ -192,7 +192,7 @@ def test_single_file_manifest_selects_subset():
     [
         ("'   '", "must be a non-empty string"),
         ("viking://user/skills/repo", "must target resource content"),
-        ("https://example.com/repo", "unsupported URI scheme"),
+        ("https://example.com/repo", "URI must start with 'viking://'"),
     ],
 )
 def test_resolver_rejects_invalid_asset_target(to: str, message: str):
@@ -295,6 +295,7 @@ class _GitProcess:
         self.killed = True
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_uses_process_local_auth_without_secret_in_argv(monkeypatch):
     captured = {}
 
@@ -324,6 +325,7 @@ async def test_git_preflight_uses_process_local_auth_without_secret_in_argv(monk
 
 
 @pytest.mark.parametrize("repo_url", ["http://github.com/org/private.git"])
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_rejects_unsafe_token_urls_before_spawn(monkeypatch, repo_url):
     exec_mock = AsyncMock()
     monkeypatch.setattr("asyncio.create_subprocess_exec", exec_mock)
@@ -352,6 +354,7 @@ async def test_git_preflight_rejects_http_userinfo_before_spawn(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_timeout_kills_process_group_and_bounds_reap(monkeypatch):
     process = Mock(pid=43210)
     process.communicate = AsyncMock(return_value=(b"", b""))
@@ -392,6 +395,7 @@ async def test_git_preflight_timeout_kills_process_group_and_bounds_reap(monkeyp
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_cancellation_kills_process_group_and_bounds_reap(monkeypatch):
     process = Mock(pid=43210)
     process.communicate = AsyncMock(side_effect=[asyncio.CancelledError, (b"", b"")])
@@ -428,6 +432,7 @@ async def test_git_preflight_cancellation_kills_process_group_and_bounds_reap(mo
     process.kill.assert_not_called()
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_preserves_ssh_username(monkeypatch):
     captured = {}
 
@@ -462,6 +467,7 @@ async def test_git_preflight_rejects_invalid_commit_selection():
         )
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_maps_private_repository_failure_to_permission_denied(monkeypatch):
     async def fake_exec(*_args, **_kwargs):
         return _GitProcess(128, b"remote: Repository not found.")
@@ -474,6 +480,7 @@ async def test_git_preflight_maps_private_repository_failure_to_permission_denie
         )
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_git_preflight_maps_missing_branch_to_not_found(monkeypatch):
     async def fake_exec(*_args, **_kwargs):
         return _GitProcess(2)
