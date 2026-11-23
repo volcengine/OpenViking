@@ -220,11 +220,11 @@ function manifestString(value, name, { maxLength = 128 } = {}) {
   return normalized;
 }
 
-// Only the manifest's own storage directories keep POSIX semantics when a
-// manifest written for a POSIX deployment is read on Windows; resolving them
-// with the host rules would produce a `C:\root...`. Any other path (the
-// OpenViking config file, a mailbox file) is local to the host that runs it.
-const POSIX_MANIFEST_FIELDS = Object.freeze(['dataDir', 'tempDir', 'workspace']);
+// Only paths a manifest declares itself keep POSIX semantics when a manifest
+// written for a POSIX deployment is read on Windows; resolving them with the
+// host rules would produce a `C:\root...`. A path this process derives locally
+// (the OpenViking plugin state, a lock file) is joined with the host's rules.
+const POSIX_MANIFEST_FIELDS = Object.freeze(['dataDir', 'tempDir', 'workspace', 'ovConfig', 'config']);
 
 function manifestAbsolutePath(value, name) {
   const normalized = manifestString(value, name, { maxLength: 4096 });
