@@ -180,48 +180,37 @@ async def generate_directory_semantics(
         )
 
     async def summarize(material: list[str]) -> str:
-        text = prompt(material)
-        if len(text) > config.max_overview_prompt_chars:
-            raise ValueError("directory abstract input exceeds max_overview_prompt_chars")
-        result = (await complete(text)).strip()
+        result = (await complete(prompt(material))).strip()
         if not result:
             raise ValueError("directory abstract generation returned empty content")
         return result
 
-    def batches(material: list[str]) -> list[list[str]]:
-        result: list[list[str]] = []
-        batch: list[str] = []
-        for item in material:
-            if batch and (
-                len(batch) >= config.overview_batch_size
-                or len(prompt([*batch, item])) > config.max_overview_prompt_chars
-            ):
-                result.append(batch)
-                batch = []
-            if len(prompt([item])) > config.max_overview_prompt_chars:
-                raise ValueError("a node summary exceeds the directory abstract input budget")
-            batch.append(item)
-        if batch:
-            result.append(batch)
-        return result
-
     if generate_summary:
-        material = [
-            json.dumps({"name": name, **entry}, ensure_ascii=False)
-            for name, entry in sorted(entries.items())
-        ]
-        while True:
-            groups = batches(material)
-            if len(groups) == 1:
-                summary = await summarize(groups[0])
-                break
-            merged = []
-            for group in groups:
-                partial_summary = await summarize(group)
-                merged.append(partial_summary[: config.abstract_max_chars].rstrip())
-            if len(merged) >= len(material) and sum(map(len, merged)) >= sum(map(len, material)):
-                raise ValueError("directory abstract budget cannot merge summary batches")
-            material = merged
+        items = [{"name": name, **entry} for name, entry in sorted(entries.items())]
+        material = [json.dumps(item, ensure_ascii=False) for item in items]
+        budget = config.max_overview_prompt_chars
+        batch_size = config.overview_batch_size
+        if len("\n".join(material)) > budget:
+            if len(material) > batch_size:
+                material = [
+                    await summarize(material[start : start + batch_size])
+                    for start in range(0, len(material), batch_size)
+                ]
+            else:
+                child_material = "\n".join(
+                    line
+                    for item, line in zip(items, material, strict=True)
+                    if item["kind"] == "directory"
+                )
+                file_count = sum(item["kind"] == "file" for item in items)
+                per_file = max(100, (budget - len(child_material)) // max(file_count, 1))
+                material = [
+                    json.dumps({**item, "summary": item["summary"][:per_file]}, ensure_ascii=False)
+                    if item["kind"] == "file"
+                    else line
+                    for item, line in zip(items, material, strict=True)
+                ]
+        summary = await summarize(material)
 
     overview, overview_summary = _render_directory_overview(
         dir_uri,
