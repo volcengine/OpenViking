@@ -512,16 +512,3 @@ Typical flow:
 2. Create and push a tag like `python-sdk@0.1.3`.
 3. GitHub Actions builds `sdk/python`.
 4. GitHub Actions publishes `openviking-sdk` to PyPI.
-
-## Filesystem semantic processing
-
-Remove and move calls default to `semantic_and_vectors`. Use `vectors_only` to skip
-VLM and parent semantic queues while preserving file vector cleanup and URI mapping.
-Parent summaries can remain stale until a later semantic reindex. Default modes are
-omitted from HTTP payloads for older-server compatibility; return types stay unchanged.
-Use HTTP directly when you need a transfer task ID or indexing status.
-
-```python
-client.rm("viking://resources/docs/old.md", processing_mode="vectors_only")
-client.mv("viking://resources/a.md", "viking://resources/b.md", processing_mode="vectors_only")
-```
