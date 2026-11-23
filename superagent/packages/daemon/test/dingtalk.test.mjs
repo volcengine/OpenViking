@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -37,7 +38,10 @@ const callback = (overrides = {}, deliveryId = 'stream-delivery') => ({
 
 function setupClient(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dingtalk-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let close = () => {};
+  t.after(() => {
+    try { close(); } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
   fs.writeFileSync(path.join(directory, 'dingtalk.json'), JSON.stringify({
     clientId: 'fixture-app', clientSecret: 'fixture-secret', robotCode,
   }));
@@ -56,11 +60,12 @@ function setupClient(t) {
     sends.push(JSON.parse(body.msgParam).text);
     return Response.json({ processQueryKey: 'fixture-delivery-receipt' });
   });
-  return { directory, client: new DingTalkClient({ dataDir: directory }, null, logger), fetch, sends };
+  return { directory, client: new DingTalkClient({ dataDir: directory }, null, logger), fetch, sends,
+    beforeCleanup: (callback) => { close = callback; } };
 }
 
 test('DingTalk passes group mentions into Harness and routes replies and due timers through the group API', async (t) => {
-  const { client, directory, fetch, sends } = setupClient(t);
+  const { client, directory, fetch, sends, beforeCleanup } = setupClient(t);
   const order = [];
   let stream;
   t.mock.method(DWClient.prototype, 'connect', function () {
@@ -80,7 +85,7 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
     runtime: { snapshot: () => ({ work: {} }) },
     inbox: { usable: () => true, add: (item) => inbound.push(item), stop() {} },
   });
-  t.after(() => { client.stop(); harness.stop(); store.close(); });
+  beforeCleanup(() => { client.stop(); harness.stop(); store.close(); });
   let event;
   await client.startSubscription((line) => {
     event = JSON.parse(line);
@@ -101,9 +106,12 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
   let now = event.occurred_at;
   const timers = new TimerRepository(store.db);
   const service = new ActionService({
-    config: { channel: 'dingtalk', workspace: directory, tempDir: directory, maxReplyChars: 1000 },
+    config: { channel: 'lark', workspace: directory, tempDir: directory, maxReplyChars: 1000 },
     store, logger, timers, clock: () => now,
-    connectors: fakeConnectors({ ids: ['dingtalk'], run: (_id, action, input) => invokeOperation(client, action, input) }),
+    connectors: fakeConnectors({ ids: ['lark', 'dingtalk'], run: (id, action, input) => {
+      assert.equal(id, 'dingtalk');
+      return invokeOperation(client, action, input);
+    } }),
   });
   const call = (tool, input) => service.call(tool, input, { authority: token });
   const delivery = { mode: 'chat', source: 'dingtalk', chat_id: chatId };
@@ -126,7 +134,7 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
     source: 'dingtalk', message_id: 'om_foreign', markdown: 'Do not send', decision_id: event.id,
   }), /original message has no known chat/);
   assert.deepEqual(sends, []);
-  await call('reply_message', { message_id: messageId, markdown: 'Timer created', decision_id: event.id });
+  await call('reply_message', { source: 'dingtalk', message_id: messageId, markdown: 'Timer created', decision_id: event.id });
 
   now += 60_000;
   const submitted = [];
@@ -252,7 +260,32 @@ test('DingTalk leaves a callback unacknowledged when SQLite staging fails', asyn
   } finally { client.stop(); }
 });
 
-test('the deployment manifest and connector worker recognize a DingTalk-only instance', async (t) => {
+test('DingTalk acknowledges malformed callbacks and skips a corrupt journal row before forwarding valid events', async (t) => {
+  const { client, directory } = setupClient(t);
+  const account = JSON.stringify(['fixture-app', robotCode]);
+  const state = new DingTalkState(directory, account);
+  try { state.stage({ id: 'corrupt', type: 'REQUEST' }); } finally { state.close(); }
+  let stream;
+  t.mock.method(DWClient.prototype, 'connect', function () { stream = this; this.connected = true; });
+  t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
+  const ack = t.mock.method(DWClient.prototype, 'socketCallBackResponse', () => {});
+  const handedOff = t.mock.fn();
+  try {
+    await client.preflight();
+    await client.startSubscription(handedOff);
+    stream.emit(TOPIC_ROBOT, { ...callback(), data: '{bad' });
+    stream.emit(TOPIC_ROBOT, callback({ msgId: 'next-valid' }, 'next-delivery'));
+    assert.deepEqual(ack.mock.calls.map(({ arguments: [id] }) => id), ['stream-delivery', 'next-delivery']);
+    assert.equal(handedOff.mock.callCount(), 1);
+    assert.equal(JSON.parse(handedOff.mock.calls[0].arguments[0]).type, 'EVENT');
+    const inspect = new DingTalkState(directory, account);
+    try {
+      assert.equal(JSON.parse(inspect.next(0).envelope).type, 'EVENT');
+    } finally { inspect.close(); }
+  } finally { client.stop(); }
+});
+
+test('the deployment manifest and connector worker recognize DingTalk as a secondary group connector', async (t) => {
   const require = createRequire(import.meta.url);
   const { loadDeploymentManifest, applyDeploymentAgentEnv } = require('../../../deployment-config.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-dingtalk-config-'));
@@ -265,16 +298,23 @@ test('the deployment manifest and connector worker recognize a DingTalk-only ins
     await connector.stop();
     fs.rmSync(directory, { recursive: true, force: true });
   });
-  fs.writeFileSync(manifest, JSON.stringify({
-    version: 1, defaultInstance: 'dingtalk', env: {}, agents: [{
-      id: 'dingtalk', displayName: 'Vika DingTalk', channel: 'dingtalk', connectors: ['dingtalk'],
-      model: 'codex', port: 3839, dataDir: path.join(directory, 'data'), workspace: path.join(directory, 'workspace'),
-      ovConfig: path.join(directory, 'ov.json'),
-    }],
+  const instance = {
+    id: 'dingtalk', displayName: 'Vika DingTalk', channel: 'lark', connectors: ['dingtalk', 'lark'],
+    profile: 'superagent-dingtalk-test',
+    model: 'codex', port: 3839, dataDir: path.join(directory, 'data'), workspace: path.join(directory, 'workspace'),
+    ovConfig: path.join(directory, 'ov.json'),
+  };
+  const writeManifest = () => fs.writeFileSync(manifest, JSON.stringify({
+    version: 1, defaultInstance: 'dingtalk', env: {}, agents: [instance],
   }));
+  instance.channel = 'dingtalk';
+  writeManifest();
+  assert.throws(() => loadDeploymentManifest(env), /requires an owner-capable IM/);
+  delete instance.channel;
+  writeManifest();
   applyDeploymentAgentEnv(env, loadDeploymentManifest(env));
-  assert.equal(env.OV_SUPERAGENT_CHANNEL, 'dingtalk');
-  assert.deepEqual(JSON.parse(env.OV_SUPERAGENT_CONNECTORS_JSON), ['dingtalk']);
+  assert.equal(env.OV_SUPERAGENT_CHANNEL, 'lark');
+  assert.deepEqual(JSON.parse(env.OV_SUPERAGENT_CONNECTORS_JSON), ['dingtalk', 'lark']);
   await assert.rejects(connector.preflight(), /Configure DingTalk app credentials/);
   assert.equal(connector.manifest.name, 'dingtalk');
 });

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
 import { readFile } from 'node:fs/promises';
@@ -5,6 +6,7 @@ import path from 'node:path';
 import { DWClient, TOPIC_ROBOT } from 'dingtalk-stream';
 import { decodeDingTalkChatId, normalizeDingTalkEvent } from './dingtalk-events.mjs';
 import { DingTalkState } from './dingtalk-state.mjs';
+import { parseProtocolLine } from './protocol.mjs';
 
 const API = 'https://api.dingtalk.com/v1.0';
 const RECEIVE_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000];
@@ -92,8 +94,14 @@ export class DingTalkClient {
     stream.registerCallbackListener(TOPIC_ROBOT, (callback) => {
       const deliveryId = callback?.headers?.messageId;
       if (this.#subscription !== subscription || typeof deliveryId !== 'string' || !deliveryId) return;
+      let event;
       try {
-        const event = normalizeDingTalkEvent(callback, { botId: robotCode });
+        event = normalizeDingTalkEvent(callback, { botId: robotCode });
+      } catch {
+        // Invalid content cannot become a valid event on redelivery.
+        this.#logger?.warn('dingtalk_invalid_callback');
+      }
+      try {
         if (event) {
           state.prune();
           state.stage(event);
@@ -123,6 +131,15 @@ export class DingTalkClient {
       while (this.#subscription === subscription) {
         const pending = subscription.state.next(subscription.cursor);
         if (!pending) break;
+        try {
+          const event = parseProtocolLine(pending.envelope);
+          if (event.type !== 'EVENT' || event.connector !== 'dingtalk') throw new Error('invalid DingTalk envelope');
+        } catch {
+          this.#logger?.warn('dingtalk_invalid_stored_event', { seq: pending.seq });
+          subscription.state.discard(pending.seq);
+          subscription.cursor = pending.seq;
+          continue;
+        }
         await subscription.onLine(pending.envelope);
         if (this.#subscription !== subscription) break;
         subscription.state.forwarded(pending.seq);

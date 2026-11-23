@@ -83,7 +83,13 @@ Capabilities are optional modules:
 Connector. `content` lists the message bodies an action accepts (`markdown`,
 `file`, `file_key`, `card`); `mentions` and `thread` opt into those Lark
 features; `idempotent: true` means the provider honours the idempotency key, so
-the Core may retry an `UNCERTAIN` attempt with the same key; `interim: false`
+the Core may retry an `UNCERTAIN` attempt with the same key;
+`reply_target: "chat"` on `message.reply` declares a group-level reply.
+Core resolves the target from the indexed message in the same Connector
+instance and adds the trusted `chat_id` to the action input alongside
+`message_id`. A missing indexed group returns `unknown_message` before
+an Outbox reservation. The Connector may use `chat_id` to send a new
+group message; thread routing requires its own advertised support; `interim: false`
 means the target takes no interim message (staged replies), only the result;
 `approval: true`
 means the action speaks for the owner (an email reply), so the Core never runs it
@@ -124,7 +130,7 @@ should reuse `spec/check/discover/read` and `RECORD/SCHEMA/STATE` semantics.
 
 `connector` identifies the provider; `instance` identifies a configured source
 instance/account and is unique within a Core. Built-in chat connectors currently
-use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, or `instance=onebot`. The source process authenticates both
+use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, `instance=onebot`, or `instance=dingtalk`. The source process authenticates both
 identities; input cannot select another Connector's identity.
 
 `id` is required and stable across retries. The Core deduplicates on
@@ -655,3 +661,27 @@ at most 200 messages and 64 KiB. `chat.list` lists the groups from `get_group_li
 cursor, as context only; private history leaves out what classification drops
 there live (command prefixes, the account's lines the Connector did not send,
 a stranger's `/`). There is no catch-up read after downtime.
+
+
+### DingTalk
+
+DingTalk Stream receives mentions in internal group text. Its `message.send`
+and `message.reply` operations accept Markdown. Replies use the
+`reply_target: "chat"` contract and the group API. Timer deliveries use the
+same group send endpoint. Use a separate owner-capable primary IM for
+owner notifications and email approvals.
+
+The Stream callback ID is used only to acknowledge that delivery. The
+provider message ID becomes a stable SuperAgent event ID. The receive
+journal at `<dataDir>/dingtalk/receive.sqlite3` commits accepted events
+before ACK. Invalid or out-of-scope callbacks are acknowledged and skipped;
+a storage failure leaves the callback unacknowledged. Local handoff
+failures retry with capped backoff. Malformed stored envelopes are
+discarded with a diagnostic and the queue advances.
+
+Startup replays retained records in order. Records successfully written to
+the Worker output are eligible for cleanup after 24 hours; records awaiting
+local handoff remain queued. A Worker output write has no Core persistence
+receipt. Core independently applies event-age policy and deduplication by
+Connector instance and event ID. Retention defines a local replay window,
+while Core policy determines whether a replay is accepted.

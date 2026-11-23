@@ -15,7 +15,7 @@
     "@earendil-works/pi-durable": "1.4.0",
     "@larksuite/cli": "1.0.99",
     "@tencent-connect/qqbot-nodejs": "1.0.5",
-    "dingtalk-stream": "2.1.6-beta.1",
+    "dingtalk-stream": "2.1.5",
     "image-size": "2.0.4",
     "qrcode-terminal": "0.12.0"
   },

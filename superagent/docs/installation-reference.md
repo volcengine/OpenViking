@@ -189,13 +189,13 @@ Use this to change the address or token, or to rebind the owner. A failed or can
 
 ### DingTalk group setup
 
-Enable a Stream-mode robot on an internal DingTalk application and publish it in the test organization. For a dedicated OpenViking SuperAgent deployment entry, set `channel` to `dingtalk`, `connectors` to `["dingtalk"]`, and supply its own `dataDir`, `workspace`, `port`, and `ovConfig`.
+Enable a Stream-mode bot on an internal DingTalk app, grant it permission to send group messages, and publish it in the organization. Add it to a trusted internal group where members are allowed to send tasks to the agent.
 
-In the instance's `dataDir`, create a private `dingtalk.json` with the app's `clientId` (AppKey), `clientSecret` (AppSecret), and optional `robotCode` (defaults to the Client ID). Restrict the file to the daemon's account. Use the normal source daemon startup with that deployment manifest and instance id.
+Select **DingTalk (group bot)** and an owner-capable IM in `ov-superagent setup`. Keep the owner-capable IM as the primary `channel`. For example, a Feishu/Lark instance uses `"channel": "lark", "connectors": ["lark", "dingtalk"]`. DingTalk handles mentions and replies in the originating group. The primary IM handles owner direct messages, proactive owner notices, email approvals and `/primary`.
 
-Keep `dataDir` on persistent storage. The connector saves accepted events to `dingtalk/receive.sqlite3` before acknowledging DingTalk. It retries failed local handoffs with backoff, even without new callbacks. A successful write to the connector output marks the start of a 24-hour restart replay window. The connector protocol does not confirm Core persistence. Core deduplicates replays by connector instance and event ID and still applies its configured message-age limit.
+Setup prompts for the app's AppKey, AppSecret (hidden input) and optional RobotCode (defaults to AppKey). It validates the credentials and writes `<dataDir>/dingtalk.json` for the daemon's account. For manual provisioning, create that private file with `clientId`, `clientSecret` and an optional `robotCode`, then include `dingtalk` in `connectors`. To rotate credentials, run `ov-superagent login dingtalk [instance]` for the existing instance.
 
-The connector accepts group text that mentions the bot. Add the published robot to the test group and mention it in a text message. A reply is posted to the originating group. A timer uses native SuperAgent scheduling and the DingTalk proactive send API, with the group target recorded in the timer.
+Mention the bot in a group text message to test delivery. Group replies are Markdown, and native timers can send Markdown to the original group. See [DingTalk delivery and replay](connector-protocol.md#dingtalk) for persistence and age limits.
 
 ## Managing instances with setup
 
@@ -273,7 +273,7 @@ Published `install.sh` and each archive record the download base used by the upd
 
 ## Multiple agents
 
-Add entries to `agents` in `config.json`, each with separate ID, port, dataDir, workspace, OV configuration, and (for Feishu) profile. They share release, Web, and updater. `channel` preserves single-Connector compatibility; optional `connectors` can start `lark`, `weixin`, `telegram`, `slack`, `qq`, `onebot`, and `email` together, with at least one chat IM for email. Omitting both selects Feishu. The easiest path is another `ov-superagent setup`; after manual edits, run `ov-superagent start <new-instance>` and `ov-superagent restart web`. The updater rereads the manifest per request and needs no restart.
+Add entries to `agents` in `config.json`, each with separate ID, port, dataDir, workspace, OV configuration, and (for Feishu) profile. They share release, Web, and updater. `channel` preserves single-Connector compatibility; optional `connectors` can start `lark`, `weixin`, `telegram`, `slack`, `qq`, `onebot`, `dingtalk`, and `email` together, with at least one chat IM for email. Omitting both selects Feishu. The easiest path is another `ov-superagent setup`; after manual edits, run `ov-superagent start <new-instance>` and `ov-superagent restart web`. The updater rereads the manifest per request and needs no restart.
 
 OpenViking SuperAgent owns OpenViking memory, the same for every runtime. The daemon syncs the conversation into the instance's own OV user, naming each line's speaker in `from=` and attaching no peer; extraction keeps profile, entities and events, each event once. Preferences are not extracted: when the agent calls `openviking_remember`, the Core writes the preference into the directory of the person who sent that message, `memories/preferences/owner/` for the owner and `memories/preferences/<name>~<id>/` for anyone else (the id comes from the channel identity, so namesakes stay apart). Before forwarding direct chats, mentioned group messages, document comments, and non-chat events such as mail, the daemon attaches the owner's preferences (the owner's standing rules) and the sender's; set `agents[].ovAutoRecall` to `true` in `config.json` (default `false`, not in setup) to also run one semantic search per such line. OV outages do not stop messaging; new sessions can skip history temporarily while synchronization retries.
 

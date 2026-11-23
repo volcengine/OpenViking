@@ -300,10 +300,13 @@ function parseAgent(value, index, ignored) {
   }
   // The primary IM: where notices to the owner go. A mailbox is never one.
   const channel = value.channel === undefined
-    ? (connectors?.find((connector) => connector !== 'email') ?? 'lark')
+    ? (connectors?.find((connector) => connector !== 'email' && connector !== 'dingtalk') ?? 'lark')
     : manifestString(value.channel, `${label}.channel`);
-  if (!['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk'].includes(channel)) {
-    throw new Error(`${label}.channel must be lark, weixin, telegram, slack, qq, onebot or dingtalk`);
+  if (channel === 'dingtalk') {
+    throw new Error(`${label}.channel requires an owner-capable IM; add dingtalk to connectors as a secondary channel`);
+  }
+  if (!['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot'].includes(channel)) {
+    throw new Error(`${label}.channel must be lark, weixin, telegram, slack, qq or onebot`);
   }
   connectors ??= [channel];
   if (!connectors.includes(channel)) {

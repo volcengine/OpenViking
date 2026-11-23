@@ -123,13 +123,19 @@ async function handleRequest(message) {
       started = true;
       try {
         const subscription = client.startSubscription((line) => {
+          // DingTalk has already validated the staged EVENT. Await the stream
+          // write callback so local transport faults can reach its retry loop.
+          if (connectorId === 'dingtalk') {
+            return new Promise((resolve, reject) => {
+              process.stdout.write(`${line}\n`, (error) => error ? reject(error) : resolve());
+            });
+          }
           try {
             const raw = JSON.parse(line);
             if (connectorId === 'lark' && isDocCommentEvent(raw)) emitDocComment(raw);
             else write(connectorId === 'lark' ? normalizeLarkEvent(raw) : parseProtocolLine(line));
           } catch (error) {
             logger.warn('connector_event_rejected', { error: safeError(error) });
-            if (connectorId === 'dingtalk') throw error;
           }
         }, (exit) => {
           if (stopping) return;

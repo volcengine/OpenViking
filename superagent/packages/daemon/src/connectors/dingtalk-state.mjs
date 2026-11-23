@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
 import fs from 'node:fs';
@@ -34,6 +35,7 @@ export class DingTalkState {
       this.insert = this.db.prepare('INSERT OR IGNORE INTO received (account, event_id, envelope) VALUES (?, ?, ?)');
       this.readNext = this.db.prepare('SELECT seq, envelope FROM received WHERE account = ? AND seq > ? ORDER BY seq LIMIT 1');
       this.markForwarded = this.db.prepare('UPDATE received SET forwarded_at = ? WHERE seq = ? AND forwarded_at IS NULL');
+      this.remove = this.db.prepare('DELETE FROM received WHERE account = ? AND seq = ?');
       this.expire = this.db.prepare('DELETE FROM received WHERE forwarded_at < ?');
       this.prune();
     } catch (error) {
@@ -45,6 +47,7 @@ export class DingTalkState {
   stage(event) { this.insert.run(this.account, event.id, JSON.stringify(event)); }
   next(after) { return this.readNext.get(this.account, after); }
   forwarded(seq) { this.markForwarded.run(Date.now(), seq); }
+  discard(seq) { this.remove.run(this.account, seq); }
   close() { this.db.close(); }
 
   // A stdout write is not a Core receipt. Keep forwarded rows for replay;

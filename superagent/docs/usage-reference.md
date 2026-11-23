@@ -27,7 +27,7 @@ Core starts Connector subprocesses from the manifest. Feishu receives through la
 
 Outbound runtimes use the same Agent tools, such as `send_message` and `reply_message`. Codex/TraeX/Claude/Pi/DSH/OpenCode/Antigravity share an MCP adapter; Durable calls through its host process. Both forward to Core's local socket. Core validates authority, freshness, routing, and content, writes a single `outbox` table, then invokes the Connector. Daemon failure notices and slash-command responses use the same path. See [Connector protocol 0.2](connector-protocol.md).
 
-All sources write `connector_events`, deduplicated by source instance and event ID. Chat/message/reply routing is optional: GitHub issues and calendar reminders can enter with `kind`, `subject`, title, and body without pretending to be chat messages. Built-in connectors are Feishu, WeChat, Telegram, Slack, QQ, OneBot, and IMAP/SMTP email; new sources require a Connector. Non-chat events notify the owner through `notify_owner`, with Core selecting the owner's direct chat on the primary `channel`, rather than the agent choosing a destination. Incoming chat replies stay on the originating IM. The primary channel handles unsolicited notifications and email approvals.
+All sources write `connector_events`, deduplicated by source instance and event ID. Chat/message/reply routing is optional: GitHub issues and calendar reminders can enter with `kind`, `subject`, title, and body without pretending to be chat messages. Built-in connectors are Feishu, WeChat, Telegram, Slack, QQ, OneBot, DingTalk, and IMAP/SMTP email; new sources require a Connector. Non-chat events notify the owner through `notify_owner`, with Core selecting the owner's direct chat on the primary `channel`, rather than the agent choosing a destination. Incoming chat replies stay on the originating IM. The primary channel handles unsolicited notifications and email approvals.
 
 Connectors establish the owner during self-check: Feishu's lark-cli user account, WeChat's scanning account, Telegram's one-time Start binding, Slack's direct-chat passphrase sender, QQ's verified direct-chat account, or the friend who sent OneBot's private-chat code. Protocol 0.2 was a direct pre-release schema change: use a new data directory; the old `inbound` table is not migrated.
 
@@ -149,6 +149,11 @@ Text is plain, up to 4,000 characters. Files are up to 20 MiB; images are sent a
 
 A OneBot-only instance uses `"channel": "onebot"`, `"connectors": ["onebot"]`, and no `profile`; Codex, TraeX, Claude, Pi, DSH, OpenCode, and Antigravity are supported. It can be the primary channel. The address, token, owner, routes, and lines waiting for delivery live in `<dataDir>/onebot/state.sqlite3` (0600, parent 0700), not manifest/logs; media lives in `<dataDir>/onebot/media` with retention cleanup. Every member of a connected group can talk to an agent that runs commands in its workspace: set every group you do not trust to `"off"` (or `"*"` to `"off"`) and run the instance isolated. OneBot has no idempotency key: a failed send, whether or not it reached the server, is not retried automatically.
 
+
+### DingTalk groups
+
+DingTalk receives internal group text that mentions the robot. It posts Markdown replies to the originating group and can deliver native timer reminders to the same group. Configure it as a secondary Connector alongside a primary IM with owner direct messages. Setup and credential rotation are documented in [DingTalk group setup](installation-reference.md#dingtalk-group-setup).
+
 ### Email
 
 The email Connector watches IMAP read-only: it does not mark messages read, move, or delete them. SMTP sends replies. Each configured mailbox runs as a separate Connector subprocess, such as `email-gmail` or `email-qq`; bad passwords or rate limits back off independently. The agent decides whether incoming mail merits an owner notification on the primary IM. It **cannot send email directly**: whether asked or acting on its own judgment, it drafts a reply and Core presents sender account, recipient, subject, and body for owner approval.
@@ -216,7 +221,7 @@ Protocol references: [RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html) for
 
 ## Attachments and cards
 
-`send_message` / `reply_message` accept exactly one of `markdown`, `file_path`, `file_key`, `card`, or `choices`. WeChat, Telegram, Slack, QQ, and OneBot support only `markdown` and `file_path`. Files are workspace-relative and at most 20 MiB; images are sent as images. Inline Card 1.0/2.0 is limited to 30 KiB. Thread files/cards use replies with `reply_in_thread: true`.
+`send_message` / `reply_message` accept exactly one of `markdown`, `file_path`, `file_key`, `card`, or `choices`. WeChat, Telegram, Slack, QQ, and OneBot support only `markdown` and `file_path`. DingTalk supports `markdown` in groups. Files are workspace-relative and at most 20 MiB; images are sent as images. Inline Card 1.0/2.0 is limited to 30 KiB. Thread files/cards use replies with `reply_in_thread: true`.
 
 `choices` sends a single-choice button question and returns immediately. After a click, the daemon validates answerer, expiry, and duplicate submissions, delivers a new input, and best-effort updates the card. Question state and thread routes persist in SQLite. Ordinary cards also enter the agent, showing `[card]` when text is unavailable. See [message formats](../packages/daemon/agent/lark-message-formats.md). Outbound schemas are runtime-independent; only Agent-tool cards register callbacks.
 

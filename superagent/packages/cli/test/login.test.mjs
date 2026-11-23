@@ -62,6 +62,18 @@ test('login renews what an instance has; connecting a new IM is setup\'s', async
   await assert.rejects(loginCommand(['email', 'haha'], m.options), /实例 haha 没有接邮箱；要接入，运行 ov-superagent setup，选择修改 haha/);
 });
 
+test('DingTalk login renews only the secondary connector and restarts after successful validation', async (t) => {
+  const m = machine(t, (home) => [agent(home, 'work', { connectors: ['lark', 'dingtalk'] })]);
+  m.options.connect.dingtalk = async ({ plan }) => { m.calls.push(['dingtalk', plan.id]); };
+  assert.equal(await loginCommand(['dingtalk', 'work'], m.options), 0);
+  assert.deepEqual(m.calls, [['dingtalk', 'work'], ['restart', 'work']]);
+  assert.equal(m.manifest().agents[0].channel, 'lark');
+  m.calls.length = 0;
+  m.options.connect.dingtalk = async () => { throw new Error('invalid app credentials'); };
+  await assert.rejects(loginCommand(['dingtalk', 'work'], m.options), /invalid app credentials/);
+  assert.deepEqual(m.calls, []);
+});
+
 test('a mailbox password is renewed for the mailbox chosen, and the instance restarts', async (t) => {
   const file = (home, id) => path.join(home, '.ov-superagent', 'email', 'wx', `${id}.json`);
   const m = machine(t, (home) => {
@@ -97,7 +109,7 @@ test('usage, and nothing to renew before setup', async (t) => {
   const empty = machine(t, () => []);
   await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 ov-superagent setup/);
   assert.equal(await loginCommand(['setup'], empty.options), 2);
-  assert.match(empty.written(), /用法：ov-superagent login <lark\|weixin\|email\|telegram\|slack\|qq\|onebot> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例/);
+  assert.match(empty.written(), /用法：ov-superagent login <lark\|weixin\|email\|telegram\|slack\|qq\|onebot\|dingtalk> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例/);
 });
 
 test('Telegram login stops the poller before verification and restarts with the new key', async (t) => {

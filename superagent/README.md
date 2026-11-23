@@ -66,6 +66,7 @@ The release-process guide is currently in Chinese.
 | Installation, model sign-in, first connection | [Installation](install.md) |
 | Chat channels, email, attachments, and cards | [Feature reference](docs/usage-reference.md#chat-channels-and-email) |
 | QQ groups through a personal account (OneBot) | [OneBot Connector](docs/onebot-connector.md) |
+| DingTalk internal group mentions, replies and reminders | [DingTalk setup](docs/installation-reference.md#dingtalk-group-setup) |
 | Permissions, sign-in, upgrades, rollback, and development | [Configuration and operations](docs/installation-reference.md) |
 | Context archival and recovery | [OV session context](docs/ov-session-context.md) |
 | Adding message sources | [Connector protocol](docs/connector-protocol.md) |

@@ -49,6 +49,7 @@ import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
 import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
+import { connectDingTalk } from './dingtalk.mjs';
 
 // `ov-superagent setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
@@ -111,6 +112,8 @@ const imChoices = () => [
     hint: t('腾讯官方机器人；需要 AppID / AppSecret 和本人私聊验证码', 'official Tencent bot; needs AppID / AppSecret and a private-chat verification code') },
   { label: IM_LABELS.onebot, value: 'onebot',
     hint: t('用 NapCat、LLOneBot 或 Lagrange 登录的普通 QQ 号；需要 WebSocket 地址、access token 和私聊口令', 'an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange; needs the WebSocket address, an access token and a code in a private message') },
+  { label: IM_LABELS.dingtalk, value: 'dingtalk',
+    hint: t('Stream 群机器人，需要另选一个主渠道', 'Stream group bot; pick an owner-capable primary IM as well') },
 ].filter(choice => capabilities.connectors[choice.value] !== false);
 
 // IMs connected by pasting tokens rather than scanning a code.
@@ -238,6 +241,7 @@ const policyRefusal = (appId, error, { made = false, typed = false } = {}) => t(
 );
 
 const ims = (state) => state.connectors.filter((connector) => connector !== 'email');
+const primaryIms = (state) => ims(state).filter((connector) => connector !== 'dingtalk');
 
 // Which instance to change, or a new one. An instance whose Feishu/Lark app
 // lacks what this release needs says so; its 飞书应用 setting completes it.
@@ -489,8 +493,9 @@ function note(ctx, text) {
 
 // A primary IM that was dropped moves to what is left, Feishu first.
 function keepChannel(ctx, state) {
-  if (ims(state).includes(state.channel)) return;
-  const next = ims(state).includes('lark') ? 'lark' : ims(state)[0];
+  const choices = primaryIms(state);
+  if (choices.includes(state.channel)) return;
+  const next = choices.includes('lark') ? 'lark' : choices[0];
   note(ctx, t(`主渠道原来是${IM_LABELS[state.channel]}，它不再接入，改成${IM_LABELS[next]}`,
     `The primary channel was ${IM_LABELS[state.channel]}, which is no longer connected; it is now ${IM_LABELS[next]}`));
   state.channel = next;
@@ -532,7 +537,11 @@ async function askIms(ctx, state) {
     const choices = imChoices();
     connectors = await ctx.prompter.multiselect(t('接入哪些 IM', 'Which IMs to connect'), choices,
       { initial: choices.map(({ value }, index) => (state.connectors.includes(value) ? index : -1)).filter((index) => index >= 0) });
-    if (connectors.some((connector) => connector !== 'email')) break;
+    if (primaryIms({ connectors }).length) break;
+    if (connectors.includes('dingtalk')) {
+      ctx.prompter.warn(t('钉钉群机器人需要另选一个支持 owner 私聊的主渠道。', 'DingTalk needs a separate primary IM with owner direct messages.'));
+      continue;
+    }
     ctx.prompter.warn(t('邮箱不能单独接：新邮件提醒和回信确认要发到飞书、微信、Telegram、Slack 或 QQ，再选一个。',
       'Email cannot be the only one: its alerts and reply approvals go to Feishu/Lark, WeChat, Telegram, Slack or QQ, so pick one of those too.'));
   }
@@ -608,7 +617,7 @@ async function askLarkApp(ctx, state) {
 // The primary IM is its own question, Feishu unless it is left out; with a
 // single IM there is nothing to ask.
 async function askChannel(ctx, state) {
-  const choices = ims(state);
+  const choices = primaryIms(state);
   if (choices.length > 1) {
     const preferred = [state.channel, 'lark'].find((im) => choices.includes(im)) ?? choices[0];
     state.channel = await ctx.prompter.select(t(`主渠道（${primaryMeaning()}）`, `Primary channel (${primaryMeaning()})`),
@@ -1835,7 +1844,7 @@ async function setupFlow({
   dshModels = null,
   configureOV = configureOpenViking,
   soul = null,
-  connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail, greet, pi: loginPi },
+  connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, dingtalk: connectDingTalk, email: askEmail, greet, pi: loginPi },
   control = { start: startCommand, restart: restartCommand, autostart: autostartCommand },
   listen = larkMessageListener,
   allocate = allocatePort,
@@ -2164,7 +2173,11 @@ async function setupFlow({
         await connect.qq({ plan, prompter, fetchImpl, canGoBack: prompter.tty && !bound });
         bound = true;
       }
-      if (newIms.includes('onebot')) await connect.onebot({ plan, prompter, canGoBack: prompter.tty && !bound });
+      if (newIms.includes('onebot')) {
+        await connect.onebot({ plan, prompter, canGoBack: prompter.tty && !bound });
+        bound = true;
+      }
+      if (newIms.includes('dingtalk')) await connect.dingtalk({ plan, prompter, canGoBack: prompter.tty && !bound });
       break;
     } catch (error) {
       if (!(error instanceof GoBack)) throw error;
@@ -2318,6 +2331,8 @@ async function setupFlow({
     next.push(['Slack', t('私聊机器人发任务；要它参与频道，在频道里 /invite 它；命令前加个空格（ /new）',
       'Message the bot directly; /invite it to channels it should join; put a space before commands ( /new)')]);
   }
+  if (newIms.includes('dingtalk')) next.push([IM_LABELS.dingtalk,
+    t('把机器人添加到企业内部群，再 @ 它发送文本。', 'Add the bot to an internal group and mention it in a text message.')]);
   if (newIms.includes('onebot')) {
     const policy = shortenHome(policyPath(plan.dataDir), homeDir);
     // What is in force: the default, or what a policy file the owner wrote says.
@@ -2404,10 +2419,11 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     const policy = POLICY_SWITCHES.has(key);
     changes.push(t(`${label}：${arrow}${policy ? '（模型会开一次新的会话）' : ''}`, `${label}: ${arrow}${policy ? ' (the model starts a new session)' : ''}`));
   }
-  for (const im of ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']) {
+  for (const im of ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']) {
     if (!was.includes(im) && after.connectors.includes(im)) {
       changes.push(im === 'qq' ? t('接入QQ（需要 AppID / AppSecret 和私聊验证码）', 'Connect QQ (needs AppID / AppSecret and a private-chat verification code)')
         : im === 'onebot' ? t(`接入${IM_LABELS[im]}（需要 WebSocket 地址、access token 和私聊口令）`, `Connect ${IM_LABELS[im]} (needs the WebSocket address, an access token and a code)`)
+        : im === 'dingtalk' ? t('接入钉钉（需要 Stream 群机器人的 AppKey 和 AppSecret）', 'Connect DingTalk (needs the Stream bot AppKey and AppSecret)')
         : im === 'telegram' ? t(`接入${IM_LABELS[im]}（需要 Bot token 和 Start 绑定）`, `Connect ${IM_LABELS[im]} (needs a bot token and Start)`)
         : im === 'slack' ? t(`接入${IM_LABELS[im]}（需要新建或选已有 App、两个 token 和私聊口令绑定）`, `Connect ${IM_LABELS[im]} (needs a new or existing app, two tokens and a code)`)
           : t(`接入${IM_LABELS[im]}（需要扫码）`, `Connect ${IM_LABELS[im]} (needs a scan)`));
