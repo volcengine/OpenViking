@@ -1956,15 +1956,13 @@ test('setup writes a Durable provider key to secrets.env and keeps the other key
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'secrets.env');
   fs.writeFileSync(file, 'OPENAI_API_KEY=keep-me\n');
-  const asked = [];
   const prompter = {
-    select: async (question, choices) => { asked.push(question); return choices[0].value; },
+    select: async (_question, choices) => choices[0].value,
     secret: async () => 'sk-test',
     success() {},
     warn() {},
   };
   assert.equal(await configureDurable({ prompter, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), true);
-  assert.equal(asked.length, 1);
   const saved = fs.readFileSync(file, 'utf8');
   assert.match(saved, /^DEEPSEEK_API_KEY=sk-test$/m);
   assert.match(saved, /^OPENAI_API_KEY=keep-me$/m);

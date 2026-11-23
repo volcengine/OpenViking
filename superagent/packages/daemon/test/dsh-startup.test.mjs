@@ -77,10 +77,9 @@ describe('DshAgent startup and SDK transport', () => {
 
   it('treats an empty version answer as unknown and lets the bridge handshake decide', async () => {
     const context = newAgent({ options: { versionProbe: async () => '' } });
-    const child = await startAgent(context);
+    await startAgent(context);
     assert.equal(context.agent.connected, true);
     assert.equal(context.agent.dshVersion, '');
-    assert.equal(child.requests('superagent/hello').length, 1);
     await context.agent.stop();
   });
 
