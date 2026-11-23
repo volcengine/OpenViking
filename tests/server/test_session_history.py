@@ -1421,6 +1421,39 @@ async def test_fallback_prints_the_lines_that_hold_the_words(service):
     assert _printed(found) == [(f"{h}#1", 0, "the port"), (f"{h}#1", 19, "is 5432 here")]
 
 
+async def test_a_dense_query_collapses_to_lines_and_windows(service):
+    sid = "hist-dense"
+    h = hashlib.sha256(sid.encode()).hexdigest()[:6]
+    text = "e" * 1000 + "\n" + "\n".join(f"e{i:02d}" for i in range(30))
+    await _add(service, sid, "user", TextPart(text), at="2026-11-02T00:00:00Z")
+    found = await _call(action="search", query="e", session=sid)
+    assert 'Search "e": 35 matching lines in 1 item, oldest first.' in found
+    window = history.LINE_WINDOW_CHARS + 1
+    assert _printed(found) == [
+        (f"{h}#1", start, "e" * min(window, 1000 - start)) for start in range(0, 1000, window)
+    ]
+    assert "part of a 1000-char line" in found
+    assert f"(30 more matching lines in {h}#1, from @1001.)" in found
+
+    sid = "hist-dense-fallback"
+    h = hashlib.sha256(sid.encode()).hexdigest()[:6]
+    text = "x" * 500 + "zq" + "e" * 300 + "\n" + "\n".join(f"e{i}" for i in range(4))
+    await _add(service, sid, "user", TextPart(text), at="2026-11-02T00:00:00Z")
+    found = await _call(action="search", query="e zq", session=sid)
+    assert "(no exact phrase match; showing lines of the items that contain all the words)" in found
+    assert ": 6 matching lines in 1 item, oldest first." in found
+    printed = _printed(found)
+    assert printed == [
+        (f"{h}#1", 300, "x" * 200 + "zq" + "e" * 200),
+        (f"{h}#1", 702, "e" * 100),
+        (f"{h}#1", 803, "e0"),
+        (f"{h}#1", 806, "e1"),
+        (f"{h}#1", 809, "e2"),
+    ]
+    assert f"(1 more matching line in {h}#1, from @812.)" in found
+    await _read_back(printed, sid)
+
+
 async def test_read_returns_an_exact_range(stored):
     whole = await _call(action="read", id=f"{H}#2", offset=0)
     assert _ids(whole) == [f"{H}#2"]  # no neighbours by default, offset=0 included

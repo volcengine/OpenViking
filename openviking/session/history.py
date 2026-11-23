@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import bisect
 import hashlib
+import heapq
 import json
 import re
 import unicodedata
@@ -1048,17 +1049,16 @@ def _allowed(position: int, item: _Item) -> Optional[bool]:
     return not any(start <= position < end for start, end in item.label_spans)
 
 
-def _matches(item: _Item, pattern: re.Pattern) -> tuple[List[tuple[int, int]], bool]:
-    """Counted match spans, and whether any match was hidden as self-echo."""
-    kept: List[tuple[int, int]] = []
-    hidden = False
+def _matches(item: _Item, pattern: re.Pattern) -> tuple[bool, bool]:
+    """Whether any match is counted, and whether any match was hidden as self-echo."""
+    counted = hidden = False
     for match in pattern.finditer(item.text or ""):
         verdict = _allowed(match.start(), item)
         if verdict is None:
             hidden = True
         elif verdict:
-            kept.append(match.span())
-    return kept, hidden
+            counted = True
+    return counted, hidden
 
 
 @dataclass
@@ -1071,19 +1071,29 @@ class _Line:
     line_chars: int
 
 
-def _matching_lines(text: str, spans: Sequence[tuple[int, int]]) -> List[_Line]:
-    """The distinct lines holding a match, in order.
+def _matching_lines(item: _Item, patterns: Sequence[re.Pattern]) -> tuple[List[_Line], bool]:
+    """Distinct lines holding a counted match of any pattern, and whether one was hidden.
 
     A long line is printed as a window around a match; a match beyond the window gets its own.
     """
-    breaks = [match.span() for match in _LINE_BREAK_RE.finditer(text)]
-    starts = [0, *(end for _start, end in breaks)]
-    ends = [*(start for start, _end in breaks), len(text)]
+    text = item.text or ""
     lines: List[_Line] = []
+    hidden = False
+    starts: List[int] = []
+    ends: List[int] = []
     covered = 0  # matches before this position are already printed
-    for match_start, match_end in sorted(spans):
+    spans = heapq.merge(*(map(re.Match.span, pattern.finditer(text)) for pattern in patterns))
+    for match_start, match_end in spans:
+        verdict = _allowed(match_start, item)
+        if not verdict:
+            hidden = hidden or verdict is None
+            continue
         if lines and match_start < covered:
             continue
+        if not lines:
+            breaks = [match.span() for match in _LINE_BREAK_RE.finditer(text)]
+            starts = [0, *(end for _start, end in breaks)]
+            ends = [*(start for start, _end in breaks), len(text)]
         index = bisect.bisect_right(starts, match_start) - 1
         start, end = starts[index], ends[index]
         if end - start > LONG_LINE_CHARS:
@@ -1094,7 +1104,7 @@ def _matching_lines(text: str, spans: Sequence[tuple[int, int]]) -> List[_Line]:
         else:
             lines.append(_Line(start, end, 0))
             covered = starts[index + 1] if index + 1 < len(starts) else len(text) + 1
-    return lines
+    return lines, hidden
 
 
 def _match_all(
@@ -1105,10 +1115,10 @@ def _match_all(
     hidden = 0
     pattern = re.compile(re.escape(query), re.IGNORECASE)
     for index, item in enumerate(items):
-        kept, item_hidden = _matches(item, pattern)
+        lines, item_hidden = _matching_lines(item, [pattern])
         hidden += item_hidden
-        if kept:
-            hits.append((index, _matching_lines(item.text or "", kept)))
+        if lines:
+            hits.append((index, lines))
     terms = query.split()
     if hits or not allow_fallback or len(terms) < 2:
         return hits, hidden, False, False
@@ -1116,10 +1126,9 @@ def _match_all(
     hidden = 0
     for index, item in enumerate(items):
         per_term = [_matches(item, term_pattern) for term_pattern in patterns]
-        hidden += any(item_hidden for _kept, item_hidden in per_term)
-        if all(kept for kept, _hidden in per_term):
-            spans = [span for kept, _hidden in per_term for span in kept]
-            hits.append((index, _matching_lines(item.text or "", spans)))
+        hidden += any(item_hidden for _counted, item_hidden in per_term)
+        if all(counted for counted, _hidden in per_term):
+            hits.append((index, _matching_lines(item, patterns)[0]))
     return hits, hidden, bool(hits), True
 
 
