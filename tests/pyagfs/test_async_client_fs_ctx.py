@@ -90,12 +90,15 @@ async def test_async_client_preserves_explicit_fs_ctx() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_client_rejects_cross_account_mv() -> None:
+async def test_async_client_rejects_cross_account_transfer() -> None:
     client = _RecordingClient()
     agfs = AsyncAGFSClient(client)
 
+    source, target = "/local/a/data/file.txt", "/local/b/data/file.txt"
     with pytest.raises(ValueError, match="cross-account"):
-        await agfs.mv("/local/a/data/file.txt", "/local/b/data/file.txt")
+        await agfs.mv(source, target)
+    with pytest.raises(ValueError, match="cross-account"):
+        await agfs._copy_file(source, target, fs_ctx={"account_id": "a", "lease_ref": "lease"})
 
 
 @pytest.mark.asyncio
@@ -179,10 +182,12 @@ async def test_async_cp_copies_bytes_using_the_supported_io(
     payload = b"firstsecond"
     files = {source: payload}
     operations = []
+    metadata_reads = []
 
     class Client:
         def stat(self, path, *, ctx=None):
             assert ctx == fs_ctx
+            metadata_reads.append(path)
             return {"isDir": path == "/local/acct/data"}
 
         def copy_within_mount(self, src, dst, *, ctx=None):
@@ -212,40 +217,17 @@ async def test_async_cp_copies_bytes_using_the_supported_io(
                 files[path] = b"".join(data)
             return path
 
-    await AsyncAGFSClient(Client()).cp(source, target, fs_ctx=fs_ctx, **options)
+    agfs = AsyncAGFSClient(Client())
+    await agfs.cp(source, target, fs_ctx=fs_ctx, **options)
 
     assert files[target] == payload
     assert operations == expected_io
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream_supported", [True, False])
-async def test_known_file_copy_skips_metadata_and_preserves_context(stream_supported):
-    class Client:
-        def __init__(self):
-            self.calls = []
-
-        def stat(self, *args, **kwargs):
-            raise AssertionError("prevalidated file copy must not stat source or parent")
-
-        def copy_within_mount(self, *args, **kwargs):
-            raise AssertionError("logical copy must preserve encryption hooks")
-
-        def cat(self, path, *, stream=False, ctx=None):
-            self.calls.append(("cat", path, ctx))
-            if stream and not stream_supported:
-                raise RuntimeError("Streaming not supported in binding mode")
-            return iter([b"a", b"b"]) if stream else b"ab"
-
-        def write(self, path, data, *, ctx=None):
-            self.calls.append(("write", path, ctx))
-            self.content = data if isinstance(data, bytes) else b"".join(data)
-
-    client = Client()
-    agfs = AsyncAGFSClient(client)
-    fs_ctx = {"account_id": "acct", "lease_ref": "lease"}
-    await agfs._copy_file("/local/acct/data/a", "/local/acct/data/b", fs_ctx=fs_ctx)
-    assert client.content == b"ab"
-    assert all(call[2] == fs_ctx for call in client.calls)
-    with pytest.raises(ValueError, match="cross-account"):
-        await agfs._copy_file("/local/acct/data/a", "/local/other/data/b", fs_ctx=fs_ctx)
+    if not options:
+        del files[target]
+        operations.clear()
+        metadata_reads.clear()
+        await agfs._copy_file(source, target, fs_ctx=fs_ctx)
+        assert files[target] == payload
+        assert operations == expected_io
+        assert not metadata_reads

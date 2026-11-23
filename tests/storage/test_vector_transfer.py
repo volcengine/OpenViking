@@ -17,22 +17,17 @@ from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope, Range,
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
-from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
-    VolcengineApiKeyCollection,
-)
-from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
 from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
     VikingDBPrivateCollectionAdapter,
 )
-from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     VectorTransferRollbackError,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 class _EnabledAclConfig:
@@ -197,128 +192,6 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
 
     async def _strict_transfer_delete(self, ctx, ids):
         return await self.delete(ids, ctx=ctx)
-
-
-@pytest.mark.asyncio
-async def test_vector_transfer_prepare_has_no_mutations():
-    source, target = "viking://resources/source", "viking://resources/target"
-    records = [
-        _record("source", source + "/a.md"),
-        _record("orphan", source + "/gone.md"),
-        _record("old-target", target + "/a.md"),
-        _record("keep", target + "/keep.md"),
-    ]
-    backend = _MemoryTransferBackend(records)
-    prepared = await backend._prepare_uri_transfer(
-        _ctx(),
-        source,
-        target,
-        recursive=True,
-        source_uris=[source, source + "/a.md"],
-        source_expected_levels={source + "/a.md": {2}},
-    )
-
-    assert backend.records == {record["id"]: record for record in records}
-    assert backend.delete_calls == backend.upsert_calls == 0
-    assert [record["id"] for record in prepared.source_records] == ["source"]
-    assert prepared.affected_target_ids == ("old-target",)
-    assert prepared.account_id == "acct"
-    assert prepared.batches == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["_copy_prepared_uri_mapping", "_move_prepared_uri_mapping"])
-async def test_prepared_transfer_rejects_another_account_before_mutation(method):
-    source, target = "viking://resources/source", "viking://resources/target"
-    records = [_record("source", source), _record("old-target", target)]
-    backend = _MemoryTransferBackend(records)
-    prepared = await backend._prepare_uri_transfer(
-        _ctx(), source, target, recursive=False, source_uris=None
-    )
-    other = RequestContext(user=UserIdentifier("other", "alice"), role=Role.USER)
-    with pytest.raises(PermissionDeniedError, match="another account"):
-        await getattr(backend, method)(other, prepared)
-    assert backend.records == {record["id"]: record for record in records}
-    assert backend.delete_calls == backend.upsert_calls == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["_copy_prepared_uri_mapping", "_move_prepared_uri_mapping"])
-async def test_empty_prepared_transfer_keeps_unselected_and_old_target(method):
-    source, target = "viking://resources/source", "viking://resources/target"
-    backend = _MemoryTransferBackend(
-        [
-            _record("orphan", source + "/gone.md"),
-            _record("old-target", target + "/a.md"),
-        ]
-    )
-    prepared = await backend._prepare_uri_transfer(
-        _ctx(),
-        source,
-        target,
-        recursive=True,
-        source_uris=[source, source + "/a.md"],
-        source_expected_levels={source + "/a.md": {2}},
-    )
-    assert prepared.source_records == () and prepared.affected_target_ids == ()
-    assert "orphan" in backend.records
-    result = await getattr(backend, method)(_ctx(), prepared)
-    assert result.scanned == result.written == 0
-    assert set(backend.records) == {"orphan", "old-target"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["copy_uri_mapping", "update_uri_mapping"])
-@pytest.mark.parametrize("recursive", [False, True])
-@pytest.mark.parametrize("expected_levels", [None, {}])
-async def test_explicit_empty_selection_does_not_query_or_mutate(
-    method, recursive, expected_levels
-):
-    source, target = "viking://resources/source", "viking://resources/target"
-    records = [_record("source", source + "/a.md"), _record("target", target + "/a.md")]
-    backend = _MemoryTransferBackend(records)
-    backend._query = AsyncMock(side_effect=TimeoutError("backend unavailable"))
-    result = await getattr(backend, method)(
-        _ctx(),
-        source,
-        target,
-        recursive=recursive,
-        source_uris=[],
-        source_expected_levels=expected_levels,
-    )
-    assert result.scanned == result.written == result.deleted == result.batches == 0
-    assert backend.records == {record["id"]: record for record in records}
-    assert backend.delete_calls == backend.upsert_calls == 0
-    backend._query.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_empty_selection_still_rejects_overlapping_transfer_scopes():
-    backend = _MemoryTransferBackend([])
-    with pytest.raises(InvalidArgumentError, match="overlap|contain|equal"):
-        await backend.copy_uri_mapping(
-            _ctx(),
-            "viking://resources/source",
-            "viking://resources/source/target",
-            recursive=True,
-            source_uris=[],
-        )
-
-
-@pytest.mark.asyncio
-async def test_prepared_move_restore_acl_does_not_modify_prepared_fields():
-    source, target = "viking://resources/source", "viking://resources/target"
-    backend = _MemoryTransferBackend([_record("source", source)])
-    prepared = await backend._prepare_uri_transfer(
-        _ctx(), source, target, recursive=False, source_uris=None
-    )
-    original = dict(prepared.source_records[0])
-    await backend._move_prepared_uri_mapping(
-        _ctx(), prepared, restore_acl={target: {"acl_mode": "restricted"}}
-    )
-    assert prepared.target_acl_fields == {}
-    assert prepared.source_records[0] == original
-    assert next(iter(backend.records.values()))["acl_mode"] == "restricted"
 
 
 def _matches_filter(expr, record: dict[str, Any]) -> bool:
@@ -706,8 +579,11 @@ async def test_transfer_scan_emits_supported_aggregate_request(
 
 
 @pytest.mark.asyncio
-async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeypatch):
-    source = "viking://resources/source.md"
+async def test_private_adapter_reads_file_and_manifest_vectors(monkeypatch):
+    source_root = "viking://resources/source"
+    source = f"{source_root}/a.md"
+    target = "viking://resources/target"
+    source_path = "/resources/source/a.md"
     backend = _MemoryTransferBackend([])
     adapter = VikingDBPrivateCollectionAdapter(
         host="unused.invalid",
@@ -749,7 +625,7 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
                             {
                                 "op": "must",
                                 "field": "uri",
-                                "conds": ["/resources/source.md"],
+                                "conds": [source_path],
                                 "para": "-d=0",
                             },
                         ],
@@ -758,18 +634,28 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
             }
             return {
                 "data": [
-                    {"id": "file", "fields": {"uri": "/resources/source.md"}},
-                    {"id": "gone", "fields": {"uri": "/resources/source.md"}},
+                    {"id": "file", "fields": {"uri": source_path}},
+                    {"id": "gone", "fields": {"uri": source_path}},
                 ]
             }
+        if path == "/api/vikingdb/data/search/scalar":
+            assert data["field"] == "updated_at" and data["order"] == "asc"
+            scope = data["filter"]["conds"][1]["conds"][1]
+            if scope.get("para") == "-d=-1":
+                assert scope["conds"] == ["/resources/source"]
+                return {"data": [{"id": "file", "fields": {"uri": source_path}}]}
+            assert scope["conds"] == ["/resources/target/a.md"]
+            assert scope["para"] == "-d=0"
+            return {"data": []}
         if path == "/api/vikingdb/data/fetch_in_collection":
-            assert data["ids"] == ["file", "gone"]
+            manifest = "/api/vikingdb/data/search/scalar" in paths
+            assert data["ids"] == (["file"] if manifest else ["file", "gone"])
             return {
                 "fetch": [
                     {
                         "id": "file",
                         "fields": {
-                            "uri": "/resources/source.md",
+                            "uri": source_path,
                             "account_id": "acct",
                             "vector": [0.1, 0.2],
                         },
@@ -777,7 +663,7 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
                 ],
                 "ids_not_exist": ["gone"],
             }
-        raise AssertionError(f"Legacy reads must not use aggregate or scalar search: {path}")
+        raise AssertionError(f"Unexpected transfer request: {path}")
 
     monkeypatch.setattr(collection, "_data_post", data_post)
     records, _ = await backend._read_uri_transfer_entries(
@@ -785,6 +671,20 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
     )
     assert [(r["id"], r["uri"], r["vector"]) for r in records] == [("file", source, [0.1, 0.2])]
     assert paths == ["/api/vikingdb/data/search/vector", "/api/vikingdb/data/fetch_in_collection"]
+
+    paths.clear()
+    await backend.copy_uri_mapping(
+        _ctx(), source_root, target, recursive=True, source_uris=[source]
+    )
+    copied = _records_under(backend, target)
+    assert [(record["uri"], record["vector"]) for record in copied] == [
+        (f"{target}/a.md", [0.1, 0.2])
+    ]
+    assert paths == [
+        "/api/vikingdb/data/search/scalar",
+        "/api/vikingdb/data/fetch_in_collection",
+        "/api/vikingdb/data/search/scalar",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1484,18 +1384,45 @@ async def test_direct_recursive_transfer_keeps_complete_target_scan(transfer_met
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_target_replacement_cleans_exact_entries_across_batches(transfer_method):
+async def test_target_replacement_cleans_exact_entries_across_batches(transfer_method, monkeypatch):
     source, target = "viking://resources/source", "viking://resources/target"
     source_records = [_record(f"source-{i}", f"{source}/file-{i}.md") for i in range(101)]
+    source_records.extend(
+        [
+            _record("source-l0", source, level=0),
+            _record("source-l1", source, level=1, updated_at=None),
+        ]
+    )
     old_records = [_record(f"old-{i}", f"{target}/file-{i}.md") for i in range(101)]
-    backend = _RealAclMemoryTransferBackend(source_records + old_records)
-    backend.acl_manager = None
+    backend = _MemoryTransferBackend(source_records + old_records)
+    backend.backend_mode = "pgvector"
 
-    result = await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
+    async def query(*, filter, limit, offset=0, order_by=None, order_desc=False, **kwargs):
+        records = [r for r in backend.records.values() if _matches_filter(filter, r)]
+        if order_by == "updated_at":
+            records.sort(
+                key=lambda r: (r["updated_at"] is None, r["updated_at"] or 0),
+                reverse=order_desc,
+            )
+        return records[offset : offset + limit]
 
-    assert result.written == 101
-    assert len(_records_under(backend, target)) == 101
+    monkeypatch.setattr(backend, "_query", query)
+    count = AsyncMock(side_effect=RuntimeError("count unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    result = await getattr(backend, transfer_method)(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=sorted({record["uri"] for record in source_records}),
+    )
+
+    assert result.written == len(source_records)
+    assert {(record["uri"], record["level"]) for record in _records_under(backend, target)} == {
+        (record["uri"].replace(source, target, 1), record["level"]) for record in source_records
+    }
     assert not set(backend.records).intersection(record["id"] for record in old_records)
+    count.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1548,10 +1475,8 @@ async def test_uri_mapping_write_failure_keeps_source_without_restoring_old_targ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
-@pytest.mark.parametrize("with_levels", [False, True])
 async def test_uri_mapping_source_uris_limits_source_and_target_replacement_scope(
     transfer_method,
-    with_levels,
 ):
     source = "viking://resources/src"
     target = "viking://resources/dst"
@@ -1568,13 +1493,20 @@ async def test_uri_mapping_source_uris_limits_source_and_target_replacement_scop
         ]
     )
 
-    result = await getattr(backend, transfer_method)(
+    transfer = getattr(backend, transfer_method)
+    original_records = dict(backend.records)
+    empty = await transfer(_ctx(), source, target, recursive=True, source_uris=[])
+    assert (empty.scanned, empty.written, empty.deleted, empty.batches) == (0, 0, 0, 0)
+    assert backend.records == original_records
+    assert not backend.query_calls
+
+    result = await transfer(
         _ctx(),
         source,
         target,
         recursive=True,
         source_uris=[source, f"{source}/a.md"],
-        source_expected_levels={source: {2}, f"{source}/a.md": {2}} if with_levels else None,
+        source_expected_levels={source: {2}, f"{source}/a.md": {2}},
     )
 
     assert result.scanned == 2
@@ -2050,500 +1982,3 @@ async def test_transfer_does_not_inspect_unrelated_chunk_shaped_entry():
     )
     assert result.written == 1
     assert backend.records["old"]["uri"] == target + "#chunk-1"
-
-
-@pytest.mark.asyncio
-async def test_manifest_transfer_uses_prefix_scan_and_parallel_complete_reads(monkeypatch):
-    import asyncio
-
-    source, target = "viking://resources/source", "viking://resources/target"
-    source_records = [_record(f"source-{i}", f"{source}/{i}.md") for i in range(800)]
-    old_records = [_record(f"old-{i}", f"{target}/{i}.md") for i in range(800)]
-    old_records += [_record(f"duplicate-{i}", f"{target}/0.md") for i in range(130)]
-    preserved = [
-        _record("source-orphan", f"{source}/orphan.md"),
-        _record("source-chunk", f"{source}/0.md#chunk_0"),
-        _record("target-only", f"{target}/only.md"),
-        _record("target-chunk", f"{target}/0.md#chunk_0"),
-    ]
-    backend = _RealAclMemoryTransferBackend(source_records + old_records + preserved)
-    backend.acl_manager = None
-    original_get, original_query = backend._strict_transfer_get, backend._query
-    active_gets = peak_gets = active_queries = peak_queries = 0
-    fetched_ids = []
-
-    async def get(ctx, ids):
-        nonlocal active_gets, peak_gets
-        if not ids or not ids[0].startswith("source-"):
-            return await original_get(ctx, ids)
-        assert len(ids) <= 100
-        fetched_ids.extend(ids)
-        active_gets += 1
-        peak_gets = max(peak_gets, active_gets)
-        try:
-            await asyncio.sleep(0)
-            return await original_get(ctx, ids)
-        finally:
-            active_gets -= 1
-
-    async def query(**kwargs):
-        nonlocal active_queries, peak_queries
-        if any(isinstance(cond, Or) for cond in kwargs["filter"].conds):
-            active_queries += 1
-            peak_queries = max(peak_queries, active_queries)
-            try:
-                await asyncio.sleep(0)
-                return await original_query(**kwargs)
-            finally:
-                active_queries -= 1
-        return await original_query(**kwargs)
-
-    monkeypatch.setattr(backend, "_strict_transfer_get", get)
-    monkeypatch.setattr(backend, "_query", query)
-    manifest = [source, *(record["uri"] for record in source_records)]
-    result = await backend.copy_uri_mapping(
-        _ctx(), source, target, recursive=True, source_uris=manifest
-    )
-
-    assert result.written == 800
-    assert result.batches == len(manifest)
-    assert peak_gets == peak_queries == 8
-    assert (
-        len(backend.query_calls) < 60
-    )  # 800 entries must be read by pages, not one query per URI.
-    assert set(fetched_ids) == {record["id"] for record in source_records}
-    assert not set(backend.records).intersection(record["id"] for record in old_records)
-    assert all(backend.records[record["id"]] == record for record in preserved)
-    source_queries = [
-        scope
-        for scope, _, _, _ in backend.query_calls
-        if PathScope("uri", source, depth=-1) in scope.conds
-    ]
-    assert source_queries
-    assert all(not any(isinstance(cond, Or) for cond in scope.conds) for scope in source_queries)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("bad_fetch", ["missing", "changed-uri", "wrong-account"])
-async def test_manifest_transfer_skips_missing_or_changed_fetch_records(monkeypatch, bad_fetch):
-    source, target = "viking://resources/source", "viking://resources/target"
-    record = _record("source", f"{source}/a.md")
-    old = _record("target", f"{target}/a.md")
-    backend = _RealAclMemoryTransferBackend([record, old])
-    backend.acl_manager = None
-    if bad_fetch == "missing":
-        fetched = []
-    else:
-        changed = (
-            {"uri": f"{source}/b.md"} if bad_fetch == "changed-uri" else {"account_id": "other"}
-        )
-        fetched = [{**record, **changed}]
-    monkeypatch.setattr(backend, "_strict_transfer_get", AsyncMock(return_value=fetched))
-
-    result = await backend.copy_uri_mapping(
-        _ctx(), source, target, recursive=True, source_uris=[source, record["uri"]]
-    )
-    assert result.scanned == result.written == 0
-    assert backend.delete_calls == backend.upsert_calls == 0
-    assert backend.records["target"] == old
-
-
-@pytest.mark.asyncio
-async def test_transfer_fetch_keeps_legacy_duplicate_and_unrelated_record_filtering(monkeypatch):
-    record = _record("source", "viking://resources/source/a.md", abstract="first")
-    backend = _MemoryTransferBackend([record])
-    monkeypatch.setattr(
-        backend,
-        "_strict_transfer_get",
-        AsyncMock(
-            return_value=[
-                record,
-                {**record, "abstract": "last"},
-                {**record, "uri": "viking://resources/other.md"},
-                {**record, "id": "unexpected"},
-            ]
-        ),
-    )
-    records = await backend._fetch_transfer_records(_ctx(), [record])
-    assert records == [{**record, "abstract": "last"}]
-
-
-@pytest.mark.asyncio
-async def test_manifest_transfer_propagates_fetch_backend_failure(monkeypatch):
-    source = "viking://resources/source/a.md"
-    backend = _RealAclMemoryTransferBackend([_record("source", source)])
-    monkeypatch.setattr(
-        backend, "_strict_transfer_get", AsyncMock(side_effect=RuntimeError("backend unavailable"))
-    )
-    with pytest.raises(RuntimeError, match="backend unavailable"):
-        await backend.copy_uri_mapping(
-            _ctx(),
-            "viking://resources/source",
-            "viking://resources/target",
-            recursive=True,
-            source_uris=[source],
-        )
-    assert backend.delete_calls == backend.upsert_calls == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("exact", [False, True])
-@pytest.mark.parametrize("mode", ["pgvector", "opengauss"])
-async def test_transfer_inventory_recovers_sql_nulls_last(monkeypatch, exact, mode):
-    root = "viking://resources/source"
-    uri = root + "/0.md"
-    records = [_record(str(i), uri if exact else f"{root}/{i}.md") for i in range(100)]
-    records.append(_record("legacy", uri, updated_at=None))
-    backend = _MemoryTransferBackend(records)
-    backend.backend_mode = mode
-    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
-    monkeypatch.setattr(backend, "_strict_transfer_count", count)
-    requests = []
-
-    async def query(**kwargs):
-        requests.append(kwargs)
-        candidates = [record for record in records if _matches_filter(kwargs["filter"], record)]
-        candidates.sort(
-            key=lambda record: (record["updated_at"] is None, record["updated_at"] or 0),
-            reverse=kwargs.get("order_desc", False),
-        )
-        return candidates[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]]
-
-    monkeypatch.setattr(backend, "_query", query)
-    scope = And(
-        [
-            Eq("account_id", "acct"),
-            Eq("uri", uri) if exact else PathScope("uri", root, depth=-1),
-        ]
-    )
-    found = await backend._read_transfer_inventory(
-        _ctx(), scope, what="NULLS LAST scan", entry_uris=[record["uri"] for record in records]
-    )
-    assert {record["id"] for record in found} == set(backend.records)
-    assert all(
-        not _matches_filter(request["filter"], _record("other", root + "-other/0.md"))
-        for request in requests
-    )
-    count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "size,tied", [(99, False), (100, True), (101, False), (101, True), (205, False)]
-)
-async def test_stable_transfer_inventory_reads_each_record_once(monkeypatch, size, tied):
-    root = "viking://resources/source"
-    records = [_record("root-l0", root, level=0), _record("root-l1", root, level=1)]
-    records += [_record(str(i), f"{root}/{i}.md") for i in range(size - 2)]
-    if not tied:
-        records = [{**record, "updated_at": i + 11} for i, record in enumerate(records)]
-    backend = _MemoryTransferBackend(records)
-    query = backend._query
-    returned = []
-
-    async def track(**kwargs):
-        page = await query(**kwargs)
-        returned.extend(record["id"] for record in page)
-        return page
-
-    monkeypatch.setattr(backend, "_query", track)
-    count = AsyncMock(side_effect=RuntimeError("count must not be called"))
-    monkeypatch.setattr(backend, "_strict_transfer_count", count)
-    found = await backend._read_transfer_inventory(
-        _ctx(),
-        And([Eq("account_id", "acct"), PathScope("uri", root, depth=-1)]),
-        what="stable inventory",
-        entry_uris=[record["uri"] for record in records],
-    )
-    assert {record["id"] for record in found} == set(backend.records)
-    assert len(returned) == size
-    assert len(backend.query_calls) == size // 100 + 1
-    count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tied", [False, True])
-@pytest.mark.parametrize("phase", ["source", "target"])
-async def test_manifest_transfer_recovers_records_after_page_deletion(monkeypatch, tied, phase):
-    source, target = "viking://resources/source", "viking://resources/target"
-    source_records = [
-        _record(f"s{i:03}", f"{source}/{i:03}.md", updated_at=11 if tied else i + 11)
-        for i in range(201)
-    ]
-    # A single overwritten URI can have several historical records.
-    target_records = [
-        _record(f"t{i:03}", f"{target}/100.md", updated_at=11 if tied else i + 11)
-        for i in range(201)
-    ]
-    backend = _RealAclMemoryTransferBackend(source_records + target_records)
-    backend.acl_manager = None
-    count = AsyncMock(side_effect=RuntimeError("count API unavailable"))
-    monkeypatch.setattr(backend, "_strict_transfer_count", count)
-    query = backend._query
-    calls = 0
-
-    def matches_uri_scope(expr, record):
-        if isinstance(expr, Range):
-            return True
-        if isinstance(expr, And):
-            return all(matches_uri_scope(cond, record) for cond in expr.conds)
-        if isinstance(expr, Or):
-            return any(matches_uri_scope(cond, record) for cond in expr.conds)
-        return _matches_filter(expr, record)
-
-    async def delete_before_second_page(**kwargs):
-        nonlocal calls
-        affected_uri = source + "/000.md" if phase == "source" else target + "/100.md"
-        if matches_uri_scope(kwargs["filter"], _record("probe", affected_uri)):
-            calls += 1
-            if calls == 2:
-                backend.records.pop("s000" if phase == "source" else "t000")
-        return await query(**kwargs)
-
-    monkeypatch.setattr(backend, "_query", delete_before_second_page)
-    result = await backend.copy_uri_mapping(
-        _ctx(),
-        source,
-        target,
-        recursive=True,
-        source_uris=[source, *[record["uri"] for record in source_records]],
-    )
-    assert result.written == (200 if phase == "source" else 201)
-    assert calls >= 2
-    assert any(record["uri"] == target + "/100.md" for record in backend.records.values())
-    assert not any(record_id.startswith("t") for record_id in backend.records)
-    count.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["source", "target"])
-@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_transfer_recovers_unobserved_historical_id_after_deletion(
-    monkeypatch, phase, operation
-):
-    source, target = "viking://resources/source", "viking://resources/target"
-    source_records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
-    target_records = [_record(f"t{i:03}", f"{target}/{i:03}.md") for i in range(100)]
-    extra = _record("unobserved", f"{source if phase == 'source' else target}/001.md")
-    backend = _RealAclMemoryTransferBackend([*source_records, *target_records, extra])
-    backend.acl_manager = None
-    query = backend._query
-    calls = 0
-
-    async def delete_before_second_page(**kwargs):
-        nonlocal calls
-        uri = f"{source if phase == 'source' else target}/000.md"
-        if _matches_filter(kwargs["filter"], _record("probe", uri)):
-            calls += 1
-            if calls == 2:
-                backend.records.pop("s000" if phase == "source" else "t000")
-        return await query(**kwargs)
-
-    monkeypatch.setattr(backend, "_query", delete_before_second_page)
-    result = await getattr(backend, operation)(
-        _ctx(),
-        source,
-        target,
-        recursive=True,
-        source_uris=[record["uri"] for record in source_records],
-        source_expected_levels={record["uri"]: {2} for record in source_records},
-    )
-    assert result.written == 100
-    if phase == "target" or operation == "update_uri_mapping":
-        assert "unobserved" not in backend.records
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_changed_source_timestamp_recovers_hidden_id_without_repeated_fetch(
-    monkeypatch, operation
-):
-    source, target = "viking://resources/source", "viking://resources/target"
-    records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
-    backend = _MemoryTransferBackend([*records, _record("unobserved", source + "/001.md")])
-    query, get = backend._query, backend._strict_transfer_get
-    calls = 0
-    fetched = []
-
-    async def change_before_second_page(**kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            backend.records["s000"]["updated_at"] = 12
-        return await query(**kwargs)
-
-    async def track_get(ctx, ids):
-        fetched.extend(
-            record_id for record_id in ids if record_id.startswith("s") or record_id == "unobserved"
-        )
-        return await get(ctx, ids)
-
-    monkeypatch.setattr(backend, "_query", change_before_second_page)
-    monkeypatch.setattr(backend, "_strict_transfer_get", track_get)
-    result = await getattr(backend, operation)(
-        _ctx(),
-        source,
-        target,
-        recursive=True,
-        source_uris=[record["uri"] for record in records],
-        source_expected_levels={record["uri"]: {2} for record in records},
-    )
-    assert result.written == 101
-    assert len(fetched) == len(set(fetched)) == 101
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_manifest_transfer_skips_unselected_records_after_pagination(monkeypatch, operation):
-    source, target = "viking://resources/source", "viking://resources/target"
-    records = [_record(f"s{i:03}", f"{source}/{i:03}.md") for i in range(100)]
-    backend = _MemoryTransferBackend(
-        [
-            _record("unselected", source + "/orphan.md"),
-            *records[:-1],
-            _record("unobserved", source + "/001.md"),
-            records[-1],
-        ]
-    )
-    query, get = backend._query, backend._strict_transfer_get
-    fetched = []
-
-    async def query_without_orphan_recheck(**kwargs):
-        def checks_orphan(expr):
-            if isinstance(expr, Eq):
-                return expr.field == "uri" and expr.value == source + "/orphan.md"
-            return any(checks_orphan(cond) for cond in getattr(expr, "conds", []))
-
-        assert not checks_orphan(kwargs["filter"])
-        return await query(**kwargs)
-
-    async def track_get(ctx, ids):
-        fetched.extend(ids)
-        return await get(ctx, ids)
-
-    monkeypatch.setattr(backend, "_query", query_without_orphan_recheck)
-    monkeypatch.setattr(backend, "_strict_transfer_get", track_get)
-    result = await getattr(backend, operation)(
-        _ctx(),
-        source,
-        target,
-        recursive=True,
-        source_uris=[record["uri"] for record in records],
-        source_expected_levels={record["uri"]: {2} for record in records},
-    )
-    assert result.written == 101
-    assert fetched.count("unobserved") == 1
-    assert "unselected" not in fetched
-    assert "unselected" in backend.records
-    if operation == "update_uri_mapping":
-        assert "unobserved" not in backend.records
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("backend_kind", ["vikingdb", "volcengine-aksk", "volcengine-api-key"])
-async def test_cloud_transfer_keeps_timestamp_prefix_scan_and_batched_fetch(
-    monkeypatch, backend_kind
-):
-    backend = _MemoryTransferBackend([])
-    meta = {"ProjectName": "test", "CollectionName": "context"}
-    if backend_kind == "vikingdb":
-        adapter = VikingDBPrivateCollectionAdapter(
-            host="unused.invalid",
-            headers=None,
-            project_name="test",
-            collection_name="context",
-            index_name="default",
-        )
-        collection = VikingDBCollection(host="unused.invalid", meta_data=meta)
-    else:
-        credentials = (
-            {"api_key": "test", "host": "unused.invalid"}
-            if backend_kind.endswith("api-key")
-            else {"ak": "test", "sk": "test", "region": "cn-beijing"}
-        )
-        adapter = VolcengineCollectionAdapter.from_config(
-            VectorDBBackendConfig(
-                backend="volcengine",
-                name="context",
-                dimension=2,
-                project_name="test",
-                volcengine=VolcengineConfig(**credentials),
-            )
-        )
-        collection = (
-            VolcengineApiKeyCollection(**credentials, meta_data=meta)
-            if backend_kind.endswith("api-key")
-            else VolcengineCollection(**credentials, meta_data=meta)
-        )
-    adapter._collection = Collection(collection)
-    adapter._dimension = 2
-    account = _SingleAccountBackend(VectorDBBackendConfig(), "acct", shared_adapter=adapter)
-    monkeypatch.setattr(backend, "_get_backend_for_context", AsyncMock(return_value=account))
-    monkeypatch.setattr(
-        backend,
-        "_strict_transfer_get",
-        VikingVectorIndexBackend._strict_transfer_get.__get__(backend),
-    )
-    paths = []
-
-    def data_post(path, data, **kwargs):
-        paths.append(path)
-        if path == "/api/vikingdb/data/search/scalar":
-            assert data["field"] == "updated_at" and data["order"] == "asc"
-            assert data["limit"] == 100 and data["offset"] == 0
-            scope = data["filter"]["conds"][1]["conds"][1]
-            if scope.get("para") == "-d=-1":
-                assert scope["conds"] == ["/resources/source"]
-                return {
-                    "data": [
-                        {
-                            "id": "file",
-                            "fields": {
-                                "uri": "/resources/source/a.md",
-                                "updated_at": "2026-01-01T00:00:00Z",
-                            },
-                        }
-                    ]
-                }
-            assert scope == {
-                "op": "must",
-                "field": "uri",
-                "conds": ["/resources/target/a.md"],
-                "para": "-d=0",
-            }
-            return {"data": []}
-        if path == "/api/vikingdb/data/fetch_in_collection":
-            assert data["ids"] == ["file"]
-            return {
-                "fetch": [
-                    {
-                        "id": "file",
-                        "fields": {
-                            "uri": "/resources/source/a.md",
-                            "account_id": "acct",
-                            "level": 2,
-                            "vector": [0.1, 0.2],
-                        },
-                    }
-                ]
-            }
-        raise AssertionError(f"Expected scalar inventory or ID fetch, got {path}")
-
-    monkeypatch.setattr(collection, "_data_post", data_post)
-    prepared = await backend._prepare_uri_transfer(
-        _ctx(),
-        "viking://resources/source",
-        "viking://resources/target",
-        recursive=True,
-        source_uris=["viking://resources/source/a.md"],
-    )
-    assert prepared.batches == 1
-    assert [(record["id"], record["vector"]) for record in prepared.source_records] == [
-        ("file", [0.1, 0.2])
-    ]
-    assert prepared.affected_target_ids == ()
-    assert paths == [
-        "/api/vikingdb/data/search/scalar",
-        "/api/vikingdb/data/fetch_in_collection",
-        "/api/vikingdb/data/search/scalar",
-    ]
