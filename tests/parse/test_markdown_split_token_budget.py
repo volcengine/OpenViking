@@ -34,13 +34,14 @@ async def test_layout_uses_character_budget_ignoring_legacy_tokens(with_headings
 
 
 @pytest.mark.asyncio
-async def test_heading_merges_stay_within_character_budget():
+async def test_split_sections_keep_source_order_within_character_budget():
     parser = MarkdownParser()
-    content = "\n\n".join(f"## Heading {i}\n\n" + "文" * 750 for i in range(12))
+    children = [f"## Chapter {i}\n\n" + "文" * 750 for i in range(1, 4)]
+    content = "\n\n".join(["# Guide\n\nIntroduction", *children, "# Appendix\n\nNotes"])
     layout = await parser._compute_layout(content, "viking://temp/test", resource_name="doc")
-    writes = [op for op in layout.ops if op.kind == "write"]
-    assert all(len(op.content) <= 2000 for op in writes)
-    assert sum(op.content.count("文") for op in writes) == 9000
+    sections = [op.content for op in layout.ops if op.kind == "write"]
+    assert all(len(section) <= 2000 for section in sections)
+    assert "\n\n".join(sections) == content
 
 
 @pytest.mark.parametrize("leading_row", ["", "| short |\n"])

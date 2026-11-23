@@ -1550,7 +1550,17 @@ class MarkdownParser(BaseParser):
         if pending:
             # No next section exists. Fold a single tiny pending section back into
             # the previous saved candidate instead of emitting a standalone file.
-            if buffered_section is not None and self._should_merge_pending_into_next(pending):
+            # Direct content precedes children when a parent becomes a directory.
+            # Keep the trailing section outside that subtree in that case.
+            if (
+                buffered_section is not None
+                and self._should_merge_pending_into_next(pending)
+                and (
+                    not buffered_section["has_children"]
+                    or len(buffered_section["content"].strip()) + len(pending[0][1].strip()) + 2
+                    <= max_size
+                )
+            ):
                 buffered_section = self._merge_pending_into_previous_section(
                     buffered_section, pending
                 )
