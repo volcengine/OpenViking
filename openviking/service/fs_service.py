@@ -707,7 +707,6 @@ class FSService:
                 )
             if memory_overview_uri:
                 memory_refresh_requested = await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
                     directory_uri=memory_overview_uri,
                     ctx=ctx,
                 )
@@ -715,7 +714,6 @@ class FSService:
                 cleanup_result
             ):
                 requested = await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
                     directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )

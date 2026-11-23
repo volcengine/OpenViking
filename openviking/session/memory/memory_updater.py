@@ -919,32 +919,13 @@ class MemoryUpdater:
     async def refresh_schema_overview(
         cls,
         *,
-        viking_fs: Any,
         directory_uri: str,
         ctx: RequestContext,
-        changed_uris: Optional[List[str]] = None,
-        strict: bool = False,
     ) -> bool:
         memory_type = cls.memory_type_from_uri(directory_uri)
         if not memory_type:
             return False
-        try:
-            from openviking.session.memory.memory_type_registry import get_default_registry
-
-            updater = cls(registry=get_default_registry())
-            updater._viking_fs = viking_fs
-            return await updater.generate_overview(
-                memory_type, directory_uri, ctx, changed_uris=changed_uris
-            )
-        except Exception:
-            logger.warning(
-                "Failed to refresh memory overview for %s",
-                directory_uri,
-                exc_info=True,
-            )
-            if strict:
-                raise
-            return False
+        return await cls().generate_overview(memory_type, directory_uri, ctx)
 
     @classmethod
     async def refresh_file_embedding(
@@ -1357,34 +1338,19 @@ class MemoryUpdater:
 
         tracer.info(f"Memory operations applied: {result.summary()}")
 
-        # Collect directories that need overview generation
-        # uri is now a string, so extract directory using os.path
-        dirs = {}
-        for operation in operations.upsert_operations:
-            for uri_str in operation.uris:
-                dir_path = "/".join(uri_str.split("/")[:-1])
-                dirs[dir_path] = operation.memory_type
+        directories = {
+            uri.rsplit("/", 1)[0]: memory_type for uri, memory_type in uri_memory_type_map.items()
+        }
         for file_content in operations.delete_file_contents:
-            dir_path = "/".join(file_content.uri.split("/")[:-1])
-            dirs[dir_path] = (
-                file_content.extra_fields.get("memory_type")
-                or file_content.memory_type
-                or "unknown"
-            )
+            if file_content.uri in deleted_uris:
+                directories[file_content.uri.rsplit("/", 1)[0]] = (
+                    file_content.extra_fields.get("memory_type")
+                    or file_content.memory_type
+                    or "unknown"
+                )
 
-        for dir, memory_type in dirs.items():
-            await self.generate_overview(
-                memory_type,
-                dir,
-                ctx,
-                changed_uris=sorted(
-                    {
-                        uri
-                        for uri in (*result.written_uris, *result.edited_uris, *result.deleted_uris)
-                        if uri.rsplit("/", 1)[0] == dir
-                    }
-                ),
-            )
+        for directory, memory_type in directories.items():
+            await self.generate_overview(memory_type, directory, ctx)
 
         return result
 
@@ -2244,35 +2210,34 @@ class MemoryUpdater:
         memory_type: str,
         directory: str,
         ctx: RequestContext,
-        *,
-        changed_uris: Optional[List[str]] = None,
     ) -> bool:
-        """Persist directory-generation work; the semantic owner writes L0 and L1."""
+        """Try to enqueue directory generation after the memory changes are saved."""
+        from openviking.session.memory.memory_type_registry import get_default_registry
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.semantic_msg import SemanticMsg
 
-        if changed_uris == []:
+        try:
+            registry = self._registry if self._registry is not None else get_default_registry()
+            schema = registry.get(memory_type)
+            queue_manager = get_queue_manager()
+            queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+            await queue.enqueue(
+                SemanticMsg(
+                    uri=directory,
+                    context_type="memory",
+                    recursive=False,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    group_ids=list(ctx.group_ids),
+                    peer_id=ctx.user.user_id,
+                    role=str(ctx.role),
+                    generation_trigger="memory_update",
+                    overview_template=(schema.overview_template or "") if schema else "",
+                    abstract_template=(schema.abstract_template or "") if schema else "",
+                ),
+                deduplicate_memory=False,
+            )
+        except Exception:
+            logger.warning("Failed to enqueue memory overview for %s", directory, exc_info=True)
             return False
-        schema = self._registry.get(memory_type)
-        queue_manager = get_queue_manager()
-        queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        await queue.enqueue(
-            SemanticMsg(
-                uri=directory,
-                context_type="memory",
-                recursive=False,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                group_ids=list(ctx.group_ids),
-                peer_id=ctx.user.user_id,
-                role=str(ctx.role),
-                changes={"modified": sorted(set(changed_uris))}
-                if changed_uris is not None
-                else None,
-                generation_trigger="memory_update",
-                overview_template=(schema.overview_template or "") if schema else "",
-                abstract_template=(schema.abstract_template or "") if schema else "",
-            ),
-            deduplicate_memory=False,
-        )
         return True

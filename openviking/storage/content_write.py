@@ -1326,11 +1326,8 @@ class ContentWriteCoordinator:
         embedding_requested = False
         for directory_uri, uris in sorted(memory_groups.items()):
             overview_requested = await MemoryUpdater.refresh_schema_overview(
-                viking_fs=self._viking_fs,
                 directory_uri=directory_uri,
-                changed_uris=sorted(uris),
                 ctx=ctx,
-                strict=True,
             )
             if overview_requested:
                 semantic_actions.append(FreshnessAction.REFRESH_NOW)
@@ -2749,10 +2746,7 @@ class ContentWriteCoordinator:
         ingest_options: IngestOptions | None = None,
     ) -> tuple[bool, bool]:
         overview_requested = await MemoryUpdater.refresh_schema_overview(
-            viking_fs=self._viking_fs,
             directory_uri=root_uri,
-            changed_uris=[uri],
-            strict=True,
             ctx=ctx,
         )
         embedding_requested = await MemoryUpdater.refresh_file_embedding(

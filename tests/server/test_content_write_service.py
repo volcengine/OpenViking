@@ -25,12 +25,13 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("overview_write_fails", [False, True])
+@pytest.mark.parametrize("overview_failure", [None, "enqueue", "write"])
 async def test_write_updates_memory_file_and_parent_overview(
-    service, monkeypatch, overview_write_fails
+    service, monkeypatch, overview_failure
 ):
     from openviking.observability.events import get_event_bus
     from openviking.observability.reporting import runtime
+    from openviking.storage.queuefs import get_queue_manager
 
     load_model = AsyncMock(side_effect=AssertionError("memory write must not call a text model"))
     monkeypatch.setattr(
@@ -55,7 +56,18 @@ async def test_write_updates_memory_file_and_parent_overview(
     )
 
     overview_uri = f"{memory_dir}/.overview.md"
-    if overview_write_fails:
+    if overview_failure == "enqueue":
+        manager = get_queue_manager()
+        semantic_queue = manager.get_queue(manager.SEMANTIC)
+        queue_storage_write = semantic_queue._async_agfs.write
+
+        async def reject_overview_enqueue(path, *args, **kwargs):
+            if path == f"{semantic_queue.path}/enqueue":
+                raise OSError("semantic queue storage unavailable")
+            return await queue_storage_write(path, *args, **kwargs)
+
+        monkeypatch.setattr(semantic_queue._async_agfs, "write", reject_overview_enqueue)
+    elif overview_failure == "write":
         write_file = service.viking_fs.write_file
 
         async def reject_overview(uri, *args, **kwargs):
@@ -92,12 +104,13 @@ async def test_write_updates_memory_file_and_parent_overview(
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "complete"
-    assert result["overview_status"] == ("skipped" if overview_write_fails else "complete")
-    assert result["queue_status"]["Embedding"]["processed"] >= 1
+    assert result["overview_status"] == ("skipped" if overview_failure else "complete")
+    memory_id = vector_record_id(ctx.account_id, memory_uri, level=2)
+    assert await service.vikingdb_manager.exists(memory_id, ctx=ctx)
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
     assert visible_content(stored, uri=memory_uri) == "Updated preference"
     load_model.assert_not_awaited()
-    if overview_write_fails:
+    if overview_failure:
         assert not await service.viking_fs.exists(overview_uri, ctx=ctx)
         return
     overview = await service.viking_fs.read_file(overview_uri, ctx=ctx)
@@ -110,12 +123,12 @@ async def test_write_updates_memory_file_and_parent_overview(
     abstract_id = vector_record_id(ctx.account_id, memory_dir, level=0)
     assert await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
 
+    await service.vikingdb_manager.strict_delete([abstract_id], ctx=ctx)
+    assert not await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
     result = await service.fs.write(
         memory_uri, content="Another preference", ctx=ctx, mode="replace", wait=True
     )
     assert result["overview_status"] == "complete"
-    # The memory file and L1 are indexed. The existing preset L0 is reused.
-    assert result["queue_status"]["Embedding"]["processed"] == 2
     assert await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
     assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == raw_abstract
     assert await service.viking_fs.read_file(overview_uri, ctx=ctx) == overview

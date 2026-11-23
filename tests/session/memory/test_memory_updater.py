@@ -347,7 +347,7 @@ class TestMemoryUpdater:
         assert updater._registry == registry
 
     @pytest.mark.asyncio
-    async def test_generate_overview_enqueues_directory_work_with_changed_uris(self):
+    async def test_generate_overview_enqueues_directory_work(self):
         registry = MagicMock()
         registry.get.return_value = SimpleNamespace(
             overview_template="{% for item in items %}{{ item.file_name }}{% endfor %}",
@@ -359,29 +359,17 @@ class TestMemoryUpdater:
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
         directory = "viking://user/alice/memories/events"
         with patch("openviking.storage.queuefs.get_queue_manager", return_value=manager):
-            assert await updater.generate_overview(
-                "events", directory, ctx, changed_uris=[f"{directory}/deleted.md"]
-            )
+            assert await updater.generate_overview("events", directory, ctx)
         msg = queue.enqueue.await_args.args[0]
         assert msg.uri == directory
         assert msg.context_type == "memory"
-        assert msg.changes == {"modified": [f"{directory}/deleted.md"]}
+        assert msg.changes is None
         assert msg.overview_template == registry.get.return_value.overview_template
         assert msg.abstract_template == registry.get.return_value.abstract_template
         assert msg.account_id == "acme"
         assert msg.user_id == "alice"
         assert msg.recursive is False
         assert queue.enqueue.await_args.kwargs["deduplicate_memory"] is False
-
-    @pytest.mark.asyncio
-    async def test_generate_overview_skips_when_no_memory_changed(self):
-        updater = MemoryUpdater(registry=MagicMock())
-        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-        with patch("openviking.storage.queuefs.get_queue_manager") as manager:
-            assert not await updater.generate_overview(
-                "events", "viking://user/alice/memories/events", ctx, changed_uris=[]
-            )
-        manager.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
@@ -812,7 +800,6 @@ class TestMemoryUpdater:
             memory_type,
             expected_directory,
             ctx,
-            changed_uris=[resolved_uri],
         )
 
     @pytest.mark.asyncio

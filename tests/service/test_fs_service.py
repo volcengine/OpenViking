@@ -1882,7 +1882,7 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
 
     refreshed = []
 
-    async def fake_refresh_schema_overview(*, viking_fs, directory_uri, ctx):
+    async def fake_refresh_schema_overview(*, directory_uri, ctx):
         refreshed.append({"viking_fs": viking_fs, "directory_uri": directory_uri, "ctx": ctx})
         return True
 
