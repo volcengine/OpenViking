@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""API contracts that need processing and indexing, but not model quality."""
+"""API contracts for processing, indexing, and retrieval with fixed model responses."""
 
 import pytest
 
@@ -10,6 +10,7 @@ from openviking.models.rerank import RerankClient
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig
+from tests.server.test_api_resources import _wait_task_terminal
 
 
 def result(response):
@@ -74,12 +75,23 @@ async def test_add_skill_stores_content_and_indexes_all_levels(client, mcp_forma
                 "required": ["expression"],
             },
         }
-    added = result(await client.post("/api/v1/skills", json={"data": skill, "wait": True}))
+    # The regular dict takes the default async route. MCP uses the blocking route
+    # so its assertions also verify that wait=True returns the queue results.
+    request = {"data": skill, "wait": True} if mcp_format else {"data": skill}
+    added = result(await client.post("/api/v1/skills", json=request))
     assert added["status"] == "success", added
     expected_name = name.replace("_", "-") if mcp_format else name
     assert added["name"] == expected_name
     root = added["root_uri"]
     assert root.endswith(f"/skills/{expected_name}")
+    if mcp_format:
+        assert added["queue_status"]["Embedding"]["error_count"] == 0
+    else:
+        task_id = added["task_id"]
+        task = await _wait_task_terminal(client, task_id)
+        assert task["status"] == "completed", task
+        assert task["task_type"] == "add_skill"
+        assert task["result"]["root_uri"] == root
     shown = result(await client.get(f"/api/v1/skills/{expected_name}"))
     assert shown["name"] == expected_name
     assert shown["description"] == description
