@@ -147,6 +147,9 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     ]);
     assert.equal(manifest.hooks[0].env.OPENVIKING_PENDING_REPLAY_LIMIT, "2");
     assert.match(manifest.mcpServers.openviking.args[0], /agent-integrations\/kimicode\/servers\/mcp-proxy\.mjs$/);
+    // Kimi Code discovers no skills directory by default; the manifest names it.
+    assert.equal(manifest.skills, "./skills/");
+    for (const skill of HOST_SKILLS) assert.ok(existsSync(join(root, "skills", skill, "SKILL.md")), skill);
     assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
     assert.ok(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
     assert.equal(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "install")), false);
@@ -758,6 +761,14 @@ for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.doesNotMatch(result.stdout, new RegExp(`^!!\\s+${client}:`, "mu"), result.stdout);
       assert.ok(existsSync(join(home, ".openviking", "agent-integrations", client, "scripts", "hook.mjs")));
+      const skills = join(home, `.${client}`, "skills");
+      for (const skill of HOST_SKILLS) assert.ok(existsSync(join(skills, skill, "SKILL.md")), skill);
+
+      // A skill the user edited is theirs: uninstall removes only the untouched copies.
+      writeFileSync(join(skills, "openviking-skills", "SKILL.md"), "Edited by the user.\n");
+      runUninstall(home, client);
+      assert.equal(readFileSync(join(skills, "openviking-skills", "SKILL.md"), "utf8"), "Edited by the user.\n");
+      assert.equal(existsSync(join(skills, "openviking-memory")), false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -779,8 +790,11 @@ test("validation fails a hook host whose files are missing or whose hook does no
     for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
       const result = validate(client);
       assert.equal(result.status, 0, `${client}: ${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, new RegExp(`${client}: hooks and MCP are configured`));
+      assert.match(result.stdout, new RegExp(`${client}: hooks, MCP and skills are configured`));
     }
+
+    rmSync(join(home, ".trae-cn", "skills", "openviking-rule-search"), { recursive: true });
+    assert.equal(validate("trae-cn").status, 1);
 
     rmSync(join(home, ".cursor", "skills", "openviking-skills"), { recursive: true });
     const incomplete = validate("cursor");

@@ -13,6 +13,7 @@
     "displayName": "OpenViking Memory",
     "shortDescription": "Recall and capture long-term memory through OpenViking"
   },
+  "skills": "./skills/",
   "mcpServers": {
     "openviking": {
       "command": "node",

@@ -67,7 +67,7 @@ export const TARGETS = [
   },
 ];
 
-// cursor, trae, trae-cn and zcode vendor nothing: the installer copies the
+// cursor, trae, trae-cn and zcode vendor no runtime: the installer copies the
 // canonical runtime to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
 // and they import it by the relative path that resolves both there and here.
 export const ASSEMBLED_ROOTS = [
@@ -251,8 +251,9 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, ...path),
     committed: true,
   })),
-  // Antigravity reads these from the plugin itself.
-  ...["antigravity"].flatMap((host) => [
+  // TRAE and ZCode read these from the user's skills directory, Kimi Code and
+  // Antigravity from the plugin itself.
+  ...["trae", "zcode", "kimicode", "antigravity"].flatMap((host) => [
     "openviking-memory",
     "openviking-skills",
     "ov-experience-memory",
