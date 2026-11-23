@@ -72,7 +72,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 | 新的用户消息 | 紧挨在这条消息之前 | system 和 developer 消息、作为一条用户消息的摘要，以及这条新消息 |
 | 工具步骤 | 最近一次工具结果之后 | system 和 developer 消息，以及摘要；模型从摘要出发继续完成任务 |
 
-摘要消息开头说明网关替换了对话较早的部分、这段内容不是用户写的；结尾附上这段对话开头的网关说明和用户画像，所以压缩后它们仍然保留。
+摘要消息开头说明网关替换了对话较早的部分、这段内容不是用户写的；结尾附上这段对话开头的网关说明、soul 和用户画像，所以压缩后它们仍然保留。
 
 之后凡是重发这段历史的请求，包括辅助请求和 Token 计数请求，都做同样的替换；子 Agent 通常发送自己单独的历史，不受影响。每次压缩让服务商缓存在截断点失效一次，之后照常命中。
 
@@ -85,7 +85,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 - **有 `openviking_session_history` 时**（OpenViking 服务的 MCP 工具中包含 `session_history`）：说明保存了什么（用户和助手的消息、工具调用及其完整输出，不含思考内容、图片和网关自己执行的 OpenViking 工具调用），以及如何按原文检索、再按 id 读取匹配位置前后的内容。
 - **否则，有 `openviking_grep` 和 `openviking_read` 时**：这段对话对应的 OpenViking 会话（`viking://user/<user_id>/sessions/<session_id>/`）和会话中消息的存放位置，以及检索步骤：先用具体的关键词 grep 会话，拿到行号，再读取匹配位置前后的内容。
 
-截断点落在一轮中间时，截断点之前的部分会立即保存到 OpenViking，模型在这一轮里就能检索到。
+截断点落在一轮中间时，截断点之前的部分会立即保存到 OpenViking，模型在这一轮里就能检索到；这次写入失败时，由这一轮结束时的保存一并写入。
 
 `session_history` 和其他 OpenViking 工具一样默认提供，可以在**工具**里取消勾选（见[选择工具](04-openviking-tools.md#choose-tools)）；关闭**保存对话**时不提供。对话沿用开始时的工具清单，所以服务端还没有这个工具时开始的对话，仍然得到 grep 的查找方法。模型没有传 `session` 参数或传了空值时，网关填入保存着这段对话消息的 OpenViking 会话，从新到旧：当前会话（已经保存过内容时），然后是同一段历史较早的最多五个会话（例如客户端自己压缩之前的会话）。模型传了 `session` 时原样发送。这段对话还没有任何内容保存时，网关不请求 OpenViking，直接回复模型：目前没有可查的内容，以及有多少条消息正在等待保存。
 
@@ -117,7 +117,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 ## 副作用 {#side-effects}
 
-**不再生成 Working Memory 摘要。** 摘要由网关使用的模型生成。在 OpenViking Server 0.5.0 及以上版本，网关提交设置 `enable_working_memory=false`，仍按解析后的记忆策略归档消息、提取记忆。新建的网关会话继承用户策略，除非 `capture_memory_types` 显式设置了会话策略。旧版服务继续使用会话级 Working Memory 关闭策略。已有会话保留原来存储的策略；要继承用户策略，请开始新对话。
+**不生成 Working Memory 摘要。** 压缩用的摘要由网关使用的模型生成，不依赖 OpenViking 的 Working Memory。在 OpenViking Server 0.5.0 及以上版本，网关提交时设置 `enable_working_memory=false`，仍按解析后的记忆策略归档消息、提取记忆；新建的网关会话继承用户策略，除非 `capture_memory_types` 显式设置了会话策略。开启 `openviking_auto_commit` 后由 OpenViking 提交，Working Memory 是否生成由用户自己的记忆策略决定（默认关闭）。更早版本的服务上，网关创建的会话关闭 Working Memory。已有会话保留原来存储的策略；要继承用户策略，请开始新对话。
 
 **记忆预算重新计算。** 每压缩一次，**单个上下文窗口预算**（见[召回记忆](08-context-profiles.md#recall-memory)）就重新计算，截断点之前补充过的记忆可能再次补充。
 
@@ -125,7 +125,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 **特别长的会话可能超出请求大小上限。** 客户端的历史越来越长，特别长的会话最终可能超出请求大小上限：请求体超过 32 MiB 会被拒绝，返回 HTTP 413（见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)）。运维人员可以用 `max_body_bytes` 调整这个上限（见[网关字段](13-configuration.md#gateway-fields)）；网关前面的反向代理允许的请求体也不能比它小（见[反向代理和 HTTPS](../guides/22-gateway-operations.md#reverse-proxy-and-https)）。
 
-**客户端自己压缩会换到新会话。** 客户端压缩或编辑历史后，网关把新历史保存到新的 OpenViking 会话。`session_history`（或 `grep` 和 `read`）可用时，新历史开头的网关说明会告诉模型如何查找之前的会话。
+**客户端自己压缩后仍写入同一个会话。** 客户端压缩或编辑历史后，网关从这一轮的用户消息开始，继续写入同一个 OpenViking 会话；客户端的摘要和被压缩掉的内容不会重新写入。检索工具可用时，新历史开头的网关说明会告诉模型较早的内容保存在哪个会话里。
 
 ## 实验性：Agent 自管上下文窗口 {#experimental-agent-managed-context-windows}
 

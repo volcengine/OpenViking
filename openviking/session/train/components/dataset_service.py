@@ -24,6 +24,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from openviking.observability.log_safety import short_hash
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
     Case,
@@ -61,10 +62,7 @@ _SENSITIVE_TEXT_RE = re.compile(
 
 def _redact_sensitive_text(text: str) -> str:
     def _replace(match: re.Match[str]) -> str:
-        return (
-            f"{match.group(1)}{match.group(2)}"
-            f"{match.group(3)}<redacted>{match.group(5)}"
-        )
+        return f"{match.group(1)}{match.group(2)}{match.group(3)}<redacted>{match.group(5)}"
 
     return _SENSITIVE_TEXT_RE.sub(_replace, text)
 
@@ -420,10 +418,12 @@ async def _run_rollout_execution(
                 rollout = await _execute_rollout_request_hosted(app, request, case)
         await app.state.rollout_executions.mark_completed(execution_id, rollout)
     except Exception as exc:
-        logger.exception(
-            "rollout execution failed execution_id=%s case=%s",
-            execution_id,
-            case.name,
+        logger.error(
+            "rollout execution failed execution_hash=%s case_hash=%s error_type=%s",
+            short_hash(str(execution_id)),
+            short_hash(str(case.name)),
+            type(exc).__name__,
+            extra={"error_type": type(exc).__name__},
         )
         try:
             await app.state.rollout_executions.mark_failed(
@@ -433,9 +433,9 @@ async def _run_rollout_execution(
         except Exception:
             # Last-ditch: do not let failures in the failure-recording path
             # raise into the event loop (the task was already fire-and-forget).
-            logger.exception(
-                "rollout execution mark_failed itself failed execution_id=%s",
-                execution_id,
+            logger.error(
+                "rollout failure persistence failed execution_hash=%s",
+                short_hash(str(execution_id)),
             )
 
 

@@ -70,7 +70,7 @@ class ExperienceGradientEstimator:
             try:
                 operations = await self._run_extract_loop(trajectory, extract_context)
             except Exception:
-                logger.exception("Experience gradient estimation failed")
+                logger.debug("experience gradient estimation failed")
                 if context.strict_extract_errors:
                     raise
                 return []
@@ -102,12 +102,9 @@ class ExperienceGradientEstimator:
         if self.vlm is None:
             if self.vlm_resolver is None:
                 raise RuntimeError(
-                    "ExperienceGradientEstimator requires a VLM resolver "
-                    "for account-owned work"
+                    "ExperienceGradientEstimator requires a VLM resolver for account-owned work"
                 )
-            vlm_config = await self.vlm_resolver.get_vlm(
-                context.request_context.account_id
-            )
+            vlm_config = await self.vlm_resolver.get_vlm(context.request_context.account_id)
             vlm = vlm_config
         else:
             vlm = self.vlm

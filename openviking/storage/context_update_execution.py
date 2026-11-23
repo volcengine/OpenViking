@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.acl import AclUpdate
 from openviking.storage.context_update_plan import ContextUpdatePlan, execute_content_tree_actions
@@ -159,9 +160,9 @@ async def enqueue_direct_index_actions(
             or enqueued_any
         )
     logger.debug(
-        "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
+        "%s root=%s action_counts=%s action_count=%d",
         log_correlation(),
-        actions[0].uri if actions else "",
+        safe_uri_for_log(str(actions[0].uri if actions else "")),
         dict(action_counts),
         len(actions),
     )

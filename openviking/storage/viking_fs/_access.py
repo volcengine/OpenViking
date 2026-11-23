@@ -551,6 +551,8 @@ class _AccessMixin:
         if len(acl_ancestors(uri)) == 1:
             raise InvalidArgumentError("ACL cannot be set on viking://resources")
         await self._ensure_acl_manage(uri, ctx)
+        if spec.entries is not None:
+            await self.acl_manager.validate_principals((e.principal for e in spec.entries), ctx)
         return AclUpdate(uri=uri, acl=spec)
 
     async def set_acl(
@@ -602,6 +604,7 @@ class _AccessMixin:
         try:
             await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
+            await self.acl_manager.validate_principals([principal], real_ctx)
             direct = await self.acl_manager.get_direct(uri, real_ctx)
             entries = {entry.principal: entry for entry in direct.entries}
             if normalized_level is None:

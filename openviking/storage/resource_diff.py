@@ -31,7 +31,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Literal, Mapping, Tuple
 
-from openviking.concurrency import bounded_map
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.resource_rnfv import (
     CONTROL_BASENAMES,
@@ -228,7 +229,6 @@ async def resolve_resource_diff(
     artifact_ref: Any,
     target: Any,
     artifact_paths: Mapping[str, str] | None = None,
-    concurrency: int | None = None,
 ) -> ResourceDiffResult:
     """Resolve R/N/F/V into final states, including bounded body fallbacks."""
     snapshot.validate_for_planning()
@@ -306,18 +306,11 @@ async def resolve_resource_diff(
 
         return rel_path, content_md5(new_bytes)
 
-    if concurrency is None:
-        from openviking_cli.utils.config import get_openviking_config
-
-        concurrency = int(
-            get_openviking_config().queue_workers.add_resource.file_operation_concurrency
-        )
-
     for rel_path, state, md5 in await bounded_map(
-        compare_paths, compare, concurrency=max(1, concurrency)
+        compare_paths, compare, concurrency=FILE_TASK_CONCURRENCY
     ):
         states[rel_path] = (state, md5)
-    for rel_path, md5 in await bounded_map(hash_paths, hash_new, concurrency=max(1, concurrency)):
+    for rel_path, md5 in await bounded_map(hash_paths, hash_new, concurrency=FILE_TASK_CONCURRENCY):
         state, _ = states[rel_path]
         states[rel_path] = (state, md5)
 
@@ -364,13 +357,10 @@ async def resolve_resource_diff(
     directory_content_counts = Counter(entry.content_state.value for entry in directory_entries)
     file_index_counts = Counter(entry.index_state.value for entry in file_entries)
     directory_index_counts = Counter(entry.index_state.value for entry in directory_entries)
-    logger.info(
-        "[ResourceDiffResult] %s target=%s n_files=%d n_dirs=%d f_files=%d f_dirs=%d "
-        "logical_root=%s v_records=%d root_state=%s root_index=%s "
-        "md5_fast_path=%d body_compared=%d new_files_hashed=%d "
-        "states={file:%s,dir:%s} index={file:%s,dir:%s}",
+    logger.debug(
+        "%s target=%s n_files=%d n_dirs=%d f_files=%d f_dirs=%d logical_root=%s v_records=%d root_state=%s root_index=%s md5_fast_path=%d body_compared=%d new_files_hashed=%d states={file:%s,dir:%s} index={file:%s,dir:%s}",
         log_correlation(),
-        snapshot.request.target_uri,
+        safe_uri_for_log(str(snapshot.request.target_uri)),
         n_files,
         n_dirs,
         f_files,
@@ -492,17 +482,17 @@ async def prepare_artifact_inventory(
                     (await store.read_bytes(ref, mapping_entry.rel_path)).decode("utf-8")
                 )
             except Exception as exc:
-                logger.warning(
-                    "[ArtifactInventory] Ignoring unreadable image mapping sidecar %s: %s",
-                    mapping_entry.rel_path,
-                    exc,
+                logger.info(
+                    "Ignoring unreadable image mapping sidecar %s: %s",
+                    safe_path_for_log(str(mapping_entry.rel_path)),
+                    type(exc).__name__,
                 )
                 loaded = None
             if not isinstance(loaded, dict):
                 if loaded is not None:
-                    logger.warning(
-                        "[ArtifactInventory] Ignoring invalid image mapping sidecar %s",
-                        mapping_entry.rel_path,
+                    logger.info(
+                        "Ignoring invalid image mapping sidecar %s",
+                        safe_path_for_log(str(mapping_entry.rel_path)),
                     )
             else:
                 current_mappings = loaded

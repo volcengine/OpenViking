@@ -12,6 +12,8 @@ export default {
   latest: 'Latest',
   rollback: 'Restore this version',
   rollbackBadge: 'Restored',
+  deletedBadge: 'Deleted',
+  deletedVersion: 'The file was deleted in this version.',
   rollbackTitle: 'Restore this document to this version?',
   rollbackConfirm: 'Confirm restore',
   rollbackHint:
@@ -22,6 +24,9 @@ export default {
   importChoose: 'Choose file',
   importDrop: 'Click to choose or drop a file',
   importFormat: '.ovpack files supported',
+  importInvalidFormat: 'Select a valid .ovpack file.',
+  importWriteRequired:
+    'OVPack import requires write access to the target directory.',
   configure: 'Compile configuration',
   configuration: 'Compilation configuration',
   configurationEmpty:
@@ -45,6 +50,7 @@ export default {
   addedLines: 'Added content',
   removedLines: 'Removed content',
   copyPath: 'Copy file path',
+  pathCopied: 'Node path copied',
   copyOriginal: 'Copy source',
   copied: 'Copied',
   historyView: 'Historical version content view',
@@ -77,6 +83,7 @@ export default {
   noSchedule: 'Do not update',
   daily: 'Daily',
   weekly: 'Weekly',
+  weeklySchedule: (weekday: string) => `Every ${weekday}`,
   time: 'Run time (Beijing time)',
   weekday: 'Day of week',
 } satisfies FileBrowserWorkflowLabels;

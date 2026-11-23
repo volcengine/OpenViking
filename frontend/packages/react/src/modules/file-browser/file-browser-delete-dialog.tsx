@@ -9,6 +9,7 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import WarningIcon from '../../../../icons/svg/file-preview/warning.svg?react';
 import type { Locale } from '../../shared/locale.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
+import { displayNameFromUri } from '../../shared/directory-tree/rows.js';
 
 export function FileBrowserDeleteDialog({
   open,
@@ -53,7 +54,7 @@ export function FileBrowserDeleteDialog({
         {text.deleteTitle}
       </h2>
       <p className="ov-file-browser-delete__message">
-        {text.deleteMessage(uri.split('/').pop() ?? uri)}
+        {text.deleteMessage(displayNameFromUri(uri))}
       </p>
       {error !== undefined ? (
         <ErrorNotification

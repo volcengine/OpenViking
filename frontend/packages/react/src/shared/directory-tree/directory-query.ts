@@ -7,8 +7,9 @@ import type {
 } from '@tanstack/query-core';
 import { queryKeys } from '../../client/query-keys.js';
 import { loadPage, PAGE_SIZE } from './fs-page.js';
-import { isSystemUri } from '../resource-uri.js';
+import { isSystemUri, normalizeResourceUri } from '../resource-uri.js';
 import type { QueryRequest } from '../request/use-query-scope.js';
+import type { UserRootMode } from './user-root-context.js';
 
 export type DirectoryPage = Awaited<ReturnType<typeof loadPage>> & {
   nextOffset: number;
@@ -26,12 +27,15 @@ export function directoryOptions(
   uri: string,
   cacheScopeKey?: string,
   retryError?: () => unknown,
+  userRootMode: UserRootMode = 'all',
 ): DirectoryOptions {
   const baseKey = queryKeys.directory(request.scope, {
     uri,
     output: 'agent',
     include_tags: isSystemUri(uri) ? undefined : true,
     node_limit: PAGE_SIZE,
+    userRootMode:
+      normalizeResourceUri(uri) === 'viking://user' ? userRootMode : undefined,
   });
   const queryKey =
     cacheScopeKey === undefined
@@ -70,6 +74,7 @@ export function directoryOptions(
           signal,
           current.options,
           retryCause,
+          userRootMode,
         );
         retryCause = undefined;
         signal.throwIfAborted();

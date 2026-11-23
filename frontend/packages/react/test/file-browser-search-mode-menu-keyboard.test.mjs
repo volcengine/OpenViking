@@ -11,7 +11,9 @@ globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 const find = '/api/v1/search/find';
 const uri = 'viking://resources/profile.md';
 const modeSwitch = () =>
-  document.querySelector('.ov-file-browser-search__switch');
+  document.querySelector(
+    '.ov-file-browser-search__summary button[role="combobox"]',
+  );
 const items = () => [
   ...document.querySelectorAll('.ov-file-browser-search__menu-item'),
 ];
@@ -27,15 +29,9 @@ const key = (target, name) =>
   );
 
 async function openWithResults() {
-  // grep 也要给一条命中：切模式会立刻重新检索，返回空列表时结果区没有模式行，
-  // 断言就看不到新的 chip。
-  //
-  // grep answers with one hit too: switching mode searches again at once, and an empty
-  // list renders no mode row, so the new chip would be missing from the assertions.
   const fetch = recordingFetch((call) => {
     if (call.path === find) return ok({ resources: [{ uri }] });
-    if (call.path === '/api/v1/search/grep')
-      return ok({ matches: [{ uri, line: 1, content: 'profile' }] });
+    if (call.path === '/api/v1/search/grep') return ok({ matches: [] });
     return ok([]);
   });
   const view = await mount(
@@ -63,14 +59,13 @@ async function openWithResults() {
 }
 
 /**
- * 键盘打开模式菜单：焦点进入当前项，选择后回到搜索输入框，Esc 后回到「切换」。
+ * 键盘打开模式菜单时焦点进入当前项，选择模式或按 Esc 后回到模式选择器。
  *
  * 菜单 portal 到 `document.body` 后不在弹窗的 DOM 子树里，只靠 `FocusLock` 的
  * shard 登记也能 Tab 到，但打开那一刻没有焦点反馈。这里断言的是真实的键盘路径，
  * 而不只是按钮存在。
  *
- * Keyboard opening focuses the current item. Selection restores the search input;
- * Escape restores the switch.
+ * Keyboard opening focuses the current item. Selection or Escape restores the trigger.
  *
  * A portaled menu sits outside the dialog's DOM subtree; the shard registration makes it
  * reachable by Tab, but without moving focus on open a keyboard user gets no feedback.
@@ -91,29 +86,8 @@ test('the mode menu takes focus on open and returns it on close', async () => {
     await act(async () => items()[2].click());
     await settle();
     assert.equal(items().length, 0);
-    // 选中后焦点落在搜索输入框：「切换」随模式行在加载态里卸载，还给它就会掉到
-    // `body`。
-    //
-    // Focus lands on the search input after a selection: the switch unmounts with the
-    // mode row while loading, so returning focus to it would drop to `body`.
-    assert.equal(
-      document.activeElement,
-      document.querySelector('.ov-file-browser-search__input'),
-    );
-    // 选完模式会立刻重新检索，结果区在加载态里不渲染模式行，因此这里等结果回来
-    // 再断言模式 chip；焦点在等待期间落在搜索输入框上。
-    //
-    // Picking a mode starts a new search at once and the results area renders no mode
-    // row while loading, so wait for the results before asserting the chip; focus lands
-    // on the search input in the meantime.
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
-    await settle();
-    assert.equal(
-      document
-        .querySelector('.ov-file-browser-search__summary')
-        .textContent.includes('grep'),
-      true,
-    );
+    assert.equal(document.activeElement, modeSwitch());
+    assert.match(modeSwitch().getAttribute('aria-label'), /grep/);
 
     await key(modeSwitch(), 'ArrowDown');
     await settle();

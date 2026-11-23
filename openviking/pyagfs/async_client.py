@@ -12,7 +12,7 @@ from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import InvalidPathLockRequestError
 
 from .leader import LeaderCandidate, leader_candidate
-from .protocols import AGFSSyncClientProtocol
+from .protocols import AGFSSyncClientProtocol, CacheRuntimeHandleProtocol
 
 _SYSTEM_ACCOUNT_ID = "_system"
 
@@ -92,6 +92,15 @@ class AsyncAGFSClient:
 
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
+
+    def cache_runtime(self, instance: str = "default") -> CacheRuntimeHandleProtocol:
+        """Return the configured cache Runtime selected by instance.
+
+        Pass the owning component's configured instance name. Omitting
+        ``instance`` uses ``default``; an unknown configured name raises
+        ``ValueError``.
+        """
+        return self._client.cache_runtime(instance)
 
     def leader_candidate(
         self,
@@ -312,6 +321,22 @@ class AsyncAGFSClient:
                 stream=True,
                 fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
                 allow_same_mount_fast_path=allow_same_mount_fast_path,
+            )
+        )
+
+    async def _copy_file(self, src_path: str, dst_path: str, *, fs_ctx: Dict[str, str]) -> None:
+        """Copy a prevalidated file under a lease after its parent is prepared."""
+        from .helpers import _copy_file
+
+        await run_to_completion(
+            lambda: asyncio.to_thread(
+                _copy_file,
+                self._client,
+                src_path,
+                dst_path,
+                stream=True,
+                fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, True),
+                parent_prepared=True,
             )
         )
 

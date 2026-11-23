@@ -23,6 +23,7 @@ description: 把 OpenViking 网关嵌入 Server、用 Docker Compose 或 Helm �
 | --- | --- |
 | OpenViking 认证方式 | `api_key` 或本地 dev 模式。网关不支持 trusted 认证。 |
 | OpenViking 版本 | 嵌入运行时和 Server 同版本发布，无需额外检查；独立运行时要求 OpenViking Server 0.4.16 或更高版本。 |
+| OpenViking 自动提交 | 只在网关配置 `openviking_auto_commit: true`、把提交交给 OpenViking 时需要：空闲提交需要 OpenViking Server 开启 `memory.session_auto_commit.enabled`（0.4.x 版本为 `memory.session_auto_commit.idle_enabled`），默认关闭；没有开启时，达不到提交阈值的对话只保存为消息，不会归档，也不会提取记忆。默认由网关提交，不需要这项设置。见[保存对话](../gateway/08-context-profiles.md#save-conversations)。 |
 | 安装 | 网关包含在 OpenViking 核心包中。可选的 `gateway-fast` extra（`pip install "openviking[gateway-fast]"`）装上更快的事件循环和 HTTP 解析器。 |
 | 登录身份 | 远程部署需要 OpenViking API 密钥，普通用户、账号管理员和 root 都能登录 Studio 的网关页面。本地 dev 模式不需要密钥，固定使用 `default/default` 身份。 |
 | 存储 | 单机使用本地磁盘上的 SQLite，多副本使用共享 Redis。Redis 需要 `pip install "openviking[expiry]"`，官方镜像已包含。 |
@@ -130,7 +131,7 @@ helm upgrade --install gateway ./deploy/helm/openviking-gateway \
 
 默认使用单副本 SQLite、持久卷和 `Recreate` 更新策略。集群必须有默认 StorageClass，或配置 `persistence.storageClass`/`persistence.existingClaim`。设置 `persistence.enabled: false` 后，更换 Pod 会丢失 SQLite 状态，Helm NOTES 会显示警告。卸载会保留 PVC。扩容前必须把两个 provider 都改成 Redis，见[扩展](#scaling)。
 
-chart 设置了 `session_ttl_seconds: 604800` 和 `response_ttl_seconds: 604800`，比网关 30 天的默认值短；需要其他值时覆盖 `config.*`。每个 Pod 请求 500m CPU 和 1Gi 内存，上限为 2 CPU 和 4Gi；可按负载设置 `resources`。
+chart 设置了 `response_ttl_seconds: 604800`，比网关 30 天的默认值短；`session_ttl_seconds` 沿用网关 1 天的默认值。需要其他值时覆盖 `config.*`。每个 Pod 请求 500m CPU 和 1Gi 内存，上限为 2 CPU 和 4Gi；可按负载设置 `resources`。
 
 独立 chart 的 `existingSecret` 接受 `management-key`、`redis-password` 和 `root-key`。前两项分别注入 `OPENVIKING_GATEWAY_MANAGEMENT_KEY` 和 `OPENVIKING_GATEWAY_REDIS_PASSWORD`；`config.storage.redis.password_env` 指向后者。local 和 KMS 加密把 `root-key` 只读挂载到 `/etc/openviking-gateway/keys/root-key`，并将 provider 的 `key_file` 指向它。安装前先按[加密](#encryption)生成密钥。上游凭证和 KMS AK/SK 在 `config` 中写 `$VAR`，通过 `extraEnv` 的 `secretKeyRef` 注入，不要将明文凭证写入 ConfigMap。
 
@@ -345,7 +346,6 @@ SQLite 供一台主机上的一套部署使用，不要跨主机共享目录，�
 replicaCount: 2
 existingSecret: gateway-credentials
 config:
-  capture_concurrency: 4
   storage:
     kernel: redis
     management: redis
@@ -361,7 +361,7 @@ config:
 
 无管理面、按密钥隔离的部署再加上 `management_api: false`、`openviking_keys: true`、`tenancy: key`、`default_upstreams` 和 `request_log_sink: stdout`，见[直接使用 OpenViking API 密钥](../gateway/09-gateway-keys.md#openviking-keys)和[部署默认上游](../gateway/07-upstreams.md#deployment-default-upstreams)。没有管理 API 时，在 OpenViking 中删除用户不会通知网关，该用户的网关数据按[保留期限](../gateway/11-security-and-data.md#retention)过期。部署在它前面的服务遵循[宿主集成约定](#host-integration-contract)。
 
-Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。每条命令连同这段等待最长 `connect_timeout_ms + command_timeout_ms`（`command_timeout_ms` 为 `0` 时不限）。保持 `pool_size >= capture_concurrency + 8`。Redis 位于鉴权路径，整体不可用时请求在 `connect_timeout_ms + command_timeout_ms` 内返回 `503 store_unavailable`（JSON），带 `Retry-After: 1` 和 `X-OpenViking-Upstream-Attempted: 0`。连不上存储的保存 worker 会退避，等待时间逐次翻倍、最长 30 秒，存储恢复后自行继续；需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
+Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。每条命令连同这段等待最长 `connect_timeout_ms + command_timeout_ms`（`command_timeout_ms` 为 `0` 时不限）。Redis 位于鉴权路径，整体不可用时请求在 `connect_timeout_ms + command_timeout_ms` 内返回 `503 store_unavailable`（JSON），带 `Retry-After: 1` 和 `X-OpenViking-Upstream-Attempted: 0`；这期间结束的轮次保存失败，原因为 `save_failed`。需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
 
 Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`；多副本时创建 `maxUnavailable: 1` 的 PDB。通过 `affinity` 把副本分散到不同节点。各进程缓存管理记录，所以修改管理配置或吊销签发密钥后，其他副本最多 **2 秒**后生效。
 
@@ -369,7 +369,9 @@ Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`�
 
 所有探针都不带凭证访问 `/health`，只返回本地状态，不调用 OpenViking 或 Redis。startupProbe 预算为 300 秒（`2 × 150`）。启动完成后，OpenViking 故障不会使 Pod 摘流。
 
-停机预算是 `15s preStop + 仍在进行的最长请求 + 最多 100s capture 排空`。`upstream_timeout_seconds` 限制的是请求等待一个不发数据的服务商的时长，而不是持续有数据的回复能持续多久，所以除非设置了 OpenViking 工具的**总时长**，网关不限制请求能持续多久。客户端不断开连接但停止读取时，请求同样会一直保持，需要靠 ingress 或负载均衡的空闲超时来关闭。chart 默认的 `terminationGracePeriodSeconds: 660` 在 preStop 之后给进行中的请求留 645 秒；宽限期结束时仍在流式输出的回复会在 Pod 被终止时切断，客户端看到连接关闭。capture 尚未排空就被 Kubernetes 终止时，其他副本会在 lease 到期后接手。要让最长 N 秒的请求完成、capture 在 Pod 被终止前排空，把它调到 `15 + N + 100`（N = 600 时为 715）。
+停机预算是 `15s preStop + 仍在进行的最长请求`。最长请求包括回复发出后保存这一轮的最多 30 秒；停机时网关不执行、也不等待空闲提交。`upstream_timeout_seconds` 限制的是请求等待一个不发数据的服务商的时长，而不是持续有数据的回复能持续多久，所以除非设置了 OpenViking 工具的**总时长**，网关不限制请求能持续多久。客户端不断开连接但停止读取时，请求同样会一直保持，需要靠 ingress 或负载均衡的空闲超时来关闭。chart 默认的 `terminationGracePeriodSeconds: 660` 在 preStop 之后给进行中的请求留 645 秒；宽限期结束时仍在流式输出的回复会在 Pod 被终止时切断，客户端看到连接关闭，这次请求也不保存这一轮。要让最长 N 秒的请求完成并保存，把它调到 `15 + N + 30`（N = 600 时为 645）。
+
+空闲提交的到期时间记在网关存储里，不受停机影响：每个网关进程每分钟检查一次，把到期已满一分钟、还没有提交的补上。保存这一轮的 Pod 被替换、进程崩溃或被终止后，提交由同一份存储上的其他进程或重新启动的进程完成，比到期时间晚一两分钟；没有网关进程运行期间到期的提交，在有进程启动后补上。两个进程同时补做同一次提交时，后一次没有可归档的内容。
 
 ### 宿主集成约定 {#host-integration-contract}
 
@@ -411,17 +413,17 @@ appendonly yes
 appendfsync everysec
 ```
 
-`volatile-lru` 只驱逐本来就会过期的数据：对话状态、replay、待投递 capture 和 OpenViking 密钥记录。每类数据丢失的影响见 [Redis 对话状态](../gateway/11-security-and-data.md#redis-conversation-state)。不要使用 `allkeys-*`：它也会驱逐没有 TTL 的数据，导致签发的密钥、上游和上下文配置消失，已删除的对话状态可能重新出现，待投递 capture 不再被调度。`noeviction` 也能运行，但内存满后写入失败，请求无法获得记忆增强。
+`volatile-lru` 只驱逐本来就会过期的数据：对话状态（包括 replay 和保存进度）和 OpenViking 密钥记录。每类数据丢失的影响见 [Redis 对话状态](../gateway/11-security-and-data.md#redis-conversation-state)。不要使用 `allkeys-*`：它也会驱逐没有 TTL 的数据，导致签发的密钥、上游和上下文配置消失，已删除的对话状态可能重新出现。`noeviction` 也能运行，但内存满后写入失败，请求无法获得记忆增强。
 
-监控 `evicted_keys` 的增速和内存用量；容量充足时不会发生驱逐。网关不检查驱逐策略或其他任何 Redis 设置。观察 capture 积压可用 `ZCARD <key_prefix>v1:k:{cap}:ready`，它统计已调度或正在处理的 capture，其中可能有少量稍后才清理的过期条目。Redis Cluster 中所有 capture 数据位于同一个分片，应为 OpenViking 故障期间的积压预留该分片容量。capture lease 使用 Redis 时钟，调度时间则来自网关宿主，各宿主应通过 NTP 保持时钟同步。
+监控 `evicted_keys` 的增速和内存用量；容量充足时不会发生驱逐。网关不检查驱逐策略或其他任何 Redis 设置。Redis Cluster 中所有对话的保存进度位于同一个分片。
 
-未启用持久化时，Redis 重启会删除网关的全部管理数据：已签发的网关密钥失效，上游和上下文配置需要重新设置。AOF 让这些数据、待投递 capture 和删除操作在重启后保留。在 Redis 7.2 上，禁用的 `default` 用户也要保留命令权限（例如 `user default off ~* &* +@all`）：AOF 回放事务时会检查这些权限，缺少时回放的写入会因 `NOPERM` 失败。`appendfsync everysec` 仍可能丢失约一秒的写入，异步主从切换也可能丢失最近的写入。AOF 重写和快照期间需为写时复制预留内存。备份中可能保留其生成之后才删除的数据。
+未启用持久化时，Redis 重启会删除网关的全部管理数据：已签发的网关密钥失效，上游和上下文配置需要重新设置。AOF 让这些数据、对话状态和删除操作在重启后保留。在 Redis 7.2 上，禁用的 `default` 用户也要保留命令权限（例如 `user default off ~* &* +@all`）：AOF 回放事务时会检查这些权限，缺少时回放的写入会因 `NOPERM` 失败。`appendfsync everysec` 仍可能丢失约一秒的写入，异步主从切换也可能丢失最近的写入。AOF 重写和快照期间需为写时复制预留内存。备份中可能保留其生成之后才删除的数据。
 
 ## 观测与例行检查 {#monitoring}
 
 网关不导出 Prometheus 之类的监控指标。请求日志默认写入存储，可通过 Studio 的[概览和请求日志](../gateway/10-overview-and-requests.md#overview)标签页查看，或者调用管理 API 的 `/gateway/admin/overview` 和 `/gateway/admin/logs`。
 
-在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）和每次后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。设置 `capture_delivery_records: true` 时，每次投递、提交和失败的尝试也各产生一行。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`，旧保存状态也可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
+在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）产生一行 JSON，即使 stdout 接到管道也会立即刷新。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
 
 设置 `request_log_sink: "file"` 和 `request_log_path`，就把同样的行写到文件。写文件由后台线程完成，磁盘慢也不会拖住请求；它的队列（10,000 行）满了时，新行被丢弃，并计入状态行的 `records_dropped`。文件达到 `request_log_max_bytes`（默认 256 MiB）时轮转，保留四个旧文件（`requests.jsonl.1` … `.4`）。这种输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker；需要扩容时增加副本。在 Kubernetes 上，把文件放在日志采集器能读到的卷上，例如用 chart 的 `extraVolumes` 和 `extraVolumeMounts`：
 
@@ -441,37 +443,41 @@ extraVolumeMounts:
 
 `$HOSTNAME` 从环境变量解析为 Pod 名，每个 Pod 写自己的文件：副本之间绝不能共用一个日志文件。
 
-独立网关设置 `log_path` 后，应用日志（警告、错误和 traceback）不再以文本写到 stderr，而是以 JSON 行写入这个轮转文件，字段为 `time`、`level`、`logger`、`message`、`request_id`（处理请求时写下的行才有）和 `exc`（有 traceback 时）。
+独立网关的应用日志在 stderr 或 `log_path` 指定的轮转文件中使用统一 UTC 文本格式。每条记录包含 `ts`、`level`、`logger`、`pid`、`request_id`、`trace_id` 和带引号的消息。异步写入前捕获上下文，缺失的关联 ID 使用 `-`。Uvicorn 同样使用此格式。请求和后台保存记录继续使用前述独立 JSON 格式。
 
 当 `management_api: false` 关闭 Studio 和管理接口时，配置 stdout sink 并采集进程或容器日志进行观测。管理面开启但选择 stdout sink 时也采用同样流程：请求日志页和概览中的请求统计不会收到新记录。之前已存储的记录仍可见，直到过期。
 
-从请求日志的顶层字段统计 reason 和首调缓存结果。对 capture 暂停（`kind: capture`）、队列增长、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；`internal_error` 的 traceback 看网关 stderr。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+从请求日志的顶层字段统计 reason 和首调缓存结果。对保存失败（`capture_status: "failed"`，按 `capture_reason` 统计）、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；在网关应用日志中查看 `internal_error` 的安全异常类型摘要。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+
+对话写入失败以 ERROR 输出，消息为 `gateway finished turn save failed` 或 `gateway history save before compaction failed`：模型回复仍可能成功，但历史可能丢失。commit 失败以 INFO 输出，消息为 `gateway session commit failed`，可查看 `error_code` 区分 `openviking_http_429` 和 `openviking_unavailable` 等原因。这些后台 commit 失败不会进入请求记录。压缩前历史保存失败的日志也包含 `error_code`。
 
 ### 状态行 {#status-line}
 
-设置 `snapshot_interval_seconds`（例如 `60`）后，每个网关进程按这个间隔写一行状态。使用 `stdout` 和 `file` 输出时，它和请求记录写在同一处；使用 `store` 时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。状态行不含账户、用户、会话、模型或请求 ID，字段见[状态行](../api/25-gateway.md#status-line)。每行统计的是距上一行的这段时间。区间计数（包括 `capture.delivered` 和 `capture.failed`）、`inflight_*` 和 `capture.workers` 按进程统计，可以跨进程相加；`capture.due`、`capture.scheduled` 和 `capture.oldest_due_age_s` 描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算）。建议的告警：
+设置 `snapshot_interval_seconds`（例如 `60`）后，每个网关进程按这个间隔写一行状态。使用 `stdout` 和 `file` 输出时，它和请求记录写在同一处；使用 `store` 时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。状态行不含账户、用户、会话、模型或请求 ID，字段见[状态行](../api/25-gateway.md#status-line)。每行统计的是距上一行的这段时间。区间计数（包括 `capture.delivered` 和 `capture.failed`）和 `inflight_*` 按进程统计，可以跨进程相加。建议的告警：
 
 - `errors.store_unavailable` 或 `store_errors` 大于零：状态存储（SQLite 或 Redis）出错。
 - `errors.upstream_timeout`、`upstream_unreachable` 或 `upstream_disconnected` 上升：服务商变慢或无法连接。
 - `openviking.state` 不是 `ok`，或 `degradations.recall_failed` 上升：OpenViking 没有应答。
 - `inflight_requests` 接近容量；`inflight_streams` 反映长时间运行的流；`rejected_overload` 大于零：进程已达 `max_inflight_requests`。
 - `records_dropped` 或 `records_failed` 大于零：请求记录在丢失。
-- `capture.oldest_due_age_s` 持续增长，或 `capture.workers` 小于 `capture_concurrency`：后台保存落后或已停止。
-- `capture.failed` 大于零而 `capture.delivered` 一直为零：保存到 OpenViking 卡住了。保存在重试期间，`capture.due` 和 `capture.oldest_due_age_s` 不会增长，因为重试被安排在之后的时间。
+- `capture.failed` 大于零：有已完成的轮次没能写入 OpenViking，网关不会重试；`capture.delivered` 同时一直为零时，保存完全停止了。按请求记录的 `capture_reason` 查原因。
+
+提交失败不进入状态行和请求记录。默认由网关提交时，对网关日志中的 `could not commit` 警告设置告警：空闲提交失败后网关每分钟再试一次，成功之前这段对话只保存为消息；被 OpenViking 以 401、403、404 拒绝的不再重试。
 
 ### 例行检查 {#day-to-day-operations}
 
 - **进程存活：** `/health`。嵌入部署用的是 Server 的健康检查，独立部署用的是网关自己的。
 - **网关健康：** **概览**标签页上的**首次调用缓存命中率**（[含义](../gateway/10-overview-and-requests.md#overview)），或从 stdout 指标计算：在同一账号和时间窗口内，筛选 `kind: "user"` 的记录，将 `first_upstream_cached_tokens` 的总和除以 `first_upstream_input_tokens` 的总和。某个字段缺失时，用该条记录的 `cached_tokens` 或 `input_tokens` 代替（未报告的用量按 0 计）。分母为零表示没有报告输入用量。这些字段位于顶层，不在嵌套的 `metrics` 对象中。命中率明显下降时，见[首次调用缓存命中率下降](../gateway/12-troubleshooting.md#the-first-call-cache-hit-rate-dropped)。
-- **单个请求：** 在**请求日志**标签页展开对应的行，或按 `account`、`user_id` 和 `request_id` 查找 stdout 记录；见[请求日志](../gateway/10-overview-and-requests.md#requests)。后台保存事件的 `kind` 为 `capture`，通过哈希后的 `session` 标识对话。
+- **单个请求：** 在**请求日志**标签页展开对应的行，或按 `account`、`user_id` 和 `request_id` 查找 stdout 记录；见[请求日志](../gateway/10-overview-and-requests.md#requests)。请求记录的 `capture_status`、`capture_reason` 和 `openviking_session` 说明这次请求是否保存了一轮、写入了哪个 OpenViking 会话。
 - **对外地址：** `public_url` 仍是客户端访问的地址，见[对外地址](#public-address)。
 - **备份：** SQLite 目录或 Redis 持久化/备份；开启加密时还有加密根密钥，见[备份与恢复](../gateway/11-security-and-data.md#backups)。
 
 ## 升级 {#upgrades}
 
 - 升级前读发布说明。新版本的网关读不了旧的存储格式时，启动会报 `Unsupported gateway schema`，见[网关无法启动](../gateway/12-troubleshooting.md#the-gateway-does-not-start)。
-- 独立网关要求 OpenViking Server 不低于 `min_server_version`（0.4.16），否则无法签发密钥，保存重试也会以 `openviking_version_mismatch` 失败；记忆检索也可能失败，显示为 `openviking_http_<status>`。两者分开升级时，先升级 OpenViking，再升级网关。嵌入网关和 Server 同版本发布，不做这项检查。
+- 独立网关要求 OpenViking Server 不低于 `min_server_version`（0.4.16），否则无法签发密钥，保存也会以 `openviking_version_mismatch` 失败；记忆检索也可能失败，显示为 `openviking_http_<status>`。两者分开升级时，先升级 OpenViking，再升级网关。嵌入网关和 Server 同版本发布，不做这项检查。
 - 从 sidecar 或旧版独立网关升级，见[迁移](#migration)。
+- `capture_concurrency` 和 `capture_delivery_records` 已删除。配置中仍有它们时网关照常启动，忽略这两个字段并打印 `Ignoring removed gateway settings` 警告，可以从配置中删掉。
 
 - SQLite 切换到 Redis 后，会话缓存从空开始。management 存储中的已签发 `ovgw_` 密钥、上游和上下文配置需要重建，没有提供迁移命令。使用 OpenViking key 时，可以通过部署默认值提供上游和上下文配置。
 - Redis 键包含布局版本（`<storage.key_prefix>v1:`）。布局相同时，回滚可以继续读现有状态。将来布局版本变化时从空开始：会话数据按缓存处理，OpenViking key 记录在访问时重建，使用签发密钥的部署需要重新配置。不要假设存在跨版本数据迁移。

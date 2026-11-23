@@ -9,6 +9,7 @@ interface RawMessage {
   role: VikingBotMessage['role'];
   created_at?: string;
   turn_id?: string;
+  interrupted?: boolean;
   parts?: RawPart[];
   content?: string;
 }
@@ -69,6 +70,8 @@ export function readNativeMessages(
       role: message.role,
       createdAt: message.created_at,
       turnId: message.turn_id ?? message.id,
+      ...(message.role === 'assistant' &&
+        message.interrupted === true && { interrupted: true }),
       parts: parts.map((part) => {
         if (part.type === 'reasoning' || part.type === 'tool') {
           active ??= `${message.id}:activity:${group++}`;

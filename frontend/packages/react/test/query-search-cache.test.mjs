@@ -50,16 +50,14 @@ test('failed background search refresh retains cached results alongside retry fe
     return h(FileBrowserSearchResults, {
       open: true,
       searched: true,
-      mode: 'find',
       query: 'cached',
       listId: 'results',
       activeIndex: 0,
       hits: state.result?.resources ?? [],
       loading: state.loading,
-      error: state.error,
+      failure: state.failure,
       text: resolveLabels(undefined, 'en-US'),
       onHighlight() {},
-      onSelectMode() {},
       onOpen() {},
       onRetry: state.retry,
     });

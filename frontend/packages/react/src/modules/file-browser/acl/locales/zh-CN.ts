@@ -30,6 +30,7 @@ export default {
   loading: '正在加载权限…',
   saving: '正在保存…',
   saved: '权限已保存',
+  permissionChanged: '权限已变更，当前无法管理此节点。',
   loadFailed: '权限加载失败',
   saveFailed: '权限保存失败',
   principalsFailed: '用户或用户组加载失败',

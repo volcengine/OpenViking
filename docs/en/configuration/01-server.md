@@ -303,7 +303,11 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
+| `cache.instances` | object | required when a cache consumer is enabled | Named CacheRuntime providers; must include `default` |
+| `agfs.cachefs.instance` | instance name | `"default"` | Runtime used when `cachefs.backend="cache"` |
+| `agfs.queuefs.instance` | instance name | `"default"` | Runtime used when `queuefs.backend="cache"` |
 | `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
+| `agfs.pathlock.instance` | instance name | `"default"` | Runtime used when `pathlock.provider="cache"`; it must use Redis |
 | `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
 | `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `opengauss`, `pgvector` | `local` | Vector database backend; see [pgvector setup](../guides/25-pgvector.md) |
@@ -311,6 +315,15 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
+| `watch_store.provider` | `file`, `mysql`, `postgres` | `file` | Watch metadata and run occupancy; relational providers share persistent rows |
+
+PostgreSQL Watch storage requires `openviking[postgres]` and the provisioned
+`openviking/service/sql/001_watch_tasks_postgres.sql` schema. Configure
+`storage.watch_store.params` with connection fields and a shared
+`credential_encryption_key` (base64-encoded 32 bytes). It is independent of
+Task/Work, Account, PathLock and vector storage. See
+[Watch store configuration](../guides/01-configuration.md#watch-store) for the
+complete example, TLS settings and deployment requirements.
 
 For same-machine path locking on a local disk without recursive business-directory scans, set
 `storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to
@@ -435,7 +448,8 @@ requirement, local vector storage's process lock, or other backend concurrency l
 #### Redis PathLock
 
 For Redis coordination,
-set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
+set `storage.agfs.pathlock.provider="cache"` and select a Redis entry from
+`cache.instances` with `storage.agfs.pathlock.instance`.
 All replicas must use the same Redis deployment, top-level `service_name`, and
 lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
 With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as
@@ -495,10 +509,8 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
-| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
+`max_concurrent` controls independent AddResource jobs. File-level work within each job uses an internal bounded concurrency limit.
 
 ### `queue_workers.reindex`
 
@@ -566,14 +578,6 @@ the host root logger. See the [logging policy](https://github.com/volcengine/Ope
 | `poll_interval_ms` | integer | `30000` | External task polling interval |
 
 When `base_url` is configured, OV sends the current user's OV API key in `X-API-Key`. It sends `X-Gateway-Token` only when `gateway_token` is configured.
-
-## Reindex Settings
-
-### `reindex`
-
-| Field | Type | Default | Description |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, fingerprinted, and prepared by one resource/skill reindex task; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
 ## HTTP Server Settings
 

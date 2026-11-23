@@ -17,12 +17,13 @@ By default, data is in two SQLite databases in `storage_path` (default `~/.openv
 | File | What it holds |
 | --- | --- |
 | `management.sqlite3` (or Redis management) | Upstreams, context profiles, gateway keys, request logs when using the default `store` sink, and which upstream created each Responses response |
-| `kernel.sqlite3` (or Redis kernel) | The state of each conversation: the memory text added to messages, OpenViking tool rounds and their results, summaries, conversation text waiting to be saved, and the reasoning of model replies when **Restore reasoning the client drops** is on |
+| `kernel.sqlite3` (or Redis kernel) | The state of each conversation: the memory text added to messages, OpenViking tool rounds and their results, summaries, the reasoning of model replies when **Restore reasoning the client drops** is on, and for saving only the OpenViking session, the last message saved, hashes that map user messages to their peers and, for the gateway's idle commit, when it is due and the ID of the stored key record to use |
 
 Some of this is sensitive:
 
 - `management.sqlite3` holds upstream API keys, header values and the OpenViking keys bound to gateway keys. Gateway keys themselves are stored only as a hash and a short prefix.
-- `kernel.sqlite3` holds memory text word for word, because the gateway needs it to [replay](01-how-it-works.md#replay) what it added in earlier turns.
+- `kernel.sqlite3` holds memory text word for word, because the gateway needs it to [replay](01-how-it-works.md#replay) what it added in earlier turns. It holds no conversation text for saving: a turn goes to OpenViking from the request that ends it.
+- By default the gateway makes the [idle commit](08-context-profiles.md#save-conversations) itself, with the OpenViking key from the stored record of the key that saved the conversation's last turn. The conversation state stores only the ID of that record, never the key: the gateway process that makes the commit reads the key from the record at that time, and when the key has been revoked or its record has expired by then, the commit is dropped.
 
 Only the system user that runs the gateway can read SQLite files. Redis access is controlled by its network and ACL configuration. With [encryption](../guides/22-gateway-operations.md#encryption) on, every stored value is encrypted as well; with it off, the credentials above are in plain text, protected by file permissions or Redis access controls. All replicas must mount the same encryption root key from a Secret; a missing entry on a read-only mount prevents startup. Redis keys contain hashes, but indexes can contain original account, object and session identifiers; use TLS as well as value encryption.
 
@@ -73,13 +74,15 @@ Gateway data expires on its own. SQLite runs an hourly cleanup job; Redis uses k
 
 | Data | Kept for | Setting |
 | --- | --- | --- |
-| Conversation state | 30 days after last use | `session_ttl_seconds` |
+| Conversation state | 1 day after last use | `session_ttl_seconds` |
 | Cached OpenViking keys and their user records | Configured TTL from creation, without renewal | `session_ttl_seconds` |
 | Stored request logs | 30 days | `log_retention_days` |
 | Which upstream created each Responses response | 30 days | `response_ttl_seconds` |
 | Sessions and memories in OpenViking | OpenViking's own rules | — |
 
-An OpenViking key record is extended while the key is in use: a request made when less than half of `session_ttl_seconds` is left saves it again for the full period. When the record expires anyway, or is evicted by a Redis backend using `volatile-lru`, capture cannot read the stored credential and retries every 5 minutes with `gateway_key_missing`, for at most `session_ttl_seconds`, then pauses with `gateway_key_revoked`. The user's next request recreates the record and resumes capture in the same scope. If the user never returns, the last pending turn is not saved to OpenViking. This state is a cache and can be lost. The existing short process-local cache can delay visibility of expiry, like revocation.
+A conversation that continues after its state expired is a new one to the gateway: the memory, tool results and summaries it added earlier are not put back, the conversation takes the key's current context profile and upstream, and its whole history is saved again into a new OpenViking session, so OpenViking may extract some memories twice. Raise `session_ttl_seconds` when conversations are often continued after more than a day. Keep it longer than **Commit when idle for**: an idle commit still waiting when the state expires is not made.
+
+An OpenViking key record is extended while the key is in use: a request made when less than half of `session_ttl_seconds` is left saves it again for the full period. When the record expires anyway, or is evicted by a Redis backend using `volatile-lru`, the user's next request confirms the key with OpenViking and recreates the record in the same scope. Saving uses the key only while serving that user's requests; only the idle commit uses it later, and it reads the key from this record when it is made, so an idle commit whose record has been revoked or has expired by then is dropped. This state is a cache and can be lost. The existing short process-local cache can delay visibility of expiry, like revocation.
 
 Redis keeps at most 10,000 request-log entries per account. Reads skip entries older than `log_retention_days`; those entries stay stored until newer ones push them past the cap, or until the account logs nothing for `log_retention_days`. Redis needs no hourly cleanup. Redis Responses routing objects expire by TTL and are not scanned during user deletion; revoked keys cannot access them.
 
@@ -94,13 +97,13 @@ Eviction has observable effects:
 | Lost state | Effect |
 | --- | --- |
 | Replay, recalled memory or restored reasoning | Earlier decisions cannot be replayed; the next request takes a cache miss. Lost compaction summaries can require another summary or leave the request over the model's context limit. |
-| Pending capture document | Unsaved turns can be lost. Rebuilding from client history can save previously delivered messages again; a worker whose document disappeared stops using its old lease. |
+| Capture document (saving state) | The conversation's next finished turn writes the whole history the client sends to a new OpenViking session; what was saved before stays in the old session, so those messages are in OpenViking twice and OpenViking may extract some memories twice. |
 | Observation or thinking state | Recall bookkeeping resets, and earlier reasoning may no longer be recognized. |
 | Tool receipt while another request waits | The result is reported as timed out or unknown. The gateway does not retry that operation; inspect its state before retrying a write. |
 
-Asynchronous Redis failover can lose recent writes or leases, causing occasional duplicate capture. Persist Redis to preserve pending work and deletions; restoring a snapshot taken before a deletion makes the deleted data visible again. See [Redis memory policy](../guides/22-gateway-operations.md#redis-memory-policy).
+Asynchronous Redis failover can lose recent writes; when the lost write is the saving state, the next turn writes messages that were already saved once more. Persist Redis to preserve conversation state, including the saving state, and deletions; restoring a snapshot taken before a deletion makes the deleted data visible again. See [Redis memory policy](../guides/22-gateway-operations.md#redis-memory-policy).
 
-With encryption on, values are encrypted. Key names are hashed, but index members contain original session IDs, and record kinds, versions, scheduling times and lease owners stay in plain text. Protect Redis access and backups accordingly.
+With encryption on, values are encrypted. Key names are hashed, but index members contain original session IDs, and record kinds and versions stay in plain text. Protect Redis access and backups accordingly.
 
 ## Deleting data {#deleting-data}
 
@@ -108,7 +111,7 @@ Revoking a gateway key, or the bound OpenViking key becoming invalid, does not d
 
 | Who | How | What is deleted |
 | --- | --- | --- |
-| Account admin or root | **Delete this user's gateway data…** in Studio ([steps](09-gateway-keys.md#delete-a-users-gateway-data)), or `DELETE /gateway/admin/users/{user_id}/data` | One user: revokes their gateway keys and deletes their conversation state and logs, including content not yet saved |
+| Account admin or root | **Delete this user's gateway data…** in Studio ([steps](09-gateway-keys.md#delete-a-users-gateway-data)), or `DELETE /gateway/admin/users/{user_id}/data` | One user: revokes their gateway keys and deletes their conversation state and logs |
 | Root | `DELETE /gateway/admin/account/data?account_id=<account>` | All gateway data of an account |
 | Embedded deployment, automatically | Deleting a user or account in OpenViking | The matching gateway data |
 
@@ -120,7 +123,7 @@ None of this touches memories and sessions already stored in OpenViking. The rev
 
 Back up these, together:
 
-- For Redis, enable AOF and back up Redis persistence together with the encryption root key. Without persistence, restarting Redis loses management settings and pending conversation data.
+- For Redis, enable AOF and back up Redis persistence together with the encryption root key. Without persistence, restarting Redis loses management settings and conversation state.
 - For SQLite, the whole `storage_path` directory: both databases and their `-wal` and `-shm` files.
 - With encryption on, OpenViking's encryption root key (not the root API key), as the [Encryption guide](../guides/08-encryption.md) describes.
 
@@ -135,7 +138,7 @@ What losing each piece means:
 
 | Lost | What happens | What to do |
 | --- | --- | --- |
-| `kernel.sqlite3` (or Redis kernel) | Memory added earlier cannot be replayed. Each ongoing conversation takes one provider cache miss, Claude conversations lose their earlier thinking once ([**Memory record missing**](12-troubleshooting.md#issues-on-degraded-requests)), and turns not yet saved are lost. | None; ongoing conversations recover after one miss |
+| `kernel.sqlite3` (or Redis kernel) | Memory added earlier cannot be replayed. Each ongoing conversation takes one provider cache miss, Claude conversations lose their earlier thinking once ([**Memory record missing**](12-troubleshooting.md#issues-on-degraded-requests)); the saving state is lost too, so each conversation's next finished turn writes the whole history to a new OpenViking session. | None; ongoing conversations recover after one miss |
 | `management.sqlite3` (or Redis management) | Upstreams, context profiles, keys and request logs are gone. | Restore a backup, or set them up again and issue new keys; OpenViking key records rebuild on later requests |
 | Encryption root key (encryption on) | The encrypted values in both databases cannot be read. | Start again with an empty `storage_path` (SQLite), or a new `storage.key_prefix` that the ACL key pattern still covers (for example `ovgw:2:`), or delete all keys under the old prefix (Redis) |
 

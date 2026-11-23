@@ -9,6 +9,7 @@ import re
 import threading
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
@@ -296,64 +297,6 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
         )
         if self._distributed:
             _try_make_metadata_table_distributed(self._conn, idx_table, "index_name")
-
-    def _save_index_meta(self, index_name: str, meta: Dict[str, Any]):
-        self._ensure_index_meta_table()
-        idx_table = _quote_identifier(
-            self._index_catalog_table(), kind="openGauss index metadata table"
-        )
-        meta_json = json.dumps(meta)
-        # Use UPDATE -> INSERT for distributed compatibility
-        with self._lock:
-            cur = self._cursor()
-            try:
-                cur.execute(
-                    f"UPDATE {idx_table} SET meta_json = %s WHERE index_name = %s",
-                    (meta_json, index_name),
-                )
-                if cur.rowcount == 0:
-                    cur.execute(
-                        f"INSERT INTO {idx_table} (index_name, meta_json) VALUES (%s, %s)",
-                        (index_name, meta_json),
-                    )
-                self._conn.commit()
-            except Exception as error:
-                self._conn.rollback()
-                if getattr(error, "pgcode", None) != "23505":
-                    raise
-                retry_cursor = self._cursor()
-                try:
-                    retry_cursor.execute(
-                        f"UPDATE {idx_table} SET meta_json = %s WHERE index_name = %s",
-                        (meta_json, index_name),
-                    )
-                    if retry_cursor.rowcount != 1:
-                        raise RuntimeError(
-                            f"openGauss index metadata race recovery failed for {index_name!r}"
-                        ) from error
-                    self._conn.commit()
-                except Exception:
-                    self._conn.rollback()
-                    raise
-                finally:
-                    retry_cursor.close()
-            finally:
-                cur.close()
-
-    def _delete_index_meta(self, index_name: str):
-        idx_table = _quote_identifier(
-            self._index_catalog_table(), kind="openGauss index metadata table"
-        )
-        try:
-            self._execute(
-                f"DELETE FROM {idx_table} WHERE index_name = %s",
-                (index_name,),
-            )
-        except Exception as error:
-            # Nothing to delete when the metadata table was never created.
-            if _is_undefined_table_error(error):
-                return
-            raise
 
     def _get_all_columns(self) -> List[str]:
         """Return all non-system column names of the collection table."""
@@ -1402,7 +1345,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 finally:
                     cur.close()
         except Exception as error:
-            logger.error("opengauss_adapter: search_by_scalar failed: %s", error)
+            logger.debug("opengauss_adapter: search_by_scalar failed: %s", type(error).__name__)
             raise
 
         items = []
@@ -1461,7 +1404,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 finally:
                     cur.close()
         except Exception as error:
-            logger.error("opengauss_adapter: search_by_random failed: %s", error)
+            logger.debug("opengauss_adapter: search_by_random failed: %s", type(error).__name__)
             raise
 
         items = []
@@ -1482,11 +1425,16 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         if mode not in (None, "bm25"):
             raise ValueError("openGauss keyword search mode must be bm25")
         if fields is not None and fields != ["content"]:
             raise ValueError("openGauss keyword search supports the content field only")
+        if bm25_k1 is not None or bm25_b is not None or advance is not None:
+            raise ValueError("openGauss keyword search does not support advanced args")
         return OpenGaussFulltextMixin.search_by_keywords(
             self,
             index_name,
@@ -1517,9 +1465,9 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 fetch=True,
             )
         except Exception as error:
-            logger.error(
+            logger.debug(
                 "opengauss_adapter: search_by_id failed to fetch source vector: %s",
-                error,
+                type(error).__name__,
             )
             raise
 
@@ -1708,20 +1656,27 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
             except Exception:
                 try:
                     self._conn.rollback()
-                except Exception:
-                    logger.warning("openGauss upsert rollback failed during error cleanup", exc_info=True)
+                except Exception as _log_error:
+                    logger.info(
+                        "openGauss upsert rollback failed during error cleanup error_type=%s",
+                        type(_log_error).__name__,
+                    )
                 try:
                     cursor.close()
-                except Exception:
-                    logger.warning("openGauss upsert cursor close failed during error cleanup", exc_info=True)
+                except Exception as _log_error:
+                    logger.info(
+                        "openGauss upsert cursor close failed during error cleanup error_type=%s",
+                        type(_log_error).__name__,
+                    )
                 raise
             else:
                 cursor.close()
         try:
             self._materialize_pending_indexes()
-        except Exception:
-            logger.exception(
-                "opengauss_adapter: data committed but pending ANN index materialization failed"
+        except Exception as _log_error:
+            logger.error(
+                "opengauss_adapter: data committed but pending ANN index materialization failed error_type=%s",
+                type(_log_error).__name__,
             )
 
     def update_data(self, data_list: List[Dict[str, Any]]):
@@ -1843,7 +1798,7 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 finally:
                     cur.close()
         except Exception as error:
-            logger.error("opengauss_adapter: fetch_data failed: %s", error)
+            logger.debug("opengauss_adapter: fetch_data failed: %s", type(error).__name__)
             raise
 
         found_ids = set()
@@ -1914,7 +1869,10 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                 try:
                     rows = self._execute(sql, where_params, fetch=True)
                 except Exception as error:
-                    logger.error("opengauss_adapter: aggregate_data (grouped) failed: %s", error)
+                    logger.debug(
+                        "opengauss_adapter: aggregate_data (grouped) failed: %s",
+                        type(error).__name__,
+                    )
                     raise
 
                 agg: Dict[str, Any] = {}
@@ -1941,9 +1899,11 @@ class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, IColl
                     rows = self._execute(sql, where_params, fetch=True)
                     total = rows[0][0] if rows else 0
                 except Exception as error:
-                    logger.error("opengauss_adapter: aggregate_data (count) failed: %s", error)
+                    logger.debug(
+                        "opengauss_adapter: aggregate_data (count) failed: %s", type(error).__name__
+                    )
                     raise
                 return AggregateResult(agg={"_total": int(total)}, op=op, field=None)
 
-        logger.warning("opengauss_adapter: unsupported aggregate op=%r", op)
+        logger.info("opengauss_adapter: unsupported aggregate op=%s", short_hash(str(op)))
         return AggregateResult(agg={"_total": 0}, op=op, field=field)

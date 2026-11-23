@@ -265,6 +265,70 @@ async def test_memory_usage_extractor_parses_mcp_text_search_and_list_results():
 
 
 @pytest.mark.asyncio
+async def test_memory_usage_extractor_drops_the_tags_suffix_from_mcp_text_results():
+    tagged_uri = "viking://user/test/memories/experiences/tagged.md"
+    untagged_uri = "viking://user/test/memories/experiences/untagged.md"
+    spaced_uri = "viking://user/test/memories/experiences/order exchange.md"
+    listed_uri = "viking://user/test/memories/experiences/listed.md"
+    recursive_uri = "viking://user/test/memories/experiences/nested/deep.md"
+    messages = [
+        Message(
+            id="msg-mcp-tags",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-find",
+                    tool_name="mcp__plugin_openviking-memory_openviking__find",
+                    tool_status="completed",
+                    tool_output=(
+                        "Found 3 item(s):\n\n"
+                        f'- [memory 90%] {tagged_uri} tags=["memory_type=experiences", '
+                        '"viking://user/test/memories/experiences/parent.md=1"]\n'
+                        "    matching experience\n"
+                        f"- [memory 80%] {untagged_uri} tags=[]\n"
+                        f'- [memory 70%] {spaced_uri} tags=["note=say \\"hi\\""]\n'
+                    ),
+                ),
+                ToolPart(
+                    tool_id="call-list",
+                    tool_name="mcp__openviking__list",
+                    tool_status="completed",
+                    tool_input={
+                        "uri": "viking://user/test/memories/experiences/",
+                        "include_tags": True,
+                    },
+                    tool_output=(
+                        '[file] listed.md tags=["memory_type=experiences"]\n'
+                        f"[file] {recursive_uri} tags=[]\n"
+                        '[dir] nested tags=["team=search"]'
+                    ),
+                ),
+                # Without include_tags the list tool prints no suffix, so a name that
+                # ends like one is the file's real name.
+                ToolPart(
+                    tool_id="call-list-plain",
+                    tool_name="mcp__openviking__list",
+                    tool_status="completed",
+                    tool_input={"uri": "viking://user/test/memories/experiences/"},
+                    tool_output="[file] notes tags=[]",
+                ),
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.resource_uri for event in events] == [
+        tagged_uri,
+        untagged_uri,
+        spaced_uri,
+        listed_uri,
+        recursive_uri,
+        "viking://user/test/memories/experiences/notes tags=[]",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_memory_usage_extractor_preserves_spaces_in_openclaw_table_uri():
     experience_uri = "viking://user/test/memories/experiences/order exchange.md"
     messages = [

@@ -1,7 +1,10 @@
 import type { RefObject, UIEventHandler } from 'react';
 import type { CommandConsoleInlineCompletion } from './command-completion.js';
 import type { CommandConsoleCommandInputMatch } from './command-input.js';
-import { CommandConsoleUriText } from './command-console-uri-text.js';
+import {
+  CommandConsoleCommandArguments,
+  CommandConsoleUriText,
+} from './command-console-uri-text.js';
 import { getCommandConsoleArgumentHints } from './command-input.js';
 import { CommandConsoleCommandText } from './command-console-command-text.js';
 
@@ -47,9 +50,8 @@ export function CommandConsoleInputMirror({
                 />
               </span>
             </span>
-            <CommandConsoleUriText
-              text={input.rest}
-              mode="literal"
+            <CommandConsoleCommandArguments
+              input={input}
               onOpenUri={onOpenUri}
               editor
             />

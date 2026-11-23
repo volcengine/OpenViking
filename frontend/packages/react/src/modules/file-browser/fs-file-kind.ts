@@ -1,3 +1,4 @@
+import { decodePathLabel } from '../../shared/path-label.js';
 import type { FilePreviewFileTab } from '../../components/file-preview/index.js';
 import type { ReactNode } from 'react';
 
@@ -125,7 +126,7 @@ export function toBinaryTab(
   return {
     kind: 'file',
     key: uri,
-    title: name,
+    title: decodePathLabel(name),
     icon,
     operations: { openParent },
     source: { file, fileName: name, path: uri },

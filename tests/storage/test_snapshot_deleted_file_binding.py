@@ -32,6 +32,7 @@ def snapshot_binding_config(tmp_path, request):
     config = tmp_path / "ragfs.toml"
     config.write_text(
         f'[git]\nenabled=true\nbackend="local"\n[git.local]\nbase_dir="{tmp_path / "git"}"\n'
+        '[git.snapshot.log]\nprovider="none"\n'
     )
     pathlock = {"provider": provider}
     if provider == "sqlite":
@@ -49,8 +50,11 @@ def snapshot_env(snapshot_binding_config):
     client_type, _ = get_binding_client()
     kwargs, fs_root = snapshot_binding_config
     client = client_type(**kwargs)
-    client.mount("localfs", "/local", {"local_dir": str(fs_root)})
-    return VikingFS(agfs=client), fs_root
+    try:
+        client.mount("localfs", "/local", {"local_dir": str(fs_root)})
+        yield VikingFS(agfs=client), fs_root
+    finally:
+        client.close()
 
 
 def _ctx(role):
@@ -138,15 +142,13 @@ async def test_commit_lock_kinds_follow_target_state(snapshot_env, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_binding_config", ["memory", "sqlite", "postgres"], indirect=True)
 async def test_missing_target_tree_lock_blocks_recreation(
     snapshot_env, snapshot_binding_config, monkeypatch
 ):
     vfs, fs_root = snapshot_env
     kwargs, _ = snapshot_binding_config
     provider = kwargs["config"]["pathlock"]["provider"]
-    if provider == "filesystem":
-        pytest.skip("filesystem cannot lock a missing target without recreating it")
-
     if provider == "memory":
         peer = vfs._async_agfs  # Memory coordinates only users of the same client.
     else:

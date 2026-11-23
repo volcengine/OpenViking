@@ -44,9 +44,13 @@ Each `items[]` entry needs `name`, `backend`, and backend-specific `params`.
 `encryption` is optional. Backup names must be unique and cannot be
 `primary`.
 
-When `provider` is `cache`, multi-write reuses the top-level CacheRuntime.
-The top-level `cache.provider` selects the implementation; multi-write has no
-separate Cache Provider connection.
+When `provider` is `cache`, multi-write reuses the named top-level CacheRuntime.
+`backups.instance` selects `cache.instances.<name>` and defaults to `default`;
+multi-write has no separate Cache Provider connection.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `instance` | `"default"` | Runtime selected when `provider` is `cache` |
 
 The Python configuration layer still accepts legacy V1 sync, acknowledgement,
 retry, operation, exclude, and redirect fields. It warns and removes them

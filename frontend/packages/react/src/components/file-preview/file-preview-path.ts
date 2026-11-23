@@ -1,3 +1,5 @@
+import { decodePathLabel } from '../../shared/path-label.js';
+
 /** 路径分隔符；`viking://` 这类带协议前缀的路径同样按 `/` 拆分。 */
 const SEPARATOR = '/';
 
@@ -46,7 +48,11 @@ export function splitPathSegments(path?: string): PathSegment[] {
 
   parts.slice(0, -1).forEach((part, index) => {
     uri = index === 0 ? `${scheme}${root}${part}` : `${uri}${SEPARATOR}${part}`;
-    segments.push({ label: part, uri, isFirst: index === 0 });
+    segments.push({
+      label: scheme ? decodePathLabel(part) : part,
+      uri,
+      isFirst: index === 0,
+    });
   });
 
   return segments;
@@ -57,5 +63,11 @@ export function getPathFileName(path?: string): string | undefined {
   const trimmed = path?.trim();
   if (!trimmed) return undefined;
   const parts = trimmed.split(SEPARATOR).filter(Boolean);
-  return parts[parts.length - 1];
+  const name = parts.at(-1);
+  return name && trimmed.includes('://') ? decodePathLabel(name) : name;
+}
+
+/** Preserve the first segment's scheme or root without displaying its encoded URI. */
+export function pathSegmentLabel({ uri, label, isFirst }: PathSegment): string {
+  return isFirst ? uri.slice(0, uri.lastIndexOf('/') + 1) + label : label;
 }

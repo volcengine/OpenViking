@@ -8,8 +8,7 @@ use super::cache_protocol::{
     RELEASE_RECOVERY_LEADER_SCRIPT, REMOVE_QUEUE_SCRIPT, RETRY_SCRIPT, STATUS_SCRIPT,
 };
 use crate::cache_runtime::{
-    CacheError, CacheOperation, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest,
-    ScriptValue, SetOptions,
+    CacheError, CacheOperation, CacheRuntime, Expiration, ScriptRequest, ScriptValue, SetOptions,
 };
 use crate::core::errors::{Error, Result};
 use bytes::Bytes;
@@ -35,63 +34,21 @@ const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v4";
 const ACQUIRE_RECOVERY_LEADER_ID: &str = "queuefs.acquire_recovery_leader.v1";
 const RELEASE_RECOVERY_LEADER_ID: &str = "queuefs.release_recovery_leader.v1";
 
-const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
-    ScriptDefinition {
-        id: RETRY_ID,
-        redis_lua: RETRY_SCRIPT,
-    },
-    ScriptDefinition {
-        id: CREATE_QUEUE_ID,
-        redis_lua: CREATE_QUEUE_SCRIPT,
-    },
-    ScriptDefinition {
-        id: REMOVE_QUEUE_ID,
-        redis_lua: REMOVE_QUEUE_SCRIPT,
-    },
-    ScriptDefinition {
-        id: ENQUEUE_ID,
-        redis_lua: ENQUEUE_SCRIPT,
-    },
-    ScriptDefinition {
-        id: DEQUEUE_ID,
-        redis_lua: DEQUEUE_SCRIPT,
-    },
-    ScriptDefinition {
-        id: PEEK_ID,
-        redis_lua: PEEK_SCRIPT,
-    },
-    ScriptDefinition {
-        id: STATUS_ID,
-        redis_lua: STATUS_SCRIPT,
-    },
-    ScriptDefinition {
-        id: LIST_UNACKED_ID,
-        redis_lua: LIST_UNACKED_SCRIPT,
-    },
-    ScriptDefinition {
-        id: PENDING_IDS_ID,
-        redis_lua: PENDING_IDS_SCRIPT,
-    },
-    ScriptDefinition {
-        id: ACK_ID,
-        redis_lua: ACK_SCRIPT,
-    },
-    ScriptDefinition {
-        id: CLEAR_ID,
-        redis_lua: CLEAR_SCRIPT,
-    },
-    ScriptDefinition {
-        id: RECOVER_STALE_ID,
-        redis_lua: RECOVER_STALE_SCRIPT,
-    },
-    ScriptDefinition {
-        id: ACQUIRE_RECOVERY_LEADER_ID,
-        redis_lua: ACQUIRE_RECOVERY_LEADER_SCRIPT,
-    },
-    ScriptDefinition {
-        id: RELEASE_RECOVERY_LEADER_ID,
-        redis_lua: RELEASE_RECOVERY_LEADER_SCRIPT,
-    },
+const SCRIPT_DEFINITIONS: &[(&str, &str)] = &[
+    (RETRY_ID, RETRY_SCRIPT),
+    (CREATE_QUEUE_ID, CREATE_QUEUE_SCRIPT),
+    (REMOVE_QUEUE_ID, REMOVE_QUEUE_SCRIPT),
+    (ENQUEUE_ID, ENQUEUE_SCRIPT),
+    (DEQUEUE_ID, DEQUEUE_SCRIPT),
+    (PEEK_ID, PEEK_SCRIPT),
+    (STATUS_ID, STATUS_SCRIPT),
+    (LIST_UNACKED_ID, LIST_UNACKED_SCRIPT),
+    (PENDING_IDS_ID, PENDING_IDS_SCRIPT),
+    (ACK_ID, ACK_SCRIPT),
+    (CLEAR_ID, CLEAR_SCRIPT),
+    (RECOVER_STALE_ID, RECOVER_STALE_SCRIPT),
+    (ACQUIRE_RECOVERY_LEADER_ID, ACQUIRE_RECOVERY_LEADER_SCRIPT),
+    (RELEASE_RECOVERY_LEADER_ID, RELEASE_RECOVERY_LEADER_SCRIPT),
 ];
 
 #[derive(Clone, Copy)]
@@ -144,9 +101,9 @@ impl CacheQueueStorage {
                 CacheOperation::ExecuteScript,
             ])
             .map_err(|error| cache_error("validate provider operations", error))?;
-        for definition in SCRIPT_DEFINITIONS {
+        for &(script_id, redis_lua) in SCRIPT_DEFINITIONS {
             runtime
-                .register_script(*definition)
+                .register_script(script_id.to_string(), redis_lua.to_string())
                 .map_err(|error| cache_error("register script", error))?;
         }
         let instance_id = Uuid::new_v4().to_string();

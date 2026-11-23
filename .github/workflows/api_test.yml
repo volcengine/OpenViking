@@ -2,6 +2,11 @@ name: 06. API & CLI Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      live_intent_smoke:
+        description: 'Run the live-model intent smoke on Linux (requires model secrets)'
+        type: boolean
+        default: false
   schedule:
     - cron: '0 1,4,7,10,13 * * *'
   pull_request:
@@ -100,7 +105,7 @@ jobs:
         id: test-pool
         env:
           TEST_RUNNER: ${{ runner.environment == 'self-hosted' && '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]' }}
-          TEST_CONTAINER: ${{ runner.environment == 'self-hosted' && (vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04') || '' }}
+          TEST_CONTAINER: ${{ vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04' }}
         run: |
           echo "runner=$TEST_RUNNER" >> "$GITHUB_OUTPUT"
           echo "container=$TEST_CONTAINER" >> "$GITHUB_OUTPUT"
@@ -222,13 +227,14 @@ jobs:
       OV_TEST_POSTGRES: ${{ format('{{"host":"{0}","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'postgres' || '127.0.0.1') }}
       OV_TEST_MYSQL: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
       OPENVIKING_WATCH_MYSQL_PARAMS: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
+      OPENVIKING_WATCH_POSTGRES_PARAMS: ${{ format('{{"host":"{0}","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'postgres' || '127.0.0.1') }}
       OV_TEST_REDIS: ${{ needs.native-runtime.outputs.test_container != '' && 'redis://redis:6379' || 'redis://127.0.0.1:6379' }}
       OPENVIKING_CONFIG_FILE: ${{ github.workspace }}/.venv/database-test-ov.conf
     steps:
-      - name: Bootstrap self-hosted Ubuntu test container
-        if: runner.environment == 'self-hosted'
+      - name: Bootstrap Ubuntu test container
+        if: runner.os == 'Linux'
         env:
-          UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
+          UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
           DEBIAN_FRONTEND: noninteractive
         run: |
           packages=(git ca-certificates curl python3 cmake build-essential)
@@ -260,7 +266,7 @@ jobs:
         with:
           submodules: recursive
       - uses: ./.github/actions/linux-test-env
-        if: runner.environment == 'self-hosted'
+        if: runner.os == 'Linux'
       - uses: actions/setup-python@v6
         with:
           python-version: '3.10'
@@ -283,10 +289,16 @@ jobs:
           uv run --no-sync python -m pytest -q -o addopts='' \
             tests/server/test_account_services.py::test_mysql_load_creates_default_account \
             tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+            tests/server/test_mysql_account_store.py \
+            tests/server/test_postgres_account_store.py \
             tests/server/test_redis_mysql_account_store.py \
+            tests/storage/test_sql_runtime.py \
             tests/service/test_task_work_contract.py \
             tests/service/test_task_store_postgres.py \
             tests/resource/test_watch_store.py \
+            tests/resource/test_watch_store_postgres.py \
+            tests/resource/test_watch_main_integration.py \
+            tests/resource/test_watch_process.py \
             --junitxml=database-integration.xml
       - name: Require executed database cases
         if: always()
@@ -324,10 +336,10 @@ jobs:
         os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-15", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
-      - name: Bootstrap self-hosted Ubuntu test container
-        if: runner.environment == 'self-hosted'
+      - name: Bootstrap Ubuntu test container
+        if: runner.os == 'Linux'
         env:
-          UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
+          UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
           DEBIAN_FRONTEND: noninteractive
         run: |
           packages=(git ca-certificates curl python3 cmake build-essential ffmpeg lsof procps)
@@ -360,7 +372,7 @@ jobs:
           submodules: recursive
           fetch-depth: 100
       - uses: ./.github/actions/linux-test-env
-        if: runner.environment == 'self-hosted'
+        if: runner.os == 'Linux'
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -384,11 +396,6 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-
-      - name: Install system dependencies (Ubuntu)
-        if: runner.os == 'Linux' && runner.environment != 'self-hosted'
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y cmake build-essential ffmpeg --no-install-recommends
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -414,6 +421,9 @@ jobs:
         run: |
           cd tests/api_test
           uv pip install -r requirements.txt
+
+      - name: Run offline API contract regressions
+        run: uv run --no-sync python -m pytest -q --override-ini=addopts= tests/server/offline/
 
       - name: Create OpenViking config file (Unix)
         if: runner.os != 'Windows'
@@ -449,6 +459,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "$EMBEDDING_API_KEY",
@@ -475,6 +486,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "dummy-embedding-api-key",
@@ -526,6 +538,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "$env:EMBEDDING_API_KEY",
@@ -552,6 +565,7 @@ jobs:
               "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "dummy-embedding-api-key",
@@ -692,20 +706,21 @@ jobs:
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
             echo "Running serial tests (filesystem + resource operations)..."
             uv run --no-sync python -m pytest filesystem/ scenarios/resources_retrieval/ -v --tb=short \
+              -m "not offline_contract" \
               --ignore=filesystem/slow/ --ignore=scenarios/resources_retrieval/slow/
             echo "Running full test suite with VLM/Embedding (parallel, excluding serial and slow tests)..."
-            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
+            uv run --no-sync python -m pytest . -v -n 4 -m "not offline_contract" --html=api-test-report.html --self-contained-html \
               --ignore=scenarios/resources_retrieval_slow/ --ignore=filesystem/ --ignore=scenarios/resources_retrieval/ \
               --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ \
               --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ \
               --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           else
             echo "Running filesystem tests (serial)..."
-            uv run --no-sync python -m pytest filesystem/ -v --tb=short \
+            uv run --no-sync python -m pytest filesystem/ -v --tb=short -m "not offline_contract" \
               --ignore=retrieval/ --ignore=resources/ --ignore=admin/ --ignore=skills/ --ignore=system/ --ignore=scenarios/ \
               --ignore=filesystem/slow/
             echo "Running basic tests only (parallel, excluding filesystem and slow tests)..."
-            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
+            uv run --no-sync python -m pytest . -v -n 4 -m "not offline_contract" --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
               --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
               --ignore=scenarios/ --ignore=filesystem/ -k "not test_observer" \
@@ -723,11 +738,25 @@ jobs:
           
           if ($env:HAS_SECRETS -eq "true") {
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem and slow tests)"
-            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
+            uv run --no-sync python -m pytest . -v -n 4 -m "not offline_contract" --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           } else {
             Write-Host "Running basic tests only (mock embedding and VLM, Windows: skipping filesystem and slow tests)"
-            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
+            uv run --no-sync python -m pytest . -v -n 4 -m "not offline_contract" --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
           }
+      - name: Run opt-in live intent smoke (Linux)
+        if: github.event_name == 'workflow_dispatch' && inputs.live_intent_smoke && runner.os == 'Linux'
+        working-directory: tests/api_test
+        env:
+          OPENVIKING_API_KEY: test-root-api-key
+          OPENVIKING_ROOT_API_KEY: test-root-api-key
+          SERVER_URL: http://127.0.0.1:${{ env.SERVER_PORT }}
+        run: |
+          if [ "$HAS_SECRETS" != "true" ]; then
+            echo "Live intent smoke requires both VLM and embedding secrets."
+            exit 1
+          fi
+          uv run --no-sync python -m pytest scenarios/resources_retrieval/test_intent_extended_search.py \
+            -q --override-ini=addopts= -m offline_contract
       - name: Install released OpenViking CLI for compatibility tests (Unix)
         if: runner.os != 'Windows'
         run: |

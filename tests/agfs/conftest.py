@@ -1,16 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import shutil
-from pathlib import Path
-
 import pytest
+
+from openviking.pyagfs import get_binding_client
 
 
 @pytest.fixture(scope="session")
-def agfs_test_root():
-    """Root directory for AGFS tests."""
-    path = Path("/tmp/openviking_agfs_test")
-    path.mkdir(parents=True, exist_ok=True)
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
+def ragfs_client_type():
+    client_type, _ = get_binding_client()
+    return client_type

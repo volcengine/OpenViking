@@ -3,7 +3,6 @@
 import time
 
 import pytest
-from conftest import make_due
 
 from openviking_gateway.models import Policy
 from openviking_gateway.proxy import resolve_binding
@@ -100,25 +99,15 @@ async def test_request_during_user_data_deletion_does_not_block_the_key(running_
     assert await management.credential(RECORD)
 
 
-async def test_capture_worker_delivers_with_the_stored_key(running_gateway):
+async def test_finished_turn_is_saved_with_the_requests_key(running_gateway):
     app, client, _, _, _, writes = running_gateway
     calls = record_openviking_calls(app)
-    headers = {**bearer(OV_KEY), "X-OpenViking-Session": "direct"}
-    messages = [{"role": "user", "content": "Remember the blue cluster"}]
-    for _ in range(2):
-        response = await client.post(
-            "/v1/chat/completions", headers=headers, json={"model": "model", "messages": messages}
-        )
-        assert response.status_code == 200, response.text
-        messages += [
-            {"role": "assistant", "content": "hello"},
-            {"role": "user", "content": "And the red one"},
-        ]
-    await make_due(app.state.store)
-    for _ in range(5):
-        if writes:
-            break
-        await app.state.worker.once()
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={**bearer(OV_KEY), "X-OpenViking-Session": "direct"},
+        json={"model": "model", "messages": [{"role": "user", "content": "Remember blue"}]},
+    )
+    assert response.status_code == 200, response.text
     assert writes
     session_keys = {key for path, key in calls if path.startswith("/api/v1/sessions")}
     assert session_keys == {OV_KEY}
