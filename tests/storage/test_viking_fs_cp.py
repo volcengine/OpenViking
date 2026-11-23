@@ -329,92 +329,27 @@ async def test_cp_directory_requires_recursive_before_locking(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cp_directory_preserves_empty_hidden_and_binary_entries(monkeypatch):
+async def test_cp_directory_preserves_entries_with_bounded_copy(monkeypatch):
     agfs = _DirectoryCopyAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    vector_copy = AsyncMock()
-    monkeypatch.setattr(fs, "_copy_vector_store_uris", vector_copy, raising=False)
-
-    await fs.cp(
-        "viking://resources/source",
-        "viking://resources/target",
-        recursive=True,
-        ctx=_ctx(),
-    )
-
-    acquire = next(event for event in agfs.events if event[0] == "acquire-batch")
-    assert acquire[1] == [
-        {"path": "/local/acct/resources/source", "kind": "tree"},
-        {"path": "/local/acct/resources/target", "kind": "tree"},
-    ]
-    assert "/local/acct/resources/target/empty" in agfs.directories
-    assert agfs.files["/local/acct/resources/target/.hidden"] == b"hidden"
-    assert agfs.files["/local/acct/resources/target/data.bin"] == b"\x00\xff"
-    assert agfs.exact_leases == []
-    fs._prepare_vector_store_uris.assert_awaited_once_with(
-        "viking://resources/source",
-        "viking://resources/target",
-        recursive=True,
-        ctx=replace(_ctx(), bypass_acl=True),
-        source_uris=[
-            "viking://resources/source",
-            "viking://resources/source/.hidden",
-            "viking://resources/source/data.bin",
-            "viking://resources/source/empty",
-        ],
-        source_expected_levels={
-            "viking://resources/source": {0, 1},
-            "viking://resources/source/.hidden": {2},
-            "viking://resources/source/data.bin": {2},
-            "viking://resources/source/empty": {0, 1},
-        },
-    )
-    vector_copy.assert_awaited_once_with(
-        fs._prepare_vector_store_uris.return_value,
-        ctx=replace(_ctx(), bypass_acl=True),
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-async def test_directory_transfer_lists_each_source_directory_once(monkeypatch, operation):
-    agfs = _DirectoryCopyAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-
-    await getattr(fs, operation)(
-        "viking://resources/source",
-        "viking://resources/target",
-        ctx=_ctx(),
-        **({"recursive": True} if operation == "cp" else {}),
-    )
-
-    listed = [event[1] for event in agfs.events if event[0] == "ls"]
-    assert listed == ["/local/acct/resources/source", "/local/acct/resources/source/empty"]
-    first_write = next(i for i, event in enumerate(agfs.events) if event[0] in {"mkdir", "cp"})
-    assert all(event[0] != "ls" for event in agfs.events[first_write:])
-
-
-@pytest.mark.asyncio
-async def test_cp_directory_copies_files_with_fixed_bounded_concurrency(monkeypatch):
-    agfs = _DirectoryCopyAGFS()
-    agfs.directories.discard("/local/acct/resources/source/empty")
-    agfs.files = {f"/local/acct/resources/source/{i}.bin": bytes([i]) for i in range(10)}
+    source_path = "/local/acct/resources/source"
+    target_path = "/local/acct/resources/target"
+    agfs.files.update({f"{source_path}/{i}.bin": bytes([i]) for i in range(8)})
+    source_files = dict(agfs.files)
     copy = agfs._copy_file
     active = peak = 0
 
-    async def tracked_copy(*args, **kwargs):
+    async def tracked_copy(source, target, *, fs_ctx):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
         try:
             await asyncio.sleep(0)
-            return await copy(*args, **kwargs)
+            await copy(source, target, fs_ctx=fs_ctx)
         finally:
             active -= 1
 
     monkeypatch.setattr(agfs, "_copy_file", tracked_copy)
     fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
 
     result = await fs.cp(
         "viking://resources/source",
@@ -423,11 +358,29 @@ async def test_cp_directory_copies_files_with_fixed_bounded_concurrency(monkeypa
         ctx=_ctx(),
     )
 
+    acquire = next(event for event in agfs.events if event[0] == "acquire-batch")
+    assert acquire[1] == [
+        {"path": source_path, "kind": "tree"},
+        {"path": target_path, "kind": "tree"},
+    ]
+    assert agfs.exact_leases == []
+    assert f"{target_path}/empty" in agfs.directories
+    assert agfs.files == {
+        **source_files,
+        **{
+            target_path + path.removeprefix(source_path): content
+            for path, content in source_files.items()
+        },
+    }
+    assert result["files_created"] == len(source_files) + 2
     assert peak == 8
-    assert result["files_created"] == 11
-    copy_events = [event for event in agfs.events if event[0] == "cp"]
-    assert len(copy_events) == 10
-    assert {event[4]["lease_ref"] for event in copy_events} == {"copy-operation"}
+    assert [event[1] for event in agfs.events if event[0] == "ls"] == [
+        source_path,
+        f"{source_path}/empty",
+    ]
+    assert {event[4]["lease_ref"] for event in agfs.events if event[0] == "cp"} == {
+        "copy-operation"
+    }
 
 
 @pytest.mark.asyncio
