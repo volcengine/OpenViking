@@ -28,9 +28,19 @@ Check the service:
 curl http://localhost:1933/health
 ```
 
-## Installation Method 1: Published Package
+## Installation Method 1: One-line Installer (Recommended)
 
-Normal users are recommended to enable it through OpenCode's package plugin mechanism:
+OpenCode shares the unified installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+```
+
+The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
+
+## Installation Method 2: Published Package
+
+To enable it through OpenCode's package plugin mechanism instead:
 
 ```json
 {
@@ -40,7 +50,7 @@ Normal users are recommended to enable it through OpenCode's package plugin mech
 
 This `plugin` entry works on both v1 and v2. OpenCode v2 normalizes it to the native `plugins` form at load time, so no manual config migration is required.
 
-## Installation Method 2: Source Install
+## Installation Method 3: Source Install
 
 Use this method for development, debugging, or PR testing. OpenCode's recommended plugin directory is:
 
@@ -113,7 +123,6 @@ Example configuration:
       "recallTokenBudget": 2000,
       "minQueryLength": 3,
       "commitTokenThreshold": 20000,
-      "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
       "skillCatalog": true,
       "skillCatalogTokenBudget": 1200,
@@ -166,7 +175,7 @@ Restart OpenCode after changing plugin or OpenViking configuration.
 In a new OpenCode session, ask the agent to browse OpenViking memory or search for a known indexed resource. The plugin should expose the OpenViking MCP server, with tools namespaced by OpenCode as `openviking_*`:
 
 - `openviking_search`, `openviking_find`
-- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_read`, `openviking_download`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
@@ -191,6 +200,7 @@ The plugin registers OpenViking's stdio MCP proxy through OpenCode config. The s
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.
+- `openviking_download`: get a one-time URL for fetching a file's original bytes with `curl`.
 - `openviking_list`: list a `viking://` directory.
 - `openviking_tree`: show a `viking://` directory tree.
 - `openviking_grep`: exact text or regex search.

@@ -32,6 +32,7 @@ from openviking.parse.output import create_parse_artifact_writer
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
 from openviking.parse.parsers.media.naming import resolve_media_names
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.parser_config import VideoConfig
 
 
@@ -68,6 +69,7 @@ class VideoParser(BaseParser):
 
         Raises:
             FileNotFoundError: If source file does not exist
+            InvalidArgumentError: If the file signature does not match the video format
             IOError: If video processing fails
         """
         # Convert to Path object
@@ -110,8 +112,8 @@ class VideoParser(BaseParser):
                 break
 
         if not valid:
-            raise ValueError(
-                f"Invalid video file: {file_path}. File signature does not match expected format {ext_lower}"
+            raise InvalidArgumentError(
+                f"Invalid video file: {file_path.name}. File signature does not match expected format {ext_lower}"
             )
 
         writer = await create_parse_artifact_writer(

@@ -17,6 +17,8 @@
 // that asks for less than a second gets a second.
 const MIN_TIMEOUT_MS = 1000;
 
+import { parseExtraHeaders } from "./mcp-proxy-config.mjs";
+
 /**
  * The headers every harness puts on every OpenViking request.
  *
@@ -59,6 +61,12 @@ export function createOvHttp(cfg = {}, {
 } = {}) {
   // dsh and pi name this field `endpoint`; every other harness names it `baseUrl`.
   const baseUrl = cfg.baseUrl || cfg.endpoint || "";
+  // A caller that owns its header map passes it in; every other harness gets the
+  // operator's escape hatch from the environment. A deployment behind an
+  // authenticating gateway (Cloudflare Access, oauth2-proxy, mTLS-terminating proxy)
+  // needs the same headers on the turn hooks as on the MCP path, and wiring each
+  // harness by hand is how the header blocks drifted in the first place.
+  const resolvedExtraHeaders = extraHeaders ?? parseExtraHeaders(process.env.OPENVIKING_EXTRA_HEADERS);
   return async function fetchJSON(path, init = {}, options = {}) {
     const timeoutMs = Math.max(MIN_TIMEOUT_MS, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
     const controller = new AbortController();
@@ -72,12 +80,28 @@ export function createOvHttp(cfg = {}, {
         ...buildOvHeaders(cfg, {
           actorPeerId: options.actorPeerId ?? resolveActorPeerId(),
           identityHeaders,
-          extraHeaders,
+          extraHeaders: resolvedExtraHeaders,
         }),
         ...(init.headers || {}),
       };
       const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-      const body = await response.json().catch(() => null);
+      const body = await response.json().catch((error) => {
+        if (!(error instanceof SyntaxError)) throw error;
+        return null;
+      });
+      const contentType = response.headers.get("content-type") || "";
+      if (body === null && response.ok && contentType && !/json/i.test(contentType)) {
+        // A 2xx that is not JSON is not OpenViking. An authenticating gateway's login
+        // page, a captive portal or a WAF page answers with 200 and HTML; calling that a
+        // success makes a harness believe it is connected while every capture and recall
+        // is quietly dropped.
+        return {
+          ok: false,
+          status: response.status,
+          result: null,
+          error: { message: `non-JSON response (${contentType})` },
+        };
+      }
       if (requireJsonBody && !body) {
         return {
           ok: false,

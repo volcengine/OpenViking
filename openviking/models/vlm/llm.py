@@ -73,8 +73,12 @@ def parse_json_from_response(response: Union[str, Any]) -> Optional[Any]:
 
     try:
         return json_repair.loads(response)
-    except (json.JSONDecodeError, ValueError):
-        logger.error(f"Failed to parse JSON from response: {response}")
+    except (json.JSONDecodeError, ValueError) as error:
+        logger.info(
+            "model response json invalid; returning no structured result error_type=%s degraded=true",
+            type(error).__name__,
+            extra={"error_type": type(error).__name__, "degraded": True},
+        )
 
     return None
 
@@ -114,7 +118,11 @@ def parse_json_to_model(response: str, model_class: Type[T]) -> Optional[T]:
     try:
         return model_class.model_validate(data)
     except Exception as e:
-        logger.warning(f"Failed to validate JSON against model {model_class.__name__}: {e}")
+        logger.info(
+            "model response validation failed; returning no structured result error_type=%s degraded=true",
+            type(e).__name__,
+            extra={"error_type": type(e).__name__, "degraded": True},
+        )
         return None
 
 
@@ -229,7 +237,11 @@ class StructuredVLM:
         try:
             return model_class.model_validate(response)
         except Exception as e:
-            logger.warning(f"Model validation failed: {e}")
+            logger.info(
+                "model response validation failed; returning no structured result error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     async def complete_model_async(
@@ -241,14 +253,20 @@ class StructuredVLM:
         """Async version of complete_model."""
         effective_thinking = self._get_vlm().thinking if thinking is None else thinking
         schema = model_class.model_json_schema()
-        response = await self.complete_json_async(prompt, schema=schema, thinking=effective_thinking)
+        response = await self.complete_json_async(
+            prompt, schema=schema, thinking=effective_thinking
+        )
         if response is None:
             return None
 
         try:
             return model_class.model_validate(response)
         except Exception as e:
-            logger.warning(f"Model validation failed: {e}")
+            logger.info(
+                "model response validation failed; returning no structured result error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     def get_vision_completion(

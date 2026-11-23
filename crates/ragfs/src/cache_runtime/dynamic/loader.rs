@@ -1,4 +1,5 @@
 use super::abi::{ProviderApiV1, ProviderEntryV1, ABI_VERSION_V1, ENTRY_SYMBOL_V1};
+use super::abi::{ProviderCloseV1, ProviderCreateV1, ProviderPingV1};
 use crate::cache_runtime::{CacheError, CacheResult};
 use libloading::{Library, Symbol};
 use std::mem::{align_of, size_of};
@@ -10,6 +11,16 @@ use std::ptr;
 struct ProviderApiHeaderV1 {
     abi_version: u32,
     struct_size: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ProviderApiRequiredV1 {
+    abi_version: u32,
+    struct_size: usize,
+    create: Option<ProviderCreateV1>,
+    ping: Option<ProviderPingV1>,
+    close: Option<ProviderCloseV1>,
 }
 
 pub(super) struct LoadedProviderApi {
@@ -52,7 +63,15 @@ pub(super) fn load(path: &Path) -> CacheResult<LoadedProviderApi> {
     }
     let header = unsafe { ptr::read(api_ptr.cast::<ProviderApiHeaderV1>()) };
     validate_header(header, path)?;
-    let api = unsafe { ptr::read(api_ptr) };
+    let mut api = unsafe { std::mem::zeroed::<ProviderApiV1>() };
+    let copy_len = header.struct_size.min(size_of::<ProviderApiV1>());
+    unsafe {
+        ptr::copy_nonoverlapping(
+            api_ptr.cast::<u8>(),
+            (&mut api as *mut ProviderApiV1).cast::<u8>(),
+            copy_len,
+        );
+    }
     validate_callbacks(&api, path)?;
     Ok(LoadedProviderApi { library, api })
 }
@@ -66,12 +85,12 @@ fn validate_header(header: ProviderApiHeaderV1, path: &Path) -> CacheResult<()> 
             ABI_VERSION_V1
         )));
     }
-    if header.struct_size < size_of::<ProviderApiV1>() {
+    if header.struct_size < size_of::<ProviderApiRequiredV1>() {
         return Err(CacheError::AbiMismatch(format!(
             "dynamic provider {} API table is {} bytes, expected at least {}",
             path.display(),
             header.struct_size,
-            size_of::<ProviderApiV1>()
+            size_of::<ProviderApiRequiredV1>()
         )));
     }
     Ok(())

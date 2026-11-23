@@ -161,42 +161,24 @@ async def test_add_resource_success(
     assert body["result"]["task_id"]
 
 
-@pytest.mark.parametrize("timeout", [None, 0.0])
 async def test_add_resource_with_wait(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
-    timeout,
 ):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": sample_markdown_file.name,
-            "reason": "test resource",
-            "wait": True,
-            "timeout": timeout,
-        },
-    )
-    if timeout == 0.0:
-        assert resp.status_code == 504
-        error = resp.json()["error"]
-        assert error["code"] == "DEADLINE_EXCEEDED"
-        task_id = error["details"]["task_id"]
-        assert error["details"]["timeout"] == timeout
-        assert "Waiting for resource import timed out" in error["message"]
-        assert "does not cancel or fail the background task" in error["message"]
-        assert f"ov task status {task_id}" in error["message"]
-        task = await _wait_task_terminal(client, task_id)
-        assert task["status"] == "completed"
-        assert "root_uri" in task["result"]
-        return
-
+    payload = {
+        "temp_file_id": sample_markdown_file.name,
+        "reason": "test resource",
+        "wait": True,
+    }
+    resp = await client.post("/api/v1/resources", json={**payload, "timeout": 0.0})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert "root_uri" in body["result"]
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_remote_empty_with_wait_returns_invalid_argument(
     client: httpx.AsyncClient,
     temp_dir,
@@ -232,6 +214,7 @@ async def test_add_resource_remote_empty_with_wait_returns_invalid_argument(
     assert not downloaded.exists()
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_forwards_args_to_service(
     client: httpx.AsyncClient,
     service,
@@ -289,6 +272,7 @@ async def test_add_resource_forwards_paused_watch_to_service(
     assert seen["is_active"] is False
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_forwards_internal_task_to_service(
     client: httpx.AsyncClient,
     service,
@@ -311,6 +295,7 @@ async def test_add_resource_forwards_internal_task_to_service(
     assert seen["internal_task"] is True
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
     seen = {}
 
@@ -343,6 +328,7 @@ async def test_add_resource_forwards_processing_mode_to_service(monkeypatch):
     assert seen["processing_mode"] == "vectors_only"
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_forwards_tags_to_service(
     client: httpx.AsyncClient,
     service,
@@ -373,6 +359,7 @@ async def test_add_resource_forwards_tags_to_service(
     assert seen["tag_mode"] == "append"
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_preserves_create_parent_field_presence(
     client: httpx.AsyncClient,
     service,
@@ -442,14 +429,12 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
 ):
     async def fake_add_resource(**kwargs):
         telemetry = get_current_telemetry()
-        telemetry.set("resource.request.duration_ms", 152.3)
-        telemetry.set("resource.process.duration_ms", 101.7)
-        telemetry.set("resource.parse.duration_ms", 38.1)
-        telemetry.set("resource.parse.warnings_count", 1)
-        telemetry.set("resource.finalize.duration_ms", 22.4)
-        telemetry.set("resource.summarize.duration_ms", 31.8)
-        telemetry.set("resource.wait.duration_ms", 46.9)
-        telemetry.set("resource.watch.duration_ms", 0.8)
+        telemetry.set("resource.total.duration_ms", 152.3)
+        telemetry.set("resource.source_execute.duration_ms", 101.7)
+        telemetry.set("resource.parse_artifact.duration_ms", 38.1)
+        telemetry.set("resource.content_commit.duration_ms", 22.4)
+        telemetry.set("resource.derived_enqueue.duration_ms", 31.8)
+        telemetry.set("queue.semantic.queue_wait.duration_ms", 46.9)
         telemetry.set("resource.flags.wait", True)
         telemetry.set("resource.flags.build_index", True)
         telemetry.set("resource.flags.summarize", False)
@@ -476,9 +461,12 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     assert resp.status_code == 200
     body = resp.json()
     resource = body["telemetry"]["summary"]["resource"]
-    assert resource["request"]["duration_ms"] == 152.3
-    assert resource["process"]["parse"] == {"duration_ms": 38.1, "warnings_count": 1}
-    assert resource["wait"]["duration_ms"] == 46.9
+    assert resource["total"]["duration_ms"] == 152.3
+    assert resource["source_execute"]["duration_ms"] == 101.7
+    assert resource["parse_artifact"]["duration_ms"] == 38.1
+    assert resource["content_commit"]["duration_ms"] == 22.4
+    assert resource["derived_enqueue"]["duration_ms"] == 31.8
+    assert resource["semantic"]["queue_wait"]["duration_ms"] == 46.9
     assert resource["flags"] == {
         "wait": True,
         "build_index": True,
@@ -487,39 +475,27 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     }
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_add_resource_business_error_uses_error_envelope(
     client: httpx.AsyncClient,
-    service,
-    monkeypatch,
+    upload_temp_dir,
 ):
-    async def fail_during_ingestion(**kwargs):
-        return {
-            "status": "error",
-            "errors": ["Parse error: boom"],
-            "source_path": kwargs["path"],
-        }
-
-    monkeypatch.setattr(
-        service.resources,
-        "_execute_resource_ingestion",
-        fail_during_ingestion,
+    upload = upload_temp_dir / "broken.png"
+    # PNG with an invalid IDAT checksum.
+    upload.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+            "0000000c49444154789c636060f80f00010301000889c2ed0000000049454e44ae426082"
+        )
     )
 
     resp = await client.post(
         "/api/v1/resources",
-        json={
-            "path": "https://example.com/bad.md",
-            "reason": "test resource",
-            "wait": True,
-        },
+        json={"temp_file_id": upload.name, "wait": True},
     )
 
-    assert resp.status_code == 500
-    body = resp.json()
-    assert body["status"] == "error"
-    assert "result" not in body
-    assert body["error"]["code"] == "PROCESSING_ERROR"
-    assert body["error"]["message"] == "Parse error: boom"
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_add_skill_business_error_uses_error_envelope(
@@ -548,23 +524,27 @@ async def test_add_skill_business_error_uses_error_envelope(
     assert body["error"]["message"] == "Skill parse error: boom"
 
 
-async def test_add_skill_missing_name_returns_invalid_argument(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/skills",
-        json={
-            "data": {
-                "description": "Skill without name",
-                "content": "# No Name Skill\nTest content.",
-            },
-        },
-    )
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (
+            {"description": "Skill without name", "content": "# No Name"},
+            "Skill must have 'name' field",
+        ),
+        ("---\nname: [broken\ndescription: invalid YAML\n---\n# Skill", "Invalid YAML frontmatter"),
+    ],
+)
+async def test_add_skill_invalid_content_returns_invalid_argument(
+    client: httpx.AsyncClient, data, message
+):
+    resp = await client.post("/api/v1/skills", json={"data": data})
 
     assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
     assert "result" not in body or body["result"] is None
     assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert body["error"]["message"] == "Skill must have 'name' field"
+    assert message in body["error"]["message"]
 
 
 async def test_add_skill_empty_dict_returns_invalid_argument(client: httpx.AsyncClient):
@@ -645,13 +625,27 @@ async def test_add_resource_with_to(
     assert "custom" in body["result"]["root_uri"]
 
 
+@pytest.mark.parametrize("archive_state", ["valid", "invalid", "bad_crc", "io_error"])
 async def test_add_resource_with_resources_root_to_uses_child_uri(
     client: httpx.AsyncClient,
     upload_temp_dir,
+    monkeypatch,
+    archive_state,
 ):
     archive_path = upload_temp_dir / "tt_b.zip"
     with zipfile.ZipFile(archive_path, "w") as zf:
         zf.writestr("tt_b/bb/readme.md", "# hello\n")
+
+    if archive_state == "invalid":
+        archive_path.write_bytes(b"not a zip archive")
+    elif archive_state == "bad_crc":
+        archive_path.write_bytes(archive_path.read_bytes().replace(b"# hello", b"# wrong"))
+    elif archive_state == "io_error":
+
+        def fail_to_open(*args, **kwargs):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(zipfile, "ZipFile", fail_to_open)
 
     resp = await client.post(
         "/api/v1/resources",
@@ -662,6 +656,14 @@ async def test_add_resource_with_resources_root_to_uses_child_uri(
             "wait": True,
         },
     )
+    if archive_state != "valid":
+        is_bad_input = archive_state != "io_error"
+        assert resp.status_code == (400 if is_bad_input else 500), resp.text
+        error = resp.json()["error"]
+        assert error["code"] == ("INVALID_ARGUMENT" if is_bad_input else "PROCESSING_ERROR")
+        assert ("Not a valid ZIP file" if is_bad_input else "disk unavailable") in error["message"]
+        return
+
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -790,46 +792,47 @@ async def test_add_resource_with_resources_root_to_trailing_slash_keeps_single_f
     assert body["result"]["root_uri"] == "viking://resources/aa"
 
 
-async def test_add_resource_non_wait_auto_name_resolves_unique_root_uri(
+async def test_add_resource_non_wait_same_name_preserves_both_files(
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
-    first = upload_temp_dir / "first.md"
-    second = upload_temp_dir / "second.md"
-    first.write_text("# first\n")
-    second.write_text("# second\n")
+    files = [
+        ("first.md", "# first", "viking://resources/same"),
+        ("second.md", "# second", "viking://resources/same_1"),
+    ]
+    submitted = []
+    for filename, content, root_uri in files:
+        (upload_temp_dir / filename).write_text(f"{content}\n", encoding="utf-8")
+        response = await client.post(
+            "/api/v1/resources",
+            json={
+                "temp_file_id": filename,
+                "source_name": "same.md",
+                "wait": False,
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        assert result["root_uri"] == root_uri
+        submitted.append((result["task_id"], root_uri, content))
 
-    first_resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": first.name,
-            "source_name": "same.md",
-            "reason": "first async resource",
-            "wait": False,
-        },
-    )
-    second_resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": second.name,
-            "source_name": "same.md",
-            "reason": "second async resource",
-            "wait": False,
-        },
-    )
+    assert submitted[0][0] != submitted[1][0]
+    for task_id, root_uri, content in submitted:
+        task = await _wait_task_terminal(client, task_id)
+        assert task["task_id"] == task_id
+        assert task["task_type"] == "add_resource"
+        assert task["status"] == "completed", task
+        assert task["result"]["root_uri"] == root_uri
 
-    assert first_resp.status_code == 200
-    assert second_resp.status_code == 200
-    first_result = first_resp.json()["result"]
-    second_result = second_resp.json()["result"]
-    assert first_result["root_uri"] == "viking://resources/same"
-    assert second_result["root_uri"] == "viking://resources/same_1"
+        response = await client.get("/api/v1/content/read", params={"uri": f"{root_uri}/same.md"})
+        assert response.status_code == 200, response.text
+        assert response.json()["result"].strip() == content
 
 
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 30.0},
+        json={},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -847,7 +850,7 @@ async def test_wait_processed_after_add(
     )
     resp = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 60.0},
+        json={},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
@@ -1039,7 +1042,7 @@ async def test_temp_upload_with_watch_and_tags_is_rejected_without_watch_source(
 
     assert resp.status_code == 400, resp.text
     assert "uploaded content" in resp.text
-    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+    task = await service.watch_manager.get_task_by_uri(
         to_uri=target_uri,
         account_id="default",
         user_id="test_user",
@@ -1143,28 +1146,6 @@ async def test_add_resource_rejects_temp_file_id_symlink(
     assert body["error"]["code"] == "PERMISSION_DENIED"
 
 
-async def test_add_resource_non_wait_returns_queue_task_id(
-    client: httpx.AsyncClient,
-    sample_markdown_file,
-    upload_temp_dir,
-):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": sample_markdown_file.name,
-            "reason": "test async task tracking",
-            "wait": False,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["status"] == "success"
-    assert "task_id" in body["result"]
-    assert body["result"]["task_id"]
-    assert body["result"]["root_uri"].startswith("viking://")
-
-
 async def test_add_resource_sync_no_task_id(
     client: httpx.AsyncClient,
     sample_markdown_file,
@@ -1182,28 +1163,3 @@ async def test_add_resource_sync_no_task_id(
     body = resp.json()
     assert body["status"] == "ok"
     assert "task_id" not in body["result"]
-
-
-async def test_add_resource_non_wait_queue_task_queryable(
-    client: httpx.AsyncClient,
-    sample_markdown_file,
-    upload_temp_dir,
-):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": sample_markdown_file.name,
-            "reason": "test task queryable",
-            "wait": False,
-        },
-    )
-    task_id = resp.json()["result"]["task_id"]
-
-    await asyncio.sleep(2.0)
-
-    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
-    assert task_resp.status_code == 200
-    result = task_resp.json()["result"]
-    assert result["task_id"] == task_id
-    assert result["task_type"] == "add_resource"
-    assert result["status"] in {"running", "completed", "failed"}

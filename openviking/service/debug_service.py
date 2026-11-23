@@ -172,7 +172,10 @@ class ObserverService:
             has_errors = await observer.has_active_errors_async()
             is_healthy = not has_errors
         except Exception as exc:
-            logger.warning("Queue observer status unavailable: %s", exc)
+            logger.info(
+                "Queue observer status unavailable; returning fallback status",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             if format == "json":
                 status = {
                     "queues": [],
@@ -335,11 +338,13 @@ class ObserverService:
                 status=status,
             )
         except Exception as exc:
-            logger.warning(
-                "Account model observer failed for account %s: %s",
-                ctx.account_id,
-                exc,
-                exc_info=True,
+            logger.info(
+                "Account model observer failed; returning fallback status",
+                extra={
+                    "account_id": ctx.account_id,
+                    "error_type": type(exc).__name__,
+                    "degraded": True,
+                },
             )
             return ComponentStatus(
                 name="models",
@@ -365,19 +370,26 @@ class ObserverService:
         try:
             backend = await self._vikingdb.get_account_backend(ctx.account_id)
             healthy = await backend.health_check()
-            count = await backend.count() if healthy else 0
+            info = await backend.get_collection_info() if healthy else None
             status = (
                 {
-                    "backend": backend._mode,
-                    "collection": backend._collection_name,
-                    "index": backend._index_name,
-                    "dimension": backend.vector_dim,
-                    "vector_count": count,
+                    "backend": info.get("backend") if info else backend._mode,
+                    "collection": info.get("name") if info else backend._collection_name,
+                    "index": info.get("index_name") if info else backend._index_name,
+                    "dimension": info.get("vector_dim") if info else backend.vector_dim,
+                    "vector_count": info.get("count", 0) if info else 0,
+                    "distance_metric": info.get("distance_metric") if info else None,
+                    "pure_dense_score_scale": (
+                        info.get("pure_dense_score_scale", "backend_defined")
+                        if info
+                        else "backend_defined"
+                    ),
                 }
                 if format == "json"
                 else f"Account: {ctx.account_id}\nBackend: {backend._mode}\n"
                 f"Collection: {backend._collection_name}\nIndex: {backend._index_name}\n"
-                f"Dimension: {backend.vector_dim}\nVector count: {count}"
+                f"Dimension: {backend.vector_dim}\nVector count: "
+                f"{info.get('count', 0) if info else 0}"
             )
             return ComponentStatus(
                 name="vikingdb",
@@ -386,11 +398,13 @@ class ObserverService:
                 status=status,
             )
         except Exception as exc:
-            logger.warning(
-                "Account VectorDB observer failed for account %s: %s",
-                ctx.account_id,
-                exc,
-                exc_info=True,
+            logger.info(
+                "Account VectorDB observer failed; returning fallback status",
+                extra={
+                    "account_id": ctx.account_id,
+                    "error_type": type(exc).__name__,
+                    "degraded": True,
+                },
             )
             return ComponentStatus(
                 name="vikingdb",
@@ -404,6 +418,8 @@ class ObserverService:
                         "index": None,
                         "dimension": None,
                         "vector_count": 0,
+                        "distance_metric": None,
+                        "pure_dense_score_scale": "backend_defined",
                         "error": str(exc),
                     }
                     if format == "json"
@@ -544,7 +560,7 @@ class ObserverService:
         """
         try:
             if self._agfs_client is None:
-                logger.debug("RAGFS client not available, returning empty stats")
+                logger.info("RAGFS client not available; returning empty stats")
                 return {}
 
             # Call get_stats on the RAGFS client
@@ -553,7 +569,10 @@ class ObserverService:
             stats = await asyncio.to_thread(self._agfs_client.get_stats, mount_path)
             return stats
         except Exception as e:
-            logger.error(f"Error getting filesystem stats: {e}")
+            logger.info(
+                "Filesystem stats unavailable; returning empty stats",
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return {}
 
     def system(self, ctx: Optional[RequestContext] = None, *, format: str = "table") -> SystemStatus:

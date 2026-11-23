@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """C++ logging initialization for vectordb engine."""
 
-import sys
 import threading
 
 _cpp_logging_initialized = False
@@ -10,35 +9,12 @@ _cpp_logging_lock = threading.Lock()
 
 
 def _convert_python_format_to_spdlog(py_format: str) -> str:
-    """
-    Convert Python logging format string to spdlog pattern string.
+    """Native logging implements the common format directly."""
+    from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
 
-    Args:
-        py_format: Python logging format string (e.g., "%(asctime)s - %(name)s - %(message)s")
-
-    Returns:
-        spdlog compatible format string
-    """
-    mapping = {
-        "%(asctime)s": "%Y-%m-%d %H:%M:%S,%e",
-        "%(levelname)s": "%l",
-        "%(levelname)-8s": "%-8l",
-        "%(name)s": "%n",
-        "%(message)s": "%v",
-        "%(process)d": "%P",
-        "%(thread)d": "%t",
-        "%(threadName)s": "%t",
-        "%(filename)s": "%s",
-        "%(lineno)d": "%#",
-        "%(module)s": "%s",
-        "%%": "%",
-    }
-
-    spd_format = py_format
-    for py_key, spd_val in mapping.items():
-        spd_format = spd_format.replace(py_key, spd_val)
-
-    return spd_format
+    if py_format != DEFAULT_LOG_FORMAT:
+        raise ValueError("C++ logging requires the common cross-runtime format")
+    return py_format
 
 
 def init_cpp_logging():
@@ -67,11 +43,7 @@ def init_cpp_logging():
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_output = str(log_dir / "openviking.log")
 
-            py_log_format = (
-                config.log.format
-                if config.log.format
-                else "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
+            py_log_format = config.log.format if config.log.format else _default_log_format()
             spd_log_format = _convert_python_format_to_spdlog(py_log_format)
 
             init_logging(log_level, log_output, spd_log_format)
@@ -79,4 +51,15 @@ def init_cpp_logging():
         except ImportError:
             pass
         except Exception as e:
-            sys.stderr.write(f"Warning: Failed to initialize C++ logging: {e}\n")
+            from openviking_cli.utils.logger import get_logger
+
+            get_logger(__name__).error(
+                "c++ logging initialization failed error_type=%s", type(e).__name__
+            )
+            raise
+
+
+def _default_log_format() -> str:
+    from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
+
+    return DEFAULT_LOG_FORMAT

@@ -626,8 +626,9 @@ def wait_for_commit_visibility(
     session_id: str,
     timeout_seconds: float = 60.0,
     verbose: bool = False,
+    require_overview: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Poll until commit_count > 0, archive overview exists, AND memories are extracted."""
+    """Wait for extraction; an overview is required only when this commit enabled WM."""
     deadline = time.time() + timeout_seconds
     latest_detail: dict[str, Any] | None = None
     latest_context: dict[str, Any] | None = None
@@ -656,7 +657,7 @@ def wait_for_commit_visibility(
             print(f"  waiting: {status} ({remaining:.0f}s remaining)")
             last_status = status
 
-        if commit_ok and overview_ok and memory_ok:
+        if commit_ok and (overview_ok or not require_overview) and memory_ok:
             return detail, context
         time.sleep(5.0)
     return latest_detail, latest_context
@@ -1350,6 +1351,9 @@ def main() -> int:
                 session_id,
                 timeout_seconds=args.commit_wait,
                 verbose=args.verbose,
+                require_overview=bool(
+                    commit_result and commit_result.get("effective_enable_working_memory") is True
+                ),
             )
         except Exception as exc:
             latest_session_detail = None
@@ -1377,8 +1381,14 @@ def main() -> int:
             overview = latest_context.get("latest_archive_overview")
             if isinstance(overview, str) and overview.strip():
                 recorder.add("PASS", "Context endpoint returned latest_archive_overview")
+            elif commit_result and commit_result.get("effective_enable_working_memory") is True:
+                recorder.add(
+                    "FAIL", "Context endpoint has no required archive overview after waiting"
+                )
             else:
-                recorder.add("FAIL", "Context endpoint has no archive overview after waiting")
+                recorder.add(
+                    "INFO", "Working Memory is disabled or not requested; no overview required"
+                )
         else:
             recorder.add("FAIL", "Context endpoint could not be read after commit")
 

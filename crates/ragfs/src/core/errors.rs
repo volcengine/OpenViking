@@ -36,6 +36,14 @@ pub enum Error {
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    /// Storage or account quota exceeded.
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
+
+    /// Upstream service temporarily rejected the request due to rate limiting.
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+
     /// Invalid path
     #[error("invalid path: {0}")]
     InvalidPath(String),
@@ -55,6 +63,10 @@ pub enum Error {
     /// Invalid operation
     #[error("invalid operation: {0}")]
     InvalidOperation(String),
+
+    /// Operation is intentionally unsupported by the current protocol.
+    #[error("not supported: {0}")]
+    NotSupported(String),
 
     /// I/O error
     #[error("I/O error: {0}")]
@@ -142,6 +154,16 @@ impl Error {
         Self::PermissionDenied(path.into())
     }
 
+    /// Create a quota-exceeded error.
+    pub fn quota_exceeded(message: impl Into<String>) -> Self {
+        Self::QuotaExceeded(message.into())
+    }
+
+    /// Create a rate-limited error.
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::RateLimited(message.into())
+    }
+
     /// Create an InvalidPath error
     pub fn invalid_path(path: impl Into<String>) -> Self {
         Self::InvalidPath(path.into())
@@ -183,11 +205,14 @@ impl Error {
             Self::NotFound(_) => "not_found",
             Self::AlreadyExists(_) => "already_exists",
             Self::PermissionDenied(_) => "permission_denied",
+            Self::QuotaExceeded(_) => "quota_exceeded",
+            Self::RateLimited(_) => "rate_limited",
             Self::InvalidPath(_) => "invalid_path",
             Self::NotADirectory(_) => "not_a_directory",
             Self::IsADirectory(_) => "is_a_directory",
             Self::DirectoryNotEmpty(_) => "directory_not_empty",
             Self::InvalidOperation(_) => "invalid_operation",
+            Self::NotSupported(_) => "not_supported",
             Self::Io(_) => "io",
             Self::Plugin(_) => "plugin",
             Self::Config(_) => "config",
@@ -208,6 +233,11 @@ impl Error {
     pub fn invalid_operation(msg: impl Into<String>) -> Self {
         Self::InvalidOperation(msg.into())
     }
+
+    /// Create a NotSupported error.
+    pub fn not_supported(msg: impl Into<String>) -> Self {
+        Self::NotSupported(msg.into())
+    }
 }
 
 #[cfg(test)]
@@ -215,15 +245,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_creation() {
-        let err = Error::not_found("/test/path");
-        assert!(matches!(err, Error::NotFound(_)));
-        assert_eq!(err.to_string(), "not found: /test/path");
-    }
+    fn missing_and_permission_denied_have_distinct_error_kinds() {
+        let missing = Error::not_found("/test/path");
+        assert!(matches!(missing, Error::NotFound(_)));
+        assert_eq!(missing.kind_name(), "not_found");
+        assert_eq!(missing.to_string(), "not found: /test/path");
 
-    #[test]
-    fn test_error_display() {
-        let err = Error::permission_denied("/protected");
-        assert_eq!(err.to_string(), "permission denied: /protected");
+        let denied = Error::permission_denied("/protected");
+        assert!(matches!(denied, Error::PermissionDenied(_)));
+        assert_eq!(denied.kind_name(), "permission_denied");
+        assert_eq!(denied.to_string(), "permission denied: /protected");
     }
 }

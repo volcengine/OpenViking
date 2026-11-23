@@ -1,0 +1,59 @@
+# Business components
+
+The business components here are plain views: you pass in the data, and they send no requests and do not need `OpenVikingProvider`. For features that load their own data, see [Blocks](../modules/).
+
+### [Icons](./icons)
+
+The icons built into the library: arrow, file-type, scope-level and dashboard icons as React components that render inline SVG, plus functions that pick a file-type icon from a file name.
+
+## Files and directories
+
+### [FileTree](./file-tree)
+
+FileTree renders the rows your app provides as an expandable, keyboard-operable file tree.
+
+### [FilePreview](./file-preview)
+
+A tabbed file preview that renders each file by its format, with a path breadcrumb, preview/source switching, text editing and actions you define.
+
+### [FileBrowserActionBar](./file-browser-action-bar)
+
+The action bar at the top of the file browsing area, with two fixed actions (connect an agent and import resources) whose visibility and behavior your app controls.
+
+### [DirectoryTour](./directory-tour)
+
+A non-modal, step-by-step tour of the directories in your app: it highlights each directory row you locate and shows an explanation card beside it, without changing the selected file.
+
+## Conversation and commands
+
+### [VikingBot](./viking-bot)
+
+Shows the conversation messages your app provides, with a composer and a pending-interaction area: sending, stopping and opening resources are reported through callbacks, and the component sends no requests.
+
+### [CommandConsole](./command-console)
+
+A terminal-style view of command records and their results, with an input area that provides command suggestions and parameter help.
+
+## Accounts and connections
+
+### [ScopeSwitcher](./scope-switcher)
+
+A scope breadcrumb made of independent selectors: `ScopeSwitcher` lays them out, and each level, such as library, data space or user, is a `ScopeSelector` that shows the current value and switches it.
+
+### [AgentConnect](./agent-connect)
+
+A connection panel that lists mainstream agents and four developer options (MCP, CLI, API and SDK), with setup instructions and copyable code blocks in which the API key is masked by default.
+
+### [Auth forms](./auth-forms)
+
+Six components that cover choosing a login method, logging in with an email or an API Key, requesting a password reset email, setting a password and confirming an invitation.
+
+## Dashboards
+
+### [WikiDashboard](./wiki-dashboard)
+
+Shows the conflicts in a Wiki directory or file: the directory view lists the files that have conflicts, and the file view lists each conflict with its details and resolution history.
+
+### [ExperienceDashboard](./experience-dashboard)
+
+Shows how Agent experiences are used: the directory view lists experience files, and the file view shows one experience's impact, source trajectories and test materials.

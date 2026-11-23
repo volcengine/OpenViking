@@ -121,11 +121,16 @@ class TestContentWriteModesDeep:
             if root_uri:
                 api_client.fs_rm(root_uri, recursive=True)
 
-    def test_write_on_nonexistent_child_uri(self, api_client):
-        fake_uri = f"viking://resources/nonexist_{uuid.uuid4().hex[:8]}/file.md"
-        write_resp = api_client.fs_write(
-            fake_uri, "Content for nonexistent", mode="replace", wait=True
-        )
-        assert write_resp.status_code == 404, (
-            f"write on nonexistent URI should return 400/404/412, got {write_resp.status_code}"
-        )
+    def test_replace_creates_missing_file_and_parent(self, api_client):
+        parent_uri = f"viking://resources/nonexist_{uuid.uuid4().hex[:8]}"
+        file_uri = f"{parent_uri}/file.md"
+        content = "Content for a newly created file"
+        try:
+            write_resp = api_client.fs_write(file_uri, content, mode="replace", wait=True)
+            assert write_resp.status_code == 200, write_resp.text
+
+            read_resp = api_client.fs_read(file_uri)
+            assert read_resp.status_code == 200, read_resp.text
+            assert read_resp.json()["result"] == content
+        finally:
+            api_client.fs_rm(parent_uri, recursive=True)

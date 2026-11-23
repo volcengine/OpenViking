@@ -105,14 +105,6 @@ class AuthPlugin(abc.ABC):
         """
         pass
 
-    def requires_api_key_manager(self) -> bool:
-        """Whether Admin API routes require an APIKeyManager in this mode.
-
-        Returns:
-            True if ``api_key_manager`` must be present for admin routes.
-        """
-        return True
-
     async def shutdown(self) -> None:
         """Release resources acquired during ``initialize`` (default no-op; override to cancel)."""
         pass

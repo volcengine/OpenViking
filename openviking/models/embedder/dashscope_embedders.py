@@ -17,9 +17,12 @@ from openviking.models.embedder.base import (
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 _DASHSCOPE_DIMENSIONS: Dict[str, int] = {
     "text-embedding-v3": 1024,
@@ -89,6 +92,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         self._openai_client = openai.OpenAI(
             api_key=self.api_key,
             base_url=f"{self.api_base}/compatible-mode/v1",
+            max_retries=0,
         )
         # Multimodal mode: httpx
         self._httpx_client = httpx.Client(
@@ -208,6 +212,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=f"{self.api_base}/compatible-mode/v1",
+                max_retries=0,
             )
         )
 
@@ -223,6 +228,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed
     # ------------------------------------------------------------------
 
+    @model_error_boundary
     def embed(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
         if isinstance(text, list):
             contents = self._to_dashscope_contents(text)
@@ -246,7 +252,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return self._run_with_retry(_call, logger=logger, operation_name="DashScope embedding")
+            return self._run_once(_call, logger=logger, operation_name="DashScope embedding")
         except Exception as e:
             raise RuntimeError(f"DashScope embedding failed: {e}") from e
 
@@ -254,11 +260,14 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_async
     # ------------------------------------------------------------------
 
+    @model_error_boundary
     async def embed_async(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
         if isinstance(text, list):
             contents = self._to_dashscope_contents(text)
             return await self.embed_content_async(
-                contents, enable_fusion=self._standard_input_fusion(contents)
+                contents,
+                enable_fusion=self._standard_input_fusion(contents),
+                is_query=is_query,
             )
 
         async def _call() -> EmbedResult:
@@ -279,8 +288,8 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return await self._run_with_async_retry(
-                _call, logger=logger, operation_name="DashScope async embedding"
+            return await self._run_once_async(
+                _call, is_query=is_query, logger=logger, operation_name="DashScope async embedding"
             )
         except Exception as e:
             raise RuntimeError(f"DashScope embedding failed: {e}") from e
@@ -289,6 +298,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_content — multimodal content (text + image URLs)
     # ------------------------------------------------------------------
 
+    @model_error_boundary
     def embed_content(
         self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
     ) -> EmbedResult:
@@ -318,14 +328,19 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return self._run_with_retry(
+            return self._run_once(
                 _call, logger=logger, operation_name="DashScope content embedding"
             )
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e
 
+    @model_error_boundary
     async def embed_content_async(
-        self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
+        self,
+        contents: List[Dict[str, str]],
+        *,
+        enable_fusion: Optional[bool] = None,
+        is_query: bool = False,
     ) -> EmbedResult:
         """Async version of embed_content."""
 
@@ -348,8 +363,11 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self._dimension))
 
         try:
-            return await self._run_with_async_retry(
-                _call, logger=logger, operation_name="DashScope async content embedding"
+            return await self._run_once_async(
+                _call,
+                is_query=is_query,
+                logger=logger,
+                operation_name="DashScope async content embedding",
             )
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e

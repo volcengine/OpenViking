@@ -23,7 +23,6 @@ from openviking.service.session_service import SessionService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
-
 _REAL_DATETIME = datetime
 
 
@@ -263,10 +262,7 @@ def _session_entry(session_id: str) -> dict[str, object]:
 def test_compute_next_check_at_parses_utc_z_timestamps_on_python310(monkeypatch):
     monkeypatch.setattr(auto_commit_module, "datetime", _Python310LikeDateTime)
 
-    assert (
-        compute_next_check_at("2026-06-20T10:00:00.000Z", 60)
-        == "2026-06-20T10:01:00+00:00"
-    )
+    assert compute_next_check_at("2026-06-20T10:00:00.000Z", 60) == "2026-06-20T10:01:00+00:00"
 
 
 @pytest.mark.asyncio
@@ -353,9 +349,7 @@ async def test_maybe_schedule_auto_commit_swallows_scheduling_errors(monkeypatch
         async def has_running(self, *args, **kwargs) -> bool:
             raise RuntimeError("task store unavailable")
 
-    monkeypatch.setattr(
-        session_service_module, "get_task_tracker", lambda: _FailingTaskTracker()
-    )
+    monkeypatch.setattr(session_service_module, "get_task_tracker", lambda: _FailingTaskTracker())
 
     did_schedule = await service.maybe_schedule_auto_commit(
         "session_a",
@@ -434,7 +428,9 @@ async def test_run_auto_commit_rechecks_idle_timeout_before_committing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_run_auto_commit_idle_commits_full_backlog_without_persisting_keep_recent(monkeypatch):
+async def test_run_auto_commit_idle_commits_full_backlog_without_persisting_keep_recent(
+    monkeypatch,
+):
     session = _FakeAutoCommitSession(
         _FakeSessionMeta(
             auto_commit_policy={
@@ -584,7 +580,7 @@ async def test_scheduler_logs_scheduled_count_separately_from_due_candidates(cap
     finally:
         openviking_logger.propagate = old_propagate
 
-    assert "SessionAutoCommitScheduler scanned=2 due=2 scheduled=1" in caplog.text
+    assert "session auto-commit scan completed scanned=2 due=2 scheduled=1" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -712,7 +708,7 @@ async def test_scheduler_does_not_warn_for_missing_meta(caplog):
 
 
 @pytest.mark.asyncio
-async def test_scheduler_warns_for_invalid_meta_json(caplog):
+async def test_scheduler_summarizes_invalid_meta_json(caplog):
     service = _FakeSessionService(
         [_session_entry("bad_session")],
         {
@@ -729,12 +725,17 @@ async def test_scheduler_warns_for_invalid_meta_json(caplog):
     old_propagate = openviking_logger.propagate
     openviking_logger.propagate = True
     try:
-        with caplog.at_level(logging.WARNING, logger="openviking.service.session_auto_commit"):
+        with caplog.at_level(logging.INFO, logger="openviking.service.session_auto_commit"):
             await scheduler._scan_once()
     finally:
         openviking_logger.propagate = old_propagate
 
-    assert "Invalid session meta JSON for idle auto-commit" in caplog.text
+    assert any(
+        record.levelno == logging.INFO
+        and getattr(record, "degraded", False)
+        and getattr(record, "failed", None) == 1
+        for record in caplog.records
+    )
     assert service.calls == []
 
 
@@ -784,7 +785,7 @@ async def test_scheduler_skips_malformed_due_fields_without_aborting_batch(caplo
 
 
 @pytest.mark.asyncio
-async def test_scheduler_warns_for_non_missing_session_scan_errors(caplog):
+async def test_scheduler_summarizes_non_missing_session_scan_errors(caplog):
     service = _FakeSessionService(
         [],
         {},
@@ -800,12 +801,17 @@ async def test_scheduler_warns_for_non_missing_session_scan_errors(caplog):
     old_propagate = openviking_logger.propagate
     openviking_logger.propagate = True
     try:
-        with caplog.at_level(logging.WARNING, logger="openviking.service.session_auto_commit"):
+        with caplog.at_level(logging.INFO, logger="openviking.service.session_auto_commit"):
             await scheduler._scan_once()
     finally:
         openviking_logger.propagate = old_propagate
 
-    assert "Failed to scan sessions for idle auto-commit" in caplog.text
+    assert any(
+        record.levelno == logging.INFO
+        and getattr(record, "degraded", False)
+        and getattr(record, "failed", None) == 1
+        for record in caplog.records
+    )
     assert service.calls == []
 
 

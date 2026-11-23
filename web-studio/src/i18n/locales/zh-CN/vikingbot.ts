@@ -1,4 +1,8 @@
 export default {
+  managementTitle: 'VikingBot 管理',
+  managementHint: '管理账号下的机器人渠道、应用凭据及平台会话历史。',
+  workbenchUnavailable:
+    'VikingBot 服务暂不可用，请联系服务管理员确认已启用并配置完成。',
   replyMode: '群聊回复方式',
   withoutMention: '无需 @ 即可回复',
   mentionModeHint: '群聊中仅在被 @ 时回复，私聊不受影响。',
@@ -112,7 +116,7 @@ export default {
   all: '全部',
   search: '搜索对话',
   empty: '开始与 VikingBot 对话',
-  emptyHint: '提出问题、探索资源，或将机器人接入你使用的消息平台。',
+  emptyHint: '使用当前用户身份提问、探索资源，继续之前的 Web 对话。',
   manageBots: '管理机器人',
   enable: '先启用 VikingBot',
   enableHint: '请管理员以 Bot 模式启动 OpenViking，并配置对话模型。',

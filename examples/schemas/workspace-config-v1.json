@@ -84,6 +84,15 @@
         }
       }
     },
+    "usage": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Codex OV-Usage footer.",
+      "properties": {
+        "view": { "type": "string", "examples": ["summary", "expanded", "off"] },
+        "output": { "type": "string", "examples": ["auto", "terminal", "desktop"] }
+      }
+    },
     "labels": {
       "type": "object",
       "description": "Free-form metadata for humans and for the plugins' doctor output. Its keys are the user's own vocabulary and are never interpreted as settings.",

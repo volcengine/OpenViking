@@ -1,5 +1,7 @@
 # OpenViking Memory Extension for Pi Coding Agent
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 Long-term semantic memory and context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
@@ -28,11 +30,13 @@ curl http://localhost:1933/health   # or your remote URL
 
 ### 2. Install the extension
 
-Use the shared installer:
+pi shares the unified installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials:
 
 ```bash
-bash examples/memory-plugin-shared/install.sh --harness pi
+curl -fsSL https://openviking.ai/install | bash
 ```
+
+From a repository checkout, `bash examples/memory-plugin-shared/install.sh --harness pi` installs the checkout's extension instead.
 
 The installer installs the locked npm dependencies in a temporary directory before replacing the extension at `~/.pi/agent/extensions/openviking`, which is one of pi's auto-discovery roots, so pi loads it on the next `pi` invocation — no `packages` entry is needed. (Registering the same path with `pi install` would load it twice, so the installer avoids that and clears any stale entry left by older versions.)
 
@@ -75,7 +79,7 @@ Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the c
       "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000,
       "commitTokenThreshold": 20000,
-      "takeoverEnabled": true,
+      "takeoverEnabled": false,
       "takeoverTokenThreshold": 30000,
       "takeoverKeepRecentTurns": 3,
       "takeoverOverviewBudget": 3000,
@@ -148,6 +152,8 @@ All fields below live in `ovcli.conf`'s `plugin` section, or in the `plugin.pi` 
 | `recallLimit`            | `10`       | Legacy quota-scaling input converted to six coding quotas, not a final cap |
 | `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
 | `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
+| `recallQueryFilters`     | `[]`       | sed-style rules applied to the prompt before recall (`s///`, `d//`, `k//`) |
+| `recallExcludeUris`      | `[]`       | URIs the recall search must never return (sent as `exclude_uris`)        |
 | `recallLedger`           | `true`     | Persist injected blocks and re-apply them to historical user messages so provider prompt-prefix caches keep hitting |
 
 ### Recall injection ledger
@@ -181,11 +187,11 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
-| `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |
+| `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
 
 ### Context takeover
 
-Takeover is enabled by default. OpenViking commits archived history, reads the
+Takeover is disabled by default; Pi manages compaction. When explicitly enabled, OpenViking commits archived history, reads the
 overview of that exact archive, then the `context` hook replaces covered
 conversation turns with a synthetic `[OpenViking Session Context]` user message
 while keeping the recent live tail. The boundary advances only after every
@@ -207,7 +213,7 @@ filtered or truncated the original Pi transcript.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `takeoverEnabled`        | `true`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
+| `takeoverEnabled`        | `false`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
 | `takeoverTokenThreshold` | `30000`    | Synced-token pressure that triggers commit and boundary advance           |
 | `takeoverKeepRecentTurns`| `3`        | Recent user turns retained in full fidelity                              |
 | `takeoverOverviewBudget` | `3000`     | Token budget for the injected archive overview                           |
@@ -300,16 +306,17 @@ Tool capture preserves structured tool parts with bounded inputs and outputs. Th
 
 The extension keeps no tool catalogue of its own. At session start it asks the server's `/mcp` endpoint for `tools/list` and registers one pi tool per descriptor it gets back, named `openviking_` + the server's own name, with the server's description and argument schema. A server that gains, drops or re-documents a tool changes pi's tool surface at the next session, with no extension release.
 
-Against a current server, that is these 15:
+Against a current server, that is these 16:
 
 | Tool                        | Description                                                             |
 |-----------------------------|-------------------------------------------------------------------------|
 | `openviking_find`           | Fast ranked retrieval across memories, resources and skills             |
 | `openviking_search`         | Deep retrieval with session context and intent analysis; `mode="context"` returns an assembled block |
 | `openviking_read`           | Read one or more `viking://` file URIs, with line-based `offset`/`limit` |
+| `openviking_download`       | Get a one-time URL for fetching a file's original bytes with `curl`     |
 | `openviking_list`           | List one sorted page under a `viking://` directory                      |
 | `openviking_tree`           | Show a recursive directory tree, optionally with abstracts              |
-| `openviking_remember`       | Store messages as long-term memory and commit them for extraction       |
+| `openviking_remember`       | Submit messages for long-term memory extraction; returns the background extraction `task_id` right away |
 | `openviking_write`          | Write text to a `viking://` file                                        |
 | `openviking_edit`           | Replace an exact string in an existing `viking://` file                 |
 | `openviking_add_resource`   | Ingest a URL, repository or local file as a resource                    |
@@ -321,6 +328,16 @@ Against a current server, that is these 15:
 | `openviking_health`         | Check that the OpenViking server is healthy                             |
 
 That table is a snapshot of one server, not a contract; `/viking` reports how many tools registered against your own.
+
+The extension also ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, which tell the model when to use which of these tools. It adds them through pi's `resources_discover` event, and leaves them out when `mcpEnabled` is `false`.
+
+On a server advertising `rule_search`, `openviking_rule_search` takes `task_context`
+and an optional `rule_probability_threshold` (default `0.65`). It returns complete
+compiled Rules for a constraint check before a planned action or response.
+Rule results share the 50 KiB / 2,000-line inline budget. Delivery stops between
+complete Rule blocks so no condition or exception is cut off; omitted Rules are
+explicitly marked with `delivery.complete=false` and a retrieval URI when available.
+Check remaining Rules before acting. Reconnect after a server upgrade to refresh the tools.
 
 The canonical `/viking` command (type `/viking` in pi's chat) displays connection status, session info, how many tools registered — or the handshake error when none did — and accepts `commit` for manual synchronous commit.
 
@@ -392,6 +409,7 @@ pi-coding-agent-extension/
 ├── lib/takeover-core.mjs # Pure context-takeover state machine
 ├── lib/recall-ledger.mjs # Injected recall blocks, replayed to keep prompt caches warm
 ├── index.ts             # Extension entry point (event handlers + /viking command)
+├── skills/              # generated by memory-plugin-shared/sync.mjs
 ├── package.json         # Name and version (the User-Agent's, and the release gate's)
 ├── DESIGN.md            # Module-by-module design, including context takeover
 └── README.md
@@ -409,6 +427,7 @@ TypeScript is loaded directly by pi's jiti transpiler. The official MCP client i
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |
 | No memories extracted                   | Wrong embedding/extraction model in OV config        | Check OV's `embedding` / `vlm` configuration                |
 | Takeover never advances                  | Pending addMessage replay or commit failed, or the archive summary never arrives (Working Memory disabled on the server) | Set `OPENVIKING_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
+| `/viking commit`: `nothing new to archive … (all_within_keep_window)` | The server already archived everything older than the last `takeoverKeepRecentTurns` user turns (an earlier archive whose summary failed, a native-compaction archive, or a 0.3.x commit) | Nothing to fix; the next commit archives once more user turns accumulate. If it follows `archive_NNN failed on the server`, check the server log for the Phase 2 (Working Memory) error |
 
 ## License
 

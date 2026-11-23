@@ -215,12 +215,12 @@
    hide internal scrollbars — iOS/Atlas pattern is overlay scroll only
    on active gesture, not a persistent track. */
 @media (max-width: 767px) {
-  .web-playground-resource-fs ::-webkit-scrollbar {
+  .web-filesystem-resource-fs ::-webkit-scrollbar {
     width: 0;
     height: 0;
     background: transparent;
   }
-  .web-playground-resource-fs * {
+  .web-filesystem-resource-fs * {
     scrollbar-width: none;
   }
 }
@@ -232,7 +232,7 @@
    page-level scrollbar, and the inner panes already overlay-scroll on
    gesture. */
 @media (display-mode: standalone) {
-  body:has(.web-playground-resource-fs)
+  body:has(.web-filesystem-resource-fs)
     [data-slot='scroll-area-scrollbar'][data-orientation='vertical'] {
     display: none;
   }

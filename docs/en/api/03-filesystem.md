@@ -4,23 +4,70 @@ OpenViking provides Unix-like file system operations for managing context.
 
 <a id="webdav"></a><a id="webdav-phase-1"></a>
 
+For reading and writing file contents, see [Content](12-content.md). [WebDAV](20-webdav.md) provides file access through WebDAV clients.
+
+The file system and content APIs allow every role to read `viking://system`. ROOT and ADMIN
+may modify only concrete assets below `viking://system/memory/memory_templates/custom/`.
+Builtin templates and official examples below `viking://system/compile/example-skills/`
+are synchronized by the service. API writes, appends, deletes, moves, and overwrite copies
+cannot modify them or bypass the restriction through their parent directories.
+Custom templates can also be published through the [template management API](08-admin.md).
+
 ## API Reference
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
 
 ### ls()
 
-List directory contents.
+List a directory's children, or return the file itself as one entry when the URI
+points to a file. A directory listing does not include the requested directory
+itself.
+
+| Target | `ls` | `ls` with `recursive=true` / `tree` |
+|--------|------|-------------------------------------|
+| Directory URI | Direct children | Descendants with `rel_path` relative to the directory |
+| File URI | One file entry without `rel_path` | One file entry with `rel_path` set to the filename |
+
+File results use the same `original`, `agent`, and URI-only `simple` formats as
+directory listings. A file's abstract and overview are empty strings when
+requested; its parent directory's summaries are not loaded. File results have
+`has_more=false`; `offset>=1` or a nonmatching tag filter returns an empty array.
+Request `extra_fields=id,locked` to include `id` and `isLocked`; files never
+include `count`.
+Explicitly requested hidden files are returned without `show_all_hidden=true`;
+storage-internal names remain hidden. Errors explicitly raised by the directory
+read, including `NOT_FOUND` and `PERMISSION_DENIED`, retain their existing behavior.
+
+File target compatibility is provided by the filesystem service for HTTP, SDK,
+CLI, and MCP calls. Internal `VikingFS.ls/tree` retain their directory listing
+behavior, so synchronization and OVPack operations keep their existing contract
+and do not add file-target probes.
+
+Directory reads are attempted first. A Not-a-directory error falls back to file
+metadata. Empty directory results also check the target type because some object
+storage backends return an empty list for file targets. If a successful empty
+directory read is followed by missing metadata, its empty result is preserved.
+In particular, S3 non-recursive `ls` keeps its existing HTTP 200 and empty array
+for nonexistent prefixes. Metadata permission errors and other backend errors
+still propagate; missing metadata after Not-a-directory still returns `NOT_FOUND`.
+
+Nonempty public directory listings do not add a type-check request. Ordinary
+successful empty pages with `offset>0` return directly without a metadata probe.
+GLOBAL and scoped data views retain type validation because an authorized
+container must be a directory.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | File or directory Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| abs_limit | int | No | 256 | Maximum returned abstract length |
+| include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
+| include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
+| overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
 | offset | int | No | 0 | Number of visible results to skip |
@@ -28,9 +75,10 @@ List directory contents.
 | sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before pagination; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
+| include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -66,40 +114,60 @@ discoverable-name behavior applies only to the shared
 `viking://resources` namespace; private user and peer namespaces retain their
 existing hiding rules.
 
+On case-insensitive `localfs`, directory name aliases that differ only by case may affect what `ls`, `tree`, and `glob` can see. For example, if the real directory is `viking://resources/bob-private/`, a request for `viking://resources/BOB-PRIVATE/` may list the same directory; on case-sensitive systems, the alias directory returns `NOT_FOUND` when it does not exist.
 
-**Python HTTP SDK**
+
+**Python SDK (HTTP)**
 
 ```python
-entries = client.ls(
+page = client.ls_page(
     uri="viking://resources/",
     offset=100,
     limit=100,
     sort_by="mtime",
     sort_order="desc",
+    include_abstract=True,
+    include_overview=True,
 )
-for entry in entries:
+for entry in page["result"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
+print("has more nodes:", page["has_more"])
 ```
 
 **TypeScript SDK**
 
 ```typescript
-const entries = await client.list("viking://resources/docs/", { simple: true });
-console.log(entries);
+const page = await client.listPage("viking://resources/docs/", {
+  includeAbstract: true,
+  includeOverview: true,
+});
+console.log(page.result);
+console.log("has more nodes:", page.hasMore);
 ```
 
 **Go SDK**
 
 ```go
-entries, err := client.List(ctx, "viking://resources/", nil)
+page, err := client.ListPage(ctx, "viking://resources/", &openviking.ListOptions{
+    IncludeAbstract: openviking.Bool(true),
+    AbsLimit:        512,
+    IncludeOverview: openviking.Bool(true),
+    OverviewLimit:   4000,
+})
 if err != nil {
     return err
 }
-for _, entry := range entries {
+for _, entry := range page.Result {
     fmt.Println(entry)
 }
+fmt.Println("has more nodes:", page.HasMore)
 ```
+
+When only the entry array is needed, use the compatibility methods `ls` in
+Python, `list` in TypeScript, and `List` in Go. To detect whether `limit` or
+`node_limit` truncated the result, use `ls_page`, `listPage`, and `ListPage`,
+respectively.
 
 **HTTP API**
 
@@ -116,6 +184,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
+# A single file, using the same listing response envelope
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  --data-urlencode "uri=viking://resources/project/readme.md" \
+  --data-urlencode "output=original" \
+  -H "X-API-Key: your-key"
+
 # Recursive listing
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
@@ -124,16 +198,16 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
-openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
-openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
+ov ls viking://resources/ [--simple] [--recursive] [--include-abstract[=true|false]] [--include-overview[=true|false]] [--tags team=search,env=prod] [-f FIELDS]
+ov tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
+ov glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ```
 
-`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `overview`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
 
 The HTTP `result` remains an entry array. `has_more=true` means more matching nodes remain after visibility, tags, offset, and limit are applied. The Python, TypeScript, and Go SDKs continue to return the `result` array. When more nodes are available, the CLI appends a pagination hint to its output.
 
-**Response**
+**Response (`output=original`)**
 
 ```json
 {
@@ -145,25 +219,43 @@ The HTTP `result` remains an entry array. `has_more=true` means more matching no
       "mode": 16877,
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
-      "uri": "viking://resources/docs/"
+      "uri": "viking://resources/docs/",
+      "access": "read"
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
+
+Entries returned by `ls`, recursive listings, `tree`, and `stat` include `access`: the current caller's effective permission for that URI. Both `original` and `agent` outputs include it; the URI-only `simple=true` output is unchanged.
+
+| access | Meaning |
+|------------|---------|
+| `denied` | No access; listings retain only a name placeholder that cannot be expanded; direct `stat` requests still return 403 |
+| `container` | A directory that can only be expanded to reach authorized descendants, without reading its own content or modifying it |
+| `read` | Read |
+| `write` | Read and write |
+| `manage` | Read, write, and manage |
+
+Shared resources combine direct and inherited grants, group membership, and implicit administrator access. Missing ACL fields or empty direct grants do not automatically mean `denied`: ancestor ACLs and shared defaults still apply. Restricted nodes without matching grants deny ordinary users. When ACL is disabled, or the URI is outside shared resources, existing identity and namespace rules apply, including read-only system files. Having a vector record does not itself grant permission.
+
+Clients can reuse the listing `access` value to control editing without a per-item `stat` or manager-only ACL request. This field does not guarantee an editable format, permission to delete a namespace root, or access to every descendant; operations still enforce their path restrictions and current authorization. The underlying filesystem `mode` is not the caller's permission.
 
 ---
 
 ### tree()
 
-Get directory tree structure.
+Get a directory's descendants, or return a file as a single-node tree. The
+response remains a flat node array. For a file URI, `rel_path` is the filename
+(for example, `readme.md`) and `level_limit` does not expand any descendants.
+`directories_only=true` excludes the file and returns an empty array. File
+pagination, tags, metadata, and errors follow the `ls` rules above.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | File or directory Viking URI |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | HTTP: 256; SDKs: 128 | Maximum returned abstract length |
 | include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
@@ -176,31 +268,45 @@ Get directory tree structure.
 | limit | int | No | None | Alias for `node_limit` |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
+| include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
 Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `node_limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
-entries = client.tree(uri="viking://resources/", offset=100, limit=100)
-for entry in entries:
+page = client.tree_page(
+    uri="viking://resources/",
+    offset=100,
+    limit=100,
+    include_abstract=True,
+    include_overview=True,
+    directories_only=True,
+)
+for entry in page["result"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
+print("has more nodes:", page["has_more"])
 ```
 
 **TypeScript SDK**
 
 ```typescript
-const tree = await client.tree("viking://resources/docs/", { nodeLimit: 100 });
-console.log(tree);
+const page = await client.treePage("viking://resources/docs/", {
+  nodeLimit: 100,
+  includeAbstract: true,
+  includeOverview: true,
+});
+console.log(page.result);
+console.log("has more nodes:", page.hasMore);
 ```
 
 **Go SDK**
 
 ```go
-entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
+page, err := client.TreePage(ctx, "viking://resources/", &openviking.TreeOptions{
     DirectoriesOnly: true,
     IncludeAbstract: openviking.Bool(true),
     IncludeOverview: openviking.Bool(true),
@@ -208,10 +314,16 @@ entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
 if err != nil {
     return err
 }
-for _, entry := range entries {
+for _, entry := range page.Result {
     fmt.Println(entry["rel_path"], entry["isDir"])
 }
+fmt.Println("has more nodes:", page.HasMore)
 ```
+
+When only the node array is needed, use the compatibility method `tree` in
+Python and TypeScript or `Tree` in Go. To detect whether `limit` or
+`node_limit` truncated the result, use `tree_page`, `treePage`, and `TreePage`,
+respectively.
 
 **HTTP API**
 
@@ -227,13 +339,13 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/ \
+ov tree viking://resources/my-project/ \
   --directories-only --include-abstract --include-overview
 ```
 
 As with `ls`, the HTTP `result` remains a node array and `has_more` is returned at the top level. When `has_more=true`, the CLI appends a pagination hint to the tree output.
 
-**Response**
+**Response (`output=original`)**
 
 ```json
 {
@@ -254,8 +366,7 @@ As with `ls`, the HTTP `result` remains a node array and `has_more` is returned 
       "uri": "viking://resources/docs/api.md"
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -272,7 +383,7 @@ Get file or directory status information. For directories, returns the count of 
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 info = client.stat(uri="viking://resources/docs/api.md")
@@ -316,8 +427,8 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 **CLI**
 
 ```bash
-openviking stat viking://resources/my-project/docs/api.md
-openviking stat viking://resources/my-project/docs
+ov stat viking://resources/my-project/docs/api.md
+ov stat viking://resources/my-project/docs
 ```
 
 
@@ -333,10 +444,10 @@ openviking stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "access": "write",
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -352,18 +463,22 @@ openviking stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": true,
     "isLocked": false,
+    "access": "manage",
     "uri": "viking://resources/docs",
     "count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
-The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. It returns `false` when the LockManager is unavailable or the lookup fails. This is an advisory check, not a lock reservation: another writer may acquire a lock after the check, so writes must still handle `ResourceBusyError`.
 
 The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
-The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
+The `count` field (directories only) is the number of visible `level=2` vector records under the directory URI subtree. It depends on asynchronous indexing and orphan cleanup, so it is not a physical filesystem entry count. `ls`, `tree`, and `glob` expose it through `extra_fields=count`.
+
+**Breaking change:** `count` previously included all indexed vector levels. It now counts only caller-visible `level=2` records.
+
+On case-insensitive `localfs`, `stat` may also return metadata for a real file or directory through a case-only alias. For example, `viking://resources/docs/REPORT.md` may hit the real `viking://resources/docs/report.md`; on case-sensitive systems, the alias target returns `NOT_FOUND` when it does not exist.
 
 ---
 
@@ -418,19 +533,22 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+
 ```
 
 **CLI**
 
 ```bash
-openviking attrs get viking://resources/docs/api.md
-openviking attrs get viking://resources/docs/api.md tags
-openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
-openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
-openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs get viking://resources/docs/api.md
+ov attrs get viking://resources/docs/api.md tags
+ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/guide.md \
+  --tags count+=1 --mode append
 ```
 
-Directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
+For `set-tags`, directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
 
 
 **Response (Resource)**
@@ -471,6 +589,8 @@ Directory targets update the directory semantic records; `recursive=true` also u
 
 `attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
 
+Batch requests accept 1-50 URIs, deduplicate normalized URIs, and return `items` and `failed` in input order. Individual failures do not fail the whole HTTP request.
+
 ---
 
 ### mkdir()
@@ -485,7 +605,7 @@ Create a directory.
 | description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Both forms write `.abstract.md` and queue L0 vectorization. |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.mkdir(uri="viking://resources/new-project/")
@@ -525,8 +645,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 **CLI**
 
 ```bash
-openviking mkdir viking://resources/new-project/
-openviking mkdir viking://resources/new-project/ --description "API docs directory"
+ov mkdir viking://resources/new-project/
+ov mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
 
@@ -537,10 +657,11 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
   "status": "ok",
   "result": {
     "uri": "viking://resources/new-project/"
-  },
-  "time": 0.1
+  }
 }
 ```
+
+On case-insensitive `localfs`, creating a directory that differs only by case may hit an existing directory. For example, if `viking://resources/docs/` already exists, `ov mkdir viking://resources/DOCS/` may act on the same underlying directory; on case-sensitive systems, they are separate paths.
 
 ---
 
@@ -549,17 +670,19 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
 Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
 
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
-Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
+Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or `queue` return `INVALID_URI`.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to remove |
+| wait | bool | No | False | Wait for the semantic refresh after deletion |
+| timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | recursive | bool | No | False | Remove directory recursively |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 # Remove single file
@@ -605,7 +728,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 **CLI**
 
 ```bash
-openviking rm viking://resources/old.md [--recursive]
+ov rm viking://resources/old.md [--recursive]
 ```
 
 
@@ -616,8 +739,7 @@ openviking rm viking://resources/old.md [--recursive]
   "status": "ok",
   "result": {
     "uri": "viking://resources/docs/old.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -629,14 +751,15 @@ openviking rm viking://resources/old.md [--recursive]
   "result": {
     "uri": "viking://resources/old-project/",
     "estimated_deleted_count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
 The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
 
 When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
+
+On case-insensitive `localfs`, case-only aliases may affect the delete target. For example, if the real file is `viking://resources/bob-private/private.md`, `ov rm viking://resources/BOB-PRIVATE/private.md` may delete the same file; on case-sensitive systems, deleting the missing alias path still succeeds because `rm` is idempotent, but it does not delete the real file.
 
 ---
 
@@ -724,6 +847,8 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when a path lock is busy, and `INVALID_ARGUMENT` (HTTP 400) when a directory is copied or removed without `recursive=true`, a directory operation targets a file, or the source/destination relationship or file/directory types are invalid.
 
+On case-insensitive `localfs`, both `from_uri` and `to_uri` may be affected by case-only aliases. For example, `ov cp viking://resources/BOB-PRIVATE/private.md viking://resources/archive/copy.md` may copy from the real `bob-private/private.md`; a `to_uri` that differs only by case may also overwrite an existing target. On case-sensitive systems, a differently cased missing source returns `NOT_FOUND`, and a differently cased target is a separate path.
+
 ---
 
 ### mv()
@@ -740,7 +865,7 @@ Files use two Exact Locks; directories use Tree Locks on the source and destinat
 | to_uri | str | Yes | - | Destination Viking URI |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.mv(
@@ -785,7 +910,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
 **CLI**
 
 ```bash
-openviking mv viking://resources/old-name/ viking://resources/new-name/
+ov mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
 
@@ -797,10 +922,11 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
   "result": {
     "from": "viking://resources/old-name/",
     "to": "viking://resources/new-name/"
-  },
-  "time": 0.1
+  }
 }
 ```
+
+On case-insensitive `localfs`, both `from_uri` and `to_uri` may be affected by case-only aliases. For example, `ov mv viking://resources/BOB-PRIVATE/private.md viking://resources/archive/private.md` may move the real `bob-private/private.md`; a `to_uri` that differs only by case may also overwrite or merge into an existing target. On case-sensitive systems, a differently cased missing source returns `NOT_FOUND`, and a differently cased target is a separate path.
 
 <a id="grep"></a><a id="glob"></a>
 
