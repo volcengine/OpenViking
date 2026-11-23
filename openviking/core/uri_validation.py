@@ -15,9 +15,11 @@ from openviking_cli.exceptions import InvalidURIError, PermissionDeniedError
 from openviking_cli.utils.uri import VikingURI
 
 _PUBLIC_API_SCOPES = frozenset(
-    {"", *VikingURI.PUBLIC_SCOPES, *VikingURI.LEGACY_SCOPES, *VikingURI.ALIAS_SCOPES}
+    {"", *VikingURI.PUBLIC_SCOPES, *VikingURI.ALIAS_SCOPES}
 )
-_ALL_API_SCOPES = frozenset({"", *VikingURI.VISITABLE_SCOPES})
+_ALL_API_SCOPES = frozenset(
+    {"", *VikingURI.PUBLIC_SCOPES, *VikingURI.INTERNAL_SCOPES, *VikingURI.ALIAS_SCOPES}
+)
 
 
 def _allowed_api_scopes(

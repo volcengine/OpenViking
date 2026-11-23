@@ -9,7 +9,7 @@ description: >
   Also use it when the user asks where memories are stored: per project, per folder, or shared between repositories.
   Covers choosing between context search, find, list search, and grep, reading viking://
   URIs, and when (not) to write.
-version: 2026.8.7
+version: 2026.10.1
 ---
 
 # OpenViking Memory
@@ -61,6 +61,10 @@ filesystem tools.
 - `add_resource` — imports files, directories, URLs, or Git repos as durable
   knowledge. Processing is asynchronous; report that ingestion started instead
   of blocking on completion.
+- `add_skill` — creates or installs skills; see the `openviking-skills` skill.
+- `write` / `edit` — only for files you author at a known URI. Never use them to
+  store a file, URL, or skill the user hands you: that skips parsing and
+  installation.
 - `forget` — permanently deletes. Confirm with the user and pass the exact URI;
   never delete from a fuzzy match.
 

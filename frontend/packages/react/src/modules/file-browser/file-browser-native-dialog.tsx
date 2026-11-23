@@ -1,0 +1,98 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import type { RefObject } from 'react';
+import { Modal } from '../../shared/primitives/modal/modal.js';
+import { PreviewHistory } from './preview-history.js';
+import { PreviewCompileConfig } from './preview-compile-config.js';
+import { PreviewPackImport } from './preview-pack-import.js';
+import type { PreviewWorkflowProps } from './preview-workflow-types.js';
+import type { ResolvedLabels } from './file-browser-labels.js';
+
+export function FileBrowserNativeDialog({
+  kind,
+  text,
+  triggerRef,
+  canWrite,
+  canSaveSnapshot,
+  versioned,
+  showContent,
+  directory,
+  onSelectPackFile,
+  packConfirmationPending,
+  ...props
+}: Omit<PreviewWorkflowProps, 'text' | 'onUpdated'> & {
+  kind: 'history' | 'importPack' | 'configure';
+  text: ResolvedLabels;
+  triggerRef: RefObject<HTMLElement | null>;
+  canWrite: boolean;
+  canSaveSnapshot: boolean;
+  versioned: boolean;
+  showContent: boolean;
+  directory: boolean;
+  onSelectPackFile?: (file: File) => void;
+  packConfirmationPending?: boolean;
+  onUpdated?: () => void;
+}) {
+  const exposure = useExposure(
+    kind === 'history'
+      ? 'file_browser_history_dialog_show'
+      : kind === 'configure'
+        ? 'file_browser_compile_config_dialog_show'
+        : 'file_browser_pack_import_dialog_show',
+  );
+  const title = kind === 'configure' ? text.workflow.configure : text[kind];
+  const common = {
+    ...props,
+    onUpdated: props.onUpdated ?? (() => undefined),
+    text: text.workflow,
+  };
+  return (
+    <Modal
+      open
+      title={title}
+      locale={props.locale}
+      triggerRef={triggerRef}
+      onClose={props.onClose}
+      className={
+        kind === 'history'
+          ? 'ov-file-browser-workflow ov-file-history'
+          : 'ov-file-browser-workflow'
+      }
+    >
+      <h2
+        ref={exposure}
+        className={kind === 'history' ? 'ov-file-history__heading' : undefined}
+      >
+        {title}
+      </h2>
+      {kind === 'history' ? null : (
+        <p className="ov-file-browser-workflow__uri">{props.uri}</p>
+      )}
+      {kind === 'history' ? (
+        <PreviewHistory
+          {...common}
+          canSaveSnapshot={canSaveSnapshot}
+          versioned={versioned}
+          showContent={showContent}
+          canWrite={canWrite}
+          directory={directory}
+          loadingText={text.loading}
+          retryText={text.retry}
+        />
+      ) : kind === 'importPack' ? (
+        <PreviewPackImport
+          {...common}
+          canWrite={canWrite}
+          onSelectPackFile={onSelectPackFile}
+          packConfirmationPending={packConfirmationPending}
+        />
+      ) : (
+        <PreviewCompileConfig
+          {...common}
+          canWrite={canWrite}
+          loadingText={text.loading}
+          retryText={text.retry}
+        />
+      )}
+    </Modal>
+  );
+}

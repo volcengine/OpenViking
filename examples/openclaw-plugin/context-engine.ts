@@ -25,7 +25,7 @@ type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
-  ownsCompaction: true;
+  ownsCompaction: boolean;
   /** OpenClaw >=2026.8.1: without both declarations (and commitTurn) the engine is degraded to "legacy" every turn. */
   transcriptSemantics: {
     currentTurnFence: "before-current-turn-entry-v1";
@@ -94,6 +94,7 @@ type ContextEngine = {
     sessionId: string;
     sessionKey?: string;
     isHeartbeat?: boolean;
+    runtimeContext?: Record<string, unknown>;
   }) => Promise<{ status: "committed" | "duplicate" }>;
   compact: (params: {
     sessionId: string;
@@ -286,6 +287,8 @@ export function createMemoryOpenVikingContextEngine(params: {
   }) => void;
   queryConfigStore?: RuntimeQueryConfigStore;
   traceRecorder?: { record(entry: RecallTraceEntry): void; recordAndFlush?: (entry: RecallTraceEntry) => Promise<unknown> };
+  /** Auto-recall runs in before_prompt_build instead of assemble. */
+  recallViaPromptHook?: boolean;
 }): ContextEngineWithCommit {
   const {
     id,
@@ -298,6 +301,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     rememberSessionAgentId,
     queryConfigStore,
     traceRecorder,
+    recallViaPromptHook,
   } = params;
 
   const diagEnabled = cfg.emitStandardDiagnostics;
@@ -365,7 +369,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
-      ownsCompaction: true,
+      ownsCompaction: cfg.contextManagementMode === "openviking",
       transcriptSemantics: {
         currentTurnFence: "before-current-turn-entry-v1",
         turnAdvancementIdempotency: "atomic-idempotent-v1",
@@ -398,6 +402,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         tokenBudget,
         runtimeContext: assembleParams.runtimeContext,
         isMainAssemble,
+        recallViaPromptHook,
         cfg,
         getClient,
         logger,
@@ -442,6 +447,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             prePromptMessageCount: 0, // Host already supplies the closed-turn range.
             isHeartbeat: commitParams.isHeartbeat,
             tokenBudget: 128_000, // Durable delivery does not carry a token budget.
+            runtimeContext: commitParams.runtimeContext,
             throwOnError: true,
             cfg,
             getClient,
@@ -490,6 +496,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     async compact(compactParams): Promise<CompactResult> {
       const tokenBudget = validTokenBudget(compactParams.tokenBudget) ?? 128_000;
       return compactOpenVikingSession({
+        contextManagementMode: cfg.contextManagementMode,
         sessionId: compactParams.sessionId,
         sessionKey: resolveSessionKey(compactParams),
         tokenBudget,

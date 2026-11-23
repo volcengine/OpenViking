@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -8,11 +11,9 @@ import (
 )
 
 // WaitProcessed waits until all queued processing completes.
-func (c *Client) WaitProcessed(ctx context.Context, opts *WaitProcessedOptions) (map[string]any, error) {
+// The optional opts argument is deprecated and ignored.
+func (c *Client) WaitProcessed(ctx context.Context, opts ...*WaitProcessedOptions) (map[string]any, error) {
 	payload := map[string]any{}
-	if opts != nil && opts.Timeout != nil {
-		payload["timeout"] = *opts.Timeout
-	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/system/wait", nil, payload, &result)
 	return result, err

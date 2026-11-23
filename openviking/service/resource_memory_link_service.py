@@ -22,6 +22,7 @@ from openviking.core.namespace import (
 )
 from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import TextPart
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_updater import MemoryUpdateResult
@@ -152,9 +153,15 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         reason: str,
         source_name: Optional[str] = None,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Bridge add-resource reason extraction through normal session commit."""
+        """Queue add-resource reason extraction as a normal session commit.
+
+        Returns ``status="accepted"`` once the commit is queued; poll
+        ``commit_task_id`` through the Task API for its result. Every reason commit
+        serializes on one shared session, so waiting for it here held the caller
+        behind all earlier reason commits (one stalled commit could block resource
+        ingestion).
+        """
         reason = (reason or "").strip()
         if not reason:
             return {"status": "skipped", "reason": "empty_reason"}
@@ -168,10 +175,9 @@ class ResourceMemoryLinkService:
         session_id = _RESOURCE_REASON_SESSION_ID
         target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
         commit_result: Dict[str, Any] = {}
-        task_result: Optional[Dict[str, Any]] = None
 
         async with self._reason_session_lock:
-            session = await self._session_service.get(
+            session = await self._session_service.open(
                 session_id,
                 ctx,
                 auto_create=True,
@@ -205,19 +211,11 @@ class ResourceMemoryLinkService:
                 keep_recent_count=0,
             )
 
-        task_id = commit_result.get("task_id")
-        if task_id:
-            task_result = await self._wait_for_commit_task(
-                task_id=str(task_id),
-                ctx=ctx,
-                timeout=timeout,
-            )
         return {
-            "status": "success",
+            "status": "accepted",
             "session_id": session_id,
-            "commit_task_id": task_id,
+            "commit_task_id": commit_result.get("task_id"),
             "archive_uri": commit_result.get("archive_uri"),
-            "commit_task": task_result,
         }
 
     async def on_resource_deleted(
@@ -227,7 +225,6 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         memory_uris: Sequence[str],
         recursive: bool = False,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Bridge resource deletion through normal session commit for mutable memories."""
         if not resource_uri:
@@ -242,7 +239,7 @@ class ResourceMemoryLinkService:
         task_result: Optional[Dict[str, Any]] = None
 
         async with self._reason_session_lock:
-            session = await self._session_service.get(
+            session = await self._session_service.open(
                 session_id,
                 ctx,
                 auto_create=True,
@@ -280,7 +277,6 @@ class ResourceMemoryLinkService:
             task_result = await self._wait_for_commit_task(
                 task_id=str(task_id),
                 ctx=ctx,
-                timeout=timeout,
             )
         return {
             "status": "success",
@@ -335,7 +331,6 @@ class ResourceMemoryLinkService:
         *,
         task_id: str,
         ctx: RequestContext,
-        timeout: Optional[float],
     ) -> Dict[str, Any]:
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
@@ -343,8 +338,7 @@ class ResourceMemoryLinkService:
             task_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            timeout=(_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout),
-            poll_interval=0.1,
+            timeout=_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
         )
         if task.status == TaskStatus.COMPLETED:
             return task.to_dict()
@@ -380,7 +374,12 @@ class ResourceMemoryLinkService:
                 recursive=recursive,
             )
         except Exception as exc:
-            logger.warning("Resource deletion memory commit failed for %s: %s", resource_uri, exc)
+            logger.info(
+                "resource deletion memory commit failed; continuing reference cleanup uri=%s error_type=%s",
+                safe_uri_for_log(resource_uri),
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             commit_result = {"status": "failed", "error": str(exc)}
 
         post_commit_matches = await self._find_referencing_memories(
@@ -473,9 +472,10 @@ class ResourceMemoryLinkService:
             resource_uri=resource_uri,
         )
         if candidate_uris is None:
-            logger.warning(
-                "Skipping resource memory reference scan for %s because grep is unavailable",
-                resource_uri,
+            logger.info(
+                "resource memory reference scan skipped; grep unavailable uri=%s",
+                safe_uri_for_log(resource_uri),
+                extra={"degraded": True},
             )
             return []
         return await self._read_referencing_memory_matches(
@@ -513,10 +513,11 @@ class ResourceMemoryLinkService:
             except (NotFoundError, FileNotFoundError):
                 continue
             except Exception as exc:
-                logger.debug(
-                    "Resource memory grep failed for %s, skipping reference scan: %s",
-                    memory_root,
-                    exc,
+                logger.info(
+                    "resource memory grep failed; skipping reference scan uri=%s error_type=%s",
+                    safe_uri_for_log(memory_root),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
                 )
                 return None
 

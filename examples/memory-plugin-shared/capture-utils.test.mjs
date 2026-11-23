@@ -18,6 +18,30 @@ const CAPTURE_CONFIG = {
   captureMaxLength: 24000,
 }
 
+for (const text of [
+  "мой любимый редактор называется курсор",
+  "これからもこのせっていをおぼえてください",
+  "تذكر أن المحرر المفضل لدي هو هذا المحرر",
+  "앞으로도 이 설정을 꼭 기억해 주세요",
+]) {
+  test(`capture keeps substantive Unicode text: ${text}`, () => {
+    for (const role of ["user", "assistant"]) {
+      const decision = shouldCaptureText(text, role)
+      assert.equal(decision.shouldCapture, true)
+      assert.equal(decision.text, text)
+    }
+  })
+}
+
+test("Unicode punctuation detection preserves signal thresholds and noise filtering", () => {
+  for (const text of ["abcd", "αβγδεζ", "中文本abc", "……！？！？……", "😀😀😀😀😀😀😀😀😀😀😀😀", "\u0301".repeat(16), "thanks", "/remember project"]) {
+    assert.equal(shouldCaptureText(text, "user").shouldCapture, false, text)
+  }
+  for (const text of ["abcdef", "中文文字", "䷀䷁䷂䷃"]) {
+    assert.equal(shouldCaptureText(text, "user").shouldCapture, true, text)
+  }
+})
+
 function toolPart(parts) {
   return parts.find((part) => part?.type === "tool")
 }
@@ -83,6 +107,26 @@ test("a tool result is labelled with the name of the call it answers", () => {
     toolNameById: collectToolNamesByIdFromEntries(entries),
   })
   assert.equal(toolPart(parts).tool_name, "Read")
+})
+
+test("a tool result given as content blocks keeps its text and line breaks", () => {
+  const result = {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "read",
+    content: [
+      { type: "text", text: "line one\nline two" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      { type: "text", text: "line three" },
+    ],
+  }
+  assert.equal(toolPart(extractPartsFromPayload(result)).tool_output, "line one\nline two\n[image]\nline three")
+})
+
+test("a tool result with an unknown content block is kept as JSON", () => {
+  const content = [{ type: "text", text: "a" }, { type: "resource", uri: "file:///x" }]
+  const result = { role: "toolResult", toolCallId: "call-2", toolName: "read", content }
+  assert.equal(toolPart(extractPartsFromPayload(result)).tool_output, JSON.stringify(content))
 })
 
 test("a host system reminder is not part of the conversation", () => {
@@ -156,7 +200,7 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
   assert.notEqual(cc.extractCaptureTurns, vendored.extractCaptureTurns)
   assert.equal(cc.sanitizeCapturedText, vendored.sanitizeCapturedText)
 
-  // Claude nests a tool result in a content array; only the adapter flattens it.
+  // Claude nests a tool result in a content array; both flatten it to text.
   const anthropic = [{
     type: "user",
     message: {
@@ -167,7 +211,7 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
   assert.equal(cc.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output, "tool output")
   assert.equal(
     vendored.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output,
-    JSON.stringify([{ type: "text", text: "tool output" }]),
+    "tool output",
   )
 })
 
@@ -203,7 +247,7 @@ test("filterCaptureParts prunes blank text parts even with no rules configured",
   assert.deepEqual(shaped.parts, [{ type: "text", text: "kept" }, TOOL_PART])
 })
 
-test("filterCaptureParts substitutes in every text part and leaves tool parts alone", () => {
+test("filterCaptureParts substitutes in every text part", () => {
   const shaped = filterCaptureParts(
     [{ type: "text", text: "token sk_ABCDEF here" }, TOOL_PART, { type: "text", text: "and sk_ZZZ" }],
     "user",
@@ -215,6 +259,33 @@ test("filterCaptureParts substitutes in every text part and leaves tool parts al
     TOOL_PART,
     { type: "text", text: "and [redacted]" },
   ])
+})
+
+test("filterCaptureParts redacts tool inputs and outputs, with or without text parts", () => {
+  const cfg = { captureFilters: ["s/sk_[A-Za-z0-9]+/[redacted]/g"] }
+  const call = {
+    type: "tool",
+    tool_name: "bash",
+    tool_input: { command: "curl -H 'Authorization: sk_ABCDEF'", env: ["KEY=sk_XYZ"], timeout: 30 },
+  }
+  const result = { type: "tool", tool_name: "bash", tool_output: "echoed sk_ABCDEF" }
+
+  const toolOnly = filterCaptureParts([call, result], "user", cfg)
+  assert.equal(toolOnly.dropped, false)
+  assert.deepEqual(toolOnly.parts, [
+    {
+      ...call,
+      tool_input: { command: "curl -H 'Authorization: [redacted]'", env: ["KEY=[redacted]"], timeout: 30 },
+    },
+    { ...result, tool_output: "echoed [redacted]" },
+  ])
+
+  const mixed = filterCaptureParts([{ type: "text", text: "run it" }, call], "assistant", cfg)
+  assert.equal(mixed.parts[1].tool_input.command, "curl -H 'Authorization: [redacted]'")
+  assert.equal(call.tool_input.command.includes("sk_ABCDEF"), true)
+
+  const scoped = filterCaptureParts([result], "user", { captureFilters: ["assistant:s/sk_[A-Za-z0-9]+/x/g"] })
+  assert.equal(scoped.parts[0].tool_output, "echoed sk_ABCDEF")
 })
 
 test("filterCaptureParts takes one drop verdict on the aggregate, tool parts included", () => {

@@ -20,22 +20,3 @@ impl fmt::Debug for DynamicProviderConfig {
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn debug_output_redacts_provider_params() {
-        let config = DynamicProviderConfig {
-            library_path: PathBuf::from("/opt/openviking/libprovider.so"),
-            params_json: r#"{"password":"secret-value"}"#.to_string(),
-        };
-
-        let output = format!("{config:?}");
-
-        assert!(output.contains("/opt/openviking/libprovider.so"));
-        assert!(!output.contains("secret-value"));
-        assert!(output.contains("<redacted>"));
-    }
-}

@@ -11,6 +11,7 @@ export const trae = {
   prefix: "tr-",
   tracksPendingPrompt: true,
   capturesOnlyWhenEnabled: true,
+  requestBudgets: { "session-start": 25_000, "user-prompt-submit": 17_000, stop: 25_000 },
   stages: { "session-start": "start", "user-prompt-submit": "prompt", stop: "capture" },
   envelope(event, block) {
     const value = { decision: "approve" };

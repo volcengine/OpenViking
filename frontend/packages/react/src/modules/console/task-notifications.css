@@ -1,0 +1,25 @@
+.ov-notification.ov-console__task-completion {
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(
+    --ov-ui-color-notification-bg,
+    var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))
+  );
+  backdrop-filter: none;
+}
+
+.ov-console__task-completion .ov-notification__title {
+  line-height: 24px;
+}
+
+.ov-console__task-completion .ov-notification__icon {
+  color: var(
+    --ov-ui-color-status-success,
+    var(--ov-ui-console-task-completion-icon-default)
+  );
+}
+
+.ov-console__task-completion .ov-notification__close {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}

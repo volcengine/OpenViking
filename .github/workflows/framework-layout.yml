@@ -1,0 +1,45 @@
+name: Framework Integration Layout
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/frameworks/**'
+      - 'openviking/integrations/**'
+      - 'examples/langchain/**'
+      - 'examples/langchain-langgraph/**'
+      - 'examples/agent-framework/**'
+      - 'tests/unit/test_langchain_*.py'
+      - 'tests/integration/langchain_langgraph/**'
+      - '.github/workflows/framework-layout.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/frameworks/**'
+      - 'openviking/integrations/**'
+      - 'examples/langchain/**'
+      - 'examples/langchain-langgraph/**'
+      - 'examples/agent-framework/**'
+      - 'tests/unit/test_langchain_*.py'
+      - 'tests/integration/langchain_langgraph/**'
+      - '.github/workflows/framework-layout.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    name: Framework package locations
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install test runner
+        run: python -m pip install pytest
+      - name: Check framework package locations
+        # These guards need only pytest and Git, without server-test configuration.
+        run: >-
+          python -m pytest -q --noconftest --rootdir=. -c /dev/null
+          tests/unit/test_langchain_package_boundary.py
+          -k 'server_source_excludes_removed_framework_namespace or framework_sources_and_tests_use_package_locations'

@@ -13,6 +13,7 @@ import {
   type SetupApiKeyProbeResult,
   type SetupHealthResult,
 } from "../services/setup/probe-service.js";
+import { grantPromptRecallHook } from "../services/setup/config-writer.js";
 
 const HOME = os.homedir();
 const OPENCLAW_DIR = getEnv("OPENCLAW_STATE_DIR") || path.join(HOME, ".openclaw");
@@ -66,6 +67,7 @@ function readCompatRangeFromManifest(): { min: string; max: string } {
 const PLUGIN_VERSION = readPluginVersion();
 const { min: COMPATIBLE_SERVER_MIN, max: COMPATIBLE_SERVER_MAX } = readCompatRangeFromManifest();
 const CONFIG_KEYS_TO_PRESERVE = [
+  "contextManagementMode",
   "targetUri",
   "headers",
   "timeoutMs",
@@ -391,7 +393,7 @@ function writeConfig(
   const entries = plugins.entries as Record<string, unknown>;
 
   const existingEntry = (entries.openviking as Record<string, unknown>) ?? {};
-  entries.openviking = { ...existingEntry, config: pluginCfg };
+  entries.openviking = { ...existingEntry, hooks: grantPromptRecallHook(existingEntry.hooks), config: pluginCfg };
 
   ensureInstallRecord(plugins);
 

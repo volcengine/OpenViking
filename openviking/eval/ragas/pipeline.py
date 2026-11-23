@@ -68,7 +68,6 @@ class RAGQueryPipeline:
         self,
         docs_dirs: List[Union[str, Path]],
         wait: bool = True,
-        timeout: float = 300,
     ) -> List[str]:
         """
         Add document directories/files to OpenViking.
@@ -76,7 +75,6 @@ class RAGQueryPipeline:
         Args:
             docs_dirs: List of document directory or file paths
             wait: Whether to wait for processing
-            timeout: Timeout for waiting
 
         Returns:
             List of root URIs for added resources
@@ -94,7 +92,6 @@ class RAGQueryPipeline:
             result = client.add_resource(
                 str(path),
                 wait=wait,
-                timeout=timeout,
             )
 
             if result and "root_uri" in result:
@@ -110,7 +107,6 @@ class RAGQueryPipeline:
         self,
         code_dirs: List[Union[str, Path]],
         wait: bool = True,
-        timeout: float = 300,
     ) -> List[str]:
         """
         Add code repositories to OpenViking.
@@ -118,12 +114,11 @@ class RAGQueryPipeline:
         Args:
             code_dirs: List of code repository paths (local or git URLs)
             wait: Whether to wait for processing
-            timeout: Timeout for waiting
 
         Returns:
             List of root URIs for added resources
         """
-        return self.add_documents(code_dirs, wait=wait, timeout=timeout)
+        return self.add_documents(code_dirs, wait=wait)
 
     def query(
         self,

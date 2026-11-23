@@ -23,13 +23,20 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.base import lazy_import
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+)
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
@@ -214,8 +221,13 @@ class URLTypeDetector:
                 client_kwargs["event_hooks"] = event_hooks
                 client_kwargs["trust_env"] = False
 
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.head(url, headers=headers)
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
+                response = await active_client.head(url, headers=headers)
 
                 meta["status_code"] = response.status_code
                 if not (200 <= response.status_code < 300):
@@ -231,7 +243,9 @@ class URLTypeDetector:
             raise
         except Exception as e:
             meta["detection_error"] = str(e)
-            logger.debug(f"[URLTypeDetector] HEAD request failed: {e}, falling back to default")
+            logger.info(
+                "URL HEAD request failed; using default type error_type=%s", type(e).__name__
+            )
 
         # === Step 3: Default behavior ===
         meta["detected_by"] = "default"
@@ -319,7 +333,9 @@ class URLTypeDetector:
             if media_type.suffix:
                 meta["media_type_suffix"] = media_type.suffix
         except Exception as e:
-            logger.debug(f"[URLTypeDetector] Failed to parse media type: {e}")
+            logger.info(
+                "Media type parsing failed; using default type error_type=%s", type(e).__name__
+            )
             meta["media_type_parse_error"] = str(e)
             return URLType.UNKNOWN
 
@@ -583,10 +599,15 @@ class HTTPAccessor(DataAccessor):
                 client_kwargs["event_hooks"] = event_hooks
                 client_kwargs["trust_env"] = False
 
-            async with httpx.AsyncClient(**client_kwargs) as client:
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
                 headers = self._request_headers(tos_signature, tos_access)
                 try:
-                    response = await client.get(url, headers=headers)
+                    response = await active_client.get(url, headers=headers)
                     response.raise_for_status()
                 except httpx.ConnectError as e:
                     cause: BaseException | None = e
@@ -626,7 +647,11 @@ class HTTPAccessor(DataAccessor):
                 # Create temp file after GET headers/content have had a chance
                 # to refine detection. This avoids routing extensionless signed
                 # URLs as HTML when HEAD is rejected by object storage.
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=ext,
+                    dir=get_parser_download_temp_dir(),
+                )
                 temp_path = temp_file.name
                 temp_file.close()
 
@@ -891,9 +916,10 @@ class HTTPAccessor(DataAccessor):
                 return url.replace("/blob/", "/raw/")
 
         except Exception as e:
-            logger.debug(
-                f"[HTTPAccessor] Failed to convert blob URL to raw: {e}, "
-                f"falling back to original URL: {url}"
+            logger.info(
+                "Blob URL conversion failed; using original URL source=%s error_type=%s",
+                safe_uri_for_log(url),
+                type(e).__name__,
             )
 
         return url

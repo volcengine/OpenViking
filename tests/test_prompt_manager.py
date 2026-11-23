@@ -12,6 +12,7 @@ import yaml
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory import memory_type_registry as registry_module
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
     OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
@@ -70,7 +71,7 @@ def teardown_function() -> None:
 
 
 def test_profile_memory_template_includes_stable_identity_work_style_and_preferences():
-    template_path = PromptManager._get_bundled_templates_dir() / "memory" / "profile.yaml"
+    template_path = builtin_memory_templates_dir() / "profile.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     text = "\n".join(
         [
@@ -89,7 +90,7 @@ def test_profile_memory_template_includes_stable_identity_work_style_and_prefere
 
 
 def test_preferences_memory_template_keeps_topic_specific_preferences():
-    template_path = PromptManager._get_bundled_templates_dir() / "memory" / "preferences.yaml"
+    template_path = builtin_memory_templates_dir() / "preferences.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     text = "\n".join(
         [

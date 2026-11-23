@@ -79,6 +79,8 @@ test("credentials resolved by the plugin reach the proxy through the child env",
       OPENVIKING_PEER_ID: "workspace-peer",
       OPENVIKING_AUTH_MODE: "trusted",
       OPENVIKING_RECALL_PEER_SCOPE: "all",
+      OPENVIKING_DEBUG: "0",
+      OPENVIKING_DEBUG_LOG: "",
       OPENVIKING_TIMEOUT_MS: "10000",
     });
 
@@ -108,6 +110,77 @@ test("credentials resolved by the plugin reach the proxy through the child env",
     assert.equal(actorEnv.OPENVIKING_RECALL_PEER_SCOPE, "actor");
     const actorProxy = readProxyConfig(actorEnv, dir);
     assert.equal(actorProxy.peerId, "workspace-peer");
+  });
+});
+
+test("shared diagnostic settings reach the proxy through the child env", async () => {
+  const { readProxyConfig } = await import("./servers/mcp-proxy.mjs");
+  await withCredentialFiles({}, ({ env: files, dir }) => {
+    const logPath = join(dir, "dsh-proxy.log");
+    const config = resolveConfig({
+      endpoint: "http://ov.example.com",
+      workspacePeer: false,
+      debug: true,
+      debugLogPath: logPath,
+    }, files, dir);
+    assert.equal(config.debug, true);
+    assert.equal(config.debugLogPath, logPath);
+
+    const { env } = buildMcpConfig(config);
+    assert.equal(env.OPENVIKING_DEBUG, "1");
+    assert.equal(env.OPENVIKING_DEBUG_LOG, logPath);
+
+    const proxy = readProxyConfig(env, dir);
+    assert.equal(proxy.debug, true);
+    assert.equal(proxy.debugLogPath, logPath);
+  });
+});
+
+test("the proxy accepts canonical diagnostic environment variables", async () => {
+  const { readProxyConfig } = await import("./servers/mcp-proxy.mjs");
+  await withCredentialFiles({}, ({ env: files, dir }) => {
+    const logPath = join(dir, "canonical-proxy.log");
+    const proxy = readProxyConfig({
+      ...files,
+      OPENVIKING_URL: "http://ov.example.com",
+      OPENVIKING_DEBUG: "1",
+      OPENVIKING_DEBUG_LOG: logPath,
+    }, dir);
+
+    assert.equal(proxy.debug, true);
+    assert.equal(proxy.debugLogPath, logPath);
+  });
+});
+
+test("disabled diagnostics are explicit in the child environment", () => {
+  withCredentialFiles({}, ({ env: files, dir }) => {
+    const config = resolveConfig({
+      endpoint: "http://ov.example.com",
+      workspacePeer: false,
+      debug: false,
+      debugLogPath: "",
+    }, files, dir);
+    const { env } = buildMcpConfig(config);
+
+    assert.equal(env.OPENVIKING_DEBUG, "0");
+    assert.equal(env.OPENVIKING_DEBUG_LOG, "");
+  });
+});
+
+test("the proxy keeps the legacy OV_DEBUG_LOG alias", async () => {
+  const { readProxyConfig } = await import("./servers/mcp-proxy.mjs");
+  await withCredentialFiles({}, ({ env: files, dir }) => {
+    const logPath = join(dir, "legacy-proxy.log");
+    const proxy = readProxyConfig({
+      ...files,
+      OPENVIKING_URL: "http://ov.example.com",
+      OPENVIKING_DEBUG: "0",
+      OPENVIKING_DEBUG_LOG: join(dir, "canonical-proxy.log"),
+      OV_DEBUG_LOG: logPath,
+    }, dir);
+
+    assert.equal(proxy.debug, true);
+    assert.equal(proxy.debugLogPath, logPath);
   });
 });
 
@@ -194,6 +267,8 @@ test("an anonymous local server forwards no key or identity", () => {
       OPENVIKING_PEER_ID: "",
       OPENVIKING_AUTH_MODE: "api_key",
       OPENVIKING_RECALL_PEER_SCOPE: "all",
+      OPENVIKING_DEBUG: "0",
+      OPENVIKING_DEBUG_LOG: "",
       OPENVIKING_TIMEOUT_MS: "10000",
     });
   });

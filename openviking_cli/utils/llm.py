@@ -74,7 +74,7 @@ def parse_json_from_response(response: str) -> Optional[Any]:
     try:
         return json_repair.loads(response)
     except (json.JSONDecodeError, ValueError):
-        logger.error(f"Failed to parse JSON from response: {response}")
+        logger.debug("model response JSON parse failed response_chars=%d", len(response))
 
     return None
 
@@ -126,7 +126,12 @@ def parse_json_to_model(response: str, model_class: Type[T]) -> Optional[T]:
     try:
         return model_class.model_validate(data)
     except Exception as e:
-        logger.warning(f"Failed to validate JSON against model {model_class.__name__}: {e}")
+        logger.debug(
+            "model response validation failed model_type=%s error_type=%s",
+            model_class.__name__,
+            type(e).__name__,
+            extra={"error_type": type(e).__name__},
+        )
         return None
 
 
@@ -213,7 +218,11 @@ class StructuredLLM:
         try:
             return model_class.model_validate(response)
         except Exception as e:
-            logger.warning(f"Model validation failed: {e}")
+            logger.debug(
+                "model response validation failed error_type=%s",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
+            )
             return None
 
     async def complete_model_async(
@@ -230,5 +239,9 @@ class StructuredLLM:
         try:
             return model_class.model_validate(response)
         except Exception as e:
-            logger.warning(f"Model validation failed: {e}")
+            logger.debug(
+                "model response validation failed error_type=%s",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
+            )
             return None

@@ -1,26 +1,13 @@
 ## 步骤1：安装
 
-1. 根据所使用的客户端，在终端执行对应的安装命令：
-
-   **Trae 国际版**
+1. 在终端执行如下安装命令：
 
    ```bash
-   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae --dist tos
+   curl -fsSL https://openviking.ai/install | bash
+   # AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
    ```
 
-   **Trae 中国版**
-
-   ```bash
-   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
-   ```
-
-   **TraeCode CLI 2.0**
-
-   ```bash
-   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cli --dist tos
-   ```
-
-2. 安装器会依次询问以下信息：语言（English / 中文）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
+2. 安装器会依次询问以下信息：要安装的 harness（Trae 国际版勾选 **TRAE**，Trae 中国版勾选 **TRAE CN**，或勾选 **TraeCode CLI 2.0**）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
 
    ```text
    {{OPENVIKING_API_KEY}}
@@ -30,7 +17,7 @@
 
 **TRAE / TRAE CN**：在「设置 → MCP → 已配置的 MCP Servers」中确认能够看到 `openviking` 条目即表示接入成功。
 
-**TraeCode CLI 2.0**：Hook 要先信任才会运行。启动 `trae-cli`，在信任确认上选 **Trust all and continue**：
+**TraeCode CLI 2.0**：启动 `trae-cli`，在 hook 审阅提示中选 **Trust all and continue**（具体界面随版本变化）：
 
 ```text
 Hooks need review
@@ -42,7 +29,19 @@ Hooks can run outside the sandbox after you trust them.
   3. Continue without trusting (hooks won't run)
 ```
 
-再执行 `trae-cli plugin list`，确认 `openviking-memory` 已启用。错过这个提示，或当时选了第 3 项，Hook 就不会运行：输入 `/hooks` 补上信任并开启条目，`/plugins` 里确认插件已启用——两个开关相互独立，都要是开着的。插件更新动了 Hook 时会再要求信任一次。
+如果跳过了提示或选了第 3 项，在 `/hooks` 中检查并开启 OpenViking hooks。执行 `trae-cli plugin list` 确认插件已启用。新增或变更的 hooks 需要重新检查；不同版本支持的会话生命周期见完整文档。
+
+MCP 条目可见只说明配置存在。让助手调用 OpenViking 的 `health` 和 `list` 验证连接；自动召回需另行检查：等之前的会话提交并处理完成后，在同一工作目录中新建会话，询问已保存的信息。
+
+## 步骤3：开始使用
+
+在 TRAE、TRAE CN 或 TraeCode CLI 2.0 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
 
 ## 故障排查
 

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.providers import base as provider_base
 from vikingbot.providers.base import (
     build_stream_response,
     merge_stream_tool_call_delta,
@@ -26,6 +27,35 @@ def _tool_call(*, index=None, call_id=None, name=None, arguments=None):
 )
 def test_parse_tool_arguments(raw, expected):
     assert parse_tool_arguments(raw) == expected
+
+
+def test_tool_arguments_do_not_repair_truncated_json_object(monkeypatch):
+    def fail_if_called(_raw, **kwargs):
+        raise AssertionError("truncated JSON must not be repaired")
+
+    monkeypatch.setattr(provider_base.json_repair, "loads", fail_if_called)
+    raw = '{"pages": [], "files": [{"path": "logic/related_work.md", "content": "'
+
+    assert parse_tool_arguments(raw) == {"raw": raw}
+
+
+def test_tool_arguments_fall_back_when_repair_rejects_input(monkeypatch):
+    def reject_input(_raw, **kwargs):
+        raise ValueError("invalid input")
+
+    monkeypatch.setattr(provider_base.json_repair, "loads", reject_input)
+
+    assert parse_tool_arguments("{invalid}") == {"raw": "{invalid}"}
+
+
+def test_tool_arguments_do_not_hide_unexpected_repair_errors(monkeypatch):
+    def fail_unexpectedly(_raw, **kwargs):
+        raise RuntimeError("repair implementation failed")
+
+    monkeypatch.setattr(provider_base.json_repair, "loads", fail_unexpectedly)
+
+    with pytest.raises(RuntimeError, match="repair implementation failed"):
+        parse_tool_arguments("{invalid}")
 
 
 def test_missing_stream_tool_call_index_uses_chunk_local_order():

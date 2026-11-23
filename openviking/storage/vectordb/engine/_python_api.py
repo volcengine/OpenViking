@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Dict, Iterable, List
 
+from openviking.observability.log_safety import DEFAULT_LOG_FORMAT
+
 INT64_SIZE = 8
 UINT64_SIZE = 8
 FLOAT32_SIZE = 4
@@ -316,7 +318,7 @@ class DeleteDataRequest(_RequestBase):
 
 
 class SearchRequest(_RequestBase):
-    __slots__ = ("query", "sparse_raw_terms", "sparse_values", "topk", "dsl")
+    __slots__ = ("query", "sparse_raw_terms", "sparse_values", "topk", "dsl", "time_decay")
 
     def __init__(self):
         self.query = []
@@ -324,6 +326,7 @@ class SearchRequest(_RequestBase):
         self.sparse_values = []
         self.topk = 0
         self.dsl = ""
+        self.time_decay = ""
 
 
 class SearchResult:
@@ -633,9 +636,7 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         def __init__(self):
             super().__init__(backend._new_volatile_store())
 
-    def init_logging(
-        log_level: str, log_output: str, log_format: str = "[%Y-%m-%d %H:%M:%S.%e] [%l] %v"
-    ):
+    def init_logging(log_level: str, log_output: str, log_format: str = DEFAULT_LOG_FORMAT):
         return backend._init_logging(log_level, log_output, log_format)
 
     return {

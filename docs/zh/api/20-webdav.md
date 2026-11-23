@@ -4,7 +4,7 @@ WebDAV 为 `resources` 命名空间提供文件协议访问。
 
 **代码入口**：`openviking/server/routers/webdav.py`
 
-## WebDAV（Phase 1）
+## 支持范围
 
 OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层：
 
@@ -12,12 +12,12 @@ OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层
 /webdav/resources
 ```
 
-Phase 1 有意把范围控制得比较小：
+当前支持以下范围：
 
 - 仅开放 `resources` 命名空间，不暴露 memories、skills、sessions 等其他空间。
 - 以文本写入为主，当前 `PUT` 只接受 UTF-8 文本内容。
 - 只实现一小部分 WebDAV 方法：`OPTIONS`、`PROPFIND`、`GET`、`HEAD`、`PUT`、`DELETE`、`MKCOL`、`MOVE`。
-- 语义侧边文件和系统内部文件保持内部可见。`.abstract.md`、`.overview.md`、`.path.ovlock`、`.redirect.json`、`.sync_log.json` 这些派生或内部文件不会出现在 WebDAV 列表中，也不能被直接访问。
+- 语义侧边文件和系统内部文件保持内部可见。`.abstract.md`、`.overview.md`、`.path.ovlock` 和多写 metadata 不会出现在 WebDAV 列表中，也不能被直接访问。
 
 行为说明：
 
@@ -25,7 +25,7 @@ Phase 1 有意把范围控制得比较小：
 - 通过 WebDAV 覆盖已有文件时，会像 `write()` 一样刷新相关语义和向量。
 - `PUT` 不会自动创建父目录。缺失的目录需要先用 `MKCOL` 创建。
 - 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
-- 启用多写存储时，被 redirect 到 backup 的文件仍会通过文件系统 API 呈现为普通文件；内部 redirect 和同步元数据不会暴露给调用方。
+- 启用多写时，WebDAV 读取只访问 primary，backup 在后台异步复制。
 
 ## API 参考
 
@@ -43,7 +43,7 @@ Phase 1 有意把范围控制得比较小：
 
 | 请求头 | 使用方法 | 必填 | 说明 |
 |--------|----------|------|------|
-| `X-API-Key` | 除 `OPTIONS` 外 | 是 | OpenViking API Key |
+| `X-API-Key` | 除 `OPTIONS` 外 | 取决于鉴权模式 | OpenViking API Key；trusted 模式还可能需要身份头 |
 | `Depth` | `PROPFIND` | 否 | `0` 仅返回目标；其他值按一级深度处理 |
 | `Destination` | `MOVE` | 是 | `/webdav/resources` 下的目标路径 |
 | `Overwrite` | `MOVE` | 否 | 默认 `T`；设为 `F` 时不覆盖已有目标 |
