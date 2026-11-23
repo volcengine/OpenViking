@@ -143,7 +143,8 @@ export function isNamedPipe(value) {
 execFile[promisify.custom] = (command, args, options = {}) => {
   if (!Array.isArray(args)) { options = args ?? options; args = []; }
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
+  const env = invocation.env ? { ...(options?.env ?? process.env), ...invocation.env } : options?.env;
+  return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) });
 };
 
 export const spawnDetached = false;

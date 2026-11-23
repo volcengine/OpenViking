@@ -10,7 +10,7 @@ import { safeError } from '../../daemon/src/logger.mjs';
 import { prepareAgyGeminiDir } from '../../daemon/src/ov-isolation.mjs';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
-import { DSH_DEFAULT_MODEL, assertSupportedDshVersion } from '../../daemon/src/dsh-runtime.mjs';
+import { DSH_DEFAULT_MODEL, assertSupportedDshVersion, dshVersionText } from '../../daemon/src/dsh-runtime.mjs';
 import { t } from './i18n.mjs';
 import { probeAcp, probeAgyAcp, probeAppServer, probeDsh } from './runtime-probe.mjs';
 
@@ -117,7 +117,7 @@ const DURABLE_PROVIDER_KEYS = [
 
 function providerSecrets(env) {
   const file = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim()
-    || (env.HOME ? path.join(env.HOME, '.ov-superagent', 'secrets.env') : '');
+    || ((env.HOME || env.USERPROFILE) ? path.join(env.HOME || env.USERPROFILE, '.ov-superagent', 'secrets.env') : '');
   if (!file) return {};
   let raw = '';
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return {}; }
@@ -251,10 +251,7 @@ export async function detectDsh({
   // answers nothing at all. Take the version from either stream when present;
   // when it is not, let the bridge handshake below (the real gate) decide
   // instead of rejecting the runtime on an empty string.
-  let versionText = version.stdout.trim();
-  if (!versionText && version.stderr) {
-    versionText = version.stderr.match(/\b0\.2\.\d+(?:-[\w.]+)?\b/)?.[0] ?? '';
-  }
+  const versionText = dshVersionText(version.stdout, version.stderr);
   if (versionText) {
     try { assertSupportedDshVersion(versionText); } catch (error) { result.note = error.message; return result; }
   }
@@ -389,6 +386,7 @@ async function detectAgy({ env, execFileImpl, probe }) {
     return result;
   }
   result.available = true;
+  const versionLabel = version.stdout.trim();
   result.note = t(`protocol 兼容（${versionLabel}），已登录`,
     `ACP compatible (${versionLabel}), logged in`);
   return result;

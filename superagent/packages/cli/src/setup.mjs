@@ -1375,7 +1375,7 @@ const DURABLE_PROVIDERS = [
 function durableSecretsFile(env) {
   const configured = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim();
   if (configured) return configured;
-  return env.HOME ? path.join(env.HOME, '.ov-superagent', 'secrets.env') : '';
+  return (env.HOME || env.USERPROFILE) ? path.join(env.HOME || env.USERPROFILE, '.ov-superagent', 'secrets.env') : '';
 }
 
 function saveDurableProviderKey(env, name, value) {

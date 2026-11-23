@@ -1972,3 +1972,16 @@ test('setup writes a Durable provider key to secrets.env and keeps the other key
   assert.equal(await configureDurable({ prompter: blank, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), false);
   assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-test$/m);
 });
+test('Durable setup writes secrets under USERPROFILE when HOME is unset', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-userprofile-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const prompter = {
+    select: async (question, choices) => choices[0].value,
+    secret: async () => 'sk-userprofile',
+    success() {},
+    warn() {},
+  };
+  assert.equal(await configureDurable({ prompter, env: { USERPROFILE: dir } }), true);
+  const file = path.join(dir, '.ov-superagent', 'secrets.env');
+  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-userprofile$/m);
+});
