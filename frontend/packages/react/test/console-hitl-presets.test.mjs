@@ -96,10 +96,18 @@ test('a sole Skill stays selectable and then appears only in the picker value', 
   }
 });
 
-test('multiple Skill candidates keep a single selection reflected in the picker', async () => {
+test('multiple Skill candidates preserve descriptions and reflect the selected URI', async () => {
   const skills = [
     'viking://system/skills/wiki/SKILL.md',
     'viking://system/skills/report/SKILL.md',
+    'viking://system/skills/import/SKILL.md',
+    'viking://system/skills/custom/SKILL.md',
+  ];
+  const descriptions = [
+    'Preserve original source citations',
+    undefined,
+    { text: 'Invalid description' },
+    '',
   ];
   const view = await mountHitl(
     [
@@ -107,6 +115,7 @@ test('multiple Skill candidates keep a single selection reflected in the picker'
         candidates: skills.map((uri, index) => ({
           uri,
           label: `Skill ${index + 1}`,
+          description: descriptions[index],
         })),
       }),
     ],
@@ -114,11 +123,20 @@ test('multiple Skill candidates keep a single selection reflected in the picker'
   );
   try {
     await view.start();
+    assert.deepEqual(
+      Array.from(
+        view.container.querySelectorAll(
+          '.ov-viking-bot__interaction-description',
+        ),
+        (node) => node.textContent,
+      ),
+      [descriptions[0], skills[1], skills[2]],
+    );
     await click(view.container.querySelector(`input[value="${skills[0]}"]`));
     await click(view.container.querySelector(`input[value="${skills[1]}"]`));
     assert.equal(
       view.container.querySelectorAll('input[type="radio"]').length,
-      2,
+      4,
     );
     assert.equal(
       view.container.querySelector(`input[value="${skills[0]}"]`).checked,
