@@ -3007,7 +3007,10 @@ class ResourceService:
                 "processed": s.processed,
                 "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
-                "errors": [{"message": e.message} for e in s.errors],
+                "errors": [
+                    {"message": e.message if ctx is None else "Queue processing error"}
+                    for e in s.errors
+                ],
             }
             for name, s in status.items()
         }

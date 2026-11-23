@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Account wait and system health compatibility."""
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,7 +10,7 @@ import pytest
 
 from openviking.service.debug_service import ComponentStatus, ObserverService
 from openviking.service.resource_service import ResourceService
-from openviking.storage.queuefs.named_queue import QueueStatus
+from openviking.storage.queuefs.named_queue import QueueError, QueueStatus
 from openviking_cli.exceptions import UnavailableError
 
 
@@ -17,7 +18,20 @@ from openviking_cli.exceptions import UnavailableError
 async def test_account_wait_dynamic_queries_and_legacy(monkeypatch):
     query = AsyncMock(side_effect=[False, True, True, False, RuntimeError("database offline")])
     qm = SimpleNamespace(
-        check_status=AsyncMock(return_value={"Semantic": QueueStatus(processed=4)}),
+        check_status=AsyncMock(
+            return_value={
+                "Semantic": QueueStatus(
+                    processed=4,
+                    error_count=5,
+                    errors=[
+                        QueueError(
+                            timestamp=datetime(2026, 11, 23),
+                            message="Previous account's private task error",
+                        )
+                    ],
+                )
+            }
+        ),
         wait_complete=AsyncMock(return_value={}),
     )
     monkeypatch.setattr("openviking.service.resource_service.get_queue_manager", lambda: qm)
@@ -34,6 +48,8 @@ async def test_account_wait_dynamic_queries_and_legacy(monkeypatch):
     qm.check_status.reset_mock()
     result = await ResourceService.wait_processed(object(), ctx=ctx)
     assert result["Semantic"]["processed"] == 4
+    assert result["Semantic"]["error_count"] == 5
+    assert result["Semantic"]["errors"] == [{"message": "Queue processing error"}]
     assert all(
         call.kwargs == {"account_id": "A", "exclude_inline": True} for call in query.await_args_list
     )
