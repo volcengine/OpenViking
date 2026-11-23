@@ -2098,19 +2098,8 @@ class _OpsMixin:
         ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        # Verify that the path exists and is not a directory before reading.
-        try:
-            stat = await self._async_agfs.stat(path)
-        except Exception as exc:
-            if is_not_found_error(exc):
-                raise NotFoundError(uri, "file") from exc
-            raise
-        if isinstance(stat, dict) and stat.get("isDir", False):
-            raise InvalidArgumentError(
-                f"Directory URI is not readable as a file: {uri}. "
-                "List it first, then read a file URI.",
-                details={"resource": uri, "expected": "file", "actual": "directory"},
-            )
+        # AGFS read returns empty bytes for non-existent files instead of
+        # raising, so only probe with stat when the read came back empty.
         try:
             content = await self._async_agfs.read(path)
             if isinstance(content, bytes):
@@ -2119,12 +2108,26 @@ class _OpsMixin:
                 raw = content.content
             else:
                 raw = b""
-
-            text = self._decode_bytes(raw)
         except Exception as exc:
             if is_not_found_error(exc):
                 raise NotFoundError(uri, "file") from exc
             raise
+
+        if not raw:
+            try:
+                stat = await self._async_agfs.stat(path)
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    raise NotFoundError(uri, "file") from exc
+                raise
+            if isinstance(stat, dict) and stat.get("isDir", False):
+                raise InvalidArgumentError(
+                    f"Directory URI is not readable as a file: {uri}. "
+                    "List it first, then read a file URI.",
+                    details={"resource": uri, "expected": "file", "actual": "directory"},
+                )
+
+        text = self._decode_bytes(raw)
 
         if offset == 0 and limit == -1:
             return text
