@@ -160,13 +160,18 @@ class TestRewriteRelativeLinks:
         )
         assert out == "[x](../目录甲/目录乙/目录丙/文档/文档.md?v=1)"
 
-    async def test_large_file_anchor_located(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        "closing_hashes",
+        ["", " ##", " ###   ", "\t##"],
+        ids=["plain", "closing-hashes", "trailing-spaces", "tab-separated"],
+    )
+    async def test_large_file_anchor_located(self, tmp_path: Path, closing_hashes: str):
         # Large target is split into section files; the anchor is located via an
         # in-memory parse → link points at the specific section file + keeps anchor.
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
         body = "".join(
-            f"## 第{i}章 {name}\n\n" + ("正文内容。" * 400) + "\n\n"
+            f"## 第{i}章 {name}{closing_hashes}\n\n" + ("正文内容。" * 400) + "\n\n"
             for i, name in [(1, "部署"), (2, "监控"), (3, "排查")]
         )
         big.write_text(body, encoding="utf-8")

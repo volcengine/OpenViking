@@ -103,6 +103,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _atx_heading_title(text: str) -> str:
+    """Remove a whitespace-delimited ATX closing run and trim the heading title."""
+    return re.sub(r"(?:^|[ \t]+)#+[ \t]*$", "", text.rstrip("\r")).strip()
+
+
 def _gh_slug(text: str) -> str:
     """GitHub-style heading slug: lowercase, strip punctuation, spaces→'-', keep CJK."""
     s = text.strip().lower()
@@ -663,7 +668,7 @@ class MarkdownParser(BaseParser):
                 continue
 
             level = len(match.group(1))
-            title = match.group(2).strip()
+            title = _atx_heading_title(match.group(2))
             if not title:
                 continue
             headings.append((match.start(), match.end(), title, level))
@@ -1179,7 +1184,8 @@ class MarkdownParser(BaseParser):
                     rel
                     for rel, text in layout.items()
                     if any(
-                        _gh_slug(h) == anchor for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+                        _gh_slug(_atx_heading_title(heading.group(2))) == anchor
+                        for heading in self._heading_pattern.finditer(text)
                     )
                 ]
                 if len(hits) == 1:
