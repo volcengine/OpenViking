@@ -928,7 +928,7 @@ ov skills remove old-skill -p viking://~/skills --yes
 }
 ```
 
-`estimated_deleted_count` 仅在底层文件系统提供删除数量估算时出现。
+响应包含 `estimated_deleted_count` 时，它表示已提交删除的向量记录数量，而非实际文件或目录数量；该数量不保证向量索引立即可见。
 
 ## 最佳实践
 

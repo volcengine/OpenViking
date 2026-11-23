@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Literal, Mapping, Tuple
 
-from openviking.concurrency import bounded_map
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.resource_rnfv import (
@@ -229,7 +229,6 @@ async def resolve_resource_diff(
     artifact_ref: Any,
     target: Any,
     artifact_paths: Mapping[str, str] | None = None,
-    concurrency: int | None = None,
 ) -> ResourceDiffResult:
     """Resolve R/N/F/V into final states, including bounded body fallbacks."""
     snapshot.validate_for_planning()
@@ -307,18 +306,11 @@ async def resolve_resource_diff(
 
         return rel_path, content_md5(new_bytes)
 
-    if concurrency is None:
-        from openviking_cli.utils.config import get_openviking_config
-
-        concurrency = int(
-            get_openviking_config().queue_workers.add_resource.file_operation_concurrency
-        )
-
     for rel_path, state, md5 in await bounded_map(
-        compare_paths, compare, concurrency=max(1, concurrency)
+        compare_paths, compare, concurrency=FILE_TASK_CONCURRENCY
     ):
         states[rel_path] = (state, md5)
-    for rel_path, md5 in await bounded_map(hash_paths, hash_new, concurrency=max(1, concurrency)):
+    for rel_path, md5 in await bounded_map(hash_paths, hash_new, concurrency=FILE_TASK_CONCURRENCY):
         state, _ = states[rel_path]
         states[rel_path] = (state, md5)
 

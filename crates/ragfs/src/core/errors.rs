@@ -245,15 +245,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_creation() {
-        let err = Error::not_found("/test/path");
-        assert!(matches!(err, Error::NotFound(_)));
-        assert_eq!(err.to_string(), "not found: /test/path");
-    }
+    fn missing_and_permission_denied_have_distinct_error_kinds() {
+        let missing = Error::not_found("/test/path");
+        assert!(matches!(missing, Error::NotFound(_)));
+        assert_eq!(missing.kind_name(), "not_found");
+        assert_eq!(missing.to_string(), "not found: /test/path");
 
-    #[test]
-    fn test_error_display() {
-        let err = Error::permission_denied("/protected");
-        assert_eq!(err.to_string(), "permission denied: /protected");
+        let denied = Error::permission_denied("/protected");
+        assert!(matches!(denied, Error::PermissionDenied(_)));
+        assert_eq!(denied.kind_name(), "permission_denied");
+        assert_eq!(denied.to_string(), "permission denied: /protected");
     }
 }

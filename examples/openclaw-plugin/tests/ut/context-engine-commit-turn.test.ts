@@ -87,6 +87,21 @@ describe("context-engine capture ownership", () => {
     },
   );
 
+  it("forwards durable runtimeContext into capture and peer routing", async () => {
+    const { engine, client } = makeEngine("2026.9.3", { peer_role: "sender" });
+    await expect(
+      engine.commitTurn({
+        ...turn,
+        runtimeContext: { senderId: "ou_sender" },
+      }),
+    ).resolves.toEqual({ status: "committed" });
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls.map((call) => call[5])).toEqual([
+      "ou_sender",
+      undefined,
+    ]);
+  });
+
   it("keeps standalone afterTurn capture on 9.3 alongside durable sessions", async () => {
     const { engine, client } = makeEngine("2026.9.3");
     await engine.afterTurn!({ ...afterTurn, sessionId: "standalone" });

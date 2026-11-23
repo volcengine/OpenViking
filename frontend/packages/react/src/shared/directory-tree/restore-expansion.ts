@@ -17,11 +17,13 @@ export async function restoreDirectoryExpansion(
   expanded: ReadonlySet<string>,
   {
     isExpanded,
+    isDeferred,
     readHome,
     resolveHome,
     restoreListed,
   }: {
     isExpanded: (uri: string) => boolean;
+    isDeferred: (uri: string) => boolean;
     readHome: () => string | undefined;
     resolveHome: (signal: AbortSignal) => Promise<string | undefined>;
     restoreListed: (uri: string) => void;
@@ -72,7 +74,9 @@ export async function restoreDirectoryExpansion(
     const pending = [...wanted];
     for (const uri of pending)
       for (const child of children.get(uri) ?? []) pending.push(child);
-    unresolved.set(parent, pending);
+    unresolved.set(parent, [
+      ...new Set([...(unresolved.get(parent) ?? []), ...pending]),
+    ]);
   };
   const restore = async (
     parent: string,
@@ -108,7 +112,12 @@ export async function restoreDirectoryExpansion(
         }
         const key = identify(entry.uri);
         const saved = wantedByKey.get(key);
-        if (!saved || !wanted.delete(saved)) continue;
+        if (!saved) continue;
+        if (isDeferred(saved)) {
+          preserve(parent, new Set([saved]));
+          continue;
+        }
+        if (!wanted.delete(saved)) continue;
         wantedByKey.delete(key);
         if (
           entry.isDir &&

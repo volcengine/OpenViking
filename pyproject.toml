@@ -37,6 +37,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
+    "markdown-it-py>=3,<5",
     "jsonschema>=4.23.0",
     "httpx>=0.25.0",
     "pdfplumber>=0.10.0",
@@ -96,6 +97,10 @@ dependencies = [
 
 
 [project.optional-dependencies]
+sqlite = [
+    "aiosqlite>=0.20,<1",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+]
 reporting = [
     "kafka-python>=3.0.12,<4",
 ]
@@ -121,6 +126,7 @@ redis-mysql = [
   "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
 test = [
+  "aiosqlite>=0.20,<1",
   "SQLAlchemy[asyncio]>=2.0,<2.1",
   "redis>=5.3.1,<7",
   "pytest>=7.0.0",
@@ -275,6 +281,7 @@ openviking = [
     "server/account_stores/sql/postgres/*.sql",
     "service/sql/*.sql",
     "service/sql/changes/*.sql",
+    "observability/usage_audit/sql/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]

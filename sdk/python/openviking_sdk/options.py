@@ -35,6 +35,7 @@ class FindOptions(_ExtraOptions, total=False):
 
 class SearchOptions(FindOptions, total=False):
     search_type: Literal["semantic", "keywords"]
+    args: Dict[str, Any]
 
 
 class SearchContextOptions(_ExtraOptions, total=False):

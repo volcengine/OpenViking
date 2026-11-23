@@ -146,7 +146,14 @@ export function SessionHistoryDialog({
           >
             {labels.cancelSessionAction}
           </Button>
-          <Button type="primary" htmlType="submit" loading={pending}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={pending}
+            className={
+              renaming ? undefined : 'ov-viking-bot__session-confirm-delete'
+            }
+          >
             {renaming ? labels.saveSessionName : labels.confirmSessionRemoval}
           </Button>
         </div>

@@ -1,5 +1,7 @@
 # OpenClaw
 
+> **Recommended: connect through [OpenViking Gateway](../guides/15-gateway.md).** Turn the plugin below off, point the model base URL at the gateway, and use a gateway key instead of the provider key. The gateway then recalls memory for each new user message and saves the conversation. The [upstream](../gateway/07-upstreams.md#upstreams) needs its own provider API key, so a subscription login cannot be used. Settings are in [Connect clients](../gateway/03-connect-clients.md#openclaw-and-hermes), with [Get started with OpenViking Gateway](../gateway/02-quickstart.md) for a first key; [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin) covers which fits better. The official page is [openviking.ai/gateway](https://openviking.ai/gateway).
+
 Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
 
 Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)
@@ -95,8 +97,10 @@ The main branch calls `getSessionContext(tokenBudget)` and builds:
 ```text
 summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
 messages = [summaryMessage] + OV active messages
-systemPromptAddition = Session Context Guide (when archives exist) + user profile (when profile.md exists) + recalled context (when available)
+systemPromptAddition = Session Context Guide (when archives exist) + user profile (when profile.md exists)
 ```
+
+Recalled context is not part of `assemble()` when the plugin has the `plugins.entries.openviking.hooks.allowConversationAccess` grant, which setup writes. A `before_prompt_build` hook then recalls once per turn from the current request and returns the block as `prependContext`; OpenClaw freezes it into that user turn and replays it unchanged, so the cached history prefix survives later turns. Without the grant, the main branch appends recalled context to `systemPromptAddition` as before. That addition changes every turn and can invalidate the provider prompt cache for the history after it.
 
 `latest_archive_overview` is the summary text returned by the server; `[Session History Summary]` is the literal heading prepended by the plugin. This synthetic user message is inserted only when the overview is nonempty. Active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
 

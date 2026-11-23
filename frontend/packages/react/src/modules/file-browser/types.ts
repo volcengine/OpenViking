@@ -1,3 +1,4 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { DirectoryExpansionSnapshot } from '../../shared/directory-tree/types.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
@@ -69,6 +70,8 @@ export interface FileBrowserLabels {
   formatPreviewUpdatedAt?: (time: string) => string;
   /** 资源预览的模型提示。空字符串可隐藏。Model notice for resources; pass an empty string to hide it. */
   previewModelNotice?: string;
+  /** AI 生成标识。AI-generated content label. */
+  previewAiGenerated?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -89,6 +92,10 @@ export interface FileBrowserLabels {
   searchEmpty?: string;
   /** 搜索请求失败的结论，原因由服务端返回。Conclusion when the search request fails; the reason comes from the server. */
   searchFailed?: string;
+  /** Grep 正则无效时的语法说明。Syntax guidance when a Grep expression is invalid. */
+  searchInvalidPattern?: string;
+  /** 展开服务端原始错误的入口。Disclosure label for the original server error. */
+  searchErrorDetails?: string;
   /** 各检索方式的输入提示。Input placeholder of each retrieval mode. */
   searchModePlaceholders?: Record<SearchMode, string>;
   /** 各检索方式的说明。One-line description of each retrieval mode. */
@@ -101,6 +108,12 @@ export interface FileBrowserLabels {
   searchScopes?: string;
   /** 选择目录的入口。Entry that opens the directory picker. */
   searchPickScope?: string;
+  /** 选择所有支持目录。Selects every supported directory. */
+  searchAllScopes?: string;
+  /** 放弃目录选择草稿。Discards the directory selection draft. */
+  searchCancelScopes?: string;
+  /** 应用目录选择草稿。Applies the directory selection draft. */
+  searchConfirmScopes?: string;
   /** 目录筛选项为空时的说明。Shown when no scope can be filtered. */
   searchScopesUnsupported?: string;
   /** 内容层级的标题。Title of the content-level filter. */
@@ -123,12 +136,14 @@ export interface FileBrowserLabels {
   searchFilterUnsupported?: string;
   /** 检索结果数量，参数为条数。Result count; receives the number. */
   searchResultCount?: (count: number) => string;
-  /** 模式标签旁的说明。Description beside the mode chip. */
+  /** @deprecated 模式说明随 searchModeHints 更新。Mode descriptions now follow searchModeHints. */
   searchVia?: string;
   /** 切换检索方式的入口。Entry that switches the retrieval mode. */
   searchSwitchMode?: string;
   /** 高级筛选按钮的无障碍名称。Accessible name of the advanced-filter button. */
   searchAdvancedLabel?: string;
+  /** 带生效筛选数量的名称，接收按钮名称和本地化数字。Label with active filters; receives the label and formatted count. */
+  searchAdvancedLabelWithCount?: (label: string, count: string) => string;
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
   searchDismiss?: string;
@@ -219,6 +234,8 @@ export interface FileBrowserProps extends Omit<
   acl?: boolean | FileBrowserAclOptions;
   /** 禁用预览编辑、导入与文件删除。Disables preview editing, import and file deletion. */
   readOnly?: boolean;
+  /** 隐藏目录树中无权访问的节点，保留可穿透目录；默认关闭。Hides denied tree entries while retaining traversal-only directories; off by default. */
+  hideDeniedEntries?: boolean;
   /** 内置预览操作的显隐开关，默认按资源能力显示。Visibility flags for native preview operations. */
   previewActions?: FileBrowserPreviewActions;
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
@@ -278,6 +295,7 @@ export interface FileBrowserProps extends Omit<
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /** Overrides individual requests for the built-in experience dashboard. */
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   /**
    * 用户请求打开或关闭内置接入抽屉时触发；宿主改变属性时不触发。
    * Called when the user requests to open or close the built-in connection drawer.

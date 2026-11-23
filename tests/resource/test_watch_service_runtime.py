@@ -15,6 +15,7 @@ from openviking.resource.watch_store_file import FileWatchStore
 from openviking.service.resource_service import ResourceService
 from openviking.utils.git_auth import GIT_AUTH_FAILED, raise_git_auth_error
 from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.utils.config.parser_config import CodeConfig
 from tests.utils.watch_fixtures import reserve_watch, shape_watch
 
 TARGET = "viking://resources/doc"
@@ -22,7 +23,9 @@ OWNER = {"account_id": "default", "user_id": "default"}
 
 
 @pytest_asyncio.fixture
-async def assembly(watch_vfs, watch_tracker):
+async def assembly(watch_vfs, watch_tracker, monkeypatch):
+    config = SimpleNamespace(code=CodeConfig())
+    monkeypatch.setattr("openviking.utils.code_hosting_utils.get_openviking_config", lambda: config)
     tracker = watch_tracker
 
     async def refresh(**kwargs):

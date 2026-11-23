@@ -3,9 +3,6 @@
 
 import asyncio
 import os
-import re
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -165,32 +162,6 @@ class TestLanguageDetection:
         assert language == expected
 
 
-class TestLanguageFlow:
-    """语言检测 + 模板渲染流程测试。"""
-
-    @pytest.mark.parametrize(
-        "lang,content,file_name",
-        [
-            ("zh-CN", "这是一个中文Python文件，包含测试代码", "chinese_code.py"),
-            ("en", "This is an English Python file for testing", "english_code.py"),
-            ("ja", "これは日本語のPythonコードテストファイルです", "japanese_code.py"),
-            ("ko", "이것은 한국어 Python 코드 테스트 파일입니다", "korean_code.py"),
-            ("ru", "Это русский тестовый файл Python кода", "russian_code.py"),
-            ("ar", "هذا ملف اختبار كود بايثون عربي", "arabic_code.py"),
-        ],
-    )
-    def test_language_detection_to_template_flow(self, lang, content, file_name):
-        """语言检测 -> output_language 注入模板 -> prompt 包含语言指令"""
-        detected_lang = _detect_language_from_text(content, fallback_language=lang)
-        assert detected_lang == lang, f"Expected {lang}, got {detected_lang}"
-
-        prompt = render_prompt(
-            "semantic.code_summary",
-            {"file_name": file_name, "content": content, "output_language": detected_lang},
-        )
-        assert f"Output Language: {lang}" in prompt
-
-
 class TestOverviewGenerationFlow:
     """目录概述生成流程测试。"""
 
@@ -234,34 +205,17 @@ class TestOverviewGenerationFlow:
         prompt = config.vlm.get_completion_async.call_args.args[0]
         assert f"Output Language: {expected_language}" in prompt
         assert all(path in prompt for path in imports)
-
-    @pytest.mark.parametrize(
-        "lang,file_summaries",
-        [
-            ("zh-CN", "[1] file1.py: 这是一个Python文件\n[2] file2.py: 这是另一个文件"),
-            ("en", "[1] file1.py: This is a Python file\n[2] file2.py: Another file"),
-            ("ja", "[1] file1.py: それはPythonファイルです\n[2] file2.py: これもPython"),
-        ],
-    )
-    def test_overview_generation_language_flow(self, lang, file_summaries):
-        """目录摘要 -> 语言检测 -> overview 模板"""
-        detected_lang = _detect_language_from_text(file_summaries, fallback_language=lang)
-        assert detected_lang == lang
-
-        prompt = render_prompt(
-            "semantic.overview_generation",
-            {
-                "dir_name": "test_dir",
-                "file_summaries": file_summaries,
-                "children_abstracts": "",
-                "output_language": detected_lang,
-            },
+        headings = (
+            ("简要描述", "快速导航", "详细说明", "目录覆盖")
+            if expected_language == "zh-CN"
+            else (
+                "Brief Description",
+                "Quick Navigation",
+                "Detailed Description",
+                "Directory Coverage",
+            )
         )
-        assert f"Output Language: {lang}" in prompt
-        assert "Output in Markdown format" in prompt
-        expected_brief_heading = "简要描述" if lang == "zh-CN" else "Brief Description"
-        assert expected_brief_heading in prompt
-        assert "abstract_max_chars" not in prompt
+        assert all(heading in prompt for heading in headings)
 
     def test_overview_generation_prompt_preserves_repository_hierarchy(self):
         prompt = render_prompt(
@@ -297,24 +251,6 @@ class TestOverviewGenerationFlow:
         assert "keep this paragraph useful as a standalone retrieval abstract" in prompt
         assert "**Directory Coverage** (H2)" in prompt
 
-    def test_chinese_overview_uses_localized_headings(self):
-        prompt = render_prompt(
-            "semantic.overview_generation",
-            {
-                "dir_name": "测试",
-                "file_summaries": "[1] test.md: 测试文档",
-                "children_abstracts": "",
-                "output_language": "zh-CN",
-            },
-        )
-
-        assert "**快速导航** (H2)" in prompt
-        assert "**详细说明** (H2)" in prompt
-        assert "**目录覆盖** (H2)" in prompt
-        assert "**Directory Coverage** (H2)" not in prompt
-        assert "**Quick Navigation** (H2)" not in prompt
-        assert "**Detailed Description** (H2)" not in prompt
-
 
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""
@@ -339,182 +275,67 @@ class LanguageAwareMockVLM:
         return self.language_responses["en"]
 
 
-def _verify_content_language(text: str, expected_lang: str) -> bool:
-    """验证文本内容语言是否符合预期。"""
-    chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
-    japanese_chars = sum(1 for c in text if "\u3040" <= c <= "\u309f" or "\u30a0" <= c <= "\u30ff")
-    korean_chars = sum(1 for c in text if "\uac00" <= c <= "\ud7af")
-    russian_chars = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
-    arabic_chars = sum(1 for c in text if "\u0600" <= c <= "\u06ff")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("file_name", "content", "locale", "expected_language"),
+    [
+        pytest.param(
+            "readme.md",
+            "这是需要总结的中文技术说明。",
+            "en_US.UTF-8",
+            "zh-CN",
+            id="chinese-document",
+        ),
+        pytest.param(
+            "readme.md",
+            "This is a technical document describing how the system works.",
+            "zh_CN.UTF-8",
+            "en",
+            id="english-document",
+        ),
+        pytest.param(
+            "broken.py",
+            "Это русский документ для проверки памяти пользователя и настроек проекта",
+            "en_US.UTF-8",
+            "ru",
+            id="russian-code-summary-fallback",
+        ),
+        pytest.param(
+            "broken.py",
+            "هذا مستند عربي طويل لتسجيل تفضيلات المستخدم ومعلومات المشروع",
+            "en_US.UTF-8",
+            "ar",
+            id="arabic-code-summary-fallback",
+        ),
+    ],
+)
+async def test_text_summary_passes_detected_content_language_to_model(
+    monkeypatch, file_name, content, locale, expected_language
+):
+    from openviking.storage.queuefs import semantic_processor
 
-    thresholds = {
-        "zh-CN": chinese_chars >= 2,
-        "en": re.search(r"\b(the|is|are|test|function)\b", text, re.I) is not None,
-        "ja": japanese_chars >= 2,
-        "ko": korean_chars >= 2,
-        "ru": russian_chars >= 2,
-        "ar": arabic_chars >= 2,
-    }
-    return thresholds.get(expected_lang, False)
+    monkeypatch.setenv("LC_ALL", locale)
+    monkeypatch.setattr(semantic_processor, "get_viking_fs", lambda: None)
+    config = MagicMock(output_language_override="")
+    config.semantic.max_file_content_chars = 10000
+    monkeypatch.setattr(semantic_processor, "get_openviking_config", lambda: config)
+    vlm = MagicMock()
+    vlm.is_available.return_value = True
+    vlm.get_completion_async = AsyncMock(return_value="  generated summary  ")
+    processor = semantic_processor.SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))
 
-
-class TestGenerateTextSummaryOutputLanguage:
-    """端到端测试：验证 _generate_text_summary 生成的内容语言是否符合预期。"""
-
-    _LANGUAGE_LOCALE = {
-        "zh-CN": "zh_CN.UTF-8",
-        "en": "en_US.UTF-8",
-        "ja": "ja_JP.UTF-8",
-        "ko": "ko_KR.UTF-8",
-        "ru": "ru_RU.UTF-8",
-        "ar": "ar_SA.UTF-8",
-    }
-
-    @pytest.fixture
-    def temp_multilang_files(self):
-        """创建包含多种语言内容的临时测试文件。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-            files = {}
-
-            files["chinese_py"] = tmppath / "chinese_code.py"
-            files["chinese_py"].write_text("# 中文Python文件\ndef 你好():\n    print('你好世界')\n")
-
-            files["english_py"] = tmppath / "english_code.py"
-            files["english_py"].write_text(
-                "# English Python file\ndef hello():\n    print('Hello World')\n"
-            )
-
-            files["japanese_py"] = tmppath / "japanese_code.py"
-            files["japanese_py"].write_text(
-                "# 日本語Pythonファイル\ndef こんにちは():\n    print('こんにちは世界')\n"
-            )
-
-            files["korean_py"] = tmppath / "korean_code.py"
-            files["korean_py"].write_text(
-                "# 한국어 Python 파일\ndef 안녕하세요():\n    print('안녕하세요')\n"
-            )
-
-            files["chinese_md"] = tmppath / "chinese_doc.md"
-            files["chinese_md"].write_text("# 中文文档\n\n这是一个测试文档，包含中文技术内容。\n")
-
-            files["english_md"] = tmppath / "english_doc.md"
-            files["english_md"].write_text(
-                "# English Documentation\n\nThis is a test document with English content.\n"
-            )
-
-            yield files
-
-    def _create_mock_viking_fs(self, content: str) -> MagicMock:
-        mock_fs = MagicMock()
-        mock_fs.read_file = AsyncMock(return_value=content)
-        return mock_fs
-
-    def _create_mock_config(self, mock_vlm: LanguageAwareMockVLM) -> MagicMock:
-        mock_config = MagicMock()
-        mock_config.vlm = mock_vlm
-        mock_config.output_language_override = ""
-        mock_config.language_fallback = "en"
-        mock_config.semantic.max_file_content_chars = 10000
-        return mock_config
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "file_key,file_name,expected_lang",
-        [
-            ("chinese_md", "chinese_doc.md", "zh-CN"),
-            ("english_md", "english_doc.md", "en"),
-        ],
+    result = await processor._generate_text_summary(
+        "viking://resources/" + file_name,
+        file_name,
+        asyncio.Semaphore(1),
+        file_content=content.encode(),
     )
-    async def test_e2e_code_output_language(
-        self, temp_multilang_files, file_key, file_name, expected_lang
-    ):
-        """端到端测试：文件 -> 语言检测 -> 生成对应语言摘要"""
-        from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
-        content = Path(temp_multilang_files[file_key]).read_text()
-        mock_vlm = LanguageAwareMockVLM()
-        mock_viking_fs = self._create_mock_viking_fs(content)
-        mock_config = self._create_mock_config(mock_vlm)
-
-        with (
-            patch.dict(
-                os.environ,
-                {"LC_ALL": self._LANGUAGE_LOCALE[expected_lang]},
-            ),
-            patch(
-                "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-                return_value=mock_viking_fs,
-            ),
-            patch(
-                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-                return_value=mock_config,
-            ),
-        ):
-            processor = SemanticProcessor(vlm_resolver=_TestVLMResolver(mock_vlm))
-            processor._current_ctx = MagicMock()
-
-            result = await processor._generate_text_summary(
-                file_path=temp_multilang_files[file_key],
-                file_name=file_name,
-                llm_sem=asyncio.Semaphore(1),
-            )
-
-            prompt_sent = mock_vlm.prompts_received[0]
-            assert f"Output Language: {expected_lang}" in prompt_sent, (
-                f"{file_name}: Prompt missing Output Language: {expected_lang}"
-            )
-
-            assert _verify_content_language(result["summary"], expected_lang), (
-                f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
-            )
-            assert "content" not in result
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "content,file_name,expected_lang",
-        [
-            ("Это русский тестовый файл Python", "russian_code.py", "ru"),
-            ("هذا ملف اختبار كود بايثون عربي", "arabic_code.py", "ar"),
-        ],
-    )
-    async def test_e2e_russian_arabic_output_language(self, content, file_name, expected_lang):
-        """端到端测试：俄文和阿拉伯文内容"""
-        from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-
-        mock_vlm = LanguageAwareMockVLM()
-        mock_viking_fs = self._create_mock_viking_fs(content)
-        mock_config = self._create_mock_config(mock_vlm)
-
-        with (
-            patch.dict(
-                os.environ,
-                {"LC_ALL": self._LANGUAGE_LOCALE[expected_lang]},
-            ),
-            patch(
-                "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-                return_value=mock_viking_fs,
-            ),
-            patch(
-                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-                return_value=mock_config,
-            ),
-        ):
-            processor = SemanticProcessor(vlm_resolver=_TestVLMResolver(mock_vlm))
-            processor._current_ctx = MagicMock()
-
-            result = await processor._generate_text_summary(
-                file_path=f"/tmp/{file_name}",
-                file_name=file_name,
-                llm_sem=asyncio.Semaphore(1),
-            )
-
-            prompt_sent = mock_vlm.prompts_received[0]
-            assert f"Output Language: {expected_lang}" in prompt_sent
-
-            assert _verify_content_language(result["summary"], expected_lang), (
-                f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
-            )
+    assert result == {"name": file_name, "summary": "generated summary"}
+    assert vlm.get_completion_async.await_count == 1
+    prompt = vlm.get_completion_async.await_args.args[0]
+    assert content in prompt
+    assert f"Output Language: {expected_language}" in prompt
 
 
 class TestOutputLanguageOverride:

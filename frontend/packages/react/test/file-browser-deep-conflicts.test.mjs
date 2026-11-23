@@ -61,9 +61,10 @@ test('conflicts beyond the native recursive depth limit mark ancestors before th
   try {
     assert.equal(pending('wiki'), true);
     assert.equal(row('a'), undefined);
+    await toggle('wiki');
     for (const name of ['wiki', 'a', 'b', 'c', 'd']) {
       assert.equal(pending(name), true, name);
-      await toggle(name);
+      assert.equal(row(name).getAttribute('aria-expanded'), 'true', name);
     }
     assert.equal(pending('conflict.md'), true);
     await toggle('wiki');

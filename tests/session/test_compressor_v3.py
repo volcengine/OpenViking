@@ -11,7 +11,6 @@ import pytest
 
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
-from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import (
     SessionCompressorV3,
     _commit_experience_snapshot,
@@ -95,11 +94,6 @@ def _case_operation() -> ResolvedOperation:
     )
 
 
-def test_factory_defaults_to_v3():
-    compressor = create_session_compressor(vikingdb=None)
-    assert isinstance(compressor, SessionCompressorV3)
-
-
 @pytest.mark.asyncio
 async def test_commit_extraction_propagates_template_conflict():
     compressor = SessionCompressorV3(
@@ -122,16 +116,6 @@ async def test_commit_extraction_propagates_template_conflict():
         )
     assert raised.value is conflict
     compressor._write_final_memory_diff.assert_not_awaited()
-
-
-def test_factory_ignores_deprecated_memory_version():
-    assert isinstance(
-        create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3
-    )
-    assert isinstance(
-        create_session_compressor(vikingdb=None, memory_version="unsupported"),
-        SessionCompressorV3,
-    )
 
 
 def test_extract_long_term_memories_preserves_legacy_positional_parameter_order():
@@ -475,6 +459,7 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         ctx=_ctx(),
         allowed_memory_types={"profile"},
         agent_evolution_enabled=False,
+        strict_extract_errors=True,
     )
 
     assert initialized_with == [{"profile"}]
@@ -848,6 +833,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
+        strict_extract_errors=True,
     )
 
     assert [context.uri for context in result] == [canonical_uri]

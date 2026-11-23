@@ -158,9 +158,7 @@ def initialize(
         manager.initialize_all(
             session_id="shared-group",
             hermes_home=str(home),
-            platform="telegram",
-            user_id="alice",
-            **identity,
+            **{"platform": "telegram", "user_id": "alice", **identity},
         )
     return home, provider, module, manager, backend
 
@@ -377,6 +375,30 @@ def test_older_hooks_and_no_gateway_sender(external_provider, monkeypatch, platf
             provider.on_turn_start(2, "Remember another fact", author_id=None)
             provider.sync_turn(
                 "Remember another fact", "OK", session_id="shared-group", turn_author={"id": None}
+            )
+            assert provider._drain_writers("shared-group", timeout=10)
+            assert "peer_id" not in backend.pending[0]
+    finally:
+        manager.shutdown_all()
+
+
+def test_cli_owner_is_not_a_gateway_sender(external_provider, monkeypatch):
+    home, provider, _, manager, backend = initialize(
+        external_provider, monkeypatch, platform="cli", user_id="uid:999"
+    )
+    try:
+        with profile_scope(home):
+            provider.on_turn_start(1, "Remember this")
+            provider.sync_turn("Remember this", "OK", session_id="shared-group")
+            assert provider._drain_writers("shared-group", timeout=10)
+            user, assistant = backend.pending
+            assert user["role"] == "user" and "peer_id" not in user
+            assert assistant["peer_id"] == "telegram.assistant"
+            backend.pending.clear()
+            # Newer hosts repeat the owner as the per-turn author.
+            provider.on_turn_start(2, "Remember more", author_id="uid:999")
+            provider.sync_turn(
+                "Remember more", "OK", session_id="shared-group", turn_author={"id": "uid:999"}
             )
             assert provider._drain_writers("shared-group", timeout=10)
             assert "peer_id" not in backend.pending[0]

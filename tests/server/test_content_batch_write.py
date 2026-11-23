@@ -31,7 +31,6 @@ from openviking_cli.exceptions import (
     ConflictError,
     InvalidArgumentError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
@@ -205,7 +204,7 @@ async def test_system_batch_write_is_file_only_without_queue_work(
         "viking://system/memory/memory_templates/builtin",
     ],
 )
-async def test_system_builtin_batch_write_rejects_external_root_writes(
+async def test_root_can_write_builtin_binary_assets_without_indexing(
     _coordinator_queue_for_unit_tests,
     root,
 ):
@@ -216,23 +215,24 @@ async def test_system_builtin_batch_write_rejects_external_root_writes(
     coordinator = ContentWriteCoordinator(vfs)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
-    with pytest.raises(PermissionDeniedError):
-        await coordinator.batch_write(
-            root_uri=root,
-            operations=[
-                {
-                    "uri": uri,
-                    "content_base64": base64.b64encode(content).decode("ascii"),
-                    "mode": "replace",
-                }
-            ],
-            ctx=ctx,
-            wait=False,
-        )
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": uri,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "mode": "replace",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
 
-    assert vfs.files == {}
-    assert vfs._async_agfs.paths == []
-    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    assert result["created"] == [uri]
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert vfs.files == {uri: content}
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
     _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
 
 

@@ -112,7 +112,6 @@ export function FileBrowserSearchTime({
               locale={locale}
               onChange={(next) => onChange({ ...filters, since: next })}
             />
-            <span aria-hidden="true">–</span>
             <DatePicker
               aria-label={text.searchUntil}
               placeholder={text.searchUntil}

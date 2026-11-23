@@ -31,6 +31,7 @@ export function AclModal({
   options,
   onClose,
   onUpdated,
+  onPermissionDenied,
 }: {
   uri: string;
   open: boolean;
@@ -42,6 +43,7 @@ export function AclModal({
   userId?: OvIdentityValue;
   options?: FileBrowserAclOptions;
   onClose: () => void;
+  onPermissionDenied: () => void;
   onUpdated: (report: FileBrowserAclReport) => void;
 }) {
   const exposure = useExposure(
@@ -58,6 +60,7 @@ export function AclModal({
     open,
     readOnly: Boolean(options?.readOnly),
     onUpdated,
+    onPermissionDenied,
   });
   const disabled = Boolean(options?.readOnly) || model.phase !== 'ready';
   const entries = model.report?.effective_entries ?? [];
@@ -129,12 +132,15 @@ export function AclModal({
           ? text.saving
           : model.phase === 'loading'
             ? text.loading
-            : model.saved
-              ? text.saved
-              : ''}
+            : ''}
       </div>
-      {model.confirmation ? (
-        <AclConfirmation model={model} text={text} />
+      {model.confirmation?.kind === 'restore' ? (
+        <AclConfirmation
+          model={model}
+          text={text}
+          locale={locale}
+          triggerRef={heading}
+        />
       ) : model.report ? (
         <>
           {model.report.acl_mode === 'restricted' ? (
@@ -174,6 +180,14 @@ export function AclModal({
             onChange={model.change}
           />
         </>
+      ) : null}
+      {model.confirmation?.kind === 'restrict' ? (
+        <AclConfirmation
+          model={model}
+          text={text}
+          locale={locale}
+          triggerRef={heading}
+        />
       ) : null}
     </Modal>
   );

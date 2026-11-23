@@ -2,6 +2,7 @@ import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type VikingBotTask = TaskSnapshot;
 import type { ReactNode } from 'react';
 import type { VikingBotReference } from './capabilities.js';
+import type { VikingBotDebugLabels } from './message-debug.js';
 
 /**
  * 片段类型判别值。两种宿主风格共用这一层：宿主在接入层把各自的流事件
@@ -177,6 +178,8 @@ export interface VikingBotMessage {
   createdAt?: string;
   /** 该助手消息是否仍在生成中。Whether the assistant message is still being written. */
   streaming?: boolean;
+  /** 助手回复被中断。The assistant reply was interrupted before completion. */
+  interrupted?: boolean;
   /**
    * system 消息的语气，缺省为 `info`；`error` 用于连接中断等提示。
    * Tone of a system message, `info` by default; `error` for failures.
@@ -206,6 +209,12 @@ export interface VikingBotMessage {
     key: string;
     /** 动作文案。Action label. */
     label?: ReactNode;
+    /** 按钮样式，缺省为普通按钮。Button appearance, standard by default. */
+    appearance?: 'pill';
+    /** 按钮图标。Decorative button icon. */
+    icon?: ReactNode;
+    /** 显示加载图标并禁用按钮。Shows a spinner and disables the button. */
+    loading?: boolean;
     /** 动作状态。Action status. */
     status?: 'idle' | 'pending' | 'submitted' | 'success' | 'error';
     /** 不可用时的说明。Reason shown when unavailable. */
@@ -254,7 +263,7 @@ export interface VikingBotDraft {
 }
 
 /** 可替换文案，组件内置英文默认值。Replaceable copy; the component ships English defaults. */
-export interface VikingBotLabels {
+export interface VikingBotLabels extends VikingBotDebugLabels {
   activityRunning?: string;
   activityCompleted?: string;
   toolInput?: string;
@@ -301,6 +310,8 @@ export interface VikingBotLabels {
   stop?: string;
   /** 添加附件按钮文案。Attach button label. */
   attach?: string;
+  /** 达到附件上限时的提示，参数为配置的上限。Hint receiving the configured attachment limit. */
+  attachmentLimit?: (limit: number) => string;
   /** 移除附件按钮文案。Remove-attachment button label. */
   removeAttachment?: string;
   uploadingAttachment?: string;

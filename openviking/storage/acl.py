@@ -22,6 +22,12 @@ class AccountConfigReader(Protocol):
     async def get_account(self, account_id: str, field: str) -> Any: ...
 
 
+class AclPrincipalDirectory(Protocol):
+    async def get_user_membership(self, account_id: str, user_id: str) -> Any: ...
+
+    async def get_groups(self, account_id: str) -> list[Any]: ...
+
+
 class AclLevel(str, Enum):
     READ = "read"
     WRITE = "write"
@@ -323,6 +329,34 @@ class AclManager:
     ) -> None:
         self._context_store = context_store
         self._runtime_config = runtime_config
+        self._principal_directory: AclPrincipalDirectory | None = None
+
+    def set_principal_directory(self, directory: AclPrincipalDirectory) -> None:
+        """Bind the registered identities used by API key authentication."""
+        self._principal_directory = directory
+
+    async def validate_principals(self, principals: Iterable[str], ctx: RequestContext) -> None:
+        """Reject grants that cannot apply within the resource's account."""
+        if self._principal_directory is None:
+            return
+        for principal in sorted(set(principals)):
+            kind, _, identifier = normalize_acl_principal(principal).partition(":")
+            if kind == "user":
+                if identifier == "*":
+                    continue
+                exists = await self._principal_directory.get_user_membership(
+                    ctx.account_id, identifier
+                )
+            else:
+                exists = any(
+                    group["group_id"] == identifier
+                    for group in await self._principal_directory.get_groups(ctx.account_id)
+                )
+            if not exists:
+                raise InvalidArgumentError(
+                    "ACL principal must exist in the resource's account; "
+                    "cross-account ACL sharing is not supported"
+                )
 
     def set_runtime_config_manager(self, runtime_config: AccountConfigReader) -> None:
         """Bind the authoritative account configuration reader."""
@@ -605,6 +639,8 @@ class AclManager:
         if entries is None and acl_mode is None:
             raise InvalidArgumentError("entries or acl_mode must be provided")
         proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None
+        if proposed_direct is not None:
+            await self.validate_principals((e.principal for e in proposed_direct.entries), ctx)
         old_records = await self._subtree_records(uri, ctx)
         try:
             effective = await self._apply_subtree(

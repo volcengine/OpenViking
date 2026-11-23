@@ -133,7 +133,7 @@ export async function runChat({
       });
     renderer = true;
     stage = monitoring?.span.child('view-commit');
-    const finished = await timeline.finish();
+    const finished = await timeline.finish({ interrupted });
     if (!current()) return false;
     update({
       messages: finished.messages,
@@ -165,7 +165,10 @@ export async function runChat({
         }));
     }
     if (!delivered) undelivered.push(draft);
-    const finished = await timeline.finish(signal.aborted);
+    const finished = await timeline.finish({
+      persistPartial: signal.aborted,
+      interrupted: signal.aborted,
+    });
     if (!current()) return false;
     const failure = error instanceof Error ? error : new Error(String(error));
     const messages = signal.aborted

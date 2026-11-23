@@ -80,6 +80,7 @@ export interface FileBrowserAclLabels {
   loading?: string;
   saving?: string;
   saved?: string;
+  permissionChanged?: string;
   loadFailed?: string;
   saveFailed?: string;
   principalsFailed?: string;

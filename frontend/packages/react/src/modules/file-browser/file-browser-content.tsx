@@ -55,9 +55,11 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     onAgentConnectOpenChange,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     acl,
     readOnly,
+    hideDeniedEntries,
     previewActions,
     onUriChange,
     onSelect,
@@ -68,8 +70,6 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     previewSlots,
     labels,
     requestOptions,
-    className,
-    style,
     ...rest
   }: FileBrowserProps,
   ref,
@@ -91,7 +91,6 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   // rather than discarded, so the tree returns to where it was dragged once the
   // container widens again.
   const treeMaxWidth = resolveTreeMaxWidth(width);
-  const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
 
   // Keep preview and summary copy stable until locale or host overrides change.
   const { summaryLabels, previewLabels } = useMemo(
@@ -100,9 +99,11 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   );
   const browser = useFileBrowser({
     rootUri,
+    hideDeniedEntries,
     locale,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     dashboardLabels: labels?.dashboard,
     controlled: isControlled,
@@ -126,6 +127,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     locale,
     labels: labels?.acl,
     requestOptions,
+    refreshGeneration: browser.refreshGeneration,
     refresh: browser.actions.refresh,
   });
   const pack = usePackImportPicker(layoutRef, text, locale, permissions);
@@ -140,9 +142,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);
-  const baseClass = stacked
-    ? 'ov-file-browser ov-file-browser--stacked'
-    : 'ov-file-browser';
+  const baseClass = `ov-file-browser${stacked ? ' ov-file-browser--stacked' : ''}`;
 
   const exposure = useExposureRef('file_browser_show', layoutRef);
   return (
@@ -150,15 +150,15 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
       <div
         {...rest}
         ref={exposure}
-        className={className ? `${baseClass} ${className}` : baseClass}
+        className={[baseClass, rest.className].filter(Boolean).join(' ')}
         {...search.shortcut}
         style={
           {
-            ...style,
+            ...rest.style,
             // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
             // The divider is its own column: the tree width applies to the tree alone
             // and the two together are what the left side occupies.
-            '--ov-file-browser-tree-width': `${treeWidth}px`,
+            '--ov-file-browser-tree-width': `${Math.min(preferredTreeWidth, treeMaxWidth)}px`,
           } as CSSProperties
         }
       >
@@ -194,7 +194,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
             label={text.resizeTree}
             min={TREE_MIN_WIDTH}
             max={treeMaxWidth}
-            value={treeWidth}
+            value={Math.min(preferredTreeWidth, treeMaxWidth)}
             onResize={setPreferredTreeWidth}
             className="ov-file-browser__resizer"
           />

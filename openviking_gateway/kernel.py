@@ -158,12 +158,14 @@ class MemoryKernel:
         except Exception as error:
             metrics = {}
             if isinstance(error, asyncio.TimeoutError) and budget.expired:
-                logger.warning(
-                    "OpenViking Gateway preparation timed out; forwarding without memory"
-                )
+                logger.info("gateway preparation timed out; forwarding without memory")
                 degrade(metrics, "prepare_timeout")
             else:
-                logger.exception("OpenViking Gateway preparation failed")
+                logger.info(
+                    "gateway preparation failed; forwarding without memory error_type=%s",
+                    type(error).__name__,
+                    extra={"degraded": True, "error_type": type(error).__name__},
+                )
                 degrade(metrics, "memory_store_failure")
             return self.degraded_body(body, protocol), None, metrics
 
@@ -940,7 +942,9 @@ class MemoryKernel:
             await self.compaction_failed(request, error.reason)
             return
         except Exception:
-            logger.exception("OpenViking Gateway summary failed")
+            logger.info(
+                "gateway summary failed; using compaction fallback", extra={"degraded": True}
+            )
             request.metrics["compaction_ms"] = round((time.monotonic() - started) * 1000, 2)
             await self.compaction_failed(request, "summary_failed")
             return

@@ -1,6 +1,5 @@
 import { Switch } from '../../shared/primitives/switch/switch.js';
-import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
-import { Button } from '../../shared/primitives/button/button.js';
+import { PathCopyButton } from '../../shared/path-copy-button/path-copy-button.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import type { usePreviewHistory } from './use-preview-history.js';
@@ -113,22 +112,20 @@ export function PreviewHistoryPath({
 }: {
   path: string;
   text: PreviewHistoryProps['text'];
-  onCopy: () => void;
+  onCopy: () => Promise<boolean>;
 }) {
   return (
     <div className="ov-file-history__file-path">
       <Tooltip content={path}>
         <span>{path}</span>
       </Tooltip>
-      <Tooltip content={text.copyPath} focusVisibleOnly>
-        <Button
-          size="small"
-          type="text"
-          aria-label={text.copyPath}
-          icon={<CopyIcon aria-hidden="true" />}
-          onClick={onCopy}
-        />
-      </Tooltip>
+      <PathCopyButton
+        key={path}
+        label={text.copyPath}
+        successLabel={text.pathCopied ?? text.copied}
+        failureLabel={text.copyFailed}
+        onClick={onCopy}
+      />
     </div>
   );
 }

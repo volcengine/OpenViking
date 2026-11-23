@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi.openapi.utils import get_openapi
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
@@ -214,18 +215,28 @@ async def test_read_content(client, service, monkeypatch):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     legacy_uri = "viking://resources/业务 域/章节 一.md"
     encoded_uri = "viking://resources/业务%20域/章节%20一.md"
-    await service.viking_fs.write_file(legacy_uri, "legacy content", ctx=ctx)
+    text = "ascii\n" * 11000 + '中文🙂"\\\r\n\t\x00\u2028\u2029'
+    for uri, content in ((legacy_uri, ""), (encoded_uri, text)):
+        await service.viking_fs.write_file(uri, content, ctx=ctx)
+        resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "status": "ok",
+            "result": content,
+            "error": None,
+            "telemetry": None,
+            "profile": None,
+        }
+        assert resp.headers["content-type"] == "application/json"
+        assert int(resp.headers["content-length"]) == len(resp.content)
 
-    resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"] == "legacy content"
+    schema = get_openapi(title="Content API", version="1", routes=content_router.router.routes)
+    success = schema["paths"]["/api/v1/content/read"]["get"]["responses"]["200"]
+    assert success["content"]["application/json"]["schema"]["$ref"].endswith("/Response")
 
-    await service.viking_fs.write_file(encoded_uri, "literal percent20 content", ctx=ctx)
-    resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
-    assert resp.status_code == 200
-    assert resp.json()["result"] == "literal percent20 content"
+    resp = await client.get("/api/v1/content/read")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
     resp = await client.get(
         "/api/v1/content/read",
@@ -234,41 +245,44 @@ async def test_read_content(client, service, monkeypatch):
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
 
-    reader = AsyncMock(side_effect=[PermissionDeniedError("denied"), b"legacy content"])
-    monkeypatch.setattr(service.viking_fs, "read_file_bytes", reader)
+    reader = AsyncMock(side_effect=[PermissionDeniedError("denied"), "legacy content"])
+    monkeypatch.setattr(service.viking_fs, "read_file", reader)
     resp = await client.get("/api/v1/content/read", params={"uri": encoded_uri})
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
     reader.assert_awaited_once()
 
 
-async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypatch):
-    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(
+    client, service, monkeypatch
+):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     uri = "viking://user/test_user/memories/notes/private.md"
-    raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret": "do-not-leak"}\n-->'
-    calls = []
+    metadata = '{"example": "stored metadata"}'
+    raw_content = f"line one\nline two\n\n<!-- MEMORY_FIELDS\n{metadata}\n-->"
+    await service.viking_fs.write_file(uri, raw_content, ctx=ctx)
+    live_read = AsyncMock(return_value="live context")
+    monkeypatch.setattr(service.mcps, "read_live_context", live_read)
 
-    async def fake_read_visible(_uri, *, ctx, offset, limit):
-        calls.append((offset, limit))
-        return "visible slice"
+    visible = await client.get("/api/v1/content/read", params={"uri": uri, "offset": 1, "limit": 1})
+    assert visible.status_code == 200
+    assert visible.json()["result"] == "line two"
 
-    async def fake_read(_uri, *, ctx, offset, limit):
-        lines = raw.splitlines(keepends=True)
-        return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
-
-    monkeypatch.setattr(
-        content_router,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read=fake_read, read_visible=fake_read_visible)),
+    raw = await client.get(
+        "/api/v1/content/read", params={"uri": uri, "offset": 4, "limit": 1, "raw": True}
     )
+    assert raw.status_code == 200
+    assert raw.json()["result"] == metadata + "\n"
 
-    response = await content_router.read(uri=uri, offset=4, limit=1, raw=False, _ctx=ctx)
-    assert response.result == "visible slice"
-    assert calls[-1] == (4, 1)
+    full = await client.get("/api/v1/content/read", params={"uri": uri, "raw": True})
+    assert full.status_code == 200
+    assert full.json()["result"] == raw_content
+    live_read.assert_not_awaited()
 
-    raw_response = await content_router.read(uri=uri, offset=4, limit=1, raw=True, _ctx=ctx)
-    assert raw_response.result == '{"secret": "do-not-leak"}\n'
-    assert calls[-1] == (4, 1)
+    live = await client.get("/api/v1/content/read", params={"uri": uri})
+    assert live.status_code == 200
+    assert live.json()["result"] == "live context"
+    live_read.assert_awaited_once()
 
 
 async def test_read_directory_uri_returns_invalid_argument(client_with_resource):
@@ -325,18 +339,27 @@ async def test_overview_content(client_with_resource, service):
     assert body["result"] == f"# {uri}\n\n[Directory overview is not ready]"
 
 
-async def test_ls_file_uri_returns_invalid_argument(client, service):
+async def test_listing_a_file_returns_one_entry(client, service):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     file_uri = "viking://resources/directory-type-check/file.md"
     await service.viking_fs.mkdir("viking://resources/directory-type-check", ctx=ctx)
     await service.viking_fs.write_file(file_uri, "file content", ctx=ctx)
 
-    resp = await client.get("/api/v1/fs/ls", params={"uri": file_uri})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "not a directory" in body["error"]["message"]
+    for endpoint, output in (("ls", "original"), ("tree", "agent")):
+        response = await client.get(
+            f"/api/v1/fs/{endpoint}", params={"uri": file_uri, "output": output}
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        (entry,) = body["result"]
+        assert entry["uri"] == file_uri
+        assert entry["isDir"] is False
+        assert entry["name" if endpoint == "ls" else "rel_path"] == "file.md"
+        assert body["has_more"] is False
+
+    next_page = await client.get("/api/v1/fs/tree", params={"uri": file_uri, "offset": 1})
+    assert next_page.status_code == 200, next_page.text
+    assert next_page.json()["result"] == []
 
 
 async def test_overview_missing_uri_returns_not_found(client):

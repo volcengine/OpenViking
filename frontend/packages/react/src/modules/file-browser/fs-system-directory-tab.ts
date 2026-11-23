@@ -1,6 +1,7 @@
 import type { FilePreviewDirectoryTab } from '../../components/file-preview/index.js';
 import { directoryIcon } from './fs-icon.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { decodePathLabel } from '../../shared/path-label.js';
 
 /** Built-in directories keep their path and tab, but have no summary levels. */
 export function toSystemDirectoryTab(
@@ -11,7 +12,7 @@ export function toSystemDirectoryTab(
   return {
     kind: 'directory',
     key: uri,
-    title: name,
+    title: decodePathLabel(name),
     icon: directoryIcon(),
     levels: [
       {

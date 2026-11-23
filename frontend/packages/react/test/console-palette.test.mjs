@@ -117,7 +117,7 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       'add-skill',
       'add-memory',
       'find',
-      'compile',
+      'compile create',
     ]);
     assert.equal(
       host.container.querySelector('.ov-command-console__empty-title')
@@ -139,8 +139,11 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       );
     await pick('add-resource');
     assert.match(host.input.value, /^ov add-resource https:\/\//);
-    await pick('compile');
-    assert.equal(host.input.value, 'ov compile ');
+    await pick('compile create');
+    assert.equal(
+      host.input.value,
+      'ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>',
+    );
     assert.equal(host.records.length, 0);
 
     await host.render({
@@ -160,6 +163,35 @@ test('Console exposes the terminal empty state and lets the host replace its qui
       host.container.querySelector('.ov-command-console__empty'),
       null,
     );
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('Console keeps quick commands above the input after execution', async () => {
+  const host = await mount(async () => ok({ state: 'ready' }));
+  try {
+    const bar = () =>
+      host.container.querySelector('.ov-command-console__quick-actions');
+    assert.equal(bar(), null);
+
+    await host.execute('ov help');
+    const buttons = [...bar().querySelectorAll('button')];
+    assert.deepEqual(
+      buttons.map((button) => button.textContent),
+      ['add-resource', 'add-skill', 'add-memory', 'find', 'compile create'],
+    );
+    assert.equal(
+      bar().nextElementSibling,
+      host.input.closest('.ov-command-console__input-row'),
+    );
+    await click(buttons[4]);
+    assert.match(host.input.value, /^ov compile create /);
+    assert.equal(document.activeElement, host.input);
+    assert.equal(host.records.length, 1);
+
+    await host.render({ quickCommands: [] });
+    assert.equal(bar(), null);
   } finally {
     await host.dispose();
   }

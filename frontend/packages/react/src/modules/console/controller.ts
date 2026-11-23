@@ -49,10 +49,12 @@ export function createConsoleController(
   const cancel = () => cancelRunning?.(true);
   const clear = () => {
     cancel();
-    if (commandHistoryKey) clearCommandHistory(commandHistoryKey);
+    const history = commandHistoryKey
+      ? clearCommandHistory(commandHistoryKey)
+      : [];
     update({
       records: [],
-      history: [],
+      history,
       command: '',
       error: undefined,
       failedCommand: undefined,
@@ -77,7 +79,9 @@ export function createConsoleController(
     const id = `command-${++sequence}`;
     const createdAtMs = Date.now();
     const entry = { id, command, createdAtMs };
-    if (commandHistoryKey) appendCommandHistory(commandHistoryKey, entry);
+    const history = commandHistoryKey
+      ? (appendCommandHistory(commandHistoryKey, entry) ?? state.history)
+      : [...state.history, entry];
     const event = analytics?.begin(id);
     const monitoring = observeCommand(client, signal);
     const current = () => active && running === controller;
@@ -107,7 +111,7 @@ export function createConsoleController(
       isExecuting: true,
       error: undefined,
       failedCommand: undefined,
-      history: [...state.history, entry],
+      history,
       records: [...state.records, { ...entry, status: 'pending' }],
     });
     signal.addEventListener('abort', onAbort, { once: true });
@@ -117,7 +121,7 @@ export function createConsoleController(
         return;
       }
       let taskKeys: string[] = [];
-      const { content, telemetry } = await executeCommand(
+      const { content, telemetry, resultNotice } = await executeCommand(
         command,
         monitoring?.client ?? client,
         { ...options, signal },
@@ -131,7 +135,13 @@ export function createConsoleController(
       if (!current() || signal.aborted) return;
       monitoring?.finish(content);
       event?.success(taskKeys);
-      updateRecord({ status: 'success', content, taskKeys, telemetry });
+      updateRecord({
+        status: 'success',
+        content,
+        taskKeys,
+        telemetry,
+        resultNotice,
+      });
     } catch (error) {
       if (!current() || signal.aborted) return;
       monitoring?.finish();

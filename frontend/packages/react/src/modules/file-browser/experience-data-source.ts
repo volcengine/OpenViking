@@ -37,6 +37,10 @@ export interface FileBrowserExperienceDataSource {
   list?: (
     request: ExperienceRequest & ExperiencePageRequest,
   ) => Promise<ExperienceListPage | undefined>;
+  /** Loads summary metrics for an experience. Omit to show unavailable metrics. */
+  effect?: (
+    request: ExperienceRequest & ExperienceDateRange,
+  ) => Promise<NonNullable<ExperienceDashboardData['effect']>>;
   outcomes?: (
     request: ExperienceRequest & ExperienceDateRange,
   ) => Promise<NonNullable<ExperienceDashboardData['outcomes']>>;

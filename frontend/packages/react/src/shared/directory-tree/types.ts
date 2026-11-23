@@ -26,14 +26,22 @@ export interface DirState {
   error: Error | null;
 }
 
+export interface DirectoryExpansionEdit {
+  uri: string;
+  expanded: boolean;
+}
+
 export interface DirectoryExpansionSnapshot {
   expandedUris: readonly string[];
   collapsedUris: readonly string[];
+  pendingEdits?: readonly DirectoryExpansionEdit[];
 }
 
 export interface UseDirectoryTreeOptions {
   client: OvClient | null;
   rootUri: string;
+  /** Presentation only; cached entries and paging retain the server response. */
+  hideDeniedEntries?: boolean;
   /** Isolates cached rows when the host changes an opaque identity. */
   cacheScopeKey?: string;
   /**

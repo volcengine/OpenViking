@@ -31,6 +31,7 @@ class TestIntentExtendedSearch:
 
             add_data = response.json()
             assert add_data.get("status") == "ok"
+            root_uri = add_data["result"]["root_uri"]
             print("资源添加成功")
 
             # 3. 等待处理完成
@@ -59,7 +60,7 @@ class TestIntentExtendedSearch:
             # 6. 执行搜索（带会话上下文）
             # 根据API文档，search支持session_id参数
             search_query = "认证"
-            response = api_client.search(search_query)
+            response = api_client.search(search_query, session_id=session_id, target_uri=root_uri)
             assert response.status_code == 200
 
             search_data = response.json()
@@ -88,6 +89,10 @@ class TestIntentExtendedSearch:
             assert total_results > 0, (
                 "Search should return at least one result when resources exist"
             )
+            assert any(
+                item["uri"] == root_uri or item["uri"].startswith(root_uri.rstrip("/") + "/")
+                for item in search_result.get("resources", [])
+            ), "Search should return the resource imported by this test"
 
             # 9. 验证搜索结果的相关性分数（如果返回）
             for field in ["resources", "memories"]:

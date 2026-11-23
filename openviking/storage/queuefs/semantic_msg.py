@@ -88,6 +88,7 @@ class SemanticMsg:
     file_vector_actions: Dict[str, str] = field(default_factory=dict)
     file_ingest_options: Dict[str, IngestOptions] = field(default_factory=dict)
     plan: Optional[SemanticPlan] = None
+    dashboard_source_type: str = ""
 
     def __init__(
         self,
@@ -126,6 +127,7 @@ class SemanticMsg:
         queue_enqueued_at: float = 0.0,
         failure_requeue_count: int = 0,
         lock_handoff_retry: int = 0,
+        dashboard_source_type: str = "",
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -156,6 +158,7 @@ class SemanticMsg:
         self.changes = changes
         self.source = dict(source) if source else None
         self.generation_trigger = generation_trigger
+        self.dashboard_source_type = str(dashboard_source_type or "")
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
@@ -191,6 +194,8 @@ class SemanticMsg:
         }
         if self.plan is not None:
             data["plan"] = self.plan.to_dict()
+        if not self.dashboard_source_type:
+            data.pop("dashboard_source_type")
         return data
 
     def to_json(self) -> str:
@@ -246,6 +251,7 @@ class SemanticMsg:
             changes=data.get("changes"),
             source=data.get("source"),
             generation_trigger=data.get("generation_trigger", "semantic_refresh"),
+            dashboard_source_type=data.get("dashboard_source_type", ""),
             aggregate_directory=data.get("aggregate_directory", True),
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),

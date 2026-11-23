@@ -88,7 +88,7 @@ React imports these SVG files directly during its build. This file records where
   14px code and message action icons, from ConnectAgent's `connectAgentUi`.
   They follow this repository's license.
 
-`svg/viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
+`svg/viking-bot/remove.svg` and `svg/viking-bot/session-commit.svg` are OpenViking-authored glyphs under the repository license.
 
 - `svg/viking-bot/context-folder.svg` and `context-close.svg` — reference-tag
   artwork supplied from the OpenViking console source (`vikingbot/assets/`). They

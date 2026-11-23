@@ -5,6 +5,57 @@
 Changes in stable releases of `@openviking/react`.
 
 <details className="ov-release-notes__group" name="ov-release-minors" open>
+<summary>0.2.x</summary>
+
+### 0.2.0
+
+**Minor Changes**
+
+- 609baba: Let FileBrowser hosts load experience metrics and override individual experience dashboard sections.
+
+- 704bec6: Add optional FileBrowser props for hosts to save and restore expanded folders independently of the selected resource.
+
+  Hosts can also persist explicit collapses across mounts when home alias resolution is temporarily unavailable.
+
+**Patch Changes**
+
+- 7a15a83: Make the AgentConnect full-instruction copy button more prominent and clarify its labels. Allow the instruction header and copy button to wrap in narrow containers regardless of component stylesheet import order. Unify rounded, theme-aware instruction cards, code blocks and tables, and keep a single table border even when only a header is present.
+
+- 9dd10ec: Consolidate compile help under one Console entry and document the model and schedule fields in `--args`.
+
+- 8a52885: Support session auto-creation, memory policies, context token budgets, and retained message counts in Console. Send structured message parts, creation timestamps, and batch JSON. Session write commands accept boolean or JSON object telemetry options and display the server's telemetry summary with a label in the current Console language.
+
+- 4c11e48: Console can restore read-only command history after a refresh in the same browser tab when the host provides a scoped `commandHistoryKey`.
+
+- 9f03f45: Add Compile create before Compile in the Console quick-start actions and fill in the command syntax for both. Clarify the compile configuration and directory parameters in the built-in help, and keep parameter descriptions readable in narrow popovers.
+
+- 989e6c7: Show the error message directly when a command fails. If the API error message is blank, show its error code.
+
+- 9f03f45: Keep Console command history in local storage for each configured library and user scope. The history menu and arrow-key recall restore the same submitted commands after a reload, including asynchronous resource imports.
+
+- 61a0546: Keep resource URIs with spaces clickable in Console result URI fields and quoted URI arguments. In plain text, Markdown code, and free-text command arguments, link each URI token separately.
+
+- 8a52885: Keep the Deleted badge on confirmed file deletions in the history and comparison picker. The file must exist in the first parent. Older servers can confirm deletion through snapshot diff. Compare with an earlier version to see the removed content. Missing snapshot content for a tracked file appears as a read error.
+
+- 8a52885: Disable dates outside the selected search range and reject reversed ranges entered by hand.
+
+- 442638c: Restore `compile create` as a separate Console entry before `compile`, split their guidance, and align creation parameters with the latest product copy.
+
+- 94b18d3: Switch retrieval modes at the top of the FileBrowser results area, including when the result count is zero. Switching modes retains the query and compatible filters.
+
+- 8a52885: Show the resource name on the preview tab immediately when opening a Wiki compilation or conflict dashboard.
+
+- c16c4cc: VikingBot now uses dedicated controls for Wiki and scheduled update questions, supports submitting the current session for memory extraction, and presents rename and delete in a menu on each history entry.
+
+  Console can also show a Bot activation screen and open the conversation when a host confirms the current library's Bot is ready.
+
+- 704bec6: Return focus to the VikingBot session history button when a session dialog closes and focus would otherwise fall back to the page. The tooltip stays hidden after mouse dismissal and remains available on hover and keyboard focus.
+
+- 8a52885: Keep Wiki conflict highlights visible while any part of a highlighted block remains. Open the selected conflict in the editor, close conflict tooltips when scrolling or leaving the editor, and show a success notice after saving a Wiki file.
+
+</details>
+
+<details className="ov-release-notes__group" name="ov-release-minors">
 <summary>0.1.x</summary>
 
 ### 0.1.14
