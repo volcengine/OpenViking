@@ -12,7 +12,7 @@ mod script;
 
 pub use api::{
     Expiration, ListDirection, ListInsertPosition, ListInsertRequest, ListMoveRequest,
-    SetCondition, SetOptions, SetResult,
+    ScoredMember, ScoreRange, SetCondition, SetOptions, SetResult,
 };
 pub use dynamic::DynamicProviderConfig;
 pub use error::{CacheError, CacheResult};
@@ -28,6 +28,7 @@ pub use script::ScriptValue;
 pub(crate) use script::ScriptRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Convert provider default TTL seconds into runtime TTL semantics.
@@ -264,10 +265,16 @@ impl CacheRuntime {
         self.provider.hget(key, field).await
     }
 
-    /// Store one hash field and return the number of newly added fields.
-    pub async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+    /// Read all fields in one hash.
+    pub async fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
         self.ensure_open()?;
-        self.provider.hset(key, field, value).await
+        self.provider.hgetall(key).await
+    }
+
+    /// Store hash fields and return the number of newly added fields.
+    pub async fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.hset(key, values).await
     }
 
     /// Check whether a set contains one member.
@@ -288,10 +295,10 @@ impl CacheRuntime {
         self.provider.scard(key).await
     }
 
-    /// Add or update one sorted-set member.
-    pub async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+    /// Add or update sorted-set members.
+    pub async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
         self.ensure_open()?;
-        self.provider.zadd(key, score, member).await
+        self.provider.zadd(key, entries).await
     }
 
     /// Return sorted-set members matching one Redis glob pattern.
@@ -309,12 +316,22 @@ impl CacheRuntime {
     pub async fn zrangebyscore(
         &self,
         key: &str,
-        min: f64,
-        max: f64,
-        limit: u32,
-    ) -> CacheResult<Vec<String>> {
+        range: ScoreRange,
+    ) -> CacheResult<Vec<ScoredMember>> {
         self.ensure_open()?;
-        self.provider.zrangebyscore(key, min, max, limit).await
+        self.provider.zrangebyscore(key, range).await
+    }
+
+    /// Return the number of sorted-set members.
+    pub async fn zcard(&self, key: &str) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.zcard(key).await
+    }
+
+    /// Return the provider server time for the primary owning `key`, in milliseconds.
+    pub async fn server_time_for_key(&self, key: &str) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.server_time_for_key(key).await
     }
 
     /// Remove sorted-set members and return the number removed.
@@ -526,13 +543,19 @@ impl SyncCacheRuntimeFacade {
             .run(async move { runtime.hget(&key, &field).await })
     }
 
-    /// Store one hash field and return the number of newly added fields.
-    pub fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+    /// Read all fields in one hash.
+    pub fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
         let runtime = Arc::clone(&self.runtime);
         let key = key.to_string();
-        let field = field.to_string();
+        self.executor.run(async move { runtime.hgetall(&key).await })
+    }
+
+    /// Store hash fields and return the number of newly added fields.
+    pub fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
         self.executor
-            .run(async move { runtime.hset(&key, &field, value).await })
+            .run(async move { runtime.hset(&key, values).await })
     }
 
     /// Check whether a set contains one member.
@@ -559,13 +582,12 @@ impl SyncCacheRuntimeFacade {
         self.executor.run(async move { runtime.scard(&key).await })
     }
 
-    /// Add or update one sorted-set member.
-    pub fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+    /// Add or update sorted-set members.
+    pub fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
         let runtime = Arc::clone(&self.runtime);
         let key = key.to_string();
-        let member = member.to_string();
         self.executor
-            .run(async move { runtime.zadd(&key, score, &member).await })
+            .run(async move { runtime.zadd(&key, entries).await })
     }
 
     /// Return sorted-set members matching one Redis glob pattern.
@@ -581,14 +603,27 @@ impl SyncCacheRuntimeFacade {
     pub fn zrangebyscore(
         &self,
         key: &str,
-        min: f64,
-        max: f64,
-        limit: u32,
-    ) -> CacheResult<Vec<String>> {
+        range: ScoreRange,
+    ) -> CacheResult<Vec<ScoredMember>> {
         let runtime = Arc::clone(&self.runtime);
         let key = key.to_string();
         self.executor
-            .run(async move { runtime.zrangebyscore(&key, min, max, limit).await })
+            .run(async move { runtime.zrangebyscore(&key, range).await })
+    }
+
+    /// Return the number of sorted-set members.
+    pub fn zcard(&self, key: &str) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        self.executor.run(async move { runtime.zcard(&key).await })
+    }
+
+    /// Return the provider server time for the primary owning `key`, in milliseconds.
+    pub fn server_time_for_key(&self, key: &str) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        self.executor
+            .run(async move { runtime.server_time_for_key(&key).await })
     }
 
     /// Remove sorted-set members and return the number removed.

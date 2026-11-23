@@ -6,6 +6,7 @@ use super::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CacheOperation {
@@ -18,6 +19,7 @@ pub(crate) enum CacheOperation {
     IncrBy,
     Expire,
     Hget,
+    Hgetall,
     Hset,
     Sismember,
     Smembers,
@@ -25,6 +27,8 @@ pub(crate) enum CacheOperation {
     Zadd,
     Zscan,
     ZrangeByScore,
+    Zcard,
+    ServerTimeForKey,
     Zrem,
     Lpush,
     Rpush,
@@ -53,6 +57,7 @@ impl CacheOperation {
             Self::IncrBy => "incrby",
             Self::Expire => "expire",
             Self::Hget => "hget",
+            Self::Hgetall => "hgetall",
             Self::Hset => "hset",
             Self::Sismember => "sismember",
             Self::Smembers => "smembers",
@@ -60,6 +65,8 @@ impl CacheOperation {
             Self::Zadd => "zadd",
             Self::Zscan => "zscan",
             Self::ZrangeByScore => "zrangebyscore",
+            Self::Zcard => "zcard",
+            Self::ServerTimeForKey => "server_time_for_key",
             Self::Zrem => "zrem",
             Self::Lpush => "lpush",
             Self::Rpush => "rpush",
@@ -96,24 +103,34 @@ pub(crate) trait CacheProvider: Send + Sync {
     async fn expire(&self, key: &str, duration: std::time::Duration) -> CacheResult<bool>;
     /// Read one hash field.
     async fn hget(&self, key: &str, field: &str) -> CacheResult<Option<Bytes>>;
-    /// Store one hash field and return the number of newly added fields.
-    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64>;
+    /// Read all fields in one hash.
+    async fn hgetall(&self, _key: &str) -> CacheResult<HashMap<String, Bytes>> {
+        Err(CacheError::UnsupportedOperation("hgetall".into()))
+    }
+    /// Store fields and return the number of newly added fields.
+    async fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64>;
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool>;
     async fn smembers(&self, key: &str) -> CacheResult<Vec<Bytes>>;
     async fn scard(&self, key: &str) -> CacheResult<u64>;
-    /// Add or update one sorted-set member.
-    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64>;
+    /// Add or update sorted-set members.
+    async fn zadd(&self, key: &str, entries: Vec<super::ScoredMember>) -> CacheResult<u64>;
     /// Return sorted-set members matching one Redis glob pattern.
     async fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>>;
     /// Return sorted-set members within one score range.
     async fn zrangebyscore(
         &self,
         _key: &str,
-        _min: f64,
-        _max: f64,
-        _limit: u32,
-    ) -> CacheResult<Vec<String>> {
+        _range: super::ScoreRange,
+    ) -> CacheResult<Vec<super::ScoredMember>> {
         Err(CacheError::UnsupportedOperation("zrangebyscore".into()))
+    }
+    /// Return the number of sorted-set members.
+    async fn zcard(&self, _key: &str) -> CacheResult<u64> {
+        Err(CacheError::UnsupportedOperation("zcard".into()))
+    }
+    /// Return the provider server time for the primary owning `key`, in milliseconds.
+    async fn server_time_for_key(&self, _key: &str) -> CacheResult<u64> {
+        Err(CacheError::UnsupportedOperation("server_time_for_key".into()))
     }
     /// Remove sorted-set members and return the number removed.
     async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64>;

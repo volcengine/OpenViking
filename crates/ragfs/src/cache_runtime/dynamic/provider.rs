@@ -4,8 +4,8 @@ use super::loader;
 use crate::cache_runtime::provider::{CacheOperation, CacheProvider};
 use crate::cache_runtime::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, ScriptRegistry, ScriptRequest, ScriptResult, ScriptValue, SetCondition,
-    SetOptions, SetResult,
+    ListMoveRequest, ScoredMember, ScoreRange, ScriptRegistry, ScriptRequest, ScriptResult,
+    ScriptValue, SetCondition, SetOptions, SetResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -45,6 +45,7 @@ pub(crate) struct DynamicProvider {
 struct DynamicState {
     _library: Library,
     api: ProviderApiV1,
+    v2: Option<ProviderApiV2>,
     handle: *mut c_void,
     calls: RwLock<()>,
     lifecycle: AtomicU8,
@@ -188,6 +189,7 @@ fn connect_state(config: DynamicProviderConfig) -> CacheResult<Arc<DynamicState>
     Ok(Arc::new(DynamicState {
         _library: loaded.library,
         api: loaded.api,
+        v2: loaded.v2,
         handle,
         calls: RwLock::new(()),
         lifecycle: AtomicU8::new(LIFECYCLE_OPEN),
@@ -215,6 +217,31 @@ impl DynamicState {
         })
     }
 
+    /// Execute a V2 callback while holding the provider lifecycle read lock.
+    fn with_v2_call<T>(
+        &self,
+        operation: &str,
+        call: impl FnOnce(&ProviderApiV2, *mut c_void) -> CacheResult<T>,
+    ) -> CacheResult<T> {
+        let _guard = self
+            .calls
+            .read()
+            .map_err(|_| CacheError::Internal("dynamic provider call lock poisoned".into()))?;
+        if self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_OPEN {
+            return Err(CacheError::Closed);
+        }
+        let api = self
+            .v2
+            .as_ref()
+            .ok_or_else(|| CacheError::UnsupportedOperation(operation.to_string()))?;
+        call(api, self.handle).map_err(|error| match error {
+            CacheError::UnsupportedOperation(_) => {
+                CacheError::UnsupportedOperation(operation.to_string())
+            }
+            other => other,
+        })
+    }
+
     fn supports(&self, operation: CacheOperation) -> bool {
         match operation {
             CacheOperation::Get => self.api.get.is_some(),
@@ -226,13 +253,24 @@ impl DynamicState {
             CacheOperation::IncrBy => self.api.incrby.is_some(),
             CacheOperation::Expire => self.api.expire.is_some(),
             CacheOperation::Hget => self.api.hget.is_some(),
-            CacheOperation::Hset => self.api.hset.is_some(),
+            CacheOperation::Hgetall => self.v2.as_ref().and_then(|api| api.hgetall).is_some(),
+            CacheOperation::Hset => self.v2.as_ref().and_then(|api| api.hset).is_some(),
+            CacheOperation::Zadd => self.v2.as_ref().and_then(|api| api.zadd).is_some(),
+            CacheOperation::ZrangeByScore => self
+                .v2
+                .as_ref()
+                .and_then(|api| api.zrangebyscore)
+                .is_some(),
+            CacheOperation::Zcard => self.v2.as_ref().and_then(|api| api.zcard).is_some(),
+            CacheOperation::ServerTimeForKey => self
+                .v2
+                .as_ref()
+                .and_then(|api| api.server_time_for_key)
+                .is_some(),
             CacheOperation::Sismember => self.api.sismember.is_some(),
             CacheOperation::Smembers => self.api.smembers.is_some(),
             CacheOperation::Scard => self.api.scard.is_some(),
-            CacheOperation::Zadd => self.api.zadd.is_some(),
             CacheOperation::Zscan => self.api.zscan.is_some(),
-            CacheOperation::ZrangeByScore => self.api.zrangebyscore.is_some(),
             CacheOperation::Zrem => self.api.zrem.is_some(),
             CacheOperation::Lpush => self.api.lpush.is_some(),
             CacheOperation::Rpush => self.api.rpush.is_some(),
@@ -589,20 +627,57 @@ impl CacheProvider for DynamicProvider {
         .await
     }
 
-    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+    async fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
         let key = key.to_string();
-        let field = field.to_string();
+        self.call("hgetall", move |state| {
+            state.with_v2_call("hgetall", |api, handle| {
+                let callback = required(api.hgetall, CacheOperation::Hgetall)?;
+                let mut output = OwnedFieldValueArrayV2::default();
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        &mut output,
+                        &mut error,
+                    )
+                };
+                take_output(
+                    status,
+                    error,
+                    "hgetall",
+                    output,
+                    take_field_value_array,
+                    discard_field_value_array,
+                )
+            })
+        })
+        .await
+    }
+
+    async fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        if values.is_empty() {
+            return Ok(0);
+        }
+        let key = key.to_string();
         self.call("hset", move |state| {
-            state.with_call("hset", |api, handle| {
+            state.with_v2_call("hset", |api, handle| {
                 let callback = required(api.hset, CacheOperation::Hset)?;
+                let entries = values
+                    .iter()
+                    .map(|(field, value)| FieldValueV2 {
+                        field: ByteSliceV1::from_slice(field.as_bytes()),
+                        value: ByteSliceV1::from_slice(value),
+                    })
+                    .collect::<Vec<_>>();
                 let mut added = 0;
                 let mut error = OwnedBufferV1::default();
                 let status = unsafe {
                     callback(
                         handle,
                         ByteSliceV1::from_slice(key.as_bytes()),
-                        ByteSliceV1::from_slice(field.as_bytes()),
-                        ByteSliceV1::from_slice(&value),
+                        entries.as_ptr(),
+                        entries.len(),
                         &mut added,
                         &mut error,
                     )
@@ -670,20 +745,34 @@ impl CacheProvider for DynamicProvider {
         scalar_u64(self, CacheOperation::Scard, key).await
     }
 
-    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+    async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        if entries.iter().any(|entry| entry.score.is_nan()) {
+            return Err(CacheError::InvalidArgument(
+                "zadd scores must not be NaN".to_string(),
+            ));
+        }
         let key = key.to_string();
-        let member = member.to_string();
         self.call("zadd", move |state| {
-            state.with_call("zadd", |api, handle| {
+            state.with_v2_call("zadd", |api, handle| {
                 let callback = required(api.zadd, CacheOperation::Zadd)?;
+                let raw_entries = entries
+                    .iter()
+                    .map(|entry| ScoredMemberV2 {
+                        score: entry.score,
+                        member: ByteSliceV1::from_slice(entry.member.as_bytes()),
+                    })
+                    .collect::<Vec<_>>();
                 let mut added = 0;
                 let mut error = OwnedBufferV1::default();
                 let status = unsafe {
                     callback(
                         handle,
                         ByteSliceV1::from_slice(key.as_bytes()),
-                        score,
-                        ByteSliceV1::from_slice(member.as_bytes()),
+                        raw_entries.as_ptr(),
+                        raw_entries.len(),
                         &mut added,
                         &mut error,
                     )
@@ -736,55 +825,53 @@ impl CacheProvider for DynamicProvider {
         .await
     }
 
-    /// Return sorted-set members within one score range through the dynamic provider.
     async fn zrangebyscore(
         &self,
         key: &str,
-        min: f64,
-        max: f64,
-        limit: u32,
-    ) -> CacheResult<Vec<String>> {
-        if limit == 0 {
+        range: ScoreRange,
+    ) -> CacheResult<Vec<ScoredMember>> {
+        if range.min.is_nan() || range.max.is_nan() {
+            return Err(CacheError::InvalidArgument(
+                "zrangebyscore bounds must not be NaN".to_string(),
+            ));
+        }
+        if range.limit == 0 {
             return Ok(Vec::new());
         }
         let key = key.to_string();
         self.call("zrangebyscore", move |state| {
-            state.with_call("zrangebyscore", |api, handle| {
+            state.with_v2_call("zrangebyscore", |api, handle| {
                 let callback = required(api.zrangebyscore, CacheOperation::ZrangeByScore)?;
-                let mut output = OwnedBufferArrayV1::default();
+                let mut output = OwnedScoredMemberArrayV2::default();
                 let mut error = OwnedBufferV1::default();
                 let status = unsafe {
                     callback(
                         handle,
                         ByteSliceV1::from_slice(key.as_bytes()),
-                        min,
-                        max,
-                        limit,
+                        score_range(range),
                         &mut output,
                         &mut error,
                     )
                 };
-                let values = take_output(
+                take_output(
                     status,
                     error,
                     "zrangebyscore",
                     output,
-                    take_buffer_array,
-                    discard_buffer_array,
-                )?;
-                values
-                    .into_iter()
-                    .map(|value| {
-                        String::from_utf8(value.to_vec()).map_err(|error| {
-                            CacheError::InvalidData(format!(
-                                "dynamic provider zrangebyscore returned non-UTF-8 member: {error}"
-                            ))
-                        })
-                    })
-                    .collect()
+                    take_scored_member_array,
+                    discard_scored_member_array,
+                )
             })
         })
         .await
+    }
+
+    async fn zcard(&self, key: &str) -> CacheResult<u64> {
+        scalar_u64_v2(self, CacheOperation::Zcard, key).await
+    }
+
+    async fn server_time_for_key(&self, key: &str) -> CacheResult<u64> {
+        scalar_u64_v2(self, CacheOperation::ServerTimeForKey, key).await
     }
 
     async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
@@ -1103,6 +1190,52 @@ async fn scalar_u64(
         .await
 }
 
+/// Execute a V2 scalar callback that returns one unsigned integer.
+async fn scalar_u64_v2(
+    provider: &DynamicProvider,
+    operation: CacheOperation,
+    key: &str,
+) -> CacheResult<u64> {
+    let key = key.to_string();
+    provider
+        .call(operation.name(), move |state| {
+            state.with_v2_call(operation.name(), |api, handle| {
+                let callback = match operation {
+                    CacheOperation::Zcard => required(api.zcard, operation)?,
+                    CacheOperation::ServerTimeForKey => {
+                        required(api.server_time_for_key, operation)?
+                    }
+                    _ => unreachable!("scalar_u64_v2 only accepts V2 scalar operations"),
+                };
+                let mut value = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        &mut value,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, operation.name())?;
+                Ok(value)
+            })
+        })
+        .await
+}
+
+/// Convert one public score range into the V2 ABI representation.
+fn score_range(range: ScoreRange) -> ScoreRangeV2 {
+    ScoreRangeV2 {
+        min: range.min,
+        min_exclusive: u8::from(range.min_exclusive),
+        max: range.max,
+        max_exclusive: u8::from(range.max_exclusive),
+        offset: range.offset,
+        limit: range.limit,
+    }
+}
+
 fn required<T: Copy>(callback: Option<T>, operation: CacheOperation) -> CacheResult<T> {
     callback.ok_or_else(|| CacheError::UnsupportedOperation(operation.name().to_string()))
 }
@@ -1202,6 +1335,31 @@ impl Drop for PendingBuffers {
     fn drop(&mut self) {
         for item in self.items.by_ref() {
             discard_buffer(item);
+        }
+    }
+}
+
+struct PendingFieldValues {
+    items: std::vec::IntoIter<OwnedFieldValueV2>,
+}
+
+impl Drop for PendingFieldValues {
+    fn drop(&mut self) {
+        for item in self.items.by_ref() {
+            discard_buffer(item.field);
+            discard_buffer(item.value);
+        }
+    }
+}
+
+struct PendingScoredMembers {
+    items: std::vec::IntoIter<OwnedScoredMemberV2>,
+}
+
+impl Drop for PendingScoredMembers {
+    fn drop(&mut self) {
+        for item in self.items.by_ref() {
+            discard_buffer(item.member);
         }
     }
 }
@@ -1380,6 +1538,104 @@ fn take_buffer_array_with_budget(
             "buffer array item",
             budget,
         )?);
+    }
+    Ok(values)
+}
+
+/// Decode an owned V2 hash field/value array into a Rust hash map.
+fn take_field_value_array(array: OwnedFieldValueArrayV2) -> CacheResult<HashMap<String, Bytes>> {
+    let mut budget = DecodeBudget::default();
+    if array.len == 0 {
+        if array.items.is_null() {
+            return Ok(HashMap::new());
+        }
+        release_registered(array.items.cast::<u8>());
+        return Err(invalid_output(
+            "dynamic provider returned a non-null empty field/value array",
+        ));
+    }
+    if array.items.is_null() {
+        return Err(invalid_output(
+            "dynamic provider returned a null field/value array",
+        ));
+    }
+    let items = take_raw_array(array.items, array.len, "field/value array", &mut budget)?;
+    let mut pending = PendingFieldValues {
+        items: items.into_iter(),
+    };
+    let mut values = HashMap::with_capacity(array.len);
+    while let Some(item) = pending.items.next() {
+        let field = take_buffer_with_budget(
+            item.field,
+            MAX_BUFFER_BYTES,
+            "field/value array field",
+            &mut budget,
+        );
+        let value = take_buffer_with_budget(
+            item.value,
+            MAX_BUFFER_BYTES,
+            "field/value array value",
+            &mut budget,
+        );
+        let field = String::from_utf8(field?.to_vec()).map_err(|error| {
+            CacheError::InvalidData(format!(
+                "dynamic provider hgetall returned non-UTF-8 field: {error}"
+            ))
+        })?;
+        if values.insert(field.clone(), value?).is_some() {
+            return Err(invalid_output(format!(
+                "dynamic provider hgetall returned duplicate field {field:?}"
+            )));
+        }
+    }
+    Ok(values)
+}
+
+/// Decode owned V2 scored members while validating UTF-8 member names and scores.
+fn take_scored_member_array(
+    array: OwnedScoredMemberArrayV2,
+) -> CacheResult<Vec<ScoredMember>> {
+    let mut budget = DecodeBudget::default();
+    if array.len == 0 {
+        if array.items.is_null() {
+            return Ok(Vec::new());
+        }
+        release_registered(array.items.cast::<u8>());
+        return Err(invalid_output(
+            "dynamic provider returned a non-null empty scored-member array",
+        ));
+    }
+    if array.items.is_null() {
+        return Err(invalid_output(
+            "dynamic provider returned a null scored-member array",
+        ));
+    }
+    let items = take_raw_array(array.items, array.len, "scored-member array", &mut budget)?;
+    let mut pending = PendingScoredMembers {
+        items: items.into_iter(),
+    };
+    let mut values = Vec::with_capacity(array.len);
+    while let Some(item) = pending.items.next() {
+        let member = take_buffer_with_budget(
+            item.member,
+            MAX_BUFFER_BYTES,
+            "scored-member array member",
+            &mut budget,
+        )?;
+        if item.score.is_nan() {
+            return Err(invalid_output(
+                "dynamic provider zrangebyscore returned a NaN score",
+            ));
+        }
+        let member = String::from_utf8(member.to_vec()).map_err(|error| {
+            CacheError::InvalidData(format!(
+                "dynamic provider zrangebyscore returned non-UTF-8 member: {error}"
+            ))
+        })?;
+        values.push(ScoredMember {
+            member,
+            score: item.score,
+        });
     }
     Ok(values)
 }
@@ -1630,6 +1886,51 @@ fn discard_buffer_array(array: OwnedBufferArrayV1) {
         Ok(items) => {
             for item in items {
                 discard_buffer(item);
+            }
+        }
+        Err(_) => release_registered(array.items.cast::<u8>()),
+    }
+}
+
+/// Release a V2 field/value array returned alongside an error status.
+fn discard_field_value_array(array: OwnedFieldValueArrayV2) {
+    if array.items.is_null() || array.len == 0 || array.len > MAX_ARRAY_ITEMS {
+        release_registered(array.items.cast::<u8>());
+        return;
+    }
+    let mut budget = DecodeBudget::default();
+    match take_raw_array(
+        array.items,
+        array.len,
+        "discarded field/value array",
+        &mut budget,
+    ) {
+        Ok(items) => {
+            for item in items {
+                discard_buffer(item.field);
+                discard_buffer(item.value);
+            }
+        }
+        Err(_) => release_registered(array.items.cast::<u8>()),
+    }
+}
+
+/// Release a V2 scored-member array returned alongside an error status.
+fn discard_scored_member_array(array: OwnedScoredMemberArrayV2) {
+    if array.items.is_null() || array.len == 0 || array.len > MAX_ARRAY_ITEMS {
+        release_registered(array.items.cast::<u8>());
+        return;
+    }
+    let mut budget = DecodeBudget::default();
+    match take_raw_array(
+        array.items,
+        array.len,
+        "discarded scored-member array",
+        &mut budget,
+    ) {
+        Ok(items) => {
+            for item in items {
+                discard_buffer(item.member);
             }
         }
         Err(_) => release_registered(array.items.cast::<u8>()),

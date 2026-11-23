@@ -2,6 +2,8 @@ use std::ffi::c_void;
 
 pub(super) const ABI_VERSION_V1: u32 = 1;
 pub(super) const ENTRY_SYMBOL_V1: &[u8] = b"openviking_cache_provider_v1\0";
+pub(super) const ABI_VERSION_V2: u32 = 2;
+pub(super) const ENTRY_SYMBOL_V2: &[u8] = b"openviking_cache_provider_v2\0";
 
 pub(super) const STATUS_OK: i32 = 0;
 pub(super) const STATUS_TIMEOUT: i32 = 2;
@@ -359,3 +361,112 @@ pub(super) struct ProviderApiV1 {
 }
 
 pub(super) type ProviderEntryV1 = unsafe extern "C" fn() -> *const ProviderApiV1;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct FieldValueV2 {
+    pub(super) field: ByteSliceV1,
+    pub(super) value: ByteSliceV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedFieldValueV2 {
+    pub(super) field: OwnedBufferV1,
+    pub(super) value: OwnedBufferV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedFieldValueArrayV2 {
+    pub(super) items: *mut OwnedFieldValueV2,
+    pub(super) len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct ScoredMemberV2 {
+    pub(super) score: f64,
+    pub(super) member: ByteSliceV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedScoredMemberV2 {
+    pub(super) score: f64,
+    pub(super) member: OwnedBufferV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedScoredMemberArrayV2 {
+    pub(super) items: *mut OwnedScoredMemberV2,
+    pub(super) len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct ScoreRangeV2 {
+    pub(super) min: f64,
+    pub(super) min_exclusive: u8,
+    pub(super) max: f64,
+    pub(super) max_exclusive: u8,
+    pub(super) offset: u64,
+    pub(super) limit: u32,
+}
+
+pub(super) type ProviderHgetallV2 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    output: *mut OwnedFieldValueArrayV2,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderHsetV2 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    entries: *const FieldValueV2,
+    entries_len: usize,
+    added: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZaddV2 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    entries: *const ScoredMemberV2,
+    entries_len: usize,
+    added: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZrangeByScoreV2 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    range: ScoreRangeV2,
+    output: *mut OwnedScoredMemberArrayV2,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZcardV2 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    count: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderServerTimeForKeyV2 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    time_ms: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct ProviderApiV2 {
+    pub(super) v1: ProviderApiV1,
+    pub(super) hgetall: Option<ProviderHgetallV2>,
+    pub(super) hset: Option<ProviderHsetV2>,
+    pub(super) zadd: Option<ProviderZaddV2>,
+    pub(super) zrangebyscore: Option<ProviderZrangeByScoreV2>,
+    pub(super) zcard: Option<ProviderZcardV2>,
+    pub(super) server_time_for_key: Option<ProviderServerTimeForKeyV2>,
+}
+
+pub(super) type ProviderEntryV2 = unsafe extern "C" fn() -> *const ProviderApiV2;

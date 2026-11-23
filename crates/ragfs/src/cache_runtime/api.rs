@@ -3,6 +3,32 @@
 use bytes::Bytes;
 use std::time::Duration;
 
+/// One sorted-set member with its score.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoredMember {
+    /// UTF-8 sorted-set member.
+    pub member: String,
+    /// Sorted-set score.
+    pub score: f64,
+}
+
+/// Score bounds and pagination for one sorted-set range query.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoreRange {
+    /// Lower score bound.
+    pub min: f64,
+    /// Exclude the lower score bound when true.
+    pub min_exclusive: bool,
+    /// Upper score bound.
+    pub max: f64,
+    /// Exclude the upper score bound when true.
+    pub max_exclusive: bool,
+    /// Number of matching members to skip.
+    pub offset: u64,
+    /// Maximum number of members to return.
+    pub limit: u32,
+}
+
 /// Expiration applied by Redis SET.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Expiration {

@@ -75,8 +75,11 @@ class CacheRuntimeHandleProtocol(Protocol):
     def hget(self, key: str, field: str) -> Awaitable[bytes | None]:
         """Read a hash field and return bytes or None."""
 
-    def hset(self, key: str, field: str, value: bytes) -> Awaitable[int]:
-        """Store a hash field and return the number of newly added fields."""
+    def hgetall(self, key: str) -> Awaitable[dict[str, bytes]]:
+        """Return every hash field as a bytes dictionary."""
+
+    def hset(self, key: str, values: dict[str, bytes]) -> Awaitable[int]:
+        """Store hash fields and return the number of newly added fields."""
 
     def sismember(self, key: str, member: bytes) -> Awaitable[bool]:
         """Return whether member belongs to the set at key."""
@@ -87,16 +90,30 @@ class CacheRuntimeHandleProtocol(Protocol):
     def scard(self, key: str) -> Awaitable[int]:
         """Return the cardinality of the set at key."""
 
-    def zadd(self, key: str, score: float, member: str) -> Awaitable[int]:
-        """Add or update a sorted-set member and return whether it was newly added."""
+    def zadd(self, key: str, entries: list[tuple[float, str]]) -> Awaitable[int]:
+        """Add or update sorted-set members and return the number newly added."""
 
     def zscan_match(self, key: str, pattern: str, count: int) -> Awaitable[list[str]]:
         """Return sorted-set members matching pattern."""
 
     def zrangebyscore(
-        self, key: str, min_score: float, max_score: float, limit: int
-    ) -> Awaitable[list[str]]:
-        """Return sorted-set members in the inclusive score range."""
+        self,
+        key: str,
+        min_score: float,
+        max_score: float,
+        limit: int,
+        *,
+        offset: int = 0,
+        min_exclusive: bool = False,
+        max_exclusive: bool = False,
+    ) -> Awaitable[list[tuple[str, float]]]:
+        """Return sorted-set members and scores within one bounded score range."""
+
+    def zcard(self, key: str) -> Awaitable[int]:
+        """Return the number of members in one sorted set."""
+
+    def server_time_for_key(self, key: str) -> Awaitable[int]:
+        """Return the provider server clock for key in milliseconds."""
 
     def zrem(self, key: str, members: list[str]) -> Awaitable[int]:
         """Remove members from a sorted set and return the number removed."""

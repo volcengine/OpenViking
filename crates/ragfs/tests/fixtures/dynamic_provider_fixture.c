@@ -1,4 +1,8 @@
+#ifdef OV_FIXTURE_V2
+#include "openviking_cache_provider_v2.h"
+#else
 #include "openviking_cache_provider_v1.h"
+#endif
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -257,10 +261,210 @@ static int32_t fixture_execute_script(
     return OV_CACHE_STATUS_OK;
 }
 
+#ifdef OV_FIXTURE_V2
+/* Compare a borrowed ABI byte slice with one literal ASCII value. */
+static int fixture_slice_equals(OvCacheByteSliceV1 value, const char *expected) {
+    size_t length = strlen(expected);
+    return value.len == length && memcmp(value.data, expected, length) == 0;
+}
+
+/* Release a host-owned buffer during fixture error cleanup. */
+static void fixture_release(OvCacheOwnedBufferV1 *buffer) {
+    if (buffer->data != NULL) {
+        fixture_host->dealloc(
+            buffer->data, buffer->len, OV_CACHE_ALIGNOF(uint8_t));
+    }
+    buffer->data = NULL;
+    buffer->len = 0;
+}
+
+/* Check that a V2 hash write contains one literal field/value pair. */
+static int fixture_has_field(
+    const OvCacheFieldValueV2 *entries,
+    size_t entries_len,
+    const char *field,
+    const char *value) {
+    for (size_t index = 0; index < entries_len; ++index) {
+        if (fixture_slice_equals(entries[index].field, field) &&
+            fixture_slice_equals(entries[index].value, value)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Check that a V2 sorted-set write contains one literal score/member pair. */
+static int fixture_has_scored_member(
+    const OvCacheScoredMemberV2 *entries,
+    size_t entries_len,
+    double score,
+    const char *member) {
+    for (size_t index = 0; index < entries_len; ++index) {
+        if (entries[index].score == score &&
+            fixture_slice_equals(entries[index].member, member)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Return one V2 hash field/value pair through host-owned buffers. */
+static int32_t fixture_hgetall_v2(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheOwnedFieldValueArrayV2 *output,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    static const uint8_t field[] = "state";
+    static const uint8_t value[] = "ready";
+    output->items = (OvCacheOwnedFieldValueV2 *)fixture_host->alloc(
+        sizeof(OvCacheOwnedFieldValueV2),
+        OV_CACHE_ALIGNOF(OvCacheOwnedFieldValueV2));
+    if (output->items == NULL) {
+        return OV_CACHE_STATUS_INTERNAL;
+    }
+    output->len = 1;
+    memset(output->items, 0, sizeof(OvCacheOwnedFieldValueV2));
+    int32_t status = fixture_copy(
+        field, sizeof(field) - 1, &output->items[0].field);
+    if (status == OV_CACHE_STATUS_OK) {
+        status = fixture_copy(
+            value, sizeof(value) - 1, &output->items[0].value);
+    }
+    if (status != OV_CACHE_STATUS_OK) {
+        fixture_release(&output->items[0].field);
+        fixture_release(&output->items[0].value);
+        fixture_host->dealloc(
+            (uint8_t *)output->items,
+            sizeof(OvCacheOwnedFieldValueV2),
+            OV_CACHE_ALIGNOF(OvCacheOwnedFieldValueV2));
+        output->items = NULL;
+        output->len = 0;
+    }
+    return status;
+}
+
+/* Verify a V2 HSET batch and return its inserted field count. */
+static int32_t fixture_hset_v2(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    const OvCacheFieldValueV2 *entries,
+    size_t entries_len,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    if (entries_len != 2 ||
+        !fixture_has_field(entries, entries_len, "state", "ready") ||
+        !fixture_has_field(entries, entries_len, "version", "2")) {
+        return OV_CACHE_STATUS_INVALID_ARGUMENT;
+    }
+    *added = 2;
+    return OV_CACHE_STATUS_OK;
+}
+
+/* Verify a V2 ZADD batch and return its inserted member count. */
+static int32_t fixture_zadd_v2(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    const OvCacheScoredMemberV2 *entries,
+    size_t entries_len,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    if (entries_len != 2 ||
+        !fixture_has_scored_member(entries, entries_len, 3.5, "three") ||
+        !fixture_has_scored_member(entries, entries_len, 7.0, "seven")) {
+        return OV_CACHE_STATUS_INVALID_ARGUMENT;
+    }
+    *added = 2;
+    return OV_CACHE_STATUS_OK;
+}
+
+/* Return two scored V2 members after checking range and pagination inputs. */
+static int32_t fixture_zrangebyscore_v2(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheScoreRangeV2 range,
+    OvCacheOwnedScoredMemberArrayV2 *output,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    static const uint8_t first[] = "three";
+    static const uint8_t second[] = "seven";
+    if (range.min != 1.0 || range.min_exclusive != 1 ||
+        range.max != 9.0 || range.max_exclusive != 0 ||
+        range.offset != 1 || range.limit != 2) {
+        return OV_CACHE_STATUS_INVALID_ARGUMENT;
+    }
+    output->items = (OvCacheOwnedScoredMemberV2 *)fixture_host->alloc(
+        2 * sizeof(OvCacheOwnedScoredMemberV2),
+        OV_CACHE_ALIGNOF(OvCacheOwnedScoredMemberV2));
+    if (output->items == NULL) {
+        return OV_CACHE_STATUS_INTERNAL;
+    }
+    output->len = 2;
+    memset(
+        output->items, 0, 2 * sizeof(OvCacheOwnedScoredMemberV2));
+    output->items[0].score = 3.5;
+    output->items[1].score = 7.0;
+    int32_t status = fixture_copy(
+        first, sizeof(first) - 1, &output->items[0].member);
+    if (status == OV_CACHE_STATUS_OK) {
+        status = fixture_copy(
+            second, sizeof(second) - 1, &output->items[1].member);
+    }
+    if (status != OV_CACHE_STATUS_OK) {
+        fixture_release(&output->items[0].member);
+        fixture_release(&output->items[1].member);
+        fixture_host->dealloc(
+            (uint8_t *)output->items,
+            2 * sizeof(OvCacheOwnedScoredMemberV2),
+            OV_CACHE_ALIGNOF(OvCacheOwnedScoredMemberV2));
+        output->items = NULL;
+        output->len = 0;
+    }
+    return status;
+}
+
+/* Return the literal cardinality expected by the V2 forwarding test. */
+static int32_t fixture_zcard_v2(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    uint64_t *count,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    *count = 2;
+    return OV_CACHE_STATUS_OK;
+}
+
+/* Return the literal millisecond clock expected by the V2 forwarding test. */
+static int32_t fixture_server_time_for_key_v2(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    uint64_t *time_ms,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    *time_ms = 1700000000123ULL;
+    return OV_CACHE_STATUS_OK;
+}
+#endif
+
 OV_CACHE_PROVIDER_EXPORT uint32_t ov_fixture_close_count(void) {
     return atomic_load(&fixture_close_calls);
 }
 
+#ifndef OV_FIXTURE_V2
 static const OvCacheProviderApiV1 FIXTURE_API = {
 #ifdef OV_FIXTURE_BAD_ABI
     .abi_version = OV_CACHE_PROVIDER_ABI_V1 + 1,
@@ -292,3 +496,44 @@ OV_CACHE_PROVIDER_EXPORT
 const OvCacheProviderApiV1 *openviking_cache_provider_v1(void) {
     return &FIXTURE_API;
 }
+#else
+static const OvCacheProviderApiV2 FIXTURE_API = {
+#ifdef OV_FIXTURE_BAD_ABI
+    .v1.abi_version = OV_CACHE_PROVIDER_ABI_V2 + 1,
+#else
+    .v1.abi_version = OV_CACHE_PROVIDER_ABI_V2,
+#endif
+    .v1.struct_size = sizeof(OvCacheProviderApiV2),
+    .v1.create = fixture_create,
+    .v1.ping = fixture_ping,
+    .v1.close = fixture_close,
+    .v1.get = fixture_get,
+    .v1.del = fixture_del,
+    .v1.expire = fixture_expire,
+    .v1.hget = fixture_hget,
+    .v1.hset = fixture_hset,
+    .v1.zadd = fixture_zadd,
+    .v1.zscan = fixture_zscan,
+    .v1.zrem = fixture_zrem,
+    .v1.execute_script = fixture_execute_script,
+#ifndef OV_FIXTURE_NO_UNLINK
+    .v1.unlink = fixture_unlink,
+#endif
+#ifndef OV_FIXTURE_NO_ZRANGEBYSCORE
+    .v1.zrangebyscore = fixture_zrangebyscore,
+#endif
+    .hgetall = fixture_hgetall_v2,
+    .hset = fixture_hset_v2,
+    .zadd = fixture_zadd_v2,
+#ifndef OV_FIXTURE_NO_ZRANGEBYSCORE
+    .zrangebyscore = fixture_zrangebyscore_v2,
+#endif
+    .zcard = fixture_zcard_v2,
+    .server_time_for_key = fixture_server_time_for_key_v2,
+};
+
+OV_CACHE_PROVIDER_EXPORT
+const OvCacheProviderApiV2 *openviking_cache_provider_v2(void) {
+    return &FIXTURE_API;
+}
+#endif

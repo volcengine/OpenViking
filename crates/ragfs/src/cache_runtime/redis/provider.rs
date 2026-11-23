@@ -2,10 +2,11 @@ use super::{RedisClient, RedisProviderConfig};
 use crate::cache_runtime::provider::CacheProvider;
 use crate::cache_runtime::{
     CacheResult, ListInsertRequest, ListMoveRequest, ScriptRegistry, ScriptRequest, ScriptResult,
-    SetOptions, SetResult,
+    ScoredMember, ScoreRange, SetOptions, SetResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,8 +74,12 @@ impl CacheProvider for RedisProvider {
         self.client.hget(key, field).await
     }
 
-    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
-        self.client.hset(key, field, value).await
+    async fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
+        self.client.hgetall(key).await
+    }
+
+    async fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        self.client.hset(key, values).await
     }
 
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
@@ -89,23 +94,29 @@ impl CacheProvider for RedisProvider {
         self.client.scard(key).await
     }
 
-    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
-        self.client.zadd(key, score, member).await
+    async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
+        self.client.zadd(key, entries).await
     }
 
     async fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>> {
         self.client.zscan_match(key, pattern, count).await
     }
 
-    /// Return sorted-set members within one score range.
+    /// Return scored sorted-set members within one score range.
     async fn zrangebyscore(
         &self,
         key: &str,
-        min: f64,
-        max: f64,
-        limit: u32,
-    ) -> CacheResult<Vec<String>> {
-        self.client.zrangebyscore(key, min, max, limit).await
+        range: ScoreRange,
+    ) -> CacheResult<Vec<ScoredMember>> {
+        self.client.zrangebyscore(key, range).await
+    }
+
+    async fn zcard(&self, key: &str) -> CacheResult<u64> {
+        self.client.zcard(key).await
+    }
+
+    async fn server_time_for_key(&self, key: &str) -> CacheResult<u64> {
+        self.client.server_time_for_key(key).await
     }
 
     async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {

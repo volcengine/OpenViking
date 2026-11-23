@@ -13,7 +13,13 @@ from openviking.scheduling.expiry.cache_runtime_store import CacheRuntimeExpiryS
 from openviking.scheduling.expiry.config import ExpiryConfig
 from openviking.scheduling.expiry.keys import HASH_NAME, HASH_SEED, IDENTITY_ENCODING, ExpiryKeys
 from openviking.scheduling.expiry.metrics import ExpiryMetrics
-from openviking.scheduling.expiry.models import BucketRef, NamespaceSpec, OwnerRole
+from openviking.scheduling.expiry.models import (
+    BucketRef,
+    NamespaceSpec,
+    OwnerRole,
+    SourceCursor,
+    StoreOperationError,
+)
 from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 from openviking_cli.utils.config.agfs_config import AGFSConfig
@@ -34,30 +40,77 @@ class _CacheRuntime:
         self.closes = 0
         self.script_calls = []
         self.set_calls = []
+        self.get_value = None
+        self.hgetall_calls = []
+        self.hset_calls = []
+        self.zadd_calls = []
+        self.zrangebyscore_calls = []
+        self.zcard_calls = []
+        self.server_time_for_key_calls = []
 
     def register_script(self, script_id, redis_lua):
+        """Record one registered Lua script."""
         self.registered[script_id] = redis_lua
 
     async def ping(self):
+        """Record a Runtime health check."""
         self.pings += 1
 
     async def close(self):
+        """Record one Runtime close request."""
         self.closes += 1
 
     async def execute_script(self, script_id, keys, args):
+        """Return minimal results for remaining business scripts."""
         self.script_calls.append((script_id, keys, args))
-        if script_id == "expiry.v1.read_hash":
-            return b"{}"
         if script_id == "expiry.v1.read_zset_page":
             return b'{"items":[["item", "10"]],"next":false}'
         return 1
 
     async def get(self, key):
-        return None
+        """Return no stored scalar value from the fake Runtime."""
+        return self.get_value
 
     async def set(self, key, value, **kwargs):
+        """Record one scalar write and report that it applied."""
         self.set_calls.append((key, value, kwargs))
         return True
+
+    async def hgetall(self, key):
+        """Record one hash read and return an empty hash."""
+        self.hgetall_calls.append(key)
+        return {}
+
+    async def hset(self, key, values):
+        """Record one batch hash write and report all fields as new."""
+        self.hset_calls.append((key, values))
+        return len(values)
+
+    async def zadd(self, key, entries):
+        """Record one batch sorted-set write and report all members as new."""
+        self.zadd_calls.append((key, entries))
+        return len(entries)
+
+    async def zrangebyscore(self, key, min_score, max_score, limit, **kwargs):
+        """Record one scored range query and return one literal member."""
+        self.zrangebyscore_calls.append((key, min_score, max_score, limit, kwargs))
+        if key.startswith("expiry:consumer:registry:"):
+            return [("session:0:0", 10.0)]
+        return [("item", 10.0)]
+
+    async def zcard(self, key):
+        """Record one sorted-set cardinality read."""
+        self.zcard_calls.append(key)
+        return 0
+
+    async def server_time_for_key(self, key):
+        """Record one key-routed time read and return a valid millisecond clock."""
+        self.server_time_for_key_calls.append(key)
+        return 1_700_000_000_123
+
+    async def zrem(self, key, members):
+        """Report that every requested sorted-set member was removed."""
+        return len(members)
 
 
 @pytest.fixture
@@ -110,12 +163,6 @@ async def test_store_registers_scripts_and_keeps_runtime_open():
         "expiry.v1.cas_zset_member",
         "expiry.v1.compare_owner",
         "expiry.v1.read_zset_page",
-        "expiry.v1.read_time",
-        "expiry.v1.read_hash",
-        "expiry.v1.write_hash",
-        "expiry.v1.set_progress_if_absent",
-        "expiry.v1.stage_items",
-        "expiry.v1.zcard",
     }
     assert runtime.closes == 0
 
@@ -150,17 +197,57 @@ async def test_store_uses_runtime_for_namespace_paging_and_owner_lease():
         after=None,
         limit=1,
     )
+    next_page = await store.read_source_page(
+        0,
+        lower_exclusive_ms=0,
+        upper_inclusive_ms=10,
+        after=SourceCursor(10, "item"),
+        limit=1,
+    )
+    await store.read_registry_page(0, after=None, limit=1)
+    now_ms = await store.read_time_ms()
     owner = await store.try_acquire_owner(OwnerRole.SCHEDULER, 0, "token", 120)
 
     assert page.items[0].item_id == "item"
+    assert next_page.items[0].item_id == "item"
+    assert now_ms == 1_700_000_000_123
     assert owner is not None
-    assert runtime.set_calls[0][1] == b"token"
-    assert runtime.set_calls[0][2] == {"ttl_seconds": 120.0, "if_not_exists": True}
+    runtime.get_value = b"token"
+    with pytest.raises(StoreOperationError) as error:
+        await store.stage_items(owner, BucketRef("session", 0, 0), [""])
+    assert error.value.code == "invalid_identity"
+    assert runtime.hgetall_calls == [ExpiryKeys("test").namespace()]
+    assert runtime.hset_calls == [
+        (
+            ExpiryKeys("test").namespace(),
+            {
+                "shard_count": b"1",
+                "hash_name": b"fnv1a64",
+                "hash_seed": b"1",
+                "identity_encoding": b"v1",
+                "state": b"INITIALIZING",
+            },
+        ),
+        (ExpiryKeys("test").namespace(), {"state": b"READY"}),
+    ]
+    assert runtime.set_calls[0][1:] == (b"0", {"if_not_exists": True})
+    assert runtime.set_calls[1][1] == b"token"
+    assert runtime.set_calls[1][2] == {"ttl_seconds": 120.0, "if_not_exists": True}
+    assert runtime.zrangebyscore_calls == [
+        (ExpiryKeys("test").source(0), 0, 10, 2, {"min_exclusive": True}),
+        (
+            ExpiryKeys("test").registry(0),
+            -1,
+            1_700_000_000_123,
+            2,
+            {"min_exclusive": True},
+        ),
+    ]
+    assert runtime.server_time_for_key_calls == [
+        ExpiryKeys("test").registry(0),
+        ExpiryKeys("test").namespace(),
+    ]
     assert [call[0] for call in runtime.script_calls] == [
-        "expiry.v1.read_hash",
-        "expiry.v1.write_hash",
-        "expiry.v1.set_progress_if_absent",
-        "expiry.v1.write_hash",
         "expiry.v1.read_zset_page",
     ]
 

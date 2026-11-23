@@ -3,14 +3,15 @@
 use super::provider::{CacheOperation, CacheProvider};
 use super::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, ScriptRequest, ScriptResult, ScriptValue, SetCondition, SetOptions, SetResult,
+    ListMoveRequest, ScoredMember, ScoreRange, ScriptRequest, ScriptResult, ScriptValue,
+    SetCondition, SetOptions, SetResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 type ScriptHandler = dyn Fn(ScriptRequest) -> CacheResult<ScriptResult> + Send + Sync + 'static;
@@ -536,8 +537,17 @@ impl CacheProvider for MemoryMockProvider {
             .and_then(|hash| hash.get(field).cloned()))
     }
 
-    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+    async fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
         self.ensure_open()?;
+        self.purge_expired_key(key).await;
+        Ok(self.hashes.read().await.get(key).cloned().unwrap_or_default())
+    }
+
+    async fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        self.ensure_open()?;
+        if values.is_empty() {
+            return Ok(0);
+        }
         let _guard = self.enter_set();
         if !self.set_delay.is_zero() {
             tokio::time::sleep(self.set_delay).await;
@@ -546,8 +556,11 @@ impl CacheProvider for MemoryMockProvider {
         self.remove_non_hash_values(key).await;
         let mut hashes = self.hashes.write().await;
         let hash = hashes.entry(key.to_string()).or_default();
-        let added = u64::from(!hash.contains_key(field));
-        hash.insert(field.to_string(), value);
+        let mut added = 0;
+        for (field, value) in values {
+            added += u64::from(!hash.contains_key(&field));
+            hash.insert(field, value);
+        }
         Ok(added)
     }
 
@@ -582,19 +595,25 @@ impl CacheProvider for MemoryMockProvider {
             .map_or(0, |members| members.len() as u64))
     }
 
-    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+    async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
         self.ensure_open()?;
-        if score.is_nan() {
+        if entries.iter().any(|entry| entry.score.is_nan()) {
             return Err(CacheError::InvalidArgument(
                 "sorted-set score cannot be NaN".into(),
             ));
+        }
+        if entries.is_empty() {
+            return Ok(0);
         }
         self.purge_expired_key(key).await;
         self.remove_non_zset_values(key).await;
         let mut zsets = self.zsets.write().await;
         let zset = zsets.entry(key.to_string()).or_default();
-        let added = u64::from(!zset.contains_key(member));
-        zset.insert(member.to_string(), score);
+        let mut added = 0;
+        for entry in entries {
+            added += u64::from(!zset.contains_key(&entry.member));
+            zset.insert(entry.member, entry.score);
+        }
         Ok(added)
     }
 
@@ -619,17 +638,15 @@ impl CacheProvider for MemoryMockProvider {
     async fn zrangebyscore(
         &self,
         key: &str,
-        min: f64,
-        max: f64,
-        limit: u32,
-    ) -> CacheResult<Vec<String>> {
+        range: ScoreRange,
+    ) -> CacheResult<Vec<ScoredMember>> {
         self.ensure_open()?;
-        if min.is_nan() || max.is_nan() {
+        if range.min.is_nan() || range.max.is_nan() {
             return Err(CacheError::InvalidArgument(
                 "sorted-set score range cannot be NaN".into(),
             ));
         }
-        if limit == 0 {
+        if range.limit == 0 {
             return Ok(Vec::new());
         }
         self.purge_expired_key(key).await;
@@ -640,18 +657,51 @@ impl CacheProvider for MemoryMockProvider {
             .get(key)
             .map(|zset| {
                 zset.iter()
-                    .filter(|(_, score)| **score >= min && **score <= max)
-                    .map(|(member, score)| (member.clone(), *score))
+                    .filter(|(_, score)| {
+                        let above_min = if range.min_exclusive {
+                            **score > range.min
+                        } else {
+                            **score >= range.min
+                        };
+                        let below_max = if range.max_exclusive {
+                            **score < range.max
+                        } else {
+                            **score <= range.max
+                        };
+                        above_min && below_max
+                    })
+                    .map(|(member, score)| ScoredMember {
+                        member: member.clone(),
+                        score: *score,
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         members.sort_by(|left, right| {
-            left.1
-                .total_cmp(&right.1)
-                .then_with(|| left.0.cmp(&right.0))
+            left.score
+                .total_cmp(&right.score)
+                .then_with(|| left.member.cmp(&right.member))
         });
-        members.truncate(limit as usize);
-        Ok(members.into_iter().map(|(member, _)| member).collect())
+        let offset = usize::try_from(range.offset).unwrap_or(usize::MAX);
+        Ok(members
+            .into_iter()
+            .skip(offset)
+            .take(range.limit as usize)
+            .collect())
+    }
+
+    async fn zcard(&self, key: &str) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.purge_expired_key(key).await;
+        Ok(self.zsets.read().await.get(key).map_or(0, |zset| zset.len() as u64))
+    }
+
+    async fn server_time_for_key(&self, _key: &str) -> CacheResult<u64> {
+        self.ensure_open()?;
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .map_err(|error| CacheError::Internal(format!("system clock is before Unix epoch: {error}")))
     }
 
     async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {

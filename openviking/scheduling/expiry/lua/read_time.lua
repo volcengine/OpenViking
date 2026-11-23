@@ -1,1 +1,0 @@
-return redis.call('TIME')

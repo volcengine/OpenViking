@@ -75,12 +75,6 @@ class CacheRuntimeExpiryStore:
             "cas_zset_member",
             "compare_owner",
             "read_zset_page",
-            "read_time",
-            "read_hash",
-            "write_hash",
-            "set_progress_if_absent",
-            "stage_items",
-            "zcard",
         ):
             self._cache_runtime.register_script(f"expiry.v1.{name}", self._read_script(name))
         await self._io.run(lambda: self._run_with_retry(self._cache_runtime.ping, retry="read"))
@@ -124,10 +118,12 @@ class CacheRuntimeExpiryStore:
         for shard_id in range(spec.shard_count):
             progress_key = self._keys.progress(shard_id)
             if initializing:
-                await self._eval(
-                    "set_progress_if_absent",
-                    [progress_key],
-                    ["0"],
+                await self._cache_call(
+                    lambda progress_key=progress_key: self._cache_runtime.set(
+                        progress_key,
+                        b"0",
+                        if_not_exists=True,
+                    ),
                     retry="idempotent",
                 )
             elif await self._cache_call(
@@ -285,11 +281,14 @@ class CacheRuntimeExpiryStore:
         """Stage resource identifiers in one bucket after owner validation."""
         if not item_ids:
             return
+        if any(not item_id for item_id in item_ids):
+            raise StoreOperationError("invalid_identity", "Timer item identifier is empty")
         await self.assert_owner(owner)
-        await self._eval(
-            "stage_items",
-            [self._keys.bucket(bucket)],
-            item_ids,
+        await self._cache_call(
+            lambda: self._cache_runtime.zadd(
+                self._keys.bucket(bucket),
+                [(0.0, item_id) for item_id in item_ids],
+            ),
             retry="resolve_by_caller",
         )
 
@@ -355,22 +354,15 @@ class CacheRuntimeExpiryStore:
         """Read Redis time in milliseconds from the namespace owner's node."""
         return await self._read_time_ms_for_key(self._keys.namespace())
 
-    @staticmethod
-    def _decode_redis_time(raw: Any) -> int:
-        """Validate and convert a Redis TIME reply into milliseconds."""
-        try:
-            seconds, microseconds = (int(value) for value in raw)
-        except (TypeError, ValueError) as exc:
-            raise StoreOperationError("namespace_corrupt", "Invalid Redis time") from exc
-        if not 0 < seconds < SCORE_TIME_BASE or not 0 <= microseconds < 1_000_000:
-            raise StoreOperationError("namespace_corrupt", "Redis time is outside supported range")
-        return seconds * 1000 + microseconds // 1000
-
     async def _read_time_ms_for_key(self, key: str) -> int:
         """Read TIME from the primary owning key so source cutoffs share its clock."""
-
-        raw = await self._eval("read_time", [key], [], retry="read")
-        return self._decode_redis_time(raw)
+        raw = await self._cache_call(
+            lambda: self._cache_runtime.server_time_for_key(key),
+            retry="read",
+        )
+        if type(raw) is not int or not 0 < raw < SCORE_TIME_BASE * 1000:
+            raise StoreOperationError("namespace_corrupt", "Redis time is outside supported range")
+        return raw
 
     async def _read_zset_page(
         self,
@@ -382,24 +374,84 @@ class CacheRuntimeExpiryStore:
         after_member: str | None,
         limit: int,
     ) -> tuple[tuple[tuple[str, int], ...], tuple[int, str] | None]:
-        """Read a scored cursor page through the Redis-compatible Lua script."""
+        """Read the first scored page directly and later pages through Lua."""
+        if type(limit) is not int or not 1 <= limit <= 4096:
+            raise StoreOperationError("invalid_integer", "Timer page limit is invalid")
+        if after_score is None:
+            upper = (
+                await self._read_time_ms_for_key(key)
+                if upper_inclusive is None
+                else upper_inclusive
+            )
+            raw = await self._cache_call(
+                lambda: self._cache_runtime.zrangebyscore(
+                    key,
+                    lower_exclusive,
+                    upper,
+                    limit + 1,
+                    min_exclusive=True,
+                ),
+                retry="read",
+            )
+            try:
+                items = self._decode_zset_items(raw)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise StoreOperationError("namespace_corrupt", "Timer page is invalid") from exc
+            if len(items) <= limit:
+                return items, None
+            return items[:limit], items[limit - 1]
+        if after_member is None:
+            raise StoreOperationError("namespace_corrupt", "Timer page cursor is incomplete")
         raw = await self._eval(
             "read_zset_page",
             [key],
             [
                 lower_exclusive,
                 "" if upper_inclusive is None else upper_inclusive,
-                "" if after_score is None else after_score,
-                after_member or "",
+                after_score,
+                after_member,
                 limit,
             ],
             retry="read",
         )
-        data = json.loads(self._decode_bytes(raw, "Timer page is invalid"))
-        items = tuple((str(member), int(score)) for member, score in data["items"])
-        next_raw = data.get("next")
-        next_cursor = (int(next_raw[0]), str(next_raw[1])) if next_raw else None
+        try:
+            data = json.loads(self._decode_bytes(raw, "Timer page is invalid"))
+            if not isinstance(data, dict):
+                raise ValueError
+            items = self._decode_zset_items(data["items"])
+            next_raw = data.get("next")
+            next_cursor = self._decode_zset_items([next_raw])[0] if next_raw else None
+        except (TypeError, ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise StoreOperationError("namespace_corrupt", "Timer page is invalid") from exc
         return items, next_cursor
+
+    @staticmethod
+    def _decode_zset_items(raw: Any) -> tuple[tuple[str, int], ...]:
+        """Validate scored Runtime results and convert scores to exact integers."""
+        if not isinstance(raw, (list, tuple)):
+            raise ValueError
+        items: list[tuple[str, int]] = []
+        for value in raw:
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise ValueError
+            member, score = value
+            if type(member) is not str:
+                raise ValueError
+            if isinstance(score, str):
+                parsed = int(score)
+            elif type(score) in {int, float}:
+                try:
+                    parsed = int(score)
+                except (OverflowError, ValueError) as exc:
+                    raise ValueError from exc
+                if parsed != score:
+                    raise ValueError
+            else:
+                raise ValueError
+            if not 0 <= parsed <= MAX_EXACT_INTEGER:
+                raise ValueError
+            items.append((member, parsed))
+        return tuple(items)
 
     async def read_bucket_page(
         self,
@@ -514,8 +566,9 @@ class CacheRuntimeExpiryStore:
 
     async def remove_registration_if_empty(self, bucket: BucketRef) -> bool:
         """Remove a registry member after confirming its bucket is empty."""
-        if int(
-            await self._eval("zcard", [self._keys.bucket(bucket)], [], retry="read")
+        if await self._cache_call(
+            lambda: self._cache_runtime.zcard(self._keys.bucket(bucket)),
+            retry="read",
         ) != 0:
             return False
         await self._cache_call(
@@ -649,24 +702,34 @@ class CacheRuntimeExpiryStore:
         return await self._io.run(lambda: self._run_with_retry(operation, retry=retry))
 
     async def _read_hash(self, key: str) -> dict[str, str]:
-        """Read one Redis hash through the named Runtime script."""
-        raw = await self._eval("read_hash", [key], [], retry="read")
+        """Read one Redis hash through the shared Runtime."""
+        raw = await self._cache_call(
+            lambda: self._cache_runtime.hgetall(key),
+            retry="read",
+        )
         try:
-            decoded = json.loads(self._decode_bytes(raw, "Timer hash is invalid"))
-            if not isinstance(decoded, dict):
+            if not isinstance(raw, dict):
                 raise ValueError
-            return {str(field): str(value) for field, value in decoded.items()}
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            decoded: dict[str, str] = {}
+            for field, value in raw.items():
+                if type(field) is not str or type(value) is not bytes:
+                    raise ValueError
+                decoded[field] = value.decode("utf-8")
+            return decoded
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
             raise StoreOperationError("namespace_corrupt", "Timer hash is invalid") from exc
 
     async def _write_hash(
         self, key: str, values: dict[str, str], *, retry: RetryPolicy
     ) -> None:
-        """Write one or more hash fields through a persistent Lua operation."""
-        args: list[str] = []
-        for field, value in values.items():
-            args.extend((field, value))
-        await self._eval("write_hash", [key], args, retry=retry)
+        """Write one or more hash fields through the shared Runtime."""
+        await self._cache_call(
+            lambda: self._cache_runtime.hset(
+                key,
+                {field: value.encode() for field, value in values.items()},
+            ),
+            retry=retry,
+        )
 
     async def _run_with_retry(self, operation: Any, *, retry: RetryPolicy) -> Any:
         """Retry safe CacheRuntime operations inside the executor's total time budget."""
