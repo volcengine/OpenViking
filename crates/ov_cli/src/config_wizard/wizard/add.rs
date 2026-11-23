@@ -22,7 +22,7 @@ use super::prompts::{
 };
 use crate::config_wizard::store::{
     ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, IdentityField, OPENVIKING_SERVICE_URL,
-    custom_allows_empty_api_key,
+    byteplus_service_url, custom_allows_empty_api_key,
 };
 use crate::error::Result;
 use crate::i18n::{Language, copy};
@@ -78,9 +78,17 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                     key_mode = None;
                     stage = Stage::Name;
                 }
-                PromptResult::Value(1) => {
+                PromptResult::Value(index @ (1 | 2)) => {
                     kind = ConfigKind::Custom;
-                    url = default_server_url.clone();
+                    // BytePlus prefills a new profile without changing how any
+                    // existing custom profile is identified or edited.
+                    url = if index == 2 {
+                        byteplus_service_url()
+                            .expect("BytePlus choice requires an endpoint")
+                            .to_string()
+                    } else {
+                        default_server_url.clone()
+                    };
                     name = None;
                     api_key = None;
                     root_api_key = None;

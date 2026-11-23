@@ -11,13 +11,25 @@ use super::{
 };
 use crate::config::Config;
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, validate_account_id_value, validate_user_id_value,
+    ApiKeyRole, ConfigDraft, ConfigKind, byteplus_service_url, validate_account_id_value,
+    validate_user_id_value,
 };
 use crate::i18n::Language;
 use crate::theme;
 use colored::Colorize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+#[test]
+fn byteplus_menu_requires_a_bound_service_url() {
+    let labels = provider_labels(Language::En);
+    assert_eq!(labels[1], "Custom");
+    if byteplus_service_url().is_some() {
+        assert_eq!(labels[2], "OpenViking Service (BytePlus)");
+    } else {
+        assert_eq!(labels.len(), 2);
+    }
+}
 
 #[test]
 fn provider_helper_copy_is_minimal_and_custom_is_clear() {

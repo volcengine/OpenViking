@@ -192,7 +192,7 @@ test("keeping the stored API key leaves the wizard on its feet", () => {
 tui_menu() { TUI_MENU_CHOICE=1; }
 INTERACTIVE=1
 exec 3< <(printf '\\n')
-prompt_connection "https://example.invalid/openviking" "stored-key"
+prompt_connection "$VOLCENGINE_SERVICE_URL" "stored-key"
 printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 `);
 
@@ -221,7 +221,7 @@ printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 test("the credentials step writes ovcli.conf when the stored key is kept", (t) => {
   const home = makeTempHome(t);
   const conf = join(home, "ovcli.conf");
-  writeFileSync(conf, `${JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "stored-key", output: "table" }, null, 2)}\n`);
+  writeFileSync(conf, `${JSON.stringify({ url: "https://api.vikingdb.cn-beijing.volces.com/openviking", api_key: "stored-key", output: "table" }, null, 2)}\n`);
 
   const result = runInstallerPrelude(`
 tui_menu() { TUI_MENU_CHOICE=1; }
@@ -913,4 +913,81 @@ while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at
   assert.deepEqual(kinds, [
     "opencode", "pi", "dsh", "cursor", "trae", "trae-cn", "zcode", "kimicode", "codebuddy", "qoder", "antigravity", "cli",
   ]);
+});
+
+
+test("BytePlus installer selection is hidden without a preset and never reuses a Volcengine key", () => {
+  const result = runInstallerPrelude(`
+info() { :; }
+ask() { :; }
+read_tty() { printf -v "$1" '%s' ""; }
+tui_menu() { printf 'options:%s\\n' "$#"; TUI_MENU_CHOICE="$TEST_CHOICE"; }
+TEST_CHOICE=1
+prompt_connection "$VOLCENGINE_SERVICE_URL/" "volcengine-test-key"
+printf '%s:%s\\n' "$WIZ_URL" "$WIZ_KEY"
+BYTEPLUS_SERVICE_URL=https://byteplus.example/openviking
+TEST_CHOICE=3
+prompt_connection "$VOLCENGINE_SERVICE_URL" "volcengine-test-key"
+printf '%s:%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split("\n"), [
+    "options:5", "https://api.vikingdb.cn-beijing.volces.com/openviking:__OPENVIKING_KEEP__",
+    "options:6", "https://byteplus.example/openviking:",
+  ]);
+});
+
+test("a changed installer URL clears inherited authentication but keeps client options", (t) => {
+  const file = join(makeTempHome(t), "ovcli.conf");
+  writeFileSync(file, JSON.stringify({
+    url: "https://previous.example/openviking", api_key: "old-key", root_api_key: "old-root",
+    account_id: "old-account", user_id: "old-user", peer_id: "old-peer", extra_headers: { Authorization: "old-header" },
+    gateway_token: "old-token", oidc_token: "old-oidc", timeout: 4,
+    plugin: { enabled: true, apiKey: "old-shared", codex: { apiKey: "old-harness", accountId: "old-account", recallLimit: 3 } },
+  }));
+  const result = runInstallerPrelude(`
+OVCLI_CONF=${JSON.stringify(file)}
+INTERACTIVE=0
+URL_ARG=https://byteplus.example/openviking
+API_KEY_ARG=new-key
+gather_credentials
+printf 'resolved:%s:%s:%s\\n' "$CRED_KEY" "$CRED_ACCOUNT" "$CRED_USER"
+json_merge_ovcli "$OVCLI_CONF" "$CRED_URL" "$CRED_KEY" "$CRED_ACCOUNT" "$CRED_USER"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /resolved:new-key::/);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+    url: "https://byteplus.example/openviking", api_key: "new-key", timeout: 4,
+    plugin: { enabled: true, codex: { recallLimit: 3 } },
+  });
+});
+
+
+test("an unknown old URL does not bind its saved key to the default local endpoint", (t) => {
+  const file = join(makeTempHome(t), "ovcli.conf");
+  writeFileSync(file, JSON.stringify({ api_key: "unknown-server-key" }));
+  const result = runInstallerPrelude(`
+OVCLI_CONF=${JSON.stringify(file)}
+INTERACTIVE=0
+URL_ARG=http://127.0.0.1:1933
+gather_credentials
+printf '<%s>\\n' "$CRED_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /<>/);
+});
+
+test("a connection change with no new key cannot activate a key from a legacy server", (t) => {
+  const home = makeTempHome(t);
+  const file = join(home, "ovcli.conf");
+  const legacy = join(home, "ov.conf");
+  const previous = { url: "https://previous.example/openviking" };
+  writeFileSync(file, JSON.stringify(previous));
+  writeFileSync(legacy, JSON.stringify({ server: { url: previous.url }, codex: { apiKey: "legacy-key" } }));
+  const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, { OPENVIKING_CONFIG_FILE: legacy });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /could reuse a key from another server/);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
 });

@@ -15,6 +15,26 @@ use crate::{
 
 pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
+/// An unbound release keeps the existing provider choices.
+pub(super) fn byteplus_service_url() -> Option<&'static str> {
+    validate_byteplus_endpoint(option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")?)
+}
+
+fn validate_byteplus_endpoint(endpoint: &str) -> Option<&str> {
+    let endpoint = endpoint.trim_end_matches('/');
+    let parsed = Url::parse(endpoint).ok()?;
+    (parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        // Require the same canonical literal that the client will use.
+        && parsed.as_str().trim_end_matches('/') == endpoint
+        && endpoint != OPENVIKING_SERVICE_URL)
+        .then_some(endpoint)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigKind {
     OpenVikingService,
@@ -1305,6 +1325,45 @@ mod tests {
 
         assert_eq!(config.url, OPENVIKING_SERVICE_URL);
         assert_eq!(config.api_key.as_deref(), Some("viking-key"));
+    }
+
+    #[test]
+    fn byteplus_endpoint_must_be_a_distinct_canonical_https_url() {
+        let fixture = "https://byteplus.example/openviking";
+        assert_eq!(super::validate_byteplus_endpoint(fixture), Some(fixture));
+        let with_slash = format!("{fixture}/");
+        assert_eq!(super::validate_byteplus_endpoint(&with_slash), Some(fixture));
+        for url in [
+            "https://API.vikingdb.cn-beijing.volces.com:443/openviking",
+            OPENVIKING_SERVICE_URL,
+            "http://byteplus.example/openviking",
+            "https://byteplus.example/openviking ",
+            "https://byteplus.example/openviking?",
+            "https://byteplus.example/openviking#",
+        ] {
+            assert_eq!(super::validate_byteplus_endpoint(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn byteplus_endpoint_does_not_change_saved_custom_profiles() {
+        let url = super::byteplus_service_url().unwrap_or("https://byteplus.example/openviking");
+        let draft = ConfigDraft {
+            name: "byteplus".into(),
+            kind: ConfigKind::Custom,
+            url: url.into(),
+            api_key: Some("byteplus-test-key".into()),
+            root_api_key: Some("separate-root-key".into()),
+            account: None,
+            user: None,
+        };
+        let config = build_config(&draft).unwrap();
+        let json = serde_json::to_string(&config).unwrap();
+        let reopened: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(ConfigKind::from_config(&reopened), ConfigKind::Custom);
+        assert_eq!(reopened.url, url);
+        assert_eq!(reopened.api_key.as_deref(), Some("byteplus-test-key"));
+        assert_eq!(reopened.root_api_key.as_deref(), Some("separate-root-key"));
     }
 
     #[test]

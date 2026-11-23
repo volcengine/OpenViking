@@ -171,6 +171,10 @@ SOURCE_ARG=""
 DIST_ARG=""
 LANG_ARG=""
 URL_ARG=""
+VOLCENGINE_SERVICE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
+# A verified endpoint can be bound for a release build. Leave the preset
+# absent when this script has no such binding.
+BYTEPLUS_SERVICE_URL=""
 API_KEY_ARG="__OPENVIKING_UNSET__"
 ACCOUNT_ARG="__OPENVIKING_UNSET__"
 USER_ARG="__OPENVIKING_UNSET__"
@@ -710,12 +714,47 @@ json_merge_ovcli() {
   local file="$1" url="$2" key="$3" account="$4" user="$5"
   # Not as arguments: any user can read those in the process list, and one of
   # the values is the API key.
-  OVCLI_URL="$url" OVCLI_API_KEY="$key" OVCLI_ACCOUNT="$account" OVCLI_USER="$user" node - "$file" <<'NODE'
+  OVCLI_URL="$url" OVCLI_API_KEY="$key" OVCLI_ACCOUNT="$account" OVCLI_USER="$user" OVCLI_LANG="$UI_LANG" node - "$file" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
 const { OVCLI_URL: url, OVCLI_API_KEY: apiKey, OVCLI_ACCOUNT: account, OVCLI_USER: user } = process.env;
-let c = {};
-try { c = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+const read = (path) => {
+  try { return JSON.parse(fs.readFileSync(path, "utf8")) || {}; } catch { return {}; }
+};
+const endpoint = (value) => typeof value === "string" ? value.replace(/\/+$/, "") : "";
+const c = read(file);
+if (url && endpoint(c.url) !== endpoint(url)) {
+  const home = process.env.HOME;
+  const legacyPath = process.env.OPENVIKING_CONFIG_FILE || `${home}/.openviking/ov.conf`;
+  const legacy = read(legacyPath.replace(/^~\//, `${home}/`));
+  const server = legacy.server || {};
+  const legacyHost = typeof server.host === "string" ? server.host.replace("0.0.0.0", "127.0.0.1") : "127.0.0.1";
+  const legacyUrl = server.url || `http://${legacyHost}:${server.port || 1933}`;
+  const legacyKey = server.root_api_key || legacy.api_key || Object.values(legacy).some(section => section?.apiKey);
+  const envKey = process.env.OPENVIKING_BEARER_TOKEN || process.env.OPENVIKING_API_KEY;
+  const envUrl = process.env.OPENVIKING_URL || process.env.OPENVIKING_BASE_URL;
+  const hasNewKey = apiKey && apiKey.trim() && apiKey !== "__OPENVIKING_KEEP__";
+  if ((legacyKey && endpoint(legacyUrl) !== endpoint(url) && !hasNewKey) ||
+      (envKey && !envUrl)) {
+    console.error(process.env.OVCLI_LANG === "zh"
+      ? "新连接可能沿用其他服务的密钥。请填写新连接的 API Key，为环境变量中的密钥指定对应 URL，或使用单独的连接配置。"
+      : "The new connection could reuse a key from another server. Set its API key and pair any environment key with its own URL, or use a separate connection configuration.");
+    process.exit(1);
+  }
+  // Do not migrate authentication settings to a different or unknown server.
+  for (const field of ["api_key", "root_api_key", "account", "account_id", "user", "user_id",
+    "actor_peer_id", "peer_id", "agent_id", "extra_header", "extra_headers", "gateway_token",
+    "auth_mode", "ldap_username", "ldap_password", "oidc_token"]) {
+    delete c[field];
+  }
+  if (c.plugin && typeof c.plugin === "object") {
+    for (const section of [c.plugin, ...Object.values(c.plugin)]) {
+      if (section && typeof section === "object") {
+        for (const field of ["apiKey", "accountId", "userId", "authMode", "auth_mode"]) delete section[field];
+      }
+    }
+  }
+}
 if (url) c.url = url;
 if (apiKey !== "__OPENVIKING_KEEP__") c.api_key = apiKey;
 if (account !== "__OPENVIKING_KEEP__") {
@@ -1606,13 +1645,19 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
   else
     def=0
   fi
-  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" \
-    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]" \
-    "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')  [api.vikingdb.cn-beijing.volces.com]" \
+  local options=(
+    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]"
+    "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')  [api.vikingdb.cn-beijing.volces.com]"
     "$custom"
+  )
+  if [ -n "$BYTEPLUS_SERVICE_URL" ]; then
+    options+=("$(t 'BytePlus OpenViking Cloud' 'BytePlus OpenViking 云服务')")
+  fi
+  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" "${options[@]}"
   case "$TUI_MENU_CHOICE" in
     0) WIZ_URL="http://127.0.0.1:1933" ;;
-    1) WIZ_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
+    1) WIZ_URL="$VOLCENGINE_SERVICE_URL" ;;
+    3) WIZ_URL="$BYTEPLUS_SERVICE_URL" ;;
     *)
       ask "$(t 'Server URL' '服务地址') [${current_url:-http://127.0.0.1:1933}]: "
       read_tty url_input
@@ -1620,6 +1665,10 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
       ;;
   esac
 
+  # A blank answer may keep a key only for the endpoint that supplied it.
+  if ! same_connection_url "$WIZ_URL" "$current_url"; then
+    current_key=""
+  fi
   hidden="$(t 'typing is not shown' '输入内容不会显示')"
   if [ -n "$current_key" ]; then
     ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
@@ -1627,6 +1676,8 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
     info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
     info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
     ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
+  elif [ "$TUI_MENU_CHOICE" -eq 3 ]; then
+    ask "$(t "BytePlus OpenViking API key ($hidden): " "BytePlus OpenViking API key（${hidden}）: ")"
   else
     ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
   fi
@@ -1655,6 +1706,21 @@ PROBE_CODE=""
 
 cred_value() { # cred_value <chosen> <stored>
   if [ "$1" = "__OPENVIKING_KEEP__" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi
+}
+
+same_connection_url() {
+  local left="$1" right="$2"
+  # An absent URL does not identify the server an existing key came from.
+  [ -n "$left" ] && [ -n "$right" ] || return 1
+  while [ "${left%/}" != "$left" ]; do left="${left%/}"; done
+  while [ "${right%/}" != "$right" ]; do right="${right%/}"; done
+  [ "$left" = "$right" ]
+}
+
+clear_inherited_credentials() {
+  if [ "$CRED_KEY" = "__OPENVIKING_KEEP__" ]; then CRED_KEY=""; fi
+  if [ "$CRED_ACCOUNT" = "__OPENVIKING_KEEP__" ]; then CRED_ACCOUNT=""; fi
+  if [ "$CRED_USER" = "__OPENVIKING_KEEP__" ]; then CRED_USER=""; fi
 }
 
 gather_credentials() {
@@ -1695,7 +1761,14 @@ gather_credentials() {
     fi
   fi
   if [ -z "$CRED_URL" ]; then
+    if [ -n "$CUR_KEY" ]; then
+      err "$(t 'The saved API key has no server URL. Reconfigure the connection or pass --url.' '已保存的 API key 没有对应的服务地址。请重新配置连接或指定 --url。')"
+      return 1
+    fi
     CRED_URL="http://127.0.0.1:1933"
+  fi
+  if ! same_connection_url "$CRED_URL" "$CUR_URL"; then
+    clear_inherited_credentials
   fi
 }
 
@@ -1755,6 +1828,11 @@ check_server() {
       "$(t 'Continue anyway' '仍然继续')"
     [ "$TUI_MENU_CHOICE" -eq 0 ] || return 0
     prompt_connection "$CRED_URL" "$key"
+    if ! same_connection_url "$WIZ_URL" "$CRED_URL"; then
+      CRED_KEY=""
+      CRED_ACCOUNT=""
+      CRED_USER=""
+    fi
     CRED_URL="$WIZ_URL"
     [ "$WIZ_KEY" = "__OPENVIKING_KEEP__" ] || CRED_KEY="$WIZ_KEY"
   done
