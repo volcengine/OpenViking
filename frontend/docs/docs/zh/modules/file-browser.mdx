@@ -358,73 +358,73 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `labels.workflows` 接受其中任意几项，省略的项跟随 `locale`。
 
-| 参数               | 说明                               | 类型                         | 默认值                                         |
-| ------------------ | ---------------------------------- | ---------------------------- | ---------------------------------------------- |
-| configure          | 编译配置操作的文案，也是弹窗的标题 | `string`                     | `'编译配置'`                                   |
-| configuration      | 同一目录关联多个配置时的页签组名称 | `string`                     | `'编译配置'`                                   |
-| configurationEmpty | 当前用户没有关联配置时的提示       | `string`                     | `'当前用户下没有关联此目录的编译配置。'`       |
-| historyEmpty       | 没有历史版本时的提示               | `string`                     | `'暂无历史版本'`                               |
-| historyLimit       | 历史记录达到 500 条上限时的提示    | `string`                     | `'最多显示最近 500 条快照。'`                  |
-| version            | Wiki 文件版本号前的文字            | `string`                     | `'版本'`                                       |
-| importFile         | 导入弹窗里文件选择框的标签         | `string`                     | `'包文件'`                                     |
-| importHint         | 导入弹窗里的说明                   | `string`                     | `'选择 .ovpack 包，导入到当前目录。'`          |
-| importSubmit       | 导入按钮                           | `string`                     | `'导入'`                                       |
-| imported           | 导入成功的提示                     | `string`                     | `'导入成功。'`                                 |
-| saved              | 编译配置保存成功的提示             | `string`                     | `'配置已保存。'`                               |
-| cancel             | 取消按钮                           | `string`                     | `'取消'`                                       |
-| save               | 保存按钮                           | `string`                     | `'保存'`                                       |
-| failed             | 操作失败的提示前缀                 | `string`                     | `'操作失败。'`                                 |
-| sources            | 源目录选择器的标签                 | `string`                     | `'源目录'`                                     |
-| skill              | 编译 Skill 选择器的标签            | `string`                     | `'编译 Skill'`                                 |
-| instruction        | 兼容字段，当前弹窗不提供指令编辑   | `string`                     | `'指令'`                                       |
-| automatic          | 兼容文案；自动更新由频次选项控制   | `string`                     | `'自动更新'`                                   |
-| schedule           | 更新策略字段的标签                 | `string`                     | `'更新时间'`                                   |
-| noSchedule         | 「不更新」选项                     | `string`                     | `'不更新'`                                     |
-| daily              | 「每天」选项                       | `string`                     | `'每日'`                                       |
-| weekly             | 「每周」选项                       | `string`                     | `'每周'`                                       |
-| weeklySchedule     | 每周更新时间摘要的格式化函数       | `(day: string) => string`    | `每周四` 等，默认跟随语言                      |
-| time               | 执行时间输入框的标签               | `string`                     | `'更新时间'`                                   |
-| weekday            | 星期选择框的标签                   | `string`                     | `'更新日期'`                                   |
-| frequency          | 更新频次单选组的标签               | `string`                     | `'更新频次'`                                   |
-| selectWeekday      | 更新日期未选择时的提示             | `string`                     | `'星期'`                                       |
-| weekdayRequired    | 更新日期必填提示                   | `string`                     | `'请选择每周更新的日期'`                       |
-| hour               | 小时列表的名称                     | `string`                     | `'小时'`                                       |
-| minute             | 分钟列表的名称                     | `string`                     | `'分钟'`                                       |
-| timezone           | 北京时间说明                       | `string`                     | `'按北京时间（UTC+8）执行，精确到分钟。'`      |
-| historyView        | 历史显示模式的名称                 | `string`                     | `'历史版本正文视图'`                           |
-| copyPath           | 复制文件路径按钮的文案             | `string`                     | `'复制文件路径'`                               |
-| pathCopied         | 历史预览中路径复制成功的反馈       | `string`                     | `'节点路径已复制'`                             |
-| rollbackConfirm    | 确认回滚按钮的文案                 | `string`                     | `'确定回滚'`                                   |
-| target             | 目标目录                           | `string`                     | `'目标目录'`                                   |
-| selectSources      | 选择源目录                         | `string`                     | `'选择源目录'`                                 |
-| selectSkill        | 选择编译 Skill                     | `string`                     | `'选择编译 Skill'`                             |
-| editSchedule       | 修改更新策略                       | `string`                     | `'修改更新策略'`                               |
-| selectFile         | 选择文件                           | `string`                     | `'选择文件'`                                   |
-| selectVersion      | 选择历史版本                       | `string`                     | `'选择历史版本'`                               |
-| comparisonVersion  | 对比版本                           | `string`                     | `'对比版本'`                                   |
-| latest             | 最新                               | `string`                     | `'最新'`                                       |
-| rollback           | 回滚至此版本                       | `string`                     | `'回滚至此版本'`                               |
-| rollbackBadge      | 回滚生成的新版本标识               | `string`                     | `'回滚'`                                       |
-| deletedBadge       | 所选版本删除了文件时显示的标识     | `string`                     | `'已删除'`                                     |
-| deletedVersion     | 删除版本无正文时的提示             | `string`                     | `'此版本的文件已被删除，暂无正文'`             |
-| rollbackTitle      | 确认回滚至此版本？                 | `string`                     | `'回滚此文档至此版本？'`                       |
-| rollbackUnchanged  | 所选版本与当前文件内容一致时的提示 | `string`                     | `'所选版本内容与当前文件一致，未生成新版本'`   |
-| rollbackSaved      | 回滚完成时的提示                   | `string`                     | `'回滚已完成'`                                 |
-| importChoose       | 选择文件                           | `string`                     | `'选择文件'`                                   |
-| importDrop         | 点击选择或拖入文件                 | `string`                     | `'点击选择或拖入文件'`                         |
-| importFormat       | 支持 .ovpack 格式                  | `string`                     | `'支持 .ovpack 格式'`                          |
-| compareChanges     | 查看变更                           | `string`                     | `'查看变更'`                                   |
-| noChanges          | 两个版本的内容相同。               | `string`                     | `'两个版本的内容相同。'`                       |
-| addedLines         | 新增内容                           | `string`                     | `'新增内容'`                                   |
-| removedLines       | 删除内容                           | `string`                     | `'删除内容'`                                   |
-| copyOriginal       | 复制原文                           | `string`                     | `'复制原文'`                                   |
-| copied             | 已复制                             | `string`                     | `'已复制'`                                     |
-| historyPreview     | 预览                               | `string`                     | `'预览'`                                       |
-| historyMarkdown    | Markdown                           | `string`                     | `'Markdown'`                                   |
-| failureTitle       | 操作失败通知的标题格式化函数       | `(action: string) => string` | `` action => `${action}失败` ``                |
-| copyFailed         | 剪贴板复制失败的 Toast 文案        | `string`                     | `'复制失败，请检查剪贴板权限后重试'`           |
-| sourcesRequired    | 未填写来源目录的 Toast 文案        | `string`                     | `'请至少填写一个来源目录'`                     |
-| skillRequired      | 未填写技能 URI 的 Toast 文案       | `string`                     | `'请填写技能 URI'`                             |
+| 参数               | 说明                               | 类型                         | 默认值                                       |
+| ------------------ | ---------------------------------- | ---------------------------- | -------------------------------------------- |
+| configure          | 编译配置操作的文案，也是弹窗的标题 | `string`                     | `'编译配置'`                                 |
+| configuration      | 同一目录关联多个配置时的页签组名称 | `string`                     | `'编译配置'`                                 |
+| configurationEmpty | 当前用户没有关联配置时的提示       | `string`                     | `'当前用户下没有关联此目录的编译配置。'`     |
+| historyEmpty       | 没有历史版本时的提示               | `string`                     | `'暂无历史版本'`                             |
+| historyLimit       | 历史记录达到 500 条上限时的提示    | `string`                     | `'最多显示最近 500 条快照。'`                |
+| version            | Wiki 文件版本号前的文字            | `string`                     | `'版本'`                                     |
+| importFile         | 导入弹窗里文件选择框的标签         | `string`                     | `'包文件'`                                   |
+| importHint         | 导入弹窗里的说明                   | `string`                     | `'选择 .ovpack 包，导入到当前目录。'`        |
+| importSubmit       | 导入按钮                           | `string`                     | `'导入'`                                     |
+| imported           | 导入成功的提示                     | `string`                     | `'导入成功。'`                               |
+| saved              | 编译配置保存成功的提示             | `string`                     | `'配置已保存。'`                             |
+| cancel             | 取消按钮                           | `string`                     | `'取消'`                                     |
+| save               | 保存按钮                           | `string`                     | `'保存'`                                     |
+| failed             | 操作失败的提示前缀                 | `string`                     | `'操作失败。'`                               |
+| sources            | 源目录选择器的标签                 | `string`                     | `'源目录'`                                   |
+| skill              | 编译 Skill 选择器的标签            | `string`                     | `'编译 Skill'`                               |
+| instruction        | 兼容字段，当前弹窗不提供指令编辑   | `string`                     | `'指令'`                                     |
+| automatic          | 兼容文案；自动更新由频次选项控制   | `string`                     | `'自动更新'`                                 |
+| schedule           | 更新策略字段的标签                 | `string`                     | `'更新时间'`                                 |
+| noSchedule         | 「不更新」选项                     | `string`                     | `'不更新'`                                   |
+| daily              | 「每天」选项                       | `string`                     | `'每日'`                                     |
+| weekly             | 「每周」选项                       | `string`                     | `'每周'`                                     |
+| weeklySchedule     | 每周更新时间摘要的格式化函数       | `(day: string) => string`    | `每周四` 等，默认跟随语言                    |
+| time               | 执行时间输入框的标签               | `string`                     | `'更新时间'`                                 |
+| weekday            | 星期选择框的标签                   | `string`                     | `'更新日期'`                                 |
+| frequency          | 更新频次单选组的标签               | `string`                     | `'更新频次'`                                 |
+| selectWeekday      | 更新日期未选择时的提示             | `string`                     | `'星期'`                                     |
+| weekdayRequired    | 更新日期必填提示                   | `string`                     | `'请选择每周更新的日期'`                     |
+| hour               | 小时列表的名称                     | `string`                     | `'小时'`                                     |
+| minute             | 分钟列表的名称                     | `string`                     | `'分钟'`                                     |
+| timezone           | 北京时间说明                       | `string`                     | `'按北京时间（UTC+8）执行，精确到分钟。'`    |
+| historyView        | 历史显示模式的名称                 | `string`                     | `'历史版本正文视图'`                         |
+| copyPath           | 复制文件路径按钮的文案             | `string`                     | `'复制文件路径'`                             |
+| pathCopied         | 历史预览中路径复制成功的反馈       | `string`                     | `'节点路径已复制'`                           |
+| rollbackConfirm    | 确认回滚按钮的文案                 | `string`                     | `'确定回滚'`                                 |
+| target             | 目标目录                           | `string`                     | `'目标目录'`                                 |
+| selectSources      | 选择源目录                         | `string`                     | `'选择源目录'`                               |
+| selectSkill        | 选择编译 Skill                     | `string`                     | `'选择编译 Skill'`                           |
+| editSchedule       | 修改更新策略                       | `string`                     | `'修改更新策略'`                             |
+| selectFile         | 选择文件                           | `string`                     | `'选择文件'`                                 |
+| selectVersion      | 选择历史版本                       | `string`                     | `'选择历史版本'`                             |
+| comparisonVersion  | 对比版本                           | `string`                     | `'对比版本'`                                 |
+| latest             | 最新                               | `string`                     | `'最新'`                                     |
+| rollback           | 回滚至此版本                       | `string`                     | `'回滚至此版本'`                             |
+| rollbackBadge      | 回滚生成的新版本标识               | `string`                     | `'回滚'`                                     |
+| deletedBadge       | 所选版本删除了文件时显示的标识     | `string`                     | `'已删除'`                                   |
+| deletedVersion     | 删除版本无正文时的提示             | `string`                     | `'此版本的文件已被删除，暂无正文'`           |
+| rollbackTitle      | 确认回滚至此版本？                 | `string`                     | `'回滚此文档至此版本？'`                     |
+| rollbackUnchanged  | 所选版本与当前文件内容一致时的提示 | `string`                     | `'所选版本内容与当前文件一致，未生成新版本'` |
+| rollbackSaved      | 回滚完成时的提示                   | `string`                     | `'回滚已完成'`                               |
+| importChoose       | 选择文件                           | `string`                     | `'选择文件'`                                 |
+| importDrop         | 点击选择或拖入文件                 | `string`                     | `'点击选择或拖入文件'`                       |
+| importFormat       | 支持 .ovpack 格式                  | `string`                     | `'支持 .ovpack 格式'`                        |
+| compareChanges     | 查看变更                           | `string`                     | `'查看变更'`                                 |
+| noChanges          | 两个版本的内容相同。               | `string`                     | `'两个版本的内容相同。'`                     |
+| addedLines         | 新增内容                           | `string`                     | `'新增内容'`                                 |
+| removedLines       | 删除内容                           | `string`                     | `'删除内容'`                                 |
+| copyOriginal       | 复制原文                           | `string`                     | `'复制原文'`                                 |
+| copied             | 已复制                             | `string`                     | `'已复制'`                                   |
+| historyPreview     | 预览                               | `string`                     | `'预览'`                                     |
+| historyMarkdown    | Markdown                           | `string`                     | `'Markdown'`                                 |
+| failureTitle       | 操作失败通知的标题格式化函数       | `(action: string) => string` | `` action => `${action}失败` ``              |
+| copyFailed         | 剪贴板复制失败的 Toast 文案        | `string`                     | `'复制失败，请检查剪贴板权限后重试'`         |
+| sourcesRequired    | 未填写来源目录的 Toast 文案        | `string`                     | `'请至少填写一个来源目录'`                   |
+| skillRequired      | 未填写技能 URI 的 Toast 文案       | `string`                     | `'请填写技能 URI'`                           |
 
 ### FileBrowserAclLabels
 
