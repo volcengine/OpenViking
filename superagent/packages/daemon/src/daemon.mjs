@@ -540,7 +540,8 @@ export class PersonalAgentDaemon {
       inboundSeq: inbound?.seq,
       metadata: { chatType: event.chatType },
     });
-    const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply');
+    // A command may answer with a card too (/tasks); the text goes where it cannot.
+    const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply', { card: outcome.card ?? null });
     if (!sent.ok) {
       this.recordSystemActivity('command.reply_failed', {
         summary: safeChatLookupError(sent.error),

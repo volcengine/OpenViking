@@ -8,6 +8,10 @@
 //   /tasks              live tasks, the last few that ended, slots in use
 //   /tasks t12          one task: request, inputs, reports and their delivery
 //   /tasks stop t12 …   stop it (and hand back what its worker never saw)
+//
+// The overview is also a card (Card JSON 2.0, a table per group of tasks),
+// sent where the connector takes cards (Lark); elsewhere, and should the card
+// be refused, the text goes.
 
 import { formatBytes } from './task-dirs.mjs';
 
@@ -50,19 +54,35 @@ function where(task) {
   return `${chat}${task.origin_thread ? ' · 话题' : ''}`;
 }
 
+// How long a task has been at what it is doing: its running turn, its wait
+// for a slot or an answer, or since it ended.
+function elapsed(task, now) {
+  if (task.status === 'running') return `${task.turnStartedAt ? since(task.turnStartedAt, now) : ''}（第 ${task.turns} 次运行）`;
+  if (task.status === 'queued' || task.status === 'waiting') return since(task.updated_at_ms, now);
+  return `${since(task.ended_at_ms ?? task.updated_at_ms, now)}前`;
+}
+
 function state(task, now) {
-  if (task.status === 'running') {
-    return `运行 ${task.turnStartedAt ? since(task.turnStartedAt, now) : ''}（第 ${task.turns} 次运行）`.replace(' （', '（');
-  }
-  if (task.status === 'queued') return `排队 ${since(task.updated_at_ms, now)}`;
-  if (task.status === 'waiting') return `等 ${task.requester_name ?? '请求人'} 回复 ${since(task.updated_at_ms, now)}`;
-  return `${STATUS[task.status] ?? task.status} · ${since(task.ended_at_ms ?? task.updated_at_ms, now)}前`;
+  if (task.status === 'running') return `运行 ${elapsed(task, now)}`.replace(' （', '（');
+  if (task.status === 'queued') return `排队 ${elapsed(task, now)}`;
+  if (task.status === 'waiting') return `等 ${task.requester_name ?? '请求人'} 回复 ${elapsed(task, now)}`;
+  return `${STATUS[task.status] ?? task.status} · ${elapsed(task, now)}`;
+}
+
+// What else marks a task in a list: more than one round, the task it follows.
+function extras(task) {
+  return [...(task.round > 1 ? [`${task.round} 次请求`] : []), ...(task.parent_id ? [`跟进 ${task.parent_id}`] : [])];
+}
+
+// What became of its latest result, for a task that has one to show.
+function delivered(task, labels = DELIVERY) {
+  return task.report?.delivery && ['done', 'dropped', 'failed', 'waiting', 'blocked'].includes(task.status)
+    ? labels[task.report.delivery] ?? '' : '';
 }
 
 function line(task, now) {
-  const delivery = task.report?.delivery && ['done', 'dropped', 'failed', 'waiting', 'blocked'].includes(task.status)
-    ? ` · 结果${DELIVERY[task.report.delivery]}` : '';
-  return `${task.id} ${state(task, now)}「${oneLine(task.title, 40)}」${task.requester_name ?? '未知'} · ${where(task)}${task.round > 1 ? ` · ${task.round} 次请求` : ''}${task.parent_id ? ` · 跟进 ${task.parent_id}` : ''}${delivery}`;
+  const result = delivered(task);
+  return `${task.id} ${state(task, now)}「${oneLine(task.title, 40)}」${task.requester_name ?? '未知'} · ${where(task)}${extras(task).map((extra) => ` · ${extra}`).join('')}${result ? ` · 结果${result}` : ''}`;
 }
 
 // The tasks that have not ended, by what they are doing: a worker on them
@@ -103,23 +123,116 @@ function section(lines, title, tasks, now) {
   if (tasks.length > LIVE_SHOWN) lines.push(`…另有 ${tasks.length - LIVE_SHOWN} 个`);
 }
 
-// Tasks with a worker on them first, then the questions waiting for a
-// person, the latest asked first, and those nobody answered for days last,
-// in one line: a question nobody answers never takes the place of work
-// being done.
-function overviewText(tasks, now) {
-  const { live, ended, total, slots, disk, dormantDays } = tasks.overview({ recent: RECENT });
-  if (total === 0) return `还没有后台任务。\n${USAGE}`;
-  const counts = liveCounts(live).filter(([label, n]) => n > 0 || label !== '久未回复').map(([label, n]) => `${label} ${n}`).join(' · ');
-  const lines = [`后台任务：${counts} · 共 ${total} 个 · worker 槽位 ${slots.used}/${slots.of}（跟进预留 ${slots.reserved}/${slots.reservedOf}）`];
-  if (disk) lines.push(`任务目录占用 ${formatBytes(disk.bytes)}${disk.budget > 0 ? `（上限 ${formatBytes(disk.budget)}）` : ''}`);
+// The overview, in the order both forms show it: tasks with a worker on them
+// first, then the questions waiting for a person, the latest asked first, the
+// tasks that ended last, and those nobody answered for days, in one line: a
+// question nobody answers never takes the place of work being done.
+function overviewParts(view) {
+  const { live, ended, total, slots, disk } = view;
   const waiting = live.filter((task) => task.status === 'waiting').sort((a, b) => b.updated_at_ms - a.updated_at_ms);
-  section(lines, '进行中', [...live.filter((task) => task.status === 'running'), ...live.filter((task) => task.status === 'queued')], now);
-  section(lines, '等待回复', waiting.filter((task) => !task.dormant), now);
-  section(lines, '最近结束', ended, now);
-  dormantLines(lines, waiting.filter((task) => task.dormant), dormantDays, now);
+  return {
+    counts: liveCounts(live).filter(([label, n]) => n > 0 || label !== '久未回复'),
+    slots: `共 ${total} 个 · worker 槽位 ${slots.used}/${slots.of}（跟进预留 ${slots.reserved}/${slots.reservedOf}）`,
+    disk: disk ? `任务目录占用 ${formatBytes(disk.bytes)}${disk.budget > 0 ? `（上限 ${formatBytes(disk.budget)}）` : ''}` : null,
+    sections: [
+      ['进行中', [...live.filter((task) => task.status === 'running'), ...live.filter((task) => task.status === 'queued')]],
+      ['等待回复', waiting.filter((task) => !task.dormant)],
+      ['最近结束', ended],
+    ],
+    dormant: waiting.filter((task) => task.dormant),
+  };
+}
+
+function overviewText(view, now) {
+  const parts = overviewParts(view);
+  const lines = [`后台任务：${parts.counts.map(([label, n]) => `${label} ${n}`).join(' · ')} · ${parts.slots}`];
+  if (parts.disk) lines.push(parts.disk);
+  for (const [title, tasks] of parts.sections) section(lines, title, tasks, now);
+  dormantLines(lines, parts.dormant, view.dormantDays, now);
   lines.push('', USAGE);
   return lines.join('\n');
+}
+
+// ---- the overview as a card (Lark, Card JSON 2.0) ----------------------------
+
+// A task's status as a coloured tag.
+const TAG = {
+  running: ['运行中', 'blue'], queued: ['排队', 'wathet'], waiting: ['等待回复', 'orange'], done: ['完成', 'green'],
+  blocked: ['受阻', 'red'], failed: ['失败', 'carmine'], dropped: ['无需处理', 'violet'], stopped: ['已停止', 'violet'],
+};
+// A table cell is narrow: the delivery states in a few characters.
+const CELL_DELIVERY = { ...DELIVERY, silent: '未发', offered: '待转发' };
+const COLUMNS = {
+  id: { name: 'id', display_name: '编号', data_type: 'text', width: '80px' },
+  status: { name: 'status', display_name: '状态', data_type: 'options', width: '100px' },
+  elapsed: { name: 'elapsed', display_name: '时长', data_type: 'text' },
+  title: { name: 'title', display_name: '任务', data_type: 'text', width: '240px' },
+  requester: { name: 'requester', display_name: '请求人', data_type: 'text' },
+  where: { name: 'where', display_name: '位置', data_type: 'text' },
+  result: { name: 'result', display_name: '结果', data_type: 'text' },
+};
+
+// Lark refuses a bot message with an email address in it (code 230028): a
+// card shows every @ of what people wrote as a full-width ＠.
+function cardText(value) {
+  return String(value ?? '').replace(/@/g, '＠');
+}
+
+function plain(content, style = {}) {
+  return { tag: 'plain_text', content: cardText(content), ...style };
+}
+
+// One group of tasks as a table, paged by Lark ten rows at a time. A task at
+// work has no result yet: its group has no such column.
+function table(tasks, now, { result }) {
+  const keys = ['id', 'status', 'elapsed', 'title', 'requester', 'where', ...(result ? ['result'] : [])];
+  return {
+    tag: 'table', page_size: 10, row_height: 'low', freeze_first_column: true,
+    header_style: { background_style: 'grey', bold: true },
+    columns: keys.map((key) => COLUMNS[key]),
+    rows: tasks.slice(0, LIVE_SHOWN).map((task) => {
+      const [label, color] = TAG[task.status] ?? [task.status, 'wathet'];
+      const more = extras(task);
+      return {
+        id: task.id,
+        status: [{ text: label, color }],
+        elapsed: elapsed(task, now),
+        title: cardText(`${oneLine(task.title, 120)}${more.length ? `（${more.join(' · ')}）` : ''}`),
+        requester: cardText(task.requester_name ?? '未知'),
+        where: cardText(where(task)),
+        ...(result ? { result: delivered(task, CELL_DELIVERY) } : {}),
+      };
+    }),
+  };
+}
+
+function overviewCard(view, now) {
+  const parts = overviewParts(view);
+  const grey = { text_size: 'notation', text_color: 'grey' };
+  const elements = [{ tag: 'markdown', content: parts.counts.map(([label, n]) => `${label} **${n}**`).join(' · ') }];
+  if (parts.disk) elements.push({ tag: 'div', text: plain(parts.disk, grey) });
+  for (const [title, tasks] of parts.sections) {
+    if (tasks.length === 0) continue;
+    elements.push({ tag: 'markdown', content: `**${title}**` }, table(tasks, now, { result: title !== '进行中' }));
+    if (tasks.length > LIVE_SHOWN) elements.push({ tag: 'div', text: plain(`…另有 ${tasks.length - LIVE_SHOWN} 个`, grey) });
+  }
+  if (parts.dormant.length) {
+    const shown = parts.dormant.slice(0, LIVE_SHOWN).map((task) => `${task.id} 等 ${task.requester_name ?? '请求人'} ${since(task.updated_at_ms, now)}`);
+    elements.push({ tag: 'div', text: plain(`久未回复（${view.dormantDays} 天以上无动静，router 的任务提示里不再出现）：${shown.join('、')}`
+      + `${parts.dormant.length > LIVE_SHOWN ? ` 等 ${parts.dormant.length} 个` : ''}`) });
+  }
+  elements.push({ tag: 'div', text: plain('/tasks <编号> 查看详情 · /tasks stop <编号> [原因] 停止任务', grey) });
+  return {
+    schema: '2.0', config: { update_multi: true },
+    header: { template: 'blue', title: plain('后台任务'), subtitle: plain(parts.slots) },
+    body: { elements },
+  };
+}
+
+function overview(tasks, now) {
+  const view = tasks.overview({ recent: RECENT });
+  if (view.total === 0) return { ok: true, text: `还没有后台任务。\n${USAGE}` };
+  return { ok: true, text: overviewText(view, now), card: overviewCard(view, now) };
 }
 
 function detailText(tasks, taskId, now) {
@@ -181,7 +294,7 @@ export function executeTasksCommand(command, { event, connectors, tasks, now = D
   }
   if (!tasks) return { ok: false, text: '这个实例没有启用 workers 调度（agents[].scheduler = "workers"），没有后台任务。' };
   const [verb = '', ...rest] = String(command.arg ?? '').trim().split(/\s+/).filter(Boolean);
-  if (!verb) return { ok: true, text: overviewText(tasks, now) };
+  if (!verb) return overview(tasks, now);
   if (TASK_ID.test(verb.toLowerCase()) && rest.length === 0) return detailText(tasks, verb.toLowerCase(), now);
   if (verb.toLowerCase() === 'stop' && TASK_ID.test(String(rest[0] ?? '').toLowerCase())) {
     const taskId = rest[0].toLowerCase();

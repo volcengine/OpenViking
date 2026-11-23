@@ -580,8 +580,12 @@ the reply text, so a rewritten reply is a new message).
 The owner sees the tasks with `/tasks` in a direct chat (how many are running,
 queued, waiting for a reply and dormant; the tasks with a worker on them, then
 the questions waiting, the latest first; recent ended ones; the dormant ones
-in one line; slots; whether each result reached the requester), one task with
-`/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
+in one line; slots; whether each result reached the requester). On Lark the
+overview is a card (Card JSON 2.0, Lark 7.20 or later): a table per group of
+tasks, with the status as a coloured tag, every @ of what people wrote shown
+as ＠ (Lark refuses a bot message with an email address in it); elsewhere,
+and when Lark refuses the card, it is the text. The owner sees one task with
+`/tasks t12` (text), and stops one with `/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort). The Core answers these without the model.
 

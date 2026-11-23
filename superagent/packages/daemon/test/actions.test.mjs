@@ -600,6 +600,31 @@ describe('agent tools', () => {
     assert.deepEqual(await service.replyToEvent(chatEvent({ replyRoute: null }), 'x', 'p'), { ok: false, stage: 'no-target' });
   });
 
+  it('replies with a card where the route takes cards, else with the text, and with the text after a refused card', async (t) => {
+    const card = { schema: '2.0', body: { elements: [{ tag: 'markdown', content: 'tasks' }] } };
+    const lark = setup(t);
+    const event = lark.inbound({ messageId: 'om_cardreply12345', chatId: 'oc_chat12345678' });
+    assert.deepEqual(await lark.service.replyToEvent(event, 'tasks as text', 'command-reply', { card }), { ok: true });
+    assert.deepEqual(lark.connectors.calls.map((call) => call.input.content), [{ type: 'card', card }]);
+    assert.equal(lark.store.db.prepare('SELECT summary FROM outbox').get().summary, 'tasks as text', 'history keeps the text');
+
+    const weixin = setup(t, { ids: ['weixin'] });
+    const plain = weixin.inbound({ source: 'weixin', messageId: 'wx_cardreply12345', chatId: 'wx_chat12345678' });
+    assert.deepEqual(await weixin.service.replyToEvent(plain, 'tasks as text', 'command-reply', { card }), { ok: true });
+    assert.deepEqual(weixin.connectors.calls.map((call) => call.input.content), [{ type: 'markdown', text: 'tasks as text' }]);
+
+    const run = async (connector, action, input) => {
+      if (input.content.type === 'card') throw new Error('lark-cli send card failed: invalid card');
+      return { message_id: 'om_delivered123456' };
+    };
+    const refused = setup(t, { run });
+    const again = refused.inbound({ messageId: 'om_cardrefused123', chatId: 'oc_chat12345678' });
+    assert.deepEqual(await refused.service.replyToEvent(again, 'tasks as text', 'command-reply', { card }), { ok: true });
+    assert.deepEqual(refused.connectors.calls.map((call) => call.input.content.type), ['card', 'markdown']);
+    assert.deepEqual(refused.logs.filter((entry) => entry.message === 'daemon_reply').map((entry) => [entry.contentType, entry.outcome]),
+      [['card', 'failed'], ['markdown', 'ok']]);
+  });
+
   it('sends daemon runtime notices only to the owner without settling the input', async (t) => {
     const { store, service, connectors, inbound } = setup(t);
     const event = inbound({ messageId: 'om_runtimeFail123', chatId: 'oc_group12345678' });
