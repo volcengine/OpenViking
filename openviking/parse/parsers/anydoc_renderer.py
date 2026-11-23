@@ -134,7 +134,7 @@ class _AnyDocMarkdownRenderer:
                 return f"### Speaker Notes\n\n{inner}"
             return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
         if kind == "code_block":
-            body = (block.text or "").rstrip("\n")
+            body = (block.text or "").removesuffix("\n")
             fence = self._backtick_fence(body, 3)
             return f"{fence}{block.lang or ''}\n{body}\n{fence}"
         if kind == "rule":
