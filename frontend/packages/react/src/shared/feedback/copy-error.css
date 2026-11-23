@@ -1,0 +1,9 @@
+.ov-error-notification__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ov-error-notification__copy-status {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 12px;
+}

@@ -72,11 +72,17 @@ class SessionExtractContextProvider(ExtractContextProvider):
         *,
         source_archive_uri: str = "",
         extraction_scope: str = "",
+        output_language_override: str | None = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
         self._source_archive_uri = source_archive_uri
         self._extraction_scope = extraction_scope
+        self._output_language_override = (
+            get_openviking_config().output_language_override
+            if output_language_override is None
+            else output_language_override
+        )
         self._output_language = self._detect_language()
         self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
         self._schema_directories = None
@@ -174,7 +180,9 @@ class SessionExtractContextProvider(ExtractContextProvider):
                         user_text_parts.append(text)
 
         text_parts = user_text_parts or all_text_parts
-        return resolve_output_language("\n".join(text_parts))
+        return resolve_output_language(
+            "\n".join(text_parts), output_language_override=self._output_language_override
+        )
 
     @staticmethod
     def _language_signal_text(text: str, *, strip_language_detection_noise) -> str:
@@ -441,7 +449,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return result
         except Exception as e:
             if not self._is_expected_read_not_found(e):
-                tracer.error(f"Failed to read {uri}: {e}")
+                logger.info(
+                    "memory operation failed stage=%s error_type=%s",
+                    "read_file",
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
             return None
 
     async def search_files(
@@ -464,7 +477,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 return [m.get("uri", "") for m in result.get("memories", []) if m.get("uri")]
             return []
         except Exception as e:
-            tracer.error(f"Failed to search: {e}")
+            logger.info(
+                "memory operation failed stage=%s error_type=%s",
+                "search_files",
+                type(e).__name__,
+                extra={"degraded": True, "error_type": type(e).__name__},
+            )
             return []
 
     async def _append_structured_read_result(
@@ -495,7 +513,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         messages = self.messages
 
         if not isinstance(messages, list):
-            tracer.error(f"Expected List[Message], got {type(messages)}")
+            logger.info("memory operation failed stage=%s", "prefetch", extra={"degraded": True})
             return []
 
         # 先构建 Conversation History user message
@@ -567,6 +585,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             search_uris = await self.search_files(
                 query=search_query,
                 search_uris=dir_list,
+                limit=max(5, self._prefetch_search_topn),
             )
             result_value = search_uris
             if self._eager_prefetch:

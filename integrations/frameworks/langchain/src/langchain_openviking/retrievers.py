@@ -70,6 +70,7 @@ class OpenVikingRetriever(BaseRetriever):
     async_client: Any = None
     url: str | None = None
     api_key: str | None = None
+    auth_mode: str | None = None
     account: str | None = None
     user: str | None = None
     user_id: str | None = None
@@ -127,6 +128,7 @@ class OpenVikingRetriever(BaseRetriever):
                     client=self.client,
                     url=self.url,
                     api_key=self.api_key,
+                    auth_mode=self.auth_mode,
                     account=self.account,
                     user=self.user,
                     user_id=self.user_id,
@@ -156,6 +158,7 @@ class OpenVikingRetriever(BaseRetriever):
                 async_client=self.async_client,
                 url=self.url,
                 api_key=self.api_key,
+                auth_mode=self.auth_mode,
                 account=self.account,
                 user=self.user,
                 user_id=self.user_id,

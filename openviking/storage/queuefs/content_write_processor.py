@@ -9,6 +9,7 @@ import json
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_domain import TaskPatch, TaskStatus
 from openviking.service.task_tracker import get_task_tracker
@@ -100,10 +101,10 @@ class ContentWriteProcessor(DequeueHandlerBase):
 
         queue_manager = get_queue_manager()
         await queue_manager.enqueue(queue_manager.CONTENT_WRITE, payload)
-        logger.warning(
-            "[ContentWrite] Requeued task %s after lock handoff failure: %s",
-            msg.task_id,
-            exc,
+        logger.info(
+            "Requeued task %s after lock handoff failure: %s",
+            short_hash(str(msg.task_id)),
+            type(exc).__name__,
         )
         return True
 
@@ -115,7 +116,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
         try:
             await lock_guard.adopt(msg.lock_handoff)
         except Exception as exc:
-            logger.warning("[ContentWrite] Failed to release orphaned lock handoff: %s", exc)
+            logger.info("Failed to release orphaned lock handoff: %s", type(exc).__name__)
         finally:
             await lock_guard.close()
 
@@ -259,10 +260,10 @@ class ContentWriteProcessor(DequeueHandlerBase):
                         f"Content write dispatch checkpoint rejected: {checkpoint.message or checkpoint.code.value}"
                     )
             else:
-                logger.info(
-                    "[ContentWrite] Resuming after completed dispatch task_id=%s work_id=%s",
-                    msg.task_id,
-                    metadata.work_id if metadata is not None else "",
+                logger.debug(
+                    "Resuming after completed dispatch task_id=%s work_id=%s",
+                    short_hash(str(msg.task_id)),
+                    type(metadata.work_id if metadata is not None else "").__name__,
                 )
             await tracker.wait_for_task_work(
                 msg.task_id,
@@ -287,15 +288,12 @@ class ContentWriteProcessor(DequeueHandlerBase):
                         code="FAILED_PRECONDITION",
                     )
                 expected = set(msg.refresh["indexed_levels"])
-                records = await get_service().fs._directory_index_records(msg.resource_id, ctx)
-                indexed = {record["level"] for record in records}
-                if (queue_status.get("Embedding") or {}).get(
-                    "error_count", 0
-                ) or expected - indexed:
+                if (queue_status.get("Embedding") or {}).get("error_count", 0):
                     raise OpenVikingError(
-                        f"Directory index is not readable: {msg.resource_id}",
+                        f"Directory index processing failed: {msg.resource_id}",
                         code="PROCESSING_ERROR",
                     )
+                await get_service().fs._wait_for_directory_index(msg.resource_id, ctx, expected)
                 result["indexed_levels"] = sorted(expected)
                 result["vector_status"] = "complete"
             result["queue_status"] = queue_status
@@ -309,12 +307,11 @@ class ContentWriteProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                     result=result,
                 )
-                logger.info(
-                    "[ContentWrite] Failed task after refresh task_id=%s operation=%s "
-                    "resource_id=%s",
-                    msg.task_id,
-                    msg.operation,
-                    msg.resource_id,
+                logger.error(
+                    "Failed task after refresh task_id=%s operation=%s resource_id=%s",
+                    short_hash(str(msg.task_id)),
+                    type(msg.operation).__name__,
+                    short_hash(str(msg.resource_id)),
                 )
                 return ProcessResult.success()
             await tracker.complete(
@@ -324,11 +321,11 @@ class ContentWriteProcessor(DequeueHandlerBase):
                 user_id=ctx.user.user_id,
                 resource_id=msg.resource_id,
             )
-            logger.info(
-                "[ContentWrite] Completed task result task_id=%s operation=%s resource_id=%s",
-                msg.task_id,
-                msg.operation,
-                msg.resource_id,
+            logger.debug(
+                "Completed task result task_id=%s operation=%s resource_id=%s",
+                short_hash(str(msg.task_id)),
+                type(msg.operation).__name__,
+                short_hash(str(msg.resource_id)),
             )
             return ProcessResult.success()
         except Exception as exc:

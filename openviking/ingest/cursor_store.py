@@ -246,55 +246,6 @@ class CursorStore:
         )
         self._conn.commit()
 
-    def upsert(
-        self,
-        harness: str,
-        native_session_id: str,
-        ov_session_id: str,
-        cursor: Cursor,
-        *,
-        appended_delta: int = 0,
-        pending_tokens: Optional[int] = None,
-        committed: bool = False,
-        locator: Optional[str] = None,
-        title: Optional[str] = None,
-    ) -> None:
-        """General cursor upsert (used by tests and simple cursor advances)."""
-        now = _now_iso()
-        committed_at = now if committed else None
-        self._conn.execute(
-            """INSERT INTO ingest_cursor
-               (harness, native_session_id, ov_session_id, cursor_kind, cursor_value,
-                locator, title, last_appended_count, pending_tokens, last_committed_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(harness, native_session_id) DO UPDATE SET
-                 ov_session_id = excluded.ov_session_id,
-                 cursor_kind = excluded.cursor_kind, cursor_value = excluded.cursor_value,
-                 locator = COALESCE(excluded.locator, ingest_cursor.locator),
-                 title = COALESCE(excluded.title, ingest_cursor.title),
-                 last_appended_count = ingest_cursor.last_appended_count + ?,
-                 pending_tokens = COALESCE(?, ingest_cursor.pending_tokens),
-                 last_committed_at = COALESCE(?, ingest_cursor.last_committed_at),
-                 updated_at = excluded.updated_at""",
-            (
-                harness,
-                native_session_id,
-                ov_session_id,
-                cursor.kind,
-                cursor.to_json(),
-                locator,
-                title,
-                appended_delta,
-                pending_tokens if pending_tokens is not None else 0,
-                committed_at,
-                now,
-                appended_delta,
-                pending_tokens,
-                committed_at,
-            ),
-        )
-        self._conn.commit()
-
     def delete(self, harness: str, native_session_id: str) -> None:
         self._conn.execute(
             "DELETE FROM ingest_cursor WHERE harness = ? AND native_session_id = ?",

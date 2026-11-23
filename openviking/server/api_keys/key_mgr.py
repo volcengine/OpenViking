@@ -17,6 +17,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 
@@ -84,6 +85,11 @@ class APIKeyManager:
         self._store = store
         self._root_api_key = root_key
         self._issue_user_keys = issue_user_keys
+
+    def require_writable(self) -> None:
+        """Reject management writes before handlers acquire filesystem leases."""
+        if self._store.read_only:
+            raise PermissionDeniedError("Account store is read-only.")
 
     async def load(self) -> None:
         try:
@@ -165,13 +171,17 @@ class APIKeyManager:
         account_id: str,
         admin_user_id: str,
         seed: Optional[str] = None,
+        *,
+        lease_ref: object | None = None,
     ) -> str | None:
         if not self._issue_user_keys:
-            await self._store.create_account(account_id, admin_user_id)
+            await self._store.create_account(account_id, admin_user_id, lease_ref=lease_ref)
             return None
 
         key = generate_api_key(account_id, admin_user_id, seed)
-        await self._store.create_account_with_api_key(account_id, admin_user_id, key)
+        await self._store.create_account_with_api_key(
+            account_id, admin_user_id, key, lease_ref=lease_ref
+        )
         return key
 
     async def delete_account(self, account_id: str) -> None:

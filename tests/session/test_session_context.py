@@ -22,7 +22,7 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 def _install_fake_vlm(monkeypatch):
-    async def _fake_get_completion(self, prompt, thinking=False, max_retries=0):
+    async def _fake_get_completion(self, prompt, thinking=False, max_retries=0, **kwargs):
         return "# Test Summary\n\nFake summary for testing.\n\n## Details\nTest content."
 
     async def _fake_get_vision_completion(self, prompt, images, thinking=False):
@@ -61,10 +61,11 @@ async def client(
         has_work,
     )
 
-    async def enqueue_with_session_commit_fallback(queue_name, data):
+    async def enqueue_with_session_commit_fallback(queue_name, data, **keys):
         if queue_name != QueueManager.SESSION_COMMIT:
-            return await original_enqueue(queue_name, data)
+            return await original_enqueue(queue_name, data, **keys)
 
+        assert keys == {"group_key": SessionCommitMsg.from_dict(data).queue_group_key}
         queued_commit_tasks.add(data["task_id"])
 
         async def process_commit():

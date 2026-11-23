@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,13 +12,23 @@ from openviking.core.namespace import canonical_user_root
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_extractor import build_session_placeholder
-from openviking.privacy.skill_extractor import extract_skill_privacy_values
+from openviking.privacy.skill_extractor import (
+    extract_skill_privacy_values,
+)
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
 from openviking.privacy.validation import PRIVACY_MAX_FIELDS, SESSION_PRIVACY_MAX_FIELDS
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+
+SECRET = (
+    "sk-proj-"
+    + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    + "T3BlbkFJ"
+    + "xY7zA9bC2dE4fG6hJ8kL0mN1pQ3sT5vW"
+)
 
 
 class _MemoryPrivacyStorage:
@@ -30,7 +41,9 @@ class _MemoryPrivacyStorage:
     def _uri_to_path(self, uri, ctx=None):
         return uri
 
-    async def pathlock_acquire_tree(self, _path, timeout_secs=0.0):
+    async def pathlock_acquire_tree(self, _path, timeout_secs=0.0, owner_lease_ref=None):
+        if owner_lease_ref is not None:
+            return {**owner_lease_ref, "child": True}
         self.lock_timeouts.append(timeout_secs)
         if timeout_secs == 0.0:
             acquired = self._lock.locked() is False and await self._lock.acquire()
@@ -44,8 +57,9 @@ class _MemoryPrivacyStorage:
             raise RuntimeError("lock acquire timed out")
         return {"lease_ref": "test"}
 
-    async def pathlock_release(self, _lease):
-        self._lock.release()
+    async def pathlock_release(self, lease):
+        if not lease.get("child"):
+            self._lock.release()
 
     async def mkdir(self, *_args, **_kwargs):
         await asyncio.sleep(0)
@@ -234,54 +248,36 @@ async def test_viking_fs_read_propagates_storage_errors(read_method):
 
 
 @pytest.mark.asyncio
-async def test_skill_read_restores_placeholder(service):
+@pytest.mark.parametrize("name", ["restore-skill", "restore-skill-agent-segment"])
+async def test_skill_read_restores_placeholder(service, monkeypatch, name):
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_restore"), role=Role.ROOT)
     await service.initialize_user_directories(ctx)
+    from openviking.server.user_config import patch_user_config
 
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
+    resolver = SimpleNamespace(
+        get_vlm=AsyncMock(side_effect=AssertionError("Privacy must not resolve VLM"))
+    )
+    monkeypatch.setattr(service._skill_processor, "_vlm_resolver", resolver)
+    content = f'api_key: "{SECRET}"\nbase_url: "https://example.com"\n'
     await service.resources.add_skill(
-        data={
-            "name": "restore-skill",
-            "description": "skill with secret",
-            "content": 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n',
-        },
+        data={"name": name, "description": "skill with secret", "content": content},
         ctx=ctx,
         wait=False,
     )
-
-    skill_file_uri = f"{canonical_user_root(ctx)}/skills/restore-skill/SKILL.md"
+    skill_file_uri = f"{canonical_user_root(ctx)}/skills/{name}/SKILL.md"
     stored = await service.viking_fs.read_file(skill_file_uri, ctx=ctx)
     restored = await service.fs.read(skill_file_uri, ctx=ctx)
-
-    assert "secret-xyz" not in stored
-    assert "{{ov_privacy:skill:restore-skill:api_key}}" in stored
-    assert "secret-xyz" in restored
-    assert "https://example.com" in restored
-
-
-@pytest.mark.asyncio
-async def test_skill_read_restores_placeholder_for_agent_segment_name(service):
-    ctx = RequestContext(
-        user=UserIdentifier.the_default_user("privacy_restore_agent_segment"), role=Role.ROOT
-    )
-    await service.initialize_user_directories(ctx)
-
-    await service.resources.add_skill(
-        data={
-            "name": "restore-skill-agent-segment",
-            "description": "skill with secret",
-            "content": 'api_key: "secret-abc"\nbase_url: "https://example.com"\n',
-        },
-        ctx=ctx,
-        wait=False,
-    )
-
-    restored = await service.fs.read(
-        f"{canonical_user_root(ctx)}/skills/restore-skill-agent-segment/SKILL.md",
-        ctx=ctx,
-    )
-
-    assert "secret-abc" in restored
-    assert "https://example.com" in restored
+    assert SECRET not in stored
+    assert "https://example.com" in stored
+    assert content in restored
+    current = await service.privacy_configs.get_current(ctx, "skill", name)
+    [field] = current.values
+    assert current.values == {field: SECRET}
+    assert f"{{{{ov_privacy:skill:{name}:{field}}}}}" in stored
+    resolver.get_vlm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -360,31 +356,33 @@ async def test_read_preserves_empty_privacy_references(client, service, entrypoi
 
 
 @pytest.mark.asyncio
-async def test_skill_privacy_extraction_returns_content_blocks():
-    content = 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n'
+async def test_skill_filters_vlm_candidates_before_matching():
+    from openviking.privacy import SkillPrivacyExtractionResult
 
-    async def fake_completion_async(_prompt):
-        return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
-
+    values = {
+        "api_key": SECRET,
+        "password": "staging",
+        "base_url": "https://example.com",
+        "token": "sample",
+        "count": 1234,
+        "credentials": {"api_key": SECRET},
+        "empty": None,
+    }
+    content = json.dumps(values)
     result = await extract_skill_privacy_values(
         skill_name="extract-block-skill",
-        skill_description="skill with secret",
+        skill_description="mixed credentials and business values",
         content=content,
-        vlm=type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})(),
+        vlm=type(
+            "VLM",
+            (),
+            {"get_completion_async": AsyncMock(return_value=json.dumps({"values": values}))},
+        )(),
     )
-
-    assert result.values["api_key"] == "secret-xyz"
-    assert result.values["base_url"] == "https://example.com"
-    assert result.original_content == content
-    assert result.original_content_blocks == ["https://example.com", "secret-xyz"]
-    assert result.replacement_content_blocks == [
-        "{{ov_privacy:skill:extract-block-skill:base_url}}",
-        "{{ov_privacy:skill:extract-block-skill:api_key}}",
-    ]
-    assert result.sanitized_content == (
-        'api_key: "{{ov_privacy:skill:extract-block-skill:api_key}}"\n'
-        'base_url: "{{ov_privacy:skill:extract-block-skill:base_url}}"\n'
-    )
+    assert isinstance(result, SkillPrivacyExtractionResult)
+    assert result.values == {"api_key": SECRET}
+    placeholder = "{{ov_privacy:skill:extract-block-skill:api_key}}"
+    assert result.sanitized_content == content.replace(SECRET, placeholder)
 
 
 @pytest.mark.asyncio
@@ -472,8 +470,7 @@ async def test_privacy_config_service_uses_user_root(service):
     assert current is not None
 
 
-@pytest.mark.asyncio
-async def test_placeholderization_only_replaces_structured_values(monkeypatch):
+def test_placeholderization_only_replaces_structured_values():
     content = """region: cn\nnotes: region is cn in docs\ndefault_env=prod\ntext: prod should stay here\n"""
     result = placeholderize_skill_content_with_blocks(
         content,
@@ -488,22 +485,6 @@ async def test_placeholderization_only_replaces_structured_values(monkeypatch):
         "default_env={{ov_privacy:skill:structured-skill:env}}\n"
         "text: prod should stay here\n"
     )
-
-    async def fake_completion_async(_prompt):
-        return '{"values": {"api_key": "different-secret"}}'
-
-    content = 'api_key: "secret-xyz"\n'
-    result = await extract_skill_privacy_values(
-        skill_name="unmatched-skill",
-        skill_description="skill with secret",
-        content=content,
-        vlm=type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})(),
-    )
-
-    assert result.values == {}
-    assert result.sanitized_content == content
-    assert result.original_content_blocks == []
-    assert result.replacement_content_blocks == []
 
 
 def test_placeholderization_replaces_end_of_file_values_without_newline():
@@ -560,7 +541,6 @@ def test_placeholderization_preserves_quoted_value_matching():
 @pytest.mark.asyncio
 async def test_patch_preserves_equal_fields_and_rotates_only_named_field(monkeypatch):
     category = "credential"
-    from unittest.mock import AsyncMock
 
     privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)

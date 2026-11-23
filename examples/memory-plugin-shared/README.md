@@ -41,6 +41,12 @@ Run from a repository checkout, the installer uses that checkout's plugins (`--s
 
 `--uninstall --harness <list>` removes the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations. Claude Code, Codex, OpenCode, pi and dsh are removed with their own commands, which the installer prints at the end of an install.
 
+Cursor skill upgrades and removal require a matching installer ownership record
+under `$OPENVIKING_HOME/cursor-skill-ownership` (default `~/.openviking`).
+Existing unmanaged skills, symlinks, and skills modified after installation are
+preserved with a warning. Copies installed before ownership tracking are also
+preserved; move them aside yourself if you want the installer to manage a fresh copy.
+
 The install ends with a "Not done" list, when something that was asked for did not happen (a selected harness whose CLI was not found, a server that could not be reached or rejected the key, a CLI that npm could not install), and then a line linking the agent onboarding guide, `https://docs.openviking.<host>/agents/<en|zh>/onboarding.md`, on the docs host the downloads came from and in the installer's language. Run from inside a dsh session (`DSH_SHELL=1`), the dsh plugin goes into that session's profile (`DSH_PROFILE`) unless `--dsh-profile` names another.
 
 ## Importing earlier sessions
@@ -62,7 +68,7 @@ By default it takes the sessions of the current project (the repository the curr
 
 A session that was already imported, or that the plugin already captured, is skipped, so a second run imports nothing. A run that stopped half way picks up where it left off.
 
-Other agents (Cursor, TRAE, TRAE CN, TRAE CLI, ZCode, Kimi Code, CodeBuddy Code, OpenCode, pi, dsh, OpenClaw, Hermes) have no built-in reader. A small converter writes their sessions to a JSONL file, one session per line (`{"id", "cwd", "messages": [{"role", "text", "created_at"}], "updated_at", "subagent"}`, documented in `--help`), and `node import-history.mjs --harness opencode --input sessions.jsonl` imports it with everything above: the same filters, redaction and single commit, the ingest source name in the session id where `openviking-server ingest` has one, and the host plugin's own live session id and peer, so nothing is imported twice. A malformed line refuses the whole file, with its line number. OpenClaw and Hermes name their peers after the agent, so no peer is derived for them unless `--peer` gives one.
+Other agents (Cursor, TRAE, TRAE CN, TRAE CLI, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, Antigravity, OpenCode, pi, dsh, OpenClaw, Hermes) have no built-in reader. A small converter writes their sessions to a JSONL file, one session per line (`{"id", "cwd", "messages": [{"role", "text", "created_at"}], "updated_at", "subagent"}`, documented in `--help`), and `node import-history.mjs --harness opencode --input sessions.jsonl` imports it with everything above: the same filters, redaction and single commit, the ingest source name in the session id where `openviking-server ingest` has one, and the host plugin's own live session id and peer, so nothing is imported twice. A malformed line refuses the whole file, with its line number. OpenClaw and Hermes name their peers after the agent, so no peer is derived for them unless `--peer` gives one.
 
 ## Workspace Peers
 

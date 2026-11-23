@@ -174,13 +174,13 @@ def round_output(protocol, value):
 
 
 @pytest.fixture
-def confirmed_cuts(monkeypatch):
+def saved_cuts(monkeypatch):
     cuts = []
 
-    async def confirm_cut(self, request, anchor):
+    async def save_cut(self, request, credential, anchor):
         cuts.append(anchor)
 
-    monkeypatch.setattr(CapturePipeline, "confirm_cut", confirm_cut)
+    monkeypatch.setattr(CapturePipeline, "save_cut", save_cut)
     return cuts
 
 
@@ -610,9 +610,7 @@ async def test_continuation_reminders_skip_messages_that_are_not_tool_results(
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_reset_continues_in_the_new_window(
-    running_gateway, confirmed_cuts, protocol, streaming
-):
+async def test_reset_continues_in_the_new_window(running_gateway, saved_cuts, protocol, streaming):
     app, client, admin, _, _, _ = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     run = await send(running_gateway, protocol, streaming, [[(NEW_CONTEXT, NOTES)]])
@@ -642,7 +640,7 @@ async def test_reset_continues_in_the_new_window(
     assert await stored(app, "replacement") == {
         anchor: {"source": "window", "text": header, "tokens": token_estimate(header)}
     }
-    assert confirmed_cuts == [anchor]
+    assert saved_cuts == [anchor]
     assert await stored(app, "hidden") == {
         hidden_chain([*run.body[field], *visible], protocol)[-1]: {
             "messages": round_output(protocol, run.upstream[1]),
@@ -654,7 +652,7 @@ async def test_reset_continues_in_the_new_window(
     assert logs[0]["window"] == 2 and logs[0]["window_reset"] is True
 
 
-async def test_last_reset_in_a_request_wins(running_gateway, confirmed_cuts):
+async def test_last_reset_in_a_request_wins(running_gateway, saved_cuts):
     app, client, admin, _, _, _ = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     second_notes = {**NOTES, "notes": "Second notes."}
@@ -667,11 +665,12 @@ async def test_last_reset_in_a_request_wins(running_gateway, confirmed_cuts):
     assert [r["text"] for r in (await stored(app, "replacement")).values()] == [header]
     (record,) = (await stored(app, "hidden")).values()
     assert record["messages"] == round_output("chat", run.upstream[2])
-    assert len(confirmed_cuts) == 1
+    # Each reset saves the client's history up to the same cut; the second finds it saved.
+    assert len(saved_cuts) == 2 and len(set(saved_cuts)) == 1
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic"])
-async def test_new_context_must_be_the_only_call(running_gateway, confirmed_cuts, protocol):
+async def test_new_context_must_be_the_only_call(running_gateway, saved_cuts, protocol):
     app, client, admin, _, _, _ = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     calls = [(NEW_CONTEXT, NOTES), ("openviking_find", {"query": "blue"})]
@@ -687,22 +686,20 @@ async def test_new_context_must_be_the_only_call(running_gateway, confirmed_cuts
         assert [(b["content"], b["is_error"]) for b in message["content"]] == [(ALONE, True)] * 2
     else:
         assert [r["content"] for r in results] == [ALONE, ALONE]
-    assert not run.mcp and not await stored(app, "replacement") and not confirmed_cuts
+    assert not run.mcp and not await stored(app, "replacement") and not saved_cuts
     text = visible_text(visible_messages(protocol, run.response, False))
     assert "> OpenViking new_context — failed" in text
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-async def test_failed_loop_after_a_reset_writes_nothing(running_gateway, confirmed_cuts, protocol):
+async def test_failed_loop_after_a_reset_keeps_no_records(running_gateway, saved_cuts, protocol):
     app, client, admin, _, _, _ = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     run = await send(running_gateway, protocol, False, [[(NEW_CONTEXT, NOTES)]], fail=True)
     assert run.response.status_code == 503 and len(run.requests) == 2
-    assert (
-        not await stored(app, "replacement")
-        and not await stored(app, "hidden")
-        and not confirmed_cuts
-    )
+    assert not await stored(app, "replacement") and not await stored(app, "hidden")
+    # The client's own history before the cut was saved when the window started.
+    assert len(saved_cuts) == 1
 
 
 async def test_context_remaining_reads_the_latest_round(running_gateway):
@@ -723,23 +720,17 @@ async def test_context_remaining_reads_the_latest_round(running_gateway):
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
 async def test_reset_replays_on_the_next_request(running_gateway, protocol):
-    app, client, admin, _, _, _ = running_gateway
+    app, client, admin, _, _, writes = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     run = await send(running_gateway, protocol, False, [[(NEW_CONTEXT, NOTES)]])
     field = FIELDS[protocol]
     header = run.requests[1][field][-1]["content"]
-    # The history up to the cut is queued for delivery at once.
+    # The history up to the cut is written at once; the turn's end writes the reply.
     anchor = hidden_chain(run.body[field], protocol)[-1]
-    store = app.state.store
-
-    def read():
-        with store.connect() as c:
-            (value,) = c.execute("SELECT value FROM capture").fetchone()
-        return store.decode(value)
-
-    state = await store.run(read)
-    confirmed = [turn["anchor"] for turn in state["pending"] if turn["confirmed"]]
-    assert anchor in [state["delivered"], *confirmed]
+    cut, end = writes
+    assert cut["messages"][-1]["source_message_ids"] == ["gateway:" + anchor]
+    saved = end["messages"][-1]["parts"][0]["text"]
+    assert saved.endswith("answer-2") and "new_context" not in saved
     run.body[field] += [
         *visible_messages(protocol, run.response, False),
         {"role": "user", "content": "Go"},
@@ -754,7 +745,7 @@ async def test_reset_replays_on_the_next_request(running_gateway, protocol):
     assert "[context-status] window w2 " in text_content(replay[-1])
 
 
-async def test_reset_builds_the_window_the_next_request_replays(running_gateway, confirmed_cuts):
+async def test_reset_builds_the_window_the_next_request_replays(running_gateway, saved_cuts):
     app, client, admin, _, _, _ = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     body = client_body("chat", False)

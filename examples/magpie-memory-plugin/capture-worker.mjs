@@ -88,7 +88,8 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
     // A worker may outlive file edits. Recheck identity and opt-in immediately
     // before each non-idempotent operation, without changing its pinned identity.
     const current = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: snapshot.configPath }, snapshot.options);
-    if (connectionScope(current, context) !== scope || !current.enabled || !current.autoCapture || bypassedSession(current, context)) return "paused";
+    if (connectionScope(current, context) !== scope || !current.enabled || !current.autoCapture
+      || (context.derivedSession && !current.captureWithoutSession) || bypassedSession(current, context)) return "paused";
     if (current.nativeAgents.includes(context.agent) || await exists(join(root, "native-owner"))) return "native";
     return withCaptureDecisions(directory, scope, (state) => {
       if (!Array.isArray(snapshot.turnAnchors) && state.rejected.length) return "rejected";
@@ -110,7 +111,8 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
     if (status !== "delivered") return status;
     state = await update((s) => structuredClone(s));
   }
-  if (state.blocked) return "paused";
+  // Older workers may have blocked the entire derived scope on one conflict.
+  if (state.blocked && !(context.derivedSession && state.blocked === "history_changed")) return "paused";
   let meta;
   try { meta = await call(cfg, `/api/v1/sessions/${sessionId}`, { signal }); }
   catch (error) {
@@ -151,6 +153,8 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
   }
   if (incoming.length <= state.hashes.length && incoming.every((id, i) => id === state.hashes[i])) return commitCaptured(cfg, sessionId, update, call, signal, stopped);
   if (!state.hashes.every((id, i) => id === incoming[i])) {
+    // Separate sessionless conversations can share an opening message.
+    if (context.derivedSession) return "rejected";
     await update((s) => { s.blocked = "history_changed"; });
     return "paused";
   }

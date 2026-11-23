@@ -10,6 +10,7 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Request
 
+from openviking.observability.log_safety import short_hash
 from openviking.server.auth import get_request_context, require_auth_root
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
@@ -72,10 +73,9 @@ async def initial(
     # accepting. Token deduplication belongs to the adapter; an untagged manual
     # reset still requires confirmation before retry after a lost response.
     await request.app.state.ttl_adapter.register_initial_backfill(body)
-    logger.info(
-        "TTL initial registered request_id=%s scope=%s/%s event=%s",
-        getattr(request.state, "request_id", ""),
-        body.resource_id,
+    logger.debug(
+        "ttl initial request accepted resource_hash=%s account_id=%s mode=%s",
+        short_hash(body.resource_id),
         body.account_id,
         "reset" if body.reset else "resume",
     )

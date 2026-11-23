@@ -22,7 +22,7 @@ import { Button } from '#/shared/ui/button'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { ObserverStatusContent } from '#/features/workbench/monitoring/components/observer-status-content'
-import { stripVersionPrefix } from '#/features/workbench/monitoring/lib/version'
+import { stripVersionPrefix } from '#/shared/lib/version'
 import {
   getHealth,
   getObserverSystem,

@@ -57,7 +57,6 @@ from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _base as _base_mod
 from openviking.storage.viking_fs._access import _AccessMixin
 from openviking.storage.viking_fs._base import (
-    _ABSTRACT_WORKER_COUNT,
     _DEFAULT_GREP_FILE_CONCURRENCY,
     _T,
     LS_ALL_NODES,
@@ -66,8 +65,6 @@ from openviking.storage.viking_fs._base import (
     SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
     SNAPSHOT_DIFF_TIMEOUT_MS,
     _ensure_non_empty_search_query,
-    _get_abstract_worker_count,
-    _get_cpu_count,
     _is_directory_not_empty_error,
     _prepare_snapshot_diff,
     _snapshot_line_count,
@@ -163,6 +160,7 @@ class VikingFS(
         self._background_tasks: set = set()
         self._deletion_guard: Optional[Callable[[str, str], bool]] = None
         self._privacy_sanitizer: Optional[Any] = None
+        self._global_policy_service: Optional[Any] = None
         self._post_write_hook: Optional[Callable[[str, Optional[RequestContext], int], Any]] = None
 
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
@@ -172,6 +170,10 @@ class VikingFS(
     def set_privacy_sanitizer(self, sanitizer: Optional[Any]) -> None:
         """Install the account service's text sanitizer for direct writes."""
         self._privacy_sanitizer = sanitizer
+
+    def set_global_policy_service(self, service: Any) -> None:
+        """Install the owner policy registry supplied by the account service."""
+        self._global_policy_service = service
 
     def set_post_write_hook(
         self,

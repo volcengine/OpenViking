@@ -6,15 +6,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import math
-import secrets
 from typing import Any
 
 from openviking_cli.exceptions import InvalidArgumentError
-
-_CURSOR_SECRET = secrets.token_bytes(32)
 
 
 def page_scope(**filters: Any) -> str:
@@ -22,29 +18,40 @@ def page_scope(**filters: Any) -> str:
 
 
 def decode_cursor(cursor: str | None, scope: str) -> tuple[float, str] | None:
+    """Decode a keyset position issued for the same caller and filters.
+
+    Cursors are positions, not authorization tokens: the task store applies the
+    caller's account, user and filter on every page, so editing a position can
+    only skip rows that caller can already see. They therefore carry no
+    node-local signing state, and a cursor issued by one server process remains
+    valid when the next page is served by another worker or after a restart
+    (the same contract as ``openviking.resource.watch_pagination``).
+    """
     if not cursor:
         return None
     try:
-        payload, signature = cursor.rsplit(".", 1)
-        expected = hmac.new(_CURSOR_SECRET, payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(signature, expected):
-            raise ValueError("invalid signature")
-        data = json.loads(base64.urlsafe_b64decode(payload.encode()))
+        if len(cursor) > 2048:
+            raise ValueError("cursor too long")
+        data = json.loads(base64.urlsafe_b64decode(cursor.encode()))
         if data["scope"] != scope:
             raise ValueError("scope mismatch")
-        timestamp = float(data["time"])
-        if not math.isfinite(timestamp):
+        timestamp = data["time"]
+        if type(timestamp) not in (int, float) or not math.isfinite(timestamp):
             raise ValueError("invalid timestamp")
-        return timestamp, str(data["id"])
-    except (ValueError, KeyError, TypeError) as exc:
+        task_id = data["id"]
+        if not isinstance(task_id, str) or not 1 <= len(task_id) <= 255:
+            raise ValueError("invalid task id")
+        return float(timestamp), task_id
+    except (ValueError, KeyError, TypeError, OverflowError, UnicodeError) as exc:
         raise InvalidArgumentError("Invalid task cursor; reload the list") from exc
 
 
 def encode_cursor(task: dict, scope: str) -> str:
-    payload = base64.urlsafe_b64encode(
-        json.dumps({"scope": scope, "time": task["created_at"], "id": task["task_id"]}).encode()
-    ).decode()
-    return payload + "." + hmac.new(_CURSOR_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+    payload = json.dumps(
+        {"scope": scope, "time": task["created_at"], "id": task["task_id"]},
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode()
 
 
 def matches(

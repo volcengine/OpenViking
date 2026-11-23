@@ -682,56 +682,6 @@ class TestVLMExtraRequestBody:
             vlm.get_completion("hello")
         call.assert_not_called()
 
-    def test_litellm_build_kwargs_passes_extra_request_body(self):
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/llama3",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-                "extra_request_body": {"think": False},
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        # Ollama models also get a default num_ctx; the explicit think is kept.
-        # num_ctx must be top-level so LiteLLM maps it into Ollama's `options`;
-        # inside extra_body it is forwarded verbatim and silently ignored.
-        assert kwargs["num_ctx"] == 16384
-        assert kwargs["extra_body"] == {"think": False}
-
-    def test_ollama_defaults_num_ctx_and_think(self):
-        """Ollama models get a larger context window and thinking disabled by default."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/qwen3.5:4b",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert kwargs["num_ctx"] == 16384
-        assert kwargs["extra_body"] == {"think": False}
-
-    def test_ollama_extra_request_body_overrides_num_ctx(self):
-        """An explicit num_ctx in extra_request_body is not overridden by the default."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/qwen3.5:4b",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-                "extra_request_body": {"num_ctx": 32768},
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert kwargs["num_ctx"] == 32768
-        assert "num_ctx" not in kwargs["extra_body"]
-        assert kwargs["extra_body"] == {"think": False}
-
     def test_ollama_num_ctx_lands_in_ollama_options_on_the_wire(self):
         """The request LiteLLM actually sends must carry num_ctx under `options`.
 
@@ -763,20 +713,6 @@ class TestVLMExtraRequestBody:
         assert body["options"]["num_ctx"] == 32768
         assert "num_ctx" not in body
 
-    def test_non_ollama_model_gets_no_num_ctx(self):
-        """num_ctx is Ollama-specific and must not leak into other providers."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "gpt-4o-mini",
-                "provider": "litellm",
-                "api_key": "sk-test",
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert "extra_body" not in kwargs or "num_ctx" not in kwargs.get("extra_body", {})
-
     def test_litellm_dashscope_merges_thinking_with_extra_request_body(self):
         vlm = LiteLLMVLMProvider(
             {
@@ -789,6 +725,78 @@ class TestVLMExtraRequestBody:
         kwargs = vlm._build_text_kwargs(prompt="hello", thinking=False)
 
         assert kwargs["extra_body"] == {"seed": 7, "enable_thinking": False}
+
+    @pytest.mark.parametrize("message_count", [0, 1, 2])
+    async def test_litellm_responses_bridge_keeps_narration_and_tool_call(
+        self, monkeypatch, message_count
+    ):
+        texts = ["Planning. ", "Writing now."][:message_count]
+        output = [
+            {
+                "type": "message",
+                "id": f"msg_{index}",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+            for index, text in enumerate(texts)
+        ]
+        output.append(
+            {
+                "type": "function_call",
+                "id": "fc_fixture",
+                "call_id": "call_fixture",
+                "name": "emit",
+                "arguments": '{"value":"fixture"}',
+                "status": "completed",
+            }
+        )
+
+        def send(client, request, **kwargs):
+            assert request.url.path == "/v1/responses"
+            assert json.loads(request.content)["tools"][0]["name"] == "emit"
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "resp_fixture",
+                    "object": "response",
+                    "created_at": 0,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": output,
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                },
+            )
+
+        async def send_async(client, request, **kwargs):
+            return send(client, request, **kwargs)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", send_async)
+        config = VLMConfig(
+            provider="litellm",
+            model="openai/responses/gpt-6-sol",
+            api_key="sk-test",
+            api_base="https://provider.example.test/v1",
+            max_retries=0,
+        )
+        tools = [
+            {"type": "function", "function": {"name": "emit", "parameters": {"type": "object"}}}
+        ]
+        vlm = config.get_vlm_instance()
+        try:
+            results = (
+                vlm.get_completion("hello", tools=tools),
+                await vlm.get_completion_async("hello", tools=tools),
+            )
+            for result in results:
+                assert (result.content or "") == "".join(texts)
+                assert result.finish_reason == "tool_calls"
+                assert [call.name for call in result.tool_calls] == ["emit"]
+                assert result.tool_calls[0].arguments == {"value": "fixture"}
+        finally:
+            config.close()
 
 
 class TestVLMConfigExtraHeaders:

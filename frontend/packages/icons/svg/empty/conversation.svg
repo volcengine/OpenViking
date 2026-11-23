@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="258" height="140" viewBox="0 0 258 140" fill="none">
+  <g
+    opacity=".36"
+    stroke="var(--ov-ui-color-border-2, var(--ov-ui-border-2-default))"
+    stroke-dasharray="2 2"
+    style="
+      mask-image: radial-gradient(
+        ellipse at center,
+        currentColor,
+        transparent 72%
+      );
+    "
+  >
+    <path
+      d="M0 28H258M0 56H258M0 84H258M0 112H258M37 0V140M75 0V140M117 0V140M159 0V140M199 0V140M235 0V140"
+    />
+  </g>
+  <path
+    d="M116 44Q116 36 124 36H156Q164 36 164 44V62Q164 70 156 70V78L148 70H124Q116 70 116 62Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="var(--ov-ui-color-border-3, var(--ov-ui-border-3-default))"
+    stroke-width="1.5"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M94 62Q94 54 102 54H142Q150 54 150 62V88Q150 96 142 96H112L102 104V96Q94 96 94 88Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linejoin="round"
+  />
+  <g fill="currentColor">
+    <circle cx="112" cy="75" r="2.25" />
+    <circle cx="122" cy="75" r="2.25" opacity=".6" />
+    <circle cx="132" cy="75" r="2.25" opacity=".3" />
+  </g>
+</svg>

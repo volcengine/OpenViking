@@ -197,48 +197,13 @@ func (c *Client) AdminListGroupMembers(ctx context.Context, accountID, groupID s
 // AdminAddGroupMember adds an existing account user to a group.
 func (c *Client) AdminAddGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members", nil, map[string]any{"user_ids": []string{userID}}, &result)
 	return result, err
 }
 
 // AdminRemoveGroupMember removes a user from a group.
 func (c *Client) AdminRemoveGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
-	return result, err
-}
-
-// AdminGetAgentEvolution returns the effective Agent Evolution switch for the
-// caller's account.
-func (c *Client) AdminGetAgentEvolution(ctx context.Context) (map[string]any, error) {
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/agent-evolution", nil, nil, &result)
-	return result, err
-}
-
-// AdminSetAgentEvolution persists and hot-reloads Agent Evolution for the
-// caller's account.
-func (c *Client) AdminSetAgentEvolution(ctx context.Context, enabled bool) (map[string]any, error) {
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/agent-evolution", nil, map[string]any{"enabled": enabled}, &result)
-	return result, err
-}
-
-// AdminGetAccountSettings returns the effective and explicitly overridden
-// settings for one account.
-func (c *Client) AdminGetAccountSettings(ctx context.Context, accountID string) (map[string]any, error) {
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/settings", nil, nil, &result)
-	return result, err
-}
-
-// AdminSetAccountAgentEvolution updates the allowlisted, hot-reloadable Agent
-// Evolution setting for one account via PATCH.
-func (c *Client) AdminSetAccountAgentEvolution(ctx context.Context, accountID string, enabled bool) (map[string]any, error) {
-	payload := map[string]any{
-		"agent_evolution": map[string]any{"enabled": enabled},
-	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/settings", nil, payload, &result)
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members", nil, map[string]any{"user_ids": []string{userID}}, &result)
 	return result, err
 }

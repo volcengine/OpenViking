@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Privacy config utilities for OpenViking."""
 
+from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.privacy.models import UserPrivacyConfigMeta, UserPrivacyConfigVersion
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.skill_extractor import (
@@ -20,6 +21,7 @@ __all__ = [
     "UserPrivacyConfigMeta",
     "UserPrivacyConfigVersion",
     "UserPrivacyConfigService",
+    "UserGlobalPolicyService",
     "SkillPrivacyExtractionResult",
     "extract_skill_privacy_values",
     "SkillPrivacyPlaceholderizationResult",

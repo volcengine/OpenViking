@@ -6,7 +6,7 @@ Community-maintained integrations for various agent runtimes. Each differs in ta
 
 Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
-The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks and an OpenViking MCP server:
+The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks, an OpenViking MCP server, and 5 skills:
 
 - **SessionStart** injects the user profile.
 - **UserPromptSubmit** recalls relevant memories.
@@ -24,11 +24,12 @@ curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, and merges hooks and MCP configuration into `~/.zcode/cli/config.json`.
+The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, merges hooks and MCP configuration into `~/.zcode/cli/config.json`, and installs `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` into `~/.zcode/skills/<name>`. A skill you edited, or an existing unmanaged directory of the same name, is preserved on upgrade and uninstall.
 
 After restarting ZCode, verify that:
 
 - `~/.zcode/cli/config.json` contains `hooks.enabled: true`, OpenViking entries under `hooks.events`, and `mcp.servers.openviking`.
+- `~/.zcode/skills/` holds the 5 skill directories, each with a `SKILL.md`.
 - `OPENVIKING_DEBUG=1` produces diagnostics in `~/.openviking/logs/zcode-hooks.log`.
 
 | Symptom | Cause | Fix |
@@ -53,7 +54,7 @@ transcript decoding, output formatting, and commit policy:
 - **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
 - **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
-- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+- The plugin manifest exposes the OpenViking MCP server and the 5 skills under the plugin root's `skills/` (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`) without editing Kimi's legacy config files.
 
 ### Install
 
@@ -79,41 +80,42 @@ The verified host contract and version are recorded in
 
 Once installed, start a new Kimi Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
 
-## CodeBuddy Code memory integration
+## Antigravity memory integration
 
 Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
-The CodeBuddy Code integration is an `agent-hook-plugin` host adapter. It reuses the shared OpenViking hook runtime and adds only CodeBuddy-specific event mapping, transcript decoding, output envelopes, and commit policy:
+The Antigravity integration serves the Antigravity desktop app and the `agy` CLI, which load the same plugins from `~/.gemini/config/plugins/`:
 
-- **SessionStart** injects the user profile and replays anything the offline queue is holding.
-- **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
-- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
+- **SessionStart** injects the user profile.
+- **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
+- **PreToolUse** denies file tool calls whose location argument is a `viking://` URI and points to the OpenViking MCP tools. Shell commands (`run_command`) are not checked.
+- **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
 
-The plugin manifest also exposes the OpenViking MCP server as a stdio proxy onto the same resolved configuration, and ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills. Hooks and MCP read the same credentials, so they cannot disagree about the server, account, or user. Subagent capture is not supported in v1, as on the other community adapters: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage yet.
+Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
+
+The plugin also carries the OpenViking MCP server and 5 skills (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`): the agent can search and manage memory itself through the MCP tools, and each skill is also invocable as `/<name>`.
 
 ### Install
 
-Prerequisites: CodeBuddy Code, Node.js 18+, and a running OpenViking server.
+Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
 
 ```bash
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness codebuddy
-# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/`, with the shared hook runtime beside the adapters, registers it as a local marketplace named `openviking`, and installs it through the CodeBuddy CLI. To remove only this integration:
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The plugin directory holds `plugin.json`, `hooks.json`, `mcp_config.json`, and `skills/`. If `~/.gemini/config/mcp_config.json` already defines an MCP server named `openviking`, the installer keeps yours and does not write the plugin's `mcp_config.json`, so no tool appears twice.
+
+Restart the Antigravity app or start a new `agy` session, then verify that:
+
+- the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
+- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`;
+- the plugin directory contains `skills/openviking-memory/SKILL.md`, and `mcp_config.json` unless your own configuration already has an `openviking` server.
+
+To uninstall:
 
 ```bash
-curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness codebuddy
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
 ```
-
-The plugin reads its connection from `~/.openviking/ovcli.conf`; `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.codebuddy` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Start a new CodeBuddy session after installing (`/reload-plugins` applies it to a running one), and confirm with `codebuddy plugin list` that `openviking-memory@openviking` is enabled.
-
-### Behaviour that follows from the host
-
-`UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI** — headless runs (`-p`, `--input-format stream-json`) never emit them, so a headless session captures on `Stop` but never sends the final commit. `SessionStart` carries no `cwd` and can be delivered twice per session, so the session-start hook is idempotent and falls back to the process working directory. A hook that overruns its timeout is killed, but its child processes are not, which is what lets commits run in a detached worker after the hook process returns.
-
-The verified host contract, the transcript format, and the adapter's v1 scope are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
 
 ## AstrBot plugin
 

@@ -8,6 +8,7 @@ import {
   NavGroupItem,
 } from '#/app/navigation/workbench-navigation'
 import { GeneratedCredentialDialog } from '#/features/connection/components/generated-credential-dialog'
+import { StudioVersion } from '#/features/connection/components/studio-version'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioCapabilities } from '#/features/connection/hooks/use-studio-capabilities'
 import { useStudioMode } from '#/features/connection/hooks/use-studio-mode'
@@ -320,7 +321,8 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
-          <SidebarFooter className="hidden items-end border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
+          <SidebarFooter className="hidden items-end justify-between gap-2 border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
+            <StudioVersion />
             <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
           </SidebarFooter>
         </Sidebar>

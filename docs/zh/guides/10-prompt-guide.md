@@ -233,12 +233,6 @@ peer_enabled: true
   - 作用：记录持久的执行经验及其替代的旧记忆
   - 关键字段：`experience_name`、`content`、`supersedes`（可选；不替换其他经验时可省略）
 
-- `identity`
-  - 生效环节：agent identity 记忆落盘阶段
-  - 影响能力：agent 身份设定的长期一致性
-  - 作用：定义 agent 的名字、形象、风格、自我介绍等身份字段
-  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`、`introduction`
-
 - `preferences`
   - 生效环节：偏好型记忆落盘与更新阶段
   - 影响能力：用户偏好 recall 和后续个性化表现
@@ -256,12 +250,6 @@ peer_enabled: true
   - 影响能力：skill 使用统计、经验沉淀与推荐流程
   - 作用：定义 skill 使用次数、成功率、适用场景等信息
   - 关键字段：`skill_name`、`total_executions`、`success_count`、`fail_count`、`best_for`、`recommended_flow`
-
-- `soul`
-  - 生效环节：agent soul 记忆落盘阶段
-  - 影响能力：agent 核心边界、连续性和长期人格稳定性
-  - 作用：定义 agent 的核心真值、边界、风格和连续性
-  - 关键字段：`core_truths`、`boundaries`、`vibe`、`continuity`
 
 - `tools`（默认禁用）
   - 生效环节：工具使用记忆落盘与更新阶段
