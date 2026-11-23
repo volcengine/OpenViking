@@ -252,10 +252,17 @@ class Pipeline:
         for source_id, metadata in self.evidence.items():
             item = inputs.setdefault(metadata["uri"], {"ranges": {}, "outputs": []})
             item["ranges"][source_id] = self.status[source_id]
-        for path, output in final.get("outputs", {}).items():
+        rejected = final.get("rejected", {})
+        references = {
+            path: output["source_refs"] for path, output in final.get("outputs", {}).items()
+        }
+        for path, refs in (references | rejected).items():
             uri = safe_join_viking_uri(self.target, path)
-            for source_uri in {self.evidence[ref]["uri"] for ref in output["source_refs"]}:
-                inputs[source_uri]["outputs"].append({"uri": uri, "delivered": uri in delivered})
+            entry = {"uri": uri, "delivered": path not in rejected and uri in delivered}
+            if path in rejected:
+                entry["rejected"] = True
+            for source_uri in {self.evidence[ref]["uri"] for ref in refs}:
+                inputs[source_uri]["outputs"].append(entry)
         for uri, item in inputs.items():
             states = item["ranges"].values()
             state = next(
