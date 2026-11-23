@@ -36,6 +36,7 @@ pub use context::{FsContext, FsContextInner, FsContextView, PathLockContext, FS_
 pub use encryption_wrapper::EncryptionWrappedFS;
 pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
+pub use grep::compile_grep_regex;
 pub use mountable::MountableFS;
 pub use multibackend_wrapper::{BackendEntry, MultiWriteWrappedFS};
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
