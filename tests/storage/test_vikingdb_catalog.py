@@ -183,11 +183,8 @@ def test_management_resolves_account_scoped_declarations_without_copying_attrs(
     assert call(collection, "resolve", "b", uris=["/resources/A/B/hit.md"])["data"][0][
         "item_uuids"
     ] == ["tenant-b"]
-    roots = call(collection, "query_items", item_uuids=["parent", "child"])["data"]
-    assert {r["item_uuid"]: r["item_attrs"] for r in roots} == {
-        "parent": ["kind=parent"],
-        "child": ["kind=child"],
-    }
+    assert declare(collection, "/resources/A", "_read")["item_attrs"] == ["kind=parent"]
+    assert declare(collection, "/resources/A/B", "_read")["item_attrs"] == ["kind=child"]
     for _, path, request in collection.client.calls:
         if path.endswith("/upsert"):
             assert all(r["account_id"] in ("a", "b") for r in request["data"])
@@ -202,9 +199,7 @@ def test_management_resolves_account_scoped_declarations_without_copying_attrs(
 def test_preserve_root_rejects_independent_children_before_deletion(collection):
     declare(collection, "/resources/A", "parent", item_attrs=[])
     call(collection, "delete_subtree", uri="/resources/A", preserve_item_root=True)
-    assert (
-        call(collection, "query_items", item_uuids=["parent"])["data"][0]["uri"] == "/resources/A"
-    )
+    assert call(collection, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == "parent"
     declare(collection, "/resources/A/child", "child")
     before = deepcopy(collection.client.rows)
     for op in ("validate_resource_update", "delete_subtree"):
@@ -250,11 +245,15 @@ def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fa
         assert call(collection, "resolve", uris=["/resources/B/kept/hit"])["data"][0][
             "item_uuids"
         ] == ["target-only", moved_uuid]
-        items = call(collection, "query_items", item_uuids=[moved_uuid, "target-only"])["data"]
-        assert {item["item_uuid"]: (item["uri"], item["item_attrs"]) for item in items} == {
-            moved_uuid: ("/resources/B", moved_attrs),
-            "target-only": ("/resources/B/kept", ["kind=kept"]),
-        }
+        moved_roots = call(
+            collection, "resolve", uris=["/resources/B", "/resources/B/kept"]
+        )["data"]
+        assert [(r["item_uuid"], r["item_root_uri"]) for r in moved_roots] == [
+            (moved_uuid, "/resources/B"),
+            ("target-only", "/resources/B/kept"),
+        ]
+        assert declare(collection, "/resources/B", "_read")["item_attrs"] == moved_attrs
+        assert declare(collection, "/resources/B/kept", "_read")["item_attrs"] == ["kind=kept"]
         with pytest.raises(ValueError, match="different account"):
             call(collection, "restore_move", "b", undo=moved["undo"])
         call(collection, "restore_move", undo=moved["undo"])
@@ -311,8 +310,7 @@ def test_collection_configuration_is_validated_without_metadata_http_calls(colle
     assert collection.client.calls == []
 
 
-def test_empty_uuid_lookup_and_other_account_rollback_make_no_requests(collection):
-    assert call(collection, "query_items", item_uuids=[]) == {"data": []}
+def test_other_account_rollback_makes_no_requests(collection):
     with pytest.raises(ValueError, match="different account"):
         call(collection, "restore_move", undo={"scope": "b", "rows": [], "added_uris": []})
     assert collection.client.calls == []
@@ -402,9 +400,9 @@ def test_missing_attribute_match_returns_empty_without_an_ann_request(collection
     ]
 
 
-def test_declaration_paging_and_point_fetches_respect_record_batch_limit(collection):
+def test_subtree_scan_and_point_fetches_respect_record_batch_limit(collection):
     for i in range(121):
-        uri = f"/resources/item-{i}"
+        uri = f"/resources/batch-{i}"
         row = {
             "id": "ov-item:" + vector_record_id("a", "viking://" + uri.lstrip("/")),
             "uri": uri,
@@ -415,9 +413,9 @@ def test_declaration_paging_and_point_fetches_respect_record_batch_limit(collect
             "item_attrs": None,
         }
         collection.client.rows[row["id"]] = row
-    result = call(collection, "query_items")
-    assert len(result["data"]) == 121
-    assert {r["item_uuid"] for r in result["data"]} == {f"uuid-{i}" for i in range(121)}
+    assert len(collection.client.rows) == 121
+    call(collection, "delete_subtree", uri="/resources")
+    assert collection.client.rows == {}
     for _, path, request in collection.client.calls:
         if path.endswith("/fetch_in_collection"):
             assert len(request["ids"]) <= 100

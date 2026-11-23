@@ -58,18 +58,10 @@ def test_declaration_is_shadowed_but_item_attrs_do_not_inherit():
         ("uuid-a", "/resources/A"),
         ("uuid-shot", "/resources/A/shot"),
     ]
-    rows = call(engine, "query_items", item_uuids=["uuid-shot", "uuid-a"])["data"]
-    assert rows == [
-        {
-            "item_uuid": "uuid-shot",
-            "uri": "/resources/A/shot",
-            "item_attrs": ["kind=shot"],
-        },
-        {
-            "item_uuid": "uuid-a",
-            "uri": "/resources/A",
-            "item_attrs": ["asset_id=V1"],
-        },
+    resolved_roots = call(engine, "resolve", uris=["/resources/A/shot", "/resources/A"])["data"]
+    assert [(row["item_uuid"], row["item_root_uri"]) for row in resolved_roots] == [
+        ("uuid-shot", "/resources/A/shot"),
+        ("uuid-a", "/resources/A"),
     ]
     assert first["item_attrs"] == ["asset_id=V1"]
     assert nested["item_attrs"] == ["kind=shot"]
@@ -182,7 +174,7 @@ def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_sco
         assert call(engine, "capabilities", scope=scope)["item_identity_mode"] == "union"
     for scope in ("a", "b"):
         assert resolve(scope)["data"][0]["item_uuids"] == ["child", "parent"]
-        assert call(engine, "query_items", scope=scope, item_uuids=["parent"])["data"][0][
+        assert declare(engine, "/resources/A", "_read", include_attrs=False, scope=scope)[
             "item_attrs"
         ] == [f"account={scope}"]
     assert resolve("new-account")["data"][0]["item_uuids"] == []
@@ -195,7 +187,10 @@ def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_sco
     declare(engine, "/resources/new", "only-a", scope="a")
     assert resolve("a")["revision"] != changed["a"]
     assert resolve("b")["revision"] == changed["b"]
-    assert call(engine, "query_items", scope="b", item_uuids=["only-a"])["data"] == []
+    assert (
+        call(engine, "resolve", scope="b", uris=["/resources/new"])["data"][0]["item_uuids"]
+        == []
+    )
     before = {scope: resolve(scope)["revision"] for scope in scopes}
     with pytest.raises(ValueError, match="shadow or union"):
         call(engine, "configure", scope="b", item_identity_mode="invalid")
@@ -411,9 +406,9 @@ def test_persistence_delete_and_account_scoped_revisions(tmp_path):
     gc.collect()
 
     engine = CatalogEngine(path)
-    assert call(engine, "query_items", item_uuids=["uuid-a"])["data"][0]["uri"] == ("/resources/A")
+    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == "uuid-a"
     call(engine, "delete_subtree", uri="/resources/A")
-    assert call(engine, "query_items", item_uuids=["uuid-a"])["data"] == []
+    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == []
 
 
 def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
@@ -455,17 +450,16 @@ def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
             "item_root_uri": "/resources/B/shot",
         },
     ]
-    assert call(engine, "query_items", item_uuids=["uuid-a", "uuid-shot"])["data"] == [
-        {
-            "item_uuid": "uuid-a",
-            "uri": "/resources/B",
-            "item_attrs": ["asset_id=V1"],
-        },
-        {
-            "item_uuid": "uuid-shot",
-            "uri": "/resources/B/shot",
-            "item_attrs": ["kind=shot"],
-        },
+    moved_roots = call(engine, "resolve", uris=["/resources/B", "/resources/B/shot"])["data"]
+    assert [(row["item_uuid"], row["item_root_uri"]) for row in moved_roots] == [
+        ("uuid-a", "/resources/B"),
+        ("uuid-shot", "/resources/B/shot"),
+    ]
+    assert declare(engine, "/resources/B", "_read", include_attrs=False)["item_attrs"] == [
+        "asset_id=V1"
+    ]
+    assert declare(engine, "/resources/B/shot", "_read", include_attrs=False)["item_attrs"] == [
+        "kind=shot"
     ]
 
 
@@ -509,9 +503,12 @@ def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identi
             "item_root_uri": "/resources/target",
         },
     ]
-    assert call(engine, "query_items", item_uuids=[moved_uuid])["data"] == [
-        {"item_uuid": moved_uuid, "uri": "/resources/target", "item_attrs": moved_attrs}
-    ]
+    target_root = call(engine, "resolve", uris=["/resources/target"])["data"][0]
+    assert target_root["item_uuid"] == moved_uuid
+    assert target_root["item_root_uri"] == "/resources/target"
+    assert declare(engine, "/resources/target", "_read", include_attrs=False)[
+        "item_attrs"
+    ] == moved_attrs
 
     call(engine, "restore_move", undo=moved["undo"])
     assert call(
@@ -1096,8 +1093,9 @@ def test_resource_catalog_reset_preserves_declaration_and_rejects_independent_ch
     reset = call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
     assert reset["revision"] == declared["revision"]
     nodes(engine, "/resources/A/swap/inner")  # The old file type no longer conflicts.
-    assert call(engine, "query_items", item_uuids=["stable"])["data"] == [
-        {"item_uuid": "stable", "uri": "/resources/A", "item_attrs": ["kind=asset"]}
+    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == "stable"
+    assert declare(engine, "/resources/A", "_read", include_attrs=False)["item_attrs"] == [
+        "kind=asset"
     ]
     declare(engine, "/resources/A/swap", "independent")
     with pytest.raises(ValueError, match="independent child Items"):
@@ -1123,7 +1121,7 @@ def test_uuid_collision_and_concurrent_declaration_replays_are_atomic(tmp_path):
     del engine
     gc.collect()
     engine = CatalogEngine(path)
-    assert call(engine, "query_items", item_uuids=[winner])["data"][0]["uri"] == "/resources/A"
+    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == winner
 
 
 def test_filter_scan_errors_release_snapshot_and_do_not_return_partial_counts(adapter):

@@ -367,14 +367,12 @@ async def test_add_resource_declares_the_actual_resolved_root(service, sample_ma
     proxy = VikingDBManagerProxy(service.viking_fs._get_vector_store(), ctx)
     resolved = await proxy.catalog_execute({"op": "resolve", "uris": [root_uri]})
     item_uuid = resolved["data"][0]["item_uuid"]
-    declaration = await proxy.catalog_execute({"op": "query_items", "item_uuids": [item_uuid]})
-    assert declaration["data"] == [
-        {
-            "item_uuid": item_uuid,
-            "uri": root_uri,
-            "item_attrs": ["source=sample"],
-        }
-    ]
+    declaration = await proxy.catalog_execute(
+        {"op": "declare_item", "uri": root_uri, "item_uuids": [item_uuid]}
+    )
+    assert declaration["uri"] == root_uri
+    assert declaration["item_uuid"] == item_uuid
+    assert declaration["item_attrs"] == ["source=sample"]
 
 
 async def test_add_resource_rejects_attrs_when_as_item_is_false(service, sample_markdown_file):

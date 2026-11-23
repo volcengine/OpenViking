@@ -384,8 +384,6 @@ class LocalCollection(ICollection):
                     "data": [{"uri": uri} for uri in request["uris"]],
                     "revision": "0",
                 }
-            if not self._catalog_enabled and request["op"] == "query_items":
-                return {"data": [], "revision": "0"}
             if not self._catalog_enabled and request["op"] == "validate_resource_update":
                 return {"valid": True, "has_item": False, "revision": "0"}
             if not self._catalog_enabled and request["op"] in (

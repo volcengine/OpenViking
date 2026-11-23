@@ -1009,30 +1009,6 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       data.PushBack(row, allocator);
     }
     result.AddMember("data", data, allocator);
-  } else if (op == "query_items") {
-    if (!req.HasMember("item_uuids") || !req["item_uuids"].IsArray()) {
-      throw std::invalid_argument("Catalog query_items requires item_uuids");
-    }
-    JsonValue data(rapidjson::kArrayType);
-    for (const auto& requested : req["item_uuids"].GetArray()) {
-      if (!requested.IsString()) {
-        throw std::invalid_argument("item_uuids must contain strings");
-      }
-      const std::string uuid(requested.GetString(), requested.GetStringLength());
-      const auto found = uuid_roots_.find(key(scope, uuid));
-      if (found == uuid_roots_.end()) continue;
-      const auto node = parse(nodes_.at(found->second));
-      JsonValue row(rapidjson::kObjectType);
-      put_string(row, "item_uuid", uuid, allocator);
-      put_string(row, "uri",
-                 std::string(node["uri"].GetString(), node["uri"].GetStringLength()),
-                 allocator);
-      JsonValue attrs(rapidjson::kArrayType);
-      if (node.HasMember("item_attrs")) attrs.CopyFrom(node["item_attrs"], allocator);
-      row.AddMember("item_attrs", attrs, allocator);
-      data.PushBack(row, allocator);
-    }
-    result.AddMember("data", data, allocator);
   } else if (op == "compile_filter" || op == "compile_item_filter") {
     if (!req.HasMember("filter")) {
       throw std::invalid_argument("Catalog requires filter");

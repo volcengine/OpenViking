@@ -437,23 +437,6 @@ class VikingDBCatalog:
             }
         if op == "resolve":
             return self._resolve(scope, [_uri(uri) for uri in request["uris"]], mode)
-        if op == "query_items":
-            wanted = request.get("item_uuids")
-            if wanted == []:
-                return {"data": []}
-            condition = _eq("item_uuids", wanted) if wanted else _eq("account_id", [scope])
-            rows = self._scan(scope, condition)
-            return {
-                "data": [
-                    {
-                        "uri": r["uri"],
-                        "item_uuid": r["item_uuids"][0],
-                        "item_attrs": r.get("item_attrs"),
-                    }
-                    for r in rows
-                    if r.get("item_uuids") and (wanted is None or r["item_uuids"][0] in wanted)
-                ]
-            }
         if op == "upsert_nodes":
             nodes = [
                 self._new_node(scope, _uri(n["uri"]), n["node_type"]) for n in request["nodes"]
