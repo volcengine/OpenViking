@@ -64,8 +64,39 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
             DirectoryDefinition(
                 path="memories",
                 abstract="User's long-term memory storage. Contains memory types like preferences, entities, events, managed hierarchically by type.",
-                overview="Use this directory to access user's personalized memories. Contains three main categories: "
-                "1) preferences-user preferences, 2) entities-entity memories, 3) events-event records.",
+                overview="Browse user preferences, entities, events, and task memories, including cases, execution trajectories, and reusable experiences.",
+                children=[
+                    DirectoryDefinition(
+                        path="preferences",
+                        abstract="User preferences organized by topic.",
+                        overview="Access when adapting communication, code style, workflows, or other choices to the user's preferences.",
+                    ),
+                    DirectoryDefinition(
+                        path="entities",
+                        abstract="Long-term knowledge about people, projects, organizations, and other entities.",
+                        overview="Access for facts about a specific entity and its relationships to other entities.",
+                    ),
+                    DirectoryDefinition(
+                        path="events",
+                        abstract="Records of important events, decisions, and milestones.",
+                        overview="Access when reviewing what happened, when it happened, or the context for a past decision.",
+                    ),
+                    DirectoryDefinition(
+                        path="cases",
+                        abstract="Concrete task cases for training and evaluation.",
+                        overview="Access when looking for examples of comparable tasks, their context, and expected outcomes.",
+                    ),
+                    DirectoryDefinition(
+                        path="trajectories",
+                        abstract="Recorded execution trajectories for completed tasks.",
+                        overview="Access to review how a task was carried out and what results it produced.",
+                    ),
+                    DirectoryDefinition(
+                        path="experiences",
+                        abstract="Reusable experience distilled from task execution trajectories.",
+                        overview="Access for lessons from previous executions that can guide similar tasks.",
+                    ),
+                ],
             ),
             DirectoryDefinition(
                 path="resources",
@@ -144,17 +175,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
 }
 
 
-# The memory writer generates summaries when these directories receive content.
-_USER_MEMORY_DIRECTORIES = (
-    "preferences",
-    "entities",
-    "events",
-    "cases",
-    "trajectories",
-    "experiences",
-)
-
-
 class DirectoryInitializer:
     """Initialize preset directory structure."""
 
@@ -196,9 +216,9 @@ class DirectoryInitializer:
             (*account_children, *user_children),
             lease_ref=lease_ref,
         )
-        await self._initialize_user_contents(user_root, lease_ref=lease_ref)
+        memory_count = await self._initialize_user_contents(user_root, lease_ref=lease_ref)
         user_count = sum(target.scope == "user" for target in created)
-        return len(created) - user_count, user_count
+        return len(created) - user_count, user_count + memory_count
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared roots and their preset first-level directories.
@@ -222,29 +242,37 @@ class DirectoryInitializer:
         created = await self._initialize_directory_trees(
             (user_root,), user_children, lease_ref=lease_ref
         )
-        await self._initialize_user_contents(user_root, lease_ref=lease_ref)
-        return len(created)
+        memory_count = await self._initialize_user_contents(user_root, lease_ref=lease_ref)
+        return len(created) + memory_count
 
     async def _initialize_user_contents(
         self, user_root: _DirectoryTarget, *, lease_ref: Any = None
-    ) -> None:
-        viking_fs = self._get_viking_fs()
+    ) -> int:
         ctx = user_root.ctx
+        directories = [
+            _DirectoryTarget(
+                uri=f"{user_root.uri}/{parent.path}/{child.path}",
+                parent_uri=f"{user_root.uri}/{parent.path}",
+                definition=child,
+                scope=user_root.scope,
+                ctx=ctx,
+            )
+            for parent in user_root.definition.children
+            for child in parent.children
+        ]
+        # Seed browsing descriptions here. Memory updates index the summaries derived from content.
         results = await asyncio.gather(
-            *(
-                viking_fs.mkdir(
-                    f"{user_root.uri}/memories/{name}", exist_ok=True, ctx=ctx, lease_ref=lease_ref
-                )
-                for name in _USER_MEMORY_DIRECTORIES
-            ),
+            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in directories),
             return_exceptions=True,
         )
-        _, error = self._partition_directory_results(results)
+        created, error = self._partition_directory_results(results)
         if error is not None:
             raise error
+        viking_fs = self._get_viking_fs()
         await ensure_agent_file(viking_fs, ctx, lease_ref=lease_ref)
         if self.user_config_defaults.preset_global_policy:
             await ensure_global_policy_file(viking_fs, ctx, lease_ref=lease_ref)
+        return len(created)
 
     async def _initialize_directory_trees(
         self,

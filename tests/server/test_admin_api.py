@@ -2934,7 +2934,7 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 
 
 async def test_register_user(admin_client: httpx.AsyncClient):
-    """Both user creation paths provision the supported memory directories."""
+    """Both user creation paths provision memory directories with their summaries."""
     acct = _uid()
     account = await admin_client.post(
         "/api/v1/admin/accounts",
@@ -2953,11 +2953,17 @@ async def test_register_user(admin_client: httpx.AsyncClient):
     for user_id, created in (("alice", account), ("bob", user)):
         listing = await admin_client.get(
             "/api/v1/fs/ls",
-            params={"uri": f"viking://user/{user_id}/memories", "output": "original"},
+            params={
+                "uri": f"viking://user/{user_id}/memories",
+                "output": "original",
+                "include_abstract": True,
+                "include_overview": True,
+            },
             headers={"X-API-Key": created.json()["result"]["user_key"]},
         )
         assert listing.status_code == 200, listing.text
-        assert {entry["name"] for entry in listing.json()["result"] if entry["isDir"]} == {
+        directories = [entry for entry in listing.json()["result"] if entry["isDir"]]
+        assert {entry["name"] for entry in directories} == {
             "preferences",
             "entities",
             "events",
@@ -2965,6 +2971,9 @@ async def test_register_user(admin_client: httpx.AsyncClient):
             "trajectories",
             "experiences",
         }
+        for directory in directories:
+            assert directory["abstract"] and directory["abstract"] != "[.abstract.md is not ready]"
+            assert directory["overview"] and directory["overview"] != "[.overview.md is not ready]"
 
 
 async def test_root_can_register_admin_role_user(
