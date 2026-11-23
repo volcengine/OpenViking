@@ -13,6 +13,7 @@ from openviking.parse.accessors import (
 from openviking.parse.accessors.web_feed_accessor import (
     FeedEntry,
     _classify_and_count,
+    _dedup_relpath,
     _entry_to_relpath,
     _extract_feed_links,
     discover_feed_hint,
@@ -177,6 +178,33 @@ class TestRegistryRouting:
 # url -> relpath
 # --------------------------------------------------------------------------- #
 class TestRelpath:
+    @pytest.mark.parametrize(
+        ("relpath", "used", "expected"),
+        [
+            ("Guide.html", set(), "Guide.html"),
+            ("Guide.html", {"Guide.html"}, "Guide-d8be0c.html"),
+            (
+                "Guide.html",
+                {"Guide.html", "Guide-d8be0c.html"},
+                "Guide-d8be0c-2.html",
+            ),
+            (
+                "docs/Guide.md",
+                {"docs/Guide.md", "docs/Guide-d8be0c.md", "docs/Guide-d8be0c-2.md"},
+                "docs/Guide-d8be0c-3.md",
+            ),
+            (
+                "docs/Guide.html",
+                {"docs/Guide.html", "Guide-d8be0c.html"},
+                "docs/Guide-d8be0c.html",
+            ),
+        ],
+    )
+    def test_dedup_relpath_checks_generated_candidates(self, relpath, used, expected):
+        before = used.copy()
+        assert _dedup_relpath(relpath, "https://docs.example/articles/gamma", used) == expected
+        assert used == before
+
     @pytest.mark.parametrize(
         "url,expected",
         [
@@ -421,6 +449,47 @@ class TestAutoDiscovery:
 # access() — RSS / Atom
 # --------------------------------------------------------------------------- #
 class TestAccessFeed:
+    async def test_rss_inline_filename_collision_preserves_all_entries(self, patch_httpx):
+        base = "https://docs.example"
+        # d8be0c is the SHA1 prefix of the gamma URL; no digest collision is needed.
+        items = [
+            (f"{base}/articles/alpha", "Guide-d8be0c", "Alpha"),
+            (f"{base}/articles/beta", "Guide", "Beta"),
+            (f"{base}/articles/gamma", "Guide", "Gamma"),
+        ]
+        rss = (
+            '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+            "<channel>"
+            + "".join(
+                f"<item><title>{title}</title><link>{url}</link>"
+                f"<content:encoded><![CDATA[<p>API reference {label}.</p>]]>"
+                "</content:encoded></item>"
+                for url, title, label in items
+            )
+            + "</channel></rss>"
+        ).encode()
+        routes = {
+            f"{base}/rss.xml": _FakeResponse(content=rss, content_type="application/rss+xml")
+        }
+        for url, _title, label in items:
+            routes[url] = _FakeResponse(content=_page(f"Article {label}"))
+        patch_httpx(routes)
+
+        resource = await WebFeedAccessor().access(
+            f"{base}/rss.xml", respect_robots=False, politeness_delay=0, max_concurrency=1
+        )
+        try:
+            assert resource.meta["page_count"] == 3
+            files = list(resource.path.rglob("*.html"))
+            assert len(files) == 3
+            documents = [path.read_text(encoding="utf-8") for path in files]
+            assert all(
+                any(f"API reference {label}." in document for document in documents)
+                for _url, _title, label in items
+            )
+        finally:
+            resource.cleanup()
+
     async def test_rss_summary_only_fetches_links(self, patch_httpx):
         base = "https://t0saki.com"
         items = [(f"{base}/posts/a/", "Post A"), (f"{base}/posts/b/", "Post B")]
