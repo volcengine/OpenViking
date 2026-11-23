@@ -1923,7 +1923,7 @@ class VikingVectorIndexBackend:
             acl_enabled = await self._acl_enabled(ctx)
             filter = self._merge_filters(
                 filter,
-                self._tenant_filter(ctx, acl_enabled=acl_enabled),
+                self._tenant_filter(ctx, acl_enabled=acl_enabled, request_filter=filter),
             )
         else:
             backend = self._get_default_backend()
@@ -3657,11 +3657,34 @@ class VikingVectorIndexBackend:
             for target_parts in (tuple(uri_parts(target)) for target in targets)
         )
 
+    @staticmethod
+    def _required_uri_scope(request_filter: Dict[str, Any] | FilterExpr) -> str | None:
+        """Read a mandatory, positive URI scope without interpreting raw filters."""
+        predicates = request_filter.conds if isinstance(request_filter, And) else [request_filter]
+        for predicate in predicates:
+            if (
+                not isinstance(predicate, PathScope)
+                or predicate.field != "uri"
+                or type(predicate.depth) is not int
+                or predicate.depth < -1
+            ):
+                continue
+            path = predicate.path
+            if not isinstance(path, str) or not path.startswith("viking://"):
+                continue
+            if any(marker in path for marker in ("?", "#", "\\")):
+                continue
+            parts = path.removeprefix("viking://").rstrip("/").split("/")
+            if all(part not in ("", ".", "..") for part in parts):
+                return path
+        return None
+
     def _tenant_filter(
         self,
         ctx: RequestContext,
         *,
         acl_enabled: bool,
+        request_filter: Optional[Dict[str, Any] | FilterExpr] = None,
     ) -> Optional[FilterExpr]:
         if ctx.bypass_acl:
             return Eq("account_id", ctx.account_id)
@@ -3671,6 +3694,13 @@ class VikingVectorIndexBackend:
         account_filter = Eq("account_id", ctx.account_id)
         if ctx.data_access is not None:
             account_filter = And([account_filter, ctx.data_access.query_filter()])
+        elif request_filter is not None:
+            scope = self._required_uri_scope(request_filter)
+            if scope is not None and self._targets_within_visible_roots(ctx, [scope]):
+                # The request itself enforces the visible root. Resources still need READ ACL.
+                if acl_enabled and is_acl_uri(scope) and ctx.role != Role.ADMIN:
+                    return And([account_filter, acl_filter(ctx, AclAction.READ)])
+                return account_filter
         if not acl_enabled:
             return And(
                 [
