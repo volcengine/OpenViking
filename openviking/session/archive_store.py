@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Literal, Optional
 from openviking.message import Message
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
+from openviking.session.working_memory import WM_DOCUMENT_TITLE, extract_wm_abstract
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
@@ -48,9 +49,13 @@ def is_storage_not_found(exc: BaseException) -> bool:
 
 
 def extract_abstract_from_summary(summary: str) -> str:
-    """Extract one-sentence overview from a structured summary."""
+    """Extract a short abstract from a Working Memory or legacy summary."""
     if not summary:
         return ""
+
+    wm_abstract = extract_wm_abstract(summary)
+    if wm_abstract is not None:
+        return wm_abstract
 
     match = re.search(r"^\*\*[^*]+\*\*:\s*(.+)$", summary, re.MULTILINE)
     if match:
@@ -415,12 +420,14 @@ class ArchiveStore:
     async def read_abstract(self, archive_uri: str, overview: str = "") -> str:
         """Read archive abstract text, falling back to summary extraction."""
         try:
-            abstract = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self._ctx)
+            stored = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self._ctx)
+            abstract = body_for_preview(stored or "")
         except Exception:
             abstract = ""
 
-        if abstract:
-            return body_for_preview(abstract)
+        # Legacy sidecars can retain a terminal newline in the body.
+        if abstract.strip() and abstract.rstrip("\r\n") != WM_DOCUMENT_TITLE:
+            return abstract
 
         if not overview:
             overview = await self.read_overview(archive_uri)

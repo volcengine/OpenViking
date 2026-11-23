@@ -81,6 +81,8 @@ def wm_debug(msg: str, *args: Any) -> None:
 # Tool schemas and section definitions
 # =====================================================================
 
+WM_DOCUMENT_TITLE = "# Working Memory"
+
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
     "Current State",
@@ -354,6 +356,37 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
     if current is not None:
         sections[current] = "\n".join(buf).strip()
     return sections
+
+
+# Fixed instructions in compression.ov_wm_v2, in abstract selection order.
+_WM_ABSTRACT_SECTIONS = (
+    (
+        "## Current State",
+        "_2-5 sentences MAX: What is the latest status? What is unresolved or pending? "
+        "Immediate next steps. NOT a fact dump._",
+    ),
+    (
+        "## Session Title",
+        "_A short and distinctive 5-10 word descriptive title for the session. "
+        "Info-dense, no filler._",
+    ),
+)
+_WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
+
+
+def extract_wm_abstract(text: str) -> Optional[str]:
+    """Return a v2 abstract, or None if the document has no Working Memory title."""
+    first_line = next(iter(text.lstrip().splitlines()), "").strip()
+    if first_line != WM_DOCUMENT_TITLE:
+        return None
+
+    sections = parse_wm_sections(text)
+    for header, instruction in _WM_ABSTRACT_SECTIONS:
+        for raw_line in sections.get(header, "").splitlines():
+            line = raw_line.strip()
+            if line and line != instruction and not _WM_HEADING_OR_RULE_RE.fullmatch(line):
+                return line
+    return ""
 
 
 _WM_SECTION_BULLET_THRESHOLD = 25
@@ -1036,7 +1069,7 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     )
     old_sections = parse_wm_sections(old_wm)
 
-    parts: List[str] = ["# Working Memory", ""]
+    parts: List[str] = [WM_DOCUMENT_TITLE, ""]
     for header in WM_SEVEN_SECTIONS:
         full_header = f"## {header}"
         op = (ops or {}).get(header)

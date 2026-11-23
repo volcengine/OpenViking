@@ -15,8 +15,9 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -747,41 +748,202 @@ class TestGetSessionContext:
 class TestGetSessionArchive:
     """Test get_session_archive"""
 
-    async def test_get_session_archive_returns_messages_and_summary(
+    async def test_get_session_archive_returns_messages_and_working_memory(
         self, client: partial, monkeypatch
     ):
         session = client(session_id="session_archive_expand_test")
         await session.ensure_exists()
-        summaries = [
-            "# Session Summary\n\narchive one",
-            "# Session Summary\n\narchive two",
-        ]
+        overviews = iter(
+            (
+                "# Working Memory\n\n## Session Title\n验收流程\n\n## Current State\n等待验收。",
+                "# Working Memory\n\n## Session Title\n验收流程\n\n## Current State\n验收通过。",
+            )
+        )
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
             del self, latest_archive_overview, kwargs
-            return summaries.pop(0)
+            return next(overviews)
 
         monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
 
-        session.add_message("user", [TextPart("turn one")])
-        session.add_message("assistant", [TextPart("reply one")])
-        result = await session.commit_async()
-        await _wait_for_task(result["task_id"])
+        messages_by_turn = {}
+        for turn in ("one", "two"):
+            user = session.add_message("user", [TextPart(f"turn {turn}")])
+            assistant = session.add_message("assistant", [TextPart(f"reply {turn}")])
+            messages_by_turn[turn] = [user.to_dict(), assistant.to_dict()]
+            result = await session.commit_async()
+            task = await _wait_for_task(result["task_id"])
+            assert task["status"] == "completed", task
 
-        session.add_message("user", [TextPart("turn two")])
-        result = await session.commit_async()
-        await _wait_for_task(result["task_id"])
+        for archive_id, turn, expected in (
+            ("archive_001", "one", "等待验收。"),
+            ("archive_002", "two", "验收通过。"),
+        ):
+            archive_uri = f"{session.uri}/history/{archive_id}"
+            stored = await session._viking_fs.read_file(
+                f"{archive_uri}/.abstract.md", ctx=session.ctx
+            )
+            assert body_for_preview(stored) == expected
+
+            archive = await session.get_session_archive(archive_id)
+            assert archive["archive_id"] == archive_id
+            assert archive["abstract"] == expected
+            assert archive["overview"] == (
+                f"# Working Memory\n\n## Session Title\n验收流程\n\n## Current State\n{expected}"
+            )
+            assert archive["messages"] == messages_by_turn[turn]
+
+    @pytest_asyncio.fixture
+    async def historical_archive(self, client: partial):
+        session = client(session_id="historical_session_archive_test")
+        await session.ensure_exists()
+        archive_uri = f"{session.uri}/history/archive_001"
+        vfs = session._viking_fs
+        await vfs.write_file(f"{archive_uri}/messages.jsonl", "", ctx=session.ctx)
+        await vfs.write_file(
+            f"{archive_uri}/.done", '{"enable_working_memory": true}', ctx=session.ctx
+        )
+        return session, archive_uri
+
+    @pytest.mark.parametrize(
+        ("stored_body", "legacy", "expected"),
+        [
+            pytest.param("# Working Memory", False, "等待验收。", id="stale-heading"),
+            pytest.param("# Working Memory\n", True, "等待验收。", id="legacy-stale-heading"),
+            pytest.param(None, False, "等待验收。", id="missing"),
+            pytest.param("", False, "等待验收。", id="empty-body"),
+            pytest.param("已有摘要。", False, "已有摘要。", id="valid"),
+            pytest.param(
+                "# Working Memory\n已有摘要。",
+                False,
+                "# Working Memory\n已有摘要。",
+                id="heading-with-body",
+            ),
+            pytest.param(
+                "    # Working Memory\n",
+                True,
+                "    # Working Memory\n",
+                id="legacy-indented-code",
+            ),
+        ],
+    )
+    async def test_get_session_archive_reads_historical_abstract(
+        self, historical_archive, stored_body, legacy, expected
+    ):
+        session, archive_uri = historical_archive
+        vfs = session._viking_fs
+        abstract_uri = f"{archive_uri}/.abstract.md"
+        overview = "# Working Memory\n\n## Current State\n等待验收。"
+        await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
+
+        if stored_body is None:
+            assert not await vfs.exists(abstract_uri, ctx=session.ctx)
+        else:
+            stored = (
+                stored_body if legacy else render_abstract_overview(0, archive_uri, stored_body)
+            )
+            await vfs.write_file(abstract_uri, stored, ctx=session.ctx)
+            assert await vfs.read_file(abstract_uri, ctx=session.ctx) == stored
 
         archive = await session.get_session_archive("archive_001")
+        assert archive["abstract"] == expected
+        assert archive["overview"] == overview
 
-        assert archive["archive_id"] == "archive_001"
-        assert archive["abstract"] == "# Session Summary"
-        assert archive["overview"] == "# Session Summary\n\narchive one"
-        assert [m["parts"][0]["text"] for m in archive["messages"]] == ["turn one", "reply one"]
+        if stored_body is None:
+            assert not await vfs.exists(abstract_uri, ctx=session.ctx)
+        else:
+            assert await vfs.read_file(abstract_uri, ctx=session.ctx) == stored
+
+    async def test_get_session_archive_falls_back_when_abstract_read_fails(
+        self, historical_archive, monkeypatch
+    ):
+        session, archive_uri = historical_archive
+        vfs = session._viking_fs
+        abstract_uri = f"{archive_uri}/.abstract.md"
+        await vfs.write_file(
+            f"{archive_uri}/.overview.md",
+            "# Working Memory\n\n## Current State\n等待验收。",
+            ctx=session.ctx,
+        )
+        await vfs.write_file(abstract_uri, "已有摘要。", ctx=session.ctx)
+
+        original_read_file = vfs.read_file
+
+        async def read_file(uri, *args, **kwargs):
+            if uri == abstract_uri:
+                raise OSError("abstract read failed")
+            return await original_read_file(uri, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(vfs, "read_file", read_file)
+            archive = await session.get_session_archive("archive_001")
+
+        assert archive["abstract"] == "等待验收。"
+        assert await vfs.read_file(abstract_uri, ctx=session.ctx) == "已有摘要。"
+
+    @pytest.mark.parametrize(
+        ("overview", "expected"),
+        [
+            pytest.param(
+                "\n \n# Working Memory\n\n## Current State\n\n### Status\n- - -\n等待验收。\n后续信息。",
+                "等待验收。",
+                id="state-only",
+            ),
+            pytest.param(
+                "# Working Memory\n\n## Session Title\n_验收流程_",
+                "_验收流程_",
+                id="title-only",
+            ),
+            pytest.param(
+                "# Working Memory\n\n"
+                "## Current State\n"
+                "_2-5 sentences MAX: What is the latest status? What is unresolved or pending? "
+                "Immediate next steps. NOT a fact dump._\n"
+                "***\n\n"
+                "## Session Title\n"
+                "_A short and distinctive 5-10 word descriptive title for the session. "
+                "Info-dense, no filler._\n\n"
+                "## Key Facts & Decisions\n**Owner**: Review team",
+                "",
+                id="template-only",
+            ),
+            pytest.param(
+                "# Session Summary\n\n**Status**: Review pending.",
+                "Review pending.",
+                id="legacy-bold-field",
+            ),
+            pytest.param(
+                "# Session Summary\n\nArchived conversation.",
+                "# Session Summary",
+                id="legacy-first-line",
+            ),
+        ],
+    )
+    async def test_get_session_archive_extracts_abstract_from_overview(
+        self, historical_archive, overview, expected
+    ):
+        session, archive_uri = historical_archive
+        await session._viking_fs.write_file(
+            f"{archive_uri}/.overview.md", overview, ctx=session.ctx
+        )
+
+        archive = await session.get_session_archive("archive_001")
+        assert archive["abstract"] == expected
+
+    async def test_get_session_archive_reports_missing_required_overview(self, historical_archive):
+        session, archive_uri = historical_archive
+        archive = await session.get_session_archive("archive_001")
+        assert archive["status"] == "failed"
+        assert archive["failure"]["stage"] == "archive_overview"
+        assert archive["abstract"] == archive["overview"] == ""
+
+        await session._viking_fs.write_file(f"{archive_uri}/.done", "{}", ctx=session.ctx)
+        with pytest.raises(NotFoundError, match="Session archive not found: archive_001"):
+            await session.get_session_archive("archive_001")
 
     async def test_get_session_archive_raises_for_missing_archive(self, client: partial):
         session = client(session_id="missing_session_archive_test")
         await session.ensure_exists()
 
-        with pytest.raises(Exception, match="Session archive not found: archive_999"):
+        with pytest.raises(NotFoundError, match="Session archive not found: archive_999"):
             await session.get_session_archive("archive_999")
