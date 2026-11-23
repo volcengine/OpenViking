@@ -33,17 +33,21 @@ export function useCommandConsoleAssistPosition(
       if (!path.includes(panel) && !path.includes(anchor)) dismiss();
     };
     const seen = roots.map(() => new WeakSet<Event>());
+    const pendingChecks = new Set<ReturnType<typeof setTimeout>>();
     const outsideListeners = roots.map((eventRoot, index) => {
       const listener = (event: Event) => {
         seen[index]!.add(event);
         const innerHost = index ? hosts[index - 1] : null;
         if (innerHost && event.composedPath().includes(innerHost)) {
           // Closed roots hide their internals from outer listeners. Wait until
-          // propagation finishes: an inner root marks the event as seen, while
-          // a direct press on host whitespace has no inner listener to do so.
-          queueMicrotask(() => {
+          // the next task: Chromium may run a microtask before dispatch reaches
+          // the inner root. The inner listener marks a real internal press as
+          // seen; a direct press on host whitespace has no such mark.
+          const pending = setTimeout(() => {
+            pendingChecks.delete(pending);
             if (!seen[index - 1]!.has(event)) dismiss();
-          });
+          }, 0);
+          pendingChecks.add(pending);
           return;
         }
         outside(event);
@@ -69,6 +73,7 @@ export function useCommandConsoleAssistPosition(
       panel.removeAttribute('popover');
       panel.dataset.inline = '';
       return () => {
+        pendingChecks.forEach(clearTimeout);
         roots.forEach((eventRoot, index) =>
           eventRoot.removeEventListener(
             'pointerdown',
@@ -134,6 +139,7 @@ export function useCommandConsoleAssistPosition(
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
+      pendingChecks.forEach(clearTimeout);
       observer.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);

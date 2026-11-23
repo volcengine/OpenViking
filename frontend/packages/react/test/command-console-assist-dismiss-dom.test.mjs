@@ -39,15 +39,16 @@ test('a command can be picked inside a closed shadow root', async () => {
   try {
     const option = view.container.querySelector('[role="option"]');
     assert.ok(option);
-    await act(() =>
+    await act(async () => {
       option.dispatchEvent(
         new window.PointerEvent('pointerdown', {
           bubbles: true,
           cancelable: true,
           composed: true,
         }),
-      ),
-    );
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     assert.ok(option.isConnected, 'the internal press keeps the assist open');
     await act(() => option.click());
     assert.equal(view.input.value, 'ov read ');
@@ -87,15 +88,16 @@ test('a command can be picked through nested closed shadow roots', async () => {
   try {
     const option = view.container.querySelector('[role="option"]');
     assert.ok(option);
-    await act(() =>
+    await act(async () => {
       option.dispatchEvent(
         new window.PointerEvent('pointerdown', {
           bubbles: true,
           cancelable: true,
           composed: true,
         }),
-      ),
-    );
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     assert.ok(option.isConnected, 'nested roots keep the internal press open');
     await act(() => option.click());
     assert.equal(view.input.value, 'ov read ');
@@ -116,7 +118,7 @@ test('a direct press on closed shadow host whitespace closes the assist', async 
           composed: true,
         }),
       );
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     assert.ok(!view.container.querySelector('[role="listbox"]'));
   } finally {
