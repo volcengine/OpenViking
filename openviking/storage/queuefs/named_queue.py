@@ -200,40 +200,39 @@ class NamedQueue:
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
-        """Acknowledge successful processing of a message (deletes it from persistent storage).
+        """Acknowledge a message after processing and propagate settlement errors.
 
-        Must be called after the dequeue handler finishes processing a message.
+        For Redis, pass the original delivery from dequeue_raw() as message so
+        the ACK includes its delivery receipt. Memory and SQLite accept the ID alone.
         Middleware can provisionally settle application state before deletion.
-        If not called (e.g. process crashes), the message will be automatically
-        re-queued on the next startup via RecoverStale.
         """
         if not msg_id:
             return
-        try:
-            await self._run_middleware("ack", AckContext(self.name, msg_id, message), self._ack)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.info(
-                "Ack failed for %s msg_id=%s: %s",
-                short_hash(str(self.name)),
-                short_hash(str(msg_id)),
-                type(e).__name__,
-            )
+        await self._run_middleware("ack", AckContext(self.name, msg_id, message), self._ack)
 
     async def _ack(self, ctx: AckContext) -> None:
-        await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
+        body = self._encode_settlement(ctx.message_id, ctx.message)
+        await self._async_agfs.write(f"{self.path}/ack", body)
         ctx.committed = True
 
-    async def retry(self, msg_id: str) -> None:
+    async def retry(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
         """Return the original delivery to pending after its Work is persisted."""
         if msg_id:
-            await self._async_agfs.write(f"{self.path}/retry", msg_id.encode("utf-8"))
+            body = self._encode_settlement(msg_id, message)
+            await self._async_agfs.write(f"{self.path}/retry", body)
+
+    @staticmethod
+    def _encode_settlement(msg_id: str, message: Optional[Dict[str, Any]]) -> bytes:
+        if message is not None and "delivery_receipt" in message:
+            return json.dumps(
+                {"id": msg_id, "delivery_receipt": message["delivery_receipt"]}
+            ).encode("utf-8")
+        return msg_id.encode("utf-8")
 
     async def settle_dequeued(self, message: Dict[str, Any], result: ProcessResult) -> None:
         msg_id = message.get("id", "")
         if result.outcome is ProcessOutcome.RETRY:
-            await self.retry(msg_id)
+            await self.retry(msg_id, message)
         else:
             await self.ack(msg_id, message)
 
@@ -265,6 +264,7 @@ class NamedQueue:
 
         If the process crashes between steps 1 and 3, the backend's RecoverStale
         on the next startup resets the message back to 'pending' for retry.
+        An ACK failure is logged and the processing result is still returned.
         """
         await self._ensure_initialized()
         try:
@@ -278,14 +278,24 @@ class NamedQueue:
             else:
                 result = ProcessResult.success(data)
             # Middleware persists Work before either native retry or final ACK.
-            await self.settle_dequeued(raw_data, result)
+            try:
+                await self.settle_dequeued(raw_data, result)
+            except Exception as e:
+                if result.outcome is ProcessOutcome.RETRY:
+                    raise
+                logger.info(
+                    "Ack failed for %s msg_id=%s: %s",
+                    short_hash(str(self.name)),
+                    short_hash(str(raw_data.get("id", ""))),
+                    type(e).__name__,
+                )
             return data
         except Exception as e:
             logger.debug("Dequeue failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return None
 
     async def dequeue_raw(self) -> Optional[Dict[str, Any]]:
-        """Get and remove message from queue without invoking the handler."""
+        """Claim a message without invoking the handler. Keep the delivery for ACK."""
         await self._ensure_initialized()
         try:
             return await self._read_queue_message()

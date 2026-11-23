@@ -7,6 +7,7 @@ use super::cache_protocol::{
     PENDING_IDS_SCRIPT, RECOVERY_INTERVAL_SECS, RECOVERY_LEADER_TTL_SECS, RECOVER_STALE_SCRIPT,
     RELEASE_RECOVERY_LEADER_SCRIPT, REMOVE_QUEUE_SCRIPT, RETRY_SCRIPT, STATUS_SCRIPT,
 };
+use super::{DequeuedMessage, Settlement};
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheRuntime, Expiration, ScriptRequest, ScriptValue, SetOptions,
 };
@@ -19,18 +20,18 @@ use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v2";
-const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v3";
-const ENQUEUE_ID: &str = "queuefs.enqueue.v4";
-const DEQUEUE_ID: &str = "queuefs.dequeue.v4";
-const PEEK_ID: &str = "queuefs.peek.v2";
-const STATUS_ID: &str = "queuefs.status.v2";
-const PENDING_IDS_ID: &str = "queuefs.pending_ids.v1";
-const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v2";
-const ACK_ID: &str = "queuefs.ack.v4";
-const RETRY_ID: &str = "queuefs.retry.v1";
-const CLEAR_ID: &str = "queuefs.clear.v4";
-const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v4";
+const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v3";
+const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v4";
+const ENQUEUE_ID: &str = "queuefs.enqueue.v5";
+const DEQUEUE_ID: &str = "queuefs.dequeue.v5";
+const PEEK_ID: &str = "queuefs.peek.v3";
+const STATUS_ID: &str = "queuefs.status.v3";
+const PENDING_IDS_ID: &str = "queuefs.pending_ids.v2";
+const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v3";
+const ACK_ID: &str = "queuefs.ack.v5";
+const RETRY_ID: &str = "queuefs.retry.v2";
+const CLEAR_ID: &str = "queuefs.clear.v5";
+const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v5";
 const ACQUIRE_RECOVERY_LEADER_ID: &str = "queuefs.acquire_recovery_leader.v1";
 const RELEASE_RECOVERY_LEADER_ID: &str = "queuefs.release_recovery_leader.v1";
 
@@ -302,13 +303,14 @@ impl CacheQueueStorage {
         Ok(())
     }
 
-    pub(super) async fn dequeue(&self, queue_name: &str) -> Result<Option<Message>> {
+    pub(super) async fn dequeue(&self, queue_name: &str) -> Result<Option<DequeuedMessage>> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
         let args = vec![
             bytes(&keys.message_prefix),
             bytes(&self.instance_id),
             bytes(unix_secs(SystemTime::now()).to_string()),
+            bytes(Uuid::new_v4().to_string()),
         ];
         match self
             .execute(
@@ -320,12 +322,17 @@ impl CacheQueueStorage {
             .await?
         {
             ScriptValue::Null => Ok(None),
-            ScriptValue::Array(values) => values
-                .get(1)
-                .ok_or_else(|| Error::internal("redis dequeue returned no payload"))
-                .and_then(string_value)
-                .and_then(Self::decode_message)
-                .map(Some),
+            ScriptValue::Array(values) => {
+                let [payload, receipt] = values.as_slice() else {
+                    return Err(Error::internal(
+                        "redis dequeue returned an invalid delivery",
+                    ));
+                };
+                Ok(Some(DequeuedMessage {
+                    message: Self::decode_message(string_value(payload)?)?,
+                    delivery_receipt: Some(string_value(receipt)?.to_owned()),
+                }))
+            }
             other => Err(invalid_result("dequeue", other)),
         }
     }
@@ -409,32 +416,28 @@ impl CacheQueueStorage {
         Ok(())
     }
 
-    pub(super) async fn ack(&self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    pub(super) async fn settle(
+        &self,
+        queue_name: &str,
+        settlement: Settlement,
+        msg_id: &str,
+        delivery_receipt: &str,
+    ) -> Result<bool> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        let (operation, script_id) = match settlement {
+            Settlement::Ack => ("ack", ACK_ID),
+            Settlement::Retry => ("retry", RETRY_ID),
+        };
         boolean(
             self.execute(
-                "ack",
-                ACK_ID,
+                operation,
+                script_id,
                 keys.script_keys(&self.key_prefix),
-                vec![bytes(msg_id)],
+                vec![bytes(msg_id), bytes(delivery_receipt)],
             )
             .await?,
         )
-    }
-
-    pub(super) async fn retry(&self, queue_name: &str, msg_id: &str) -> Result<bool> {
-        self.require_queue(queue_name).await?;
-        let keys = QueueKeys::new(&self.key_prefix, queue_name);
-        Ok(integer(
-            self.execute(
-                "retry",
-                RETRY_ID,
-                keys.script_keys(&self.key_prefix),
-                vec![bytes(msg_id)],
-            )
-            .await?,
-        )? > 0)
     }
 
     #[allow(dead_code)]
@@ -831,7 +834,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graceful_shutdown_allows_immediate_processing_recovery() {
+    async fn graceful_shutdown_recovers_legacy_delivery_without_a_receipt() {
         let Ok(endpoint) = std::env::var("REDIS_URL") else {
             return;
         };
@@ -852,7 +855,11 @@ mod tests {
         let message = Message::new(b"payload".to_vec());
         let message_id = message.id.clone();
         first.enqueue("jobs", message).await.unwrap();
-        assert_eq!(first.dequeue("jobs").await.unwrap().unwrap().id, message_id);
+        let original = first.dequeue("jobs").await.unwrap().unwrap();
+        assert_eq!(original.message.id, message_id);
+        let receipts = QueueKeys::new(&prefix, "jobs").delivery_receipts;
+        // Recreate the pre-upgrade state: processing and delivery_owner, with no receipt hash.
+        assert_eq!(runtime.del(&[receipts]).await.unwrap(), 1);
 
         first.shutdown().await.unwrap();
         let second = CacheQueueStorage::open_with_timing(
@@ -873,7 +880,14 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(recovered.id, message_id);
+        assert_eq!(recovered.message.id, message_id);
+        let receipt = recovered.delivery_receipt.as_deref().unwrap();
+        assert_ne!(Some(receipt), original.delivery_receipt.as_deref());
+        assert!(second
+            .settle("jobs", Settlement::Ack, &message_id, receipt)
+            .await
+            .unwrap());
+        assert_eq!(second.status("jobs").await.unwrap().processing, 0);
         second.remove_queue("jobs").await.unwrap();
         second.shutdown().await.unwrap();
         runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
@@ -918,10 +932,8 @@ mod tests {
         later.serial_key = Some("A".to_string());
         let later_id = later.id.clone();
         failed.enqueue("jobs", later).await.unwrap();
-        assert_eq!(
-            failed.dequeue("jobs").await.unwrap().unwrap().id,
-            message_id
-        );
+        let original = failed.dequeue("jobs").await.unwrap().unwrap();
+        assert_eq!(original.message.id, message_id);
 
         let heartbeat = heartbeat_key(&prefix, &failed.instance_id);
         for task in [
@@ -947,12 +959,21 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(recovered.id, message_id);
-        assert_eq!(recovered.serial_key.as_deref(), Some("A"));
+        assert_eq!(recovered.message.id, message_id);
+        assert_eq!(recovered.message.serial_key.as_deref(), Some("A"));
+        assert_ne!(recovered.delivery_receipt, original.delivery_receipt);
         assert!(survivor.dequeue("jobs").await.unwrap().is_none());
-        survivor.ack("jobs", &message_id).await.unwrap();
+        assert!(survivor
+            .settle(
+                "jobs",
+                Settlement::Ack,
+                &message_id,
+                recovered.delivery_receipt.as_deref().unwrap(),
+            )
+            .await
+            .unwrap());
         assert_eq!(
-            survivor.dequeue("jobs").await.unwrap().unwrap().id,
+            survivor.dequeue("jobs").await.unwrap().unwrap().message.id,
             later_id
         );
         survivor.remove_queue("jobs").await.unwrap();

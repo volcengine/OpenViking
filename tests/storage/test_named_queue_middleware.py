@@ -4,17 +4,19 @@
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID
 
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs.exceptions import AGFSInvalidOperationError
 from openviking.storage.queuefs.named_queue import (
     DequeueHandlerBase,
     NamedQueue,
 )
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.queuefs.queue_middleware import QueueMiddleware
 
 
@@ -51,7 +53,7 @@ async def test_keyed_enqueue_native_receipt_and_payload(key):
         concurrent = await queue.dequeue_raw()
         if key == "serial_key":
             assert concurrent is None
-            await queue.ack(receipt, message)
+            await queue.ack(receipt)
             concurrent = await queue.dequeue_raw()
         assert concurrent["id"] == second
     finally:
@@ -116,6 +118,52 @@ async def test_middleware_constructor_order_and_commit(transport, operation):
         assert await queue.clear()
         transport.write.assert_awaited_once_with("/queue/Test/clear", b"")
     assert events == [("outer", "enter"), ("inner", "enter"), ("inner", "exit"), ("outer", "exit")]
+
+
+@pytest.mark.parametrize("operation", ["ack", "retry"])
+@pytest.mark.parametrize("delivery_receipt", [None, "original-receipt"])
+async def test_dequeue_settles_original_delivery(transport, operation, delivery_receipt):
+    message = {"id": "message-1", "data": "{}"}
+    if delivery_receipt is not None:
+        message["delivery_receipt"] = delivery_receipt
+    transport.read.return_value = json.dumps(message).encode("utf-8")
+
+    class HandlerWithResult(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            assert data == message
+            if operation == "retry":
+                return ProcessResult.retry()
+            return ProcessResult.success({"id": "result-id", "delivery_receipt": "result-receipt"})
+
+    queue = NamedQueue(Mock(), "/queue", "Test", dequeue_handler=HandlerWithResult())
+    await queue.dequeue()
+
+    path, body = transport.write.call_args.args
+    transport.write.assert_awaited_once()
+    assert path == f"/queue/Test/{operation}"
+    if delivery_receipt is None:
+        assert body == b"message-1"
+    else:
+        assert json.loads(body) == {"id": "message-1", "delivery_receipt": delivery_receipt}
+
+
+async def test_manual_ack_requires_original_redis_delivery(transport):
+    message = {"id": "message-1", "data": "{}", "delivery_receipt": "original-receipt"}
+    transport.read.return_value = json.dumps(message).encode("utf-8")
+    transport.write.side_effect = [AGFSInvalidOperationError("delivery_receipt required"), 0]
+    queue = NamedQueue(Mock(), "/queue", "Test")
+
+    delivery = await queue.dequeue_raw()
+    assert delivery == message
+    with pytest.raises(AGFSInvalidOperationError, match="delivery_receipt required"):
+        await queue.ack(delivery["id"])
+    transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
+
+    await queue.ack(delivery["id"], message=delivery)
+    assert transport.write.await_count == 2
+    path, body = transport.write.call_args.args
+    assert path == "/queue/Test/ack"
+    assert json.loads(body) == {"id": "message-1", "delivery_receipt": "original-receipt"}
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("write failed"), asyncio.CancelledError()])
@@ -365,11 +413,18 @@ async def test_invalid_process_result_does_not_ack(transport):
     transport.write.assert_not_awaited()
 
 
-async def test_ack_error_does_not_double_count_processing(transport):
+async def test_dequeue_returns_processed_result_when_ack_fails(transport):
+    class ProcessedHandler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            return ProcessResult.success({"processed": data["id"]})
+
     transport.read.return_value = b'{"id":"m","data":"{}"}'
     transport.write.side_effect = OSError("ack failed")
-    queue = NamedQueue(object(), "/queue", "Test", dequeue_handler=Handler())
-    await queue.dequeue()
+    manager = QueueManager(object())
+    queue = manager.get_queue("Test", dequeue_handler=ProcessedHandler(), allow_create=True)
+
+    assert await manager.dequeue("Test") == {"processed": "m"}
+    transport.write.assert_awaited_once_with("/queue/Test/ack", b"m")
     assert queue._processed == 1
     assert queue._error_count == 0
 

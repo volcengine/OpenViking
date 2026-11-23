@@ -130,9 +130,9 @@ ownership after its last in-flight ACK. Duplicate ACKs do not affect other claim
 SQLite automatically adds a nullable `serial_key` column and its index. Old
 messages have `NULL` in that column. A `schedule_seq` column is backfilled from
 row IDs and replaces the status index's ordering column; IDs, payloads and
-original ordering remain unchanged. Redis layout is incompatible with older versions:
-drain shared queues under the service and upgrade producers and consumers
-together. Mixed versions and automatic backlog migration are unsupported.
+original ordering remain unchanged. When upgrading from a QueueFS version that
+predates Redis message-key scheduling, drain the shared queues before following
+the coordinated upgrade steps below.
 
 Extended enqueue uses a big-endian `QFSE` v1 frame (fixed header, TLVs, raw
 payload), with a 64 KiB header limit. `group_key` / `serial_key` use TLV types
@@ -141,12 +141,38 @@ invalid keys, and unknown required fields are rejected; unknown optional fields
 are skipped. The complete frame definition is in
 `crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs` in the source tree.
 
-Legacy `/enqueue` still accepts raw payload; dequeue, peek, messages and ACK
-formats are unchanged. `/dequeue` returns `{}` when nothing is eligible, even
-with pending messages. Extended write returns a byte count; the caller owns the
-UUID. An ID still present in the same queue returns `AlreadyExists`; deduplication
-records are not retained after ACK. `clear` and queue removal also clear scheduling
-state. ACK after processing, batching and writeback finish.
+Legacy `/enqueue` still accepts raw payload. `/dequeue` returns `{}` when nothing
+is eligible, even with pending messages. Extended write returns a byte count and
+the caller owns the UUID. An ID still present in the same queue returns
+`AlreadyExists`. Deduplication records are discarded after ACK. `clear` and queue
+removal also clear scheduling state and in-flight delivery receipts. ACK after
+processing, batching and writeback finish.
+
+Redis QueueFS adds a fresh `delivery_receipt` to each successful `/dequeue`
+response. Write `{"id":"<message id>","delivery_receipt":"<receipt>"}` to
+`/ack` or `/retry` using the ID and receipt from that response. Memory and SQLite
+take a raw message ID. `/peek`, `/messages`, and `/status` keep their existing
+formats. Redis returns `InvalidOperation` for a missing receipt, a raw ID, or a
+malformed request. A well-formed request with an expired or mismatched receipt,
+including a duplicate settlement, leaves messages, counts, and group ownership
+unchanged. Heartbeat recovery and retry retire the old receipt, and a new claim
+gets a fresh receipt. Business processing remains at-least-once.
+
+In Python, if you claim a message manually with `NamedQueue.dequeue_raw()`, keep
+the returned delivery and replace `await queue.ack(delivery["id"])` with
+`await queue.ack(delivery["id"], message=delivery)` after processing. A Redis ACK
+without a receipt raises `AGFSInvalidOperationError` to the caller and leaves the
+message in processing.
+
+To upgrade from the Redis message-key layout to delivery receipts, shut down
+every process mounting the old Redis QueueFS under the same `service_name`,
+including consumers, producers that only enqueue, and administrative processes.
+Wait for all their in-flight requests to finish before enabling the new QueueFS
+with matching Python code and native extension. Each Redis QueueFS mount starts
+heartbeat recovery, and administrative operations such as `clear` and queue
+deletion also modify the shared Redis state. Pending messages can stay queued,
+and heartbeat recovery returns old in-flight messages to pending. Each gets a
+receipt when it is next claimed.
 
 Python `enqueue(..., serial_key=..., group_key=...)` validates keys before Work
 registration and returns the actual UUID for extended writes; unkeyed writes
@@ -164,8 +190,8 @@ already published a replacement and the original delivery is ACKed.
 External outcome saves allow three attempts. Escaped execution,
 cleanup or Task/Work persistence errors leave the delivery unacknowledged; handled
 business failures are ACKed after Work settlement. Cancellation uses the common
-Task middleware contract. ACK uses the common queue behavior: a failed write logs
-a warning and leaves the delivery for recovery while consumption continues.
+Task middleware contract. Workers log ACK errors and continue polling while
+unacknowledged deliveries remain eligible for recovery.
 For this release, ExternalTaskService retains its baseline target reservations
 and execution guard for pre-key deliveries, restoring reservations before workers
 start. These transitional guards are scheduled for removal in the next release.
