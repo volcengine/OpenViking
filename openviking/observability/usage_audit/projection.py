@@ -282,6 +282,7 @@ def _project_http_request(
             error_message,
             error_details,
             created_at,
+            payload.get("delegated_by_user_id"),
         )
     )
     touched_audit_accounts.add(audit_account)

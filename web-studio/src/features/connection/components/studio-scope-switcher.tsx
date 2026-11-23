@@ -202,6 +202,7 @@ export function StudioScopeSwitcher({
   ].filter(Boolean)
   const hasUser =
     Boolean(connection.apiKey) ||
+    Boolean(connection.adminDelegation) ||
     serverMode === 'trusted' ||
     serverMode === 'dev'
   const assertedIdentity = serverMode === 'trusted' || serverMode === 'dev'

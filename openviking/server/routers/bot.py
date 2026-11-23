@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import _auth_mode, get_request_context
+from openviking.server.auth.delegation import require_unbound_credential_export
 from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
@@ -111,6 +112,7 @@ def _attach_openviking_connection(
     trusts loopback forwards from this proxy, so a browser body must not be able
     to smuggle a forged identity through the no-API-key / non-trusted branch.
     """
+    require_unbound_credential_export(ctx, "Bot forwarding")
     enriched = dict(body)
     # Drop any client-claimed connection before deciding what (if anything) to attach.
     enriched.pop("openviking_connection", None)
@@ -156,10 +158,7 @@ async def get_compile(
 ):
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail=(
-            "This endpoint is no longer supported. "
-            "Poll GET /api/v1/tasks/{task_id} instead."
-        ),
+        detail=("This endpoint is no longer supported. Poll GET /api/v1/tasks/{task_id} instead."),
     )
 
 
@@ -171,8 +170,7 @@ async def cancel_compile(
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=(
-            "This endpoint is no longer supported. "
-            "Use POST /api/v1/tasks/{task_id}/cancel instead."
+            "This endpoint is no longer supported. Use POST /api/v1/tasks/{task_id}/cancel instead."
         ),
     )
 
@@ -323,6 +321,7 @@ async def interrupt_session(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Interrupt an active or queued bot session via the VikingBot gateway."""
+    require_unbound_credential_export(_ctx, "Bot forwarding")
     bot_url = get_bot_url()
     headers = {
         "X-OpenViking-Account": _ctx.user.account_id,

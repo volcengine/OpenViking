@@ -156,6 +156,48 @@ class APIKeyManager:
             group_ids=tuple(snapshot["group_ids"]),
         )
 
+    @property
+    def supports_admin_delegation(self) -> bool:
+        return self._store.supports_admin_delegation
+
+    async def resolve_admin_delegation(
+        self, api_key: str, identity: ResolvedIdentity, target_user_id: str
+    ) -> ResolvedIdentity:
+        if (
+            identity.role != Role.ADMIN
+            or identity.from_oauth
+            or not self.supports_admin_delegation
+            or not identity.account_id
+            or not identity.user_id
+        ):
+            raise PermissionDeniedError(
+                "Admin user delegation is not available for this credential"
+            )
+        from openviking_cli.session.user_id import validate_user_id
+
+        if error := validate_user_id(target_user_id):
+            raise InvalidArgumentError(error)
+        target = await self._store.get_admin_delegation(
+            api_key,
+            account_id=identity.account_id,
+            admin_user_id=identity.user_id,
+            target_user_id=target_user_id,
+        )
+        if (
+            target is None
+            or target["account_id"] != identity.account_id
+            or target["user_id"] != target_user_id
+            or target["role"] != Role.USER
+        ):
+            raise PermissionDeniedError("Admin authority or delegation target is no longer active")
+        return ResolvedIdentity(
+            role=Role.USER,
+            account_id=identity.account_id,
+            user_id=target_user_id,
+            group_ids=target["group_ids"],
+            delegated_by_user_id=identity.user_id,
+        )
+
     @staticmethod
     def _key_hints(key: str) -> tuple[str, str]:
         if not is_valid_format_key(key):

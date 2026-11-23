@@ -7,7 +7,10 @@ import { RequestLogRow } from '#/features/workbench/request-logs/components/row'
 import type { ConsoleAuditLogItem } from '@ov-server/api/v1/console'
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, values?: { user: string }) =>
+      key === 'table.delegatedBy' ? `${key}:${values?.user}` : key,
+  }),
 }))
 
 afterEach(cleanup)
@@ -85,4 +88,16 @@ describe('RequestLogRow', () => {
 
     expect(screen.queryByRole('button')).toBeNull()
   })
+})
+
+it('keeps the effective user and Admin actor separate in audited rows', () => {
+  renderRow({
+    method: 'GET',
+    route: '/api/v1/fs/ls',
+    status_code: 200,
+    user_id: 'alice',
+    delegated_by_user_id: 'admin',
+  })
+  expect(screen.getByText('alice')).toBeTruthy()
+  expect(screen.getByText('table.delegatedBy:admin')).toBeTruthy()
 })

@@ -42,6 +42,7 @@ function currentConnectionIdentity(): string {
     connection.apiKey,
     connection.adminApiKey,
     connection.identityHeaders,
+    connection.adminDelegation,
   ])
 }
 

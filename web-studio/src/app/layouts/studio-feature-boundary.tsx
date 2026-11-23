@@ -98,6 +98,7 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     !isSharedStudioPath(pathname) &&
     serverMode === 'api_key' &&
     !connection.apiKey &&
+    !connection.adminDelegation &&
     connection.adminApiKey
   )
     reason = 'managementRequired'

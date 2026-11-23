@@ -73,6 +73,7 @@ export type ConsoleContextCommitItem = {
 export type ConsoleContextCommitsResult = ConsoleSeriesResult<ConsoleContextCommitItem>
 
 export type ConsoleAuditLogItem = {
+  delegated_by_user_id?: string | null
   account_id?: string | null
   api_type?: string
   created_at?: string

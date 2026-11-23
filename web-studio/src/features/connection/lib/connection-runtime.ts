@@ -198,6 +198,9 @@ export function normalizeConnectionDraft(
     // fetchServerHealth, detectConnectionRole, and the admin client).
     baseUrl: connection.baseUrl.trim(),
     userId: connection.userId.trim(),
+    ...(connection.adminDelegation === true && !connection.apiKey.trim()
+      ? { adminDelegation: true }
+      : {}),
   }
 }
 
@@ -222,6 +225,7 @@ export function createIdentityScopeKey(
     connection.accountId,
     connection.userId,
     dataKey ? hashSecret(dataKey) : 'none',
+    ...(connection.adminDelegation ? ['admin-delegation'] : []),
   ].join('\u0000')
 }
 
@@ -237,6 +241,7 @@ export function createConnectionRoleProbeKey(
     connection.userId,
     connection.adminApiKey ? hashSecret(connection.adminApiKey) : 'none',
     connection.apiKey ? hashSecret(connection.apiKey) : 'none',
+    ...(connection.adminDelegation ? ['admin-delegation'] : []),
   ].join('\u0000')
 }
 
@@ -309,6 +314,7 @@ export function applyConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
   studioMode: StudioMode = 'management',
+  delegationVerified = false,
 ): void {
   ovClient.setOptions({
     credentialScope: studioMode === 'management' ? 'control' : 'data',
@@ -321,13 +327,18 @@ export function applyConnection(
   ovClient.setConnection({
     accountId: connection.accountId,
     adminApiKey:
-      studioMode === 'management' || serverMode === 'trusted'
+      studioMode === 'management' ||
+      serverMode === 'trusted' ||
+      connection.adminDelegation
         ? connection.adminApiKey
         : '',
     apiKey: serverMode === 'trusted' ? '' : connection.apiKey,
     identityHeaders: serverMode === 'trusted' || serverMode === 'dev',
     trustedAuth: serverMode === 'trusted',
     userId: connection.userId,
+    adminDelegation:
+      studioMode === 'workbench' && connection.adminDelegation === true,
+    delegationVerified,
   })
 }
 

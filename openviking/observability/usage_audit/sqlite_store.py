@@ -97,8 +97,8 @@ class SQLiteUsageAuditStore:
             )
         if current == SCHEMA_VERSION:
             return
-        if current == 4 and SCHEMA_VERSION == 5:
-            SQLiteUsageAuditStore._migrate_v4_to_v5_sync(conn)
+        if current in (4, 5) and SCHEMA_VERSION == 6:
+            SQLiteUsageAuditStore._migrate_v4_v5_to_v6_sync(conn)
             return
         if current >= 4:
             raise RuntimeError(
@@ -108,8 +108,8 @@ class SQLiteUsageAuditStore:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
 
     @staticmethod
-    def _migrate_v4_to_v5_sync(conn: sqlite3.Connection) -> None:
-        """Add nullable audit error fields without deleting v4 usage data."""
+    def _migrate_v4_v5_to_v6_sync(conn: sqlite3.Connection) -> None:
+        """Add nullable audit error and delegation fields without deleting usage data."""
         table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'request_audit'"
         ).fetchone()
@@ -118,9 +118,12 @@ class SQLiteUsageAuditStore:
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(request_audit)")}
         conn.execute("BEGIN")
         try:
-            for name in ("error_code", "error_message", "error_details"):
+            for name in ("error_code", "error_message", "error_details", "delegated_by_user_id"):
                 if name not in columns:
                     conn.execute(f"ALTER TABLE request_audit ADD COLUMN {name} TEXT")
+            conn.execute(
+                "UPDATE _schema_meta SET value = ? WHERE key = 'version'", (str(SCHEMA_VERSION),)
+            )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -258,9 +261,9 @@ class SQLiteUsageAuditStore:
             INSERT INTO request_audit (
                 request_id, account_id, user_id, method, route,
                 api_type, status_code, duration_ms,
-                error_code, error_message, error_details, created_at
+                error_code, error_message, error_details, created_at, delegated_by_user_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -387,9 +390,7 @@ class SQLiteUsageAuditStore:
         assert self._conn is not None
         day = date.fromisoformat(user_date)
         utc_start, utc_end = _user_day_window_utc(day, tz)
-        rows = self._fetch_hourly_token_rows(
-            account_id, utc_start, utc_end, user_id=user_id
-        )
+        rows = self._fetch_hourly_token_rows(account_id, utc_start, utc_end, user_id=user_id)
         result = {"vlm_input": 0, "vlm_output": 0, "embedding_input": 0}
         for source, token_type, _, _, total in rows:
             key = f"{source}_{token_type}"
@@ -745,7 +746,7 @@ class SQLiteUsageAuditStore:
             f"""
             SELECT request_id, account_id, user_id, method, route, api_type,
                    status_code, duration_ms, error_code, error_message,
-                   error_details, created_at
+                   error_details, created_at, delegated_by_user_id
             FROM request_audit
             WHERE {where_sql}
             ORDER BY created_at DESC, id DESC

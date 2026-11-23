@@ -36,6 +36,7 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
         account_id: str | None = None,
         request_id: str | None = None,
         user_id: str | None = None,
+        delegated_by_user_id: str | None = None,
         url_path: str | None = None,
         result_count: int | None = None,
         error_code: str | None = None,
@@ -59,6 +60,8 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
             payload["request_id"] = str(request_id)
         if user_id is not None:
             payload["user_id"] = str(user_id)
+        if delegated_by_user_id is not None:
+            payload["delegated_by_user_id"] = str(delegated_by_user_id)
         if url_path is not None:
             payload["url_path"] = str(url_path)
         if result_count is not None:

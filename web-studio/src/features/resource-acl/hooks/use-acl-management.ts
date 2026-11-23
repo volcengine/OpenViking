@@ -1,4 +1,5 @@
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { isVerifiedAdminDelegation } from '#/features/connection/lib/health'
 import { resolveStudioManagementCapabilities } from '#/features/connection/lib/studio-permissions'
 import { createResourceAclApi } from '#/features/resource-acl/lib/resource-acl'
 import { useQuery } from '@tanstack/react-query'
@@ -13,6 +14,7 @@ export function useAclManagement(load = true) {
     identityScopeKey,
     switchIdentity,
     studioMode,
+    serverHealth,
   } = useAppConnection()
   const { canManageUsers } = resolveStudioManagementCapabilities({
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
@@ -29,15 +31,25 @@ export function useAclManagement(load = true) {
   // An account admin's control key is also a valid tenant data credential.
   // Keep the regular browsing identity unchanged while managing ACLs.
   const useAccountAdminCredential =
-    serverMode === 'api_key' && connectionRole === 'admin'
+    serverMode === 'api_key' &&
+    connectionRole === 'admin' &&
+    !connection.adminDelegation
+  const delegationVerified =
+    serverMode === 'api_key' &&
+    isVerifiedAdminDelegation(
+      serverHealth,
+      connection.userId,
+      connection.accountId,
+    )
   const api = useMemo(
     () =>
       createResourceAclApi(
         connection,
         serverMode === 'trusted',
         useAccountAdminCredential,
+        delegationVerified,
       ),
-    [connection, serverMode, useAccountAdminCredential],
+    [connection, serverMode, useAccountAdminCredential, delegationVerified],
   )
   const settingsKey = [
     'account-acl',
@@ -65,7 +77,8 @@ export function useAclManagement(load = true) {
     hasDataIdentity:
       serverMode !== 'api_key' ||
       useAccountAdminCredential ||
-      Boolean(connection.apiKey),
+      Boolean(connection.apiKey) ||
+      Boolean(connection.adminDelegation),
     settings,
     settingsKey,
     adminConnection,

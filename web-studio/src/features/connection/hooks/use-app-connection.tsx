@@ -39,6 +39,7 @@ import {
 import type { ServerMode } from '#/features/connection/lib/health'
 import {
   fetchServerHealth,
+  isVerifiedAdminDelegation,
   normalizeBaseUrl,
   readServerIdentity,
   resetServerHealthCache,
@@ -234,7 +235,19 @@ export function AppConnectionProvider({
 
   // Child effects may issue requests before provider effects run. Restrict the
   // shared client synchronously when crossing the management/workbench boundary.
-  applyConnection(connection, serverMode, studioMode)
+  applyConnection(
+    connection,
+    serverMode,
+    studioMode,
+    serverMode === 'api_key' &&
+      serverHealth?.key ===
+        studioMode + createConnectionRoleProbeKey(connection, 'checking') &&
+      isVerifiedAdminDelegation(
+        serverHealth.data,
+        connection.userId,
+        connection.accountId,
+      ),
+  )
 
   React.useEffect(() => {
     if (
@@ -257,6 +270,7 @@ export function AppConnectionProvider({
     })
     const dataIdentity =
       Boolean(connection.apiKey) ||
+      Boolean(connection.adminDelegation) ||
       serverMode === 'trusted' ||
       serverMode === 'dev'
     const targetMode =
@@ -466,6 +480,7 @@ export function AppConnectionProvider({
     connection.accountId,
     connection.adminApiKey,
     connection.apiKey,
+    connection.adminDelegation,
     connection.baseUrl,
     connection.serviceSelection,
     connection.userId,
@@ -480,7 +495,7 @@ export function AppConnectionProvider({
     const controller = new AbortController()
     const management = studioMode === 'management'
     const apiKey =
-      management || serverMode === 'trusted'
+      management || serverMode === 'trusted' || connection.adminDelegation
         ? connection.adminApiKey || connection.apiKey
         : connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
@@ -587,6 +602,7 @@ export function AppConnectionProvider({
     connection.accountId,
     connection.adminApiKey,
     connection.apiKey,
+    connection.adminDelegation,
     connection.baseUrl,
     connection.serviceSelection,
     connection.userId,
@@ -781,6 +797,7 @@ export function AppConnectionProvider({
           ...connection,
           accountId,
           apiKey: serverMode === 'trusted' ? '' : apiKey,
+          adminDelegation: false,
           userId,
         })
         const identity = await detectConnectionIdentity(

@@ -485,6 +485,7 @@ class ServerConfig(BaseModel):
     timeout_keep_alive: int = 5
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
+    api_key_admin_delegation_enabled: StrictBool = False
     # OIDC/LDAP authentication configuration
     oidc: Optional[OIDCConfig] = None
     ldap: Optional[LDAPConfig] = None

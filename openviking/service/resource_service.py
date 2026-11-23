@@ -2112,6 +2112,9 @@ class ResourceService:
             watch_auth_state = None
             create_watch = bool(watch_manager and manage_watch and watch_interval > 0)
             if create_watch:
+                from openviking.server.auth.delegation import require_unbound_credential_export
+
+                require_unbound_credential_export(ctx, "Connector watch credential storage")
                 connector_watch_auth_args = dict(normalized_args.processor_kwargs)
                 connector_watch_auth_args.pop(CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG, None)
                 watch_auth_state = await connector.create_watch_auth_state(

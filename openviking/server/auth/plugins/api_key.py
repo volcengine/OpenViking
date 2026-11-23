@@ -45,6 +45,8 @@ def _remove_header(request: Request, name: bytes) -> None:
     request.scope["headers"] = [
         (key, value) for key, value in scope_headers if key.lower() != name.lower()
     ]
+    if hasattr(request, "_headers"):
+        del request._headers
 
 
 class ApiKeyAuthPlugin(AuthPlugin):
@@ -79,11 +81,29 @@ class ApiKeyAuthPlugin(AuthPlugin):
             x_openviking_user=x_openviking_user,
         )
         if oauth_identity is not None:
+            if request.headers.get("X-OpenViking-Delegate-User") is not None:
+                raise PermissionDeniedError("OAuth credentials cannot delegate Admin authority")
             return oauth_identity
 
         identity = await manager.resolve_identity(api_key)
         identity.account_id = identity.account_id or "default"
         identity.user_id = identity.user_id or "default"
+
+        target = request.headers.get("X-OpenViking-Delegate-User")
+        if target is not None:
+            config = getattr(request.app.state, "config", None)
+            if not getattr(config, "api_key_admin_delegation_enabled", False):
+                raise PermissionDeniedError("Admin user delegation is disabled")
+            if x_openviking_account and x_openviking_account != identity.account_id:
+                raise PermissionDeniedError("Admin delegation cannot cross account boundaries")
+            if x_openviking_user or request.headers.get("X-OpenViking-Role"):
+                raise PermissionDeniedError(
+                    "Delegation cannot be combined with identity assertions"
+                )
+            identity = await manager.resolve_admin_delegation(api_key, identity, target.strip())
+            # No handler may accidentally export the Admin secret as the target.
+            _remove_header(request, b"x-api-key")
+            _remove_header(request, b"authorization")
 
         # Silently ignore identity assertion headers in api_key mode.
         # Older clients may send these headers out of habit; clearing them
@@ -126,9 +146,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
 
         recorded_fp = record.authorizing_key_fp
         manager = request.app.state.api_key_manager
-        current_fp = await manager.get_user_key_fingerprint(
-            record.account_id, record.user_id
-        )
+        current_fp = await manager.get_user_key_fingerprint(record.account_id, record.user_id)
         if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
             raise UnauthenticatedError(
                 "OAuth token's authorizing API key has been rotated or revoked; "

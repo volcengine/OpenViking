@@ -60,6 +60,7 @@ export function StudioSettingsMenu({
     !managementMode &&
     Boolean(userName) &&
     (Boolean(connection.apiKey) ||
+      Boolean(connection.adminDelegation) ||
       serverMode === 'trusted' ||
       serverMode === 'dev')
   const managementIdentity =
@@ -84,6 +85,7 @@ export function StudioSettingsMenu({
   const effectiveDefault =
     preferredMode !== 'management' &&
     (connection.apiKey ||
+      connection.adminDelegation ||
       workbenchKey ||
       serverMode === 'trusted' ||
       serverMode === 'dev')
@@ -221,6 +223,7 @@ export function StudioSettingsMenu({
                   disabled={
                     mode === 'workbench' &&
                     !connection.apiKey &&
+                    !connection.adminDelegation &&
                     !workbenchKey &&
                     serverMode !== 'trusted' &&
                     serverMode !== 'dev'

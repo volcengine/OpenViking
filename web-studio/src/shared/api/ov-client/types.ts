@@ -12,6 +12,8 @@ export interface OvConnectionState {
   identityHeaders: boolean
   trustedAuth?: boolean
   userId: string
+  adminDelegation?: boolean
+  delegationVerified?: boolean
 }
 
 export interface OvClientOptions {

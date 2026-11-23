@@ -354,9 +354,7 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
             bucket="hour",
             tz=UTC,
         )
-        assert any(
-            row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits
-        )
+        assert any(row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits)
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
         audit = await store.query_audit_logs(account_id="acct-1")
         assert audit["total"] == 4
@@ -444,7 +442,7 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
         assert "hour_utc" in context_columns
         assert "hour_bucket" not in context_columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("5",)
+        assert version == ("6",)
     finally:
         conn.close()
 
@@ -521,7 +519,7 @@ async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path
         columns = {row[1] for row in conn.execute("PRAGMA table_info(request_audit)")}
         assert {"error_code", "error_message", "error_details"} <= columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("5",)
+        assert version == ("6",)
     finally:
         conn.close()
 
@@ -537,20 +535,20 @@ async def test_sqlite_usage_audit_store_rejects_unhandled_future_migration_witho
     await store.initialize()
     await store.close()
 
-    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 6)
+    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 7)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         with pytest.raises(
             RuntimeError,
-            match="No usage/audit schema migration path from version 5 to 6",
+            match="No usage/audit schema migration path from version 6 to 7",
         ):
             SQLiteUsageAuditStore._migrate_legacy_sync(conn)
 
         assert conn.execute("SELECT COUNT(*) FROM request_audit").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM usage_token_hourly").fetchone()[0] == 1
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version[0] == "5"
+        assert version[0] == "6"
     finally:
         conn.close()
 
@@ -590,6 +588,63 @@ async def test_sqlite_usage_audit_store_handles_malformed_error_details(tmp_path
         assert audit["items"][0]["error_details"] is None
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("column_already_present", [False, True])
+async def test_v5_delegation_migration_preserves_rows_and_resumes_additive_layout(
+    tmp_path, column_already_present
+):
+    db_path = tmp_path / "usage.sqlite3"
+    _create_v4_usage_audit_db(db_path)
+    with sqlite3.connect(db_path) as connection:
+        for field in ("error_code", "error_message", "error_details"):
+            connection.execute(f"ALTER TABLE request_audit ADD COLUMN {field} TEXT")
+        connection.execute("UPDATE _schema_meta SET value = '5'")
+        if column_already_present:
+            connection.execute("ALTER TABLE request_audit ADD COLUMN delegated_by_user_id TEXT")
+    store = SQLiteUsageAuditStore(db_path)
+    await store.initialize()
+    try:
+        audit = await store.query_audit_logs(account_id="acct-1")
+        assert audit["total"] == 1
+        assert audit["items"][0]["delegated_by_user_id"] is None
+    finally:
+        await store.close()
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT value FROM _schema_meta").fetchone()[0] == "6"
+        assert connection.execute("SELECT COUNT(*) FROM usage_token_hourly").fetchone()[0] == 1
+
+
+def test_v4_delegation_migration_failure_rolls_back_columns_and_version(tmp_path):
+    db_path = tmp_path / "usage.sqlite3"
+    _create_v4_usage_audit_db(db_path)
+    connection = sqlite3.connect(db_path, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    alters = 0
+
+    def reject_last_alter(action, *args):
+        nonlocal alters
+        if action == sqlite3.SQLITE_ALTER_TABLE:
+            alters += 1
+            if alters == 4:
+                return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    try:
+        connection.set_authorizer(reject_last_alter)
+        with pytest.raises(sqlite3.DatabaseError):
+            SQLiteUsageAuditStore._migrate_legacy_sync(connection)
+        connection.set_authorizer(None)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(request_audit)")}
+        assert "error_code" not in columns
+        assert "delegated_by_user_id" not in columns
+        assert connection.execute("SELECT value FROM _schema_meta").fetchone()[0] == "4"
+        assert connection.execute("SELECT COUNT(*) FROM request_audit").fetchone()[0] == 1
+        SQLiteUsageAuditStore._migrate_legacy_sync(connection)
+        assert connection.execute("SELECT value FROM _schema_meta").fetchone()[0] == "6"
+    finally:
+        connection.close()
 
 
 @pytest.mark.asyncio

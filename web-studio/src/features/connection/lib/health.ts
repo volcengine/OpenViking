@@ -80,9 +80,20 @@ export async function fetchServerHealth(
     signal,
   }).then((response) => {
     const data = response.data
-    return data && typeof data === 'object'
-      ? (data as Record<string, unknown>)
-      : {}
+    const health =
+      data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+    const target = headers['X-OpenViking-Delegate-User']
+    if (
+      target &&
+      !isVerifiedAdminDelegation(
+        health,
+        target,
+        headers['X-OpenViking-Account'],
+      )
+    ) {
+      throw new Error(i18n.t('studio:delegation.unverified'))
+    }
+    return health
   })
 
   if (!signal)
@@ -98,6 +109,26 @@ export async function fetchServerHealth(
     forgetFailedHealthRequest(promise)
     throw error
   }
+}
+
+export function isVerifiedAdminDelegation(
+  health: unknown,
+  target: string,
+  account: string,
+): boolean {
+  if (!health || typeof health !== 'object') return false
+  const identity = health as Record<string, unknown>
+  const capabilities = identity.capabilities as
+    | Record<string, unknown>
+    | undefined
+  return (
+    capabilities?.admin_user_delegation === true &&
+    identity.role === 'user' &&
+    identity.user_id === target &&
+    identity.account_id === account &&
+    typeof identity.delegated_by_user_id === 'string' &&
+    Boolean(identity.delegated_by_user_id)
+  )
 }
 
 export function resetServerHealthCache(): void {
@@ -144,5 +175,16 @@ export async function fetchConnectionHealth(
     throwOnError: true,
   })
   const response = await client.get({ url: '/health', signal })
+  if (
+    credential === 'data' &&
+    connection.adminDelegation &&
+    !isVerifiedAdminDelegation(
+      response.data,
+      connection.userId,
+      connection.accountId,
+    )
+  ) {
+    throw new Error(i18n.t('studio:delegation.unverified'))
+  }
   return response.data
 }

@@ -15,6 +15,7 @@ import {
   postSessions,
 } from '#/gen/ov-client/sdk.gen'
 import i18n from '#/i18n/core'
+import { adminDelegationHeaders } from '#/shared/api/ov-client/delegation'
 import {
   getOvResult,
   normalizeOvClientError,
@@ -439,9 +440,12 @@ function extractErrorMessage(text: string, fallback: string): string {
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const apiKey = conn.apiKey || (conn.identityHeaders ? conn.adminApiKey : '')
-  if (apiKey) headers['X-API-Key'] = apiKey
-  if (conn.identityHeaders) {
+  Object.assign(headers, adminDelegationHeaders(conn))
+  const apiKey =
+    conn.apiKey ||
+    (conn.identityHeaders || conn.adminDelegation ? conn.adminApiKey : '')
+  if (apiKey && !conn.adminDelegation) headers['X-API-Key'] = apiKey
+  if (conn.identityHeaders && !conn.adminDelegation) {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
     if (conn.userId) headers['X-OpenViking-User'] = conn.userId
   }
