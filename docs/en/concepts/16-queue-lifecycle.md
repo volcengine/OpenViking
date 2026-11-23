@@ -141,8 +141,7 @@ invalid keys, and unknown required fields are rejected; unknown optional fields
 are skipped. The complete frame definition is in
 `crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs` in the source tree.
 
-Legacy `/enqueue` still accepts raw payload; dequeue, peek, messages and ACK
-formats are unchanged. `/dequeue` returns `{}` when nothing is eligible, even
+Legacy `/enqueue` still accepts raw payload. `/dequeue` returns `{}` when nothing is eligible, even
 with pending messages. Extended write returns a byte count; the caller owns the
 UUID. An ID still present in the same queue returns `AlreadyExists`; deduplication
 records are not retained after ACK. `clear` and queue removal also clear scheduling
@@ -182,3 +181,20 @@ Submit cancellation keeps the existing count/time/close batching window.
 Cancelling a flush propagates to batch processing and settles its waiting items
 as cancelled. Multiple group failures preserve the first observed exception
 after the remaining groups finish.
+
+## Delivery Settlement
+
+Memory, SQLite and Redis issue a fresh `delivery_receipt` on every claim.
+Pass the claimed envelope's `id` and `delivery_receipt` as a JSON object to
+`/ack` or `/retry`. A QueueFS write returns the byte count when settlement
+applies and zero when the delivery no longer matches. Retry and recovery
+invalidate the receipt and preserve priority over later messages of the same
+`serial_key`. `/peek` and `/messages` omit receipts.
+
+Bare IDs settle only processing entries with no receipt. PostgreSQL continues
+to settle by message ID and consumer lease. For each SQLite file or Redis
+namespace, drain in-flight requests and stop old mounts before starting the
+upgraded mounts. SQLite recovers legacy processing rows at startup even with a
+positive `recover_stale_sec`, which still protects recent receipt-bearing rows.
+On Redis, legacy claims can settle by ID until heartbeat recovery requeues
+them. Once reclaimed, they require a receipt like any new claim.

@@ -31,6 +31,12 @@ _ContextT = TypeVar("_ContextT")
 _ResultT = TypeVar("_ResultT")
 
 
+def _settlement_payload(message_id: str, delivery_receipt: Optional[str]) -> bytes:
+    if delivery_receipt is None:
+        return message_id.encode("utf-8")
+    return json.dumps({"id": message_id, "delivery_receipt": delivery_receipt}).encode("utf-8")
+
+
 @dataclass
 class QueueError:
     """Error record."""
@@ -253,18 +259,23 @@ class NamedQueue:
             )
 
     async def _ack(self, ctx: AckContext) -> None:
-        await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
+        receipt = ctx.message.get("delivery_receipt") if ctx.message is not None else None
+        await self._async_agfs.write(
+            f"{self.path}/ack", _settlement_payload(ctx.message_id, receipt)
+        )
         ctx.committed = True
 
-    async def retry(self, msg_id: str) -> None:
+    async def retry(self, msg_id: str, *, delivery_receipt: Optional[str] = None) -> None:
         """Return the original delivery to pending after its Work is persisted."""
         if msg_id:
-            await self._async_agfs.write(f"{self.path}/retry", msg_id.encode("utf-8"))
+            await self._async_agfs.write(
+                f"{self.path}/retry", _settlement_payload(msg_id, delivery_receipt)
+            )
 
     async def settle_dequeued(self, message: Dict[str, Any], result: ProcessResult) -> None:
         msg_id = message.get("id", "")
         if result.outcome is ProcessOutcome.RETRY:
-            await self.retry(msg_id)
+            await self.retry(msg_id, delivery_receipt=message.get("delivery_receipt"))
         else:
             await self.ack(msg_id, message)
 

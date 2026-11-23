@@ -20,17 +20,17 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v2";
-const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v3";
+const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v4";
 const ENQUEUE_ID: &str = "queuefs.enqueue.v4";
-const DEQUEUE_ID: &str = "queuefs.dequeue.v4";
+const DEQUEUE_ID: &str = "queuefs.dequeue.v5";
 const PEEK_ID: &str = "queuefs.peek.v2";
 const STATUS_ID: &str = "queuefs.status.v2";
 const PENDING_IDS_ID: &str = "queuefs.pending_ids.v1";
 const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v2";
-const ACK_ID: &str = "queuefs.ack.v4";
-const RETRY_ID: &str = "queuefs.retry.v1";
-const CLEAR_ID: &str = "queuefs.clear.v4";
-const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v4";
+const ACK_ID: &str = "queuefs.ack.v5";
+const RETRY_ID: &str = "queuefs.retry.v2";
+const CLEAR_ID: &str = "queuefs.clear.v5";
+const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v5";
 const ACQUIRE_RECOVERY_LEADER_ID: &str = "queuefs.acquire_recovery_leader.v1";
 const RELEASE_RECOVERY_LEADER_ID: &str = "queuefs.release_recovery_leader.v1";
 
@@ -305,10 +305,12 @@ impl CacheQueueStorage {
     pub(super) async fn dequeue(&self, queue_name: &str) -> Result<Option<Message>> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        let receipt = Uuid::new_v4().to_string();
         let args = vec![
             bytes(&keys.message_prefix),
             bytes(&self.instance_id),
             bytes(unix_secs(SystemTime::now()).to_string()),
+            bytes(&receipt),
         ];
         match self
             .execute(
@@ -325,7 +327,10 @@ impl CacheQueueStorage {
                 .ok_or_else(|| Error::internal("redis dequeue returned no payload"))
                 .and_then(string_value)
                 .and_then(Self::decode_message)
-                .map(Some),
+                .map(|mut message| {
+                    message.delivery_receipt = Some(receipt);
+                    Some(message)
+                }),
             other => Err(invalid_result("dequeue", other)),
         }
     }
@@ -409,7 +414,12 @@ impl CacheQueueStorage {
         Ok(())
     }
 
-    pub(super) async fn ack(&self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    pub(super) async fn ack(
+        &self,
+        queue_name: &str,
+        msg_id: &str,
+        receipt: Option<&str>,
+    ) -> Result<bool> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
         boolean(
@@ -417,13 +427,22 @@ impl CacheQueueStorage {
                 "ack",
                 ACK_ID,
                 keys.script_keys(&self.key_prefix),
-                vec![bytes(msg_id)],
+                [msg_id, queue_name]
+                    .into_iter()
+                    .chain(receipt)
+                    .map(bytes)
+                    .collect(),
             )
             .await?,
         )
     }
 
-    pub(super) async fn retry(&self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    pub(super) async fn retry(
+        &self,
+        queue_name: &str,
+        msg_id: &str,
+        receipt: Option<&str>,
+    ) -> Result<bool> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
         Ok(integer(
@@ -431,7 +450,11 @@ impl CacheQueueStorage {
                 "retry",
                 RETRY_ID,
                 keys.script_keys(&self.key_prefix),
-                vec![bytes(msg_id)],
+                [msg_id, queue_name]
+                    .into_iter()
+                    .chain(receipt)
+                    .map(bytes)
+                    .collect(),
             )
             .await?,
         )? > 0)
@@ -918,10 +941,8 @@ mod tests {
         later.serial_key = Some("A".to_string());
         let later_id = later.id.clone();
         failed.enqueue("jobs", later).await.unwrap();
-        assert_eq!(
-            failed.dequeue("jobs").await.unwrap().unwrap().id,
-            message_id
-        );
+        let original = failed.dequeue("jobs").await.unwrap().unwrap();
+        assert_eq!(original.id, message_id);
 
         let heartbeat = heartbeat_key(&prefix, &failed.instance_id);
         for task in [
@@ -950,7 +971,15 @@ mod tests {
         assert_eq!(recovered.id, message_id);
         assert_eq!(recovered.serial_key.as_deref(), Some("A"));
         assert!(survivor.dequeue("jobs").await.unwrap().is_none());
-        survivor.ack("jobs", &message_id).await.unwrap();
+        assert_ne!(original.delivery_receipt, recovered.delivery_receipt);
+        assert!(!survivor
+            .retry("jobs", &original.id, original.delivery_receipt.as_deref())
+            .await
+            .unwrap());
+        assert!(survivor
+            .ack("jobs", &recovered.id, recovered.delivery_receipt.as_deref())
+            .await
+            .unwrap());
         assert_eq!(
             survivor.dequeue("jobs").await.unwrap().unwrap().id,
             later_id

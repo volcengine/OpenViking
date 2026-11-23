@@ -126,7 +126,7 @@ key 长度为 1–4096 UTF-8 bytes；拒绝互斥字段并存、重复或无效 
 跳过未知可选字段。完整帧定义见源码树中的
 `crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs`。
 
-旧 `/enqueue` 仍接收原始 payload；dequeue、peek、messages 和 ACK 格式不变。
+旧 `/enqueue` 仍接收原始 payload。
 无可投递消息时 `/dequeue` 返回 `{}`，即使 pending 非零。扩展 write 返回字节数，
 UUID 由调用方持有；同队列尚存 ID 重复入队返回 `AlreadyExists`，ACK 后不保留去重记录。
 `clear` 和删除队列同时清理调度状态。业务处理、合并及写回结束后才 ACK。
@@ -157,3 +157,17 @@ SessionCommit 的首次提交和恢复入队均按账号/用户生成 `group_key
 取消 submit 不改变原有 count/time/close 批处理窗口；取消 flush 会传递给
 批处理，并将等待项结算为取消。多个合并分组失败时，等待其他组结束后仍抛出
 最先发生的异常。
+
+## 投递确认与重试
+
+Memory、SQLite 和 Redis 每次取出消息时生成新的 `delivery_receipt`。
+向 `/ack` 或 `/retry` 写入包含本次投递的 `id` 和 `delivery_receipt` 的 JSON 对象。
+确认或重试成功时，QueueFS 写操作返回写入字节数。投递不匹配时返回零。
+重试和恢复都会使旧回执失效，并保留原消息相对于同 `serial_key` 后续消息的优先级。
+`/peek` 和 `/messages` 不返回投递回执。
+
+只有没有回执的处理中消息可以仅凭 ID 确认或重试。PostgreSQL 继续使用消息 ID 和消费者租约。
+对每个 SQLite 文件或 Redis 命名空间，先结束在途请求并停止旧挂载，再启动升级后的挂载。
+SQLite 启动时会恢复没有回执的旧消息，即使 `recover_stale_sec` 为正也一样。
+这个阈值仍会保护最近取出且带回执的消息。Redis 旧消息在心跳恢复前可以仅凭 ID 确认，
+恢复后重新取出时需要使用新回执。
