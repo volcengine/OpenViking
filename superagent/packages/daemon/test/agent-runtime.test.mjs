@@ -183,6 +183,26 @@ function opencodeSwitchRuntime(directory, store, spawns) {
 }
 
 describe('global Codex/Claude hard switch', () => {
+  it('invalidates account-scoped catalogs, including an old request still in flight', async () => {
+    const runtime = new AgentRuntime({}, { getCognitionState: () => ({}) }, quietLogger);
+    const implementation = backend('codex');
+    implementation.account = { type: 'chatgpt', email: 'a***@gmail.com', planType: 'pro', switching: false };
+    runtime.backend = adaptRuntime('codex', implementation);
+    await runtime.snapshot({ catalog: 'refresh' });
+    assert.equal(runtime.cachedModels.length, 1);
+    let resolve;
+    implementation.listModels = () => new Promise(done => { resolve = done; });
+    const pending = runtime.snapshot({ catalog: 'refresh' });
+    const revision = runtime.revision;
+    runtime._backendOptions().onAccountChanged();
+    resolve([{ id: 'old-account-model' }]);
+    const snapshot = await pending;
+    assert.deepEqual(snapshot.models, []);
+    assert.equal(runtime.revision, revision + 1);
+    assert.equal(snapshot.account.email, 'a***@gmail.com');
+    assert.equal(Object.isFrozen(snapshot.account), true);
+  });
+
   it('temporary switches drain accepted work, preserve preference and reconcile primary on restart', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-failback-'));
     const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
