@@ -15,8 +15,8 @@ from vikingbot.compile.renderer import (
 async def run(runtime, documents):
     """Reject duplicate paths and unseen replacements before preparing publication operations.
 
-    Only selected, completed worker outputs are eligible. Existing target files require a
-    prior read by a worker. This preflight does not provide atomic compare-and-swap writes.
+    Replacing an existing target requires a read by the attempt that produced the file.
+    This preflight does not provide atomic compare-and-swap writes.
     """
     bundle = RenderedBundle()
     contents, outputs = {}, {}
@@ -41,20 +41,18 @@ async def run(runtime, documents):
                 continue
         contents[path] = content
         outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
-        read_before = path in runtime.old
-        old = await file_ops.load_old(runtime, path)
-        if old is not None and not read_before:
-            # Create mode lets the server preserve an existing target as a reported conflict.
-            mode = "create"
-        elif old is not None:
+        target_hash = runtime.output_target_hashes.get((document.workspace_path, path))
+        if target_hash is not None:
             current = await runtime.client.download_bytes(uri)
-            if content_hash(current) != content_hash(old):
+            if content_hash(current) != target_hash:
                 raise ValueError(f"Target changed after reading: {uri}")
             if current == content.encode("utf-8"):
                 bundle.unchanged.append(uri)
                 continue
             mode = "replace"
         else:
+            await file_ops.load_old(runtime, path)
+            # Create mode preserves an existing target as a reported conflict.
             mode = "create"
         bundle.operations.append({"uri": uri, "content": content, "mode": mode})
         (bundle.updated if mode == "replace" else bundle.created).append(uri)
