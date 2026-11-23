@@ -15,7 +15,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-`openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+OpenViking 启动时需要 Embedding 和 VLM。未指定 Embedding 模型时使用内置的本地默认模型。`openviking-server init` 会引导你配置这两种模型。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
 
 ## 快速开始
 

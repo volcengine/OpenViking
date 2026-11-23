@@ -137,6 +137,7 @@ async def service(
         config_dict={
             # Domain tests use a file-only fake; Watch leadership has dedicated fixtures.
             "enable_watch_scheduler": False,
+            "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "test-key"},
             "storage": {
                 "workspace": str(test_data_dir),
                 "agfs": {"backend": "local"},
