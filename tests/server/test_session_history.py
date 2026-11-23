@@ -424,13 +424,45 @@ async def test_unreadable_externalized_output_is_labelled(stored, service):
     assert "| [OpenViking tool result externalized]" in page
 
 
+async def test_a_user_message_that_only_carries_tool_results_counts_as_tool(service):
+    sid = "hist-transport"
+    await _add(
+        service,
+        sid,
+        "user",
+        ToolPart(
+            tool_id="call_1",
+            tool_name="bash",
+            tool_output="deploy.sh exited with status 3",
+            tool_status="completed",
+        ),
+        at="2026-11-03T09:00:00Z",
+    )
+    await _add(service, sid, "user", TextPart("Why did deploy.sh fail?"), at="2026-11-03T09:00:05Z")
+    handle = hashlib.sha256(sid.encode()).hexdigest()[:6]
+
+    everything = await _call(action="search", query="deploy.sh", session=sid)
+    assert f"[{handle}#1 @" in everything and "] tool · 2026-11-03T09:00:00Z" in everything
+    assert _ids(await _call(action="search", query="deploy.sh", role="user", session=sid)) == [
+        f"{handle}#2"
+    ]
+    assert _ids(await _call(action="search", query="deploy.sh", role="tool", session=sid)) == [
+        f"{handle}#1"
+    ]
+    assert f"[{handle}#1] tool ·" in await _call(action="read", id=f"{handle}#1", session=sid)
+
+    await _commit(service, sid)
+    overview = await _call(action="overview", session=sid)
+    assert "| first user message: Why did deploy.sh fail?" in overview
+
+
 async def test_bad_ids_and_arguments_are_answered_as_text(stored):
     assert f"Valid ids: {H}#1 to {H}#5." in await _call(action="read", id=f"{H}#99")
     assert "Bad arguments: read needs id=" in await _call(action="read")
     assert "Bad arguments: pass action=" in await _call(action="delete")
     assert "Bad arguments: search needs query=" in await _call(action="search")
-    assert 'Bad arguments: role is "user" or "assistant".' in await _call(
-        action="search", query="x", role="tool"
+    assert 'Bad arguments: role is "user", "assistant" or "tool".' in await _call(
+        action="search", query="x", role="system"
     )
     past = await _call(action="read", id="1", offset=10_000)
     assert "offset must be below" in past

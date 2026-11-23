@@ -955,7 +955,7 @@ Read-only lookup over everything a session has saved: every archive that has a `
 | action | str | Yes | - | `search`, `read` or `overview` |
 | sessions | list[str] | No | `[]` | More session ids (at most 9), newest first, looked at after the path session |
 | query | str | No | `""` | search: literal text, case-insensitive; required for search |
-| role | str | No | `""` | search: `user` or `assistant` |
+| role | str | No | `""` | search: `user`, `assistant` or `tool`. `user` is what the user wrote; a user-role message that only carries tool results counts as `tool` and is labelled so in results |
 | from_id / to_id | str | No | `""` | search: inclusive id bounds |
 | id | str | No | `""` | read: item id |
 | before / after | int | No | 0 | read: neighbouring items, 0-20 |

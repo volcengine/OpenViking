@@ -2709,7 +2709,14 @@ async def session_history(
         _HistoryText, _history_arg("string", "Session id(s), comma-separated, newest first")
     ] = "",
     query: Annotated[_HistoryText, _history_arg("string")] = "",
-    role: Annotated[_HistoryText, _history_arg("string", enum=["user", "assistant"])] = "",
+    role: Annotated[
+        _HistoryText,
+        _history_arg(
+            "string",
+            "tool: tool results saved as their own messages",
+            enum=["user", "assistant", "tool"],
+        ),
+    ] = "",
     from_id: Annotated[_HistoryText, _history_arg("string", "Oldest id to search")] = "",
     to_id: Annotated[_HistoryText, _history_arg("string", "Newest id to search")] = "",
     id: Annotated[_HistoryText, _history_arg("string")] = "",

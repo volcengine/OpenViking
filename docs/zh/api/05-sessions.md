@@ -954,7 +954,7 @@ ov session get-session-archive a1b2c3d4 archive_002
 | action | str | 是 | - | `search`、`read` 或 `overview` |
 | sessions | list[str] | 否 | `[]` | 更多会话 ID（最多 9 个），从新到旧，排在路径中的会话之后 |
 | query | str | 否 | `""` | search：字面量文本，不区分大小写；search 必填 |
-| role | str | 否 | `""` | search：`user` 或 `assistant` |
+| role | str | 否 | `""` | search：`user`、`assistant` 或 `tool`。`user` 只包含用户自己写的内容；只携带工具结果的 user 角色消息算作 `tool`，结果里也这样标注 |
 | from_id / to_id | str | 否 | `""` | search：ID 范围（闭区间） |
 | id | str | 否 | `""` | read：条目 ID |
 | before / after | int | 否 | 0 | read：相邻条目数，0-20 |

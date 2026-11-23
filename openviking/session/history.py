@@ -39,7 +39,11 @@ from typing import Any, List, Optional, Sequence
 from openviking.message import Message
 from openviking.message.part import ContextPart, ImagePart, TextPart, ToolPart
 from openviking.session.archive_store import is_storage_not_found
-from openviking.session.retention import RETENTION_MODE_TURN_BUDGET
+from openviking.session.retention import (
+    RETENTION_MODE_TURN_BUDGET,
+    is_tool_transport,
+    is_user_query,
+)
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError, PermissionDeniedError, ResourceExhaustedError
 from openviking_cli.utils import get_logger
@@ -145,7 +149,7 @@ def _t_bad(what: str) -> str:
 
 
 T_BAD_ACTION = _t_bad('pass action="search", action="read" or action="overview".')
-T_BAD_ROLE = _t_bad('role is "user" or "assistant".')
+T_BAD_ROLE = _t_bad('role is "user", "assistant" or "tool".')
 T_BAD_SEARCH = _t_bad('search needs query="<exact words>".')
 T_BAD_READ = _t_bad('read needs id="<id>", e.g. id="3fa91c#12".')
 
@@ -409,6 +413,9 @@ def _fmt_time(raw: Any) -> str:
 
 
 def _role(item: _Item) -> str:
+    """The message's role; a user-role message that only carries tool results is "tool"."""
+    if item.message is not None and is_tool_transport(item.message):
+        return "tool"
     role = item.message.role if item.message is not None else ""
     return role if isinstance(role, str) and re.fullmatch(r"[a-z]{1,16}", role) else "?"
 
@@ -1331,7 +1338,7 @@ def _fit_neighbours(
 
 def _first_user_snippet(items: Sequence[_Item]) -> str:
     for item in items:
-        if item.message is None or item.message.role != "user":
+        if item.message is None or not is_user_query(item.message):
             continue
         text = " ".join(
             part.text
@@ -1551,7 +1558,7 @@ async def _answer(
     if action not in ACTIONS:
         return bad(T_BAD_ACTION)
     role = texts["role"].strip().lower()
-    if role and role not in ("user", "assistant"):
+    if role and role not in ("user", "assistant", "tool"):
         return bad(T_BAD_ROLE)
     query = texts["query"]
     from_id, to_id, id_ = texts["from_id"], texts["to_id"], texts["id"]
