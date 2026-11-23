@@ -800,3 +800,9 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
   }
 }
 ```
+
+## 事件循环选择
+
+`server.event_loop` 支持 `"auto"`（默认）、`"asyncio"` 和 `"uvloop"`，用于单 worker 和多 worker 的 Uvicorn 启动。非 Windows 环境安装 `openviking[gateway-fast]` 后可使用 uvloop；auto 会自动选择已安装的 uvloop。
+
+SQL store 有独立的私有线程循环，启动前设置 `OPENVIKING_SQL_LOOP=uvloop` 可显式启用，默认仍为 asyncio，不修改全局事件循环 policy。Windows SQL 始终使用兼容 psycopg 的 SelectorEventLoop。无效值或显式请求但未安装 uvloop 会在线程启动前报错。修改后重启。完整回退同时设置 `server.event_loop="asyncio"` 和 `OPENVIKING_SQL_LOOP=asyncio`。嵌入式应用自行配置 HTTP runner；采用前验证取消、关闭和平台兼容性。

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import sys
 import threading
 from collections.abc import Awaitable, Callable
@@ -43,6 +44,18 @@ class SQLRuntime:
     """
 
     def __init__(self) -> None:
+        selection = os.environ.get("OPENVIKING_SQL_LOOP", "asyncio")
+        if selection not in {"asyncio", "uvloop"}:
+            raise ValueError("OPENVIKING_SQL_LOOP must be asyncio or uvloop")
+        self._loop_factory = asyncio.new_event_loop
+        if selection == "uvloop" and sys.platform != "win32":
+            try:
+                import uvloop
+            except ImportError as exc:
+                raise RuntimeError(
+                    "OPENVIKING_SQL_LOOP=uvloop requires openviking[gateway-fast]"
+                ) from exc
+            self._loop_factory = uvloop.new_event_loop
         self._state_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: Thread | None = None
@@ -200,7 +213,7 @@ class SQLRuntime:
     def _thread_main(self, ready: Event, stopped: Event) -> None:
         # psycopg rejects Windows' default Proactor loop. Select the compatible
         # loop in this thread without changing the caller's event-loop policy.
-        loop = asyncio.SelectorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+        loop = asyncio.SelectorEventLoop() if sys.platform == "win32" else self._loop_factory()
         asyncio.set_event_loop(loop)
         with self._state_lock:
             self._loop = loop

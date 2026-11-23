@@ -466,6 +466,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    event_loop: Literal["auto", "asyncio", "uvloop"] = "auto"
     executor_threads: int = Field(
         default=64,
         ge=0,

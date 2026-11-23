@@ -14,6 +14,7 @@ from openviking.storage import sql_runtime
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])
 async def test_private_thread_selects_driver_compatible_loop(monkeypatch, platform):
+    monkeypatch.setenv("OPENVIKING_SQL_LOOP", "asyncio")
     caller_loop = asyncio.get_running_loop()
     caller_thread = threading.get_ident()
     policy = asyncio.get_event_loop_policy()
@@ -43,4 +44,71 @@ async def test_private_thread_selects_driver_compatible_loop(monkeypatch, platfo
         await asyncio.wait_for(runtime.release(), timeout=5)
         await asyncio.to_thread(thread.join, 5)
         assert not thread.is_alive()
+    assert loop.is_closed()
+
+
+async def test_uvloop_private_thread_shutdown_and_caller_isolation(monkeypatch):
+    uvloop = pytest.importorskip("uvloop")
+    monkeypatch.setenv("OPENVIKING_SQL_LOOP", "uvloop")
+    policy = asyncio.get_event_loop_policy()
+    caller = asyncio.get_running_loop()
+    runtime = sql_runtime.SQLRuntime()
+    for _ in range(2):
+        await asyncio.wait_for(runtime.acquire(), 5)
+        thread = runtime._thread
+        try:
+
+            async def inspect():
+                return asyncio.get_running_loop()
+
+            loop = await runtime.run(inspect)
+            assert isinstance(loop, uvloop.Loop)
+            assert loop is not caller
+            assert asyncio.get_event_loop_policy() is policy
+        finally:
+            await asyncio.wait_for(runtime.release(), 5)
+            await asyncio.to_thread(thread.join, 5)
+        assert not thread.is_alive()
+        assert loop.is_closed()
+
+
+def test_invalid_loop_fails_before_worker_start(monkeypatch):
+    monkeypatch.setenv("OPENVIKING_SQL_LOOP", "invalid")
+    with pytest.raises(ValueError, match="OPENVIKING_SQL_LOOP"):
+        sql_runtime.SQLRuntime()
+
+
+def test_missing_requested_uvloop_fails_before_worker_start(monkeypatch):
+    import builtins
+
+    original = builtins.__import__
+
+    def unavailable(name, *args, **kwargs):
+        if name == "uvloop":
+            raise ImportError("not installed")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setenv("OPENVIKING_SQL_LOOP", "uvloop")
+    monkeypatch.setattr(sql_runtime, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(builtins, "__import__", unavailable)
+    with pytest.raises(RuntimeError, match=r"openviking\[gateway-fast\]"):
+        sql_runtime.SQLRuntime()
+
+
+async def test_windows_uvloop_selection_retains_selector(monkeypatch):
+    monkeypatch.setenv("OPENVIKING_SQL_LOOP", "uvloop")
+    monkeypatch.setattr(sql_runtime, "sys", SimpleNamespace(platform="win32"))
+    runtime = sql_runtime.SQLRuntime()
+    await runtime.acquire()
+    thread = runtime._thread
+    try:
+
+        async def inspect():
+            return asyncio.get_running_loop()
+
+        loop = await runtime.run(inspect)
+        assert isinstance(loop, asyncio.SelectorEventLoop)
+    finally:
+        await runtime.release()
+        await asyncio.to_thread(thread.join, 5)
     assert loop.is_closed()
