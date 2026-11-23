@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 from openviking.core.namespace import is_session_uri
 from openviking.observability.log_safety import safe_uri_for_log
-from openviking.pyagfs import get_grep_pattern_class
+from openviking.pyagfs import compile_grep_pattern
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr, PathScope, RawDSL
@@ -28,9 +28,8 @@ def _pkg():
 
 
 async def _compile_grep_pattern(pattern: str, case_insensitive: bool):
-    pattern_class = get_grep_pattern_class()
     try:
-        return await asyncio.to_thread(pattern_class, pattern, case_insensitive)
+        return await asyncio.to_thread(compile_grep_pattern, pattern, case_insensitive)
     except ValueError as exc:
         raise InvalidArgumentError(f"Invalid grep pattern: {exc}") from exc
 

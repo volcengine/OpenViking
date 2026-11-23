@@ -1,20 +1,6 @@
 use std::collections::VecDeque;
 
-use regex::Regex;
-
-use super::errors::{Error, Result};
 use super::types::{GrepContextLine, GrepMatch, GrepResult};
-
-/// Compile a grep pattern for matching individual lines of text.
-pub fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
-    let regex_pattern = if case_insensitive {
-        format!("(?i){pattern}")
-    } else {
-        pattern.to_string()
-    };
-    Regex::new(&regex_pattern)
-        .map_err(|e| Error::invalid_operation(format!("Invalid regex pattern: {e}")))
-}
 
 /// Collects ordered line events into grep matches with optional context.
 pub(crate) struct GrepLineCollector<'a> {

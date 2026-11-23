@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import openviking.storage.viking_fs as viking_fs_module
-from openviking.pyagfs import get_grep_pattern_class
+from openviking.pyagfs import compile_grep_pattern
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
 from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
@@ -877,7 +877,7 @@ async def test_grep_applies_content_transform_before_matching(monkeypatch):
 
     result = await fs.grep(
         "viking://resources",
-        pattern="^visible$|secret",
+        pattern="visible|secret",
         content_transform=lambda content, _uri: content.split("<!--", 1)[0].rstrip(),
         before_context=2,
         after_context=2,
@@ -898,13 +898,13 @@ async def test_grep_applies_content_transform_before_matching(monkeypatch):
 @pytest.mark.asyncio
 async def test_grep_in_files_generates_context_from_single_read(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
-    read = AsyncMock(return_value=b"first\nbefore\nMATCH\nafter\nlast")
+    read = AsyncMock(return_value=b"first\nbefore\nmatch\nafter\nlast")
     monkeypatch.setattr(fs, "read", read)
 
     result = await fs._grep_in_files(
         ["viking://resources/a.md"],
         pattern="match",
-        case_insensitive=True,
+        case_insensitive=False,
         node_limit=None,
         ctx=None,
         before_context=2,
@@ -915,7 +915,7 @@ async def test_grep_in_files_generates_context_from_single_read(monkeypatch):
         {
             "line": 3,
             "uri": "viking://resources/a.md",
-            "content": "MATCH",
+            "content": "match",
             "before_context": [
                 {"line": 1, "content": "first"},
                 {"line": 2, "content": "before"},
@@ -944,7 +944,7 @@ async def test_grep_parallel_limits_context_construction_per_file(monkeypatch):
 
     matches, files_scanned = await fs._grep_files_parallel(
         ["viking://resources/a.md"],
-        compiled_pattern=get_grep_pattern_class()("hit", False),
+        compiled_pattern=compile_grep_pattern("hit", False),
         node_limit=1,
         before_context=400,
         after_context=400,

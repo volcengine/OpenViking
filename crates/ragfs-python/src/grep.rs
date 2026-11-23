@@ -2,7 +2,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyString, PyStringMethods};
+use pyo3::pybacked::PyBackedStr;
 use ragfs::core::compile_grep_regex;
 use regex::Regex;
 
@@ -22,23 +22,14 @@ impl PyGrepPattern {
     }
 
     /// Return zero-based indices of matching lines, up to the requested limit.
-    fn matching_lines(
-        &self,
-        py: Python<'_>,
-        lines: Vec<Bound<'_, PyString>>,
-        limit: usize,
-    ) -> PyResult<Vec<usize>> {
-        let lines = lines
-            .iter()
-            .map(|line| line.to_str())
-            .collect::<PyResult<Vec<_>>>()?;
-        Ok(py.detach(|| {
+    fn matching_lines(&self, py: Python<'_>, lines: Vec<PyBackedStr>, limit: usize) -> Vec<usize> {
+        py.detach(|| {
             lines
-                .into_iter()
+                .iter()
                 .enumerate()
                 .filter_map(|(index, line)| self.regex.is_match(line).then_some(index))
                 .take(limit)
                 .collect()
-        }))
+        })
     }
 }

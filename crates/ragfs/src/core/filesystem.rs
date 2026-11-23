@@ -12,7 +12,6 @@ use std::path::{Component, Path};
 
 use super::errors::{Error, Result};
 use super::glob::{compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob};
-use super::grep::compile_grep_regex;
 use super::types::{
     FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult, ListSortBy, SortOrder,
     TreeEntry, WriteFlag,
@@ -171,6 +170,19 @@ pub(crate) fn relative_depth(rel: &str) -> usize {
     } else {
         rel.split('/').filter(|p| !p.is_empty()).count()
     }
+}
+
+/// Compile a grep pattern into a `Regex`, applying the case-insensitive `(?i)` prefix.
+///
+/// Shared by filesystem grep and the matcher for already-read text.
+pub fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
+    let regex_pattern = if case_insensitive {
+        format!("(?i){}", pattern)
+    } else {
+        pattern.to_string()
+    };
+    Regex::new(&regex_pattern)
+        .map_err(|e| Error::invalid_operation(format!("Invalid regex pattern: {}", e)))
 }
 
 /// Core filesystem abstraction trait
