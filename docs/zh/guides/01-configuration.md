@@ -2301,6 +2301,20 @@ publisher 不再暴露为公共 CLI 命令。
 `cache.instances.<instance>.params`，将 `request_budget_seconds` 和
 `max_inflight_requests` 迁移到 `expiry`，再通过 `expiry.cache.instance` 选择实例。
 
+| 旧字段 | 新字段 | 转换规则 |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | 直接复制。 |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | 补充 `redis://` 或 `rediss://`；裸 `host:port` 会被拒绝。 |
+| `expiry.redis.tls` | endpoint scheme | 为 `true` 时使用 `rediss://`。 |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | 直接复制。 |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | 直接复制。 |
+| `expiry.redis.password` | `password_env` | 改为环境变量；不提供明文替代字段。 |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | 乘以 1000。 |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | 乘以 1000。 |
+| `expiry.redis.max_connections` | `pool_size` | 直接复制。 |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | 直接复制。 |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | 直接复制。 |
+
 ##### 单 session 自动 commit 策略
 
 当 session 带有 `auto_commit_policy` 时，未传的字段会回退到下方内置默认值。没有存储 policy 的 session 保持 auto commit 关闭。除 idle 超时的写入下限外，取值会被 clamp 到 `[0, 上限]`；未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create-session)。

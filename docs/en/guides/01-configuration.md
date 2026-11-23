@@ -2346,6 +2346,20 @@ public CLI command.
 `max_inflight_requests` directly under `expiry`, then set
 `expiry.cache.instance` to that instance name.
 
+| Old field | New field | Migration |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | Copy the value. |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | Add `redis://` or `rediss://`; bare `host:port` values are rejected. |
+| `expiry.redis.tls` | endpoint scheme | Use `rediss://` when it is `true`. |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | Copy the value. |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | Copy the value. |
+| `expiry.redis.password` | `password_env` | Define an environment variable instead; no plaintext replacement exists. |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.max_connections` | `pool_size` | Copy the value. |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | Copy the value. |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | Copy the value. |
+
 ##### Per-session Auto Commit Policy
 
 When a session carries an `auto_commit_policy`, any field you omit falls back to the built-in default below. Sessions without a stored policy keep auto commit disabled. Except for the idle-timeout write minimum, values are clamped into `[0, max]`; unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create-session) for how to set and view it.
