@@ -32,6 +32,8 @@ hermes
   [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)，
   无需安装服务端或配置本地模型。
 - **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
+  使用 BytePlus 时，选择 **Custom**，输入 BytePlus OpenViking 实例的服务地址和 API Key。
+  详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 
 配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
 请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。

@@ -4,7 +4,7 @@
 
 To answer questions about your project, an AI agent first needs to find relevant material and read the source. OpenViking is a context database for agents: it stores and retrieves that material so the agent can ground its answers in your sources.
 
-In this walkthrough, you will import fictional Lighthouse project notes, ask an agent about feedback collection, and open its citations to check the answer. Choose Volcengine's cloud service or run OpenViking locally. Both paths take you through **import → retrieve and read → generate an answer → verify its sources**.
+In this walkthrough, you will import fictional Lighthouse project notes, ask an agent about feedback collection, and open its citations to check the answer. Choose a managed OpenViking service on BytePlus or Volcengine, or run it locally. Each path takes you through **import → retrieve and read → generate an answer → verify its sources**.
 
 ## Prerequisites
 
@@ -12,12 +12,13 @@ Choose where to run OpenViking, then prepare the corresponding tools:
 
 | Option | When to choose it | What to prepare |
 | --- | --- | --- |
+| **BytePlus cloud service** | Use a managed service in Asia Pacific (Johor) | Node.js/npm, a BytePlus OpenViking service URL and API key, and an agent that can run terminal commands on your machine |
 | **Volcengine cloud service** | Use a managed service and ask questions through an existing agent | Node.js/npm, a Volcengine account, and an agent that can run terminal commands on your machine |
 | **Local service** | Run OpenViking on your computer with its built-in agent, VikingBot | Node.js/npm, uv, Python, and model credentials |
 
 ### Install Node.js
 
-Both paths use the `ov` CLI to work with your sources. Open the [Node.js download page](https://nodejs.org/en/download), select an **LTS** release for your operating system, and follow its installer or command instructions. npm is included with Node.js.
+All paths use the `ov` CLI to work with your sources. Open the [Node.js download page](https://nodejs.org/en/download), select an **LTS** release for your operating system, and follow its installer or command instructions. npm is included with Node.js.
 
 Reopen your terminal after installation and confirm that both commands print a version:
 
@@ -63,6 +64,10 @@ Prepare credentials for two models: an **embedding model** for indexing and retr
 ## Set up the service
 
 Complete one of the following paths, then continue to [Connect the CLI](#connect-the-cli).
+
+### BytePlus cloud service
+
+Use the service URL and API key for your BytePlus OpenViking instance. See the [BytePlus setup guide](../guides/27-byteplus-setup.md) for prerequisites. Prepare an agent that can run terminal commands on your machine, then continue to [Connect the CLI](#connect-the-cli).
 
 <a id="managed-service-on-volcengine"></a>
 
@@ -136,6 +141,7 @@ Add a connection using the settings for your chosen path, then save and activate
 
 | Option | Connection type | Settings |
 | --- | --- | --- |
+| BytePlus cloud service | **Custom** | Enter your BytePlus OpenViking service URL and API key |
 | Volcengine cloud service | **OpenViking Service** | Use the service address provided by the wizard and enter the API key from the console |
 | Local service | **Custom** | Set the URL to `http://127.0.0.1:1933`; leave the key empty for default local mode |
 

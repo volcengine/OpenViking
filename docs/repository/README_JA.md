@@ -164,6 +164,13 @@ uv tool install openviking --upgrade && openviking-server init
 
 </details>
 
+<details>
+<summary><strong>OpenViking Service を使う（BytePlus がホスト）</strong></summary>
+
+[BytePlus](https://openviking.ai/byteplus) はアジア太平洋（ジョホール）で OpenViking をホストしています。接続には BytePlus OpenViking のサービス URL と API キーを使います。CLI とエージェントの設定は [BytePlus セットアップガイド](https://docs.openviking.ai/en/guides/27-byteplus-setup)を参照してください。
+
+</details>
+
 ### CLI で試す
 
 `openviking` パッケージには `ov` CLI が含まれます。サーバーが動いている状態で、リポジトリを取り込み、検索します。
@@ -208,7 +215,7 @@ API キーは、私がそのサーバーで自分用に作成した user key で
 <details>
 <summary><strong>自分でターミナルでインストール</strong></summary>
 
-インストーラーを実行し、表示に従ってツールとサーバーを選びます。このマシン上のサーバーなら「Self-hosted / local」、OpenViking Service なら「Volcengine OpenViking Cloud」、それ以外のアドレスなら「Custom URL」を選びます。認証が有効なら、root key ではなく user key を入力してください。
+インストーラーを実行し、表示に従ってツールとサーバーを選びます。このマシン上のサーバーなら「Self-hosted / local」、Volcengine のサービスなら「Volcengine OpenViking Cloud」、BytePlus やその他のサービスなら「Custom URL」を選びます。認証が有効なら、root key ではなく user key を入力してください。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -347,7 +354,7 @@ ov chat   # 別のターミナルで実行
 <img src="../images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
 <h3>☁️ マネージド SaaS 版</h3>
-<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
+<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。<a href="https://openviking.ai/byteplus">BytePlus</a> はアジア太平洋（ジョホール）で OpenViking をホストしています。</p>
 
 </td>
 <td width="50%" valign="top">

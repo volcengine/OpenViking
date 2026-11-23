@@ -36,7 +36,9 @@ Then choose a connection:
   with a service API key. You do not need to install a server or configure
   local models.
 - **Custom** connects to your own server with its URL and credentials. Setup
-  can also reuse a saved `ovcli.conf`.
+  can also reuse a saved `ovcli.conf`. For BytePlus, choose **Custom** and
+  enter the service URL and API key for your BytePlus OpenViking instance. See
+  [BytePlus setup](../guides/27-byteplus-setup.md).
 
 After setup, chat as usual. The plugin requests a commit at 20,000 pending
 tokens by default, at session end and when switching sessions. Memories become
