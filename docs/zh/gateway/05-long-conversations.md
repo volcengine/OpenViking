@@ -87,9 +87,9 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 截断点落在一轮中间时，截断点之前的部分会立即保存到 OpenViking，模型在这一轮里就能检索到；这次写入失败时，由这一轮结束时的保存一并写入。
 
-`session_history` 和其他 OpenViking 工具一样默认提供，可以在**工具**里取消勾选（见[选择工具](04-openviking-tools.md#choose-tools)）；关闭**保存对话**时不提供。对话沿用开始时的工具清单，所以服务端还没有这个工具时开始的对话，仍然得到 grep 的查找方法。模型没有传 `session` 参数或传了空值时，网关填入保存着这段对话消息的 OpenViking 会话，从新到旧：当前会话（已经保存过内容时），然后是同一段历史较早的最多五个会话（例如客户端自己压缩之前的会话）。模型传了 `session` 时原样发送。这段对话还没有任何内容保存时，网关不请求 OpenViking，直接回复模型：目前没有可查的内容，以及有多少条消息正在等待保存。
+`session_history` 和其他 OpenViking 工具一样默认提供，可以在**工具**里取消勾选（见[选择工具](04-openviking-tools.md#choose-tools)）；关闭**保存对话**时不提供。对话沿用开始时的工具清单，所以服务端还没有这个工具时开始的对话，仍然得到 grep 的查找方法。模型没有传 `session` 参数或传了空值时，网关填入保存着这段对话消息的 OpenViking 会话，从新到旧：当前会话（已经保存过内容时），然后是这段对话之前保存过的最多五个会话。客户端自己压缩对话时仍沿用同一个会话；之前的会话只来自[重新同步对话…](10-overview-and-requests.md#resync-a-conversation)或更早版本的网关。模型传了 `session` 时原样发送。这段对话还没有任何内容保存时（例如第一轮还没结束），网关不请求 OpenViking，直接回复模型：目前没有可查的内容，请根据上下文里已有的内容继续。
 
-保存在后台进行，最新的消息可能还没写入 OpenViking。还在模型上下文里的未保存消息不需要提醒。网关填入了 `session`、且摘要或新窗口替换掉的消息里有尚未保存的，结果末尾会多一行网关说明：“Gateway note: the last *N* messages before your current context window are not saved yet and may be missing from this result.” 同一个请求里刚被 `openviking_new_context` 截掉的部分也算在内。网关无法判断已保存的会话包含哪些消息时（新的 OpenViking 会话接替了之前的会话，或已保存的位置属于历史的另一个分支），不加这一行。这一行在按**结果大小上限**截断之后才追加，不会被截掉。
+每一轮在回复结束时写入 OpenViking，所以一轮进行中时，它最新的消息还没有保存。还在模型上下文里的未保存消息不需要提醒。只有某次写入没能完成时，摘要或新窗口替换掉的消息里才会有尚未保存的：一轮中间截断时的写入失败了，或者因为 OpenViking 不可用而跳过了，又或者之前某一轮的保存失败了。这种情况下，如果 `session` 是网关填入的，结果末尾会多一行网关说明：“Gateway note: the last *N* messages before your current context window are not saved yet and may be missing from this result.” 同一个请求里刚被 `openviking_new_context` 截掉的部分也算在内。网关不知道这段历史保存到了哪里时，不加这一行：最后保存的那条消息不在这次请求的历史里（客户端压缩、编辑或截短了历史），或者重新同步开启了一个还没写入任何内容的新会话。这一行在按**结果大小上限**截断之后才追加，不会被截掉。
 
 **每个窗口的历史查询预算。** 和所有 OpenViking 工具往返一样，`session_history` 的结果会一直留在模型的上下文里，直到下一个截断点。当前窗口里这些结果累计达到上下文窗口的五分之一或 8,000 token（取较大者，小窗口也够一次检索加一次读取）后，这个窗口里再调用 `session_history` 只会得到一行回复：之前的结果仍在上下文里，下次压缩之后（开启 Agent 自管上下文窗口时，也可以在模型开启新窗口之后）可以继续查询。网关根据已经为这个窗口保存的工具往返计算用量。
 
