@@ -35,12 +35,7 @@ from openviking.storage.acl import (
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
-from openviking.storage.scope_filter import (
-    build_scope_filter,
-    infer_uri_scopes,
-    merge_filters,
-    specialize_visibility_filter,
-)
+from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -1726,7 +1721,7 @@ class VikingVectorIndexBackend:
         acl_enabled = await self._acl_enabled(ctx)
         filter = self._merge_filters(
             filter,
-            self._scoped_tenant_filter(ctx, filter, acl_enabled=acl_enabled),
+            self._tenant_filter(ctx, acl_enabled=acl_enabled),
         )
         return await backend.search_by_random(
             filter=filter,
@@ -1797,7 +1792,7 @@ class VikingVectorIndexBackend:
         acl_enabled = await self._acl_enabled(ctx)
         filter = self._merge_filters(
             filter,
-            self._scoped_tenant_filter(ctx, filter, acl_enabled=acl_enabled),
+            self._tenant_filter(ctx, acl_enabled=acl_enabled),
         )
         return await backend.scroll(
             filter=filter,
@@ -1902,7 +1897,7 @@ class VikingVectorIndexBackend:
             acl_enabled = await self._acl_enabled(ctx)
             filter = self._merge_filters(
                 filter,
-                self._scoped_tenant_filter(ctx, filter, acl_enabled=acl_enabled),
+                self._tenant_filter(ctx, acl_enabled=acl_enabled, request_filter=filter),
             )
         else:
             backend = self._get_default_backend()
@@ -1929,7 +1924,7 @@ class VikingVectorIndexBackend:
             acl_enabled = await self._acl_enabled(ctx)
             filter = self._merge_filters(
                 filter,
-                self._scoped_tenant_filter(ctx, filter, acl_enabled=acl_enabled),
+                self._tenant_filter(ctx, acl_enabled=acl_enabled),
             )
         else:
             backend = self._get_default_backend()
@@ -3267,12 +3262,17 @@ class VikingVectorIndexBackend:
         acl_enabled: bool,
     ) -> Optional[FilterExpr]:
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
-        request_filter = build_scope_filter(
-            target_directories=targets,
-            wrap_single_target=True,
-            extra_filter=extra_filter,
-        )
-        tenant_filter = self._scoped_tenant_filter(ctx, request_filter, acl_enabled=acl_enabled)
+        tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
+        if (
+            tenant_filter
+            and not acl_enabled
+            and ctx.data_access is None
+            and self._targets_within_visible_roots(ctx, targets)
+        ):
+            # The target scopes are already narrower than the tenant-visible
+            # roots. Keep account isolation, but avoid recursively evaluating
+            # the broader path scopes as an additional filter.
+            tenant_filter = Eq("account_id", ctx.account_id)
         return build_scope_filter(
             context_type=context_type,
             base_filter=tenant_filter,
@@ -3283,34 +3283,48 @@ class VikingVectorIndexBackend:
             level=level,
         )
 
-    def _scoped_tenant_filter(
-        self,
-        ctx: RequestContext,
-        request_filter: Optional[FilterExpr | Dict[str, Any]],
-        *,
-        acl_enabled: bool,
-    ) -> Optional[FilterExpr]:
-        tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
-        if tenant_filter is None or ctx.data_access is not None:
-            return tenant_filter
-        scopes = infer_uri_scopes(request_filter)
-        if scopes is None:
-            return tenant_filter
-        targets = [tuple(uri_parts(scope.path)) for scope in scopes]
-        roots = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
-        if acl_enabled:
-            covered = any(all(target[: len(root)] == root for target in targets) for root in roots)
-        else:
-            covered = all(any(target[: len(root)] == root for root in roots) for target in targets)
-        if not covered:
-            return tenant_filter
-        return specialize_visibility_filter(tenant_filter, scopes)
+    @staticmethod
+    def _targets_within_visible_roots(ctx: RequestContext, targets: List[str]) -> bool:
+        if not targets:
+            return False
+
+        root_parts = [tuple(uri_parts(root)) for root in visible_roots(ctx)]
+        return all(
+            any(
+                len(target_parts) >= len(root) and target_parts[: len(root)] == root
+                for root in root_parts
+            )
+            for target_parts in (tuple(uri_parts(target)) for target in targets)
+        )
+
+    @staticmethod
+    def _required_uri_scope(request_filter: Dict[str, Any] | FilterExpr) -> str | None:
+        """Read a mandatory, positive URI scope without interpreting raw filters."""
+        predicates = request_filter.conds if isinstance(request_filter, And) else [request_filter]
+        for predicate in predicates:
+            if (
+                not isinstance(predicate, PathScope)
+                or predicate.field != "uri"
+                or type(predicate.depth) is not int
+                or predicate.depth < -1
+            ):
+                continue
+            path = predicate.path
+            if not isinstance(path, str) or not path.startswith("viking://"):
+                continue
+            if any(marker in path for marker in ("?", "#", "\\")):
+                continue
+            parts = path.removeprefix("viking://").rstrip("/").split("/")
+            if all(part not in ("", ".", "..") for part in parts):
+                return path
+        return None
 
     def _tenant_filter(
         self,
         ctx: RequestContext,
         *,
         acl_enabled: bool,
+        request_filter: Optional[Dict[str, Any] | FilterExpr] = None,
     ) -> Optional[FilterExpr]:
         if ctx.bypass_acl:
             return Eq("account_id", ctx.account_id)
@@ -3320,6 +3334,13 @@ class VikingVectorIndexBackend:
         account_filter = Eq("account_id", ctx.account_id)
         if ctx.data_access is not None:
             account_filter = And([account_filter, ctx.data_access.query_filter()])
+        elif request_filter is not None:
+            scope = self._required_uri_scope(request_filter)
+            if scope is not None and self._targets_within_visible_roots(ctx, [scope]):
+                # The request itself enforces the visible root. Resources still need READ ACL.
+                if acl_enabled and is_acl_uri(scope) and ctx.role != Role.ADMIN:
+                    return And([account_filter, acl_filter(ctx, AclAction.READ)])
+                return account_filter
         if not acl_enabled:
             return And(
                 [
