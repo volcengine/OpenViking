@@ -112,29 +112,26 @@
 
     #[tokio::test]
     async fn test_restore_writeback_refs_are_not_snapshot_targets() {
-        let (_dir, _vfs, _object_store, ref_store, svc) = make_service("acct");
-        let key = "refs/ov-restore/completed";
+        let (_dir, vfs, _object_store, ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"hello");
+        let source = make_commit(&svc, "acct", "main", "first").await;
+        let key = restore_writeback::writeback_ref("main", "resources", source);
         let marker = ObjectId::null(gix_hash::Kind::Sha1);
-        ref_store.cas_update("acct", key, None, marker).await.unwrap();
+        ref_store.cas_update("acct", &key, None, marker).await.unwrap();
 
-        for (target, abbreviated) in [(key, false), ("000000000000", true)] {
-            let err = svc
-                .show(ShowRequest {
-                    account: "acct".into(),
-                    target_ref: target.into(),
-                    path: None,
-                })
-                .await
-                .unwrap_err();
-            if abbreviated {
-                assert!(matches!(err, GitError::OidPrefixNotFound { .. }), "{err}");
-            } else {
-                assert!(
-                    matches!(err, GitError::RefStore(RefStoreError::NotFound(_))),
-                    "{err}"
-                );
-            }
-        }
+        assert_eq!(
+            ref_store.list("acct", "refs/").await.unwrap(),
+            vec![("refs/heads/main".into(), source)]
+        );
+        let err = svc
+            .show(ShowRequest {
+                account: "acct".into(),
+                target_ref: "000000000000".into(),
+                path: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GitError::OidPrefixNotFound { .. }), "{err}");
     }
 
     #[tokio::test]

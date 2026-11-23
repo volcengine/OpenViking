@@ -47,7 +47,6 @@ mod validate;
 use diff::compute_subtree_diff;
 #[cfg(test)]
 use log::normalize_log_paths;
-use restore_writeback::WRITEBACK_REF_PREFIX;
 use validate::{validate_account_id, validate_project_dir, validate_relative_path};
 
 const MAX_LOG_COMMITS_SCANNED: usize = 1_000;
@@ -178,9 +177,6 @@ async fn resolve_ref(
         format!("refs/heads/{target_ref}")
     };
     crate::git::util::validate_ref_name(&full)?;
-    if full.starts_with(WRITEBACK_REF_PREFIX) {
-        return Err(RefStoreError::NotFound(full).into());
-    }
     Ok(ref_store.read(account, &full).await?)
 }
 
@@ -244,10 +240,7 @@ async fn resolve_abbreviated_oid(
 
     let refs = ref_store.list(account, "refs/").await?;
     let mut visited: HashSet<ObjectId> = HashSet::new();
-    let mut queue: Vec<ObjectId> = refs
-        .into_iter()
-        .filter_map(|(name, oid)| (!name.starts_with(WRITEBACK_REF_PREFIX)).then_some(oid))
-        .collect();
+    let mut queue: Vec<ObjectId> = refs.into_iter().map(|(_, oid)| oid).collect();
     let mut matches: Vec<ObjectId> = Vec::new();
 
     while let Some(oid) = queue.pop() {

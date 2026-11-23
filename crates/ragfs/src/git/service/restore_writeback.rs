@@ -4,8 +4,6 @@ use crate::git::types::RestoreDiff;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub(super) const WRITEBACK_REF_PREFIX: &str = "refs/ov-restore/";
-
 #[derive(Deserialize, Serialize)]
 pub(super) struct PendingRestore {
     pub parent: String,
@@ -57,7 +55,8 @@ fn fingerprint(bytes: &[u8]) -> String {
 pub(super) fn writeback_ref(branch: &str, project: &str, source: ObjectId) -> String {
     // Branch and project names cannot contain a NUL.
     let key = format!("{branch}\0{project}\0{}", source.to_hex());
-    format!("{WRITEBACK_REF_PREFIX}{}", fingerprint(key.as_bytes()))
+    // Keep the marker out of refs/ so snapshot lookups never enumerate it.
+    format!("restore-writeback/{}", fingerprint(key.as_bytes()))
 }
 
 pub(super) fn parse_oid(value: &str) -> Result<ObjectId, GitError> {
