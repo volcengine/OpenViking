@@ -710,6 +710,30 @@ test("Stop does not repeat a final answer the transcript already holds", async (
   }
 });
 
+test("Stop does not repeat a written final answer after earlier assistant text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-suffix-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, [
+      question,
+      JSON.stringify({ role: "assistant", content: "I checked the server configuration." }),
+      JSON.stringify({ role: "assistant", content: "The server listens" }),
+      JSON.stringify({ role: "assistant", content: " on 1933." }),
+    ].join("\n"));
+    const messages = await captureFinalAnswer(root, transcriptPath, {
+      last_assistant_message: "The server listens on 1933.",
+    });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "I checked the server configuration."],
+      ["assistant", "The server listens"],
+      ["assistant", "on 1933."],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function queueWrites(sessionId, count, createdAt) {
   for (let i = 0; i < count; i++) {
     await enqueue("addMessage", sessionId, {
