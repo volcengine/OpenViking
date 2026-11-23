@@ -3,10 +3,12 @@
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
 from contextlib import closing
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from openviking.ingest import poller as poller_module
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
 from openviking.ingest.orchestrator import IngestOrchestrator
@@ -127,19 +129,28 @@ async def test_append_batch_confirms_cursor_and_marks_needs_commit(tmp_path):
     assert fake.committed == []  # append does not commit
 
 
-@pytest.mark.parametrize("after_append", [True, False], ids=["confirmed-batch", "first-read"])
-async def test_watch_shutdown_after_read_error(tmp_path, monkeypatch, after_append):
+@pytest.mark.parametrize("batch_state", ["new", "confirmed", "unacknowledged", "absent"])
+async def test_watch_shutdown_after_read_error(tmp_path, monkeypatch, batch_state):
     (tmp_path / "s1.jsonl").write_text('{"role": "user", "content": "hello"}\n')
     config = IngestHarnessConfig(enabled=True, paths=[str(tmp_path)])
     source = HermesSource(config, fallback_user="test")
     ref = next(iter(source.discover_sessions()))
     messages, confirmed_cursor = source.read_messages(ref, None)
+    state_dir = tmp_path / "state"
     fake = _FakeReplay(pending=1)
-    with closing(CursorStore(tmp_path / "state")) as store:
+    sid = "import__hermes__s1"
+    if batch_state in {"confirmed", "unacknowledged"}:
+        with closing(CursorStore(state_dir)) as store:
+            store.set_pending("hermes", "s1", sid, Cursor.zero(BYTE_OFFSET), confirmed_cursor, 1, 0)
+            fake.count = 1  # The remote service accepted the batch before restart.
+            if batch_state == "confirmed":
+                store.confirm_append("hermes", "s1", confirmed_cursor, 1)
+
+    with closing(CursorStore(state_dir)) as store:
         poller = IngestPoller([("hermes", config, source)], SessionReplayer(fake, store))
 
         def read_until_error(_ref, cursor, _limit):
-            if after_append and cursor is None:
+            if batch_state == "new" and cursor is None:
                 return messages, confirmed_cursor
             poller.stop()
             raise OSError("source unavailable")
@@ -148,14 +159,46 @@ async def test_watch_shutdown_after_read_error(tmp_path, monkeypatch, after_appe
         await poller.run()
 
         record = store.get("hermes", ref.native_session_id)
-        if after_append:
+        if batch_state != "absent":
             assert record is not None
             assert record.cursor == confirmed_cursor
-            assert fake.committed == ["import__hermes__s1"]
+            assert fake.committed == [sid]
+            assert fake.appended == ([(sid, 1)] if batch_state == "new" else [])
+            assert record.pending_count == 0
             assert not record.needs_commit
         else:
             assert record is None
             assert fake.committed == []
+
+
+@pytest.mark.parametrize("pending_tokens", [1, 6000], ids=["idle-deadline", "token-threshold"])
+async def test_watch_read_errors_preserve_commit_policy(tmp_path, monkeypatch, pending_tokens):
+    (tmp_path / "s1.jsonl").write_text('{"role": "user", "content": "hello"}\n')
+    config = IngestHarnessConfig(enabled=True, paths=[str(tmp_path)])
+    source = HermesSource(config, fallback_user="test")
+    ref = next(iter(source.discover_sessions()))
+    messages, cursor = source.read_messages(ref, None)
+    fake = _FakeReplay(pending=pending_tokens)
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(poller_module, "time", SimpleNamespace(monotonic=lambda: clock.now))
+
+    def fail_read(*_args):
+        raise OSError("source unavailable")
+
+    monkeypatch.setattr(source, "read_messages", fail_read)
+    with closing(CursorStore(tmp_path / "state")) as store:
+        replayer = SessionReplayer(fake, store)
+        await replayer.append_batch("hermes", ref, messages, Cursor.zero(BYTE_OFFSET), cursor)
+        poller = IngestPoller([("hermes", config, source)], replayer)
+        sid = "import__hermes__s1"
+        await poller._tick()
+        assert fake.committed == ([sid] if pending_tokens == 6000 else [])
+
+        clock.now = config.commit.commit_idle_seconds
+        await poller._tick()
+        await poller._commit_idle()
+        assert fake.committed == [sid]
+        assert not store.get("hermes", "s1").needs_commit
 
 
 async def test_reconcile_defers_replay_then_confirms_landed_batch(tmp_path):
