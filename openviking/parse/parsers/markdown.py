@@ -663,7 +663,8 @@ class MarkdownParser(BaseParser):
                 continue
 
             level = len(match.group(1))
-            title = match.group(2).strip()
+            title = match.group(2).removesuffix("\r")
+            title = re.sub(r"(?:^|[ \t]+)#+[ \t]*$", "", title).strip(" \t")
             if not title:
                 continue
             headings.append((match.start(), match.end(), title, level))
@@ -1179,7 +1180,7 @@ class MarkdownParser(BaseParser):
                     rel
                     for rel, text in layout.items()
                     if any(
-                        _gh_slug(h) == anchor for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+                        _gh_slug(title) == anchor for _, _, title, _ in self._find_headings(text)
                     )
                 ]
                 if len(hits) == 1:
