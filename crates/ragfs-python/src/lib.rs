@@ -995,6 +995,7 @@ fn string_array_field_or_default(
 
 mod git;
 mod global_policy;
+mod grep;
 mod privacy;
 mod privacy_extractor;
 
@@ -3451,6 +3452,7 @@ impl RAGFSBindingClient {
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
     m.add_class::<global_policy::PyUserGlobalPolicy>()?;
+    m.add_class::<grep::PyGrepPattern>()?;
     m.add_class::<privacy::PyPrivacyMatcher>()?;
     m.add_class::<privacy_extractor::PyPrivacyExtractor>()?;
     let global_policy_error = m.py().get_type::<global_policy::GlobalPolicyError>();

@@ -861,7 +861,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要搜索的 Viking URI |
-| pattern | str | 是 | - | 搜索模式（正则表达式）|
+| pattern | str | 是 | - | 搜索模式，使用 Rust `regex` 语法逐行匹配 |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
@@ -870,6 +870,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
 | before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 | after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
+
+环视、反向引用等超出支持范围的写法属于无效正则。
 
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 

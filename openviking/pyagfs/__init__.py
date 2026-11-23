@@ -159,6 +159,11 @@ def get_privacy_matcher_class():
         ) from exc
 
 
+def compile_grep_pattern(pattern: str, case_insensitive: bool):
+    """Compile a pattern with the native RAGFS grep matcher."""
+    return _load_rust_module().GrepPattern(pattern, case_insensitive)
+
+
 def get_privacy_extractor_class():
     """Return the native fixed-rule credential extractor."""
     try:

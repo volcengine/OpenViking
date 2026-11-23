@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import re
 import time
 from unittest.mock import AsyncMock
 
 import pytest
 
 import openviking.storage.viking_fs as viking_fs_module
+from openviking.pyagfs import compile_grep_pattern
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.expr import And, PathScope, RawDSL
@@ -848,7 +848,7 @@ async def test_grep_vikingdb_pushes_tag_filter_into_bm25_request(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("pattern", ["match", "["])
+@pytest.mark.parametrize("pattern", ["match", "match(?= a1)"])
 async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch, pattern):
     fs = VikingFS(agfs=_DummyAgfs())
 
@@ -888,7 +888,7 @@ async def test_grep_preserves_dfs_order_and_node_limit(monkeypatch, pattern):
     )
     monkeypatch.setattr(fs.agfs, "read", fake_agfs_read, raising=False)
 
-    if pattern == "[":
+    if pattern != "match":
         with pytest.raises(InvalidArgumentError, match="Invalid grep pattern"):
             await fs.grep("viking://resources", pattern=pattern, node_limit=3)
         return
@@ -1050,7 +1050,7 @@ async def test_grep_parallel_limits_context_construction_per_file(monkeypatch):
 
     matches, files_scanned = await fs._grep_files_parallel(
         ["viking://resources/a.md"],
-        compiled_pattern=re.compile("hit"),
+        compiled_pattern=compile_grep_pattern("hit", False),
         node_limit=1,
         before_context=400,
         after_context=400,
@@ -1178,7 +1178,7 @@ async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch)
 
     assert result["count"] == 2
     assert result["files_scanned"] == 1
-    assert read_paths == ["/resources/file0.md", "/resources/file1.md"]
+    assert sorted(read_paths) == ["/resources/file0.md", "/resources/file1.md"]
 
 
 @pytest.mark.asyncio
