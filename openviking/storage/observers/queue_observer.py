@@ -33,6 +33,17 @@ class QueueObserver(BaseObserver):
             return await self._queue_manager.check_status()
         return await self._queue_manager.check_status(account_id=self._account_id)
 
+    async def observe_async(self, *, format: str = "table") -> tuple[str | dict, bool]:
+        """Return formatted status and active errors from one queue snapshot."""
+        statuses = await self._check_status()
+        tree_stats = self._get_semantic_tree_stats()
+        status = (
+            self._format_status_as_json(statuses, tree_stats)
+            if format == "json"
+            else self._format_status_as_table(statuses, tree_stats)
+        )
+        return status, self._has_active_errors(statuses)
+
     async def get_status_table_async(self) -> str:
         statuses = await self._check_status()
         tree_stats = self._get_semantic_tree_stats()
@@ -41,6 +52,12 @@ class QueueObserver(BaseObserver):
     async def get_status_json_async(self) -> dict:
         statuses = await self._check_status()
         tree_stats = self._get_semantic_tree_stats()
+        return self._format_status_as_json(statuses, tree_stats)
+
+    @staticmethod
+    def _format_status_as_json(
+        statuses: Dict[str, QueueStatus], tree_stats: Optional[object]
+    ) -> dict:
         queues = []
         total_pending = 0
         total_in_progress = 0

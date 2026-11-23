@@ -3,6 +3,7 @@
 """
 Debug Service - provides system status query and health check.
 """
+
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -168,12 +169,7 @@ class ObserverService:
             qm, **({"account_id": account_id} if account_id is not None else {})
         )
         try:
-            status = (
-                await observer.get_status_json_async()
-                if format == "json"
-                else await observer.get_status_table_async()
-            )
-            has_errors = await observer.has_active_errors_async()
+            status, has_errors = await observer.observe_async(format=format)
             is_healthy = not has_errors
         except Exception as exc:
             logger.info(
@@ -191,10 +187,10 @@ class ObserverService:
                         "errors": 0,
                         "total": 0,
                     },
-                    "error": str(exc),
+                    "error": "Status unavailable",
                 }
             else:
-                status = f"Status unavailable: {exc}"
+                status = "Status unavailable"
             is_healthy = False
             has_errors = True
         return ComponentStatus(
@@ -260,9 +256,7 @@ class ObserverService:
         vlm_instance = None
         embedding_instance = None
         scope = "Node aggregate"
-        if self._vlm_resolver is not None and hasattr(
-            self._vlm_resolver, "get_node_token_usage"
-        ):
+        if self._vlm_resolver is not None and hasattr(self._vlm_resolver, "get_node_token_usage"):
             vlm_instance = SimpleNamespace(
                 model="node-aggregate",
                 provider="aggregate",
@@ -598,7 +592,9 @@ class ObserverService:
             )
             return {}
 
-    def system(self, ctx: Optional[RequestContext] = None, *, format: str = "table") -> SystemStatus:
+    def system(
+        self, ctx: Optional[RequestContext] = None, *, format: str = "table"
+    ) -> SystemStatus:
         """Get system overall status."""
         if ctx is not None:
             return run_async(self.account_system(ctx, format=format))
