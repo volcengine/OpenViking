@@ -12,7 +12,7 @@ from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
-from vikingbot.compile import simple
+from vikingbot.compile import review, simple
 from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.ops import finalize
@@ -685,6 +685,57 @@ async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
 
     assert caught.value.code == "COMPILE_INCOMPLETE"
     pipeline.client.write.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("grouped", "case"),
+    [(False, "shared"), (True, "shared"), (True, "distinct"), (False, "short"), (True, "named")],
+)
+async def test_review_inlines_shared_source_refs_without_changing_assignments(
+    pipeline, grouped, case
+):
+    pipeline.contract = contract(True)
+    refs = [f"{i:024x}" for i in range(36)]
+    if case in {"shared", "named"}:
+        assignments = [refs, [*reversed(refs), refs[0]], []]
+    elif case == "distinct":
+        assignments = [refs[:6], refs[6:], []]
+    else:
+        assignments = [["a"], ["a"], []]
+    docs = [
+        Document(f"{i}.md", f"drafts/{i}.md", assigned) for i, assigned in enumerate(assignments)
+    ]
+    for doc in docs:
+        await pipeline.files.sandbox.write_file(doc.workspace_path, "# Facts")
+    target = pipeline.target + "/older.md"
+    outputs = [Group("first", docs[:2], [target]), Group("second", docs[2:])] if grouped else docs
+    pipeline.model.provider.chat = AsyncMock(
+        return_value=LLMResponse(content='{"action":"continue"}')
+    )
+    node = parse_plan(MERGE, pipeline.contract)[int(grouped)]
+    context = (
+        {"skill": f"Compare assignments against the exact range ID {refs[4]}."}
+        if case == "named"
+        else {}
+    )
+    await review.run(pipeline, node, outputs, "", {node.name}, 0, context, completed_ops={node.op})
+    messages = pipeline.model.provider.chat.await_args.kwargs["messages"]
+    data = json.loads(messages[1]["content"])
+    rows = data["outputs"]
+    if grouped:
+        assert [group["group_id"] for group in rows] == ["first", "second"]
+        assert [group["target_uris"] for group in rows] == [[target], []]
+        rows = [doc for group in rows for doc in group["documents"]]
+    assert [row["workspace_path"] for row in rows] == [doc.workspace_path for doc in docs]
+    if case == "shared":
+        assert data["source_range_ids"] == {f"r{i}": ref for i, ref in enumerate(refs)}
+        assert "keys in source_range_ids" in messages[0]["content"]
+        restored = [[data["source_range_ids"][i] for i in row["source_refs"]] for row in rows]
+    else:
+        assert "source_range_ids" not in data
+        assert "keys in source_range_ids" not in messages[0]["content"]
+        restored = [row["source_refs"] for row in rows]
+    assert restored == assignments == [doc.source_refs for doc in docs]
 
 
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
