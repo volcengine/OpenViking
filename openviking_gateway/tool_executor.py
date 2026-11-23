@@ -185,9 +185,10 @@ def unsaved(request, capture):
     """How many messages are neither saved nor in the current context window.
 
     They follow the delivered anchor up to the active cut, the part a compaction summary or a
-    new window replaced. Without a cut everything unsaved is still in context. Without a delivered anchor in this
-    history, or when a new OpenViking session took over from earlier ones, the gateway cannot
-    tell which messages the saved sessions hold, so it counts none rather than too many.
+    new window replaced. Without a cut everything unsaved is still in context. Without a
+    delivered anchor in this history (a client compaction, an edited history, or a reset whose
+    new session holds nothing yet), the gateway cannot tell which messages the saved sessions
+    hold, so it counts none rather than too many.
     """
     delivered, chain, cut = capture.get("delivered", ""), request.capture_chain, active_cut(request)
     if not delivered or delivered not in chain:
@@ -344,12 +345,7 @@ class ToolExecutor:
                 capture = self.request.capture.value
             sessions = lineage(capture)
             if not sessions:
-                # Nothing is saved yet, so every message so far is waiting.
-                waiting = len(capture_messages(self.request.messages, self.request.capture_chain))
-                if not waiting:
-                    return NOTHING_SAVED, False
-                count = "message so far is" if waiting == 1 else f"{waiting} messages so far are"
-                return NOTHING_SAVED + f" Its {count} waiting to be saved.", False
+                return NOTHING_SAVED, False
             args["session"] = ",".join(sessions)
         value = await self._call("session_history", args)
         content = result_text(value, self.policy.get("tool_result_bytes", 65536))

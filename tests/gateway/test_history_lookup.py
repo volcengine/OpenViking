@@ -57,11 +57,8 @@ def lookup(arguments=SEARCH, identifier="g-1"):
 
 
 async def delivered(store, prepared, index):
-    """Mark the history up to ``index`` as saved, as the worker would."""
-    value = (await store.capture.get(prepared.scope, prepared.session)).value
-    anchor = prepared.capture_chain[index]
-    pending = [t for t in value["pending"] if prepared.capture_chain.index(t["anchor"]) > index]
-    return await update_capture(store, prepared, delivered=anchor, pending=pending)
+    """Mark the history up to ``index`` as saved, as a turn's end or a cut would."""
+    return await update_capture(store, prepared, delivered=prepared.capture_chain[index])
 
 
 # (1) The tool is offered from the MCP catalog and session defaults to this conversation.
@@ -154,9 +151,9 @@ async def test_lookup_before_anything_is_saved_answers_without_openviking(
     assert calls == [] and not result["failed"]
     assert result["content"] == (
         "Nothing from this conversation is saved in OpenViking yet, so there is nothing to look "
-        "up; work from what is in your context. Its 5 messages so far are waiting to be saved."
+        "up; work from what is in your context."
     )
-    assert result["content"].startswith(NOTHING_SAVED)
+    assert result["content"] == NOTHING_SAVED
     # The answer is the call's receipt: a retry of it returns the same bytes.
     again = await ToolExecutor(viking, store, prepared, credential, "", 1024).execute(lookup())
     assert again == result and calls == []
@@ -221,8 +218,7 @@ async def test_no_note_while_every_unsaved_message_is_in_context(setup_kernel, c
     kernel, store, viking, _ = setup_kernel
     prepared = await history_request(kernel, credential, policy)
     recorder(viking)
-    value = await delivered(store, prepared, 1)
-    assert sum(len(t["messages"]) for t in value["pending"]) == 2
+    await delivered(store, prepared, 1)
     run = ToolExecutor(viking, store, prepared, credential, "", 1024)
     assert (await run.execute(lookup()))["content"] == "| found"
 
@@ -281,7 +277,7 @@ async def test_note_counts_the_part_a_new_window_just_cut(setup_kernel, credenti
     run = ToolExecutor(viking, store, prepared, credential, "", 1024)
     assert (await run.execute(lookup()))["content"] == "| found"
     started = await run.execute(gateway_call(NEW_CONTEXT.removeprefix("openviking_"), NOTES))
-    # The tool loop switches to the new window; persist would queue the cut part later.
+    # The tool loop switches to the new window; its save of the cut part did not get through.
     prepared.records[K.REPLACEMENT, started["cut"][0]] = started["cut"][1]
     assert started["cut"][0] == prepared.capture_chain[4]
     assert (await run.execute(lookup(SEARCH, "g-2")))["content"] == "| found" + note(3)

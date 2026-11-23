@@ -3,7 +3,6 @@
 import pytest
 from conftest import HISTORY_TOOL, MCP_TOOLS
 from test_compaction import FIELD, Summarizer, answered, prepare
-from test_review_regressions import worker_for
 from test_windows import NOTES, windows_request
 
 from openviking_gateway.capture_store import Document
@@ -116,21 +115,22 @@ async def test_session_start_after_a_client_compaction_points_to_the_history_too
 ):
     from openviking_gateway.blocks import LOOKUP
 
-    kernel, store, viking, encryption = setup_kernel
+    kernel, store, viking, _ = setup_kernel
     policy.update(gateway_tools=True)
     viking.catalog = CATALOG
-    worker = await worker_for(store, encryption, credential, viking)
     reply = {"role": "assistant", "content": "Blue."}
-    messages = [{"role": "user", "content": "How do I deploy?"}]
-    first = await prepare(kernel, "chat", messages, credential, policy)
-    await kernel.completed(first, credential, ResponseCapture("chat", reply, complete=True))
-    messages += [reply, {"role": "user", "content": "And staging?"}]
-    await prepare(kernel, "chat", messages, credential, policy)
-    assert await worker.once()
+    first = await prepare(
+        kernel, "chat", [{"role": "user", "content": "How do I deploy?"}], credential, policy
+    )
+    response = ResponseCapture("chat", reply, complete=True)
+    await kernel.completed(first, credential, response)
+    await kernel.save(first, credential, response)
+    saved = (await store.capture.get(first.scope, first.session)).value["ov_session"]
+    # The client's compacted history goes on in the session that holds the old one.
     fresh = await prepare(
         kernel, "chat", [{"role": "user", "content": "Summary. Continue."}], credential, policy
     )
-    assert fresh.capture_target != first.capture_target
+    assert fresh.capture.value["ov_session"] == saved
     assert LOOKUP["start"] in opening_block(fresh.records, fresh.chain)
 
 
