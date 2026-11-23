@@ -800,3 +800,7 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
   }
 }
 ```
+
+## HTTP 协议实现
+
+`server.http_protocol` 支持 `"auto"`（默认）、`"h11"` 和 `"httptools"`，同时用于单 worker 和多 worker 启动。使用 httptools 前安装 `openviking[gateway-fast]`。auto 在安装 httptools 后会自动选用它；需要固定回退基线时显式选择 h11。修改后重启。显式选择未安装的 httptools 会导致启动失败。该选项仅选择 HTTP/1.1 解析器，不启用 HTTP/2 或配置 TLS；切换前验证代理头、流式响应、异常请求和 WebSocket。

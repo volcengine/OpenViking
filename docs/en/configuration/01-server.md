@@ -838,3 +838,9 @@ Provider-, parser-, storage-, and encryption-specific fields are documented in [
   }
 }
 ```
+
+## HTTP protocol implementation
+
+`server.http_protocol` accepts `"auto"` (default), `"h11"`, or `"httptools"` and applies to single-worker and multi-worker server startup. Install `openviking[gateway-fast]` before selecting `"httptools"`. Uvicorn auto selects httptools when installed; otherwise it uses h11. Select h11 explicitly for a reproducible fallback even when httptools remains installed. Restart after changing this setting. Explicit httptools fails at startup if unavailable.
+
+This selects the HTTP/1.1 parser; it does not enable HTTP/2 or configure TLS. Validate proxy headers, streaming, malformed requests and WebSockets on your deployment before adopting a different parser.
