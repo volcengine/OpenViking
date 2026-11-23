@@ -75,6 +75,15 @@ describe('DshAgent startup and SDK transport', () => {
     assert.equal(badVersion.children.length, 0);
   });
 
+  it('treats an empty version answer as unknown and lets the bridge handshake decide', async () => {
+    const context = newAgent({ options: { versionProbe: async () => '' } });
+    const child = await startAgent(context);
+    assert.equal(context.agent.connected, true);
+    assert.equal(context.agent.dshVersion, '');
+    assert.equal(child.requests('superagent/hello').length, 1);
+    await context.agent.stop();
+  });
+
   it('fails startup when bridge hello is missing or has the wrong version', async () => {
     const context = newAgent({ childOptions: { hello: new Error('method not found') } });
     await assert.rejects(context.agent.start(), /method not found/);
