@@ -1174,7 +1174,7 @@ class MarkdownParser(BaseParser):
         if suffix:
             # A) #anchor uniquely located in a real section → point at that section file.
             if suffix.startswith("#"):
-                anchor = suffix[1:]
+                anchor = unquote(suffix[1:])
                 hits = [
                     rel
                     for rel, text in layout.items()

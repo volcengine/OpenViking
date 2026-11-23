@@ -73,6 +73,35 @@ class TestRewriteRelativeLinks:
             rewrite_ctx=rewrite_ctx,
         )
 
+    @pytest.mark.parametrize(
+        ("heading", "fragment", "section_file"),
+        [
+            ("Target", "target", "Target.md"),
+            ("Target", "%74arget", "Target.md"),
+            ("Target", "%74%61%72%67%65%74", "Target.md"),
+            ("部署流程", "部署流程", "部署流程.md"),
+            ("部署流程", "%E9%83%A8%E7%BD%B2%E6%B5%81%E7%A8%8B", "部署流程.md"),
+            ("部署流程", "%e9%83%a8%e7%bd%b2%e6%b5%81%e7%a8%8b", "部署流程.md"),
+            ("First-section", "first-section", "First-section.md"),
+            ("First-section", "first%2Dsection", "First-section.md"),
+            ("Target", "%2574arget", None),
+        ],
+    )
+    async def test_percent_encoded_fragment_locates_split_section(
+        self, tmp_path: Path, heading: str, fragment: str, section_file: str | None
+    ):
+        (tmp_path / "target.md").write_text(
+            "# " + heading + "\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
+            encoding="utf-8",
+        )
+
+        rewritten = await self._rewrite(self._parser(), tmp_path, f"[target](target.md#{fragment})")
+
+        if section_file is None:
+            assert rewritten == "[target](../target/)"
+        else:
+            assert rewritten == f"[target](../target/{section_file}#{fragment})"
+
     async def test_md_target_becomes_directory(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
         out = await self._rewrite(
