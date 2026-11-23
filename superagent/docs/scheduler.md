@@ -124,7 +124,21 @@ claims so the inputs can be replayed. `task_reports` is the append-only list of
 reports.
 
 Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
-person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`.
+person), and the ended `done`, `blocked`, `dropped`, `failed`, `stopped`.
+
+`waiting` is the only status that keeps a task live without a worker on it:
+its worker asked one thing a person can answer or do (decide, tell, grant an
+access, confirm), and goes on in the same round when they do. A round its
+worker cannot finish for a missing access or prerequisite that no one can
+clear now ends `blocked`, like one that `failed`: the requester is told what
+is missing, and the input that clears it reopens the task for a round. A
+`blocked` task used to stay live until someone wrote to it again. Nothing
+aged it: on one long-running instance six sat for up to twelve days with no
+worker, counted as in progress by `/tasks`, kept in every input's working set
+and holding their directories, one of them blocked only because its worker
+could not edit a pull request's description after the work was done. A
+daemon that starts on such tasks ends each, with its round, when its worker
+last moved it.
 
 ### A task is one result, pushed forward in rounds
 
@@ -187,12 +201,14 @@ pull request, a document), and it takes only what is about that result:
   100 000). The rule for a working task is the one from before rounds,
   unchanged.
 - **An ended task takes a new request as a round.** `owner` input to a task
-  that is `done`, `dropped` or `failed` reopens it for its next round
+  that is `done`, `blocked`, `dropped` or `failed` reopens it for its next round
   (`task_rounds`); `context` reopens nothing, and a `stopped` task stays
   stopped (work on it again is a new task that follows it). A round records
   where it was asked and by whom: its report says `round=N`, its origin is that
   round's message, so the answer goes there and an answer there settles that
-  round's report. A delivery that names the task (`task_ids`) settles the
+  round's report. A round that reopens a task which ended `blocked` or
+  `failed` is told so, with why, and to check first whether that still
+  stands. A delivery that names the task (`task_ids`) settles the
   reports of the round it answers, never the task's other rounds: the round
   it was decided on (its origin, or another input of it), else the rounds
   asked where it went; only an answer given where no round was asked settles
@@ -443,6 +459,20 @@ follows one whose directory was deleted starts from its report, as when its
 session cannot be forked; one whose parent lost its dependency folders is told
 to install again what it needs.
 
+A directory whose git repositories hold work that exists nowhere else is not
+deleted whole for its age: changes not committed (untracked files included),
+or commits on a branch, a tag, a detached HEAD or the stash that no
+remote-tracking branch has (a repository with no remote has nothing pushed).
+That is often the very work a `blocked` task could not push. Its dependency
+folders still go after 3 days; the directory goes only past the budget,
+after every directory without such work, with a `task_dir_removed_unsaved`
+warning. A repository git cannot answer for (a timeout, an error) counts as
+holding such work; a `.git` git does not take for a repository counts as
+none. The sweep asks git only about the directories it may delete whole,
+read-only (`git status`, `git log --all --not --remotes`), with no optional
+locks, no `core.fsmonitor`, and never about a repository above the one it
+names.
+
 The daemon sweeps a minute after it starts and every hour. Measuring runs in
 the background; choosing what to delete and moving it to a trash folder next
 to it happen in one step, so a task never starts in, or reads, a directory
@@ -531,8 +561,10 @@ the reply text, so a rewritten reply is a new message).
   action. Selected final reports still awaiting the inbox are delivered again
   through their idempotent receipt.
 
-The owner sees the tasks with `/tasks` in a direct chat (live ones, recent
-ended ones, slots, whether each result reached the requester), one task with
+The owner sees the tasks with `/tasks` in a direct chat (how many are running,
+queued and waiting for a reply; the tasks with a worker on them, then the
+questions waiting, the latest first; recent ended ones; slots; whether each
+result reached the requester), one task with
 `/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort). The Core answers these without the model.

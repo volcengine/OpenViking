@@ -70,13 +70,28 @@ describe('/tasks', () => {
     await settle();
     tasks.settleReports({ taskIds: ['t3'] });
     const text = run('').text;
-    assert.match(text, /^后台任务：进行中 2 · 共 3 个 · worker 槽位 1\/3（跟进预留 0\/1）\n/);
-    assert.match(text, /\n进行中\nt1 运行 不到 1 分钟（第 1 次运行）「排查飞书 Watch 令牌刷新失败」陈晓斌 · OpenViking 用户群 · 话题\n/);
-    assert.match(text, /\nt2 等 Bob 回复 不到 1 分钟「核实账号能否改名」Bob · OpenViking 用户群 · 话题 · 结果待 router 转发\n/);
+    assert.match(text, /^后台任务：运行中 1 · 排队 0 · 等待回复 1 · 共 3 个 · worker 槽位 1\/3（跟进预留 0\/1）\n/);
+    assert.match(text, /\n进行中\nt1 运行 不到 1 分钟（第 1 次运行）「排查飞书 Watch 令牌刷新失败」陈晓斌 · OpenViking 用户群 · 话题\n\n/);
+    assert.match(text, /\n等待回复\nt2 等 Bob 回复 不到 1 分钟「核实账号能否改名」Bob · OpenViking 用户群 · 话题 · 结果待 router 转发\n/);
     assert.match(text, /\n最近结束\nt3 完成 · 不到 1 分钟前「解读 0\.5\.4 更新」Carol · OpenViking 用户群 · 话题 · 跟进 t1 · 结果已了结\n/);
     assert.match(text, /\n用法：\/tasks 查看任务/);
     assert.equal(taskStatusLine(tasks), '后台任务：运行中 1 · 等待回复 1（/tasks 查看）');
     assert.equal(taskStatusLine(null), '');
+  });
+
+  it('shows a task that ended blocked among those that ended, never as one in progress', async (t) => {
+    const { tasks, turns, row, run } = setup(t);
+    tasks.create({ rows: [row()], title: '推送 slugify 修复', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'blocked', summary: '没有仓库写权限', draft: '修好了，但没有写权限，推不上去' });
+    turns[0].finish({ text: '' });
+    await settle();
+    const text = run('').text;
+    assert.match(text, /^后台任务：运行中 0 · 排队 0 · 等待回复 0 · 共 1 个 · worker 槽位 0\/3/);
+    assert.doesNotMatch(text, /进行中|等待回复\n/);
+    assert.match(text, /\n最近结束\nt1 受阻 · 不到 1 分钟前「推送 slugify 修复」Alice · OpenViking 用户群 · 话题 · 结果待 router 转发\n/);
+    assert.equal(taskStatusLine(tasks), '', '/status counts no task at work');
+    assert.match(run('t1').text, /\n状态：受阻 · 不到 1 分钟前\n/);
+    assert.match(run('stop t1').text, /^t1 已结束（受阻），无需停止。$/);
   });
 
   it('shows one task: its request, follow-ups and their fate, and its reports and their delivery', async (t) => {
