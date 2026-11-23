@@ -400,7 +400,7 @@ async def mv(
     reject_generic_skill_mutation(from_uri, "mv")
     reject_generic_skill_mutation(to_uri, "mv")
     try:
-        result = await service.fs.mv(
+        await service.fs.mv(
             from_uri,
             to_uri,
             ctx=_ctx,
@@ -418,7 +418,4 @@ async def mv(
         if mapped is not None:
             raise mapped from exc
         raise
-    response_result = {"from": from_uri, "to": to_uri}
-    if isinstance(result, dict):
-        response_result.update(result)
-    return Response(status="ok", result=response_result)
+    return Response(status="ok", result={"from": from_uri, "to": to_uri})

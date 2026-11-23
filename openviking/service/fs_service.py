@@ -1123,9 +1123,6 @@ class FSService:
         result.setdefault("recursive", recursive)
         if processing_mode == VECTORS_ONLY:
             result["semantic_status"] = "skipped"
-            result["vector_status"] = "complete" if target_indexed else "skipped"
-            if not source_indexed and target_indexed:
-                result.update(await self._enqueue_transfer_vectors(to_uri, ctx))
             return result
 
         context_type = context_type_for_uri(to_uri)
@@ -1197,7 +1194,7 @@ class FSService:
         ctx: RequestContext,
         *,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
-    ) -> Dict[str, Any]:
+    ) -> None:
         """Move a resource without exposing a cancellable partial transaction."""
         processing_mode = self._validate_processing_mode(processing_mode)
         from_uri = VikingFS._normalize_transfer_uri(from_uri)
@@ -1205,7 +1202,7 @@ class FSService:
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
         validate_account_memory_template_transfer(to_uri)
-        return await self._finish_transfer_after_caller_cancel(
+        await self._finish_transfer_after_caller_cancel(
             self._mv_and_refresh(from_uri, to_uri, ctx=ctx, processing_mode=processing_mode),
             operation="move",
         )
@@ -1217,7 +1214,7 @@ class FSService:
         *,
         ctx: RequestContext,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
-    ) -> Dict[str, Any]:
+    ) -> None:
         """Move content and Watch state, migrate exact-target Compile settings, and refresh parents."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
@@ -1300,16 +1297,8 @@ class FSService:
                     raise
 
         await move()
-        result: Dict[str, Any] = {
-            "from": from_uri,
-            "to": to_uri,
-            "semantic_status": "skipped",
-            "vector_status": "complete" if source_indexed and target_indexed else "skipped",
-        }
         if processing_mode == VECTORS_ONLY:
-            if not source_indexed and target_indexed:
-                result.update(await self._enqueue_transfer_vectors(to_uri, ctx))
-            return result
+            return
 
         rebuild_target = not source_indexed and target_indexed
         if rebuild_target:
@@ -1327,18 +1316,14 @@ class FSService:
             )
             if rebuild_root_uri:
                 try:
-                    result["semantic_status"] = await self._enqueue_transfer_rebuild(
+                    await self._enqueue_transfer_rebuild(
                         root_uri=rebuild_root_uri,
                         target_uri=to_uri,
                         recursive=target_is_dir,
                         context_type=context_type,
                         ctx=ctx,
                     )
-                    result["vector_status"] = result["semantic_status"]
                 except Exception as exc:
-                    result["vector_status"] = "failed"
-                    result["semantic_status"] = "failed"
-                    result["semantic_error"] = str(exc)
                     logger.info(
                         "Move committed with failed semantic rebuild",
                         extra={
@@ -1348,42 +1333,7 @@ class FSService:
                         },
                     )
         else:
-            result["semantic_status"] = (
-                await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
-                or "skipped"
-            )
-        return result
-
-    async def _enqueue_transfer_vectors(
-        self, target_uri: str, ctx: RequestContext
-    ) -> Dict[str, Any]:
-        """Report post-commit indexing failure without undoing a completed transfer."""
-        from openviking.service.reindex_executor import ReindexExecutor
-
-        try:
-            queued = await ReindexExecutor().execute(
-                uri=target_uri,
-                mode=VECTORS_ONLY,
-                wait=False,
-                ctx=ctx,
-            )
-        except Exception as exc:
-            logger.info(
-                "Transfer committed with failed vector rebuild",
-                extra={
-                    "target_id": safe_uri_for_log(target_uri),
-                    "error_type": type(exc).__name__,
-                    "degraded": True,
-                },
-            )
-            return {
-                "vector_status": "failed",
-                "vector_error": {
-                    "code": getattr(exc, "code", "INTERNAL"),
-                    "message": str(exc),
-                },
-            }
-        return {"vector_status": "queued", "task_id": queued["task_id"]}
+            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
     @asynccontextmanager
     async def _transfer_scope(
@@ -1465,10 +1415,10 @@ class FSService:
         to_uri: str,
         ctx: RequestContext,
         refresh_target: bool = True,
-    ) -> str:
+    ) -> None:
         """Queue transfer refreshes for both affected parents after mv commits."""
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            return "skipped"
+            return
 
         source_context_type = context_type_for_uri(from_uri)
         target_context_type = context_type_for_uri(to_uri)
@@ -1482,10 +1432,9 @@ class FSService:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
         failed_refreshes = 0
-        queued_refreshes = 0
         for parent_uri, changed_uri, change_kind, context_type in refreshes:
             try:
-                status = await self._enqueue_copy_refresh(
+                await self._enqueue_copy_refresh(
                     root_uri=parent_uri,
                     source_uri=from_uri,
                     copied_uri=changed_uri,
@@ -1493,7 +1442,6 @@ class FSService:
                     context_type=context_type,
                     ctx=ctx,
                 )
-                queued_refreshes += status == "queued"
             except Exception as exc:
                 failed_refreshes += 1
                 logger.debug(
@@ -1510,8 +1458,6 @@ class FSService:
                 "Move committed with incomplete parent semantic refresh",
                 extra={"total": len(refreshes), "failed": failed_refreshes, "degraded": True},
             )
-
-        return "failed" if failed_refreshes else "queued" if queued_refreshes else "skipped"
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":

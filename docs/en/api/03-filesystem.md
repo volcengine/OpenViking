@@ -783,7 +783,7 @@ Files use Exact Locks on both paths; directories use Tree Locks on both subtrees
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI, including the new file or directory name |
 | recursive | bool | No | False | Required when the source is a directory |
-| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh; copies/moves existing vectors without building missing indexes |
 
 **HTTP API**
 
@@ -869,7 +869,7 @@ Files use two Exact Locks; directories use Tree Locks on the source and destinat
 |-----------|------|----------|---------|-------------|
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI |
-| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh; copies/moves existing vectors without building missing indexes |
 
 
 **Python SDK (HTTP)**

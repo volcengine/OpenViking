@@ -2490,9 +2490,7 @@ async def test_directory_index_visibility(monkeypatch, request_context, error, v
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
-async def test_transfer_reindex_failure_reports_committed_operation(
-    request_context, monkeypatch, operation
-):
+async def test_vectors_only_transfer_skips_postprocessing(request_context, monkeypatch, operation):
     from openviking.service.reindex_executor import ReindexExecutor
 
     native = AsyncMock(return_value={})
@@ -2500,10 +2498,13 @@ async def test_transfer_reindex_failure_reports_committed_operation(
         _ensure_access=AsyncMock(), _ensure_destination_access=AsyncMock(), cp=native, mv=native
     )
     _with_pathlock(fs)
-    monkeypatch.setattr(
-        ReindexExecutor, "execute", AsyncMock(side_effect=RuntimeError("queue unavailable"))
-    )
-    result = await getattr(FSService(viking_fs=fs), operation)(
+    reindex = AsyncMock(return_value={"task_id": "unexpected-reindex"})
+    monkeypatch.setattr(ReindexExecutor, "execute", reindex)
+    service = FSService(viking_fs=fs)
+    service._enqueue_copy_refresh = AsyncMock()
+    service._enqueue_transfer_rebuild = AsyncMock()
+    service._refresh_move_parents = AsyncMock()
+    result = await getattr(service, operation)(
         "viking://system/memory/memory_templates/custom/demo.md",
         "viking://resources/demo.md",
         ctx=request_context,
@@ -2511,9 +2512,15 @@ async def test_transfer_reindex_failure_reports_committed_operation(
         **({"recursive": False} if operation == "cp" else {}),
     )
     native.assert_awaited_once()
-    assert result["semantic_status"] == "skipped"
-    assert result["vector_status"] == "failed"
-    assert result["vector_error"]["message"] == "queue unavailable"
+    reindex.assert_not_awaited()
+    service._enqueue_copy_refresh.assert_not_awaited()
+    service._enqueue_transfer_rebuild.assert_not_awaited()
+    service._refresh_move_parents.assert_not_awaited()
+    if operation == "cp":
+        assert result["semantic_status"] == "skipped"
+        assert "task_id" not in result
+    else:
+        assert result is None
 
 
 @pytest.mark.asyncio

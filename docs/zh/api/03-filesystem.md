@@ -809,7 +809,7 @@ ov rm viking://resources/old.md [--recursive]
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI，必须包含新的文件名或目录名 |
 | recursive | bool | 否 | False | 源为目录时必须设为 `true` |
-| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新，仍维护文件向量 |
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新；仅复制/迁移已有向量，不补建缺失索引 |
 
 **HTTP API**
 
@@ -895,7 +895,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 |------|------|------|--------|------|
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI |
-| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新，仍维护文件向量 |
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新；仅复制/迁移已有向量，不补建缺失索引 |
 
 
 **Python SDK (HTTP)**
