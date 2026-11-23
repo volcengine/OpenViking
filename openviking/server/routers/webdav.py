@@ -15,6 +15,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.responses import Response as FastAPIResponse
 
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+    normalize_processing_mode,
+)
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -171,10 +177,30 @@ def _destination_path(destination: str) -> str:
     return _normalized_resource_path(normalized[len(prefix) + 1 :])
 
 
-async def _write_text_resource(service, uri: str, content: str, ctx: RequestContext) -> None:
+def _processing_mode(request: Request) -> ProcessingMode:
+    value = request.headers.get("X-OpenViking-Processing-Mode", DEFAULT_PROCESSING_MODE)
+    if not value:
+        raise InvalidArgumentError("Invalid processing_mode: empty header")
+    try:
+        return normalize_processing_mode(value)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+
+async def _write_text_resource(
+    service,
+    uri: str,
+    content: str,
+    ctx: RequestContext,
+    *,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+) -> None:
     """Persist UTF-8 text content and refresh derived summaries before returning."""
     await service.viking_fs.write_file(uri, content, ctx=ctx)
-    await service.resources.summarize([uri], ctx=ctx)
+    if processing_mode == VECTORS_ONLY:
+        await service.resources.build_index([uri], ctx=ctx)
+    else:
+        await service.resources.summarize([uri], ctx=ctx)
 
 
 async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[str, Any]]:
@@ -303,6 +329,7 @@ async def put(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     try:
+        processing_mode = _processing_mode(request)
         normalized_path = _normalized_resource_path(resource_path)
         _ensure_exposed_path(normalized_path)
     except InvalidArgumentError as exc:
@@ -330,10 +357,10 @@ async def put(
     if stat is not None:
         if stat.get("isDir", False):
             return _error(405, "PUT is only supported for files")
-        await _write_text_resource(service, uri, content, _ctx)
+        await _write_text_resource(service, uri, content, _ctx, processing_mode=processing_mode)
         return FastAPIResponse(status_code=204, headers=_webdav_headers())
 
-    await _write_text_resource(service, uri, content, _ctx)
+    await _write_text_resource(service, uri, content, _ctx, processing_mode=processing_mode)
     headers = _webdav_headers()
     headers["Location"] = _href_for_path(request, normalized_path, is_dir=False)
     return FastAPIResponse(status_code=201, headers=headers)
@@ -342,10 +369,12 @@ async def put(
 @router.api_route("", methods=["DELETE"])
 @router.api_route("/{resource_path:path}", methods=["DELETE"])
 async def delete(
+    request: Request,
     resource_path: str = "",
     _ctx: RequestContext = Depends(get_request_context),
 ):
     try:
+        processing_mode = _processing_mode(request)
         normalized_path = _normalized_resource_path(resource_path)
         _ensure_exposed_path(normalized_path)
     except InvalidArgumentError as exc:
@@ -362,7 +391,12 @@ async def delete(
     if stat is None:
         return _error(404, "Not found")
 
-    await service.fs.rm(uri, ctx=_ctx, recursive=bool(stat.get("isDir", False)))
+    await service.fs.rm(
+        uri,
+        ctx=_ctx,
+        recursive=bool(stat.get("isDir", False)),
+        processing_mode=processing_mode,
+    )
     return FastAPIResponse(status_code=204, headers=_webdav_headers())
 
 
@@ -404,6 +438,10 @@ async def move(
     resource_path: str = "",
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    try:
+        processing_mode = _processing_mode(request)
+    except InvalidArgumentError as exc:
+        return _error(400, exc.message)
     destination = request.headers.get("Destination", "")
     if not destination:
         return _error(400, "Destination header is required")
@@ -437,8 +475,18 @@ async def move(
     if dst_stat is not None:
         if not overwrite:
             return _error(412, "Destination already exists")
-        await service.fs.rm(dst_uri, ctx=_ctx, recursive=bool(dst_stat.get("isDir", False)))
+        await service.fs.rm(
+            dst_uri,
+            ctx=_ctx,
+            recursive=bool(dst_stat.get("isDir", False)),
+            processing_mode=processing_mode,
+        )
 
-    await service.fs.mv(src_uri, dst_uri, ctx=_ctx)
+    await service.fs.mv(
+        src_uri,
+        dst_uri,
+        ctx=_ctx,
+        processing_mode=processing_mode,
+    )
     status_code = 204 if dst_stat is not None else 201
     return FastAPIResponse(status_code=status_code, headers=_webdav_headers())

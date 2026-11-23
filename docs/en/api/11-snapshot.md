@@ -476,6 +476,7 @@ This is a **forward-commit restore**: it computes the diff between `source_commi
 | source_commit | str | Yes | - | What to restore from: commit OID (abbreviated prefix allowed), branch name, or tag |
 | project_dir | str | No | null | `viking://` URI of the subtree to restore. USER/ADMIN callers must provide it; omitting it for a whole-account restore is reserved for local ROOT mode |
 | branch | str | No | `main` | Branch to advance |
+| processing_mode | string | No | null | Directory restore accepts `vectors_only`; omitted/null keeps the same behavior. `semantic_and_vectors` returns HTTP 400 (`INVALID_ARGUMENT`) |
 | dry_run | bool | No | false | Compute and return the diff only; write nothing |
 | message | str | No | null | Message for the new commit; auto-generated when omitted |
 | author_name | str | No | null | Override the default author name |
@@ -610,6 +611,7 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | path | str | File URI, also used as the historical snapshot path |
+| processing_mode | string | HTTP only. Omitted/null defaults to `semantic_and_vectors`; `vectors_only` skips VLM and parent semantic refresh |
 | restore_commit_id | str | Source commit ID, 40 lowercase hexadecimal characters |
 | current_commit_id | str | Optional. Omit to restore unconditionally, or pass the last commit observed for this file on `main`. A mismatch returns `409 CONFLICT` with resource `VERSION_CONFLICT` |
 | dry_run | bool | Optional; checks the request without changing content or creating a snapshot |

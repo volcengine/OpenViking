@@ -2486,3 +2486,59 @@ async def test_directory_index_visibility(monkeypatch, request_context, error, v
         with pytest.raises(fs_module.OpenVikingError, match=message):
             await fs.ensure_directory_index(uri, request_context, "Output")
     assert records.await_count == reads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_vectors_only_transfer_skips_postprocessing(request_context, monkeypatch, operation):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    native = AsyncMock(return_value={})
+    fs = SimpleNamespace(
+        _ensure_access=AsyncMock(), _ensure_destination_access=AsyncMock(), cp=native, mv=native
+    )
+    _with_pathlock(fs)
+    reindex = AsyncMock(return_value={"task_id": "unexpected-reindex"})
+    monkeypatch.setattr(ReindexExecutor, "execute", reindex)
+    service = FSService(viking_fs=fs)
+    service._enqueue_copy_refresh = AsyncMock()
+    service._enqueue_transfer_rebuild = AsyncMock()
+    service._refresh_move_parents = AsyncMock()
+    result = await getattr(service, operation)(
+        "viking://system/memory/memory_templates/custom/demo.md",
+        "viking://resources/demo.md",
+        ctx=request_context,
+        processing_mode="vectors_only",
+        **({"recursive": False} if operation == "cp" else {}),
+    )
+    native.assert_awaited_once()
+    reindex.assert_not_awaited()
+    service._enqueue_copy_refresh.assert_not_awaited()
+    service._enqueue_transfer_rebuild.assert_not_awaited()
+    service._refresh_move_parents.assert_not_awaited()
+    if operation == "cp":
+        assert result["semantic_status"] == "skipped"
+        assert "task_id" not in result
+    else:
+        assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["rm", "cp", "mv"])
+async def test_fs_rejects_invalid_processing_mode_before_mutation(request_context, operation):
+    native = AsyncMock()
+    viking_fs = SimpleNamespace(rm=native, cp=native, mv=native)
+    service = FSService(viking_fs=viking_fs)
+    with pytest.raises(InvalidArgumentError, match="processing_mode"):
+        if operation == "rm":
+            await service.rm("viking://resources/a.md", request_context, processing_mode="bad")
+        else:
+            kwargs = {"recursive": False} if operation == "cp" else {}
+            await getattr(service, operation)(
+                "viking://resources/a.md",
+                "viking://resources/b.md",
+                ctx=request_context,
+                processing_mode="bad",
+                **kwargs,
+            )
+    native.assert_not_awaited()

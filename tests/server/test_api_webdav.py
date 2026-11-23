@@ -6,8 +6,10 @@
 import xml.etree.ElementTree as ET
 
 import httpx
+import pytest
 from starlette.requests import Request
 
+from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import webdav as webdav_router
 from openviking.server.routers.webdav import _ensure_exposed_path, _exposed_child_entries
 from openviking_cli.exceptions import NotFoundError
@@ -26,7 +28,7 @@ def _webdav_path_from_uri(uri: str) -> str:
 
 async def test_webdav_get_content_length_uses_delivered_body_size(monkeypatch):
     class FakeFS:
-        async def stat(self, uri: str, ctx=None):
+        async def stat(self, uri: str, ctx=None, **_kwargs):
             assert uri == "viking://resources/scratch/notes.md"
             return {
                 "isDir": False,
@@ -253,3 +255,29 @@ async def test_webdav_move_and_delete_text_file(client: httpx.AsyncClient):
 
     deleted_resp = await client.get("/webdav/resources/move-space/renamed.md")
     assert deleted_resp.status_code == 404
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE", "MOVE"])
+async def test_webdav_invalid_processing_mode_preserves_existing_files(
+    client, service, monkeypatch, method
+):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    for name in ("source", "target"):
+        await service.viking_fs.write_file(
+            f"viking://resources/mode-guard/{name}.md", name, ctx=ctx
+        )
+    response = await client.request(
+        method,
+        "/webdav/resources/mode-guard/source.md",
+        content="replacement",
+        headers={
+            "X-OpenViking-Processing-Mode": "invalid",
+            "Destination": "http://testserver/webdav/resources/mode-guard/target.md",
+        },
+    )
+    assert response.status_code == 400
+    for name in ("source", "target"):
+        assert (
+            await service.viking_fs.read_file(f"viking://resources/mode-guard/{name}.md", ctx=ctx)
+            == name
+        )

@@ -986,3 +986,24 @@ async def test_restore_rejects_unknown_field_per_pydantic_forbid(client_with_res
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     # The offending field name must surface in the error so the user can fix it.
     assert "dryRun" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("file_mode", [True, False])
+async def test_snapshot_mode_boundary_contracts(snapshot_router_client, monkeypatch, file_mode):
+    from openviking.server.routers import snapshot
+
+    fs = SimpleNamespace(restore_file_version=AsyncMock(return_value={}), restore=AsyncMock())
+    monkeypatch.setattr(snapshot, "get_service", lambda: SimpleNamespace(fs=fs))
+    body = (
+        {"path": "viking://resources/a.md", "restore_commit_id": "a" * 40, "processing_mode": None}
+        if file_mode
+        else {"source_commit": "a" * 40, "processing_mode": "semantic_and_vectors"}
+    )
+    response = await snapshot_router_client.post("/api/v1/snapshot/restore", json=body)
+    assert response.status_code == (200 if file_mode else 400), response.text
+    if file_mode:
+        assert (
+            fs.restore_file_version.await_args.kwargs["processing_mode"] == "semantic_and_vectors"
+        )
+    else:
+        fs.restore.assert_not_awaited()

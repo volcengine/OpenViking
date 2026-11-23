@@ -1597,3 +1597,27 @@ describe("OpenVikingClient", () => {
     expect(url.pathname).toBe("/api/v1/admin/accounts/team-a/users/alice");
   });
 });
+
+it.each([undefined, "semantic_and_vectors", "vectors_only"] as const)(
+  "serializes filesystem processing mode %s with compatible defaults",
+  async (processingMode) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const options = processingMode === undefined ? {} : { processingMode };
+    await client.remove("resources/a.md", options);
+    await client.move("resources/a.md", "resources/b.md", options);
+    const [removeUrl] = fetcher.mock.calls[0]!;
+    const [, moveInit] = fetcher.mock.calls[1]!;
+    expect(new URL(String(removeUrl)).searchParams.get("processing_mode")).toBe(
+      processingMode === "vectors_only" ? processingMode : null,
+    );
+    expect(JSON.parse(String(moveInit?.body)).processing_mode).toBe(
+      processingMode === "vectors_only" ? processingMode : undefined,
+    );
+  },
+);

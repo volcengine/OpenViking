@@ -10,6 +10,7 @@ import {
 } from "./node-files.js";
 import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
+  ProcessingMode,
   AddResourceOptions,
   AclSpec,
   BatchAddMessagesOptions,
@@ -780,6 +781,7 @@ export class OpenVikingClient {
     options: {
       recursive?: boolean;
       wait?: boolean;
+      processingMode?: ProcessingMode;
       /** @deprecated Accepted for compatibility and ignored. */
       timeout?: number;
     } = {},
@@ -789,13 +791,28 @@ export class OpenVikingClient {
         uri: normalizeURI(uri),
         recursive: options.recursive ?? false,
         wait: options.wait ?? false,
+        processing_mode:
+          options.processingMode !== "semantic_and_vectors"
+            ? options.processingMode
+            : undefined,
       },
     });
   }
   /** Move a URI. */
-  move(fromUri: string, toUri: string): Promise<void> {
+  move(
+    fromUri: string,
+    toUri: string,
+    options: { processingMode?: ProcessingMode } = {},
+  ): Promise<void> {
     return this.request("POST", "/api/v1/fs/mv", {
-      body: { from_uri: normalizeURI(fromUri), to_uri: normalizeURI(toUri) },
+      body: compact({
+        from_uri: normalizeURI(fromUri),
+        to_uri: normalizeURI(toUri),
+        processing_mode:
+          options.processingMode !== "semantic_and_vectors"
+            ? options.processingMode
+            : undefined,
+      }),
     });
   }
   /** Read text content. */
@@ -1393,7 +1410,12 @@ export class OpenVikingClient {
     );
   }
   /** Return up to limit commits for branch/paths, newest first, skipping offset matches. */
-  gitLog(branch = "main", limit = 20, paths?: string[], offset = 0): Promise<JsonObject[]> {
+  gitLog(
+    branch = "main",
+    limit = 20,
+    paths?: string[],
+    offset = 0,
+  ): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
       query: { branch, limit, offset, paths },
     });

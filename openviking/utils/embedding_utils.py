@@ -33,6 +33,7 @@ from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.utils.content_hash import content_md5
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
@@ -831,6 +832,40 @@ async def index_resource(
 
     viking_fs = get_viking_fs()
     context_type = context_type_for_uri(uri)
+
+    stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+    if not stat.get("isDir", stat.get("is_dir", False)):
+        parent = VikingURI(uri).parent
+        if parent is None:
+            raise ValueError(f"file has no parent URI: {uri}")
+        vector_store = viking_fs._get_vector_store()
+        # Snapshot final stored bytes, including any privacy replacements made by write_file.
+        content = await viking_fs.read_file_bytes(uri, ctx=ctx)
+        if not content:
+            if vector_store:
+                await vector_store.delete_uris(ctx, [uri], recursive=False)
+            return
+        existing = (await vector_store.fetch_by_uri(uri, ctx=ctx) if vector_store else None) or {}
+        enqueued = await vectorize_file(
+            file_path=uri,
+            summary_dict={
+                "name": uri.rsplit("/", 1)[-1],
+                "summary": existing.get("abstract") or "",
+            },
+            parent_uri=parent.uri,
+            context_type=context_type,
+            ctx=ctx,
+            ingest_options=ingest_options,
+            file_content=content,
+            file_md5=content_md5(content),
+            materialize_content=True,
+            scalar_override=(
+                {"created_at": existing["created_at"]} if existing.get("created_at") else None
+            ),
+        )
+        if not enqueued:
+            raise RuntimeError(f"File vectorization did not enqueue work: {uri}")
+        return
 
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"

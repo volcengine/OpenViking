@@ -480,6 +480,7 @@ page = client.snapshot.diff_paths(
 | source_commit | str | 是 | - | 要恢复到的来源：提交 OID（支持缩写前缀）、分支名或标签 |
 | project_dir | str | 否 | null | 要恢复的子目录 `viking://` URI；USER/ADMIN 必须显式传入，省略时恢复整棵账号树仅用于本地 ROOT 模式 |
 | branch | str | 否 | `main` | 要推进的分支 |
+| processing_mode | string | 否 | null | 目录恢复支持 `vectors_only`；省略/null 保持原行为，`semantic_and_vectors` 返回 HTTP 400 (`INVALID_ARGUMENT`) |
 | dry_run | bool | 否 | false | 仅计算并返回差异，不做任何写入 |
 | message | str | 否 | null | 新提交的说明；省略时自动生成 |
 | author_name | str | 否 | null | 覆盖默认的提交者名字 |
@@ -614,6 +615,7 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | path | str | 文件 URI，同时用作历史快照中的读取路径 |
+| processing_mode | string | 仅 HTTP；省略/null 默认 `semantic_and_vectors`，`vectors_only` 跳过 VLM 和父目录语义刷新 |
 | restore_commit_id | str | 来源 commit ID，40 位小写十六进制 |
 | current_commit_id | str | 可选。省略时直接恢复；传入时须匹配该文件在 `main` 上最后一次变更的 commit ID，否则返回 `409 CONFLICT`，resource 为 `VERSION_CONFLICT` |
 | dry_run | bool | 可选；仅校验，不修改内容或创建快照 |

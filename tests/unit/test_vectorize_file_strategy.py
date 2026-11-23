@@ -1,6 +1,7 @@
 import base64
 import io
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -1331,3 +1332,13 @@ async def test_full_upsert_carries_existing_record_id_as_internal_override(monke
     msg = queue.items[0]
     assert msg.context_data["_upsert_record_id"] == "id-from-vector-db"
     assert "_record_id" not in msg.context_data
+
+
+async def test_direct_index_reports_rejected_embedding(monkeypatch):
+    fs = DummyFS(b"body")
+    fs.stat = AsyncMock(return_value={"isDir": False})
+    fs._get_vector_store = lambda: None
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(embedding_utils, "vectorize_file", AsyncMock(return_value=False))
+    with pytest.raises(RuntimeError, match="vectorization"):
+        await embedding_utils.index_resource("viking://resources/a.md", DummyReq())

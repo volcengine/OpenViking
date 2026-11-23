@@ -44,6 +44,7 @@ Except for `OPTIONS`, WebDAV requests use the same authentication headers as oth
 | Header | Methods | Required | Description |
 |--------|---------|----------|-------------|
 | `X-API-Key` | All except `OPTIONS` | Depends on auth mode | OpenViking API key; trusted mode may also require identity headers |
+| `X-OpenViking-Processing-Mode` | `PUT`, `DELETE`, `MOVE` | No | `semantic_and_vectors` (default) or `vectors_only` (maintain vectors without regenerating summaries); invalid values return 400 before mutation |
 | `Depth` | `PROPFIND` | No | `0` returns only the target; other values use one level |
 | `Destination` | `MOVE` | Yes | Target path below `/webdav/resources` |
 | `Overwrite` | `MOVE` | No | Defaults to `T`; set `F` to preserve an existing target |

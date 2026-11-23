@@ -71,6 +71,7 @@ from .options import (
     MCPToolMount,
     Message,
     PreflightAssetOptions,
+    ProcessingMode,
     ReindexOptions,
     ResolveAssetsOptions,
     RuleCompileOptions,
@@ -1536,16 +1537,29 @@ class AsyncHTTPClient:
         recursive: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,  # Deprecated and ignored.
+        *,
+        processing_mode: ProcessingMode = "semantic_and_vectors",
     ) -> None:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
+        if processing_mode != "semantic_and_vectors":
+            params["processing_mode"] = processing_mode
         response = await self._request("DELETE", "/api/v1/fs", params=params)
         self._handle_response(response)
 
-    async def mv(self, from_uri: str, to_uri: str) -> None:
+    async def mv(
+        self,
+        from_uri: str,
+        to_uri: str,
+        *,
+        processing_mode: ProcessingMode = "semantic_and_vectors",
+    ) -> None:
+        payload = {"from_uri": VikingURI.normalize(from_uri), "to_uri": VikingURI.normalize(to_uri)}
+        if processing_mode != "semantic_and_vectors":
+            payload["processing_mode"] = processing_mode
         response = await self._request(
             "POST",
             "/api/v1/fs/mv",
-            json={"from_uri": VikingURI.normalize(from_uri), "to_uri": VikingURI.normalize(to_uri)},
+            json=payload,
         )
         self._handle_response(response)
 
@@ -3319,11 +3333,23 @@ class SyncHTTPClient:
         recursive: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,  # Deprecated and ignored.
+        *,
+        processing_mode: ProcessingMode = "semantic_and_vectors",
     ) -> None:
-        run_async(self._async_client.rm(uri, recursive=recursive, wait=wait))
+        run_async(
+            self._async_client.rm(
+                uri, recursive=recursive, wait=wait, processing_mode=processing_mode
+            )
+        )
 
-    def mv(self, from_uri: str, to_uri: str) -> None:
-        run_async(self._async_client.mv(from_uri, to_uri))
+    def mv(
+        self,
+        from_uri: str,
+        to_uri: str,
+        *,
+        processing_mode: ProcessingMode = "semantic_and_vectors",
+    ) -> None:
+        run_async(self._async_client.mv(from_uri, to_uri, processing_mode=processing_mode))
 
     def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))

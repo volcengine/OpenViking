@@ -706,6 +706,7 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 | wait | bool | 否 | False | 等待删除后的语义刷新完成 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | recursive | bool | 否 | False | 递归删除目录 |
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新，仍维护文件向量 |
 
 
 **Python SDK (HTTP)**
@@ -714,6 +715,9 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 # 删除单个文件
 client.rm(uri="viking://resources/docs/old.md")
 
+# 跳过父目录语义刷新
+client.rm(uri="viking://resources/docs/old.md", processing_mode="vectors_only")
+
 # 递归删除目录
 client.rm(uri="viking://resources/old-project/", recursive=True)
 ```
@@ -721,7 +725,7 @@ client.rm(uri="viking://resources/old-project/", recursive=True)
 **TypeScript SDK**
 
 ```typescript
-await client.remove("viking://resources/docs/old.md");
+await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
 ```
 
 **Go SDK**
@@ -729,6 +733,7 @@ await client.remove("viking://resources/docs/old.md");
 ```go
 err := client.Remove(ctx, "viking://resources/old-project/", &openviking.RemoveOptions{
     Recursive: true,
+    ProcessingMode: "vectors_only",
 })
 if err != nil {
     return err
@@ -804,6 +809,7 @@ ov rm viking://resources/old.md [--recursive]
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI，必须包含新的文件名或目录名 |
 | recursive | bool | 否 | False | 源为目录时必须设为 `true` |
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新；仅复制/迁移已有向量，不补建缺失索引 |
 
 **HTTP API**
 
@@ -889,6 +895,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 |------|------|------|--------|------|
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI |
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新；仅复制/迁移已有向量，不补建缺失索引 |
 
 
 **Python SDK (HTTP)**
@@ -897,6 +904,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 client.mv(
     from_uri="viking://resources/old-name/",
     to_uri="viking://resources/new-name/",
+    processing_mode="vectors_only",
 )
 ```
 
@@ -906,13 +914,15 @@ client.mv(
 await client.move(
   "viking://resources/docs/old.md",
   "viking://resources/docs/new.md",
+  { processingMode: "vectors_only" },
 );
 ```
 
 **Go SDK**
 
 ```go
-if err := client.Move(ctx, "viking://resources/old-name/", "viking://resources/new-name/"); err != nil {
+if err := client.MoveWithOptions(ctx, "viking://resources/old-name/", "viking://resources/new-name/",
+    &openviking.MoveOptions{ProcessingMode: "vectors_only"}); err != nil {
     return err
 }
 ```

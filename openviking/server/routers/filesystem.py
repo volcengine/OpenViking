@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -275,6 +276,7 @@ async def rm(
         deprecated=True,
         description="Deprecated compatibility parameter; accepted and ignored.",
     ),
+    processing_mode: Annotated[ProcessingMode, Query()] = DEFAULT_PROCESSING_MODE,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
@@ -284,7 +286,13 @@ async def rm(
     _reject_managed_tools_uri("rm", [uri], _ctx)
     reject_generic_skill_mutation(uri, "rm")
     try:
-        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait)
+        result = await service.fs.rm(
+            uri,
+            ctx=_ctx,
+            recursive=recursive,
+            wait=wait,
+            processing_mode=processing_mode,
+        )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -307,6 +315,8 @@ async def rm(
         response_result["semantic_status"] = result["semantic_status"]
     if isinstance(result, dict) and "queue_status" in result:
         response_result["queue_status"] = result["queue_status"]
+    if isinstance(result, dict) and "vector_status" in result:
+        response_result["vector_status"] = result["vector_status"]
     if isinstance(result, dict) and "task_id" in result:
         response_result["task_id"] = result["task_id"]
     return Response(status="ok", result=response_result)
@@ -317,6 +327,7 @@ class MvRequest(BaseModel):
 
     from_uri: str
     to_uri: str
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
 
 
 class CpRequest(BaseModel):
@@ -324,6 +335,7 @@ class CpRequest(BaseModel):
 
     from_uri: str
     to_uri: str
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     recursive: bool = False
 
 
@@ -348,6 +360,7 @@ async def cp(
             to_uri,
             recursive=request.recursive,
             ctx=_ctx,
+            processing_mode=request.processing_mode,
         )
     except AGFSNotFoundError:
         raise NotFoundError(from_uri, "file")
@@ -387,7 +400,12 @@ async def mv(
     reject_generic_skill_mutation(from_uri, "mv")
     reject_generic_skill_mutation(to_uri, "mv")
     try:
-        await service.fs.mv(from_uri, to_uri, ctx=_ctx)
+        await service.fs.mv(
+            from_uri,
+            to_uri,
+            ctx=_ctx,
+            processing_mode=request.processing_mode,
+        )
     except AGFSNotFoundError:
         raise NotFoundError(from_uri, "file")
     except AGFSClientError as e:

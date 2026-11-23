@@ -219,7 +219,8 @@ ov read viking://resources/docs/api.md
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | use_snapshot | bool | 否 | `false` | 在内容锁内为写入文件保存快照|
-| defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，不派发语义或向量处理；FILE_ONLY 处理行为不变 |
+| processing_mode | string | 否 | `semantic_and_vectors` | resource/skill 处理模式：`vectors_only` 只维护向量，不重算摘要；memory 和 sidecar 写入沿用原处理方式 |
+| defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，优先于 `processing_mode`；FILE_ONLY 处理行为不变 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |

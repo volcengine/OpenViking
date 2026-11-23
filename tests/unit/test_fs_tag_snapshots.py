@@ -92,7 +92,19 @@ async def test_file_restore_rechecks_commit_under_content_lock(
     vfs.show.return_value = expected_content.encode()
     vfs.read_file_bytes.return_value = b"edit" if stale == "content" else vfs.show.return_value
 
-    async def locked_write(uri, content, ctx, *, mode, commit_content, tags, tag_mode, **kwargs):
+    async def locked_write(
+        uri,
+        content,
+        ctx,
+        *,
+        mode,
+        commit_content,
+        tags,
+        tag_mode,
+        processing_mode: str = "semantic_and_vectors",
+        **kwargs,
+    ):
+        assert processing_mode == "semantic_and_vectors"
         assert mode == "replace" and content == expected_content
         assert kwargs == {"use_snapshot": True}
         assert tags == [f"has_conflict={str(bool(count)).lower()}", f"conflict_num={count}"]
