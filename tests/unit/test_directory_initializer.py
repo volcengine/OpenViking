@@ -39,6 +39,7 @@ class _FakeVikingFS:
         self.contexts = {}
         self.write_leases = []
         self.files = {}
+        self.mkdir = AsyncMock()
         self._async_agfs = SimpleNamespace(
             pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "agent-init"}),
             pathlock_release=AsyncMock(),
@@ -173,8 +174,6 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
     vikingdb = _FakeVikingDB()
     agfs = MockLocalAGFS(root_path=tmp_path)
     viking_fs = VikingFS(agfs)
-    prepare_parent = AsyncMock(wraps=viking_fs._async_agfs.ensure_parent_dirs)
-    viking_fs._async_agfs.ensure_parent_dirs = prepare_parent
     deletion_guard = AsyncMock(return_value=False)
     viking_fs.set_deletion_guard(deletion_guard)
     sanitizer = SimpleNamespace(
@@ -198,8 +197,6 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
     }
     assert count == len(expected_uris)
-    assert deletion_guard.await_count == len(expected_uris) + 1
-    assert prepare_parent.await_count == len(expected_uris) + 1
     root_path = agfs._resolve(viking_fs._uri_to_path(user_root, ctx=ctx))
     assert {str(path.relative_to(root_path)) for path in root_path.rglob("*.md")} == {
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename

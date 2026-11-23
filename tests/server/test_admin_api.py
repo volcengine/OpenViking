@@ -2934,30 +2934,37 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 
 
 async def test_register_user(admin_client: httpx.AsyncClient):
-    """ROOT can register a user in an account."""
+    """Both user creation paths provision the supported memory directories."""
     acct = _uid()
-    await admin_client.post(
+    account = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    resp = await admin_client.post(
+    assert account.status_code == 200, account.text
+    user = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["result"]["user_id"] == "bob"
-    assert "user_key" in body["result"]
+    assert user.status_code == 200, user.text
+    assert user.json()["result"]["user_id"] == "bob"
 
-    # Bob's key should work
-    bob_key = body["result"]["user_key"]
-    resp = await admin_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={"X-API-Key": bob_key},
-    )
-    assert resp.status_code == 200
+    for user_id, created in (("alice", account), ("bob", user)):
+        listing = await admin_client.get(
+            "/api/v1/fs/ls",
+            params={"uri": f"viking://user/{user_id}/memories", "output": "original"},
+            headers={"X-API-Key": created.json()["result"]["user_key"]},
+        )
+        assert listing.status_code == 200, listing.text
+        assert {entry["name"] for entry in listing.json()["result"] if entry["isDir"]} == {
+            "preferences",
+            "entities",
+            "events",
+            "cases",
+            "trajectories",
+            "experiences",
+        }
 
 
 async def test_root_can_register_admin_role_user(

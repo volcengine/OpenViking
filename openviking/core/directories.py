@@ -66,62 +66,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 abstract="User's long-term memory storage. Contains memory types like preferences, entities, events, managed hierarchically by type.",
                 overview="Use this directory to access user's personalized memories. Contains three main categories: "
                 "1) preferences-user preferences, 2) entities-entity memories, 3) events-event records.",
-                children=[
-                    DirectoryDefinition(
-                        path="preferences",
-                        abstract="User's personalized preference memories. Stores preferences by topic (communication style, code standards, domain interests, etc.), "
-                        "one subdirectory per preference type, same-type preferences can be appended.",
-                        overview="Access when adjusting output style, following user habits, or providing personalized services. "
-                        "Examples: user prefers concise communication, code needs type annotations, focus on certain tech domains. "
-                        "Preferences organized by topic, same-type preferences aggregated in same subdirectory.",
-                    ),
-                    DirectoryDefinition(
-                        path="entities",
-                        abstract="Entity memories from user's world. Each entity has its own subdirectory, including projects, people, concepts, etc. "
-                        "Entities are important objects in user's world, can append additional information.",
-                        overview="Access when referencing user-related projects, people, concepts. "
-                        "Examples: OpenViking project, colleague Zhang San, certain technical concept. "
-                        "Each entity stored independently, can append updates.",
-                    ),
-                    DirectoryDefinition(
-                        path="events",
-                        abstract="User's event records. Each event has its own subdirectory, recording important events, decisions, milestones, etc. "
-                        "Events are time-independent, historical records not updated.",
-                        overview="Access when reviewing user history, understanding event context, or tracking user progress. "
-                        "Examples: decided to refactor memory system, completed a project, attended an event. "
-                        "Events are historical records, not updated once created.",
-                    ),
-                    DirectoryDefinition(
-                        path="cases",
-                        abstract="User's case memories. Stores concrete problem contexts and resolutions learned from sessions.",
-                        overview="Access when handling similar future problems. Cases are specific examples, separate from reusable patterns.",
-                    ),
-                    DirectoryDefinition(
-                        path="patterns",
-                        abstract="User's pattern memories. Stores reusable methods, workflows, and SOP-like lessons.",
-                        overview="Access when applying accumulated methods to new tasks. Patterns are generalized from cases and interactions.",
-                    ),
-                    DirectoryDefinition(
-                        path="tools",
-                        abstract="User's tool usage memories. Stores tool behavior, parameter experience, and failure modes.",
-                        overview="Access when deciding how to call tools or diagnosing tool failures.",
-                    ),
-                    DirectoryDefinition(
-                        path="skills",
-                        abstract="User's skill execution memories. Stores experience about using configured skills.",
-                        overview="Access when choosing or executing skills. This is memory about skill usage, not the skill definition itself.",
-                    ),
-                    DirectoryDefinition(
-                        path="trajectories",
-                        abstract="User's execution trajectory records. Stores end-to-end task execution traces when trajectory memory is enabled.",
-                        overview="Access when reviewing how a previous task was executed.",
-                    ),
-                    DirectoryDefinition(
-                        path="experiences",
-                        abstract="User's generalized experience memories distilled from execution trajectories.",
-                        overview="Access when applying lessons learned from repeated execution trajectories.",
-                    ),
-                ],
             ),
             DirectoryDefinition(
                 path="resources",
@@ -200,6 +144,17 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
 }
 
 
+# The memory writer generates summaries when these directories receive content.
+_USER_MEMORY_DIRECTORIES = (
+    "preferences",
+    "entities",
+    "events",
+    "cases",
+    "trajectories",
+    "experiences",
+)
+
+
 class DirectoryInitializer:
     """Initialize preset directory structure."""
 
@@ -241,13 +196,7 @@ class DirectoryInitializer:
             (*account_children, *user_children),
             lease_ref=lease_ref,
         )
-        await ensure_agent_file(
-            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
-        )
-        if self.user_config_defaults.preset_global_policy:
-            await ensure_global_policy_file(
-                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
-            )
+        await self._initialize_user_contents(user_root, lease_ref=lease_ref)
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
 
@@ -266,26 +215,36 @@ class DirectoryInitializer:
     async def initialize_user_directories(
         self, ctx: RequestContext, *, lease_ref: Any = None
     ) -> int:
-        """Initialize the current user's root and first-level entry directories.
-
-        Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
-        are still created lazily when content is written. This keeps a new user
-        root discoverable without materializing the full empty taxonomy.
-        """
+        """Provision the user workspace and return the number of directories seeded with summaries."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
         created = await self._initialize_directory_trees(
             (user_root,), user_children, lease_ref=lease_ref
         )
-        await ensure_agent_file(
-            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
-        )
-        if self.user_config_defaults.preset_global_policy:
-            await ensure_global_policy_file(
-                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
-            )
+        await self._initialize_user_contents(user_root, lease_ref=lease_ref)
         return len(created)
+
+    async def _initialize_user_contents(
+        self, user_root: _DirectoryTarget, *, lease_ref: Any = None
+    ) -> None:
+        viking_fs = self._get_viking_fs()
+        ctx = user_root.ctx
+        results = await asyncio.gather(
+            *(
+                viking_fs.mkdir(
+                    f"{user_root.uri}/memories/{name}", exist_ok=True, ctx=ctx, lease_ref=lease_ref
+                )
+                for name in _USER_MEMORY_DIRECTORIES
+            ),
+            return_exceptions=True,
+        )
+        _, error = self._partition_directory_results(results)
+        if error is not None:
+            raise error
+        await ensure_agent_file(viking_fs, ctx, lease_ref=lease_ref)
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(viking_fs, ctx, lease_ref=lease_ref)
 
     async def _initialize_directory_trees(
         self,
