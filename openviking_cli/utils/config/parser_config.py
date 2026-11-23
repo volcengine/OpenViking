@@ -706,9 +706,6 @@ class SemanticConfig:
     overview_batch_size: int = 50
     """Maximum number of file summaries per batch when splitting oversized prompts."""
 
-    overview_sample_limit: int = 32
-    """Maximum direct-child sample per directory summary and freshness small-directory threshold."""
-
     freshness_refresh_ratio: float = 0.10
     """Pending direct-child change ratio that refreshes a wide directory."""
 
@@ -725,8 +722,6 @@ class SemanticConfig:
     """Legacy setting retained for configuration compatibility; unused by memory vectorization."""
 
     def __post_init__(self):
-        if self.overview_sample_limit <= 0:
-            raise ValueError("overview_sample_limit must be positive")
         if not 0 < self.freshness_refresh_ratio <= 1:
             raise ValueError("freshness_refresh_ratio must be in the range (0, 1]")
         if self.memory_chunk_chars <= 0:

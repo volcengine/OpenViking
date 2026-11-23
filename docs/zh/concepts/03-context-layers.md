@@ -148,11 +148,11 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 - `unsampled_entries`：未采样的直接子项数，满足 `sampled + unsampled = total`。
 - `pending_child_changes`：尚未反映到当前正文中的直接子项变化事件数（同一子项重复变化会分别计数）。
 
-当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，减少采样变化带来的正文差异；模型重新生成的正文仍可能不同。
+当直接子项超过 32 项时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，减少采样变化带来的正文差异；模型重新生成的正文仍可能不同。
 
 `pending_child_changes > 0` 表示正文仍然可读，但已知落后于下层变化。父目录刷新成功后，该值会随新的覆盖率元数据重置为 0。
 
-resource/skill 的父目录刷新已使用 freshness 决策。子目录 L0 正文不变时，不触发向上传播。正文变化后，若父目录没有 freshness 基线，或直接子项数不超过 `semantic.overview_sample_limit`，则立即安排刷新。更大的目录会累计 `pending_child_changes`，其与 `total_entries` 的比值达到 `semantic.freshness_refresh_ratio`（默认 `0.10`）时才刷新。手动刷新或导入仅对请求的根目录跳过阈值，不会强制刷新所有祖先。传播止于 namespace 根边界。未达阈值时父目录仍可读，但保留 pending 状态；阈值策略不承诺定时刷新。
+resource/skill 的父目录刷新已使用 freshness 决策。子目录 L0 正文不变时，不触发向上传播。正文变化后，若父目录没有 freshness 基线，或直接子项数不超过 32 项，则立即安排刷新。更大的目录会累计 `pending_child_changes`，其与 `total_entries` 的比值达到 `semantic.freshness_refresh_ratio`（默认 `0.10`）时才刷新。手动刷新或导入仅对请求的根目录跳过阈值，不会强制刷新所有祖先。传播止于 namespace 根边界。未达阈值时父目录仍可读，但保留 pending 状态；阈值策略不承诺定时刷新。
 
 ## 写保护
 

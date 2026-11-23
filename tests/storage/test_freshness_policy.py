@@ -16,7 +16,6 @@ def _decide(**overrides):
         "total_entries": 161,
         "pending_before": 3,
         "current_change_count": 1,
-        "overview_sample_limit": 32,
         "refresh_ratio": 0.10,
     }
     values.update(overrides)

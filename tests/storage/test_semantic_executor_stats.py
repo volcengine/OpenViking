@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -161,15 +160,6 @@ class _ScheduledExecutor:
         self.failure = exc
 
 
-def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(
-            semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
-        ),
-    )
-
-
 @pytest.mark.asyncio
 async def test_semantic_executor_stats_collects_nodes(monkeypatch):
     root_uri = "viking://resources/root"
@@ -187,7 +177,6 @@ async def test_semantic_executor_stats_collects_nodes(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor(verify_streaming=True)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -226,7 +215,6 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -256,8 +244,7 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sample_limit", [4, 32])
-async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch, sample_limit):
+async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch):
     root_uri = "viking://resources/wide"
     tree = {
         root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
@@ -266,7 +253,6 @@ async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch, sa
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch, overview_sample_limit=sample_limit)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -283,40 +269,38 @@ async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch, sa
 
     await executor.run(root_uri)
 
-    assert len(processor.summarized_files) == sample_limit + 1
+    assert len(processor.summarized_files) == 33
     assert f"{root_uri}/file-004.txt" in processor.vectorized_files
     _, summaries, _, coverage = processor.overview_inputs[-1]
-    assert len(summaries) == sample_limit
+    assert len(summaries) == 32
     assert summaries[0]["name"] == "file-000.txt"
     assert summaries[-1]["name"] == "file-039.txt"
     assert "file-004.txt" not in {item["name"] for item in summaries}
     assert coverage["total_files"] == 40
     overview = parse_abstract_overview(dict(fake_fs.writes)[f"{root_uri}/.overview.md"])
-    assert overview.metadata["freshness"] == freshness_metadata(40, sample_limit)
+    assert overview.metadata["freshness"] == freshness_metadata(40, 32)
 
 
 @pytest.mark.asyncio
 async def test_non_recursive_memory_samples_files_and_child_abstracts_together(monkeypatch):
     root_uri = "viking://user/alice/memories"
     child_a = f"{root_uri}/a-child"
-    child_d = f"{root_uri}/d-child"
+    child_z = f"{root_uri}/z-child"
     tree = {
         root_uri: [
             {"name": "a-child", "isDir": True},
-            {"name": "b.md", "isDir": False},
-            {"name": "c.md", "isDir": False},
-            {"name": "d-child", "isDir": True},
-            {"name": "e.md", "isDir": False},
-            {"name": "f.md", "isDir": False},
+            *({"name": f"file-{idx:03}.md", "isDir": False} for idx in range(36)),
+            {"name": "z-child", "isDir": True},
         ],
         child_a: [{"name": "nested.md", "isDir": False}],
-        child_d: [{"name": "nested.md", "isDir": False}],
+        child_z: [{"name": "nested.md", "isDir": False}],
     }
-    fake_fs = _FakeVikingFS(tree, abstracts={child_a: "child a abstract"})
+    fake_fs = _FakeVikingFS(
+        tree, abstracts={child_a: "child a abstract", child_z: "child z abstract"}
+    )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch, overview_sample_limit=3)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "alice"), role=Role.USER)
@@ -332,16 +316,17 @@ async def test_non_recursive_memory_samples_files_and_child_abstracts_together(m
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [f"{root_uri}/{name}.md" for name in ("c", "f")]
-    assert executor.get_stats().total_nodes == 3
+    assert len(processor.summarized_files) == 30
+    assert all("/file-" in uri for uri in processor.summarized_files)
     assert processor.vectorized_files == []
     assert processor.vectorized_dirs == []
     _, file_summaries, child_abstracts, coverage = processor.overview_inputs[-1]
-    assert [item["name"] for item in file_summaries] == ["c.md", "f.md"]
+    assert len(file_summaries) == 30
     assert child_abstracts == [
         {"name": "a-child", "abstract": "child a abstract"},
+        {"name": "z-child", "abstract": "child z abstract"},
     ]
-    assert coverage["total_files"] == 4
+    assert coverage["total_files"] == 36
     assert coverage["total_children"] == 2
 
 
@@ -356,7 +341,7 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
     # The pending-counter read only locks when a sidecar exists; provide one
     # so the busy lock is actually exercised.
     sidecar = render_abstract_overview(
-        ContextLevel.ABSTRACT, root_uri, "abstract", {"freshness": freshness_metadata(40, 4, 0)}
+        ContextLevel.ABSTRACT, root_uri, "abstract", {"freshness": freshness_metadata(40, 32, 0)}
     )
 
     async def read_file(uri, ctx=None):
@@ -368,7 +353,6 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch, overview_sample_limit=4)
     monkeypatch.setattr(
         fake_fs, "pathlock_acquire_exact_batch", AsyncMock(side_effect=LockAcquisitionError("busy"))
     )
@@ -403,7 +387,6 @@ async def test_directory_listing_lock_conflict_propagates_for_retry(monkeypatch)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch)
 
     executor = SemanticTreeExecutor(
         processor=_FakeProcessor(),
@@ -434,7 +417,6 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -529,7 +511,6 @@ async def test_semantic_executor_skip_vectorization_does_not_schedule_tasks(monk
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)

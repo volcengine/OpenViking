@@ -3071,10 +3071,6 @@ async def test_directory_index_slots_choose_exact_levels(monkeypatch):
     )
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     class Processor:
         _generate_overview = AsyncMock(return_value="overview")
@@ -3136,10 +3132,6 @@ async def test_directory_sidecar_write_failure_fails_semantic_plan(monkeypatch):
     fs = SimpleNamespace(_async_agfs=None, _uri_to_path=lambda uri, ctx=None: uri)
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     class Processor:
         _generate_overview = AsyncMock(return_value="overview")
@@ -3188,10 +3180,6 @@ async def test_directory_repair_passes_partial_update_per_missing_level(monkeypa
     fs = SimpleNamespace(_async_agfs=None, _uri_to_path=lambda uri, ctx=None: uri)
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     class Processor:
         _generate_overview = AsyncMock(return_value="overview")
@@ -3269,10 +3257,6 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
     fs = SimpleNamespace(_async_agfs=None, _uri_to_path=lambda uri, ctx=None: uri)
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     embedding_queue = SimpleNamespace(enqueue=AsyncMock(return_value="embedding-id"))
     queue_manager = SimpleNamespace(
@@ -3369,10 +3353,6 @@ async def test_code_summary_unchanged_still_reembeds_after_content_change(monkey
     )
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     class Processor:
         _generate_single_file_summary = AsyncMock(return_value={"name": "a.py", "summary": "same"})
@@ -3455,10 +3435,6 @@ async def test_file_repair_passes_partial_update_to_embedding(monkeypatch):
     )
     fs._async_agfs = fs
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     class Processor:
         _generate_single_file_summary = AsyncMock(

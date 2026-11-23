@@ -5,6 +5,7 @@
 
 import pytest
 
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
@@ -14,7 +15,6 @@ def test_semantic_config_defaults():
     assert config.max_file_content_chars == 30000
     assert config.max_overview_prompt_chars == 60000
     assert config.overview_batch_size == 50
-    assert config.overview_sample_limit == 32
     assert config.freshness_refresh_ratio == 0.10
     assert config.abstract_max_chars == 256
     assert config.overview_max_chars == 4000
@@ -29,11 +29,18 @@ def test_freshness_refresh_ratio_must_be_a_probability(ratio):
 
 
 def test_semantic_config_custom_values():
-    """Test custom values override defaults."""
-    config = SemanticConfig(
-        max_overview_prompt_chars=100000,
-        overview_batch_size=100,
+    """Retired sample limits are ignored while remaining settings apply."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "semantic": {
+                "overview_sample_limit": 0,
+                "max_overview_prompt_chars": 100000,
+                "overview_batch_size": 100,
+            }
+        }
     )
+    assert "overview_sample_limit" not in config.to_dict()["semantic"]
+    config = config.semantic
     assert config.max_overview_prompt_chars == 100000
     assert config.overview_batch_size == 100
     # Unchanged defaults

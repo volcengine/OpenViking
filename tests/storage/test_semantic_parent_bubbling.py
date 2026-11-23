@@ -26,9 +26,7 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            semantic=SimpleNamespace(overview_sample_limit=32, freshness_refresh_ratio=0.10)
-        ),
+        lambda: SimpleNamespace(semantic=SimpleNamespace(freshness_refresh_ratio=0.10)),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
@@ -94,7 +92,6 @@ async def test_parent_refresh_stops_at_nonsemantic_namespace_root(monkeypatch, u
         "openviking.storage.queuefs.semantic_processor.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(
-                overview_sample_limit=32,
                 freshness_refresh_ratio=0.10,
             )
         ),
@@ -139,7 +136,6 @@ async def test_parent_refresh_preserves_semantic_roots(
         "openviking.storage.queuefs.semantic_processor.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(
-                overview_sample_limit=32,
                 freshness_refresh_ratio=0.10,
             )
         ),

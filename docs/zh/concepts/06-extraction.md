@@ -92,7 +92,9 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 
 ### Freshness、采样与父级刷新
 
-每次生成都会记录直接子项覆盖情况，超过 `semantic.overview_sample_limit`（默认 32）时使用稳定采样。resource/skill 的父级刷新取决于子目录 L0 正文变化和 freshness 阈值，L0 正文不变时不向上传播。`pending_child_changes` 统计等待刷新的变化事件，同一子项重复变化也会分别计数。阈值、手动刷新和延后更新的规则见[上下文层级](03-context-layers.md)。
+每次生成都会记录直接子项覆盖情况，超过 32 个直接子项时使用稳定采样。resource/skill 的父级刷新取决于子目录 L0 正文变化和 freshness 阈值，L0 正文不变时不向上传播。`pending_child_changes` 统计等待刷新的变化事件，同一子项重复变化也会分别计数。阈值、手动刷新和延后更新的规则见[上下文层级](03-context-layers.md)。
+
+目录采样上限固定为 32 项。旧配置中的 `semantic.overview_sample_limit` 会被忽略。
 
 ### 处理限制
 
@@ -101,7 +103,6 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 | `vlm.max_concurrent` | 32 | 语义处理并发上限，传入 `SemanticProcessor.max_concurrent_llm` |
 | `max_images_per_call` | 10 | `VLMProcessor` 构造参数：单次最大图片数，非 `ov.conf` 字段 |
 | `max_sections_per_call` | 20 | `VLMProcessor` 构造参数：单次最大章节数，非 `ov.conf` 字段 |
-| `semantic.overview_sample_limit` | 32 | 单个目录摘要使用的直接子项样本上限 |
 
 ## 代码骨架提取
 

@@ -21,7 +21,10 @@ from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.cache_config import CacheConfig
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    is_valid_openviking_config,
+)
 from openviking_cli.utils.config.storage_config import StorageConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -1397,29 +1400,21 @@ def test_vlm_validation():
     print("Test VLM config validation")
     print("=" * 60)
 
-    # Test 1: VLM not configured (optional)
-    print("\n1. Test VLM not configured (optional)...")
-    try:
-        _ = VLMConfig()
-        print("   Pass (VLM is optional)")
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    embedding = {"dense": {"provider": "local", "model": "bge-small-zh-v1.5-f16"}}
+    config = OpenVikingConfig.from_dict({"embedding": embedding})
+    with pytest.raises(ValueError, match="A VLM is required"):
+        is_valid_openviking_config(config)
 
-    # Test 2: VLM partial config (has model but no api_key)
-    print("\n2. Test VLM partial config...")
-    try:
-        _ = VLMConfig(model="gpt-4")
-        print("   Should fail but passed")
-    except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
+    with pytest.raises(ValueError, match="api_key"):
+        VLMConfig(model="gpt-4")
 
-    # Test 3: VLM complete config
-    print("\n3. Test VLM complete config...")
-    try:
-        _ = VLMConfig(model="gpt-4", api_key="fake-api-key-for-testing", provider="openai")
-        print("   Pass")
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    config = OpenVikingConfig.from_dict(
+        {
+            "embedding": embedding,
+            "vlm": {"provider": "openai", "model": "gpt-4", "api_key": "test-key"},
+        }
+    )
+    assert is_valid_openviking_config(config)
 
     # Test 4: VLM Provider/Backend sync
     print("\n4. Test VLM Provider/Backend sync...")

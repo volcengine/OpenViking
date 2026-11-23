@@ -176,13 +176,6 @@ class _FakeMemoryDirFS:
         ]
 
 
-def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
-    )
-
-
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_success(monkeypatch, native_queue):
     pathlock = _FakePathLock()
@@ -279,7 +272,6 @@ async def test_memory_directory_summarizes_all_files_but_samples_overview(monkey
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: fake_fs,
     )
-    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -341,7 +333,6 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
-    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
@@ -387,7 +378,6 @@ async def test_memory_directory_skips_vectorization_when_visible_semantics_are_u
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: _FakeMemoryDirFS(),
     )
-    _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(
         processor,
         "_generate_single_file_summary",
