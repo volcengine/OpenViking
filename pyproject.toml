@@ -281,6 +281,7 @@ openviking = [
     "server/account_stores/sql/postgres/*.sql",
     "service/sql/*.sql",
     "service/sql/changes/*.sql",
+    "observability/usage_audit/sql/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]
