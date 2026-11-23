@@ -51,7 +51,7 @@ def _build_test_app(*, oauth_enabled: bool, tmp_path=None) -> FastAPI:
 
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
-    app.state.api_key_manager = object()  # presence triggers API_KEY auth path
+    app.state.api_key_manager = _UserOnlyKeyManager()
     # Set auth plugin (lifespan not triggered in ASGI tests)
     registry = get_registry()
     if registry.get("api_key") is None:
@@ -69,24 +69,30 @@ def _build_test_app(*, oauth_enabled: bool, tmp_path=None) -> FastAPI:
 
 
 class _RootOnlyKeyManager:
-    def resolve(self, api_key):
-        if api_key != "root-test-1234567890abcd":
-            raise UnauthenticatedError("Invalid API Key")
-        return ResolvedIdentity(
-            role=Role.ROOT,
-            account_id="default",
-            user_id="default",
-        )
+    def is_root_key(self, api_key):
+        return api_key == "root-test-1234567890abcd"
+
+    async def resolve_identity(self, api_key):
+        if self.is_root_key(api_key):
+            return ResolvedIdentity(role=Role.ROOT)
+        raise UnauthenticatedError("Invalid API Key")
 
 
 class _UserOnlyKeyManager:
-    def resolve(self, api_key):
+    def is_root_key(self, api_key):
+        return False
+
+    async def verify(self, api_key):
         if api_key != "user-test-1234567890abcd":
             raise UnauthenticatedError("Invalid API Key")
+        return "default", "alice"
+
+    async def resolve_identity(self, api_key):
+        account_id, user_id = await self.verify(api_key)
         return ResolvedIdentity(
             role=Role.USER,
-            account_id="default",
-            user_id="alice",
+            account_id=account_id,
+            user_id=user_id,
         )
 
 

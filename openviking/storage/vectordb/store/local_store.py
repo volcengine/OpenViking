@@ -3,7 +3,7 @@
 from typing import Iterator, List, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
-from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, Op, OpType
+from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, OpType
 from openviking.storage.vectordb.utils.stale_lock import clean_stale_rocksdb_locks
 
 # Constant for the maximum Unicode character, used for range queries to cover all possible keys
@@ -49,6 +49,12 @@ class StoreEngineProxy(IMutiTableStore):
         super().__init__()
         self.storage_engine = storage_engine
 
+    @staticmethod
+    def _check_mutation_status(status: int, operation: str) -> None:
+        """Raise when a native mutation reports a failure."""
+        if status != 0:
+            raise RuntimeError(f"Native VectorDB {operation} failed with status {status}")
+
     def read(self, keys: List[str], table_name: str) -> List[bytes]:
         """Read values for multiple keys from a table.
 
@@ -74,7 +80,7 @@ class StoreEngineProxy(IMutiTableStore):
             table_name (str): Table name prefix.
         """
         keys = [table_name + key for key in keys]
-        self.storage_engine.put_data(keys, values)
+        self._check_mutation_status(self.storage_engine.put_data(keys, values), "put_data")
 
     def delete(self, keys: List[str], table_name: str):
         """Delete multiple keys from a table.
@@ -84,11 +90,11 @@ class StoreEngineProxy(IMutiTableStore):
             table_name (str): Table name prefix.
         """
         keys = [table_name + key for key in keys]
-        self.storage_engine.delete_data(keys)
+        self._check_mutation_status(self.storage_engine.delete_data(keys), "delete_data")
 
     def clear(self):
         """Clear all data from the storage engine."""
-        self.storage_engine.clear_data()
+        self._check_mutation_status(self.storage_engine.clear_data(), "clear_data")
 
     def read_all(self, table_name: str) -> List[Tuple[str, bytes]]:
         """Read all key-value pairs from a table.
@@ -259,27 +265,6 @@ class StoreEngineProxy(IMutiTableStore):
             start_exclusive = True
             page = seek_page(cursor, end_key, page_size, page_bytes, start_exclusive)
 
-    def exec_sequence(self, op: List[Op], table_name: str):
-        """Execute a sequence of operations on a specific table.
-
-        Args:
-            op (List[Op]): List of operations to execute in order.
-            table_name (str): Name of the table to operate on.
-        """
-        engine_op_list = []
-        for operation in op:
-            engine_op = engine.StorageOp()
-            if operation.op_type == OpType.PUT:
-                engine_op.type = engine.StorageOpType.PUT
-                engine_op.value = operation.data
-            else:
-                engine_op.type = engine.StorageOpType.DELETE
-                engine_op.value = ""  # Value not needed for delete
-
-            engine_op.key = table_name + operation.key
-            engine_op_list.append(engine_op)
-        self.storage_engine.exec_op(engine_op_list)
-
     def exec_sequence_batch_op(self, batch_op_list: List[BatchOp]):
         """Execute a batch of operations across multiple tables.
 
@@ -308,4 +293,4 @@ class StoreEngineProxy(IMutiTableStore):
                 # Safety check for data_list
                 engine_op.value = batch_op.data_list[i] if i < len(batch_op.data_list) else ""
                 engine_op_list.append(engine_op)
-        self.storage_engine.exec_op(engine_op_list)
+        self._check_mutation_status(self.storage_engine.exec_op(engine_op_list), "exec_op")

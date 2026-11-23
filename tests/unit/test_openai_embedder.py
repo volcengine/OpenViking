@@ -87,7 +87,7 @@ class TestOpenAIDenseEmbedder:
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_preserves_openai_batch_text_input(self, mock_openai_class):
-        """OpenAI batch text input should keep the historical list[str] passthrough."""
+        """OpenAI batches keep item boundaries and truncate each oversized item."""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -101,13 +101,13 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            dimension=1536,
+            config={"max_input_tokens": 1},
         )
 
-        embedder.embed(["first text", "second text"])
+        embedder.embed(["first text", "x"])
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
-        assert call_kwargs["input"] == ["first text", "second text"]
+        assert call_kwargs["input"] == ["firs\n...(truncated for embedding)", "x"]
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_multimodal_input_type_passes_content_parts(self, mock_openai_class):

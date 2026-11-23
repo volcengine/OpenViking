@@ -222,7 +222,7 @@ def run_ingest(
 
     if wait_processed:
         _log("wait_processed: drain vectorization/semantic queues")
-        client.wait_processed(timeout=task_timeout)
+        client.wait_processed()
 
     session_info = client.get_session(session_id)
     _log(f"session info: {session_info}")

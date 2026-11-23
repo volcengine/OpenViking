@@ -17,6 +17,7 @@ from .resource import ResourceIngestionEventDataSource
 from .retrieval import RetrievalStatsDataSource
 from .session import SessionLifecycleDataSource
 from .telemetry_bridge import TelemetryBridgeEventDataSource
+from .vikingdb import VikingDBEventDataSource
 
 __all__ = [
     "EventMetricDataSource",
@@ -33,4 +34,5 @@ __all__ = [
     "ResourceIngestionEventDataSource",
     "EncryptionEventDataSource",
     "TelemetryBridgeEventDataSource",
+    "VikingDBEventDataSource",
 ]

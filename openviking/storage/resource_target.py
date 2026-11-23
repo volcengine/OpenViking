@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from openviking.observability.reporting.facts import emit_file_change
 from openviking.utils.path_safety import safe_join_viking_uri
 
 
@@ -58,12 +59,16 @@ class AgfsResourceTarget:
 
     async def delete_path(self, rel_path: str, *, is_dir: bool) -> None:
         """Delete one planned path under the already-held resource tree lease."""
+        uri = self._resolve(rel_path)
         await self._viking_fs.remove_files(
-            self._resolve(rel_path),
+            uri,
             recursive=is_dir,
             ctx=self._ctx,
             lease_ref=self._lease_ref,
         )
+        # Incremental imports intentionally skip rm's index cleanup. Record
+        # their committed deletion here, after storage succeeds, exactly once.
+        emit_file_change(uri, self._ctx, "deleted", is_dir=is_dir)
 
 
 __all__ = ["AgfsResourceTarget"]

@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -18,61 +18,41 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import ListingResponse, Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
+from openviking.server.skill_history import reject_generic_skill_mutation
 from openviking.storage.acl import AclSpec
-from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
-from openviking.storage.vikingdb_manager import VikingDBManagerProxy
-from openviking.utils.tags import normalize_search_tags
-from openviking_cli.exceptions import NotFoundError
+from openviking.ttl.wiring import attach_expires_at
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
 
-_ATTR_INDEX_FIELDS = ["level", "search_tags"]
-
-
-def _clean_memory_attrs(raw: str) -> dict[str, Any]:
-    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-    mf = MemoryFileUtils.read(raw)
-    attrs: dict[str, Any] = mf.to_metadata()
-    attrs.pop("content", None)
-    return attrs
-
-
-async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
-    vikingdb_manager = getattr(service, "vikingdb_manager", None)
-    if not vikingdb_manager:
-        return []
-
-    # Tags are written per level (see ContentWriteCoordinator.set_tags): a
-    # directory carries them on its L0/L1 summary records, while a file carries
-    # them on its L2 content record. Mirror that here so the exact node's tags
-    # are read back instead of unrelated records. Eq("uri", ...) compiles to an
-    # exact path match (-d=0), avoiding prefix/subtree matches over the path field.
-    levels = [0, 1] if is_dir else [2]
-    proxy = VikingDBManagerProxy(vikingdb_manager, ctx)
-    records = await proxy.filter(
-        filter=And([Eq("uri", uri), In("level", levels)]),
-        limit=10,
-        output_fields=_ATTR_INDEX_FIELDS,
-    )
-    records = sorted(records, key=lambda item: item.get("level", 99))
-    tags: list[str] = []
-    for record in records:
-        for tag in normalize_search_tags(record.get("search_tags"), discard_invalid=True):
-            if tag not in tags:
-                tags.append(tag)
-    return tags
+def _reject_managed_tools_uri(
+    operation: str,
+    uris: list[str],
+    ctx: RequestContext,
+) -> None:
+    roots = ("viking://agent/tools", f"{canonical_user_root(ctx)}/tools")
+    for uri in uris:
+        if any(uri == root or uri.startswith(f"{root}/") for root in roots):
+            raise InvalidArgumentError(
+                f"{operation} is not allowed under managed MCP tools directories; "
+                "use 'ov mcps' instead"
+            )
 
 
 @router.get("/ls")
 async def ls(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="File or directory Viking URI"),
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    include_abstract: Optional[bool] = Query(
+        None, description="Include directory L0 abstracts; defaults to the output format"
+    ),
+    include_overview: Optional[bool] = Query(None, description="Include directory L1 overviews"),
+    overview_limit: int = Query(4000, ge=1, description="Maximum overview length"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
@@ -89,7 +69,7 @@ async def ls(
     include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List directory contents."""
+    """List a directory's children or return the file itself."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
@@ -102,6 +82,9 @@ async def ls(
             simple=simple,
             output=output,
             abs_limit=abs_limit,
+            include_abstract=include_abstract,
+            include_overview=include_overview,
+            overview_limit=overview_limit,
             show_all_hidden=show_all_hidden,
             node_limit=actual_node_limit,
             offset=offset,
@@ -118,12 +101,13 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
+    await attach_expires_at(page.entries, _ctx)
     return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/tree")
 async def tree(
-    uri: str = Query(..., description="Viking URI"),
+    uri: str = Query(..., description="File or directory Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Maximum returned abstract length"),
     include_abstract: Optional[bool] = Query(
@@ -144,7 +128,7 @@ async def tree(
     include_tags: bool = Query(False, description="Include tags in each entry"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get directory tree."""
+    """List directory descendants or return a file as a single-node tree."""
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
@@ -174,6 +158,7 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
+    await attach_expires_at(page.entries, _ctx)
     return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
@@ -195,7 +180,9 @@ async def stat(
         # URI requests use the canonical validated URI. ID requests are resolved
         # inside VikingFS, which returns the corresponding canonical URI.
         response_uri = result.get("uri", resolved)
-        return Response(status="ok", result={**result, "uri": response_uri})
+        payload = {**result, "uri": response_uri}
+        await attach_expires_at([payload], _ctx)
+        return Response(status="ok", result=payload)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -215,22 +202,11 @@ async def attrs(
     uri: str = Query(..., description="Viking URI"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get logical extended attributes for a URI."""
+    """Get logical extended attributes for one URI."""
     service = get_service()
-    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        stat_result = await service.fs.stat(uri, ctx=_ctx, skip_count=True)
-        result = {
-            "uri": uri,
-            "context_type": context_type_for_uri(uri),
-            "attrs": {
-                "tags": await _tags_attr(
-                    service, uri, _ctx, is_dir=stat_result.get("isDir", False)
-                ),
-            },
-        }
-        if result["context_type"] == "memory" and not stat_result.get("isDir", False):
-            result["attrs"]["memory"] = _clean_memory_attrs(await service.fs.read(uri, ctx=_ctx))
+        result = await service.fs.attrs(resolved, ctx=_ctx)
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -272,6 +248,8 @@ async def mkdir(
     service = get_service()
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+    _reject_managed_tools_uri("mkdir", [uri], _ctx)
+    reject_generic_skill_mutation(uri, "mkdir")
     try:
         await service.fs.mkdir(
             uri,
@@ -292,15 +270,21 @@ async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
     wait: bool = Query(False, description="Wait for semantic refresh to complete"),
-    timeout: Optional[float] = Query(None, description="Wait timeout in seconds"),
+    timeout: Optional[float] = Query(
+        None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
     service = get_service()
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    _reject_managed_tools_uri("rm", [uri], _ctx)
+    reject_generic_skill_mutation(uri, "rm")
     try:
-        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait, timeout=timeout)
+        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -317,14 +301,14 @@ async def rm(
     response_result = {"uri": uri}
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
-    if isinstance(result, dict) and "memory_cleanup" in result:
-        response_result["memory_cleanup"] = result["memory_cleanup"]
     if isinstance(result, dict) and "semantic_root_uri" in result:
         response_result["semantic_root_uri"] = result["semantic_root_uri"]
     if isinstance(result, dict) and "semantic_status" in result:
         response_result["semantic_status"] = result["semantic_status"]
     if isinstance(result, dict) and "queue_status" in result:
         response_result["queue_status"] = result["queue_status"]
+    if isinstance(result, dict) and "task_id" in result:
+        response_result["task_id"] = result["task_id"]
     return Response(status="ok", result=response_result)
 
 
@@ -356,6 +340,8 @@ async def cp(
     to_uri = validate_request_viking_uri(
         resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
     )
+    _reject_managed_tools_uri("cp", [from_uri, to_uri], _ctx)
+    reject_generic_skill_mutation(to_uri, "cp")
     try:
         result = await service.fs.cp(
             from_uri,
@@ -397,6 +383,9 @@ async def mv(
     to_uri = validate_request_viking_uri(
         resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
     )
+    _reject_managed_tools_uri("mv", [from_uri, to_uri], _ctx)
+    reject_generic_skill_mutation(from_uri, "mv")
+    reject_generic_skill_mutation(to_uri, "mv")
     try:
         await service.fs.mv(from_uri, to_uri, ctx=_ctx)
     except AGFSNotFoundError:

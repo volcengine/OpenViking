@@ -22,7 +22,7 @@ type RemoteSearchResponse =
   | { ok: true; results: DocsSearchResult[] }
   | { ok: false; reason: RemoteSearchFailureReason }
 
-const PRODUCTION_SEARCH_URL = 'https://openviking.net/studio/gateway/docs/search'
+const SEARCH_URL = import.meta.env.VITE_DOCS_SEARCH_URL || 'https://openviking.net/studio/gateway/docs/search'
 const SEARCH_LIMIT = 8
 const REMOTE_SEARCH_DEBOUNCE_MS = 1000
 const REMOTE_SEARCH_TIMEOUT_MS = 15000
@@ -213,7 +213,7 @@ async function runSearch() {
 
   try {
     const remoteResponse = await fetchRemoteResults(
-      PRODUCTION_SEARCH_URL,
+      SEARCH_URL,
       currentQuery,
       mode.value,
       docsLocale(),
@@ -474,19 +474,22 @@ onUnmounted(() => {
     <button
       ref="triggerRef"
       :aria-label="searchCopy.trigger"
+      :title="`${searchCopy.trigger} (⌘K / Ctrl K)`"
+      :aria-expanded="isOpen"
+      aria-haspopup="dialog"
+      aria-controls="ov-docs-search-dialog"
       class="ov-docs-search-trigger"
       type="button"
       @click="openSearch"
     >
-      <span class="ov-docs-search-trigger-label">{{ searchCopy.trigger }}</span>
-      <span aria-hidden="true" class="ov-docs-search-trigger-compact">{{ searchCopy.compactTrigger }}</span>
-      <kbd>Ctrl K</kbd>
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 4.5 4.5" /></svg>
     </button>
 
     <Teleport v-if="isMounted && isOpen" to="body">
       <div class="ov-docs-search-backdrop" @click.self="closeSearch">
         <section
           ref="dialogRef"
+          id="ov-docs-search-dialog"
           :aria-label="searchCopy.dialogLabel"
           aria-modal="true"
           class="ov-docs-search-dialog"

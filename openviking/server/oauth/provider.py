@@ -12,8 +12,9 @@ strings keyed by their SHA-256 hash, so this module contains no cryptography.
 
 from __future__ import annotations
 
+import inspect
 import secrets
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
@@ -97,7 +98,7 @@ class OpenVikingOAuthProvider(
         refresh_token_ttl_seconds: int = 30 * 24 * 3600,
         auth_code_ttl_seconds: int = 300,
         authorize_page_path: str = DEFAULT_AUTHORIZE_PAGE,
-        role_resolver: Optional[Callable[[str, str], "Role"]] = None,
+        role_resolver: Optional[Callable[[str, str], Role | None | Awaitable[Role | None]]] = None,
     ) -> None:
         self._store = store
         self._issuer = issuer.rstrip("/")
@@ -105,11 +106,8 @@ class OpenVikingOAuthProvider(
         self._refresh_ttl = refresh_token_ttl_seconds
         self._code_ttl = auth_code_ttl_seconds
         self._authorize_page = authorize_page_path
-        # Optional callback to look up a user's current role at refresh time.
-        # When supplied, exchange_refresh_token will reject if the embedded
-        # role outranks the current role — mirrors the bearer-auth check so
-        # that `set_role` demotion can't be laundered through token rotation.
-        # Wired in app.py from the APIKeyManager.
+        # Optional account-registry lookup used to validate the saved
+        # authorization role at refresh time, matching bearer authentication.
         self._role_resolver = role_resolver
 
     # ---- Clients (DCR) ----
@@ -149,17 +147,15 @@ class OpenVikingOAuthProvider(
         # auth method was declared. To prevent confidential clients from
         # *thinking* they're getting secret-based auth (silent security
         # downgrade), we normalize whatever the registrar requested to
-        # "none" and log a warning. Real MCP clients use "none" anyway —
+        # "none" and log the normalization. Real MCP clients use "none" anyway —
         # RFC 8252 §8.4 says native apps MUST NOT use client_secret —
         # but the OAuth 2.0 default that some SDKs fill in is
         # "client_secret_basic", which would otherwise fail the gate.
         requested = client_info.token_endpoint_auth_method
         if requested and requested != "none":
-            logger.warning(
-                "DCR: client %s requested token_endpoint_auth_method=%s; "
-                "downgrading to 'none' (OpenViking only supports public PKCE clients).",
-                client_info.client_id,
-                requested,
+            logger.info(
+                "OAuth client authentication method normalized to none; "
+                "only public PKCE clients are supported"
             )
         auth_method = "none"
         try:
@@ -286,25 +282,21 @@ class OpenVikingOAuthProvider(
         refresh_token: OVRefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        # Role downgrade gate: if the embedded role outranks the user's
-        # current role (post-`set_role` demotion), refuse to rotate. Same
-        # invariant the bearer-auth path enforces; checked here so a
-        # demoted user can't keep minting fresh access tokens at the old
-        # privilege level just because they hold a long-lived refresh.
+        # Validate the saved authorization role without replacing it with
+        # the account-registry role. Registry reads may be cached.
         if self._role_resolver is not None:
             try:
-                token_role = Role(refresh_token.role)
-                current_role = Role(
-                    self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                authorized_account_role = Role.parse(refresh_token.role)
+                resolved = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                registered_account_role = Role.parse(
+                    await resolved if inspect.isawaitable(resolved) else resolved
                 )
-            except (ValueError, Exception):  # noqa: BLE001
-                token_role = None
-                current_role = None
-            if (
-                token_role is not None
-                and current_role is not None
-                and token_role.rank > current_role.rank
-            ):
+            except Exception as exc:
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description="Unable to validate current identity; re-authorize the client",
+                ) from exc
+            if not registered_account_role.allows_token_role(authorized_account_role):
                 raise TokenError(
                     error="invalid_grant",
                     error_description=(
@@ -325,10 +317,11 @@ class OpenVikingOAuthProvider(
             # risk leaving sibling tokens live.
             if await self._store.is_refresh_known_but_consumed(refresh_token.token):
                 logger.warning(
-                    "OAuth refresh replay detected for client_id=%s account=%s user=%s",
-                    client.client_id,
-                    refresh_token.account_id,
-                    refresh_token.user_id,
+                    "OAuth refresh token replay detected",
+                    extra={
+                        "account_id": refresh_token.account_id,
+                        "user_id": refresh_token.user_id,
+                    },
                 )
                 await self._store.revoke_tokens(
                     account_id=refresh_token.account_id,

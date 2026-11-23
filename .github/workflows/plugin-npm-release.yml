@@ -10,6 +10,7 @@ on:
     paths:
       - "examples/dsh-memory-plugin/**"
       - "examples/opencode-plugin/**"
+      - "examples/magpie-memory-plugin/**"
       - "examples/memory-plugin-shared/lib/**"
       - "examples/memory-plugin-shared/sync.mjs"
       - ".github/workflows/plugin-npm-release.yml"
@@ -30,6 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - package: "@openviking/magpie-plugin"
+            directory: examples/magpie-memory-plugin
+            install: npm install --ignore-scripts
           - package: "@openviking/dsh-memory-plugin"
             directory: examples/dsh-memory-plugin
             install: npm ci

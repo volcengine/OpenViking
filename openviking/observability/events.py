@@ -45,6 +45,7 @@ class ObservabilityEventBus:
     def __init__(self) -> None:
         self._subscribers: dict[str, ObservabilitySubscriber] = {}
         self._lock = threading.RLock()
+        self._delivery_failure_reported = False
 
     def register(self, name: str, subscriber: ObservabilitySubscriber) -> None:
         """Register or replace one named subscriber."""
@@ -63,17 +64,23 @@ class ObservabilityEventBus:
         with self._lock:
             subscribers = list(self._subscribers.items())
 
+        failed = []
         for name, subscriber in subscribers:
             try:
                 subscriber(event)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "observability subscriber %s failed for event %s: %s",
-                    name,
-                    event.event_name,
-                    exc,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
-                )
+            except Exception:  # noqa: BLE001
+                failed.append(name)
+        if failed:
+            with self._lock:
+                level = logging.INFO if self._delivery_failure_reported else logging.ERROR
+                self._delivery_failure_reported = True
+            logger.log(
+                level,
+                "observability delivery incomplete total=%d failed=%d degraded=true",
+                len(subscribers),
+                len(failed),
+                extra={"total": len(subscribers), "failed": len(failed), "degraded": True},
+            )
 
     def clear(self) -> None:
         """Remove all subscribers. Intended for tests and process shutdown."""
@@ -119,6 +126,21 @@ def _metadata_from_context(payload: dict[str, Any]) -> dict[str, str | None]:
 def build_event(event_name: str, payload: dict[str, Any] | None = None) -> ObservabilityEvent:
     """Create an enriched event envelope from a raw event name and payload."""
     normalized_payload = dict(payload or {})
+    from openviking.observability.reporting.runtime import is_reporting_enabled
+
+    if is_reporting_enabled() and not normalized_payload.get("event_id"):
+        from uuid import uuid4
+
+        normalized_payload["event_id"] = "evt_" + uuid4().hex
+    from openviking.observability.reporting.facts import event_context
+
+    for key, value in event_context(str(event_name)).items():
+        if normalized_payload.get(key) is None:
+            normalized_payload[key] = value
+    if event_name == "http.request":
+        tasks = get_observability_context().extra.get("metric_tasks", {})
+        if tasks:
+            normalized_payload["metric_tasks"] = list(tasks.values())
     metadata = _metadata_from_context(normalized_payload)
     return ObservabilityEvent(
         event_name=str(event_name),
@@ -134,11 +156,10 @@ def try_publish_event(event_name: str, payload: dict[str, Any] | None = None) ->
     try:
         _GLOBAL_EVENT_BUS.publish(build_event(event_name, payload))
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "observability event publish failed for %s: %s",
-            event_name,
-            exc,
-            exc_info=logger.isEnabledFor(logging.DEBUG),
+        logger.info(
+            "observability publish unavailable error_type=%s degraded=true",
+            type(exc).__name__,
+            extra={"degraded": True},
         )
 
 

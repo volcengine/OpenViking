@@ -15,6 +15,7 @@ from dataclasses import asdict, is_dataclass
 from types import UnionType
 from typing import (
     Any,
+    Callable,
     List,
     Optional,
     Tuple,
@@ -366,6 +367,7 @@ def parse_json_with_stability(
     content: str,
     model_class: Optional[Type] = None,
     expected_fields: Optional[List[str]] = None,
+    validate_data: Optional[Callable[[dict], None]] = None,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """
     Five-layer JSON parsing with maximum stability.
@@ -379,7 +381,8 @@ def parse_json_with_stability(
     Args:
         content: Raw LLM response string
         model_class: Optional Pydantic model class to validate against
-        expected_fields: Optional list of field names to keep (filter out extra fields)
+        expected_fields: Optional field names to keep. Non-empty objects containing
+            none of these fields are rejected instead of becoming an empty result.
 
     Returns:
         Tuple of (parsed_data, error_message). error_message is None on success.
@@ -430,11 +433,19 @@ def parse_json_with_stability(
 
     # Filter to only expected fields if provided
     if expected_fields:
-        filtered_data = {}
-        for k, v in parsed_data.items():
-            if k in expected_fields:
-                filtered_data[k] = v
+        filtered_data = {k: v for k, v in parsed_data.items() if k in expected_fields}
+        if parsed_data and not filtered_data:
+            fields = ", ".join(sorted(parsed_data))
+            return None, f"No expected fields found; got fields: {fields}"
         parsed_data = filtered_data
+
+    # Run semantic restrictions before item-dropping tolerance: dropping a rejected
+    # replacement but keeping its deletion would silently change the request.
+    if validate_data is not None:
+        try:
+            validate_data(parsed_data)
+        except ValueError as exc:
+            return None, str(exc)
 
     # If no model class, return the raw dict
     if model_class is None:

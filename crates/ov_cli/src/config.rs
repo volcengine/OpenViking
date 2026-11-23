@@ -151,19 +151,6 @@ pub(crate) fn timeout_is_valid(timeout: f64) -> bool {
     timeout > 0.0 && std::time::Duration::try_from_secs_f64(timeout).is_ok()
 }
 
-pub(crate) fn parse_positive_timeout(value: &str) -> std::result::Result<f64, String> {
-    let timeout = value
-        .parse::<f64>()
-        .map_err(|_| format!("invalid timeout {value:?}: expected a positive number of seconds"))?;
-    if timeout_is_valid(timeout) {
-        Ok(timeout)
-    } else {
-        Err(format!(
-            "invalid timeout {value:?}: expected a positive finite number of seconds"
-        ))
-    }
-}
-
 fn default_output_format() -> String {
     "table".to_string()
 }
@@ -266,26 +253,11 @@ impl Config {
     }
 
     pub fn load_required() -> Result<Self> {
-        // Resolution order: env var > default path
-        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
-            return Self::load_required_from_path(&PathBuf::from(env_path));
-        }
-
-        let config_path = default_config_path()?;
-        Self::load_required_from_path(&config_path)
+        Self::load_required_from_path(&effective_config_path()?)
     }
 
     pub fn load_default() -> Result<Self> {
-        // Resolution order: env var > default path
-        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
-            let p = PathBuf::from(env_path);
-            if p.exists() {
-                return Self::from_file(&p.to_string_lossy());
-            }
-        }
-
-        let config_path = default_config_path()?;
-        Self::load_default_from_path(&config_path)
+        Self::load_default_from_path(&effective_config_path()?)
     }
 
     pub fn load_required_from_path(path: &Path) -> Result<Self> {
@@ -314,7 +286,7 @@ impl Config {
     }
 
     pub fn save_default(&self) -> Result<()> {
-        let config_path = default_config_path()?;
+        let config_path = effective_config_path()?;
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| Error::Config(format!("Failed to create config directory: {}", e)))?;
@@ -412,6 +384,18 @@ impl Config {
     }
 }
 
+/// Resolve the file used by both requests and configuration management.
+/// An explicit path stays selected even when it does not exist yet.
+pub fn effective_config_path() -> Result<PathBuf> {
+    match std::env::var_os(OPENVIKING_CLI_CONFIG_ENV) {
+        Some(path) if !path.is_empty() => Ok(PathBuf::from(path)),
+        Some(_) => Err(Error::Config(format!(
+            "{OPENVIKING_CLI_CONFIG_ENV} must not be empty"
+        ))),
+        None => default_config_path(),
+    }
+}
+
 pub fn default_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
@@ -419,9 +403,15 @@ pub fn default_config_path() -> Result<PathBuf> {
 }
 
 pub fn display_config_home() -> String {
-    let path = default_config_path()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    let path = effective_config_path().ok().and_then(|path| {
+        path.parent().map(|parent| {
+            if parent.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                parent.to_path_buf()
+            }
+        })
+    });
     let Some(path) = path else {
         return "~/.openviking".to_string();
     };

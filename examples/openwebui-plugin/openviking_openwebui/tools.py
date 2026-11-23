@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -57,6 +58,16 @@ class SearchResponse(BaseModel):
 class RecallRequest(BaseModel):
     query: str
     limit: int = Field(6, ge=1, le=50)
+
+
+class RuleSearchRequest(BaseModel):
+    task_context: str = Field(
+        ...,
+        min_length=1,
+        max_length=64000,
+        description="User goal, planned action, and facts affecting Rule applicability",
+    )
+    rule_probability_threshold: float = Field(0.65, ge=0.0, le=1.0)
 
 
 class AddMemoryRequest(BaseModel):
@@ -158,6 +169,26 @@ async def ov_search(
     except OVError as exc:
         raise _forward(exc) from exc
     return SearchResponse(hits=_hits_from_find(raw), raw=raw if isinstance(raw, dict) else {})
+
+
+@router.post(
+    "/tools/ov_rule_search",
+    operation_id="ov_rule_search",
+    summary="Check constraints before a planned action or response; return complete compiled Rules.",
+)
+async def ov_rule_search(
+    body: RuleSearchRequest,
+    client: OVClient = Depends(get_client),
+) -> str:
+    """Return full Rules including applicability conditions and exceptions."""
+    try:
+        raw = await client.post("/api/v1/rules/search", json=body.model_dump())
+    except OVError as exc:
+        raise _forward(exc) from exc
+    result = raw.get("result") if isinstance(raw, dict) else None
+    if not isinstance(result, dict) or not isinstance(result.get("rendered"), str):
+        raise HTTPException(status_code=502, detail="OpenViking returned no rendered Rules")
+    return result["rendered"]
 
 
 @router.post(
@@ -289,7 +320,14 @@ async def ov_session_status(
     client: OVClient = Depends(get_client),
 ) -> Dict[str, Any]:
     """GET /api/v1/sessions/{session_id}."""
+    session_id = body.session_id
+    # Reject percent escapes as well: upstream routers may decode the path.
+    if session_id in {".", ".."} or not re.fullmatch(r"[^/\\?#%\x00-\x1f\x7f]+", session_id):
+        raise HTTPException(
+            status_code=422,
+            detail="session_id must be a single path segment without URL syntax or control characters",
+        )
     try:
-        return await client.get(f"/api/v1/sessions/{body.session_id}")
+        return await client.get(f"/api/v1/sessions/{session_id}")
     except OVError as exc:
         raise _forward(exc) from exc

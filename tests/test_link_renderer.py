@@ -89,6 +89,54 @@ class TestLinkSatisfaction:
     source_uri = "viking://resources/wiki/overview.md"
     target_uri = "viking://resources/wiki/tags.md"
 
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "![OpenViking][demo]\n\n[demo]: image.png",
+            "![OpenViking][]\n\n[OpenViking]: image.png",
+            "![OpenViking]\n\n[OpenViking]: image.png",
+            "![nested [OpenViking] label](image.png)",
+            "> ![nested [OpenViking]][demo]\n\n[demo]: image.png",
+            "- ![OpenViking\r\n  illustration](image.png)",
+            "![example][demo]\n\n[demo]: first.png\n[demo]: OpenViking.png",
+        ],
+    )
+    def test_commonmark_images_are_not_knowledge_links(self, content):
+        assert not LinkRenderer.can_render_link(
+            content, "OpenViking", self.source_uri, self.target_uri
+        )
+        assert LinkRenderer.render_links_with_count(
+            content,
+            self.source_uri,
+            [{"match_text": "OpenViking", "to_uri": self.target_uri}],
+        ) == (content, 0)
+        assert LinkRenderer.render_links_with_count(
+            content + "\n\nOpenViking",
+            self.source_uri,
+            [{"match_text": "OpenViking", "to_uri": self.target_uri}],
+        ) == (content + "\n\n[OpenViking](./tags.md)", 1)
+
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            "<!-- Example: `OpenViking` -->\n\n",
+            "Example <!-- `OpenViking` --> ",
+            "Example\x00 <!-- `OpenViking` --> ",
+            "- A preview\n\t![OpenViking](img.png) ",
+        ],
+    )
+    def test_link_visible_anchor_after_protected_syntax(self, prefix):
+        assert not LinkRenderer.can_render_link(
+            prefix, "OpenViking", self.source_uri, self.target_uri
+        )
+        content = prefix + "OpenViking"
+        assert LinkRenderer.can_render_link(content, "OpenViking", self.source_uri, self.target_uri)
+        assert LinkRenderer.render_links_with_count(
+            content,
+            self.source_uri,
+            [{"match_text": "OpenViking", "to_uri": self.target_uri}],
+        ) == (prefix + "[OpenViking](./tags.md)", 1)
+
     def test_unprotected_anchor_can_be_linked(self):
         assert LinkRenderer.can_render_link(
             "Read the behavior tags.",
@@ -179,6 +227,25 @@ class TestLinkSatisfaction:
         assert not LinkRenderer.can_render_link(
             "`[行为标签库](./tags.md)`",
             "行为标签库",
+            self.source_uri,
+            self.target_uri,
+        )
+
+    def test_escaped_link_syntax_does_not_count_as_an_existing_link(self):
+        assert list(LinkRenderer.iter_markdown_links(r"\[Tags](./tags.md)")) == []
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "> ```md\n> behavior tags\n> ```",
+            "- ```md\n  behavior tags\n  ```",
+            "```md\nbehavior tags",
+        ],
+    )
+    def test_commonmark_code_blocks_are_not_linkable(self, content):
+        assert not LinkRenderer.can_render_link(
+            content,
+            "behavior tags",
             self.source_uri,
             self.target_uri,
         )

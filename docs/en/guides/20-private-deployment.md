@@ -38,6 +38,30 @@ ovadmin material check-registry --listfile "${VIKING_HOME}/vikinglist" \
 
 Download URLs in `vikinglist` are signed and expire. If you get `HTTP 403`, ask the delivery team for a fresh list. If the deployment host cannot reach the URLs, download on a connected machine and copy the `repo` directory over. Without a Docker daemon, run `skopeo login` and add `--skopeo-bin "$(command -v skopeo)"` to `import-registry`. Tags that already exist in the Registry are skipped, so reruns are safe. Continue once `check-registry` reports no missing images.
 
+When importing:
+
+- If the Registry does not create repositories on push (for example Amazon ECR), list the target images with `import-registry --dry-run` and create each repository first.
+- `--crane-bin` passes the `.tar.gz` files straight to `crane push`, which only accepts uncompressed tar and fails with `archive/tar: invalid tar header`. Use `--skopeo-bin`, or `gunzip` each file and push it with `crane push <file>.tar <target>`.
+- `import-registry` stops the whole batch at the first failure. Fix the cause and rerun; tags already imported are skipped.
+
+**Initialization images are not in `vikinglist`.** When dependencies are initialized by Flyway (option two in the bundled infrastructure requirements), the initialization Jobs reference the three images below by default. They are public Docker Hub images; copy them into the matching Registry paths yourself:
+
+| Purpose | Default reference | Public source |
+| --- | --- | --- |
+| MySQL DDL | `${IMAGE_REGISTRY}/infra/apecloud/mysql:8.0.39` | `docker.io/apecloud/mysql:8.0.39` |
+| Kafka topics | `${IMAGE_REGISTRY}/infra/apecloud/kafka:3.8.1-debian-12-r2` | `docker.io/apecloud/kafka:3.8.1-debian-12-r2` |
+| HBase tables, HDFS directory | `${IMAGE_REGISTRY}/infra/apecloud/hbase-hmaster:v2.5.6-1.0.0` | `docker.io/apecloud/hbase-hmaster:v2.5.6-1.0.0` |
+
+```bash
+crane copy docker.io/apecloud/mysql:8.0.39 "${IMAGE_REGISTRY}/infra/apecloud/mysql:8.0.39"
+crane copy docker.io/apecloud/kafka:3.8.1-debian-12-r2 "${IMAGE_REGISTRY}/infra/apecloud/kafka:3.8.1-debian-12-r2"
+crane copy docker.io/apecloud/hbase-hmaster:v2.5.6-1.0.0 "${IMAGE_REGISTRY}/infra/apecloud/hbase-hmaster:v2.5.6-1.0.0"
+```
+
+To use your own client images, set their repository and tag under `spec.global.flywayInitImages` in `vdb.yaml`. The MySQL DDL ships inside ovadmin and runs from the Flyway Job; the package has no separate SQL files.
+
+`setup apply --dry-run` checks every image in the Registry, so the full plan is only available after both application and initialization images are synchronized.
+
 Isolated environments also need infrastructure dependencies, model services, and a license renewal / telemetry return plan. Having the images in place does not make the system fully offline-ready.
 
 ## 2. Generate and edit configuration
@@ -71,6 +95,26 @@ kubectl label node '<node-name>' nodeLevel=online --overwrite
 kubectl label node '<offline-node-name>' nodeLevel=offline --overwrite
 kubectl get nodes -L nodeLevel
 ```
+
+Also add or change these items in the generated `vdb.yaml` to match your environment:
+
+| Item | Why | What to do |
+| --- | --- | --- |
+| `spec.middleware.hdfs.configMapName` | `init config` does not generate it; without it, dry-run does not check the HDFS ConfigMap either | Add `hdfs: {configMapName: hadoop-config}`, matching the actual ConfigMap name |
+| `spec.observability.oneAgent.enabled` | Defaults to `true` in the `cluster` profile, and one-agent writes into a `viking-infra` namespace; without the matching observability stack, apply fails with `namespaces "viking-infra" not found` | Set to `false` if the matching observability stack is not deployed |
+| Component `replicas` and `resources` | Defaults assume large nodes and may exceed node pool capacity | Size to the allocatable capacity of your node pools; see the [deployment checklist](19-deployment-checklist.md) |
+| `spec.tbase` scheduling | This release's Operator does not render `tolerations` under `spec.tbase` into tbase-api / tbase-scan, and direct Deployment edits are rejected by the license webhook | If dedicated nodes are tainted, use `spec.tbase.nodeSelector` to place tbase on untainted nodes with enough capacity |
+
+When dedicated nodes are tainted, `tolerations` set per component in `vdb.yaml` take effect for the other components.
+
+The HDFS model directory must be writable by `root` (see the [deployment checklist](19-deployment-checklist.md) for why). Flyway creates the directory as user `hadoop` with mode `755` by default, while fermat writes as `root` at runtime. After the directory exists, add an ACL as the HDFS administrator:
+
+```bash
+hdfs dfs -setfacl -R -m user:root:rwx,default:user:root:rwx,default:user:hadoop:rwx /home/vikingdb_data
+hdfs dfs -getfacl /home/vikingdb_data
+```
+
+If HDFS ACLs are disabled, use `hdfs dfs -chown -R root /home/vikingdb_data` or another method that fits your policies. Without write access, VikingDB still reports Ready but indexes stay in `INIT`.
 
 Then check namespaces, external Secret / ConfigMap references, and StorageClass. Complete dependency initialization using the bundled infrastructure requirements. Run preflight checks and initialize pull Secrets for namespaces configured in the delivery:
 
@@ -106,6 +150,19 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license status
 ```
 
 The `.vlic` must be issued from this cluster's `fingerprint.json`. A fingerprint from another cluster, or an edited file, fails verification.
+
+With online licensing, no fingerprint or `.vlic` is needed. Likewise wait for the CR's first status sync, activate with the one-time activation code, and repeat apply with the same configuration:
+
+```bash
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license activate \
+  --system-namespace viking-system \
+  --code '<activation-code>' \
+  --endpoint 'https://<license-endpoint>' \
+  --yes
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license status vikingdb
+```
+
+An activation code can succeed only once; keep it out of configuration files, scripts, and logs. After activation, `license status` shows Mode `online`; the Operator handles renewal and telemetry, and stores the renewal credential in `viking-system/viking-license-renewal`. Offline and online licensing cannot be mixed. While waiting for a license, the CR reason always reads `provide offline .vlic via import secret`; in an online-licensed environment, activate as described here.
 
 Skip licensing steps when licensing is disabled. Verify VikingDB before proceeding:
 
@@ -190,6 +247,14 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check smoketest \
 ```
 
 The generated configuration contains a Root API Key for initialization and administration. Application data access requires a User / Admin Key; the P0 smoke provisions a test User Key. Do not commit the client configuration or copy it into logs.
+
+The generated configuration stores the Root API Key in the `api_key` field. Recent `ov` CLI versions read `root_api_key` for `--sudo` administration commands, so first add a `root_api_key` field with the same value, then register an application user and write the returned User Key back into `api_key`:
+
+```bash
+ov admin register-user default '<user-id>' --sudo
+```
+
+Everyday `ov` commands then use the User Key; keep `root_api_key` for administration only.
 
 For an in-cluster client, use `gen-conf --endpoint-type service`. For an external client, supply a reachable entry point with `--endpoint '<openviking-endpoint>'`. Generating configuration does not create Ingress, TLS, or a load balancer. Add `--force` only after deciding to overwrite an existing output file.
 

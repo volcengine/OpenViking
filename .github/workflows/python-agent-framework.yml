@@ -1,0 +1,48 @@
+name: Microsoft Agent Framework Integration
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/frameworks/microsoft-agent-framework/**'
+      - 'examples/agent-framework/**'
+      - '.github/workflows/python-agent-framework.yml'
+      - '.github/workflows/python-agent-framework-release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/frameworks/microsoft-agent-framework/**'
+      - 'examples/agent-framework/**'
+      - '.github/workflows/python-agent-framework.yml'
+      - '.github/workflows/python-agent-framework-release.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - maf: 'agent-framework-core==1.20.0'
+            sdk: 'openviking-sdk==0.1.13'
+          - maf: 'agent-framework-core>=1.20,<2'
+            sdk: 'openviking-sdk>=0.1.13,<0.2'
+    defaults:
+      run:
+        working-directory: integrations/frameworks/microsoft-agent-framework
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install supported dependencies
+        run: python -m pip install '.[test,dev]' '${{ matrix.maf }}' '${{ matrix.sdk }}'
+      - name: Check package and offline contracts
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q --confcutdir=tests tests
+          python -m build
+          python -m twine check dist/*

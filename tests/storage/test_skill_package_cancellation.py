@@ -6,18 +6,19 @@ import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import pytest
 
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskTracker
 from openviking.service.task_work_index import (
-    TaskWorkIndex,
     bind_task_context,
     get_task_context,
     prepare_task_payload,
+    record_enqueued_work,
 )
 from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
@@ -26,10 +27,10 @@ from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.session.user_id import UserIdentifier
 from tests.storage.test_collection_schemas import _DummyConfig, _DummyEmbedder
 from tests.storage.test_semantic_executor_skip_files import _FakeVikingFS
+from tests.test_task_tracker import _FakeAgfs
 
 
 def _ctx():
@@ -182,9 +183,6 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
         ),
         SimpleNamespace(bind=lambda _account_id: Embedder()),
     )
-    telemetry_id = str(uuid4())
-    tracker = get_request_wait_tracker()
-    tracker.register_request(telemetry_id)
     msg = EmbeddingMsg(
         "content",
         {
@@ -192,15 +190,13 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
             "context_type": "skill",
             "account_id": "acc",
         },
-        telemetry_id=telemetry_id,
     )
-    tracker.register_embedding_root(telemetry_id, msg.id)
-    index = TaskWorkIndex()
-    cancelling = set()
-    index.set_callbacks(
-        finalize_before_ack=AsyncMock(),
-        is_cancellation_requested=lambda task_id: task_id in cancelling,
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    task = await tracker.create(
+        "add_skill", task_id="skill-task", account_id="acc", user_id="alice"
     )
+    await tracker.start(task.task_id, account_id="acc", user_id="alice")
     with bind_task_context("skill-task", "acc", "alice"):
         payload, metadata = prepare_task_payload(msg.to_dict())
     queue = NamedQueue(
@@ -208,20 +204,27 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
         "/queue",
         "Embedding",
         dequeue_handler=handler,
-        middlewares=[TaskWorkQueueMiddleware(index)],
+        middlewares=[TaskWorkQueueMiddleware()],
     )
     envelope = {"data": json.dumps(payload)}
-    assert index.register(queue.name, metadata)
+    assert metadata is not None
+    await tracker.register_work(
+        task.task_id,
+        metadata.work_id,
+        queue.name,
+        account_id="acc",
+        user_id="alice",
+    )
     worker = asyncio.create_task(queue.process_dequeued(envelope))
     try:
         await asyncio.wait_for(started.wait(), 1)
-        cancelling.add("skill-task")
-        index.cancel_active("skill-task")
+        await tracker.cancel(task.task_id, account_id="acc", user_id="alice")
         await asyncio.sleep(0.03)
         if during_write:
             assert not worker.done()
-            assert not tracker.is_complete(telemetry_id)
-            assert index.has_work("skill-task")
+            assert await tracker.has_work(
+                task.task_id, account_id="acc", user_id="alice"
+            )
             assert not writes
         else:
             await asyncio.wait_for(worker, 1)
@@ -230,25 +233,26 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
         release.set()
         result = await asyncio.wait_for(worker, 1)
         assert result.outcome is ProcessOutcome.CANCELLED
-        await index.prepare_ack(queue.name, envelope)
-        assert not index.has_work("skill-task")
-        assert tracker.is_complete(telemetry_id)
-        tracker.cleanup(telemetry_id)
+        assert not await tracker.has_work(
+            task.task_id, account_id="acc", user_id="alice"
+        )
     assert len(writes) == int(during_write)
 
 
 @pytest.mark.asyncio
 async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkeypatch):
-    tracker = get_request_wait_tracker()
-    telemetry_id = str(uuid4())
-    tracker.register_request(telemetry_id)
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    task = await tracker.create(
+        "add_skill", task_id="skill-task", account_id="acc", user_id="alice"
+    )
+    await tracker.start(task.task_id, account_id="acc", user_id="alice")
+    child = None
     msg = SemanticMsg(
         uri="viking://agent/skills/demo",
         context_type="skill",
-        telemetry_id=telemetry_id,
         propagate_to_parent=False,
     )
-    tracker.register_semantic_root(telemetry_id, msg.id)
     started = asyncio.Event()
     events = []
 
@@ -257,7 +261,16 @@ async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkey
             self.stale = False
 
         async def run(self, uri):
-            tracker.register_embedding_root(telemetry_id, "embedding")
+            nonlocal child
+            child = "embedding"
+            await tracker.register_work(
+                task.task_id,
+                child,
+                "Embedding",
+                account_id="acc",
+                user_id="alice",
+            )
+            record_enqueued_work("Embedding", child)
             started.set()
 
         def get_stats(self):
@@ -280,9 +293,10 @@ async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkey
         lambda: SimpleNamespace(exists=AsyncMock(return_value=True)),
     )
     resolver = SimpleNamespace(get_vlm=AsyncMock())
-    worker = asyncio.create_task(
-        SemanticProcessor(vlm_resolver=resolver).on_dequeue({"data": msg.to_json()})
-    )
+    with bind_task_context("skill-task", "acc", "alice", enqueued_work=[]):
+        worker = asyncio.create_task(
+            SemanticProcessor(vlm_resolver=resolver).on_dequeue({"data": msg.to_json()})
+        )
     await asyncio.wait_for(started.wait(), 1)
     worker.cancel()
     await asyncio.sleep(0)
@@ -290,11 +304,14 @@ async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkey
     await asyncio.sleep(0.03)
     assert not worker.done()
     assert events == []
-    assert not tracker.is_complete(telemetry_id)
     events.append("embedding-settled")
-    tracker.mark_embedding_done(telemetry_id, "embedding")
+    assert child is not None
+    await tracker.mark_work_done(
+        task.task_id,
+        child,
+        account_id="acc",
+        user_id="alice",
+    )
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(worker, 1)
     assert events == ["embedding-settled", "released"]
-    assert tracker.is_complete(telemetry_id)
-    tracker.cleanup(telemetry_id)

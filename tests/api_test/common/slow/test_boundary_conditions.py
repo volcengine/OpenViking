@@ -142,9 +142,8 @@ class TestBoundaryConditions:
 
     def test_list_tasks_with_zero_limit(self, api_client):
         resp = api_client.list_tasks(limit=0)
-        assert resp.status_code == 200, (
-            f"list_tasks with limit=0 should return valid status, got {resp.status_code}"
-        )
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
     def test_list_tasks_with_large_limit(self, api_client):
         resp = api_client.list_tasks(limit=10000)

@@ -15,11 +15,11 @@ and `OPENVIKING_PENDING_DIR` relocate individual pieces.
 | `<repo root>/.openviking/config.json` / `config.local.json` | Workspace config layers, `version: 1` required: `peer.source`, `peer.id`, `recall.*`, `capture.*`, `bypass.session_patterns`, `labels`. `config.json` is committed and shared; `config.local.json` is private and gitignored. Trusted without a prompt, but connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. A blanket `.openviking/` rule in `.gitignore` stops `config.json` from ever being committed — narrow it to `.openviking/media/` and `.openviking/downloads/`. |
 | `~/.openviking/workspaces/<slot>.json` | Per-machine workspace registry, one file per workspace (`<dir name>-<hash>.json`, mode 0600). Outranks both workspace files, and nothing writes it — a user creates the file by hand. An entry recorded for a different repository is ignored, not inherited. |
 | `~/.claude/plugins/installed_plugins.json` | Install registry: `plugins["openviking-memory@openviking"][0].installPath/version/lastUpdated`. |
-| `~/.claude/plugins/known_marketplaces.json` | Marketplace `openviking` → `source` (`directory` path or `github`), `installLocation`. |
+| `~/.claude/plugins/known_marketplaces.json` | Marketplace `openviking` → `source` (`directory` path, `github`, or `url` of the TOS manifest), `installLocation`, `autoUpdate`. |
 | `~/.claude/plugins/cache/openviking/openviking-memory/<version>/` | The copy Claude Code actually runs. Keyed by `plugin.json` version. |
 | `~/.claude/settings.json` | `enabledPlugins`, `statusLine`, optional `env`, legacy `hooks`. |
-| `~/.openviking/marketplaces/openviking-claude/` | Installer-generated directory marketplace (GitHub dist) whose manifest points at `git-subdir` `examples/claude-code-memory-plugin`. |
-| `~/.openviking/memory-plugin-marketplace/` | Unpacked TOS archive (TOS dist); cannot self-update. |
+| `~/.openviking/marketplaces/openviking-claude/` | Directory marketplace that older installers generated for GitHub installs; its manifest points at `git-subdir` `examples/claude-code-memory-plugin`. The installer no longer writes it, and a re-run moves the registration to the TOS URL marketplace. |
+| `~/.openviking/memory-plugin-marketplace/` | Unpacked plugin bundle from the release; the Claude Code marketplace only before Claude Code 2.1.224, and cannot self-update. |
 | `~/.openviking/state/` | `last-recall.json`, `last-capture.json`, `last-session-event.json`, `daily-stats.json`, `server-probe.json`, `host-cli-probe.json`, `context-face.json`, `recall-digest.json`, `ws-peer-<session>.json`, `ws-identity-<hash>.json` (60s cache of the git identity behind the peer). Anything else there is residue. |
 | `~/.openviking/last_inject.md` | Full text of the last SessionStart injection. |
 | `~/.openviking/logs/cc-hooks.log` | JSONL hook + proxy log; written only when `OPENVIKING_DEBUG=1` or `debug: true`. |
@@ -83,10 +83,9 @@ That file and the registry file whose path the doctor prints are the whole surfa
 | `api_key` | key required | from the key; account/user headers are silently stripped |
 | `trusted` | root key optional | from the headers; missing → 400 `Trusted mode requests must include X-OpenViking-Account …` |
 
-Key formats: `base64url(account).base64url(user).base64url(secret)` (three
-segments, identity readable) or a bare 64-hex legacy key (identity only via
-server lookup). Both fail identically as `401 Invalid API Key` when unknown —
-there is no "wrong account" error.
+Key format: `base64url(account).base64url(user).base64url(secret)` (three
+segments, identity readable). Other shapes are rejected as
+`401 Invalid API Key` — there is no "wrong account" error.
 
 `role: root` keys are allowed only on `/api/v1/system/status`, `/api/v1/admin/*`,
 `/api/v1/observer/*`, `/api/v1/tasks/*` and a few system paths; everything the
@@ -159,7 +158,7 @@ port is bound only after initialization finishes, so "connection refused"
 during startup is normal; `/health` 200 says nothing about embedding or VLM.
 
 `GET /ready` (no auth, 200 or 503):
-`{"status":"ready"|"not_ready","checks":{"agfs":{"status":…,"checks":{"filesystem":…,"multiwrite_sync":…}},"vectordb":…,"api_key_manager":…,"embedding":…,"ollama":…}}`.
+`{"status":"ready"|"not_ready","checks":{"agfs":{"status":…,"checks":{"filesystem":…}},"vectordb":…,"api_key_manager":…,"embedding":…,"ollama":…}}`.
 `ok`, `not_configured` and `not_supported` count as healthy; `embedding` is a
 real embed call with a 10s cap. `503 {"status":"not_ready","reason":"initializing"}`
 while booting; 404 on servers that predate the endpoint. The official docker
