@@ -7,10 +7,12 @@
  *   - source=startup → fresh codex CLI / `/new` / zouk daemon spawn-without-sessionId
  *   - source=clear   → `/clear` (orphans the current process's previous session)
  *   - source=resume  → `/resume` or short reconnect (no commit/sweep;
- *     may inject latest archive summary if the live OV session was already committed)
+ *     may inject latest archive summary if the live OV session was already
+ *     committed), then the session-history pointer, which is sent even when
+ *     the server is unreachable
  *   - source=compact → after Codex compacted the thread: only the session-history
- *     pointer (OPENVIKING_SESSION_HISTORY_POINTER=0 turns it off), no state or
- *     server work
+ *     pointer, no state or server work
+ *   OPENVIKING_SESSION_HISTORY_POINTER=0 turns the pointer off on both sources.
  *
  * Every other source injects the shared OpenViking profile block unless
  * OPENVIKING_NO_AUTO_INJECT=1. The block contains profile.md plus
@@ -375,10 +377,14 @@ runHookStage({
     // Earliest liveness signal after `codex resume`: the thread is running
     // again, so a marker left by its previous exit must not trigger the sweep.
     await clearEnded(newSessionId, { before: HOOK_STARTED_AT });
+    // Needs nothing from the server, so it goes out even when the rest cannot.
+    const historyPointer = !bypassed && cfg.sessionHistoryPointer && cfg.autoCapture && newSessionId !== "unknown"
+      ? formatSessionHistoryPointer(deriveOvSessionId(newSessionId), { event: "resume" })
+      : "";
     const health = await fetchJSON("/health");
     if (!health) {
       logError("health_check", "server unreachable; skipping profile + archive injection");
-      return;
+      return { contexts: [historyPointer] };
     }
     await replayPendingWrites();
     if (bypassed) {
@@ -386,11 +392,13 @@ runHookStage({
       return;
     }
     const archiveContext = await buildResumeArchiveContext(newSessionId);
+    const reservedBytes = Buffer.byteLength(archiveContext, "utf8")
+      + (historyPointer ? Buffer.byteLength(historyPointer, "utf8") + 2 : 0);
     const maxBytes = cfg.sessionStartMaxBytes > 0
-      ? Math.max(1, cfg.sessionStartMaxBytes - Buffer.byteLength(archiveContext, "utf8"))
+      ? Math.max(1, cfg.sessionStartMaxBytes - reservedBytes)
       : 0;
     const profileContext = await buildSessionProfileContext({ sessionId: newSessionId, source, maxBytes });
-    return { contexts: [profileContext, archiveContext] };
+    return { contexts: [profileContext, archiveContext, historyPointer] };
   }
 
   // Other non-startup sources are hard no-ops. We don't sweep there, because

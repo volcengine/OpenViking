@@ -862,3 +862,44 @@ test("compact adds only the session-history pointer and touches neither state no
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test("resume adds the session-history pointer after the rest, also when the server is unreachable", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
+  const requests = [];
+  const input = { session_id: "resumed-thread", source: "resume", cwd: "/tmp/codex-resume-pointer", hook_event_name: "SessionStart" };
+  try {
+    await withMockOpenViking(profileHandler(requests, { archiveOverview: "Earlier work. ".repeat(400) }), async (baseUrl) => {
+      const maxBytes = 3000;
+      const { output } = await runSessionStart(input, {
+        ...baseEnv(baseUrl, stateDir),
+        OPENVIKING_RESUME_ARCHIVE_INJECT: "1",
+        OPENVIKING_SESSION_START_MAX_BYTES: String(maxBytes),
+      });
+      const context = output.hookSpecificOutput.additionalContext;
+      assert.match(context, /^<openviking-context source="session-start">/);
+      assert.match(context, /source="session-resume"/);
+      assert.match(context, /\n\n<openviking-context source="session-history">\n[^]*<\/openviking-context>$/);
+      assert.match(context, /full record of this session as cx-resumed-thread, including anything an earlier compaction summarized/);
+      assert.ok(Buffer.byteLength(context, "utf8") <= maxBytes, `context is ${Buffer.byteLength(context, "utf8")} bytes`);
+
+      const off = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_SESSION_HISTORY_POINTER: "0" });
+      assert.doesNotMatch(off.output.hookSpecificOutput?.additionalContext || "", /source="session-history"/);
+    });
+
+    await withMockOpenViking((req, res) => {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "unavailable" }));
+    }, async (baseUrl) => {
+      const { output } = await runSessionStart(input, baseEnv(baseUrl, stateDir));
+      const context = output.hookSpecificOutput.additionalContext;
+      assert.match(context, /^<openviking-context source="session-history">\n/);
+      assert.match(context, /pass session="cx-resumed-thread"/);
+      assert.doesNotMatch(context, /source="session-start"/);
+
+      const off = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_SESSION_HISTORY_POINTER: "0" });
+      assert.deepEqual(off.output, {});
+    });
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
