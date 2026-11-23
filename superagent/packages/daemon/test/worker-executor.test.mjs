@@ -70,6 +70,22 @@ describe('WorkerExecutor', () => {
     assert.equal(result.transient, true);
   });
 
+  it('selects the platform shell tool in a Pi worker argv', async (t) => {
+    const { dir, config, task } = setup(t);
+    config.piBin = fakeCli(dir, 'pi', [
+      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
+      { type: 'agent_settled' },
+    ]);
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'pi', model: null, effort: null }) });
+    await executor.start({ task: task(), prompt: 'p', authority: 'x' }).done;
+    const argv = calls(dir, 'pi')[0].argv;
+    if (process.platform === 'win32') {
+      assert.ok(argv.includes('+powershell,-bash'), 'worker selects the PowerShell tool');
+      assert.equal(argv.includes('+bash,-powershell'), false);
+    } else {
+      assert.equal(argv.includes('--tools'), false, 'POSIX keeps Pi bash default');
+    }
+  });
   it('runs a Pi worker turn in json print mode in its own session, with the worker authority and policy', async (t) => {
     const { dir, config, task } = setup(t);
     config.piBin = fakeCli(dir, 'pi', [
