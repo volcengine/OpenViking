@@ -634,7 +634,7 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 
 > Output replacement applies only to the external command's `stdout` and `stderr`, not to files it writes or data it sends over the network.
 
-When both streams are redirected into a regular log file, the CLI relays them together in write order if the system confirms they share one open file description. Separate relays preserve the order within each stream.
+On Linux, when the system cannot verify that stdout and stderr share one open regular file description, the CLI relays each stream separately and preserves the order within each stream.
 
 ```bash
 # 1. Pass via environment variable (recommended to keep sensitive values out of argv)

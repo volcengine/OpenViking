@@ -416,6 +416,7 @@ fn with_borrowed_file<T>(
 #[cfg(unix)]
 fn shared_non_tty_outputs() -> bool {
     use std::io::IsTerminal;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
     if std::io::stdout().is_terminal() {
@@ -434,60 +435,80 @@ fn shared_non_tty_outputs() -> bool {
     if kind.is_fifo() || kind.is_socket() {
         return true;
     }
-    #[cfg(target_os = "linux")]
-    if kind.is_file() {
-        use std::os::fd::AsRawFd;
-        return same_regular_file_description(
+    kind.is_file()
+        && same_regular_file_description(
             std::io::stdout().as_raw_fd(),
             std::io::stderr().as_raw_fd(),
-        );
-    }
-    false
+        )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn same_regular_file_description(out_fd: i32, err_fd: i32) -> bool {
     unsafe extern "C" {
         fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     }
-
-    // SAFETY: F_DUPFD_QUERY (Linux >= 6.10) compares open file descriptions.
-    const F_DUPFD_QUERY: i32 = 1027;
-    let equal = unsafe { fcntl(out_fd, F_DUPFD_QUERY, err_fd) };
-    if equal >= 0 {
-        return equal == 1;
+    if out_fd == err_fd {
+        return true;
     }
-
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(target_os = "linux")]
     {
-        unsafe extern "C" {
-            fn syscall(num: std::ffi::c_long, ...) -> std::ffi::c_long;
+        // SAFETY: F_DUPFD_QUERY (Linux >= 6.10) queries struct file equality without side effects.
+        let equal = unsafe { fcntl(out_fd, 1027, err_fd) };
+        if equal >= 0 {
+            return equal == 1;
         }
-        const SYS_KCMP: std::ffi::c_long = if cfg!(target_arch = "x86_64") {
-            312
-        } else {
-            272
-        };
-        let pid = std::process::id() as i32;
-        // SAFETY: KCMP_FILE (0) queries two descriptors in this process.
-        let cmp = unsafe {
-            syscall(
-                SYS_KCMP,
-                pid,
-                pid,
-                0 as std::ffi::c_long,
-                out_fd as std::ffi::c_ulong,
-                err_fd as std::ffi::c_ulong,
-            )
-        };
-        if cmp >= 0 {
-            return cmp == 0;
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        {
+            unsafe extern "C" {
+                fn syscall(num: std::ffi::c_long, ...) -> std::ffi::c_long;
+            }
+            const SYS_KCMP: std::ffi::c_long = if cfg!(target_arch = "x86_64") {
+                312
+            } else {
+                272
+            };
+            let pid = std::process::id() as std::ffi::c_long;
+            // SAFETY: KCMP_FILE (0) compares two descriptors in this process without mutating state.
+            let cmp = unsafe {
+                syscall(
+                    SYS_KCMP,
+                    pid,
+                    pid,
+                    0 as std::ffi::c_long,
+                    out_fd as std::ffi::c_ulong,
+                    err_fd as std::ffi::c_ulong,
+                )
+            };
+            if cmp >= 0 {
+                return cmp == 0;
+            }
         }
-    }
 
-    // Independent opens may have the same flags and cursor. Keep the streams separate
-    // when neither kernel query can establish that the descriptors share a cursor.
-    false
+        // Matching flags and offsets alone cannot distinguish independent opens.
+        false
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::io::Seek;
+
+        // Keep best-effort ordering for shared regular-file redirects on other Unix systems.
+        // SAFETY: F_GETFL (3) reads file status flags without modifying descriptor state.
+        let flags = unsafe { fcntl(out_fd, 3) };
+        if flags < 0 || flags != unsafe { fcntl(err_fd, 3) } {
+            return false;
+        }
+        // Reading out_fd before and after err_fd tolerates monotonic concurrent writes.
+        let Some(p1) = with_borrowed_file(out_fd, |f| f.stream_position()) else {
+            return false;
+        };
+        let Some(p2) = with_borrowed_file(err_fd, |f| f.stream_position()) else {
+            return false;
+        };
+        let Some(p3) = with_borrowed_file(out_fd, |f| f.stream_position()) else {
+            return false;
+        };
+        p1 <= p2 && p2 <= p3
+    }
 }
 
 #[cfg(unix)]

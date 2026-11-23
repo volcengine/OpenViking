@@ -621,11 +621,41 @@ async fn preserves_output_handle_semantics() {
         assert_eq!(output, format!("1\n2:{TOKEN}\n3\n4\n"));
     }
 
-    // Identical flags and offsets do not imply that two opens share a cursor.
+    // macOS keeps best-effort ordering for an actual shared regular-file redirect.
+    #[cfg(target_os = "macos")]
+    {
+        let shared_path = dir.path().join("shared.log");
+        let shared_out = fs::File::create(&shared_path).unwrap();
+        let shared_err = shared_out.try_clone().unwrap();
+        let (url, server) = resolver([(TOKEN, Some("secret-shared".into()))]).await;
+        let status = detached_sh(
+            dir.path(),
+            &url,
+            true,
+            r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2; printf '3\n'; printf '4\n' >&2"#,
+        )
+        .stdout(Stdio::from(shared_out))
+        .stderr(Stdio::from(shared_err))
+        .status()
+        .await
+        .unwrap();
+        assert_eq!(status.code(), Some(0));
+        server.await.unwrap();
+        assert_eq!(
+            fs::read_to_string(&shared_path).unwrap(),
+            format!("1\n2:{TOKEN}\n3\n4\n")
+        );
+    }
+
+    // Linux also keeps the cursors separate when both opens have the same flags.
     let sep_path = dir.path().join("separate.log");
     fs::File::create(&sep_path).unwrap();
     let mut sep_out = fs::OpenOptions::new().write(true).open(&sep_path).unwrap();
-    let mut sep_err = fs::OpenOptions::new().write(true).open(&sep_path).unwrap();
+    let mut sep_err = fs::OpenOptions::new()
+        .write(true)
+        .append(cfg!(target_os = "macos"))
+        .open(&sep_path)
+        .unwrap();
     let (url, server) = resolver([(TOKEN, Some("secret-sep".into()))]).await;
     let status = detached_sh(dir.path(), &url, true, r#"printf 'warn:%s\n' "$TOKEN" >&2"#)
         .stdout(Stdio::from(sep_out.try_clone().unwrap()))
