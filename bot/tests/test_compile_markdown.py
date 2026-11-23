@@ -722,3 +722,61 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert empty_bundle.operations == []
     assert len(pipeline.warnings) == 1
     assert "selection-rules.md" in pipeline.warnings[0]
+
+
+@pytest.mark.parametrize("include_modified", [False, True])
+async def test_complex_compile_passes_explicit_deletions_to_planning(
+    pipeline, monkeypatch, include_modified
+):
+    root = "viking://resources/source"
+    removed, modified = f"{root}/removed.md", f"{root}/modified.md"
+    changes = [{"uri": removed, "change_type": "deleted"}]
+    if include_modified:
+        changes.append({"uri": modified, "change_type": "modified"})
+    pipeline.changes = {
+        "diff_dirs": [root],
+        "full_dirs": [],
+        "base": "base",
+        "head": "head",
+        "execution": {"mode": "incremental"},
+    }
+    request = pipeline.request.model_copy(update={"changes": pipeline.changes})
+    pipeline.client.diff_paths = AsyncMock(return_value={"changes": changes, "has_more": False})
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=CompileFailure("TEST_STOP", "Planning reached", stage="pipeline")
+    )
+    read = AsyncMock(return_value="Modified fact")
+    monkeypatch.setattr("vikingbot.compile.service.read_source", read)
+    monkeypatch.setattr("vikingbot.compile.service.Pipeline", lambda **kwargs: pipeline)
+    service = BotCompileService.__new__(BotCompileService)
+    service.agent_loop = SimpleNamespace(
+        provider=pipeline.model.provider,
+        model="test-model",
+        temperature=0,
+        tools=SimpleNamespace(get=lambda _: None),
+    )
+    service._model_slots = asyncio.Semaphore(1)
+    service.limits = pipeline.limits
+    service._set_state = AsyncMock()
+    service.store = SimpleNamespace(update=AsyncMock())
+
+    with pytest.raises(CompileFailure, match="Planning reached"):
+        await service._run_pipeline(
+            task_id="deleted",
+            request=request,
+            client=pipeline.client,
+            sandbox=pipeline.files.sandbox,
+            skill_text=pipeline.skill,
+            source_files=None,
+            usage={},
+        )
+    notices = [
+        entry["uri"]
+        for entry in pipeline.evidence.values()
+        if entry.get("change_type") == "deleted"
+    ]
+    assert notices == [removed]
+    assert [call.args[1] for call in read.await_args_list] == (
+        [modified] if include_modified else []
+    )
+    pipeline.client.batch_write.assert_not_awaited()

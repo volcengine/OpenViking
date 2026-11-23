@@ -297,8 +297,9 @@ async def test_pipeline_inventory_combines_full_files_and_every_diff_page(runtim
     )
     service = BotCompileService.__new__(BotCompileService)
     request = pipeline.request.model_copy(update={"changes": changes})
-    files = await service._list_pipeline_source_files(pipeline.client, request)
+    files, notices = await service._list_pipeline_source_files(pipeline.client, request)
     assert files == sorted([*uris, *full_files])
+    assert notices == [{"uri": f"{root}/deleted.md", "change_type": "deleted"}]
     assert pipeline.client.diff_paths.await_args_list == [
         call([root], base="base", head="head", offset=offset) for offset in (0, 100)
     ]
