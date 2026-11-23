@@ -54,7 +54,9 @@ test("an npm-package install reports no install problem", () => withHome((home) 
   const config = join(home, ".config", "opencode", "opencode.json")
   writeFileSync(config, JSON.stringify({ plugin: ["@openviking/opencode-plugin"] }))
   assert.deepEqual(runDoctor(home).problems, [])
-  // OpenCode also accepts a [spec, options] pair.
+  // OpenCode also accepts a [spec, options] pair and an object naming the package.
   writeFileSync(config, JSON.stringify({ plugin: [["@openviking/opencode-plugin@latest", {}]] }))
+  assert.deepEqual(runDoctor(home).problems, [])
+  writeFileSync(config, JSON.stringify({ plugins: [{ package: "@openviking/opencode-plugin" }] }))
   assert.deepEqual(runDoctor(home).problems, [])
 }))

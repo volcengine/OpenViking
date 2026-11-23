@@ -93,9 +93,9 @@ function checkInstall(report) {
   const hostConfig = readJsonc(configPath)
   if (hostConfig.exists && !hostConfig.ok) report.fail(`${homeShort(configPath)} cannot be parsed`, hostConfig.error, "fix the file; OpenCode refuses to start on it")
   const data = hostConfig.ok ? hostConfig.data : {}
-  // A plugin entry is a spec, or a [spec, options] pair.
+  // A plugin entry is a spec, a [spec, options] pair, or an object naming the package.
   const specs = [data.plugin, data.plugins].flat()
-    .map((spec) => (Array.isArray(spec) ? spec[0] : spec))
+    .map((spec) => (Array.isArray(spec) ? spec[0] : spec?.package ?? spec))
     .filter((spec) => typeof spec === "string")
   const viaNpm = specs.some((spec) => spec === NPM_PACKAGE || spec.startsWith(`${NPM_PACKAGE}@`))
   const wrapper = join(opencodeDir(), "plugins", "openviking.js")
@@ -137,7 +137,7 @@ function checkConfig(report, cfg, host) {
     `auto-capture ${cfg.autoCapture ? "on" : "OFF"}`,
     `write path ${cfg.writePathAsync ? "async" : "sync"}`,
     `MCP ${cfg.mcpEnabled ? "on" : "OFF"}`,
-    `repo context ${cfg.repoContext ? "on" : "OFF"}`,
+    `repo context ${cfg.repoContext?.enabled ? "on" : "OFF"}`,
   ])
   sweepEnv(report, cfg, host)
   return { keyInfo, peer, ovConf }
