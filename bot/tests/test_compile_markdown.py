@@ -452,6 +452,45 @@ async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline
         await finalize.run(pipeline, [doc])
 
 
+@pytest.mark.parametrize("cancel_leader", [False, True])
+async def test_reduce_target_reads_coalesce_and_retry_cancelled_leader(pipeline, cancel_leader):
+    pipeline.contract = contract(True)
+    pipeline.client.stat = AsyncMock(return_value={"isDir": False})
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def download(uri):
+        started.set()
+        await release.wait()
+        return b"old facts"
+
+    pipeline.client.download_bytes.side_effect = download
+    reader = TargetReader(pipeline)
+    leader = asyncio.create_task(reader.execute(path="topic.md"))
+    await started.wait()
+    followers = [asyncio.create_task(reader.execute(path="topic.md")) for _ in range(3)]
+    await asyncio.sleep(0)
+    if cancel_leader:
+        leader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leader
+    release.set()
+    results = (
+        await asyncio.gather(*followers)
+        if cancel_leader
+        else await asyncio.gather(leader, *followers)
+    )
+    assert all(json.loads(result)["content"] == "old facts" for result in results)
+    assert pipeline.client.stat.await_count == 1 + cancel_leader
+    assert pipeline.client.download_bytes.await_count == 1 + cancel_leader
+
+    draft = Document("topic.md", "changed.md")
+    await pipeline.files.sandbox.write_file(draft.workspace_path, "# Updated facts")
+    pipeline.client.download_bytes.side_effect = None
+    pipeline.client.download_bytes.return_value = b"changed by another writer"
+    with pytest.raises(ValueError, match="changed after reading"):
+        await finalize.run(pipeline, [draft])
+
+
 @pytest.mark.parametrize("cancelled,conflict", [(False, False), (False, True), (True, False)])
 async def test_service_publishes_final_markdown_with_batch_write_and_honors_cancel(
     pipeline, monkeypatch, cancelled, conflict
