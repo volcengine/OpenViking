@@ -2,7 +2,8 @@
 
 TTL is optional and disabled by default. The first implementation requires Redis;
 there is no Redis-free backend. The implementation and tests ship with OpenViking.
-It uses the existing expiry Redis client and storage/configuration lifecycle.
+Directory indexes use their own direct Redis client. Scheduled TTL work uses the
+named CacheRuntime selected by the expiry configuration.
 
 Install OpenViking with the `expiry` extra, then merge into your server config:
 
@@ -17,10 +18,25 @@ Install OpenViking with the `expiry` extra, then merge into your server config:
       }
     }
   },
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6379"]}
+      },
+      "expiry": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://127.0.0.1:6379"],
+          "default_ttl_seconds": 0
+        }
+      }
+    }
+  },
   "expiry": {
     "service_name": "stable-library-id",
     "publisher_separate_process": false,
-    "redis": {"mode": "standalone", "endpoints": ["redis://127.0.0.1:6379"]}
+    "cache": {"instance": "expiry"}
   },
   "ttl": {"sessions": 30, "user_events": 60, "peer_events": 60}
 }
