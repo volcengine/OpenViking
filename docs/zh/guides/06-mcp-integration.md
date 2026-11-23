@@ -311,7 +311,3 @@ curl http://localhost:1933/health
 - [OpenViking 部署](03-deployment.md)
 
 客户端配置参考：[Claude Code MCP](https://code.claude.com/docs/en/mcp)、[OpenCode MCP servers](https://opencode.ai/docs/mcp-servers/)。
-
-`write`、`edit`、`forget` 支持 `processing_mode="vectors_only"`，仍维护文件向量
-及删除清理，父目录摘要可能保持旧内容。`write` 还支持 `defer_processing=true`
-延迟全部索引工作；依赖搜索前应执行 reindex。已有调用默认继续自动语义处理。

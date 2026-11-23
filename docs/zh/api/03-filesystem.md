@@ -12,23 +12,6 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
 自定义模板也可以通过[模板管理 API](08-admin.md)发布。
 
-`rm`、`cp`、`mv` 支持 `processing_mode="semantic_and_vectors"`（默认）或 `"vectors_only"`。
-后者跳过 VLM 调用及 SemanticQueue，仍维护删除、复制、移动所需的文件向量和 URI 映射。
-已有摘要保持不变，父目录 `.abstract.md` / `.overview.md` 可能继续描述旧目录树；
-需要更新时执行 `reindex(mode="semantic_and_vectors")`。`wait` 只控制等待，不控制是否运行语义处理。
-
-FILE_ONLY→INDEXED 的 `vectors_only` 转移会对目标提交 reindex，返回 `task_id` 和
-`vector_status="queued"`。入队失败返回 `vector_status="failed"`、
-`vector_error`（`code`、`message`）；已提交的转移不会回滚。其他 vectors-only 转移返回
-`semantic_status="skipped"`，向量状态为已完成或跳过。共享资源别名
-`/api/v1/resources/cp`、`/api/v1/resources/mv`、`DELETE /api/v1/resources?uri={uri}` 支持同一参数。
-`mkdir` 保持当前目录初始化行为。
-
-vectors-only 资源删除仍确定性清除 memory 引用，但跳过用于模型重写 memory 的 session extraction。
-
-SDK 在 HTTP 请求中省略默认处理模式，兼容旧服务端。返回类型保持不变；
-需要索引状态或转移 task ID 时，请使用 HTTP。
-
 ## API 参考
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>

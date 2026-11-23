@@ -326,8 +326,3 @@ curl http://localhost:1933/health
 - [OpenViking Deployment](03-deployment.md)
 
 Client configuration references: [Claude Code MCP](https://code.claude.com/docs/en/mcp), [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers/).
-
-`write`, `edit`, and `forget` support `processing_mode="vectors_only"`. File vectors
-and delete cleanup still run, while parent summaries may remain stale. `write` also
-supports `defer_processing=true` to postpone all indexing; run reindex before relying
-on search. Existing callers retain automatic semantic processing by default.

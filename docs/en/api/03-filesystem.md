@@ -13,26 +13,6 @@ are synchronized by the service. API writes, appends, deletes, moves, and overwr
 cannot modify them or bypass the restriction through their parent directories.
 Custom templates can also be published through the [template management API](08-admin.md).
 
-`rm`, `cp`, and `mv` accept `processing_mode="semantic_and_vectors"` (default) or `"vectors_only"`.
-The latter skips VLM calls and SemanticQueue work while preserving deletion, copy, and move
-maintenance of file vectors and URI mappings. It preserves existing summaries, so parent
-`.abstract.md` / `.overview.md` can describe the old tree until a later
-`reindex(mode="semantic_and_vectors")`. `wait` controls waiting, not whether semantics run.
-
-For FILE_ONLY→INDEXED transfers, `vectors_only` schedules a target-scoped reindex and returns
-`task_id` with `vector_status="queued"`. An enqueue failure returns `vector_status="failed"`
-and `vector_error` (`code`, `message`); the transfer is already committed. Other vectors-only
-transfers report `semantic_status="skipped"` and the completed or skipped vector status.
-The shared-resource aliases `/api/v1/resources/cp`, `/api/v1/resources/mv`, and
-`DELETE /api/v1/resources?uri={uri}` support the same parameter. `mkdir` keeps its current directory
-initialization behavior.
-
-Vectors-only resource deletion still unlinks memory references deterministically,
-but skips the session memory extraction that would otherwise rewrite those memories with a VLM.
-
-SDKs omit the default processing mode from HTTP payloads for older-server compatibility.
-Their return types are unchanged; use HTTP when you need indexing status or a transfer task ID.
-
 ## API Reference
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
