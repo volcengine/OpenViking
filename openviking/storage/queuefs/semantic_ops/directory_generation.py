@@ -173,28 +173,26 @@ async def generate_directory_semantics(
         summary = (preset_abstract or "") if seeded else ""
     generate_summary = not manual and preset_abstract is None and bool(entries)
 
-    def prompt(material: list[str]) -> str:
-        return render_prompt(
-            "semantic.abstract_generation",
-            {
-                "dir_name": dir_uri.rstrip("/").rsplit("/", 1)[-1],
-                "material": "\n".join(material),
-                "sampled_entries": len(entries),
-                "total_entries": total_entries,
-                "output_language": language,
-            },
-        )
-
-    async def summarize(material: list[str]) -> str | None:
+    async def summarize(material: list[str]) -> str:
         try:
-            return (await complete(prompt(material))).strip() or None
+            prompt = render_prompt(
+                "semantic.abstract_generation",
+                {
+                    "dir_name": dir_uri.rstrip("/").rsplit("/", 1)[-1],
+                    "material": "\n".join(material),
+                    "sampled_entries": len(entries),
+                    "total_entries": total_entries,
+                    "output_language": language,
+                },
+            )
+            return (await complete(prompt)).strip()
         except Exception as exc:
             logger.info(
                 "Directory summary generation failed target=%s error_type=%s degraded=true",
                 safe_uri_for_log(dir_uri),
                 type(exc).__name__,
             )
-            return None
+            return ""
 
     if generate_summary:
         items = [{"name": name, **entry} for name, entry in sorted(entries.items())]
@@ -210,7 +208,7 @@ async def generate_directory_semantics(
             results = await bounded_map(
                 batches, summarize, concurrency=min(len(batches), max_concurrent_llm)
             )
-            partials = [partial for partial in results if partial is not None]
+            partials = [partial for partial in results if partial]
             summary = partials[0] if partials else ""
             if len(partials) > 1:
                 summary = await summarize(partials) or summary

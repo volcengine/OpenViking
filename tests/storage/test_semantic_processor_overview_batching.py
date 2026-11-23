@@ -14,34 +14,31 @@ from openviking_cli.utils.config.parser_config import SemanticConfig
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("budget", "failed_calls", "expected"),
+    ("budget", "responses", "expected"),
     [
-        (60_000, (), "Summary."),
-        (2_000, (), "Summary."),
-        (2_000, (0,), "Second batch."),
-        (2_000, (0, 1), "[Directory overview is not generated]"),
-        (2_000, (2,), "First batch."),
+        (60_000, ("Summary.",), "Summary."),
+        (2_000, ("First batch.", "Second batch.", "Summary."), "Summary."),
+        (2_000, (None, "Second batch."), "Second batch."),
+        (2_000, (None, None), "[Directory overview is not generated]"),
+        (2_000, ("First batch.", "Second batch.", None), "First batch."),
     ],
 )
-async def test_directory_batch_generation_retains_successful_summaries(
-    budget, failed_calls, expected
-):
-    prompts = []
+async def test_directory_batch_generation_retains_successful_summaries(budget, responses, expected):
+    remaining = iter(responses)
     batches_started = asyncio.Event()
 
-    async def complete(prompt):
-        call = len(prompts)
-        prompts.append(prompt)
-        if budget == 2_000 and call < 2:
-            if call == 1:
+    async def respond(_prompt):
+        response = next(remaining)
+        call_count = complete.await_count
+        if budget == 2_000 and call_count <= 2:
+            if call_count == 2:
                 batches_started.set()
             await asyncio.wait_for(batches_started.wait(), timeout=1)
-        if call in failed_calls:
+        if response is None:
             raise RuntimeError("model call failed")
-        if budget == 2_000:
-            return ("First batch.", "Second batch.", "Summary.")[call]
-        return "Summary."
+        return response
 
+    complete = AsyncMock(side_effect=respond)
     config = SemanticConfig(max_overview_prompt_chars=budget, overview_batch_size=2)
     result = await generate_directory_semantics(
         "viking://resources/root",
@@ -53,15 +50,14 @@ async def test_directory_batch_generation_retains_successful_summaries(
         complete=complete,
         max_concurrent_llm=2,
     )
+    prompts = [call.args[0] for call in complete.await_args_list]
+    assert len(prompts) == len(responses)
     if budget == 2_000:
-        assert batches_started.is_set()
-        first, second = prompts[:2]
+        first, second, *merge = prompts
         assert "child-0" in first and "child-1" in first and "child-2" not in first
         assert "child-2" in second and "child-0" not in second and "child-1" not in second
-        if 0 in failed_calls:
-            assert len(prompts) == 2
-        else:
-            (merged,) = prompts[2:]
+        if merge:
+            (merged,) = merge
             assert "First batch." in merged and "Second batch." in merged
             assert all(f"child-{i}" not in merged for i in range(3))
     else:
