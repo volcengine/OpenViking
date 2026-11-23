@@ -259,14 +259,21 @@ class FakeOpenViking:
 
 
 def matching_lines(text, query):
-    """(offset, printed text) of each line holding ``query``; long lines print a window."""
+    """(offset, printed text) of each line holding ``query``.
+
+    A long line prints a window around a match; a match beyond the window gets its own.
+    """
     found, start = [], 0
     for line in text.split("\n"):
-        at = line.lower().find(query)
-        if query and at >= 0:
-            begin = max(0, at - 200) if len(line) > 400 else 0
-            shown = line[begin : at + len(query) + 200] if len(line) > 400 else line
-            found.append((start + begin, shown))
+        low = line.lower()
+        at = low.find(query) if query else -1
+        if at >= 0 and len(line) <= 400:
+            found.append((start, line))
+        covered = 0
+        while at >= 0 and len(line) > 400:
+            begin, covered = max(covered, at - 200), at + len(query) + 200
+            found.append((start + begin, line[begin:covered]))
+            at = low.find(query, covered)
         start += len(line) + 1
     return found
 
