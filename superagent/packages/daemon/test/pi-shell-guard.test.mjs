@@ -148,3 +148,34 @@ describe('Pi worker task inputs', () => {
     }
   });
 });
+
+describe('Pi PowerShell guard', () => {
+  it('caps a router PowerShell, forbids explicit waits, and counts it in the work budget', () => {
+    const handlers = load({ PERSONAL_AGENT_SHELL_LIMIT_S: '30', PERSONAL_AGENT_WORK_TOOL_BUDGET: '10' });
+    const call = (toolName, input) => {
+      const event = { toolName, input: { ...input } };
+      return { result: handlers.get('tool_call')(event), input: event.input };
+    };
+    assert.equal(call('powershell', { command: 'Get-Date', timeout: 600 }).input.timeout, 30);
+    assert.equal(call('powershell', { command: 'Get-Date' }).input.timeout, 30);
+    for (const command of ['Start-Sleep -Seconds 60', 'Get-Date; Start-Sleep 1', 'Wait-Process -Name node', 'Wait-Job -Id 1']) {
+      assert.match(call('powershell', { command }).result?.reason ?? '', /may not sleep or wait/, command);
+    }
+    assert.equal(call('powershell', { command: 'Get-ChildItem -Filter sleeper*' }).result, undefined);
+    const tight = load({ PERSONAL_AGENT_SHELL_LIMIT_S: '30', PERSONAL_AGENT_WORK_TOOL_BUDGET: '1' }).get('tool_call');
+    assert.equal(tight({ toolName: 'powershell', input: { command: 'Get-Date' } }), undefined);
+    assert.match(tight({ toolName: 'powershell', input: { command: 'Get-Date' } })?.reason ?? '', /used your own tools 1 times/);
+  });
+
+  it('gives a worker PowerShell the default 300s and caps at 3600s', () => {
+    const toolCall = load({ PERSONAL_AGENT_SHELL_LIMIT_S: undefined, PERSONAL_AGENT_SHELL_DEFAULT_S: '300', PERSONAL_AGENT_SHELL_MAX_S: '3600' }).get('tool_call');
+    const timeout = (input) => {
+      const event = { toolName: 'powershell', input: { command: 'npm test', ...input } };
+      assert.equal(toolCall(event), undefined);
+      return event.input.timeout;
+    };
+    assert.equal(timeout({}), 300);
+    assert.equal(timeout({ timeout: 1_200 }), 1_200);
+    assert.equal(timeout({ timeout: 86_400 }), 3_600);
+  });
+});

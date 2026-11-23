@@ -228,6 +228,11 @@ if (`$command.CommandType -eq 'Alias' -and `$command.Definition -eq (Join-Path `
     if ((Get-FileHash -LiteralPath (Join-Path $one 'superagent-preview.ps1')).Hash -ne $beforeHash) { throw 'existing release was overwritten' }
     if ((Resolve-LinkOrFile (Join-Path $testHome 'current')) -ne $one) { throw 'conflict changed current' }
 
+    # A byte change that keeps the same length must still be a conflict: the
+    # identity and shape checks alone would call this "already installed".
+    $equal = New-Fixture 'same-version-same-length' -Version '0.5.0-windows-preview-test' -Check 'param($ActioN)'
+    Expect-Failure 'release conflict with equal length' @('-File', $equal, '-NoSetup', '-Lang', 'en') 'Release conflict' | Out-Null
+    if ((Get-FileHash -LiteralPath (Join-Path $one 'superagent-preview.ps1')).Hash -ne $beforeHash) { throw 'existing release was overwritten by an equal-length package' }
     # A new package moves current and keeps the old release as rollback.
     $second = New-Fixture 'second' -Version '0.6.0-windows-preview-test'
     $run = Invoke-Installer -Arguments @('-File', $second, '-Lang', 'en')

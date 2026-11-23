@@ -517,10 +517,44 @@ function Release-Shape([string]$root) {
     }
     return "$count|$bytes"
 }
+function Get-ReleaseTreeDigest([string]$dir, [string]$node) {
+    $script = @'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+const root = process.argv[1];
+const hash = createHash("sha256");
+const walk = (directory) => {
+  const entries = fs.readdirSync(directory, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name);
+    const relative = path.relative(root, full).split(path.sep).join("/");
+    if (relative === "windows-preview.json") continue;
+    if (entry.isDirectory()) { walk(full); continue; }
+    const data = fs.readFileSync(full);
+    hash.update(relative); hash.update("\0"); hash.update(String(data.length)); hash.update("\0"); hash.update(data);
+  }
+};
+walk(root);
+process.stdout.write(hash.digest("hex"));
+'@
+    $out = & $node --input-type=module -e $script $dir
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+    return ($out | Out-String).Trim()
+}
 function Test-SameRelease([string]$stageDir, [string]$existing) {
-    $identity = Release-Identity $stageDir
-    return [bool]$identity -and $identity -eq (Release-Identity $existing) -and
-        (Release-Shape $stageDir) -eq (Release-Shape $existing)
+    if (-not (Release-Identity $stageDir) -or (Release-Identity $stageDir) -ne (Release-Identity $existing)) { return $false }
+    if ((Release-Shape $stageDir) -ne (Release-Shape $existing)) { return $false }
+    # Same version and same shape still is not proof: a byte-edited file keeps
+    # both. Compare the digest the build recorded for this tree.
+    $meta = $null
+    try { $meta = Get-Content -LiteralPath (Join-Path $stageDir 'windows-preview.json') -Raw | ConvertFrom-Json } catch { return $false }
+    if (-not $meta.treeSha256) { return $false }
+    $node = Join-Path $stageDir 'runtime\node.exe'
+    if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { return $false }
+    $digest = Get-ReleaseTreeDigest $existing $node
+    return [bool]$digest -and $digest -eq $meta.treeSha256
 }
 
 # ---- Install --------------------------------------------------------------

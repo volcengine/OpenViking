@@ -60,6 +60,13 @@ import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
 
 const PERMISSIONS = new URL('../../../permission.json', import.meta.url);
 
+// A home directory may contain spaces; a command shown for copy/paste must
+// quote its path. superagentCommand returns the bare name when bin is on PATH.
+function displayCommand(env) {
+  const command = superagentCommand(env);
+  return /\s/.test(command) ? `"${command}"` : command;
+}
+
 function resolveLarkCli(env) {
   const bundled = bundledLarkCli({ env });
   return bundled === 'lark-cli' ? which('lark-cli', env) : bundled;
@@ -1480,7 +1487,7 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
     prompter.warn(t('没有可用的 agent 运行时：', 'No agent runtime can run yet:'));
     const labelWidth = Math.max(...detected.map((runtime) => width(runtime.label)));
     for (const runtime of detected) prompter.write(`      ${padEnd(runtime.label, labelWidth)}  ${runtime.note}\n`);
-    const later = t(`登录好其中一个后，重新运行 ${superagentCommand(env)} setup。`, `Log in to one of them, then run ${superagentCommand(env)} setup again.`);
+    const later = t(`登录好其中一个后，重新运行 ${displayCommand(env)} setup。`, `Log in to one of them, then run ${displayCommand(env)} setup again.`);
     if (!prompter.tty || !connect.pi) {
       prompter.info(later);
       return { stopped: 'unavailable' };
@@ -1554,7 +1561,7 @@ function manifestModel(state, current) {
 // draft in hand; the hint no longer prints field values, because the wizard
 // will ask for them.
 function dshModelHint({ env, state }) {
-  const cli = superagentCommand(env);
+  const cli = displayCommand(env);
   const instance = state.id ? ` --instance ${state.id}` : '';
   return t(
     `补一个 model route：${cli} dsh model${instance}\n`
@@ -1783,7 +1790,7 @@ async function setupFlow({
   registrations,
 }) {
   const out = (text) => prompter.write(text);
-  const cli = superagentCommand(env);
+  const cli = displayCommand(env);
   // The manifest is read before detection: a binary path pinned there is what the
   // daemon runs, so the probe has to see it too.
   const { path: configPath, value: manifest, ignored } = readManifest(env);
