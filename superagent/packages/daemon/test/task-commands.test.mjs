@@ -127,8 +127,8 @@ describe('/tasks', () => {
     const { ok, text } = run('t1');
     assert.equal(ok, true);
     assert.match(text, /^t1「查 X」\n状态：完成 · 不到 1 分钟前\n请求人：Alice · OpenViking 用户群 · 话题 · 创建于 \d\d-\d\d \d\d:\d\d\nrouter 备注：Alice 只要上周\nRuntime：pi\n请求：\n  查一下 X 为什么慢\n/);
-    assert.match(text, /追加（3）：\n  .* 追加：只看上周的\n  .* 已退回：帮我订个会议室\n  .* 背景：我们这边也慢\n/);
-    assert.match(text, /结果：\n  .* 完成 · 待 router 转发：慢在缺索引\n/);
+    assert.match(text, /用户追加消息与额外上下文（3）：\n  （追加：[^\n]*）\n  .* 第 1 轮 · 追加 · 已读：只看上周的\n  .* 第 1 轮 · 已退回 · —：帮我订个会议室\n  .* 第 1 轮 · 背景 · 未读：我们这边也慢\n/);
+    assert.match(text, /结果：\n  （每轮结束时[^\n]*）\n  .* 第 1 轮 · 完成 · 待 router 转发：慢在缺索引\n/);
     assert.match(text, /产出：https:\/\/github\.com\/x\/pull\/1\nworker 运行次数：1 · 目录：/);
     assert.match(run('t9').text, /^没有任务 t9。/);
     assert.match(run('nonsense').text, /^用法：/);
@@ -143,7 +143,7 @@ describe('/tasks', () => {
     tasks.route('t1', [row({ content: '函数改名叫 toSlug' })], 'owner', { requester: 'Bob' });
     const { text } = run('t1');
     assert.match(text, /\n请求：\n  实现 slugify 并开个 PR\n之后的请求（1）：\n  \d\d-\d\d \d\d:\d\d 第 2 次 · Bob（进行中）：函数改名叫 toSlug\n/);
-    assert.doesNotMatch(text, /追加/, 'a request that reopened the task is not a follow-up');
+    assert.doesNotMatch(text, /用户追加消息与额外上下文/, 'a request that reopened the task is not a follow-up');
     assert.match(run('').text, /\nt1 运行 不到 1 分钟（第 2 次运行）「slugify PR」Alice · OpenViking 用户群 · 话题 · 2 次请求\n/);
   });
 

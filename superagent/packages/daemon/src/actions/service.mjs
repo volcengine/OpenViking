@@ -580,6 +580,11 @@ export class ActionService {
           metadata: event.chatId ? {} : { event: event.envelope },
         });
         this.logger.info('daemon_reply', { ...trace, outcome: result.duplicate ? 'duplicate' : result.dry_run ? 'dry_run' : 'ok' });
+        // A card is registered where it landed, so a choice made on it comes
+        // back as this daemon's (card-messages.mjs, resolveCardAction).
+        const warning = this.rememberCard(content, result, { connector: event.connectorInstance, chatId: event.chatId,
+          seen: [event.messageId ? this.store.eventByMessageId(event.messageId, event.connectorInstance) : null] });
+        if (warning) this.logger.warn('daemon_reply_card_unregistered', trace);
         return { ok: true };
       } catch (error) {
         this.logger.warn('daemon_reply', { ...trace, outcome: 'failed', error: safeError(error) });
