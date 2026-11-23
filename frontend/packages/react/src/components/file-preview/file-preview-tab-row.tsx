@@ -194,6 +194,15 @@ export function FilePreviewTabRow({
                 {tab.title ??
                   (tab.kind === 'file' ? tab.source.fileName : tab.key)}
               </span>
+              {tab.badge && tab.badge.count > 0 ? (
+                <span
+                  className="ov-file-preview__tab-badge"
+                  title={tab.badge.label}
+                  aria-label={tab.badge.label}
+                >
+                  {tab.badge.count > 99 ? '99+' : tab.badge.count}
+                </span>
+              ) : null}
             </button>
           );
         })}

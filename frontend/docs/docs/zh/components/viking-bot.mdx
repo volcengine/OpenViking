@@ -74,6 +74,14 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ```
 
+### 配置确认
+
+通过显式数据向 `VikingBotConfirmation` 传入摘要行。修改按钮打开宿主的预填表单；确认按钮等待回调，提交期间禁用两项操作，失败后保留摘要。示例使用固定数据和模拟提交。
+
+```tsx file="../../_demos/viking-bot-confirmation.tsx" preview
+
+```
+
 ### 外部目录选择
 
 通过 `allowCustomInput.onOpen` 接管目录选择，使用公共 [ContextPicker](./context-picker) 管理弹窗，确认后调用 `select` 写回答案。
@@ -449,6 +457,43 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | onCopy    | 接管会话标识的复制；省略时写入剪贴板                                   | `(text: string) => void` | -                        |
 | labels    | 覆盖界面文案，全部键见 `DEFAULT_LABELS`                                | `VikingBotLabels`        | -                        |
 | locale    | 界面语言，规则见[国际化](../guide/i18n)                                | `'zh-CN' \| 'en-US'`     | 继承上级，默认 `'en-US'` |
+
+### VikingBotConfirmationProps
+
+从 `@openviking/react/components/viking-bot` 或其 `interaction` 子路径引入 `VikingBotConfirmation`，使用对应的 VikingBot 或 interaction 样式入口。
+
+| 参数       | 说明                                                               | 类型                                   | 默认值               |
+| ---------- | ------------------------------------------------------------------ | -------------------------------------- | -------------------- |
+| rows       | 按展示顺序提供摘要行，值支持长 URI、多行文本或自定义内容           | `readonly VikingBotConfirmationRow[]`  | 必填                 |
+| title      | 摘要上方的标题                                                     | `ReactNode`                            | 请确认创建配置       |
+| onEdit     | 进入宿主的编辑流程，由宿主保留已有值；省略时隐藏修改按钮           | `() => void`                           | -                    |
+| onConfirm  | 校验并提交宿主配置，Promise 拒绝时展示重试反馈；省略时禁用确认按钮 | `() => void \| Promise<void>`          | -                    |
+| disabled   | 禁用两项操作                                                       | `boolean`                              | `false`              |
+| submitting | 宿主控制的提交状态                                                 | `boolean`                              | `false`              |
+| error      | 宿主控制的提交错误                                                 | `ReactNode`                            | -                    |
+| requestKey | 切换配置时变更此身份，以重置提交反馈                               | `string`                               | -                    |
+| className  | 附加到根元素的类名                                                 | `string`                               | -                    |
+| locale     | 界面语言                                                           | `'zh-CN' \| 'en-US'`                   | 继承，否则 `'en-US'` |
+| labels     | 覆盖 title、edit、confirm 和 submitFailed 文案                     | `Partial<VikingBotConfirmationLabels>` | 当前语言             |
+| slots      | 渲染错误替代内容                                                   | `{ errorFallback?: ErrorFallback }`    | 继承或内置           |
+
+### VikingBotConfirmationRow
+
+| 参数  | 说明       | 类型        | 默认值 |
+| ----- | ---------- | ----------- | ------ |
+| label | 摘要行名称 | `ReactNode` | 必填   |
+| value | 摘要行内容 | `ReactNode` | 必填   |
+
+### VikingBotConfirmationLabels
+
+| 参数         | 说明         | 类型     | 默认值           |
+| ------------ | ------------ | -------- | ---------------- |
+| title        | 默认标题     | `string` | 请确认创建配置   |
+| edit         | 修改按钮     | `string` | 修改             |
+| confirm      | 确认按钮     | `string` | 确认并提交       |
+| submitFailed | 提交错误标题 | `string` | 提交失败，请重试 |
+
+组件展示调用方提供的摘要行并报告操作。调用方决定展示时机、保留全部配置、映射后端类型、校验权限并进入编辑流程。组件不从 Bot 消息推断信息完整性，也不改变 Console 的问题协议。确认成功后，由调用方更新或移除摘要。
 
 ### VikingBotInteraction
 
