@@ -89,6 +89,10 @@ const HINT_REQUEST_CHARS = 40;
 export const DIR_PRUNE_DAYS = 3;
 export const DIR_REMOVE_DAYS = 14;
 export const DIR_BUDGET_GB = 20;
+// A task waiting for a person's answer with nothing for this many days is
+// dormant (dormantBefore): a question asked on a Friday is still near on
+// Monday. The config overrides it; 0 turns it off.
+export const DORMANT_DAYS = 5;
 const SWEEP_DELAY_MS = 60_000;
 const SWEEP_MS = 3_600_000;
 
@@ -400,17 +404,42 @@ export class TaskManager {
     return Boolean(task) && !ENDED.has(task.status);
   }
 
-  // The working set the router is shown: every live task and the most recent
-  // ended ones. Older tasks stay in the table for task_list and exact links.
-  // A task has an end time exactly while it is ended (setStatus, stop,
-  // openRound, runTurn keep that), so both reads walk the end-time index
-  // instead of every task.
+  // The working set the router is shown: every live task but a dormant one,
+  // and the most recent ended ones. Older tasks stay in the table for
+  // task_list and exact links. A task has an end time exactly while it is
+  // ended (setStatus, stop, openRound, runTurn keep that), so both reads walk
+  // the end-time index instead of every task.
   workingSet() {
     const live = this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NULL
-      AND status NOT IN ${ENDED_SQL} ORDER BY created_at_ms`).all();
+      AND status NOT IN ${ENDED_SQL} AND (status != 'waiting' OR updated_at_ms >= ?) ORDER BY created_at_ms`).all(this.dormantBefore());
     const ended = this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NOT NULL
       AND status IN ${ENDED_SQL} ORDER BY ended_at_ms DESC LIMIT ?`).all(RECENT_ENDED);
     return [...live, ...ended];
+  }
+
+  // A task waiting for a person that has not moved since this time is
+  // dormant: its question went unanswered for days. It stays live (an answer
+  // goes on in the same round, its directory stays held), but it is out of
+  // the working set, so it no longer takes a place in every nearby input's
+  // hint, nor answers for a person's every word in a direct chat. A reply to
+  // its messages, its thread or its id still finds it.
+  dormantBefore() {
+    const days = this.dormantDays();
+    return days > 0 ? this.now() - days * 86_400_000 : -1;
+  }
+
+  dormantDays() {
+    return Number.isFinite(this.config.taskDormantDays) ? this.config.taskDormantDays : DORMANT_DAYS;
+  }
+
+  isDormant(task) {
+    return task?.status === 'waiting' && task.updated_at_ms < this.dormantBefore();
+  }
+
+  // The dormant tasks, the last to move first.
+  dormant() {
+    return this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NULL AND status = 'waiting' AND updated_at_ms < ?
+      ORDER BY updated_at_ms DESC`).all(this.dormantBefore());
   }
 
   // Tasks asked in a thread, any round, the latest first: the exact signal
@@ -532,17 +561,26 @@ export class TaskManager {
       const task = this.get(taskId);
       return task ? [this.card(task, { detail: true })] : [];
     }
+    // A search looks past the working set at the dormant tasks too.
     let rows = requester
       ? this.db.prepare(`SELECT * FROM tasks WHERE id IN (SELECT task_id FROM task_rounds
             WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'})
           ORDER BY updated_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), ASKER_TASKS])
-      : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all() : this.workingSet();
+      : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all()
+        : [...this.workingSet(), ...(query ? this.dormant() : [])];
     if (query) {
       const grams = bigrams(query);
       rows = rows.map((task) => ({ task, score: similarity(grams, bigrams(`${task.title} ${task.summary}`)) }))
         .filter((row) => row.score > 0.15).sort((a, b) => b.score - a.score).map((row) => row.task);
     }
-    return rows.map((task) => this.card(task));
+    const lines = rows.map((task) => this.card(task));
+    // The working set leaves the dormant tasks out: they are named, so a
+    // question about them still finds them.
+    const dormant = requester || includeEnded || query ? [] : this.dormant();
+    if (dormant.length) {
+      lines.push(`Also waiting, with nothing for days: ${dormant.map((task) => `${task.id} (${this.ago(task.updated_at_ms)})`).join(', ')}. task_id= shows one.`);
+    }
+    return lines;
   }
 
   // Message ids that belong to a task: its routed inputs and what the router
@@ -601,15 +639,20 @@ export class TaskManager {
       const score = similarity(query, bigrams(`${task.title} ${task.summary}`));
       if (score > 0.25 && (owner || hits.has(task.id))) add(task, 'similar words', 1);
     }
-    return [...hits.values()].sort((a, b) => b.weight - a.weight).slice(0, CANDIDATES);
+    // Of equal weight, the task that moved last first: never the oldest live
+    // one ahead of one that ended minutes ago.
+    return [...hits.values()].sort((a, b) => b.weight - a.weight || b.task.updated_at_ms - a.task.updated_at_ms).slice(0, CANDIDATES);
   }
 
   // What a task is doing, as the router needs it to route: working, waiting
-  // for whom, or ended and how long ago, and how many rounds it had.
+  // for whom and for how long, or ended and how long ago, and how many rounds
+  // it had.
   state(task) {
     const rounds = task.round > 1 ? `, ${task.round} rounds` : '';
     if (task.status === 'running' || task.status === 'queued') return `working${rounds}`;
-    if (task.status === 'waiting') return `waiting for ${this.roundOf(task).requester_name ?? task.requester_name ?? 'the requester'}${rounds}`;
+    if (task.status === 'waiting') {
+      return `waiting for ${this.roundOf(task).requester_name ?? task.requester_name ?? 'the requester'} for ${this.ago(task.updated_at_ms)}${rounds}`;
+    }
     if (!ENDED.has(task.status)) return `${task.status}${rounds}`;
     return `${task.status} ${this.ago(task.ended_at_ms ?? task.updated_at_ms)} ago${rounds}`;
   }
@@ -1718,6 +1761,7 @@ export class TaskManager {
     const delivery = this.delivery(task);
     return {
       ...task,
+      dormant: this.isDormant(task),
       turnStartedAt: this.running.get(task.id)?.startedAt ?? null,
       chatName: this.chatName(task.origin_chat),
       report: delivery ? { id: delivery.reportId, state: delivery.reportState, createdAt: delivery.createdAt,
@@ -1737,6 +1781,7 @@ export class TaskManager {
       total: Number(this.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n),
       slots: { used: this.running.size - reserved, of: this.slots, reserved, reservedOf: this.reservedSlots },
       disk: this.disk,
+      dormantDays: this.dormantDays(),
     };
   }
 

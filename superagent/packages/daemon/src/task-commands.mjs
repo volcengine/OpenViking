@@ -66,10 +66,16 @@ function line(task, now) {
 }
 
 // The tasks that have not ended, by what they are doing: a worker on them
-// (running, or queued for a slot), or a question waiting for a person.
+// (running, or queued for a slot), a question waiting for a person, or one
+// nobody answered for days (dormant).
 function liveCounts(live) {
-  const count = (...statuses) => live.filter((task) => statuses.includes(task.status)).length;
-  return [['运行中', count('running')], ['排队', count('queued')], ['等待回复', count('waiting')]];
+  const count = (test) => live.filter(test).length;
+  return [
+    ['运行中', count((task) => task.status === 'running')],
+    ['排队', count((task) => task.status === 'queued')],
+    ['等待回复', count((task) => task.status === 'waiting' && !task.dormant)],
+    ['久未回复', count((task) => task.dormant)],
+  ];
 }
 
 // The one line /status adds when there are tasks at work.
@@ -81,6 +87,15 @@ export function taskStatusLine(tasks) {
   return `后台任务：${parts.join(' · ')}（/tasks 查看）`;
 }
 
+// The questions nobody answered for days, in one line at the end: still
+// waiting, but out of the router's task hints.
+function dormantLines(lines, dormant, days, now) {
+  if (dormant.length === 0) return;
+  const shown = dormant.slice(0, LIVE_SHOWN).map((task) => `${task.id} 等 ${task.requester_name ?? '请求人'} ${since(task.updated_at_ms, now)}`);
+  lines.push('', `久未回复（${days} 天以上无动静，router 的任务提示里不再出现；/tasks stop <编号> 可关闭）`,
+    `${shown.join('、')}${dormant.length > LIVE_SHOWN ? ` 等 ${dormant.length} 个` : ''}`);
+}
+
 function section(lines, title, tasks, now) {
   if (tasks.length === 0) return;
   lines.push('', title);
@@ -89,17 +104,20 @@ function section(lines, title, tasks, now) {
 }
 
 // Tasks with a worker on them first, then the questions waiting for a
-// person, the latest asked first: a question nobody answers never takes the
-// place of work being done.
+// person, the latest asked first, and those nobody answered for days last,
+// in one line: a question nobody answers never takes the place of work
+// being done.
 function overviewText(tasks, now) {
-  const { live, ended, total, slots, disk } = tasks.overview({ recent: RECENT });
+  const { live, ended, total, slots, disk, dormantDays } = tasks.overview({ recent: RECENT });
   if (total === 0) return `还没有后台任务。\n${USAGE}`;
-  const counts = liveCounts(live).map(([label, n]) => `${label} ${n}`).join(' · ');
+  const counts = liveCounts(live).filter(([label, n]) => n > 0 || label !== '久未回复').map(([label, n]) => `${label} ${n}`).join(' · ');
   const lines = [`后台任务：${counts} · 共 ${total} 个 · worker 槽位 ${slots.used}/${slots.of}（跟进预留 ${slots.reserved}/${slots.reservedOf}）`];
   if (disk) lines.push(`任务目录占用 ${formatBytes(disk.bytes)}${disk.budget > 0 ? `（上限 ${formatBytes(disk.budget)}）` : ''}`);
+  const waiting = live.filter((task) => task.status === 'waiting').sort((a, b) => b.updated_at_ms - a.updated_at_ms);
   section(lines, '进行中', [...live.filter((task) => task.status === 'running'), ...live.filter((task) => task.status === 'queued')], now);
-  section(lines, '等待回复', live.filter((task) => task.status === 'waiting').sort((a, b) => b.updated_at_ms - a.updated_at_ms), now);
+  section(lines, '等待回复', waiting.filter((task) => !task.dormant), now);
   section(lines, '最近结束', ended, now);
+  dormantLines(lines, waiting.filter((task) => task.dormant), dormantDays, now);
   lines.push('', USAGE);
   return lines.join('\n');
 }
@@ -114,7 +132,7 @@ function detailText(tasks, taskId, now) {
   const followUps = task.inputs.filter((input) => (input.seq !== task.origin_seq && !reopenedBy.has(input.seq)) || input.role !== 'owner');
   const lines = [
     `${task.id}「${task.title}」`,
-    `状态：${state(task, now)}`,
+    `状态：${state(task, now)}${task.dormant ? '（久未回复：router 的任务提示里不再出现，回复它的消息、在它的话题里或按编号仍能找到）' : ''}`,
     `请求人：${task.requester_name ?? '未知'} · ${where(task)} · 创建于 ${clock(task.created_at_ms)}`,
     ...(task.parent_id ? [`跟进自：${task.parent_id}`] : []),
     ...(task.children.length ? [`后续任务：${task.children.map((child) => `${child.id}（${STATUS[child.status] ?? child.status}）`).join('、')}`] : []),

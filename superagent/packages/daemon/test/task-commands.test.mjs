@@ -17,7 +17,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 const OWNER_DM = { chatType: 'p2p', senderType: 'user', senderId: 'ou_owner' };
 const connectors = { isOwner: (event) => event.senderId === 'ou_owner' };
 
-function setup(t) {
+function setup(t, { now = Date.now } = {}) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'task-commands-'));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const db = new DatabaseSync(':memory:');
@@ -36,7 +36,7 @@ function setup(t) {
     },
   };
   const inbox = new MessageInbox({ db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
-  const tasks = new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: (row) => `[chat=${row.chat_id} event=${row.event_id}] ${row.content}` });
+  const tasks = new TaskManager({ db, config: { workspace }, executor, inbox, now, lineFor: (row) => `[chat=${row.chat_id} event=${row.event_id}] ${row.content}` });
   t.after(() => { tasks.shutdown(); inbox.stop(); });
   let seq = 0;
   const row = (fields = {}) => {
@@ -44,7 +44,7 @@ function setup(t) {
     return { seq, event_id: `e${seq}`, connector_instance: 'lark', source: 'lark', scope_key: 'lark:oc_group:omt_1', chat_id: 'oc_group',
       thread_id: 'omt_1', message_id: `om_${seq}`, chat_type: 'group', sender_id: 'ou_alice', content: `line ${seq}`, ...fields };
   };
-  const run = (arg) => executeTasksCommand({ name: 'tasks', arg }, { event: OWNER_DM, connectors, tasks });
+  const run = (arg) => executeTasksCommand({ name: 'tasks', arg }, { event: OWNER_DM, connectors, tasks, now: now() });
   return { tasks, turns, row, run, db };
 }
 
@@ -92,6 +92,25 @@ describe('/tasks', () => {
     assert.equal(taskStatusLine(tasks), '', '/status counts no task at work');
     assert.match(run('t1').text, /\n状态：受阻 · 不到 1 分钟前\n/);
     assert.match(run('stop t1').text, /^t1 已结束（受阻），无需停止。$/);
+  });
+
+  it('lists the questions nobody answered for days apart, in one line at the end', async (t) => {
+    const day = 86_400_000;
+    let at = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, turns, row, run } = setup(t, { now: () => at });
+    for (const [index, name] of ['Alice', 'Bob'].entries()) {
+      tasks.create({ rows: [row()], title: `问 ${name}`, requester: name, runtime: 'pi' });
+      tasks.report(`t${index + 1}`, { state: 'needs_user', question: '哪个？' });
+      turns[index].finish({ text: '' });
+      await settle();
+      at += 4 * day;
+    }
+    const text = run('').text;
+    assert.match(text, /^后台任务：运行中 0 · 排队 0 · 等待回复 1 · 久未回复 1 · 共 2 个 · /);
+    assert.match(text, /\n等待回复\nt2 等 Bob 回复 4 天「问 Bob」/);
+    assert.match(text, /\n久未回复（5 天以上无动静，router 的任务提示里不再出现；\/tasks stop <编号> 可关闭）\nt1 等 Alice 8 天\n\n用法：/);
+    assert.equal(taskStatusLine(tasks), '后台任务：等待回复 1 · 久未回复 1（/tasks 查看）');
+    assert.match(run('t1').text, /\n状态：等 Alice 回复 8 天（久未回复：router 的任务提示里不再出现/);
   });
 
   it('shows one task: its request, follow-ups and their fate, and its reports and their delivery', async (t) => {
