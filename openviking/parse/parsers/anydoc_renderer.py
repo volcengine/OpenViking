@@ -194,7 +194,7 @@ class _AnyDocMarkdownRenderer:
             number = self.note_numbers.get(inline.note_id or "")
             return f"[^{number}]" if number is not None else ""
         if kind == "line_break":
-            return "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
+            return "<br>" if context == "block" else "\n" if context == "table_cell" else " "
         if kind == "math":
             source = self._escape_math_source(inline.text or "", context=context)
             return f"${source}$" if source else ""
