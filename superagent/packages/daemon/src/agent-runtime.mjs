@@ -252,6 +252,9 @@ export class AgentRuntime {
     if (runtime === 'volc' && this.config.connectors.includes('weixin')) {
       throw new Error('Weixin is not supported on the Volc runtime');
     }
+    if (runtime === 'volc' && (this.config.externalConnectors ?? []).some((item) => this.config.connectors.includes(item.id))) {
+      throw new Error('An external connector is not supported on the Volc runtime');
+    }
   }
 
   prepareInputContext() { return this.backend?.prepareInputContext?.(); }

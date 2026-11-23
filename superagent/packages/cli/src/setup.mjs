@@ -298,6 +298,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     workspace: current?.workspace ?? path.join(homeDir, 'superagent-workspace', id),
     runtime: kept ?? runtimes.find((runtime) => runtime.available && (!current || runtime.model === current.model)),
     connectors,
+    externalConnectors: current?.externalConnectors ?? [],
     channel: current?.channel ?? connectors[0],
     ovConfig: current?.ovConfig,
     // A DSH route this run adds, kept in memory until the instance is saved;
@@ -532,7 +533,11 @@ async function askIms(ctx, state) {
     const choices = imChoices();
     connectors = await ctx.prompter.multiselect(t('接入哪些 IM', 'Which IMs to connect'), choices,
       { initial: choices.map(({ value }, index) => (state.connectors.includes(value) ? index : -1)).filter((index) => index >= 0) });
-    if (connectors.some((connector) => connector !== 'email')) break;
+    const custom = (state.externalConnectors ?? []).map((item) => item.id);
+    if (connectors.some((connector) => connector !== 'email') || custom.length > 0) {
+      connectors = [...connectors, ...custom.filter((id) => !connectors.includes(id))];
+      break;
+    }
     ctx.prompter.warn(t('邮箱不能单独接：新邮件提醒和回信确认要发到飞书、微信、Telegram、Slack 或 QQ，再选一个。',
       'Email cannot be the only one: its alerts and reply approvals go to Feishu/Lark, WeChat, Telegram, Slack or QQ, so pick one of those too.'));
   }

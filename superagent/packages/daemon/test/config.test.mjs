@@ -91,6 +91,32 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /unsupported connector/);
   });
 
+  it('accepts an external connector program as a channel without treating it as a built-in', () => {
+    setEnv('OV_SUPERAGENT_CHANNEL', 'dingtalk');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["dingtalk","lark"]');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([
+      { id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'] },
+    ]));
+    const config = getConfig();
+    assert.equal(config.channel, 'dingtalk');
+    assert.deepEqual(config.connectors, ['dingtalk', 'lark']);
+    assert.deepEqual(config.externalConnectors, [{
+      id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'], prompt: null,
+    }]);
+    setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'lark', command: '/bin/true' }]));
+    assert.throws(() => getConfig(), /built-in/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: 'ovsa-discord' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /absolute path/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
+    assert.throws(() => getConfig(), /not listed/);
+  });
+
   it('moves temporary files independently of persistent data and ignores TMPDIR', () => {
     setEnv('OV_SUPERAGENT_DATA_DIR', '/root/.local/share/superagent-primary');
     setEnv('OV_SUPERAGENT_WORKSPACE', '/work/superagent-primary');
