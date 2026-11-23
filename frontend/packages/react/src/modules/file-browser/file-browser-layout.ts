@@ -1,21 +1,26 @@
 /**
  * 文件浏览的栏宽约束。
  *
- * 树默认 352px（与设计稿一致）；窄于 200px 就只剩图标可辨。上限除了 520px 的
+ * 树默认宽度随语言变化；窄于 200px 就只剩图标可辨。上限除了 520px 的
  * 绝对值，还要给右侧详情留出可读宽度——容器被宿主压窄时，树不能继续占着
  * 520px 把详情挤没。
  *
  * Column-width limits of the file browser.
  *
- * The tree starts at 352px, matching the design; below 200px only icons stay
+ * The tree's default width follows the locale; below 200px only icons stay
  * legible. Above the 520px absolute cap the detail pane must still have room, so a
  * container the host squeezed narrows the tree rather than letting it keep 520px
  * and crush the detail.
  */
-export const TREE_DEFAULT_WIDTH = 352;
+export const TREE_DEFAULT_WIDTH_BY_LOCALE = {
+  'zh-CN': 352,
+  'en-US': 500,
+};
 export const TREE_MIN_WIDTH = 200;
+export const STACKED_TREE_MIN_HEIGHT = 160;
 /** 详情区至少保留的宽度。 Width the detail pane keeps at minimum. */
 const DETAIL_MIN_WIDTH = 320;
+const STACKED_DETAIL_MIN_HEIGHT = 240;
 /** The separator occupies only its 1px line; the wider hit area overlays the panes. */
 const RESIZE_FOOTPRINT = 1;
 /** Minimum width that can fit both panes and the divider side by side. */
@@ -44,4 +49,10 @@ export function resolveTreeMaxWidth(containerWidth: number) {
       containerWidth - DETAIL_MIN_WIDTH - RESIZE_FOOTPRINT,
     ),
   );
+}
+
+export function resolveStackedTreeMaxHeight(containerHeight: number) {
+  const maxHeight =
+    containerHeight - STACKED_DETAIL_MIN_HEIGHT - RESIZE_FOOTPRINT;
+  return maxHeight > STACKED_TREE_MIN_HEIGHT ? maxHeight : undefined;
 }
