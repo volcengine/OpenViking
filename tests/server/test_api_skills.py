@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import hashlib
 import io
 import json
 import sys
@@ -693,6 +694,60 @@ async def test_skills_api_add_accepts_source_metadata_override(client, monkeypat
     local = await client.post("/api/v1/skills", json={"data": str(tmp_path)})
     assert local.status_code == 403, local.text
     assert len(downloads) == count
+
+
+async def test_skills_api_hashes_visible_and_stored_definitions(client, service):
+    from openviking.privacy.reference import build_privacy_field_reference
+    from openviking.privacy.skill_placeholder import build_placeholder
+
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    name = "late-masked-skill"
+    value = "sample-registered-setting"
+    restored_value = "sample-restored-setting"
+    skill_ref = build_placeholder(name, "api_key")
+    credential_ref = build_privacy_field_reference(
+        owner.user.user_id, "credential", "example", "token"
+    )
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": "off"}})
+    )
+    created = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": _skill_md(name, "Example Skill", f"Use {skill_ref} and {value}."),
+            "wait": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    uri = created.json()["result"]["root_uri"] + "/SKILL.md"
+
+    await service.privacy_configs.upsert(owner, "skill", name, {"api_key": restored_value})
+    await service.privacy_configs.upsert(owner, "credential", "example", {"token": value})
+    await patch_user_config(
+        service.viking_fs,
+        owner,
+        UserSettingsPatch.model_validate({"privacy": {"mode": "registered", "restore": True}}),
+    )
+
+    visible_response = await client.get("/api/v1/content/read", params={"uri": uri})
+    download = await client.get("/api/v1/content/download", params={"uri": uri})
+    detail_response = await client.get(f"/api/v1/skills/{name}", params={"include_integrity": True})
+    assert (
+        visible_response.status_code == download.status_code == detail_response.status_code == 200
+    )
+
+    visible = visible_response.json()["result"]
+    detail = detail_response.json()["result"]
+    [definition] = [item for item in detail["files"] if item["path"] == "SKILL.md"]
+    assert f"Use {skill_ref} and {credential_ref}." in visible
+    assert f"Use {skill_ref} and {value}.".encode() in download.content
+    assert restored_value in detail["content"]
+    assert detail["visible_content_sha256"] == hashlib.sha256(visible.encode()).hexdigest()
+    assert (
+        detail["stored_content_sha256"]
+        == definition["sha256"]
+        == hashlib.sha256(download.content).hexdigest()
+    )
 
 
 async def test_skills_api_update_accepts_binary_auxiliary_files(client, service):
