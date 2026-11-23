@@ -63,12 +63,7 @@ async def copy_resource(
     from_uri = _validate_shared_resource_uri(request.from_uri, _ctx, field_name="from_uri")
     to_uri = _validate_shared_resource_uri(request.to_uri, _ctx, field_name="to_uri")
     return await copy_filesystem_entry(
-        CpRequest(
-            from_uri=from_uri,
-            to_uri=to_uri,
-            recursive=request.recursive,
-            processing_mode=request.processing_mode,
-        ),
+        request.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}),
         _ctx=_ctx,
     )
 
@@ -82,7 +77,7 @@ async def move_resource(
     from_uri = _validate_shared_resource_uri(request.from_uri, _ctx, field_name="from_uri")
     to_uri = _validate_shared_resource_uri(request.to_uri, _ctx, field_name="to_uri")
     return await move_filesystem_entry(
-        MvRequest(from_uri=from_uri, to_uri=to_uri, processing_mode=request.processing_mode),
+        request.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}),
         _ctx=_ctx,
     )
 
@@ -104,11 +99,7 @@ async def delete_resource(
         uri=resolved,
         recursive=recursive,
         wait=wait,
-        **(
-            {"processing_mode": processing_mode}
-            if processing_mode != DEFAULT_PROCESSING_MODE
-            else {}
-        ),
+        processing_mode=processing_mode,
         _ctx=_ctx,
     )
 

@@ -26,7 +26,9 @@ from openviking_cli.session.user_id import UserIdentifier
 
 @pytest.mark.asyncio
 async def test_rm_omits_legacy_memory_cleanup(monkeypatch):
-    async def fake_rm(uri, ctx=None, recursive=False, wait=False):
+    async def fake_rm(
+        uri, ctx=None, recursive=False, wait=False, processing_mode: str = "semantic_and_vectors"
+    ):
         return {
             "estimated_deleted_count": 1,
             "memory_cleanup": {"status": "success"},
@@ -54,7 +56,9 @@ async def test_rm_omits_legacy_memory_cleanup(monkeypatch):
 async def test_cp_resolves_paths_and_preserves_service_result(monkeypatch):
     calls = []
 
-    async def fake_cp(from_uri, to_uri, recursive=False, ctx=None):
+    async def fake_cp(
+        from_uri, to_uri, recursive=False, ctx=None, processing_mode: str = "semantic_and_vectors"
+    ):
         calls.append((from_uri, to_uri, recursive, ctx))
         return {
             "operation_id": "copy-1",
@@ -181,7 +185,9 @@ async def test_cp_canonicalizes_home_aliases(monkeypatch):
     calls = []
     calls = []
 
-    async def fake_cp(from_uri, to_uri, recursive=False, ctx=None):
+    async def fake_cp(
+        from_uri, to_uri, recursive=False, ctx=None, processing_mode: str = "semantic_and_vectors"
+    ):
         calls.append((from_uri, to_uri, recursive, ctx))
         return {}
 

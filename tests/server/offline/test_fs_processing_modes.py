@@ -55,6 +55,34 @@ async def write_vectors(client, uri):
     )
 
 
+async def seed_referenced_memory(service, ctx, resource, memory):
+    await service.viking_fs.write_file(resource, "resource body", ctx=ctx)
+    await service.viking_fs.write_file(
+        memory,
+        MemoryFileUtils.write(
+            MemoryFile(
+                uri=memory,
+                content=f"# Resource card\n\nReference: {resource}",
+                extra_fields={
+                    "category": "reference",
+                    "name": "resource",
+                    "resource_refs": [{"resource_uri": resource}],
+                },
+            )
+        ),
+        ctx=ctx,
+    )
+    await MemoryUpdater.refresh_file_embedding(
+        viking_fs=service.viking_fs,
+        vikingdb=service.vikingdb_manager,
+        uri=memory,
+        memory_type="entities",
+        ctx=ctx,
+        strict=True,
+    )
+    await service.resources.wait_processed()
+
+
 async def test_vectors_only_copy_move_and_delete_keep_uri_vectors(client, service, monkeypatch):
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     source = "viking://resources/source/a.md"
@@ -235,28 +263,7 @@ async def test_resource_delete_vectors_only_refreshes_referenced_memory_index(
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     resource = "viking://resources/memory-ref/a.md"
     memory = f"viking://user/{ctx.user.user_id}/memories/entities/resource-ref.md"
-    await service.viking_fs.write_file(resource, "resource body", ctx=ctx)
-    raw = MemoryFileUtils.write(
-        MemoryFile(
-            uri=memory,
-            content=f"# Resource card\n\nReference: {resource}",
-            extra_fields={
-                "category": "reference",
-                "name": "resource",
-                "resource_refs": [{"resource_uri": resource}],
-            },
-        )
-    )
-    await service.viking_fs.write_file(memory, raw, ctx=ctx)
-    await MemoryUpdater.refresh_file_embedding(
-        viking_fs=service.viking_fs,
-        vikingdb=service.vikingdb_manager,
-        uri=memory,
-        memory_type="entities",
-        ctx=ctx,
-        strict=True,
-    )
-    await service.resources.wait_processed()
+    await seed_referenced_memory(service, ctx, resource, memory)
     before = await service.vikingdb_manager.fetch_by_uri(memory, ctx=ctx)
     assert resource in before["abstract"]
     enqueue = forbid_semantics(monkeypatch)
@@ -290,31 +297,7 @@ async def test_resource_delete_reports_memory_embedding_failure(
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     resource = "viking://resources/memory-failure/a.md"
     memory = f"viking://user/{ctx.user.user_id}/memories/entities/failure.md"
-    await service.viking_fs.write_file(resource, "body", ctx=ctx)
-    await service.viking_fs.write_file(
-        memory,
-        MemoryFileUtils.write(
-            MemoryFile(
-                uri=memory,
-                content=f"# Card\n\nReference: {resource}",
-                extra_fields={
-                    "name": "failure",
-                    "category": "reference",
-                    "resource_refs": [{"resource_uri": resource}],
-                },
-            )
-        ),
-        ctx=ctx,
-    )
-    await MemoryUpdater.refresh_file_embedding(
-        viking_fs=service.viking_fs,
-        vikingdb=service.vikingdb_manager,
-        uri=memory,
-        memory_type="entities",
-        ctx=ctx,
-        strict=True,
-    )
-    await service.resources.wait_processed()
+    await seed_referenced_memory(service, ctx, resource, memory)
     manager = get_queue_manager()
     if failure_stage == "enqueue":
         queue = manager.get_queue(manager.EMBEDDING)

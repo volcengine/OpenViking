@@ -30,6 +30,9 @@ initialization behavior.
 Vectors-only resource deletion still unlinks memory references deterministically,
 but skips the session memory extraction that would otherwise rewrite those memories with a VLM.
 
+SDKs omit the default processing mode from HTTP payloads for older-server compatibility.
+Their return types are unchanged; use HTTP when you need indexing status or a transfer task ID.
+
 ## API Reference
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
@@ -693,11 +696,11 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 | uri | str | Yes | - | Viking URI to remove |
 | wait | bool | No | False | Wait for the semantic refresh after deletion |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | recursive | bool | No | False | Remove directory recursively |
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 
 
 **Python SDK (HTTP)**
@@ -706,6 +709,9 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 # Remove single file
 client.rm(uri="viking://resources/docs/old.md")
 
+# Skip parent semantic refresh
+client.rm(uri="viking://resources/docs/old.md", processing_mode="vectors_only")
+
 # Remove directory recursively
 client.rm(uri="viking://resources/old-project/", recursive=True)
 ```
@@ -713,7 +719,7 @@ client.rm(uri="viking://resources/old-project/", recursive=True)
 **TypeScript SDK**
 
 ```typescript
-await client.remove("viking://resources/docs/old.md");
+await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
 ```
 
 **Go SDK**
@@ -721,6 +727,7 @@ await client.remove("viking://resources/docs/old.md");
 ```go
 err := client.Remove(ctx, "viking://resources/old-project/", &openviking.RemoveOptions{
     Recursive: true,
+    ProcessingMode: "vectors_only",
 })
 if err != nil {
     return err
@@ -793,10 +800,10 @@ Files use Exact Locks on both paths; directories use Tree Locks on both subtrees
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI, including the new file or directory name |
 | recursive | bool | No | False | Required when the source is a directory |
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 
 **HTTP API**
 
@@ -880,9 +887,9 @@ Files use two Exact Locks; directories use Tree Locks on the source and destinat
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI |
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 
 
 **Python SDK (HTTP)**
@@ -891,6 +898,7 @@ Files use two Exact Locks; directories use Tree Locks on the source and destinat
 client.mv(
     from_uri="viking://resources/old-name/",
     to_uri="viking://resources/new-name/",
+    processing_mode="vectors_only",
 )
 ```
 
@@ -900,13 +908,15 @@ client.mv(
 await client.move(
   "viking://resources/docs/old.md",
   "viking://resources/docs/new.md",
+  { processingMode: "vectors_only" },
 );
 ```
 
 **Go SDK**
 
 ```go
-if err := client.Move(ctx, "viking://resources/old-name/", "viking://resources/new-name/"); err != nil {
+if err := client.MoveWithOptions(ctx, "viking://resources/old-name/", "viking://resources/new-name/",
+    &openviking.MoveOptions{ProcessingMode: "vectors_only"}); err != nil {
     return err
 }
 ```
@@ -957,24 +967,3 @@ On case-insensitive `localfs`, both `from_uri` and `to_uri` may be affected by c
 - [Viking URI](../concepts/04-viking-uri.md) - URI specification
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2
 - [Resources](02-resources.md) - Resource management
-
-### Skip semantic refresh through SDKs
-
-```python
-client.rm("viking://resources/docs/old.md", processing_mode="vectors_only")
-client.mv("viking://resources/a.md", "viking://resources/b.md", processing_mode="vectors_only")
-```
-
-```typescript
-await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
-await client.move("viking://resources/a.md", "viking://resources/b.md", { processingMode: "vectors_only" });
-```
-
-```go
-err := client.MoveWithOptions(ctx, "viking://resources/a.md", "viking://resources/b.md",
-    &openviking.MoveOptions{ProcessingMode: "vectors_only"})
-```
-
-SDK return types are unchanged. Use HTTP directly when you need the transfer task ID or
-indexing status. Omitted and explicit `semantic_and_vectors` modes are not serialized,
-so existing calls remain compatible with older servers.

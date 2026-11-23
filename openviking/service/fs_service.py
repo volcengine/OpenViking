@@ -2882,11 +2882,7 @@ class FSService:
             use_snapshot=True,
             tags=conflict_tags,
             tag_mode="append",
-            **(
-                {"processing_mode": processing_mode}
-                if processing_mode != DEFAULT_PROCESSING_MODE
-                else {}
-            ),
+            processing_mode=processing_mode,
         )
         return result
 

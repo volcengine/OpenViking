@@ -395,11 +395,7 @@ async def delete(
         uri,
         ctx=_ctx,
         recursive=bool(stat.get("isDir", False)),
-        **(
-            {"processing_mode": processing_mode}
-            if processing_mode != DEFAULT_PROCESSING_MODE
-            else {}
-        ),
+        processing_mode=processing_mode,
     )
     return FastAPIResponse(status_code=204, headers=_webdav_headers())
 
@@ -483,22 +479,14 @@ async def move(
             dst_uri,
             ctx=_ctx,
             recursive=bool(dst_stat.get("isDir", False)),
-            **(
-                {"processing_mode": processing_mode}
-                if processing_mode != DEFAULT_PROCESSING_MODE
-                else {}
-            ),
+            processing_mode=processing_mode,
         )
 
     await service.fs.mv(
         src_uri,
         dst_uri,
         ctx=_ctx,
-        **(
-            {"processing_mode": processing_mode}
-            if processing_mode != DEFAULT_PROCESSING_MODE
-            else {}
-        ),
+        processing_mode=processing_mode,
     )
     status_code = 204 if dst_stat is not None else 201
     return FastAPIResponse(status_code=status_code, headers=_webdav_headers())

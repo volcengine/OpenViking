@@ -21,7 +21,9 @@ def _ctx() -> RequestContext:
 async def test_delete_resource_delegates_to_fs_with_index_wait(monkeypatch):
     calls = []
 
-    async def fake_rm(uri, recursive=False, wait=False, _ctx=None):
+    async def fake_rm(
+        uri, recursive=False, wait=False, _ctx=None, processing_mode: str = "semantic_and_vectors"
+    ):
         calls.append((uri, recursive, wait, _ctx))
         return SimpleNamespace(result={"uri": uri, "semantic_status": "complete"})
 
@@ -58,7 +60,9 @@ async def test_delete_resource_http_forwards_recursive_and_wait(
 ):
     calls = []
 
-    async def fake_rm(uri, ctx=None, recursive=False, wait=False):
+    async def fake_rm(
+        uri, ctx=None, recursive=False, wait=False, processing_mode: str = "semantic_and_vectors"
+    ):
         calls.append((uri, ctx, recursive, wait))
         return {"uri": uri, "semantic_status": "complete"}
 

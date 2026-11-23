@@ -291,11 +291,7 @@ async def rm(
             ctx=_ctx,
             recursive=recursive,
             wait=wait,
-            **(
-                {"processing_mode": processing_mode}
-                if processing_mode != DEFAULT_PROCESSING_MODE
-                else {}
-            ),
+            processing_mode=processing_mode,
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -364,11 +360,7 @@ async def cp(
             to_uri,
             recursive=request.recursive,
             ctx=_ctx,
-            **(
-                {"processing_mode": request.processing_mode}
-                if request.processing_mode != DEFAULT_PROCESSING_MODE
-                else {}
-            ),
+            processing_mode=request.processing_mode,
         )
     except AGFSNotFoundError:
         raise NotFoundError(from_uri, "file")
@@ -412,11 +404,7 @@ async def mv(
             from_uri,
             to_uri,
             ctx=_ctx,
-            **(
-                {"processing_mode": request.processing_mode}
-                if request.processing_mode != DEFAULT_PROCESSING_MODE
-                else {}
-            ),
+            processing_mode=request.processing_mode,
         )
     except AGFSNotFoundError:
         raise NotFoundError(from_uri, "file")

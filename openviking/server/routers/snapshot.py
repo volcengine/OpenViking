@@ -198,11 +198,7 @@ async def restore(
                 current_commit_id=request.current_commit_id,
                 ctx=_ctx,
                 dry_run=request.dry_run,
-                **(
-                    {"processing_mode": request.processing_mode}
-                    if request.processing_mode not in {None, DEFAULT_PROCESSING_MODE}
-                    else {}
-                ),
+                processing_mode=request.processing_mode or DEFAULT_PROCESSING_MODE,
             )
             return Response(status="ok", result=result)
         result = await service.fs.restore(
