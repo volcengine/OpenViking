@@ -26,6 +26,7 @@ async def test_service_applies_configured_queue_worker_limits(tmp_path, monkeypa
         json.dumps(
             {
                 "storage": {"workspace": str(tmp_path / "workspace")},
+                "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
                 "embedding": {
                     "dense": {
                         "provider": "openai",
