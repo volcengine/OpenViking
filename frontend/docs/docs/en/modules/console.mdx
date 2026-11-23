@@ -85,7 +85,7 @@ The live status region mounts empty and announces only while visible. When suppo
 
 If the scope's request signal is already cancelled or becomes cancelled, Console keeps the Bot tab and displays a static cancellation message, without loading or a retry button that cannot restart the cancelled request. To check again, the host must replace the aborted signal with a fresh, non-aborted signal, or remove it. Changing only `scopeKey` while passing the same aborted signal leaves the panel cancelled.
 
-After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
+After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Start using VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
 
 Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
 
