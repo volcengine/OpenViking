@@ -233,6 +233,21 @@ async def test_store_runs_expiry_flow_through_native_cache_runtime(tmp_path, red
         assert await store.ack(claimed)
         assert await store.remove_registration_if_empty(bucket)
         assert await store.release_owner(owner)
+        await store.close()
+
+        expiry_runtime = ExpiryRuntime(
+            ExpiryConfig(
+                service_name="test",
+                shard_count=1,
+                cache={"instance": "expiry"},
+            ),
+            cache_runtime=client.cache_runtime("expiry"),
+            roles=ExpiryRuntimeRoles(),
+        )
+        try:
+            await expiry_runtime.start_storage()
+        finally:
+            await expiry_runtime.close()
     finally:
         await store.close()
         client.close()
