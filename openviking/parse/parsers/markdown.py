@@ -1770,12 +1770,13 @@ class MarkdownParser(BaseParser):
         # Build content
         heading_prefix = "#" * level
         section_start = end_pos  # After heading line
-        full_content = f"{heading_prefix} {title}\n\n{content[section_start:section_end].strip()}"
+        section_body = content[section_start:section_end].lstrip("\r\n").rstrip()
+        full_content = f"{heading_prefix} {title}\n\n{section_body}"
         full_chars = len(full_content)
 
         direct_content = ""
         if has_children:
-            direct_text = content[section_start:direct_content_end].strip()
+            direct_text = content[section_start:direct_content_end].lstrip("\r\n").rstrip()
             if direct_text:
                 direct_content = f"{heading_prefix} {title}\n\n{direct_text}"
 
