@@ -74,7 +74,7 @@ async def test_cancel_during_skill_task_creation_settles_persisted_record(monkey
     async def slow_create(task, **kwargs):
         started.set()
         await resume.wait()
-        await original_create(task, **kwargs)
+        return await original_create(task, **kwargs)
 
     monkeypatch.setattr(store, "create", slow_create)
     tracker = TaskTracker(store=store)

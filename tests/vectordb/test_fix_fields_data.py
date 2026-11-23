@@ -13,41 +13,15 @@ instead of defaulted.
 from openviking.storage.vectordb.utils.validation import fix_fields_data
 
 
-def test_missing_field_is_filled_even_when_counts_match():
+def test_legacy_row_with_extra_fields_gets_both_kinds_of_schema_default():
     meta = {
-        "a": {"FieldType": "string", "DefaultValue": None},
-        "b": {"FieldType": "int64", "DefaultValue": None},
-        "vec": {"FieldType": "string", "DefaultValue": None},
-    }
-    # 3 keys == len(meta), but "b" is absent and an extra non-schema key exists.
-    data = {"a": "hello", "vec": "x", "persisted": 5}
-
-    result = fix_fields_data(dict(data), meta)
-
-    assert "b" in result, "missing schema field must be backfilled"
-    assert result["b"] == 0  # int64 type default
-
-
-def test_default_value_is_used_when_present():
-    meta = {
-        "a": {"FieldType": "string", "DefaultValue": None},
+        "name": {"FieldType": "string", "DefaultValue": None},
+        "count": {"FieldType": "int64", "DefaultValue": None},
         "status": {"FieldType": "string", "DefaultValue": "pending"},
-        "extra": {"FieldType": "string", "DefaultValue": None},
+        "score": {"FieldType": "int64", "DefaultValue": 3},
     }
-    data = {"a": "hello", "extra": "x", "legacy": "y"}
+    legacy = {"name": "hello", "score": 7, "persisted": 5, "legacy": "value"}
+    expected = {**legacy, "count": 0, "status": "pending"}
 
-    result = fix_fields_data(dict(data), meta)
-
-    assert result["status"] == "pending"
-
-
-def test_complete_data_is_returned_unchanged():
-    meta = {
-        "a": {"FieldType": "string", "DefaultValue": None},
-        "b": {"FieldType": "int64", "DefaultValue": None},
-    }
-    data = {"a": "hello", "b": 7}
-
-    result = fix_fields_data(dict(data), meta)
-
-    assert result == {"a": "hello", "b": 7}
+    assert fix_fields_data(legacy, meta) == expected
+    assert fix_fields_data(legacy, meta) == expected

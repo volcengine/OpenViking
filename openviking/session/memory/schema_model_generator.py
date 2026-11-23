@@ -202,13 +202,13 @@ class SchemaModelGenerator:
                 merge_op = MergeOpFactory.from_field(field)
                 patch_type = merge_op.get_output_schema_type(field.field_type)
                 union_type = Union[base_type, patch_type]
-                desc = merge_op.get_output_schema_description(
-                    self._render_description(
-                        field.description,
-                        memory_type=memory_type.memory_type,
-                        field=field_label,
-                    )
+                desc = self._render_description(
+                    field.description,
+                    memory_type=memory_type.memory_type,
+                    field=field_label,
                 )
+                if memory_type.operation_mode != "add_only":
+                    desc = merge_op.get_output_schema_description(desc)
                 field_definitions[field.name] = (
                     Optional[union_type],
                     Field(None, description=desc),

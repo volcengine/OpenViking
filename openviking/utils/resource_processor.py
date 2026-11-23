@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
@@ -72,7 +73,6 @@ _PARSE_ARTIFACT_INTERNAL_NAMES = frozenset(
         ".artifact_manifest.json",
     }
 )
-_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
@@ -1838,14 +1838,7 @@ class ResourceProcessor:
                     continue
                 files.append((entry_uri, str(name), parent.uri))
 
-        config = get_openviking_config().queue_workers.add_resource
-        concurrency = max(
-            1,
-            min(
-                int(config.file_vectorization_concurrency),
-                _MAX_FILE_VECTORIZATION_CONCURRENCY,
-            ),
-        )
+        concurrency = FILE_TASK_CONCURRENCY
 
         async def vectorize(entry_uri: str, name: str, parent_uri: str) -> None:
             file_content = None

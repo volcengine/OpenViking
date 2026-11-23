@@ -18,6 +18,7 @@ from openviking.service.task_domain import TaskPatch, TaskRetentionPolicy, TaskS
 from openviking.service.task_store import PersistentTaskStore, WorkRegistration
 from openviking.service.task_tracker import TaskTracker
 from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.utils.config.storage_config import StorageConfig
 from tests.test_task_tracker import _FakeAgfs
 
 OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
@@ -45,8 +46,13 @@ def test_mysql_duplicate_detection_uses_driver_error_code(original, expected):
     assert MySQLTaskWorkStore._is_duplicate_error(error) is expected
 
 
-def _relational_backend(provider):
+def _relational_backend(provider, tmp_path=None):
     sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
+    if provider == "sqlite":
+        pytest.importorskip("aiosqlite")
+        from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+        return sqlalchemy, SQLiteTaskWorkStore, {"path": str(tmp_path / "tasks.db")}, []
     if provider == "postgres":
         pytest.importorskip("psycopg")
         from openviking.service.task_store_postgres import PostgresTaskWorkStore
@@ -81,11 +87,25 @@ async def _provision_task_schema(admin, params, schema_names):
                     await connection.exec_driver_sql(statement)
 
 
-@pytest.fixture(params=["file", "mysql", "postgres"])
-async def task_stores(request):
+@pytest.fixture(params=["file", "mysql", "postgres", "sqlite"])
+async def task_stores(request, tmp_path):
     if request.param == "file":
         store = PersistentTaskStore(_FakeAgfs())
         yield store, store
+        return
+    if request.param == "sqlite":
+        pytest.importorskip("aiosqlite")
+        from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+        params = {"path": str(tmp_path / "tasks.db")}
+        first, second = SQLiteTaskWorkStore(params=params), SQLiteTaskWorkStore(params=params)
+        try:
+            await first.load()
+            await second.load()
+            yield first, second
+        finally:
+            await first.close()
+            await second.close()
         return
     sqlalchemy, store_class, params, schema_names = _relational_backend(request.param)
     first = store_class(params=params)
@@ -130,14 +150,11 @@ async def test_relational_load_requires_schema_and_can_retry(provider):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("release", ["finalize", "withdraw", "replace"])
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_duplicate_business_key_rechecks_after_conflict(task_stores, monkeypatch, release):
     from sqlalchemy.exc import IntegrityError
 
-    from openviking.service.task_store_sql import SQLTaskWorkStore
-
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Duplicate-key recovery is a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     uri = "viking://resources/duplicate-key"
     await observer.create("content_write", uri, task_id="blocker", reject_if_active=True, **OWNER)
@@ -179,15 +196,13 @@ async def test_duplicate_business_key_rechecks_after_conflict(task_stores, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres"], indirect=True)
 async def test_duplicate_task_id_deleted_before_recovery_is_retried(task_stores, monkeypatch):
     from sqlalchemy.exc import IntegrityError
 
     from openviking.service.task_domain import TaskRecord
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Duplicate-key recovery is a relational store contract")
     record = TaskRecord(task_id="same-id", task_type="content_write", **OWNER)
     load = first._load_task
     transaction = first._transaction
@@ -222,15 +237,13 @@ async def test_duplicate_task_id_deleted_before_recovery_is_retried(task_stores,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_duplicate_recovery_churn_has_bounded_retries(task_stores, monkeypatch):
     from sqlalchemy.exc import IntegrityError
 
     from openviking.service.task_domain import TaskRecord
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Duplicate-key recovery is a relational store contract")
     observer = TaskTracker(second)
     record = TaskRecord(
         task_id="new", task_type="content_write", resource_id="viking://resources/churn", **OWNER
@@ -272,15 +285,13 @@ async def test_duplicate_recovery_churn_has_bounded_retries(task_stores, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True], ids=["complete", "cancel"])
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_outcome_resource_conflict_preserves_task_and_work(task_stores, cancelled):
     from sqlalchemy import select
 
     from openviking.service.task_store import TaskAlreadyActive
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Resource guard conflicts are a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     source, target = "viking://resources/source", "viking://resources/target"
     await writer.create("content_write", source, task_id="source", reject_if_active=True, **OWNER)
@@ -341,12 +352,9 @@ async def test_outcome_resource_conflict_preserves_task_and_work(task_stores, ca
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_terminal_outcome_does_not_acquire_destination_guard(task_stores):
-    from openviking.service.task_store_sql import SQLTaskWorkStore
-
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Resource guard conflicts are a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     target = "viking://resources/target"
     await writer.create("content_write", "source", task_id="source", reject_if_active=True, **OWNER)
@@ -360,14 +368,11 @@ async def test_terminal_outcome_does_not_acquire_destination_guard(task_stores):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_outcome_conflict_retries_if_destination_guard_is_released(task_stores, monkeypatch):
     from sqlalchemy.exc import IntegrityError
 
-    from openviking.service.task_store_sql import SQLTaskWorkStore
-
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Resource guard conflicts are a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     target = "viking://resources/target"
     await writer.create("content_write", "source", task_id="source", reject_if_active=True, **OWNER)
@@ -399,13 +404,11 @@ async def test_outcome_conflict_retries_if_destination_guard_is_released(task_st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, monkeypatch):
     from openviking.service.task_store import StoreOperationCode
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Task-before-Work row locking is a relational store contract")
     writer = TaskTracker(first)
     await writer.create("content_write", task_id="task", **OWNER)
     await writer.register_work("task", "work", "Semantic", **OWNER)
@@ -416,13 +419,25 @@ async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, 
         attempted.set()
         return await lock_task(*args, **kwargs)
 
+    transaction = first._transaction
+
+    @asynccontextmanager
+    async def observe_transaction():
+        attempted.set()
+        async with transaction() as session:
+            yield session
+
     async def hold_task():
         async with second._transaction() as session:
             assert await second._lock_task(session, "task", **OWNER)
             locked.set()
             assert await asyncio.to_thread(release.wait, 5)
 
-    monkeypatch.setattr(first, "_lock_task", observe_task_lock)
+    if first.dialect_name == "sqlite":
+        # SQLite waits before reading any state, rather than at the Task SELECT.
+        monkeypatch.setattr(first, "_transaction", observe_transaction)
+    else:
+        monkeypatch.setattr(first, "_lock_task", observe_task_lock)
     holder = asyncio.create_task(second._sql_runtime.run(hold_task))
     error_writer = None
     try:
@@ -851,18 +866,29 @@ def test_mysql_task_store_schema_uses_service_name_partition():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deletion", ["manual", "expired"])
-@pytest.mark.parametrize("provider", ["mysql", "postgres"])
-async def test_relational_requeue_and_concurrent_completion_are_durable(deletion, provider):
-    sqlalchemy, store_class, params, schema_names = _relational_backend(provider)
-    first = store_class(params=params)
-    second = store_class(params=params)
-    isolated_store = store_class(
-        params=params,
-        service_name="contract-isolated",
+@pytest.mark.parametrize("provider", ["mysql", "postgres", "sqlite"])
+async def test_relational_requeue_and_concurrent_completion_are_durable(
+    deletion, provider, tmp_path
+):
+    sqlalchemy, store_class, params, schema_names = _relational_backend(provider, tmp_path)
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    config = StorageConfig.model_validate(
+        {
+            "task_store": {
+                "provider": provider,
+                "params": {**params, "service_name": "contract-main"},
+            }
+        }
     )
+    writer = config.build_task_tracker(None)
+    second = store_class(params=params, service_name="contract-main")
+    observer = TaskTracker(second)
+    isolated = config.build_task_tracker(None, service_name="contract-isolated")
+    first, isolated_store = writer._store, isolated._store
+    assert isinstance(first, SQLTaskWorkStore)
+    assert isinstance(isolated_store, SQLTaskWorkStore)
     admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
-    writer, observer = TaskTracker(first), TaskTracker(second)
-    isolated = TaskTracker(isolated_store)
     try:
         await _provision_task_schema(admin, params, schema_names)
         await first.load()

@@ -486,6 +486,9 @@ html.dark .ov-file-browser__empty-art {
   );
   cursor: pointer;
 }
+.ov-file-browser__dashboard--wiki {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
 .ov-file-browser__dashboard--pending {
   color: var(
     --ov-ui-color-dashboard-warning,
@@ -547,6 +550,11 @@ html.dark .ov-file-browser__empty-art {
 .ov-dropdown__item.ov-file-browser__preview-action--danger:not(:disabled) {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
+.ov-file-browser__preview-pane .ov-file-preview__footer {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
 .ov-file-browser__preview-meta {
   display: flex;
   flex-wrap: wrap;
@@ -559,7 +567,4 @@ html.dark .ov-file-browser__empty-art {
   margin-inline-start: auto;
   text-align: end;
   line-height: 20px;
-}
-.ov-file-browser__preview-model-name {
-  white-space: nowrap;
 }

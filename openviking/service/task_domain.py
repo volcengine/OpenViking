@@ -279,8 +279,11 @@ class TaskRecord:
         }
 
     def has_compile_dependency_failure(self) -> bool:
-        """Only a local Runtime 424 decision takes precedence over a Compile cancellation."""
-        return self.task_type == "compile" and self.meta.get("compile_runtime_http_status") == 424
+        """A checkpointed Runtime failure takes precedence over a Compile cancellation."""
+        return self.task_type == "compile" and self.meta.get("compile_runtime_http_status") in (
+            404,
+            424,
+        )
 
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_TASK_STATUSES

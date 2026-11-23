@@ -55,12 +55,11 @@ export function AgentConnectInstructionsView({
         </h4>
         <Button
           ref={exposure}
-          size="mini"
+          type="primary"
           className="ov-agent-connect__copy"
           htmlType="button"
           disabled={status === 'pending'}
           onClick={() => void copy()}
-          type="primary"
         >
           <CopyIcon aria-hidden="true" />
           {status === 'copied' ? labels.copied : copyLabel}
@@ -75,6 +74,7 @@ export function AgentConnectInstructionsView({
               language="bash"
               display={command.display}
               copyText={command.copy}
+              hasKey
             />
             {instructions.display.slice(commandOffset + command.display.length)}
           </>

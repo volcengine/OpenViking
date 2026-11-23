@@ -45,6 +45,7 @@ export interface FileBrowserWorkflowLabels {
   removedLines: string;
   copyOriginal: string;
   copyPath: string;
+  pathCopied?: string;
   copied: string;
   historyPreview: string;
   historyView: string;
@@ -76,13 +77,14 @@ export interface FileBrowserWorkflowLabels {
   timezone: string;
   daily: string;
   weekly: string;
+  weeklySchedule?: (weekday: string) => string;
   time: string;
   weekday: string;
 }
 export interface PreviewWorkflowProps {
   uri: string;
   locale: Locale;
-  text: FileBrowserWorkflowLabels;
+  text: Required<FileBrowserWorkflowLabels>;
   requestOptions?: OvRequestOptions;
   onUpdated: () => void;
   onClose: () => void;

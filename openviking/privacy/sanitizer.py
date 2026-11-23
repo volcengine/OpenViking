@@ -22,6 +22,7 @@ from openviking.core.namespace import (
     owner_space_for_uri,
     resolve_request_uri,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference
@@ -309,7 +310,13 @@ class PrivacySanitizer:
                 raise
             reason = "privacy_structure_changed"
         self.write_failures[reason] += 1
-        logger.warning("Privacy write kept original content: uri=%s reason=%s", uri, reason)
+        target_id = safe_uri_for_log(uri)
+        logger.error(
+            "privacy write kept original content target_id=%s error_code=%s",
+            target_id,
+            reason,
+            extra={"degraded": True, "target_id": target_id, "error_code": reason},
+        )
         return content
 
     async def _matcher(
@@ -477,12 +484,13 @@ class PrivacySanitizer:
             "yes",
             "on",
         }
-        logger.warning(
-            "Privacy ambiguous_matches=%d strict=%s uri=%s canonical_references=%s",
+        target_id = safe_uri_for_log(uri)
+        logger.info(
+            "privacy ambiguous matches total=%d strict=%s target_id=%s",
             occurrences,
             strict,
-            uri,
-            tuple(items[0] for items in ambiguous),
+            target_id,
+            extra={"degraded": True, "total": occurrences, "target_id": target_id},
         )
         if strict:
             raise InvalidArgumentError(

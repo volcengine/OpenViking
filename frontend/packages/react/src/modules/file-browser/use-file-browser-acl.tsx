@@ -1,4 +1,6 @@
-import { Button } from '../../shared/primitives/button/button.js';
+import { useAclManager } from './acl/use-acl-manager.js';
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
+import { AclPermissionError } from './acl/acl-permission-error.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   useOvClient,
@@ -26,6 +28,7 @@ export function useFileBrowserAcl({
   locale,
   labels,
   requestOptions,
+  refreshGeneration: revision,
   refresh,
 }: {
   uri: string | null;
@@ -34,6 +37,7 @@ export function useFileBrowserAcl({
   locale: Locale;
   labels?: FileBrowserAclLabels;
   requestOptions?: OvRequestOptions;
+  refreshGeneration: number;
   refresh: () => Promise<void>;
 }) {
   const client = useOvClient();
@@ -43,13 +47,14 @@ export function useFileBrowserAcl({
   const signal = requestOptions?.signal ?? inheritedSignal;
   const options = typeof acl === 'object' ? acl : undefined;
   const key = scopeKeyOf(client, requestOptions, uri ?? undefined);
-  const [permission, setPermission] = useState<{
+  const [access, setPermission] = useState<{
     key: string;
     level?: FileBrowserAclLevel;
     error?: boolean;
   }>();
   const [opened, setOpened] = useState<string>();
   const [generation, setGeneration] = useState(0);
+  const [toast, toastHolder] = useToast({ locale });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const { baseURL, apiKey, accountId, userId, resourceId } =
     requestOptions ?? {};
@@ -109,9 +114,10 @@ export function useFileBrowserAcl({
     },
     [aclEnabled, loadPermission, readOnly],
   );
-  // Sync the active resource with the permission service, including navigation
-  // and account changes that do not originate in a click. Abort on scope change
-  // or unmount; aborted responses never publish a permission for the next scope.
+  // Sync the active resource with the permission service on navigation, account
+  // changes and explicit refresh, even when the selected URI stays the same.
+  // The server owns grants, so rendering cannot derive them. Abort on refresh,
+  // scope change or unmount so an older response cannot publish stale access.
   useEffect(() => {
     if (!enabled || !uri) return;
     const controller = new AbortController();
@@ -126,62 +132,80 @@ export function useFileBrowserAcl({
       },
     );
     return () => controller.abort();
-  }, [enabled, key, uri, signal, generation, loadPermission]);
-  const level =
-    enabled && permission?.key === key ? permission.level : undefined;
+  }, [enabled, key, uri, signal, generation, revision, loadPermission]);
+  const level = enabled && access?.key === key ? access.level : undefined;
   const text = aclLabels(locale, labels);
+  // Pending saves may finish after the host changes its locale or labels.
+  const currentText = useRef(text);
+  currentText.current = text;
+  const openManager = useAclManager({
+    key,
+    revision,
+    uri,
+    loadPermission,
+    onLevel: (current) => {
+      setPermission({ key, level: current });
+      if (current === 'manage') setOpened(key);
+      else toast.warning({ content: text.permissionChanged });
+    },
+    onError: () => setPermission({ key, error: true }),
+  });
+  function permissionDenied() {
+    setOpened(undefined);
+    setPermission({ key });
+    setGeneration((value) => value + 1);
+    toast.warning({ content: text.permissionChanged });
+  }
   return {
     checkWrite,
     canDelete: !enabled || level === 'manage',
     canEdit: !enabled || level === 'write' || level === 'manage',
     titleExtra:
-      enabled && permission?.key === key && permission.error ? (
-        <span className="ov-file-browser-acl__lookup-error" role="status">
-          {text.loadFailed}
-          <Button
-            size="small"
-            type="default"
-            htmlType="button"
-            onClick={() => setGeneration((value) => value + 1)}
-          >
-            {text.retry}
-          </Button>
-        </span>
+      enabled && access?.key === key && access.error ? (
+        <AclPermissionError
+          text={text}
+          onRetry={() => setGeneration((value) => value + 1)}
+        />
       ) : level ? (
         <AclTag
           level={level}
           text={text}
           triggerRef={triggerRef}
-          onManage={() => setOpened(key)}
+          onManage={() => void openManager()}
         />
       ) : null,
-    drawer:
-      enabled && uri && context && level === 'manage' ? (
-        <AclModal
-          key={key}
-          uri={uri}
-          open={opened === key}
-          text={text}
-          locale={locale}
-          triggerRef={triggerRef}
-          context={context}
-          accountId={identity.accountId}
-          userId={identity.userId}
-          options={options}
-          onClose={() => setOpened(undefined)}
-          onUpdated={(report) => {
-            // Keep the Modal mounted while the manager probe refreshes; a downgrade
-            // will remove the panel as soon as the authoritative check returns.
-            setGeneration((value) => value + 1);
-            void refresh();
-            try {
-              options?.onChange?.(report);
-            } catch {
-              // A host notification cannot undo a successful server mutation.
-              return;
-            }
-          }}
-        />
-      ) : null,
+    drawer: (
+      <>
+        {toastHolder}
+        {enabled && uri && context && level === 'manage' ? (
+          <AclModal
+            key={key}
+            uri={uri}
+            open={opened === key}
+            text={text}
+            locale={locale}
+            triggerRef={triggerRef}
+            context={context}
+            accountId={identity.accountId}
+            userId={identity.userId}
+            options={options}
+            onClose={() => setOpened(undefined)}
+            onPermissionDenied={permissionDenied}
+            onUpdated={(report) => {
+              toast.success({ content: currentText.current.saved });
+              // Keep the Modal mounted while the manager probe refreshes; a downgrade
+              // will remove the panel as soon as the authoritative check returns.
+              setGeneration((value) => value + 1);
+              void refresh();
+              try {
+                options?.onChange?.(report);
+              } catch {
+                // A host notification cannot undo a successful server mutation.
+              }
+            }}
+          />
+        ) : null}
+      </>
+    ),
   };
 }

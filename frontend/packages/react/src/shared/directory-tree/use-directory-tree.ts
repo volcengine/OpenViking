@@ -16,6 +16,7 @@ import { useDirectoryRows } from './use-directory-rows.js';
 import { DirectoryQueries } from './directory-queries.js';
 import { useQueryScope } from '../request/use-query-scope.js';
 import type { DirState, UseDirectoryTreeOptions } from './types.js';
+import { useUserRootMode } from './user-root-context.js';
 
 const empty: Record<string, DirState> = {};
 const subscribeEmpty = () => () => {};
@@ -26,6 +27,7 @@ const DIRECTORY_LOAD = 'file_browser_directory_load';
 export function useDirectoryTree({
   client,
   rootUri,
+  hideDeniedEntries,
   cacheScopeKey,
   defaultExpandedUri,
   defaultExpandedUris,
@@ -34,6 +36,7 @@ export function useDirectoryTree({
   onExpansionSnapshotChange,
   requestOptions,
 }: UseDirectoryTreeOptions) {
+  const userRootMode = useUserRootMode();
   const {
     request,
     aborted,
@@ -41,8 +44,10 @@ export function useDirectoryTree({
     retry: retryScope,
   } = useQueryScope(client, requestOptions, DIRECTORY_LOAD, cacheScopeKey);
   const session = useMemo(
-    () => request && new DirectoryQueries(request, rootUri, cacheScopeKey),
-    [request, rootUri, cacheScopeKey],
+    () =>
+      request &&
+      new DirectoryQueries(request, rootUri, cacheScopeKey, userRootMode),
+    [request, rootUri, cacheScopeKey, userRootMode],
   );
   const dirs = useSyncExternalStore(
     aborted ? subscribeEmpty : (session?.subscribe ?? subscribeEmpty),
@@ -80,15 +85,11 @@ export function useDirectoryTree({
     request?.client ?? null,
     request?.options,
     rootUri,
+    userRootMode,
   );
   const fetchPage = useCallback(
-    async (...args: Parameters<DirectoryQueries['load']>) => {
-      try {
-        return await activeSession.current?.load(...args);
-      } catch {
-        return undefined;
-      }
-    },
+    async (...args: Parameters<DirectoryQueries['load']>) =>
+      activeSession.current?.load(...args).catch(() => undefined),
     [],
   );
   const expandForNavigation = useCallback(
@@ -146,6 +147,7 @@ export function useDirectoryTree({
     session,
     rootUri,
     dirs,
+    hideDeniedEntries,
     expanded,
     collapsed: expansion.collapsed,
     pendingEdits: expansion.pendingEdits,
@@ -157,11 +159,8 @@ export function useDirectoryTree({
     dirs,
     dirs[rootUri]?.ready ?? false,
   );
-  tagData(
-    monitoring[0]?.span.binding,
-    rows,
-    monitoring.map((operation) => operation.span),
-  );
+  const spans = monitoring.map((operation) => operation.span);
+  tagData(spans[0]?.binding, rows, spans);
   const isInitializing = !identityError && initializing;
   const root = dirs[rootUri];
   const isReady = root?.ready ?? false;

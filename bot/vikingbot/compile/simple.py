@@ -13,6 +13,7 @@ from openviking.utils.path_safety import (
 )
 from openviking_cli.exceptions import OpenVikingError
 from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.compile import CompileImageReadTool
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingGrepTool,
@@ -33,6 +34,8 @@ Read individual source URIs directly. For incremental compilation, fully scan fu
 page through the snapshot diff for diff_dirs. Read added/modified sources and update affected
 target content for deleted sources.
 Use small pages and bounded reads so you can inspect complete results.
+For an image source, call openviking_multi_read with its URI and inspect the returned image
+before writing findings or marking its contents unreadable. Listing shows only metadata.
 When a tool fails, use its error to correct the arguments, retry or choose another tool.
 Write completed text files as you go, using paths relative to to. Read relevant existing files
 before changing them and preserve unrelated content. Separate dependent writes into different
@@ -203,7 +206,10 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     registry = ToolRegistry(config=loop.config)
     roots = [*sources, request.skill, request.to]
     for reader in (VikingListTool, VikingMultiReadTool, VikingGlobTool, VikingGrepTool):
-        registry.register(CompileReadTool(reader(config=loop.config, client=client), roots))
+        tool = reader(config=loop.config, client=client)
+        if isinstance(tool, VikingMultiReadTool):
+            tool = CompileImageReadTool(tool, {})
+        registry.register(CompileReadTool(tool, roots))
     if changes:
         assignment.update({k: changes[k] for k in ("base", "head", "full_dirs", "diff_dirs")})
         if changes["diff_dirs"]:

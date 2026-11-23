@@ -21,17 +21,22 @@ const messages: typeof enUS = {
       ConsoleLabels,
       | 'commandConsole'
       | 'vikingBot'
+      | 'activationTitle'
+      | 'activationDescription'
       | 'commandTitle'
       | 'commandDescription'
       | 'quickStart'
     >
   >,
+  noTasks: '暂无任务',
+  grepLimitReached: '已达到搜索上限，可能还有其他匹配结果。',
   telemetryResult: (value: string) => `遥测：${value}`,
+  taskResult: '任务结果',
   memoryCommit: {
-    idle: '提交会话',
-    pending: '会话提交中',
-    submitted: '会话提交中',
-    success: '会话已提交',
+    idle: '抽取长期记忆',
+    pending: '抽取长期记忆',
+    submitted: '抽取长期记忆',
+    success: '已抽取长期记忆',
     empty: '当前会话暂无可生成的新记忆',
     skipped: '本轮未生成新记忆',
     failed: '会话提交失败',
@@ -39,15 +44,9 @@ const messages: typeof enUS = {
     saved: '记忆已生成，并保存至目录文件',
     view: '查看记忆',
   },
-  taskCompletion: {
-    title: '任务完成',
-    description: '异步任务已完成。',
-    resource: '资源添加任务已完成，可点击查看结果。',
-    viewResult: '查看结果',
-  },
   compileQuickInputs: {
     createWiki: {
-      label: '创建 Wiki',
+      label: 'Wiki',
       prompt: '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
     },
     dailyReport: {
@@ -57,7 +56,7 @@ const messages: typeof enUS = {
   },
   commands: {
     ...transferSession,
-    'add-resource': '添加路径或 URL 到资源',
+    'add-resource': '导入网页链接、仓库或本地文件',
     'add-skill': '添加 Skill 到技能目录',
     'add-memory': '直接添加记忆',
     compile: '执行编译',
@@ -86,10 +85,14 @@ const messages: typeof enUS = {
     'task status': '查看后台任务',
     'task cancel': '请求取消后台任务',
   },
+  localResourceImportHelp:
+    '传入网页链接或仓库地址可直接导入。直接执行命令或仅传入本地路径，会打开「本地上传」页面，可选择文件或文件夹。',
+  localResourceImportSummary:
+    '导入网页链接或仓库，也可打开「本地上传」选择文件或文件夹',
   commandGuides: {
     'add-resource': {
       description:
-        '把网页 URL 或仓库地址导入 Resources，供后续检索、阅读和引用。浏览器终端不接收本地文件路径。',
+        '传入网页链接或仓库地址可直接导入。导入本地文件时，请在浏览器中选择文件。',
       examples: [
         'ov add-resource https://github.com/volcengine/OpenViking/blob/main/docs/repository/README_CN.md',
       ],
@@ -154,6 +157,9 @@ const messages: typeof enUS = {
     status: '配置与状态',
   },
   messages: {
+    localResourceImportOpened: () => '请在本地上传页面选择文件或文件夹。',
+    localResourceImportFlags: () =>
+      '请在本地上传页面配置导入，或使用 --temp-file-id 按命令选项导入。',
     cancelled: () => '请求已取消；服务端可能仍在处理已接收的操作。',
     unavailableCommand: (value?: string) => `当前工作台不支持命令：${value}`,
     invalidOvpack: () => '请选择有效的 .ovpack 文件。',

@@ -1,6 +1,7 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
 import {
   compileTargetError,
+  formatCompileUriLabel,
   parseCompileUri,
   parseSourceUris,
 } from './uris.js';
@@ -94,16 +95,31 @@ export function outputDirectories(
     output === 'markdown' ? '_daily_report' : output === 'wiki' ? '_wiki' : '';
   const path =
     suffix && stem && stem !== '.' && stem !== '..' && !/[\\/]/.test(stem)
-      ? '/' + encodeURIComponent(stem) + (stem.endsWith(suffix) ? '' : suffix)
+      ? '/' + stem + (stem.endsWith(suffix) ? '' : suffix)
       : '';
   const personal = userId
-    ? `viking://user/${encodeURIComponent(userId)}/resources`
+    ? `viking://user/${userId}/resources`
     : 'viking://~/resources';
   const suggested = parseCompileUri(card.request.initialValue ?? '');
-  return [
-    ...new Set([
-      ...(path ? [`viking://resources${path}`, `${personal}${path}`] : []),
-      ...(suggested && !compileTargetError(suggested) ? [suggested] : []),
-    ]),
-  ];
+  const existing =
+    suggested && !compileTargetError(suggested) ? suggested : undefined;
+  const generated = path
+    ? [`viking://resources${path}`, `${personal}${path}`]
+    : [];
+  const personalAlias = userId ? `viking://user/${userId}/` : undefined;
+  const comparisonLabel = (uri: string) =>
+    formatCompileUriLabel(
+      personalAlias && uri.startsWith('viking://~/')
+        ? personalAlias + uri.slice('viking://~/'.length)
+        : uri,
+    );
+  const candidates = existing
+    ? [
+        ...generated.map((uri) =>
+          comparisonLabel(uri) === comparisonLabel(existing) ? existing : uri,
+        ),
+        existing,
+      ]
+    : generated;
+  return [...new Set(candidates)];
 }

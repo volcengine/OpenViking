@@ -58,6 +58,7 @@ export function builtinRequest(
     return {
       kind: 'text',
       question,
+      required: cardType !== 'compile_instruction',
       initialValue:
         cardType === 'compile_instruction'
           ? p.current_value

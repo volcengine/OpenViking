@@ -863,6 +863,9 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         events_time_decay_protection: Option<String>,
+        /// JSON args for keyword search: {"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":1000}
+        #[arg(long, value_name = "json", help_heading = "Advanced options")]
+        args: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {

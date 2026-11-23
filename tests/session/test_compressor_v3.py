@@ -459,6 +459,7 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         ctx=_ctx(),
         allowed_memory_types={"profile"},
         agent_evolution_enabled=False,
+        strict_extract_errors=True,
     )
 
     assert initialized_with == [{"profile"}]
@@ -832,6 +833,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
+        strict_extract_errors=True,
     )
 
     assert [context.uri for context in result] == [canonical_uri]

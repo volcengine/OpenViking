@@ -5,12 +5,13 @@ import {
   getCommandConsoleSafeHref,
   COMMAND_CONSOLE_URI_PATTERN,
   COMMAND_CONSOLE_PROSE_URI_PATTERN,
+  trimCommandConsoleProseUri,
 } from './command-console-text.js';
 
 export interface CommandConsoleUriTextProps {
   text: string;
   onOpenUri?: (uri: string) => void;
-  /** 编辑镜像隐藏重复文字，但保留链接语义及输入框焦点。 */
+  /** 编辑镜像隐藏重复文字；Viking URI 显示为普通文本。 */
   editor?: boolean;
   mode: 'prose' | 'literal' | 'json';
   wholeUri?: boolean;
@@ -32,6 +33,9 @@ export function CommandConsoleUriLink({
 }) {
   const href = getCommandConsoleSafeHref(uri);
   if (!href) return <>{children}</>;
+  if (editor && /^viking:\/\//i.test(href)) {
+    return <span aria-hidden="true">{children}</span>;
+  }
   return (
     <a
       href={href}
@@ -100,9 +104,7 @@ export function CommandConsoleUriText({
       (quoted === undefined ? 0 : (matched.groups?.field?.length ?? 0) + 1);
     const display =
       quoted ??
-      (mode === 'prose'
-        ? matched[0].replace(/[.!?；;:：！？]+$/u, '')
-        : matched[0]);
+      (mode === 'prose' ? trimCommandConsoleProseUri(matched[0]) : matched[0]);
     const uri =
       quoted === undefined ? display : (JSON.parse(`"${quoted}"`) as string);
     if (index > cursor) parts.push(plain(text.slice(cursor, index), cursor));

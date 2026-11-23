@@ -65,7 +65,6 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-memory',
   'find',
   'compile create',
-  'compile',
 ] as const;
 
 export function consoleQuickCommands(
@@ -91,6 +90,10 @@ export function consoleCommands(
       (spec) => !spec.admin || options?.allowAdminCommands,
     ).map((spec) => {
       const guide = guides[spec.name];
+      const description =
+        spec.name === 'add-resource' && options?.onOpenLocalResourceImport
+          ? text.localResourceImportHelp
+          : (guide?.description ?? text.commands[spec.name]);
       const positional = (
         spec.preferredPositional ??
         spec.positional ??
@@ -104,7 +107,7 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          description: guide?.description ?? text.commands[spec.name],
+          description,
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
           quickStart: guide?.quickStart,
@@ -176,6 +179,7 @@ export function createCommandHelp(
   locale: Locale,
   options?: ConsoleCommandOptions,
 ): CommandConsoleRecordContent {
+  const text = resolveConsoleLocale(locale);
   const commands = consoleCommands(locale, options);
   return {
     variant: 'command-help',
@@ -188,8 +192,11 @@ export function createCommandHelp(
           .filter((command) => command.group === key)
           .map((item) => ({
             key: item.name,
-            name: item.usage,
-            description: item.description,
+            name: item.inputText ?? `ov ${item.name}`,
+            description:
+              item.name === 'add-resource' && options?.onOpenLocalResourceImport
+                ? text.localResourceImportSummary
+                : (item.summary ?? item.description),
           })),
       })),
   };

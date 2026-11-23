@@ -1,5 +1,6 @@
 import { levelToFileTab } from './file-preview-source.js';
 import type { Locale } from '../../shared/locale.js';
+import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 import { useId, useState } from 'react';
 
 import type {
@@ -50,6 +51,7 @@ export interface FilePreviewDirectoryBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
+  onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   onCancelEditing: () => void;
 }
 
@@ -69,6 +71,7 @@ export function FilePreviewDirectoryBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
+  onLinkClick,
   onCancelEditing,
 }: FilePreviewDirectoryBodyProps) {
   // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
@@ -164,6 +167,8 @@ export function FilePreviewDirectoryBody({
               onViewModeChange={onViewModeChange}
               onHandleChange={onHandleChange}
               onViewModesChange={onViewModesChange}
+              onLinkClick={onLinkClick}
+              directoryLinks={tab.operations?.openUri ? 'resources' : 'anchors'}
               onCancelEditing={onCancelEditing}
               onStateChange={(state) =>
                 layer.onProbeStatus(probeStatusOf(state))

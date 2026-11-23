@@ -231,6 +231,16 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
             ],
         )
     ]
+    if ending == "success":
+        replies.insert(
+            0,
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)
+                ],
+            ),
+        )
     if ending != "budget":
         replies.extend(
             [
@@ -248,7 +258,14 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
         pipeline.limits.model_copy(update={"subagent_iterations": 1 if ending == "budget" else 4}),
     )
     if ending == "success":
-        result = await pipeline.generate("map-0", "Generate Markdown", {"inputs": []}, [])
+        source_refs = [f"{index:064x}" for index in range(138)]
+        inputs = [{"payload": {"source_ranges": source_refs}}]
+        result = await pipeline.generate(
+            "reduce-0", "Generate Markdown", {"inputs": inputs}, source_refs
+        )
+        messages = pipeline.model.provider.chat.await_args_list[1].kwargs["messages"]
+        assignment = json.loads(next(msg["content"] for msg in messages if msg["role"] == "tool"))
+        assert assignment["inputs"] == inputs
         assert len(result) == 1 and result[0].path == "topic.md"
         assert (
             await pipeline.files.sandbox.read_file(result[0].workspace_path) == "# Topic\n\nFacts."

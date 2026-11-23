@@ -68,10 +68,14 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking_cli.utils.config.config_loader import load_json_config
 from openviking_cli.utils.config.config_utils import DEFAULT_SERVICE_NAME
 from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
-from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfigSingleton,
+    initialize_openviking_config,
+)
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 logger = get_logger(__name__)
@@ -241,7 +245,37 @@ class OpenVikingService:
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
-        binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
+        from openviking.server.dependencies import get_server_config
+
+        config_file = OpenVikingConfigSingleton.get_config_file()
+        account_store_cache_instance = None
+        server_config = get_server_config()
+        if server_config is not None:
+            account_store = server_config.account_store
+        elif config_file is not None:
+            server = load_json_config(config_file).get("server")
+            account_store = server.get("account_store") if isinstance(server, dict) else None
+        else:
+            account_store = None
+        provider = (
+            account_store.get("provider")
+            if isinstance(account_store, dict)
+            else getattr(account_store, "provider", None)
+        )
+        params = (
+            account_store.get("params")
+            if isinstance(account_store, dict)
+            else getattr(account_store, "params", None)
+        )
+        if provider == "redis_mysql":
+            from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
+
+            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(params)
+
+        binding_config, self._encryptor = build_runtime_ragfs_binding_config(
+            self._config,
+            account_store_cache_instance=account_store_cache_instance,
+        )
         return binding_config
 
     @property

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.namespace_policy import is_system_uri
 from openviking.core.retrieval_types import SearchType
+from openviking.core.search_args import validate_search_args
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext
@@ -160,6 +161,7 @@ class SearchService:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        args: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Search with session context.
 
@@ -171,12 +173,17 @@ class SearchService:
             score_threshold: Score threshold
             filter: Metadata filters
             level: Filter by level (0=abstract, 1=overview, 2=file)
+            args: Advanced keyword-search options; keywords only
 
         Returns:
             FindResult
         """
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        try:
+            args = validate_search_args(args, search_type=search_type, limit=limit)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url)
         _reject_system_targets(target_uri)
@@ -202,6 +209,7 @@ class SearchService:
             events_time_decay_protection=events_time_decay_protection,
             search_type=search_type,
             context_types=context_types,
+            args=args,
         )
         return result
 

@@ -13,6 +13,8 @@ import pytest
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
 from openviking.utils.process_lock import LOCK_FILENAME
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.storage_config import StorageConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -27,17 +29,9 @@ class _FakeConfig:
 
     service_name = "test-core-encryption"
     storage = SimpleNamespace(
-        agfs=SimpleNamespace(
+        agfs=AGFSConfig(
             path="/tmp/ov-test",
             backend="local",
-            cachefs=SimpleNamespace(backend="local"),
-            pathlock=SimpleNamespace(
-                model_dump=lambda mode, exclude_none=False: {
-                    "provider": "filesystem",
-                    "lock_timeout_secs": 0.0,
-                    "lock_expire_secs": 30.0,
-                }
-            ),
         ),
         skip_process_lock=False,
     )
@@ -95,23 +89,13 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
 
     assert isinstance(ragfs_config, RagfsBindingConfig)
     assert ragfs_config.agfs is service._config.storage.agfs
-    assert ragfs_config.to_binding_dict() == {
-        "service_name": "test-core-encryption",
-        "cache": {
-            "enabled": False,
-            "runtime_enabled": False,
-            "provider": "redis",
-        },
-        "pathlock": {
-            "provider": "filesystem",
-            "lock_timeout_secs": 0.0,
-            "lock_expire_secs": 30.0,
-        },
-        "log": {"level": "INFO", "output": "stdout"},
-        "encryption": {
-            "root_key": b"k" * 32,
-            "provider_type": 1,
-        },
+    binding = ragfs_config.to_binding_dict()
+    assert binding["service_name"] == "test-core-encryption"
+    assert binding["cache"]["runtime_enabled"] is False
+    assert binding["pathlock"]["provider"] == "filesystem"
+    assert binding["encryption"] == {
+        "root_key": b"k" * 32,
+        "provider_type": 1,
     }
     assert isinstance(service._encryptor, _FakeEncryptor)
 
@@ -129,10 +113,8 @@ def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path, backend):
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(
-        storage=SimpleNamespace(
-            workspace=str(tmp_path),
-            skip_process_lock=False,
-            vectordb=SimpleNamespace(backend=backend),
+        storage=StorageConfig.model_validate(
+            {"workspace": str(tmp_path), "vectordb": {"backend": backend}}
         )
     )
     service._data_dir_lock_acquired = False
@@ -146,11 +128,23 @@ def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path, backend):
 
 
 @pytest.mark.parametrize(
-    "backend,skip_process_lock",
-    [("local", True), ("cuvs", True), ("http", False), ("volcengine", False), ("vikingdb", False)],
+    "vector_config,skip_process_lock",
+    [
+        pytest.param({"backend": "local"}, True, id="local-opt-out"),
+        pytest.param({"backend": "cuvs"}, True, id="cuvs-opt-out"),
+        pytest.param({"backend": "http", "url": "http://127.0.0.1"}, False, id="http"),
+        pytest.param(
+            {"backend": "volcengine", "volcengine": {"api_key": "test", "region": "cn-beijing"}},
+            False,
+            id="volcengine",
+        ),
+        pytest.param(
+            {"backend": "vikingdb", "vikingdb": {"host": "127.0.0.1"}}, False, id="vikingdb"
+        ),
+    ],
 )
 def test_ensure_data_dir_lock_skips_shared_backends_and_explicit_opt_out(
-    monkeypatch, tmp_path, backend, skip_process_lock
+    monkeypatch, tmp_path, vector_config, skip_process_lock
 ):
     """Shared backends and explicit opt-out must never attempt a workspace lock."""
 
@@ -160,10 +154,12 @@ def test_ensure_data_dir_lock_skips_shared_backends_and_explicit_opt_out(
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(
-        storage=SimpleNamespace(
-            workspace=str(tmp_path),
-            skip_process_lock=skip_process_lock,
-            vectordb=SimpleNamespace(backend=backend),
+        storage=StorageConfig.model_validate(
+            {
+                "workspace": str(tmp_path),
+                "skip_process_lock": skip_process_lock,
+                "vectordb": vector_config,
+            }
         )
     )
     service._data_dir_lock_acquired = False

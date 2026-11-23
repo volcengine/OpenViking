@@ -37,6 +37,7 @@ from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import AUDIO_EXTENSIONS
 from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking.parse.temp import get_parser_download_temp_dir
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.parser_config import AudioConfig
 from openviking_cli.utils.logger import get_logger
 
@@ -76,6 +77,7 @@ class AudioParser(BaseParser):
 
         Raises:
             FileNotFoundError: If source file does not exist
+            InvalidArgumentError: If the file signature does not match the audio format
             IOError: If audio processing fails
         """
         # Convert to Path object
@@ -119,8 +121,8 @@ class AudioParser(BaseParser):
                 break
 
         if not valid:
-            raise ValueError(
-                f"Invalid audio file: {file_path}. File signature does not match expected format {ext_lower}"
+            raise InvalidArgumentError(
+                f"Invalid audio file: {file_path.name}. File signature does not match expected format {ext_lower}"
             )
 
         writer = await create_parse_artifact_writer(

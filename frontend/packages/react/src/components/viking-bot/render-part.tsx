@@ -59,7 +59,7 @@ export function renderPart(part: VikingBotMessagePart, context: PartContext) {
           <span className="ov-viking-bot__tool-name">{part.name}</span>
           <span className="ov-viking-bot__tool-status">
             {labels[
-              `tool${capitalize(part.status)}` as keyof VikingBotLabels
+              `tool${capitalize(part.status)}` as `tool${Capitalize<typeof part.status>}`
             ] ?? part.status}
           </span>
           {part.durationMs ? <span>{`${part.durationMs}ms`}</span> : null}

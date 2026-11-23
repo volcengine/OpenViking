@@ -17,6 +17,14 @@ export function useVikingBotChat(
   const monitoring = useMonitoringBinding();
   const analytics = useAnalyticsRef();
   const { service: native, signal, hasProvider } = useBotService(options);
+  const getSessionCommitTask = useMemo(() => {
+    const service = options.service ?? native;
+    if (service.getSessionCommitTask)
+      return service.getSessionCommitTask.bind(service);
+    return hasProvider && !service.commitSession
+      ? native.getSessionCommitTask
+      : undefined;
+  }, [options.service, native, hasProvider]);
   const locale = useLocale(options.locale);
   const { track, tasks, source } = useTaskTracking(options);
   const {
@@ -114,6 +122,7 @@ export function useVikingBotChat(
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),
     commitSession: controller.commitSession,
+    getSessionCommitTask,
     error,
     send: controller.send,
     abort: controller.abort,

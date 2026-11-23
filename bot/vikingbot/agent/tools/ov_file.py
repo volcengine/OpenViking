@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 import httpx
 from loguru import logger
+from PIL.Image import DecompressionBombError
 
 from openviking.utils.image_input import (
+    MAX_COMPILE_IMAGE_DOWNLOAD_BYTES,
     MAX_IMAGE_INPUT_DOWNLOAD_BYTES,
     compress_image_input,
 )
@@ -761,8 +763,13 @@ class VikingGrepTool(OVFileTool):
     @property
     def description(self) -> str:
         return (
-            "Search Viking resources using a regex pattern (like grep)."
-            "Result: Only URIs and summaries are included here. To view the full content, use openviking_multi_read tool."
+            "Search Viking resources using a regex pattern (like grep). "
+            "Returns matching lines and URIs, with at most limit matches per scope (default: 10). "
+            "The backend limit applies before permission filtering, so fewer visible matches "
+            "can still be capped. If the limit is reached, more matches may exist; increase "
+            "limit or narrow the scope/pattern. Candidate search may also be capped, even with "
+            "few or no matching lines. If the evidence is insufficient, narrow the URI or read "
+            "a promising file directly with openviking_multi_read. "
             "Avoid duplicate calls with the same intent in the same turn."
         )
 
@@ -780,6 +787,12 @@ class VikingGrepTool(OVFileTool):
                     "type": "string",
                     "description": "Rust regex syntax supports literals, character classes, groups, alternation, quantifiers and anchors, but not lookahead, lookbehind or backreferences.",
                 },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum matching lines per search scope; increase if results are capped.",
+                    "minimum": 1,
+                    "default": 10,
+                },
                 "case_insensitive": {
                     "type": "boolean",
                     "description": "Case-insensitive search",
@@ -795,12 +808,15 @@ class VikingGrepTool(OVFileTool):
         pattern: str,
         uri: str = "viking://",
         case_insensitive: bool = False,
+        limit: int = 10,
         **kwargs: Any,
     ) -> str:
         client = None
         try:
             client = await self._get_client(tool_context)
             matches = []
+            capped_scopes = []
+            capped_candidate_scopes = []
             target_uris = self._fs_retrieval_uris(client, tool_context, uri)
             for target_uri in target_uris:
                 try:
@@ -808,6 +824,7 @@ class VikingGrepTool(OVFileTool):
                         target_uri,
                         pattern,
                         case_insensitive=case_insensitive,
+                        node_limit=limit,
                     )
                 except Exception as exc:
                     if len(target_uris) == 1:
@@ -815,12 +832,18 @@ class VikingGrepTool(OVFileTool):
                     logger.debug(f"Skip OpenViking grep target {target_uri}: {exc}")
                     continue
                 if isinstance(result, dict):
-                    matches.extend(result.get("matches", []))
+                    scope_matches = result.get("matches", [])
+                    limit_reached = result.get("limit_reached", False)
+                    candidate_limit_reached = result.get("candidate_limit_reached", False)
                 else:
-                    matches.extend(getattr(result, "matches", []))
-
-            if not matches:
-                return f"No matches found for pattern: '{pattern}'"
+                    scope_matches = getattr(result, "matches", [])
+                    limit_reached = getattr(result, "limit_reached", False)
+                    candidate_limit_reached = getattr(result, "candidate_limit_reached", False)
+                matches.extend(scope_matches)
+                if limit_reached or len(scope_matches) >= limit:
+                    capped_scopes.append(target_uri)
+                if candidate_limit_reached:
+                    capped_candidate_scopes.append(target_uri)
 
             merged_results: dict[str, list[tuple[int, str]]] = {}
 
@@ -838,9 +861,18 @@ class VikingGrepTool(OVFileTool):
                     merged_results[match_uri] = []
                 merged_results[match_uri].append((line, content))
 
+            empty_action = "returned" if capped_candidate_scopes else "found"
             result_lines = [
                 f"Found {len(matches)} match{'es' if len(matches) != 1 else ''} for pattern '{pattern}':"
+                if matches
+                else f"No matches {empty_action} for pattern: '{pattern}'"
             ]
+            if capped_candidate_scopes:
+                result_lines.append(
+                    "Candidate search may have been capped in: "
+                    f"{', '.join(capped_candidate_scopes)}. "
+                    "Narrow the URI or read a promising file directly with openviking_multi_read."
+                )
 
             for match_uri, uri_matches in merged_results.items():
                 uri_matches.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
@@ -849,6 +881,13 @@ class VikingGrepTool(OVFileTool):
                     result_lines.append(f"   Line {line}:")
                     result_lines.append(f"   {content}")
 
+            if capped_scopes:
+                result_lines.append(
+                    f"\nResult limit reached ({limit} matches per scope, before permission filtering); "
+                    "more matches may exist. "
+                    "Increase limit or narrow the scope/pattern. "
+                    f"Capped scopes: {', '.join(capped_scopes)}"
+                )
             return "\n".join(result_lines)
         except Exception as e:
             return f"Error searching Viking with grep: {str(e)}"
@@ -1138,8 +1177,8 @@ class VikingMultiReadTool(OVFileTool):
         }
 
     @classmethod
-    async def _read_image(cls, client, uri):
-        """Load one native image for multi-read and Compile using the same checks."""
+    async def _read_image(cls, client, uri, *, for_compile: bool = False):
+        """Load one native image and opt into pixel normalization for Compile."""
         stat = await client.stat(uri)
         size = stat.get("size") if isinstance(stat, dict) else None
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
@@ -1149,12 +1188,15 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        if size > MAX_IMAGE_INPUT_DOWNLOAD_BYTES:
+        download_limit = (
+            MAX_COMPILE_IMAGE_DOWNLOAD_BYTES if for_compile else MAX_IMAGE_INPUT_DOWNLOAD_BYTES
+        )
+        if size > download_limit:
             return {
                 "uri": uri,
                 "content": (
                     f"Image is {size} bytes; the model image download limit is "
-                    f"{MAX_IMAGE_INPUT_DOWNLOAD_BYTES} bytes."
+                    f"{download_limit} bytes."
                 ),
                 "success": False,
                 "media_kind": "image",
@@ -1176,7 +1218,22 @@ class VikingMultiReadTool(OVFileTool):
                 "media_kind": "image",
             }
         model_data, mime_type = data, image_format.mime_type
-        if len(data) > cls._MAX_INLINE_MEDIA_BYTES:
+        if for_compile:
+            try:
+                model_data, mime_type = await asyncio.to_thread(
+                    compress_image_input,
+                    data,
+                    mime_type,
+                    compile_inline_budget=cls._MAX_INLINE_MEDIA_BYTES,
+                )
+            except (DecompressionBombError, OSError, ValueError) as exc:
+                return {
+                    "uri": uri,
+                    "content": f"Cannot prepare image for Compile: {exc}",
+                    "success": False,
+                    "media_kind": "image",
+                }
+        elif len(data) > cls._MAX_INLINE_MEDIA_BYTES:
             model_data, mime_type = await asyncio.to_thread(compress_image_input, data, mime_type)
         if len(model_data) > cls._MAX_INLINE_MEDIA_BYTES:
             return {

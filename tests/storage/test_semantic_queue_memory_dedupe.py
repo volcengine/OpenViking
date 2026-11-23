@@ -4,7 +4,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -14,7 +14,6 @@ from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     parse_abstract_overview,
 )
-from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -36,120 +35,61 @@ def native_queue():
 
 
 @pytest.mark.asyncio
-async def test_memory_semantic_enqueue_deduped_within_window():
-    mock_agfs = MagicMock()
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
-        named_enqueue.return_value = "queued-id"
-        q = SemanticQueue(mock_agfs, "/queue", "semantic")
-        msg = SemanticMsg(
-            uri="viking://user/default/memories/entities",
-            context_type="memory",
-            account_id="acc",
-            user_id="u1",
-            peer_id="p1",
-        )
-        r1 = await q.enqueue(msg)
-        r2 = await q.enqueue(
-            SemanticMsg(
-                uri="viking://user/default/memories/entities",
-                context_type="memory",
-                account_id="acc",
-                user_id="u1",
-                peer_id="p1",
-            )
-        )
-        assert r1 == "queued-id"
-        assert r2 == "deduplicated"
-        assert named_enqueue.call_count == 1
+async def test_memory_semantic_enqueue_deduped_within_window(native_queue):
+    first = SemanticMsg(
+        uri="viking://user/default/memories/entities", context_type="memory", account_id="acc"
+    )
+    await native_queue.enqueue(first)
+    duplicate = SemanticMsg(uri=first.uri, context_type="memory", account_id="acc")
+    assert await native_queue.enqueue(duplicate) == "deduplicated"
+
+    for uri, context_type in (
+        ("viking://user/default/memories/patterns", "memory"),
+        ("viking://resources/docs", "resource"),
+        ("viking://resources/docs", "resource"),
+    ):
+        msg = SemanticMsg(uri=uri, context_type=context_type, account_id="acc")
+        await native_queue.enqueue(msg)
+
+    delivered = []
+    for _ in range(4):
+        msg = await native_queue.dequeue()
+        assert msg is not None
+        delivered.append((msg.context_type, msg.uri))
+    assert delivered == [
+        ("memory", first.uri),
+        ("memory", "viking://user/default/memories/patterns"),
+        ("resource", "viking://resources/docs"),
+        ("resource", "viking://resources/docs"),
+    ]
+    assert await native_queue.dequeue() is None
 
 
 @pytest.mark.asyncio
-async def test_memory_semantic_worker_retry_bypasses_dedupe_window():
-    mock_agfs = MagicMock()
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
-        named_enqueue.return_value = "queued-id"
-        q = SemanticQueue(mock_agfs, "/queue", "semantic")
-        msg = SemanticMsg(
-            uri="viking://user/default/memories/entities",
-            context_type="memory",
-            account_id="acc",
-            user_id="u1",
-            peer_id="p1",
-        )
-
-        await q.enqueue(msg)
-        retry = await q.enqueue(msg, deduplicate_memory=False)
-
-        assert retry == "queued-id"
-        assert named_enqueue.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_worker_without_lock_does_not_dedupe_a_memory_retry(monkeypatch):
-    """The circuit-breaker requeue runs before a lease is acquired.
-
-    That is the branch `SemanticMessageWork` takes when it owns no lock, so the
-    worker itself - not just the queue API - has to bypass the memory window.
-    """
+async def test_worker_without_lock_does_not_dedupe_a_memory_retry(monkeypatch, native_queue):
     from openviking.storage.queuefs.semantic_work import SemanticMessageWork
 
-    processor = _processor()
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
-        named_enqueue.return_value = "queued-id"
-        queue = SemanticQueue(MagicMock(), "/queue", "semantic")
-        msg = SemanticMsg(
-            uri="viking://user/default/memories/entities",
-            context_type="memory",
-            account_id="acc",
-            user_id="u1",
-            peer_id="p1",
-        )
-        assert await queue.enqueue(msg) == "queued-id"
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: native_queue),
+    )
+    msg = SemanticMsg(
+        uri="viking://user/default/memories/entities",
+        context_type="memory",
+        account_id="acc",
+        user_id="u1",
+        peer_id="p1",
+    )
+    await native_queue.enqueue(msg)
+    original = await native_queue.dequeue()
+    assert original is not None
 
-        monkeypatch.setattr(
-            "openviking.storage.queuefs.get_queue_manager",
-            lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
-        )
+    await SemanticMessageWork(_processor(), original, None).reenqueue()
 
-        work = SemanticMessageWork(processor, msg, None)
-        await work.reenqueue()
-
-        # Without the flag the retry would be coalesced against the enqueue it
-        # is retrying, and the delivery would be ACKed with no replacement.
-        assert named_enqueue.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_memory_semantic_enqueue_different_uri_not_deduped():
-    mock_agfs = MagicMock()
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
-        named_enqueue.return_value = "queued-id"
-        q = SemanticQueue(mock_agfs, "/queue", "semantic")
-        await q.enqueue(
-            SemanticMsg(
-                uri="viking://user/default/memories/entities",
-                context_type="memory",
-            )
-        )
-        await q.enqueue(
-            SemanticMsg(
-                uri="viking://user/default/memories/patterns",
-                context_type="memory",
-            )
-        )
-        assert named_enqueue.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_non_memory_context_not_deduped():
-    mock_agfs = MagicMock()
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
-        named_enqueue.return_value = "queued-id"
-        q = SemanticQueue(mock_agfs, "/queue", "semantic")
-        uri = "viking://resources/docs"
-        await q.enqueue(SemanticMsg(uri=uri, context_type="resource"))
-        await q.enqueue(SemanticMsg(uri=uri, context_type="resource"))
-        assert named_enqueue.call_count == 2
+    retry = await native_queue.dequeue()
+    assert retry is not None
+    assert (retry.id, retry.uri, retry.account_id) == (msg.id, msg.uri, msg.account_id)
+    assert await native_queue.dequeue() is None
 
 
 @pytest.mark.asyncio

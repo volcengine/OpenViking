@@ -1,4 +1,3 @@
-import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import {
   beginWorkflow,
   type Workflow,
@@ -9,8 +8,6 @@ import type {
   FilePreviewDirectoryTab,
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
-import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { isAbort } from '../../shared/request/fs-errors.js';
 import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
@@ -18,53 +15,13 @@ import { isSystemUri } from '../../shared/resource-uri.js';
 import { readDirectory } from './fs-read-directory.js';
 import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
-import { createPreviewImageResolver } from './fs-preview-images.js';
+import { createPreviewImageResolver as previewImages } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { loadVideoDetails } from './fs-video-details.js';
-import { abortError, readPreviewStat } from './fs-stat.js';
+import { abortError, toPreviewError } from './fs-stat.js';
 import { useWikiSaveFeedback } from './use-wiki-save-feedback.js';
-
-export interface UseFsPreviewOptions {
-  client: OvClient | null;
-  uri: string | null;
-  /**
-   * 当前资源的类型。目录读 L0/L1 摘要，文件读正文，`unknown` 先查一次 `fs/stat`
-   * 再决定。
-   *
-   * 传三态而不是「目录集合」：集合每次加载都会换新引用，作为 effect 依赖会让预览
-   * 反复重取。三态是稳定的字符串，换引用的问题不存在。
-   *
-   * The type of the current resource. A directory reads its L0/L1 summary, a file reads
-   * its content, and `unknown` resolves with one `fs/stat` call first.
-   *
-   * A three-state value rather than the directory set: the set gets a new identity on
-   * every load, and as an effect dependency it would make the preview reload
-   * repeatedly. The three-state value is a stable string, so that cannot happen.
-   */
-  resourceType?: 'directory' | 'file' | 'unknown';
-  contentKind?: 'plain' | 'wiki' | 'pending';
-  activeLevelKey?: string;
-  onActiveLevelChange?: (key: string) => void;
-  /** 目录两级摘要的标题。Titles of the two summary levels. */
-  labels?: DirectorySummaryLabels;
-  /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
-  formatCharacterCount?: (count: number) => string;
-  /**
-   * 打开路径上的某一级祖先。面包屑与目录页签共用它。
-   * Opens one ancestor level; the breadcrumb and a directory tab share it.
-   */
-  openParent?: (uri: string) => Promise<void>;
-  /**
-   * 重新取数的代次。宿主调用刷新时递增，让同一资源的正文重新请求——内容在服务
-   * 端变了而 URI 没变，只靠依赖是看不出来的。
-   *
-   * Reload generation. A host increments it on refresh so the same resource is read
-   * again: the content changed on the server while the URI did not, which
-   * dependencies alone cannot express.
-   */
-  generation?: number;
-  requestOptions?: OvRequestOptions;
-}
+import type { UseFsPreviewOptions } from './preview-types.js';
+import { usePreviewLookup } from './use-preview-lookup.js';
 
 /**
  * 当前资源的预览页签。切换资源时旧请求被取消，已产出的页签不会覆盖新资源。
@@ -81,8 +38,9 @@ export interface UseFsPreviewOptions {
 export function useFsPreview({
   client,
   uri,
-  resourceType = 'file',
-  contentKind = 'plain',
+  resourceType: treeType = 'file',
+  listedUpdatedAt,
+  readDashboardHint,
   activeLevelKey = 'l0',
   onActiveLevelChange,
   labels = resolveSummaryLabels('en-US'),
@@ -98,7 +56,9 @@ export function useFsPreview({
     summary: DirectorySummary;
     resolveImage: FilePreviewDirectoryTab['resolveImage'];
   } | null>(null);
-  const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
+  const [tabs, setTabs] = useState<
+    (FilePreviewTab & { compileOutput?: boolean })[] | null
+  >(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
@@ -108,18 +68,39 @@ export function useFsPreview({
     uri,
     requestOptions,
   );
+  const lookup = usePreviewLookup({
+    client,
+    uri,
+    requestOptions,
+    generation,
+    saveGeneration,
+    wikiSave,
+    listedUpdatedAt,
+  });
+  const [statType, setStatType] = useState<{
+    lookup: typeof lookup;
+    type: 'directory' | 'file';
+  }>();
+  // A late tree listing that confirms fs/stat should keep the original request
+  // running. A conflicting type or a new lookup still starts a fresh preview.
+  const resourceType =
+    statType?.lookup === lookup && statType.type === treeType
+      ? 'unknown'
+      : treeType;
 
   // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
   // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
-  // 依赖变化与卸载中止请求并忽略过期结果；摘要层级与文案仅影响展示。
+  // 依赖变化与卸载中止请求并忽略过期结果。
   useEffect(() => {
+    const { client, uri, wikiSave } = lookup;
+    if (resourceType !== 'unknown') setStatType(undefined);
     setDirectory(null);
     setStat(undefined);
     wikiSave.reset();
+    setActiveKey(client ? uri : null);
+    setError(null);
     if (!client || !uri) {
       setTabs(null);
-      setActiveKey(null);
-      setError(null);
       return;
     }
     const controller = new AbortController();
@@ -129,12 +110,9 @@ export function useFsPreview({
     // A tab is present even while loading, so the shell — tab row and path row —
     // stays put and only the body shows the loading state. Setting null would make
     // the whole preview area disappear and reappear, flashing on every switch.
-    setTabs([loadingTab(uri, resourceType !== 'file')]);
-    setActiveKey(uri);
-    setError(null);
+    setTabs([loadingTab(uri, resourceType)]);
     const { options, onStatus } = wikiSave.bind(controller.signal);
     const { signal } = options;
-    if (contentKind === 'pending') return () => controller.abort();
     const operation = beginWorkflow(
       client,
       'file_browser_preview_load',
@@ -143,8 +121,13 @@ export function useFsPreview({
     if (operation) operation.identity = uri;
     setMonitoring(operation);
     const api = operation?.client(client) ?? client;
-    const metadata = readPreviewStat(api, uri, options);
-    void metadata.then((result) => {
+    const { metadata, bodyCache } = lookup.prepareFileRead(
+      api,
+      uri,
+      options,
+      resourceType === 'unknown',
+    );
+    void metadata?.then((result) => {
       if (!signal.aborted && result?.updatedAt)
         setStat({ uri, updatedAt: result.updatedAt });
     });
@@ -153,35 +136,36 @@ export function useFsPreview({
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
     // 于是目录会被读成正文、丢掉 L0/L1 摘要。缺失的是元数据，不是「它是文件」的
     // 证据，因此先查再决定。
-    //
     // An unknown type is resolved with one `fs/stat` call first. Treating "not in the
     // known directory set" as a file is wrong: the set only covers loaded levels, so a
     // directory URI the host passes directly, before it was ever expanded, is simply
     // absent — and the directory would be read as content and lose its L0/L1 summary.
     // What is missing is metadata, not evidence that it is a file.
     const read = (async () => {
-      const isDir =
-        resourceType === 'unknown'
-          ? (await metadata)?.isDirectory
-          : resourceType === 'directory';
+      const stat = resourceType === 'unknown' ? await metadata : undefined;
+      const isDir = stat?.isDirectory ?? resourceType === 'directory';
       if (signal.aborted) throw abortError();
+      if (resourceType === 'unknown' && isDir !== undefined) {
+        const type = isDir ? 'directory' : 'file';
+        setStatType({ lookup, type });
+        setTabs([loadingTab(uri, type)]);
+      }
       if (isDir)
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
           : { summary: await readDirectory(api, uri, options) };
-      return {
-        tab: await readFile(
-          api,
-          uri,
-          options,
-          openParent,
-          () => {
-            if (!signal.aborted) setSaveGeneration((value) => value + 1);
-          },
-          contentKind === 'wiki',
-          onStatus,
-        ),
-      };
+      return readFile(
+        api,
+        uri,
+        options,
+        openParent,
+        () => {
+          if (!signal.aborted) setSaveGeneration((value) => value + 1);
+        },
+        onStatus,
+        readDashboardHint,
+        bodyCache ?? lookup.bodyCacheFor(uri, stat?.updatedAt),
+      );
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -198,24 +182,25 @@ export function useFsPreview({
     void read.then(
       (result) => {
         if (signal.aborted) return;
-        if (result.summary) {
+        if ('summary' in result && result.summary) {
           setDirectory({
             uri,
             summary: result.summary,
-            resolveImage: createPreviewImageResolver(
-              client,
-              uri,
-              true,
-              options,
-            ),
+            resolveImage: previewImages(client, uri, true, options),
           });
-          setActiveKey(uri);
           return;
         }
         const tab = result.tab;
         setTabs([tab]);
-        setActiveKey(tab.key);
-        // Supplemental content can fail independently of the playable video.
+        if ('resolveWikiTab' in result)
+          void result.resolveWikiTab?.().then(
+            (updatedTab) => {
+              if (!signal.aborted && updatedTab) setTabs([updatedTab]);
+            },
+            (cause: unknown) => {
+              if (!signal.aborted) setError(toPreviewError(cause));
+            },
+          );
         void loadVideoDetails(client, tab, options, (updatedTab) =>
           setTabs([updatedTab]),
         ).catch(() => undefined);
@@ -224,43 +209,27 @@ export function useFsPreview({
         if (isAbort(cause) || signal.aborted) return;
         operation?.fail(cause, 'protocol', signal);
         setTabs([]);
-        setError(cause instanceof Error ? cause : new Error(String(cause)));
+        setError(toPreviewError(cause));
       },
     );
 
     return () => controller.abort();
-  }, [
-    client,
-    uri,
-    resourceType,
-    contentKind,
-    openParent,
-    generation,
-    saveGeneration,
-    wikiSave,
-  ]);
+  }, [lookup, resourceType, readDashboardHint, openParent]);
 
   const directoryTab =
     directory?.uri === uri
-      ? {
-          ...toDirectoryTab(
-            directory.uri,
-            directory.summary,
-            labels,
-            openParent,
-            directoryIcon(),
-          ),
+      ? toDirectoryTab(directory.uri, directory.summary, labels, openParent, {
           resolveImage: directory.resolveImage,
           activeLevelKey,
           onActiveLevelChange,
-        }
+        })
       : undefined;
   const current = tabs?.[0];
+  const level = directoryTab?.levels.find(
+    (item) => item.key === activeLevelKey,
+  );
   const count = directoryTab
-    ? (
-        directoryTab.levels.find((level) => level.key === activeLevelKey)
-          ?.source.content ?? ''
-      ).length
+    ? (level?.source.content ?? '').length
     : current?.key === uri && current.kind === 'file' && !current.loading
       ? current.source.content?.length
       : undefined;
@@ -270,8 +239,10 @@ export function useFsPreview({
     activeKey,
     error,
     wikiSaveFeedback,
+    hasDirectorySummary: Boolean(level?.hasSummary),
+    isCompileOutput: current?.key === uri && Boolean(current.compileOutput),
     footer: count === undefined ? undefined : formatCharacterCount(count),
-    updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
+    updatedAt: stat?.uri === uri ? stat.updatedAt : listedUpdatedAt,
     setActiveKey,
   };
 }

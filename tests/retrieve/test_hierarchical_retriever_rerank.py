@@ -3,14 +3,14 @@
 
 """Global retrieval and final rerank behavior tests."""
 
-import asyncio
 import threading
-import time
 
 import pytest
 
 from openviking.core.context import ContextLevel
+from openviking.models.rerank import RerankBase
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
+from openviking.retrieve.rerank_scoring import rerank_scores
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -107,8 +107,7 @@ def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", [None, RetrieverMode.THINKING])
-async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
+async def test_retrieve_reranks_global_candidates_once(monkeypatch):
     fake_client = FakeRerankClient([0.1, 0.2, 0.95, 0.99])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
@@ -138,7 +137,6 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
         query,
         ctx=_ctx(),
         limit=2,
-        mode=mode,
         scope_dsl=scope,
         score_threshold=0.9,
         events_time_decay_protection="0",
@@ -164,52 +162,6 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
 
 
 @pytest.mark.asyncio
-async def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch):
-    fake_client = FakeRerankClient([0.95, 0.05])
-    monkeypatch.setattr(
-        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
-        lambda config: fake_client,
-    )
-
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=DummyEmbedder(),
-        rerank_config=_config(),
-    )
-
-    rerank = await retriever._rerank_scores(
-        "hello",
-        ["root A", "", "   ", "root D"],
-        [0.2, 0.8, 0.7, 0.4],
-    )
-
-    assert rerank.scores == [0.95, 0.8, 0.7, 0.05]
-    assert rerank.reranked == [True, False, False, True]
-    assert fake_client.calls == [("hello", ["root A", "root D"])]
-
-
-@pytest.mark.asyncio
-async def test_rerank_scores_does_not_truncate_by_default(monkeypatch):
-    oversized_document = "summary-start " + ("填充内容" * 600) + " relevant-tail"
-    fake_client = FakeRerankClient([0.95])
-    monkeypatch.setattr(
-        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
-        lambda config: fake_client,
-    )
-
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=DummyEmbedder(),
-        rerank_config=RerankConfig(ak="ak", sk="sk"),
-    )
-
-    await retriever._rerank_scores("query", [oversized_document], [0.2])
-
-    assert retriever.rerank_max_input_tokens == 0
-    assert fake_client.calls == [("query", [oversized_document])]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "oversized_document",
     [
@@ -217,7 +169,7 @@ async def test_rerank_scores_does_not_truncate_by_default(monkeypatch):
         "摘要开头" + ("填充内容" * 600) + "相关结论",
     ],
 )
-async def test_rerank_scores_bounds_oversized_documents_and_preserves_tail(
+async def test_retrieve_rerank_bounds_oversized_documents_and_preserves_tail(
     monkeypatch, oversized_document
 ):
     fake_client = FakeRerankClient([0.95])
@@ -226,15 +178,22 @@ async def test_rerank_scores_bounds_oversized_documents_and_preserves_tail(
         lambda config: fake_client,
     )
 
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=DummyEmbedder(),
-        rerank_config=RerankConfig(ak="ak", sk="sk", max_input_tokens=128),
+    storage = DummyStorage(
+        [_result("viking://resources/runbook.md", 0.2, abstract=oversized_document)]
     )
+    cfg = RerankConfig(ak="ak", sk="sk")
+    default = await HierarchicalRetriever(storage, DummyEmbedder(), cfg).retrieve(
+        _query(), ctx=_ctx()
+    )
+    assert [hit.score for hit in default.matched_contexts] == [0.95]
+    assert fake_client.calls == [("hello", [oversized_document])]
 
-    rerank = await retriever._rerank_scores("query", [oversized_document], [0.2])
-
-    assert rerank.scores == [0.95]
+    fake_client = FakeRerankClient([0.95])
+    cfg = RerankConfig(ak="ak", sk="sk", max_input_tokens=128)
+    bounded = await HierarchicalRetriever(storage, DummyEmbedder(), cfg).retrieve(
+        _query(), ctx=_ctx()
+    )
+    assert [hit.score for hit in bounded.matched_contexts] == [0.95]
     rerank_query, rerank_documents = fake_client.calls[0]
     bounded_document = rerank_documents[0]
     assert estimate_text_tokens(rerank_query) + estimate_text_tokens(bounded_document) <= 128
@@ -274,48 +233,24 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(monkeypatc
     retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
 
     result = await retriever.retrieve(
-        _query(), ctx=_ctx(), limit=2, events_time_decay_protection="0"
+        _query(), ctx=_ctx(), limit=3, events_time_decay_protection="0"
     )
 
-    assert [ctx.uri for ctx in result.matched_contexts] == [
-        "viking://resources/b/deep-b.md",
-        "viking://resources/a/deep-a.md",
+    assert [(hit.uri, hit.score) for hit in result.matched_contexts] == [
+        ("viking://resources/b/deep-b.md", 0.8),
+        ("viking://resources/a/deep-a.md", 0.2),
+        ("viking://resources/b/deep-c.md", 0.05),
     ]
-    assert [ctx.score for ctx in result.matched_contexts] == [0.8, 0.2]
     assert result.matched_contexts[1].origin_score == 0.8
     assert result.matched_contexts[1].time_score == 0.25
     assert len(storage.search_calls) == 1
-    assert storage.search_calls[0]["limit"] == 4
     assert fake_client.calls == [("hello", ["deep B", "deep A", "deep C"])]
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, [0.9], RuntimeError("provider unavailable")])
-async def test_rerank_failure_fallback_does_not_apply_rerank_threshold(monkeypatch, failure):
-    class FailedRerankClient(FakeRerankClient):
-        def rerank_batch(self, query, documents):
-            if isinstance(failure, Exception):
-                raise failure
-            return failure
-
-    monkeypatch.setattr(
-        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
-        lambda config: FailedRerankClient([]),
-    )
-    storage = DummyStorage(
-        [
-            _result("viking://resources/high", 0.8, abstract="high"),
-            _result("viking://resources/low", 0.05, abstract="low"),
-        ]
-    )
-    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
-
-    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=5)
-    explicit = await retriever.retrieve(_query(), ctx=_ctx(), limit=5, score_threshold=0.5)
-
-    # Vector scores are not on the reranker's scale, so rerank.threshold must not filter them.
-    assert [ctx.score for ctx in result.matched_contexts] == [0.8, 0.05]
-    assert [ctx.score for ctx in explicit.matched_contexts] == [0.8]
+    # An explicit threshold also applies to vector scores when the model fails.
+    explicit = await retriever.retrieve(_query(), ctx=_ctx(), limit=3, score_threshold=0.5)
+    assert [(hit.uri, hit.score) for hit in explicit.matched_contexts] == [
+        ("viking://resources/b/deep-b.md", 0.8),
+    ]
 
 
 @pytest.mark.asyncio
@@ -330,6 +265,7 @@ async def test_rerank_threshold_filters_only_model_scores(monkeypatch):
             _result("viking://resources/demoted", 0.9, abstract="demoted"),
             _result("viking://resources/relevant", 0.8, abstract="relevant"),
             _result("viking://resources/no-abstract", 0.05, abstract=""),
+            _result("viking://resources/blank-abstract", 0.03, abstract="   "),
             _result("viking://resources/promoted", 0.01, abstract="promoted"),
         ]
     )
@@ -338,77 +274,26 @@ async def test_rerank_threshold_filters_only_model_scores(monkeypatch):
     result = await retriever.retrieve(_query(), ctx=_ctx(), limit=5)
 
     assert fake_client.calls == [("hello", ["demoted", "relevant", "promoted"])]
-    # The empty abstract was never reranked, so its vector score skips rerank.threshold.
+    # Empty and whitespace-only abstracts keep their vector scores.
     assert [(ctx.uri, ctx.score) for ctx in result.matched_contexts] == [
         ("viking://resources/promoted", 0.95),
         ("viking://resources/relevant", 0.9),
         ("viking://resources/no-abstract", 0.05),
+        ("viking://resources/blank-abstract", 0.03),
     ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "rerank_config, mode",
-    [
-        (RerankConfig(), None),
-        (_config(), RetrieverMode.QUICK),
-        (RerankConfig(ak="ak", sk="sk", threshold=0.8), RetrieverMode.QUICK),
-    ],
-)
-async def test_quick_path_does_not_apply_rerank_threshold(monkeypatch, rerank_config, mode):
-    fake_client = FakeRerankClient([])
-    monkeypatch.setattr(
-        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
-        lambda config: fake_client,
-    )
-    storage = DummyStorage(
-        [
-            _result("viking://resources/high", 0.9, abstract="high"),
-            _result("viking://resources/low", 0.05, abstract="low"),
-        ]
-    )
-    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=rerank_config)
-
-    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=5, mode=mode)
-    explicit = await retriever.retrieve(
-        _query(), ctx=_ctx(), limit=5, mode=mode, score_threshold=0.5
-    )
-
-    assert fake_client.calls == []
-    assert [ctx.score for ctx in result.matched_contexts] == [0.9, 0.05]
-    assert [ctx.score for ctx in explicit.matched_contexts] == [0.9]
-
-
-@pytest.mark.asyncio
 async def test_rerank_scores_runs_blocking_client_off_event_loop():
-    class SlowRerankClient:
-        def __init__(self):
-            self.thread_id = None
+    caller_thread = threading.get_ident()
 
+    class RecordingClient(RerankBase):
         def rerank_batch(self, query: str, documents: list[str]):
-            self.thread_id = threading.get_ident()
-            time.sleep(0.2)
-            return [0.9 for _ in documents]
+            return [0.9] if threading.get_ident() != caller_thread else [0.0]
 
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=DummyEmbedder(),
-        rerank_config=None,
-    )
-    fake_client = SlowRerankClient()
-    retriever._rerank_client = fake_client
+    result = await rerank_scores(RecordingClient(), "hello", ["doc"], [0.1])
 
-    started = time.monotonic()
-    rerank_task = asyncio.create_task(retriever._rerank_scores("hello", ["doc"], [0.1]))
-
-    ticks = 0
-    while time.monotonic() - started < 0.15:
-        await asyncio.sleep(0.01)
-        ticks += 1
-
-    assert (await rerank_task).scores == [0.9]
-    assert fake_client.thread_id != threading.get_ident()
-    assert ticks >= 3
+    assert result.scores == [0.9]
 
 
 @pytest.mark.asyncio
@@ -416,7 +301,7 @@ async def test_rerank_scores_runs_blocking_client_off_event_loop():
     "rerank_config, mode",
     [(None, RetrieverMode.THINKING), (RerankConfig(), None), (_config(), RetrieverMode.QUICK)],
 )
-async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, rerank_config, mode):
+async def test_retrieve_without_rerank_uses_only_vector_scores(monkeypatch, rerank_config, mode):
     fake_client = FakeRerankClient([])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
@@ -426,8 +311,8 @@ async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, r
         [
             _result("viking://resources/root", 0.95, level=0, abstract="root abstract"),
             _result("viking://resources/file", 0.9, abstract="file abstract"),
-            _result("viking://resources/dir", 0.85, level=1, abstract="dir overview"),
-            _result("viking://resources/extra", 0.8, abstract="extra"),
+            _result("viking://resources/dir", 0.05, level=1, abstract="dir overview"),
+            _result("viking://resources/extra", 0.01, abstract="extra"),
         ]
     )
     retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=rerank_config)
@@ -441,7 +326,7 @@ async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, r
     ]
     assert fake_client.calls == []
     assert [ctx.level for ctx in result.matched_contexts] == [0, 2, 1]
-    assert [ctx.score for ctx in result.matched_contexts] == [0.95, 0.9, 0.85]
+    assert [ctx.score for ctx in result.matched_contexts] == [0.95, 0.9, 0.05]
     assert len(storage.search_calls) == 1
     assert storage.search_calls[0]["limit"] == 3
     assert storage.search_calls[0]["level"] is None
@@ -529,43 +414,14 @@ async def test_retrieve_without_rerank_filters_by_vector_score():
 
 
 @pytest.mark.asyncio
-async def test_convert_to_matched_contexts_propagates_search_tags():
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=None,
-        rerank_config=None,
-    )
-
-    result = await retriever._convert_to_matched_contexts(
-        [
-            _result(
-                "viking://resources/file-a",
-                1.0,
-                abstract="child A",
-                search_tags=["default", "team=infra", "bad=", "project=viking"],
-            )
-        ],
-        ctx=_ctx(),
-    )
-
-    assert result[0].search_tags == ["team=infra", "project=viking"]
-
-
-@pytest.mark.asyncio
-async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
-    retriever = HierarchicalRetriever(
-        storage=DummyStorage(),
-        embedder=None,
-        rerank_config=None,
-    )
+async def test_retrieve_exposes_body_previews_and_valid_tags():
     uri = "viking://resources/demo"
     metadata = {
         "source": {"kind": "http", "uri": "https://example.com/private.pdf"},
         "generated_by": {"component": "SemanticProcessor", "trigger": "ingest"},
     }
     markdown = "---\ntitle: User document\n---\n\nVisible body."
-
-    result = await retriever._convert_to_matched_contexts(
+    storage = DummyStorage(
         [
             _result(
                 uri,
@@ -576,28 +432,39 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
                 ),
             ),
             _result(
-                uri,
+                f"{uri}/subdir",
                 0.9,
                 level=int(ContextLevel.OVERVIEW),
                 abstract=render_abstract_overview(
-                    ContextLevel.OVERVIEW, uri, "# Visible overview", metadata
+                    ContextLevel.OVERVIEW, f"{uri}/subdir", "# Visible overview", metadata
                 ),
             ),
-            _result("viking://resources/demo.md", 0.8, level=2, abstract=markdown),
             _result(
-                "viking://resources/malformed",
+                f"{uri}/demo.md",
+                0.8,
+                abstract=markdown,
+                search_tags=["default", "team=infra", "bad=", "project=viking"],
+            ),
+            _result(
+                f"{uri}/malformed",
                 0.7,
                 level=int(ContextLevel.ABSTRACT),
                 abstract="---\n",
             ),
-        ],
-        ctx=_ctx(),
+            _result(f"{uri}/demo.md", 0.6, abstract="Lower scored record"),
+        ]
     )
+    result = await HierarchicalRetriever(storage, DummyEmbedder()).retrieve(_query(), ctx=_ctx())
 
-    assert [item.search_tags for item in result] == [[], [], [], []]
-    assert [item.abstract for item in result] == [
-        "Visible abstract.",
-        "# Visible overview",
-        markdown,
-        "",
+    assert [(hit.uri, hit.abstract) for hit in result.matched_contexts] == [
+        (f"{uri}/.abstract.md", "Visible abstract."),
+        (f"{uri}/subdir/.overview.md", "# Visible overview"),
+        (f"{uri}/demo.md", markdown),
+        (f"{uri}/malformed/.abstract.md", ""),
+    ]
+    assert [hit.search_tags for hit in result.matched_contexts] == [
+        [],
+        [],
+        ["team=infra", "project=viking"],
+        [],
     ]

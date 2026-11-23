@@ -91,3 +91,22 @@ test('host picker limits new grants without hiding existing Group grants', async
     await view.unmount();
   }
 });
+
+test('principal search placeholder stays consistent when picker opens and closes', async () => {
+  const view = await mount(tree(fixture()));
+  try {
+    await open();
+    const input = document.querySelector('.ov-file-browser-acl__add input');
+    assert.ok(input);
+    const placeholder = input.placeholder;
+    assert.equal(placeholder, 'Search users or groups');
+    await click(input);
+    assert.equal(input.placeholder, placeholder);
+    await click(
+      button('Cancel', document.querySelector('.ov-file-browser-acl-picker')),
+    );
+    assert.equal(input.placeholder, placeholder);
+  } finally {
+    await view.unmount();
+  }
+});

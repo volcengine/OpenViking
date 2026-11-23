@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from openviking.parse.parsers.anydoc_renderer import _AnyDocMarkdownRenderer, _attr
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 @dataclass(frozen=True)
@@ -45,10 +46,10 @@ def _load_document(path: Path, format_hint: str | None = None):
 
     try:
         document = (
-            anydoc.to_document(data, source_format)
-            if source_format
-            else anydoc.to_document(data)
+            anydoc.to_document(data, source_format) if source_format else anydoc.to_document(data)
         )
+    except (anydoc.MalformedError, anydoc.MissingPartError) as exc:
+        raise InvalidArgumentError(f"Invalid document file: {path.name}. Error: {exc}") from exc
     except anydoc.ConvertError as exc:
         format_context = f" as {source_format}" if source_format else ""
         raise type(exc)(f"Failed to convert {path}{format_context}: {exc}") from exc

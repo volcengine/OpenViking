@@ -4,6 +4,7 @@
 
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 
@@ -160,35 +161,44 @@ class TestRewriteRelativeLinks:
         )
         assert out == "[x](../目录甲/目录乙/目录丙/文档/文档.md?v=1)"
 
-    async def test_large_file_anchor_located(self, tmp_path: Path):
-        # Large target is split into section files; the anchor is located via an
-        # in-memory parse → link points at the specific section file + keeps anchor.
+    async def test_split_target_keeps_raw_and_encoded_fragments(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
         body = "".join(
-            f"## 第{i}章 {name}\n\n" + ("正文内容。" * 400) + "\n\n"
+            f"## 第{i}章 {name}\n\n" + ("正文内容。" * 240) + "\n\n"
             for i, name in [(1, "部署"), (2, "监控"), (3, "排查")]
         )
         big.write_text(body, encoding="utf-8")
+        fragment = "第3章-排查"
+        encoded = quote(fragment)
         out = await self._rewrite(
             self._parser(),
             kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#第3章-排查)",
+            f"[raw](./目录甲/目录乙/目录丙/big.md#{fragment}) "
+            f"[encoded](./目录甲/目录乙/目录丙/big.md#{encoded})",
         )
-        assert out.startswith("[x](../目录甲/目录乙/目录丙/big/")
-        assert out.endswith(".md#第3章-排查)")  # points at a file, anchor kept
+        section = "../目录甲/目录乙/目录丙/big/第3章_排查.md"
+        assert out == f"[raw]({section}#{fragment}) [encoded]({section}#{encoded})"
 
-    async def test_large_file_unlocatable_anchor_falls_back_to_dir(self, tmp_path: Path):
-        # Anchor matches no heading in the (large) target → drop suffix, point at dir.
+    async def test_split_target_resolves_closing_hashes_and_falls_back_for_missing_anchor(
+        self, tmp_path: Path
+    ):
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
-        big.write_text("# 大文档\n\n" + ("这是一段较长的正文内容。" * 1200), encoding="utf-8")
+        big.write_text(
+            "# Target ##\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
+            encoding="utf-8",
+        )
         out = await self._rewrite(
             self._parser(),
             kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
+            "[found](./目录甲/目录乙/目录丙/big.md#target) "
+            "[missing](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
         )
-        assert out == "[x](../目录甲/目录乙/目录丙/big/)"
+        assert out == (
+            "[found](../目录甲/目录乙/目录丙/big/Target.md#target) "
+            "[missing](../目录甲/目录乙/目录丙/big/)"
+        )
 
     async def test_multiple_links_on_one_line(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)

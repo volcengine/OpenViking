@@ -98,7 +98,6 @@ _WAIT_INITIAL_POLL_INTERVAL = 0.05
 _WAIT_MAX_POLL_INTERVAL = 1.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
-_sanitize_error = sanitize_error
 _sanitize_task_result = sanitize_task_result
 
 

@@ -1600,17 +1600,20 @@ class BotCompileService:
         Children use paths relative to their own draft roots in the shared task workspace.
         Only the parent submits final output; child usage is accumulated without transcripts.
         """
+        image_reader = registry.get("openviking_multi_read")
+        if image_reader is not None:
+            image_hashes = {
+                part.uri: part.sha256
+                for batch in source_batches or []
+                for part in batch
+                if part.image and part.sha256
+            }
+            registry.register(CompileImageReadTool(image_reader, image_hashes))
         spawn = registry.get("spawn")
         if spawn is None:
             return None
         manager = request_loop.subagents
         claimed_roots: set[str] = set()
-        image_hashes = {
-            part.uri: part.sha256
-            for batch in source_batches or []
-            for part in batch
-            if part.image and part.sha256
-        }
 
         async def run_child(
             child_id: str,
@@ -1675,8 +1678,6 @@ class BotCompileService:
             for name in _COMPILE_READ_TOOLS:
                 tool = registry.get(name)
                 if tool is not None:
-                    if name == "openviking_multi_read" and image_hashes:
-                        tool = CompileImageReadTool(tool, image_hashes)
                     child_tools.register(tool)
 
             async def require_draft_submission(context: _PlainTextContext) -> _PlainTextDelivered:

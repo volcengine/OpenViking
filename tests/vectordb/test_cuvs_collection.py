@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import gc
+import struct
 import threading
 import traceback
 import weakref
@@ -29,6 +30,12 @@ class FakeCuVSRuntime:
 
     def build(self, dataset):
         return [list(vector) for vector in dataset]
+
+    @staticmethod
+    def prepare_filter_words(words):
+        if isinstance(words, bytes):
+            words = [word for (word,) in struct.iter_unpack("<I", words)]
+        return tuple(bool(word & (1 << bit)) for word in words for bit in range(32))
 
     def search(self, index, query, limit, mask):
         self.search_count += 1
