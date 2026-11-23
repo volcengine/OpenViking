@@ -23,9 +23,8 @@ use crate::shape::SHAPE_MANIFEST_PATH;
 
 use super::context::FsContextView;
 use super::errors::{Error, Result};
-use super::filesystem::{
-    apply_read_dir_options, compile_grep_regex, normalize_prefix_path, paginate_entries, FileSystem,
-};
+use super::filesystem::{apply_read_dir_options, normalize_prefix_path, paginate_entries, FileSystem};
+use super::grep::compile_grep_regex;
 use super::types::{
     FileInfo, GlobPage, GrepOptions, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag,
 };

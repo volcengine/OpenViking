@@ -159,6 +159,16 @@ def get_privacy_matcher_class():
         ) from exc
 
 
+def get_grep_pattern_class():
+    """Return the native RAGFS grep pattern class."""
+    try:
+        return _load_rust_module().GrepPattern
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python GrepPattern is not available; rebuild the native extension"
+        ) from exc
+
+
 def get_privacy_extractor_class():
     """Return the native fixed-rule credential extractor."""
     try:
