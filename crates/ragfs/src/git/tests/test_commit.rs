@@ -427,7 +427,7 @@
         ) -> std::result::Result<(), RefStoreError> {
             let should_conflict = {
                 let mut fired = self.fired.lock().unwrap();
-                if ref_name.starts_with("refs/heads/") && !*fired {
+                if !*fired {
                     *fired = true;
                     true
                 } else {

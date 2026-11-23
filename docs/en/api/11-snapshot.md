@@ -568,9 +568,9 @@ When the restore has vector side effects (files written/deleted), the response c
 
 **Retrying partial writeback**
 
-For a directory restore, `RESTORE_WRITEBACK_PARTIAL` means the branch already points to the restore commit and some working-tree changes still need to be applied. Repeat the same restore with the same source commit, branch, and directory to resume the recorded changes. The retry reuses the restore commit and checks current permissions. A changed branch or working file returns a conflict. A dry run of a pending restore reports its outstanding write and delete paths.
+For a directory restore, `RESTORE_WRITEBACK_PARTIAL` means the branch already points to the restore commit and some working-tree changes failed. When the server has saved those failures, repeating the same source commit, branch, and directory retries only the recorded paths and reuses the restore commit. A dry run shows the pending writes and deletes.
 
-The server records the writeback plan before advancing the branch. The record is stored with the Git objects and refs, so it is available to another process using the same stores. Only affected paths are checked. A regular `noop` still compares the snapshot trees, preserving uncommitted workspace edits.
+Retry checks current permissions and requires the branch to still point to the restore commit. Each pending path must still match the parent snapshot or already match the restore target. Other states return a conflict. This applies to recorded partial failures. An interruption before the failure was recorded requires manual recovery.
 
 **Response (noop)**
 

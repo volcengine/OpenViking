@@ -410,7 +410,9 @@ def vfs_encrypted(workspace, ragfs_client_type):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("after_failure", ["resume", "edit", "new_head", "no_write_permission"])
+@pytest.mark.parametrize(
+    "after_failure", ["resume", "edit", "dirty_before_restore", "new_head", "no_write_permission"]
+)
 async def test_restore_resumes_only_safe_pending_paths(
     workspace, ragfs_client_type, monkeypatch, after_failure
 ):
@@ -446,6 +448,9 @@ async def test_restore_resumes_only_safe_pending_paths(
             await vfs.write_file(uri, b"new", ctx=ctx)
         await vfs.commit(message="after", paths=[project], ctx=ctx)
         params = {"project_dir": project, "source_commit": source["commit_oid"], "ctx": ctx}
+        before_restore = b"uncommitted" if after_failure == "dirty_before_restore" else b"new"
+        if after_failure == "dirty_before_restore":
+            await vfs.write_file(pending, before_restore, ctx=ctx)
 
         blocked.chmod(0o500)
         try:
@@ -457,7 +462,7 @@ async def test_restore_resumes_only_safe_pending_paths(
             blocked.chmod(0o700)
         restore_oid = error.value.new_commit_oid
         assert await vfs.read(applied, ctx=ctx) == b"old"
-        assert await vfs.read(pending, ctx=ctx) == b"new"
+        assert await vfs.read(pending, ctx=ctx) == before_restore
         assert await vfs.read(remove, ctx=ctx) == b"new"
     finally:
         client.close()
@@ -473,11 +478,14 @@ async def test_restore_resumes_only_safe_pending_paths(
                 await vfs.restore(**params)
             assert await vfs.read(pending, ctx=ctx) == b"new"
             return
-        if after_failure == "edit":
-            await vfs.write_file(pending, b"newer edit", ctx=ctx)
+        if after_failure in {"edit", "dirty_before_restore"}:
+            preserved = before_restore
+            if after_failure == "edit":
+                preserved = b"newer edit"
+                await vfs.write_file(pending, preserved, ctx=ctx)
             with pytest.raises(GitRestoreWritebackConflictError):
                 await vfs.restore(**params)
-            assert await vfs.read(pending, ctx=ctx) == b"newer edit"
+            assert await vfs.read(pending, ctx=ctx) == preserved
             assert await vfs.read(remove, ctx=ctx) == b"new"
             return
 

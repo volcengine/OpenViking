@@ -69,53 +69,49 @@ impl GitService {
             Some(key) => self.read_restore_writeback(account, key).await?,
             None => (None, None),
         };
-        if let (Some(key), Some(project), Some(record_oid), Some(pending)) =
-            (&writeback_key, project_dir, previous_record, pending)
-        {
-            let parent = parse_oid(&pending.parent)?;
+        let record = writeback_key.as_deref().map(|key| (key, previous_record));
+        if let (Some(project), Some(pending)) = (project_dir, pending) {
             let restore_commit = parse_oid(&pending.commit)?;
-            if head_oid == restore_commit {
-                let diff = pending.diff()?;
-                if *dry_run {
-                    return Ok(RestoreResponse::DryRun {
-                        diff,
-                        head: head_oid,
-                        source: source_oid,
-                    });
-                }
-                let (diff, written, deleted) = pending
-                    .check_workspace(self, account, project, diff)
-                    .await?;
-                let observed_head = self.ref_store.read(account, &ref_name).await?;
-                if observed_head != head_oid {
-                    return Err(GitError::ConcurrentCommit {
-                        ref_name,
-                        expected: Some(head_oid),
-                        actual: Some(observed_head),
-                    });
-                }
-                return self
-                    .apply_restore_writeback(
-                        &req,
-                        source_oid,
-                        parent,
-                        restore_commit,
-                        diff,
-                        pending.unchanged,
-                        Some((key, record_oid, pending)),
-                        written,
-                        deleted,
-                    )
-                    .await;
-            }
-            // A prepared record whose parent is still HEAD never reached writeback.
-            if head_oid != parent {
+            if head_oid != restore_commit {
                 return Err(GitError::ConcurrentCommit {
                     ref_name,
                     expected: Some(restore_commit),
                     actual: Some(head_oid),
                 });
             }
+            let diff = pending.diff()?;
+            if *dry_run {
+                return Ok(RestoreResponse::DryRun {
+                    diff,
+                    head: head_oid,
+                    source: source_oid,
+                });
+            }
+            let parent = parse_oid(&pending.parent)?;
+            let (diff, written, deleted) = self
+                .check_restore_workspace(account, project, parent, diff)
+                .await?;
+            let observed_head = self.ref_store.read(account, &ref_name).await?;
+            if observed_head != head_oid {
+                return Err(GitError::ConcurrentCommit {
+                    ref_name,
+                    expected: Some(head_oid),
+                    actual: Some(observed_head),
+                });
+            }
+            return self
+                .apply_restore_writeback(
+                    &req,
+                    source_oid,
+                    parent,
+                    restore_commit,
+                    diff,
+                    pending.unchanged,
+                    record,
+                    written,
+                    deleted,
+                )
+                .await;
         }
         let source_meta =
             load_commit_meta(self.object_store.as_ref(), account, &source_oid).await?;
@@ -238,25 +234,6 @@ impl GitService {
         )
         .await?;
 
-        let unchanged_count = diff.unchanged.len();
-        let record = if let (Some(key), Some(project)) = (&writeback_key, project_dir) {
-            let prefix = format!("/local/{account}/{project}");
-            let pending = PendingRestore::prepare(
-                self.vfs.as_ref(),
-                &prefix,
-                head_oid,
-                new_commit_oid,
-                &diff,
-            )
-            .await;
-            let oid = self
-                .save_restore_writeback(account, key, previous_record, Some(&pending))
-                .await?;
-            Some((key.as_str(), oid, pending))
-        } else {
-            None
-        };
-
         // 9. CAS-swap the branch ref. Map Conflict → ConcurrentCommit.
         //    This MUST happen before any VFS writeback: if another commit
         //    advanced the branch between our HEAD read and now, the CAS fails
@@ -269,14 +246,6 @@ impl GitService {
         {
             Ok(()) => {}
             Err(crate::git::error::RefStoreError::Conflict { expected, actual }) => {
-                if let Some((key, oid, _)) = &record {
-                    if let Err(err) = self
-                        .save_restore_writeback(account, key, Some(*oid), None)
-                        .await
-                    {
-                        warn!("could not clear unpublished restore writeback record: {err}");
-                    }
-                }
                 return Err(GitError::ConcurrentCommit {
                     ref_name,
                     expected,
@@ -295,6 +264,7 @@ impl GitService {
         )
         .await;
 
+        let unchanged_count = diff.unchanged.len();
         self.apply_restore_writeback(
             &req,
             source_oid,
@@ -318,7 +288,7 @@ impl GitService {
         new_commit_oid: ObjectId,
         diff: RestoreDiff,
         unchanged_count: usize,
-        mut record: Option<(&str, ObjectId, PendingRestore)>,
+        record: Option<(&str, Option<ObjectId>)>,
         mut written_paths: Vec<String>,
         mut deleted_paths: Vec<String>,
     ) -> Result<RestoreResponse, GitError> {
@@ -507,21 +477,27 @@ impl GitService {
                 failed_writes,
                 failed_deletes,
             };
-            if let (Some((key, oid, pending)), Some(project)) = (record.as_mut(), project_dir) {
-                pending.retain_failures(project, &failure);
+            if let (Some((key, previous)), Some(project)) = (record, project_dir) {
+                let pending = PendingRestore::from_failure(project, &diff, &failure);
                 if let Err(err) = self
-                    .save_restore_writeback(account, key, Some(*oid), Some(pending))
+                    .save_restore_writeback(account, key, previous, Some(&pending))
                     .await
                 {
-                    // The earlier record still covers all unconfirmed paths.
-                    warn!("could not narrow pending restore writeback record: {err}");
+                    warn!("could not record partial restore writeback: {err}");
                 }
             }
             return Err(GitError::RestoreWritebackPartial(Box::new(failure)));
         }
-        if let Some((key, oid, _)) = record {
-            self.save_restore_writeback(account, key, Some(oid), None)
-                .await?;
+        if let Some((key, Some(oid))) = record {
+            if !oid.is_null() {
+                if let Err(err) = self
+                    .save_restore_writeback(account, key, Some(oid), None)
+                    .await
+                {
+                    // A subsequent retry can recognize the paths already at their target.
+                    warn!("could not clear partial restore writeback record: {err}");
+                }
+            }
         }
 
         Ok(RestoreResponse::Applied {

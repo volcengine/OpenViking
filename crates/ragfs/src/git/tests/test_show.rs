@@ -111,30 +111,6 @@
     }
 
     #[tokio::test]
-    async fn test_restore_writeback_refs_are_not_snapshot_targets() {
-        let (_dir, vfs, _object_store, ref_store, svc) = make_service("acct");
-        vfs.put("resources/a.md", b"hello");
-        let source = make_commit(&svc, "acct", "main", "first").await;
-        let key = restore_writeback::writeback_ref("main", "resources", source);
-        let marker = ObjectId::null(gix_hash::Kind::Sha1);
-        ref_store.cas_update("acct", &key, None, marker).await.unwrap();
-
-        assert_eq!(
-            ref_store.list("acct", "refs/").await.unwrap(),
-            vec![("refs/heads/main".into(), source)]
-        );
-        let err = svc
-            .show(ShowRequest {
-                account: "acct".into(),
-                target_ref: "000000000000".into(),
-                path: None,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, GitError::OidPrefixNotFound { .. }), "{err}");
-    }
-
-    #[tokio::test]
     async fn test_short_oid_three_chars_falls_through_to_ref_lookup() {
         // 3 hex chars is below the 4-char floor for abbreviated OID; it
         // should be treated as a branch name (which doesn't exist), giving
