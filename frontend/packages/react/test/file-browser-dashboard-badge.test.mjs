@@ -109,6 +109,11 @@ test('Wiki directory badges explain the file unit, cap 100, and hide unknown res
       view.container.querySelector('.ov-wiki-dashboard dd')?.textContent,
       '3',
     );
+    await view.render(
+      tree(fetch, target, { renderDashboard: () => h('p', null, 'Host view') }),
+    );
+    assert.match(view.container.textContent, /Host view/);
+    assert.equal(badge(view)?.textContent, '3');
     count = 100;
     await click(view.container.querySelector('[aria-label="Refresh"]'));
     assert.equal(badge(view)?.textContent, '99+');

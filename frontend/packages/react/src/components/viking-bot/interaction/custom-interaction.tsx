@@ -62,7 +62,8 @@ export function CustomInteraction({
             try {
               await onSubmit?.({ kind: 'custom', value });
             } catch (cause) {
-              if (lifetime.current) setFailure(cause);
+              if (lifetime.current)
+                setFailure(cause || new Error(labels.submitFailed));
             } finally {
               locked.current = false;
               if (lifetime.current) setPending(false);

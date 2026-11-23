@@ -104,3 +104,19 @@ test('async confirmation locks both actions, retains rows after failure and perm
     await view.unmount();
   }
 });
+
+test('confirmation reports a rejection without a reason', async () => {
+  const view = await mount(
+    h(VikingBotConfirmation, {
+      rows,
+      onConfirm: () => Promise.reject(),
+    }),
+  );
+  try {
+    await submit(view);
+    await settle();
+    assert.match(notificationContent().textContent, /Submission failed/);
+  } finally {
+    await view.unmount();
+  }
+});

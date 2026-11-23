@@ -12,7 +12,7 @@ export function useDashboardTab(
   const rendered = dashboard && options.renderDashboard?.(dashboard);
   const wikiQuery = useWikiDashboard({
     uri: dashboard?.uri ?? '',
-    enabled: dashboard?.kind === 'wiki' && rendered == null,
+    enabled: dashboard?.kind === 'wiki',
     requestOptions: options.requestOptions,
     refreshGeneration: options.generation + options.conflictRevision,
   });
