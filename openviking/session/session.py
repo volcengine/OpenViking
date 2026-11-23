@@ -85,7 +85,10 @@ from openviking.session.working_memory import (
     WM_SEVEN_SECTIONS,
     WM_UPDATE_TOOL,
 )
-from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    render_abstract_overview,
+)
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
@@ -2801,10 +2804,11 @@ class Session:
                                     archive_uri,
                                     summary,
                                     {
+                                        WM_TEMPLATE_DESCRIPTIONS_KEY: descriptions,
                                         "generated_by": {
                                             "component": "Session",
                                             "trigger": "archive_summary",
-                                        }
+                                        },
                                     },
                                 ),
                                 ctx=self.ctx,
@@ -2814,7 +2818,6 @@ class Session:
                                 {
                                     "overview_tokens": estimate_text_tokens(summary),
                                     "abstract_tokens": estimate_text_tokens(abstract),
-                                    wm.WM_TEMPLATE_DESCRIPTIONS_KEY: descriptions,
                                     "checkpoints": checkpoint_records,
                                 },
                             )
@@ -3344,11 +3347,12 @@ class Session:
             raise NotFoundError(archive_id, "session archive")
         overview = abstract = ""
         if state.state == "completed":
-            overview = await self._archives.read_overview(state.archive_uri)
+            overview_document = await self._archives.read_overview_document(state.archive_uri)
+            overview = overview_document.preview_body
             if not overview and state.done.get("enable_working_memory") is not False:
                 raise NotFoundError(archive_id, "session archive")
             if overview:
-                abstract = await self._archives.read_abstract(state.archive_uri, overview)
+                abstract = await self._archives.read_abstract(state.archive_uri, overview_document)
         result: Dict[str, Any] = {
             "archive_id": archive_id,
             "status": state.state,
@@ -4006,7 +4010,8 @@ class Session:
                     "output_language": output_language,
                 },
             )
-            template_descriptions = wm.rendered_wm_template_descriptions(prompt)
+            checkpoint_summaries = ()
+            input_material = formatted
             if checkpoint_requests:
                 response = await _complete(
                     prompt=prompt,
@@ -4032,32 +4037,27 @@ class Session:
                 working_memory = args.get("working_memory")
                 if not isinstance(working_memory, str) or not working_memory.strip():
                     raise ValueError("create_working_memory.working_memory is empty")
-                return _ArchiveSummaryResult(
-                    overview=await _fit_summary(
-                        first_overview=working_memory,
-                        input_material=f"{latest_archive_overview}\n\n{formatted}",
-                    ),
-                    checkpoint_summaries=wm.parse_required_checkpoint_summaries(
-                        args,
-                        len(checkpoint_requests),
-                    ),
-                    template_descriptions=template_descriptions,
+                checkpoint_summaries = wm.parse_required_checkpoint_summaries(
+                    args, len(checkpoint_requests)
                 )
-            first = await _complete(
-                prompt=prompt,
+                input_material = f"{latest_archive_overview}\n\n{formatted}"
+            else:
+                working_memory = str(await _complete(prompt=prompt) or "")
+            overview = await _fit_summary(
+                first_overview=working_memory,
+                input_material=input_material,
             )
             return _ArchiveSummaryResult(
-                overview=await _fit_summary(
-                    first_overview=str(first or ""), input_material=formatted
-                ),
-                template_descriptions=template_descriptions,
+                overview=overview,
+                checkpoint_summaries=checkpoint_summaries,
+                template_descriptions=wm.rendered_wm_template_descriptions(prompt, overview),
             )
 
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         input_material = f"{latest_archive_overview}\n\n{formatted}"
 
         async def _regenerate() -> _ArchiveSummaryResult:
-            fallback = await self._fallback_generate_wm_creation(
+            fallback, prompt = await self._fallback_generate_wm_creation(
                 formatted,
                 messages,
                 latest_archive_overview,
@@ -4065,10 +4065,11 @@ class Session:
                 session_window_context=session_window_context,
                 reasoning_effort=reasoning_effort,
             )
-            overview = await _fit_summary(
-                first_overview=fallback.overview, input_material=input_material
+            overview = await _fit_summary(first_overview=fallback, input_material=input_material)
+            return _ArchiveSummaryResult(
+                overview=overview,
+                template_descriptions=wm.rendered_wm_template_descriptions(prompt, overview),
             )
-            return replace(fallback, overview=overview)
 
         wm.wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
         reminders = wm.build_wm_section_reminders(latest_archive_overview)
@@ -4231,7 +4232,7 @@ class Session:
         output_language: str = "en",
         session_window_context: int = 128_000,
         reasoning_effort: Optional[str] = None,
-    ) -> _ArchiveSummaryResult:
+    ) -> tuple[str, str]:
         """Regenerate WM when a successful update response cannot be parsed.
 
         Passes ``prior_overview`` so the creation prompt can incorporate
@@ -4264,10 +4265,7 @@ class Session:
         if reasoning_effort is not None:
             kwargs["reasoning_effort"] = reasoning_effort
         overview = await vlm.get_completion_async(**kwargs)
-        return _ArchiveSummaryResult(
-            overview=str(overview or ""),
-            template_descriptions=wm.rendered_wm_template_descriptions(prompt),
-        )
+        return str(overview or ""), prompt
 
     async def _write_to_agfs_async(
         self,

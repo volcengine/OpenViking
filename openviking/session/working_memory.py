@@ -86,7 +86,6 @@ def wm_debug(msg: str, *args: Any) -> None:
 
 WM_DOCUMENT_TITLE = "# Working Memory"
 WM_CREATE_PROMPT_ID = "compression.ov_wm_v2"
-WM_TEMPLATE_DESCRIPTIONS_KEY = "wm_rendered_template_descriptions"
 
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
@@ -365,19 +364,20 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
 
 _WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
 _WM_BOLD_LABEL_RE = re.compile(r"^\*\*[^*]+\*\*:\s*")
-_WM_DESCRIPTION_DIRECTIVE_RE = re.compile(
-    r"^(?:please\s+(?:describe|record|summari[sz]e|write|list|include|provide)\b"
-    r"|(?:describe|summari[sz]e)\s+the\b"
-    r"|(?:describe|record|summari[sz]e|write|list|include|provide)\s+"
-    r"(?:the\s+)?(?:latest|current|session|conversation)\b"
-    r"|请(?:描述|记录|总结|概括|填写|列出|说明|简述))",
-    re.IGNORECASE,
-)
+_WM_DESCRIPTION_MARKER = "<!-- wm-description -->"
+_WM_EXAMPLE_MARKER = "<!-- wm-example -->"
+
+
+def _wm_section_lines(body: str) -> tuple[str, str]:
+    first, _, rest = body.partition("\n")
+    if first.strip() in {_WM_DESCRIPTION_MARKER, _WM_EXAMPLE_MARKER}:
+        first, _, rest = rest.lstrip().partition("\n")
+    return first.strip(), rest
 
 
 def _wm_section_first_lines(text: str) -> dict[str, str]:
     return {
-        header: body.partition("\n")[0].strip()
+        header: _wm_section_lines(body)[0]
         for header, body in parse_wm_sections(text).items()
         if body and header.removeprefix("## ") in WM_SEVEN_SECTIONS
     }
@@ -396,30 +396,44 @@ def _bundled_wm_template_descriptions() -> dict[str, str]:
     )
 
 
-def _wm_instruction_lines(text: str) -> dict[str, str]:
+def _known_bundled_descriptions() -> dict[str, str]:
     try:
-        bundled = _bundled_wm_template_descriptions()
+        return _bundled_wm_template_descriptions()
     except (OSError, ValueError, YAMLError):
-        bundled = {}
-    # Overrides may use plain text or emphasis for directions. Both styles
-    # can also contain real status, so formatting alone is insufficient.
-    return {
-        header: line
-        for header, line in _wm_section_first_lines(text).items()
-        if line == bundled.get(header) or _WM_DESCRIPTION_DIRECTIVE_RE.match(line.strip("*_"))
-    }
+        return {}
 
 
-def rendered_wm_template_descriptions(prompt: str) -> dict[str, str]:
-    """Identify directions in the actual rendered creation example."""
-    return _wm_instruction_lines(_wm_template_example(prompt))
+def rendered_wm_template_descriptions(prompt: str, overview: str) -> dict[str, str]:
+    """Match copied descriptions by position in the rendered template's example."""
+    if overview.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
+        return {}
+    sections = parse_wm_sections(overview)
+    bundled = _known_bundled_descriptions()
+    descriptions = {}
+    for header, example in parse_wm_sections(_wm_template_example(prompt)).items():
+        if header.removeprefix("## ") not in WM_SEVEN_SECTIONS:
+            continue
+        marker = example.partition("\n")[0].strip()
+        if marker == _WM_EXAMPLE_MARKER:
+            continue
+        first, _ = _wm_section_lines(example)
+        output_first, output_rest = _wm_section_lines(sections.get(header, ""))
+        if not first or first != output_first:
+            continue
+        # An unmarked custom line copied on its own can be a real state
+        # matching a legacy example-only template. Preserve it in that case.
+        if (
+            marker == _WM_DESCRIPTION_MARKER
+            or first == bundled.get(header)
+            or _first_wm_abstract_line(output_rest)
+        ):
+            descriptions[header] = first
+    return descriptions
 
 
 def recover_wm_template_descriptions(text: str) -> dict[str, str]:
-    """Recover recognizable directions from an archive without reliable metadata."""
-    if text.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
-        return {}
-    return _wm_instruction_lines(text)
+    """Recognize only known built-in descriptions in unannotated archives."""
+    return match_wm_template_descriptions(text, _known_bundled_descriptions())
 
 
 def wm_output_language(messages: list[Message], output_language_override: str | None = None) -> str:
@@ -456,10 +470,8 @@ def _first_wm_abstract_line(body: str) -> str:
 
 
 def _wm_section_abstract(body: str, description: str | None) -> str:
-    first_line, _, rest = body.partition("\n")
-    if first_line.strip() == description:
-        body = rest
-    return _first_wm_abstract_line(body)
+    first, rest = _wm_section_lines(body)
+    return _first_wm_abstract_line(rest if first == description else f"{first}\n{rest}")
 
 
 def extract_wm_abstract(text: str, descriptions: Mapping[str, str] | None = None) -> Optional[str]:

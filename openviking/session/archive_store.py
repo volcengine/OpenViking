@@ -26,11 +26,16 @@ from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.session.working_memory import (
     WM_DOCUMENT_TITLE,
-    WM_TEMPLATE_DESCRIPTIONS_KEY,
     extract_wm_abstract,
+    match_wm_template_descriptions,
     recover_wm_template_descriptions,
 )
-from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    AbstractOverviewDocument,
+    body_for_preview,
+    parse_abstract_overview,
+)
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -414,15 +419,21 @@ class ArchiveStore:
     # Sidecar readers
     # ------------------------------------------------------------------
 
+    async def read_overview_document(self, archive_uri: str) -> AbstractOverviewDocument:
+        """Read the archive overview body and its generator metadata together."""
+        try:
+            raw = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self._ctx)
+        except Exception:
+            raw = ""
+        return parse_abstract_overview(raw or "")
+
     async def read_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
-        try:
-            overview = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self._ctx)
-        except Exception:
-            return ""
-        return body_for_preview(overview or "")
+        return (await self.read_overview_document(archive_uri)).preview_body
 
-    async def read_abstract(self, archive_uri: str, overview: str = "") -> str:
+    async def read_abstract(
+        self, archive_uri: str, overview: AbstractOverviewDocument | None = None
+    ) -> str:
         """Read archive abstract text, falling back to summary extraction."""
         try:
             stored = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self._ctx)
@@ -430,18 +441,19 @@ class ArchiveStore:
         except Exception:
             abstract = ""
 
-        if not overview:
-            overview = await self.read_overview(archive_uri)
-        descriptions = await self._read_wm_template_descriptions(archive_uri, overview)
+        if overview is None:
+            overview = await self.read_overview_document(archive_uri)
+        descriptions = self._wm_template_descriptions(overview)
 
         # Legacy sidecars can retain a terminal newline in the body.
+        stored_line = abstract.rstrip("\r\n")
         if (
             abstract.strip()
-            and abstract.rstrip("\r\n") != WM_DOCUMENT_TITLE
-            and abstract.strip() not in descriptions.values()
+            and stored_line != WM_DOCUMENT_TITLE
+            and stored_line not in descriptions.values()
         ):
             return abstract
-        return extract_abstract_from_summary(overview, descriptions)
+        return extract_abstract_from_summary(overview.preview_body, descriptions)
 
     async def read_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
@@ -492,17 +504,14 @@ class ArchiveStore:
         except Exception:
             return {}
 
-    async def _read_wm_template_descriptions(
-        self, archive_uri: str, overview: str
-    ) -> dict[str, str]:
-        if overview.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
-            return {}
-        recorded = (await self.read_meta(archive_uri)).get(WM_TEMPLATE_DESCRIPTIONS_KEY)
-        if isinstance(recorded, dict):
-            return recorded
-        # Older metadata could label example content as a direction. Recover
-        # from the archived text when generation-time descriptions are unavailable.
-        return recover_wm_template_descriptions(overview)
+    @staticmethod
+    def _wm_template_descriptions(overview: AbstractOverviewDocument) -> dict[str, str]:
+        recorded = overview.metadata.get(WM_TEMPLATE_DESCRIPTIONS_KEY)
+        if recorded is not None:
+            return match_wm_template_descriptions(overview.preview_body, recorded)
+        # Earlier archives can contain a custom line or a real state with
+        # identical text. Only the built-in descriptions are known here.
+        return recover_wm_template_descriptions(overview.preview_body)
 
     # ------------------------------------------------------------------
     # Derived summaries
@@ -517,9 +526,9 @@ class ArchiveStore:
         for archive in await self.completed_refs(exclude_archive_uri, before_archive_index):
             if archive.get("context_reset"):
                 break
-            archive_uri = archive["archive_uri"]
-            if overview := await self.read_overview(archive_uri):
-                return overview, await self._read_wm_template_descriptions(archive_uri, overview)
+            overview = await self.read_overview_document(archive["archive_uri"])
+            if overview.preview_body:
+                return overview.preview_body, self._wm_template_descriptions(overview)
         return "", {}
 
     async def uncovered_messages(

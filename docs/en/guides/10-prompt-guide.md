@@ -486,9 +486,18 @@ Recommended approach:
 When overriding `compression.ov_wm_v2`, keep the canonical Working Memory headings
 in the output example. Put each fixed section description on the first nonblank
 line under its heading and keep it on a single line. Plain text and Markdown
-are both supported. Put sample content after the description. New archives
-record the matched descriptions so abstract recovery can skip them after a
-template change.
+are both supported. Put sample content after the description.
+
+If the model may return a custom description as the entire section, put
+`<!-- wm-description -->` on its own line before the description. For a section
+with sample content only, put `<!-- wm-example -->` before the sample. Ask the
+model to omit these comments from its response.
+
+New archives record matched descriptions in the L1 frontmatter so abstract
+recovery works after a template change or loss of `.meta.json`. Earlier archives
+without generation-time evidence can identify built-in descriptions by exact
+match. Their saved abstract is preserved when a custom line could be either a
+description or session content.
 
 Example directory:
 

@@ -20,7 +20,12 @@ from openviking.session import Session
 from openviking.session import working_memory as wm
 from openviking.session.extraction_batch import estimate_extraction_message_tokens
 from openviking.session.session import _estimate_summary_template_tokens
-from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    body_for_preview,
+    parse_abstract_overview,
+    render_abstract_overview,
+)
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.config import OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, get_openviking_config
@@ -781,6 +786,7 @@ class TestGetSessionArchive:
             "italic-example",
             "first-line-example",
             "first-line-italic-example",
+            "marked-example",
         ],
     )
     async def test_get_session_archive_returns_messages_and_working_memory(
@@ -804,6 +810,7 @@ class TestGetSessionArchive:
             "italic-example",
             "first-line-example",
             "first-line-italic-example",
+            "marked-example",
         }:
             description = "_Record the latest sign-off outcome here._"
             template_line = description
@@ -811,7 +818,9 @@ class TestGetSessionArchive:
                 template_line = "_Record the latest sign-off outcome in {{ output_language }}._"
                 description = "_Record the latest sign-off outcome in en._"
             elif summary_format == "plain-description":
-                template_line = description = "Record the latest sign-off outcome here."
+                template_line = description = "Capture the latest release status in one sentence."
+            elif summary_format == "description-only":
+                template_line = f"<!-- wm-description -->\n  {description}"
             elif summary_format == "example":
                 template_line += "\n  Sign-off complete."
             elif summary_format == "italic-example":
@@ -820,19 +829,23 @@ class TestGetSessionArchive:
                 template_line = description = "Sign-off complete."
             elif summary_format == "first-line-italic-example":
                 template_line = description = "_Sign-off complete._"
+            elif summary_format == "marked-example":
+                description = "Record the current release decision."
+                template_line = f"<!-- wm-example -->\n  {description}"
+                template = template.replace("{state}", "{state}\nThe rollout is pending.")
             _override_wm_state_template(monkeypatch, tmp_path, template_line)
             prompt = prompt_manager.render_prompt(
                 "compression.ov_wm_v2", {"messages": "", "output_language": "en"}
             )
             assert description in prompt
             if summary_format in {"custom", "plain-description", "description-only", "jinja"}:
-                _, _, example = prompt.partition("\n## Current State\n")
-                state_example = example.split("\n## Task & Goals", 1)[0].strip()
-                template = template.replace("{state}", state_example + "\n{state}")
+                template = template.replace("{state}", description + "\n{state}")
 
         states = ("Sign-off pending.", "Sign-off complete.")
         if summary_format in {"italic-example", "first-line-italic-example"}:
             states = tuple(f"_{state}_" for state in states)
+        if summary_format == "marked-example":
+            states = (states[0], description)
         if summary_format == "description-only":
             template = template.replace("Sign-off review", "{state}").removesuffix("\n{state}")
         overviews = iter(template.format(state=state) for state in states)
@@ -872,29 +885,23 @@ class TestGetSessionArchive:
 
         if summary_format in {"custom", "plain-description", "description-only", "jinja"}:
             vfs = session._viking_fs
-            legacy_uri = f"{session.uri}/history/archive_003"
-            await vfs.write_file(f"{legacy_uri}/.done", "{}", ctx=session.ctx)
-            await vfs.write_file(f"{legacy_uri}/messages.jsonl", "", ctx=session.ctx)
-            await vfs.write_file(
-                f"{legacy_uri}/.overview.md", template.format(state=states[0]), ctx=session.ctx
-            )
-            await vfs.write_file(f"{legacy_uri}/.abstract.md", description, ctx=session.ctx)
-            legacy = await session.get_session_archive("archive_003")
-            assert legacy["abstract"] == states[0]
-            assert await vfs.read_file(f"{legacy_uri}/.abstract.md", ctx=session.ctx) == description
+            first_archive = f"{session.uri}/history/archive_001"
+            second_archive = f"{session.uri}/history/archive_002"
+            first_abstract = f"{first_archive}/.abstract.md"
+            second_abstract = f"{second_archive}/.abstract.md"
+            await vfs.write_file(first_abstract, description, ctx=session.ctx)
+            await vfs.rm(second_abstract, ctx=session.ctx)
+            for archive_uri in (first_archive, second_archive):
+                await vfs.rm(f"{archive_uri}/.meta.json", ctx=session.ctx)
 
-            # Simulate a new process with template B reading the L1 written with template A.
+            # A different template and missing archive metadata should not affect L1 provenance.
             _override_wm_state_template(monkeypatch, tmp_path, "_Describe the acceptance result._")
-            legacy = await session.get_session_archive("archive_003")
-            assert legacy["abstract"] == states[0]
-            assert await vfs.read_file(f"{legacy_uri}/.abstract.md", ctx=session.ctx) == description
-            first_abstract = f"{session.uri}/history/archive_001/.abstract.md"
-            await vfs.rm(first_abstract, ctx=session.ctx)
             for index, expected in enumerate(states, 1):
                 historical = await session.get_session_archive(f"archive_{index:03d}")
                 assert historical["abstract"] == expected
                 assert historical["overview"] == template.format(state=expected)
-            assert not await vfs.exists(first_abstract, ctx=session.ctx)
+            assert await vfs.read_file(first_abstract, ctx=session.ctx) == description
+            assert not await vfs.exists(second_abstract, ctx=session.ctx)
 
     async def test_archive_abstract_uses_last_batch_rendered_description(
         self, client, monkeypatch, tmp_path
@@ -932,9 +939,10 @@ class TestGetSessionArchive:
         abstract_uri = f"{result['archive_uri']}/.abstract.md"
         vfs = session._viking_fs
         assert body_for_preview(await vfs.read_file(abstract_uri, ctx=session.ctx)) == english
-        assert (await session._archives.read_meta(result["archive_uri"]))[
-            wm.WM_TEMPLATE_DESCRIPTIONS_KEY
-        ] == {"## Current State": "_Record the latest sign-off outcome in en._"}
+        raw_overview = await vfs.read_file(f"{result['archive_uri']}/.overview.md", ctx=session.ctx)
+        assert parse_abstract_overview(raw_overview).metadata[WM_TEMPLATE_DESCRIPTIONS_KEY] == {
+            "## Current State": "_Record the latest sign-off outcome in en._"
+        }
         await vfs.rm(abstract_uri, ctx=session.ctx)
         assert (await session.get_session_archive("archive_001"))["abstract"] == english
 
@@ -999,14 +1007,22 @@ class TestGetSessionArchive:
         )
         return session, archive_uri
 
-    async def test_historical_example_keeps_saved_state(
-        self, historical_archive, monkeypatch, tmp_path
+    @pytest.mark.parametrize(
+        "state",
+        [
+            "Sign-off complete.",
+            "Record the current release decision.",
+            "Capture the latest release status in one sentence.",
+        ],
+    )
+    async def test_historical_archive_keeps_saved_state(
+        self, historical_archive, monkeypatch, tmp_path, state
     ):
         session, archive_uri = historical_archive
-        state = "Sign-off complete."
         _override_wm_state_template(monkeypatch, tmp_path, state)
         overview = (
             f"# Working Memory\n\n## Session Title\nSign-off review\n\n## Current State\n{state}"
+            "\nThe rollout is pending."
         )
         vfs = session._viking_fs
         await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
@@ -1014,22 +1030,29 @@ class TestGetSessionArchive:
         assert (await session.get_session_archive("archive_001"))["abstract"] == state
         await vfs.write_file(
             f"{archive_uri}/.meta.json",
-            json.dumps({"wm_template_descriptions": {"## Current State": state}}),
+            json.dumps(
+                {
+                    "wm_template_descriptions": {"## Current State": state},
+                    "wm_rendered_template_descriptions": {"## Current State": state},
+                }
+            ),
             ctx=session.ctx,
         )
         assert (await session.get_session_archive("archive_001"))["abstract"] == state
+        assert await vfs.read_file(f"{archive_uri}/.abstract.md", ctx=session.ctx) == state
 
     async def test_next_commit_reads_previous_overview_with_unreadable_messages(
         self, historical_archive, monkeypatch
     ):
         session, archive_uri = historical_archive
         vfs = session._viking_fs
-        overview = (
-            "# Working Memory\n\n## Current State\n"
-            "Record the latest sign-off outcome here.\nSign-off pending."
+        description = (
+            "_2-5 sentences MAX: What is the latest status? What is unresolved or pending? "
+            "Immediate next steps. NOT a fact dump._"
         )
+        overview = f"# Working Memory\n\n## Current State\n{description}\nSign-off pending."
         await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
-        await vfs.write_file(f"{archive_uri}/.abstract.md", "# Working Memory", ctx=session.ctx)
+        await vfs.write_file(f"{archive_uri}/.abstract.md", description, ctx=session.ctx)
         messages_uri = f"{archive_uri}/messages.jsonl"
         await vfs.rm(messages_uri, ctx=session.ctx)
         await vfs.mkdir(messages_uri, ctx=session.ctx)
