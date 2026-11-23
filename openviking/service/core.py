@@ -245,16 +245,18 @@ class OpenVikingService:
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
+        from openviking.server.dependencies import get_server_config
+
         config_file = OpenVikingConfigSingleton.get_config_file()
         account_store_cache_instance = None
-        if config_file is not None:
+        server_config = get_server_config()
+        if server_config is not None:
+            account_store = server_config.account_store
+        elif config_file is not None:
             server = load_json_config(config_file).get("server")
             account_store = server.get("account_store") if isinstance(server, dict) else None
         else:
-            from openviking.server.dependencies import get_server_config
-
-            server_config = get_server_config()
-            account_store = server_config.account_store if server_config is not None else None
+            account_store = None
         provider = (
             account_store.get("provider")
             if isinstance(account_store, dict)

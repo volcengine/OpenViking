@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from openviking.server.config import AccountStoreConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
@@ -86,6 +87,7 @@ def test_service_loads_account_store_runtime_from_config_file(monkeypatch) -> No
         "openviking.service.core.load_json_config",
         lambda path: {"server": {"account_store": account_store}},
     )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", None)
     monkeypatch.setattr(
         "openviking.service.core.build_runtime_ragfs_binding_config",
         lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
@@ -111,6 +113,37 @@ def test_service_uses_registered_account_store_runtime_without_config_file(monke
     monkeypatch.setattr(
         "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
         lambda: None,
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [(service._config, {"account_store_cache_instance": "accountstore"})]
+
+
+def test_service_prefers_registered_account_store_config_over_config_file(monkeypatch) -> None:
+    """Use normalized ServerConfig instead of stale Account Store file settings."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    server_config = SimpleNamespace(
+        account_store=AccountStoreConfig(
+            provider=" REDIS_MYSQL ",
+            params={"cache": {"instance": "accountstore"}},
+        )
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: Path("/tmp/ov.conf"),
+    )
+    monkeypatch.setattr(
+        "openviking.service.core.load_json_config",
+        lambda path: {"server": {"account_store": {"provider": "file"}}},
     )
     monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
     monkeypatch.setattr(
