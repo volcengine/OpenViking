@@ -2678,3 +2678,18 @@ class TestConsecutivePatchesSameURI:
         assert "gamma" in parsed["content"]
         assert mock_viking_fs.read_file.await_count == 2 + int(read_timeout)
         assert mock_viking_fs.write_file.await_count == 2
+
+
+@pytest.mark.parametrize("db", [None, MagicMock(has_queue_manager=False)])
+async def test_strict_file_embedding_requires_initialized_queue(db):
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.ROOT)
+    options = {
+        "viking_fs": object(),
+        "vikingdb": db,
+        "uri": "viking://user/alice/memories/entities/a.md",
+        "memory_type": "entities",
+        "ctx": ctx,
+    }
+    with pytest.raises(RuntimeError, match="embedding queue"):
+        await MemoryUpdater.refresh_file_embedding(**options, strict=True)
+    assert await MemoryUpdater.refresh_file_embedding(**options) is False

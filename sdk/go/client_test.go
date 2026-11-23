@@ -2505,14 +2505,11 @@ func TestFilesystemProcessingModes(t *testing.T) {
 					expected = mode
 				}
 				if r.Method == http.MethodDelete {
-					if r.URL.Query().Get("processing_mode") != expected {
+					if expected == "" && r.URL.Query().Has("processing_mode") || expected != "" && r.URL.Query().Get("processing_mode") != expected {
 						t.Errorf("query: %s", r.URL.RawQuery)
 					}
 				} else {
-					var body map[string]any
-					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-						t.Fatal(err)
-					}
+					body := readJSONBody(t, r)
 					value, present := body["processing_mode"]
 					if expected == "" && present || expected != "" && value != expected {
 						t.Errorf("body: %#v", body)
@@ -2524,26 +2521,15 @@ func TestFilesystemProcessingModes(t *testing.T) {
 			if err := client.Remove(context.Background(), "resources/a.md", &RemoveOptions{ProcessingMode: mode}); err != nil {
 				t.Fatal(err)
 			}
-			if err := client.MoveWithOptions(context.Background(), "resources/a.md", "resources/b.md", &MoveOptions{ProcessingMode: mode}); err != nil {
+			var err error
+			if mode == "" {
+				err = client.Move(context.Background(), "resources/a.md", "resources/b.md")
+			} else {
+				err = client.MoveWithOptions(context.Background(), "resources/a.md", "resources/b.md", &MoveOptions{ProcessingMode: mode})
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-func TestMoveLegacySignature(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if _, present := body["processing_mode"]; present {
-			t.Fatal("legacy Move must omit processing_mode")
-		}
-		writeOK(t, w, map[string]any{})
-	}))
-	defer closeServer()
-	if err := client.Move(context.Background(), "resources/a.md", "resources/b.md"); err != nil {
-		t.Fatal(err)
 	}
 }

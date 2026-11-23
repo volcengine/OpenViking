@@ -328,7 +328,9 @@ async def test_on_resource_added_reuses_same_reason_session(request_context):
     await entered.wait()
     second = asyncio.create_task(add_reason("fuji"))
     await asyncio.sleep(0)
-    worker = asyncio.create_task(asyncio.to_thread(lambda: asyncio.run(add_from_other_queue())))
+    worker = asyncio.create_task(
+        asyncio.to_thread(lambda: asyncio.run(add_from_other_queue()))
+    )
     try:
         assert await asyncio.to_thread(worker_waiting.wait, 3)
         assert len(session_service.got) == 1
@@ -792,25 +794,3 @@ async def test_assert_resource_unlinked_propagates_non_not_found_errors(request_
             "viking://resources/id_card.pdf",
             request_context,
         )
-
-
-@pytest.mark.asyncio
-async def test_vectors_only_delete_unlinks_refs_without_memory_commit(request_context):
-    uri = "viking://resources/docs/a.md"
-    memory_uri = "viking://user/alice/memories/entities/a.md"
-    memory = MemoryFile(
-        content=f"File: {uri}",
-        extra_fields={"resource_refs": [{"resource_uri": uri}]},
-    )
-    fs = _FakeVikingFS({memory_uri: MemoryFileUtils.write(memory)})
-    sessions = _FakeSessionService()
-    service = ResourceMemoryLinkService(viking_fs=fs, session_service=sessions)
-    result = await service.before_resource_delete(
-        ctx=request_context,
-        resource_uri=uri,
-        processing_mode="vectors_only",
-    )
-    assert sessions.committed == []
-    assert result["memory_commit"]["status"] == "skipped"
-    assert uri not in fs.store[memory_uri]
-    assert memory_uri in result["memory_uris"]

@@ -166,11 +166,14 @@ async def test_file_only_transfer_vectors_only_rebuilds_searchable_target(
     enqueue.assert_not_awaited()
 
 
-async def test_webdav_vectors_only_indexes_file_with_real_parent(client, service, monkeypatch):
+async def test_webdav_vectors_preserve_state_and_reindex_reverted_content(
+    client, service, monkeypatch
+):
     ctx = RequestContext(user=service.user, role=Role.ROOT)
     await service.fs.mkdir("viking://resources/webdav-mode", ctx)
     uri = "viking://resources/webdav-mode/a.md"
     await write_vectors(client, uri)
+    original_content = await service.viking_fs.read_file(uri, ctx=ctx)
     record = await service.vikingdb_manager.fetch_by_uri(uri, ctx=ctx)
     record = (await service.vikingdb_manager.get_strict([record["id"]], ctx=ctx))[0]
     record["abstract"] = "Existing file summary"
@@ -184,6 +187,7 @@ async def test_webdav_vectors_only_indexes_file_with_real_parent(client, service
 
     async def enqueue_after_counter_update(msg):
         if msg.context_data.get("uri") == uri:
+            assert msg.context_data["parent_uri"] == "viking://resources/webdav-mode"
             latest = (await service.vikingdb_manager.get_strict([record["id"]], ctx=ctx))[0]
             latest["active_count"] = 99
             await service.vikingdb_manager.upsert(latest, ctx=ctx)
@@ -205,6 +209,13 @@ async def test_webdav_vectors_only_indexes_file_with_real_parent(client, service
     assert updated["abstract"] == "Existing file summary"
     assert updated["created_at"].startswith("2020-01-01")
     assert updated["active_count"] == 99
+    fingerprint = await service.vikingdb_manager.get_l2_diff_records_by_uris([uri], ctx=ctx)
+    assert fingerprint[uri]["md5"] == content_md5(b"# WebDAV\n\nFile content")
+    reverted = await service.fs.write(
+        uri, original_content, ctx, wait=True, processing_mode="vectors_only"
+    )
+    assert reverted["vector_status"] == "complete"
+    assert reverted["queue_status"]["Embedding"]["processed"] == 1
     enqueue.assert_not_awaited()
 
 
@@ -229,30 +240,6 @@ async def test_single_file_restore_vectors_only_skips_semantics(client, service,
     await service.resources.wait_processed()
     assert await service.viking_fs.read_file(uri, ctx=ctx) == "# Test\n\nIndexed file body"
     assert len(await records(service, uri, ctx)) == 1
-    enqueue.assert_not_awaited()
-
-
-async def test_webdav_vector_fingerprint_allows_reverting_content(client, service, monkeypatch):
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    uri = "viking://resources/webdav-fingerprint/a.md"
-    await service.fs.write(uri, "old body", ctx, wait=True, processing_mode="vectors_only")
-    before = await service.vikingdb_manager.get_l2_diff_records_by_uris([uri], ctx=ctx)
-    assert before[uri]["md5"] == content_md5(b"old body")
-    enqueue = forbid_semantics(monkeypatch)
-    response = await client.put(
-        "/webdav/resources/webdav-fingerprint/a.md",
-        content="new body",
-        headers={"X-OpenViking-Processing-Mode": "vectors_only"},
-    )
-    assert response.status_code == 204, response.text
-    await service.resources.wait_processed()
-    updated = await service.vikingdb_manager.get_l2_diff_records_by_uris([uri], ctx=ctx)
-    assert updated[uri]["md5"] == content_md5(b"new body")
-    rewritten = await service.fs.write(
-        uri, "old body", ctx, wait=True, processing_mode="vectors_only"
-    )
-    assert rewritten["vector_status"] == "complete"
-    assert rewritten["queue_status"]["Embedding"]["processed"] == 1
     enqueue.assert_not_awaited()
 
 

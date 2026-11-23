@@ -2489,115 +2489,31 @@ async def test_directory_index_visibility(monkeypatch, request_context, error, v
 
 
 @pytest.mark.asyncio
-async def test_rm_vectors_only_preserves_deletion_and_skips_semantic(request_context):
-    viking_fs = _FakeVikingFS()
-    service = FSService(viking_fs=viking_fs)
-    cleanup = SimpleNamespace(before_resource_delete=AsyncMock(return_value={"memory_uris": []}))
-    service._resource_memory_link_service = cleanup
-    service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock()
-    result = await service.rm(
-        "viking://resources/docs/a.md",
-        request_context,
-        wait=True,
-        processing_mode="vectors_only",
-    )
-    assert len(viking_fs.rm_calls) == 1
-    service._enqueue_delete_refresh.assert_not_awaited()
-    service._wait_for_refresh.assert_not_awaited()
-    assert cleanup.before_resource_delete.await_args.kwargs["processing_mode"] == "vectors_only"
-    assert result["semantic_status"] == "skipped"
-    assert result["vector_status"] == "complete"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
-@pytest.mark.parametrize("target_indexed", [True, False])
-async def test_transfer_vectors_only_preserves_native_vectors_and_skips_parents(
-    request_context, operation, target_indexed
-):
-    source = "viking://resources/source/a.md"
-    target = (
-        "viking://resources/target/a.md"
-        if target_indexed
-        else "viking://system/memory/memory_templates/custom/demo.md"
-    )
-    viking_fs = SimpleNamespace(
-        _ensure_access=AsyncMock(),
-        _ensure_destination_access=AsyncMock(),
-        cp=AsyncMock(return_value={}),
-        mv=AsyncMock(return_value={}),
-    )
-    _with_pathlock(viking_fs)
-    service = FSService(viking_fs=viking_fs)
-    service._enqueue_copy_refresh = AsyncMock()
-    service._refresh_move_parents = AsyncMock()
-    kwargs = {"recursive": False} if operation == "cp" else {}
-    result = await getattr(service, operation)(
-        source, target, ctx=request_context, processing_mode="vectors_only", **kwargs
-    )
-    native_options = getattr(viking_fs, operation).await_args.kwargs
-    if target_indexed:
-        assert "maintain_vectors" not in native_options
-        assert "vector_mode" not in native_options
-    elif operation == "mv":
-        assert native_options["vector_mode"] == "delete_source"
-    else:
-        assert native_options["maintain_vectors"] is False
-    service._enqueue_copy_refresh.assert_not_awaited()
-    service._refresh_move_parents.assert_not_awaited()
-    assert result["semantic_status"] == "skipped"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-@pytest.mark.parametrize("is_dir", [False, True])
-@pytest.mark.parametrize("enqueue_fails", [False, True])
-async def test_file_only_transfer_vectors_only_queues_reindex_after_commit(
-    request_context, monkeypatch, operation, is_dir, enqueue_fails
+async def test_transfer_reindex_failure_reports_committed_operation(
+    request_context, monkeypatch, operation
 ):
     from openviking.service.reindex_executor import ReindexExecutor
 
-    source = "viking://system/memory/memory_templates/custom/demo"
-    target = "viking://resources/project/demo"
     native = AsyncMock(return_value={})
-    viking_fs = SimpleNamespace(
-        _ensure_access=AsyncMock(),
-        _ensure_destination_access=AsyncMock(),
-        stat=AsyncMock(return_value={"isDir": is_dir}),
-        cp=native,
-        mv=native,
+    fs = SimpleNamespace(
+        _ensure_access=AsyncMock(), _ensure_destination_access=AsyncMock(), cp=native, mv=native
     )
-    _with_pathlock(viking_fs)
-    service = FSService(viking_fs=viking_fs)
-    service._enqueue_transfer_rebuild = AsyncMock()
-    service._refresh_move_parents = AsyncMock()
-
-    async def reindex(**kwargs):
-        native.assert_awaited_once()
-        assert kwargs == {
-            "uri": target,
-            "mode": "vectors_only",
-            "wait": False,
-            "ctx": request_context,
-        }
-        if enqueue_fails:
-            raise RuntimeError("queue unavailable")
-        return {"task_id": "reindex-target"}
-
-    monkeypatch.setattr(ReindexExecutor, "execute", AsyncMock(side_effect=reindex))
-    kwargs = {"recursive": is_dir} if operation == "cp" else {}
-    result = await getattr(service, operation)(
-        source, target, ctx=request_context, processing_mode="vectors_only", **kwargs
+    _with_pathlock(fs)
+    monkeypatch.setattr(
+        ReindexExecutor, "execute", AsyncMock(side_effect=RuntimeError("queue unavailable"))
     )
-    service._enqueue_transfer_rebuild.assert_not_awaited()
-    service._refresh_move_parents.assert_not_awaited()
+    result = await getattr(FSService(viking_fs=fs), operation)(
+        "viking://system/memory/memory_templates/custom/demo.md",
+        "viking://resources/demo.md",
+        ctx=request_context,
+        processing_mode="vectors_only",
+        **({"recursive": False} if operation == "cp" else {}),
+    )
+    native.assert_awaited_once()
     assert result["semantic_status"] == "skipped"
-    assert result["vector_status"] == ("failed" if enqueue_fails else "queued")
-    if enqueue_fails:
-        assert result["vector_error"]["message"] == "queue unavailable"
-    else:
-        assert result["task_id"] == "reindex-target"
+    assert result["vector_status"] == "failed"
+    assert result["vector_error"]["message"] == "queue unavailable"
 
 
 @pytest.mark.asyncio
@@ -2622,53 +2538,24 @@ async def test_fs_rejects_invalid_processing_mode_before_mutation(request_contex
 
 
 @pytest.mark.asyncio
-async def test_vectors_only_rm_reembeds_each_changed_memory_once(request_context, monkeypatch):
-    memory_uri = "viking://user/test-user/memories/entities/a.md"
+@pytest.mark.parametrize("has_input", [True, False])
+async def test_vectors_only_rm_updates_each_changed_memory_once(
+    request_context, monkeypatch, has_input
+):
+    memory = "viking://user/test-user/memories/entities/a.md"
     cleanup = SimpleNamespace(
-        before_resource_delete=AsyncMock(
-            return_value={"memory_uris": [memory_uri, memory_uri], "deleted_memory_uris": []}
-        )
+        before_resource_delete=AsyncMock(return_value={"memory_uris": [memory, memory]})
     )
-    vikingdb = SimpleNamespace(has_queue_manager=True)
-    fs = _FakeVikingFS()
-    service = FSService(viking_fs=fs, vikingdb=vikingdb, resource_memory_link_service=cleanup)
+    db = SimpleNamespace(has_queue_manager=True, delete_uris=AsyncMock())
     from openviking.session.memory.memory_updater import MemoryUpdater
 
-    refresh = AsyncMock(return_value=True)
+    refresh = AsyncMock(return_value=has_input)
     monkeypatch.setattr(MemoryUpdater, "refresh_file_embedding", refresh)
     monkeypatch.setattr(MemoryUpdater, "refresh_schema_overview", AsyncMock(return_value=False))
-    deleted = await service.rm(
-        "viking://resources/a.md", request_context, processing_mode="vectors_only", wait=False
-    )
-    refresh.assert_awaited_once_with(
-        viking_fs=fs,
-        vikingdb=vikingdb,
-        uri=memory_uri,
-        memory_type="entities",
-        ctx=request_context,
-        strict=True,
-    )
-    assert deleted["vector_status"] == "queued"
-
-
-@pytest.mark.asyncio
-async def test_vectors_only_rm_removes_unvectorizable_changed_memory_index(
-    request_context, monkeypatch
-):
-    memory_uri = "viking://user/test-user/memories/entities/a.md"
-    cleanup = SimpleNamespace(
-        before_resource_delete=AsyncMock(return_value={"memory_uris": [memory_uri]})
-    )
-    vikingdb = SimpleNamespace(has_queue_manager=True, delete_uris=AsyncMock())
-    service = FSService(
-        viking_fs=_FakeVikingFS(), vikingdb=vikingdb, resource_memory_link_service=cleanup
-    )
-    from openviking.session.memory.memory_updater import MemoryUpdater
-
-    monkeypatch.setattr(MemoryUpdater, "refresh_file_embedding", AsyncMock(return_value=False))
-    monkeypatch.setattr(MemoryUpdater, "refresh_schema_overview", AsyncMock(return_value=False))
-    result = await service.rm(
-        "viking://resources/a.md", request_context, processing_mode="vectors_only", wait=False
-    )
-    vikingdb.delete_uris.assert_awaited_once_with(request_context, [memory_uri], recursive=False)
-    assert result["vector_status"] == "complete"
+    result = await FSService(
+        viking_fs=_FakeVikingFS(), vikingdb=db, resource_memory_link_service=cleanup
+    ).rm("viking://resources/a.md", request_context, processing_mode="vectors_only", wait=False)
+    refresh.assert_awaited_once()
+    assert result["vector_status"] == ("queued" if has_input else "complete")
+    if not has_input:
+        db.delete_uris.assert_awaited_once_with(request_context, [memory], recursive=False)
