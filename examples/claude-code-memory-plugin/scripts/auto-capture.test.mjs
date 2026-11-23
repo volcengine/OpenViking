@@ -580,7 +580,7 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
     JSON.stringify({ role: "assistant", content: "first task done" }),
   ];
   try {
-    await writeFile(transcriptPath, lines.join("\n"));
+    await writeFile(transcriptPath, `[\n${lines.join(",\n")}\n]\n`);
     await withMockOpenViking(async (req, res) => {
       const url = new URL(req.url, "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/health") {
@@ -609,7 +609,7 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
       await writeFile(transcriptPath, [
         ...lines,
         JSON.stringify({ role: "user", content: "follow-up from a background task" }),
-      ].join("\n"));
+      ].join("\r\n"));
       await runHook("subagent-start.mjs", input, env);
       await runHook("subagent-stop.mjs", input, env);
       // Stopping with nothing new must not commit an empty archive.

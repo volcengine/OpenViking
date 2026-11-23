@@ -8,6 +8,10 @@
  * the block walking, the part building and the capture filter are shared.
  */
 
+import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+
 import {
   collectToolNamesByIdFromEntries,
   extractPartsFromPayload,
@@ -36,9 +40,42 @@ export function parseTranscript(content) {
   const messages = [];
   for (const line of String(content || "").split("\n")) {
     if (!line.trim()) continue;
-    try { messages.push(JSON.parse(line)); } catch { /* skip */ }
+    const message = parseTranscriptLine(line);
+    if (message !== undefined) messages.push(message);
   }
   return messages;
+}
+
+function parseTranscriptLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read JSONL a line at a time, keeping the legacy JSON array fallback. */
+export async function readTranscriptTurns(path, cfg = {}) {
+  const input = createReadStream(path, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  const payloads = [];
+  let firstRecord = true;
+  try {
+    for await (const line of lines) {
+      const text = line.trim();
+      if (!text) continue;
+      if (firstRecord && text.startsWith("[")) {
+        return extractCaptureTurns(parseTranscript(await readFile(path, "utf8")), cfg);
+      }
+      firstRecord = false;
+      const payload = normalizeMessage(parseTranscriptLine(text), cfg);
+      if (payload && (payload.role || payload.content !== undefined)) payloads.push(payload);
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+  return extractNormalizedCaptureTurns(payloads);
 }
 
 function extractToolResultText(content) {
@@ -134,11 +171,15 @@ function textFromParts(parts) {
  * a caller can treat the position of a turn as a durable cursor.
  */
 export function extractCaptureTurns(messages, cfg = {}) {
-  const payloads = (messages || []).map((message) => normalizeMessage(message, cfg));
-  const toolNameById = collectToolNamesByIdFromEntries(payloads.filter(Boolean));
+  const payloads = (messages || []).map((message) => normalizeMessage(message, cfg)).filter(Boolean);
+  return extractNormalizedCaptureTurns(payloads);
+}
+
+function extractNormalizedCaptureTurns(payloads) {
+  const toolNameById = collectToolNamesByIdFromEntries(payloads);
   const turns = [];
   for (const payload of payloads) {
-    const role = payload && normalizeCaptureRole(payload.role);
+    const role = normalizeCaptureRole(payload.role);
     if (!role) continue;
     // Output was capped in normalizeBlock; capping it again here would eat the
     // "[truncated, N more chars]" note that cap just appended.
