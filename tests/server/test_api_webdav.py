@@ -26,7 +26,7 @@ def _webdav_path_from_uri(uri: str) -> str:
 
 async def test_webdav_get_content_length_uses_delivered_body_size(monkeypatch):
     class FakeFS:
-        async def stat(self, uri: str, ctx=None):
+        async def stat(self, uri: str, ctx=None, **_kwargs):
             assert uri == "viking://resources/scratch/notes.md"
             return {
                 "isDir": False,

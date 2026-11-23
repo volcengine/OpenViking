@@ -12,6 +12,20 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
 自定义模板也可以通过[模板管理 API](08-admin.md)发布。
 
+`rm`、`cp`、`mv` 支持 `processing_mode="semantic_and_vectors"`（默认）或 `"vectors_only"`。
+后者跳过 VLM 调用及 SemanticQueue，仍维护删除、复制、移动所需的文件向量和 URI 映射。
+已有摘要保持不变，父目录 `.abstract.md` / `.overview.md` 可能继续描述旧目录树；
+需要更新时执行 `reindex(mode="semantic_and_vectors")`。`wait` 只控制等待，不控制是否运行语义处理。
+
+FILE_ONLY→INDEXED 的 `vectors_only` 转移会对目标提交 reindex，返回 `task_id` 和
+`vector_status="queued"`。入队失败返回 `vector_status="failed"`、
+`vector_error`（`code`、`message`）；已提交的转移不会回滚。其他 vectors-only 转移返回
+`semantic_status="skipped"`，向量状态为已完成或跳过。共享资源别名
+`/api/v1/resources/cp`、`/api/v1/resources/mv`、`DELETE /api/v1/resources` 支持同一参数。
+`mkdir` 保持当前目录初始化行为。
+
+vectors-only 资源删除仍确定性清除 memory 引用，但跳过用于模型重写 memory 的 session extraction。
+
 ## API 参考
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
@@ -702,6 +716,7 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新，仍维护文件向量 |
 | uri | str | 是 | - | 要删除的 Viking URI |
 | wait | bool | 否 | False | 等待删除后的语义刷新完成 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
@@ -801,6 +816,7 @@ ov rm viking://resources/old.md [--recursive]
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新，仍维护文件向量 |
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI，必须包含新的文件名或目录名 |
 | recursive | bool | 否 | False | 源为目录时必须设为 `true` |
@@ -887,6 +903,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 跳过 VLM 和父目录语义刷新，仍维护文件向量 |
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI |
 
@@ -963,3 +980,23 @@ ov mv viking://resources/old-name/ viking://resources/new-name/
 - [Viking URI](../concepts/04-viking-uri.md) - URI 规范
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2
 - [Resources](02-resources.md) - 资源管理
+
+### 通过 SDK 跳过语义刷新
+
+```python
+client.rm("viking://resources/docs/old.md", processing_mode="vectors_only")
+client.mv("viking://resources/a.md", "viking://resources/b.md", processing_mode="vectors_only")
+```
+
+```typescript
+await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
+await client.move("viking://resources/a.md", "viking://resources/b.md", { processingMode: "vectors_only" });
+```
+
+```go
+err := client.MoveWithOptions(ctx, "viking://resources/a.md", "viking://resources/b.md",
+    &openviking.MoveOptions{ProcessingMode: "vectors_only"})
+```
+
+SDK 返回类型保持不变；需要转移 task ID 或索引状态时使用 HTTP 接口。省略模式或
+显式传入 `semantic_and_vectors` 时不序列化该字段，保持旧服务端兼容。

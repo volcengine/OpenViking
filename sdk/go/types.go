@@ -281,10 +281,16 @@ type TreePage struct {
 
 // RemoveOptions controls Remove.
 type RemoveOptions struct {
-	Recursive bool
-	Wait      bool
+	ProcessingMode string
+	Recursive      bool
+	Wait           bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout *float64
+}
+
+// MoveOptions controls optional post-transfer semantic processing.
+type MoveOptions struct {
+	ProcessingMode string
 }
 
 // WriteOptions controls Write.

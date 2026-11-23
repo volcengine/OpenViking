@@ -1962,3 +1962,31 @@ def test_compile_memory_omits_sources_without_losing_target():
         "to": "viking://~/memories",
         "skill": "memory",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize("operation", ["rm", "mv"])
+@pytest.mark.parametrize("mode", [None, "semantic_and_vectors", "vectors_only"])
+async def test_filesystem_processing_mode_serialization(client_type, operation, mode):
+    def handle(request):
+        payload = dict(request.url.params) if operation == "rm" else json.loads(request.content)
+        if mode == "vectors_only":
+            assert payload["processing_mode"] == mode
+        else:
+            assert "processing_mode" not in payload
+        return httpx.Response(200, json={"status": "ok", "result": {}})
+
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        args = ("resources/a.md",) if operation == "rm" else ("resources/a.md", "resources/b.md")
+        kwargs = {} if mode is None else {"processing_mode": mode}
+        result = getattr(client, operation)(*args, **kwargs)
+        if client_type is AsyncHTTPClient:
+            await result
+    finally:
+        await async_client.close()

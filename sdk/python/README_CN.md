@@ -487,3 +487,15 @@ v0.3.26
 2. 创建并推送类似 `python-sdk@0.1.3` 的 tag
 3. GitHub Actions 构建 `sdk/python`
 4. GitHub Actions 将 `openviking-sdk` 发布到 PyPI
+
+## 文件系统语义处理
+
+删除和移动默认采用 `semantic_and_vectors`。选择 `vectors_only` 可以跳过 VLM
+和父目录语义队列，同时保留文件向量清理及 URI 映射维护。父目录摘要可能保持旧内容，
+需要时执行语义 reindex。默认模式不会出现在 HTTP 参数中，兼容旧服务端；返回类型不变。
+需要转移 task ID 或索引状态时使用 HTTP。
+
+```python
+client.rm("viking://resources/docs/old.md", processing_mode="vectors_only")
+client.mv("viking://resources/a.md", "viking://resources/b.md", processing_mode="vectors_only")
+```

@@ -13,6 +13,23 @@ are synchronized by the service. API writes, appends, deletes, moves, and overwr
 cannot modify them or bypass the restriction through their parent directories.
 Custom templates can also be published through the [template management API](08-admin.md).
 
+`rm`, `cp`, and `mv` accept `processing_mode="semantic_and_vectors"` (default) or `"vectors_only"`.
+The latter skips VLM calls and SemanticQueue work while preserving deletion, copy, and move
+maintenance of file vectors and URI mappings. It preserves existing summaries, so parent
+`.abstract.md` / `.overview.md` can describe the old tree until a later
+`reindex(mode="semantic_and_vectors")`. `wait` controls waiting, not whether semantics run.
+
+For FILE_ONLY→INDEXED transfers, `vectors_only` schedules a target-scoped reindex and returns
+`task_id` with `vector_status="queued"`. An enqueue failure returns `vector_status="failed"`
+and `vector_error` (`code`, `message`); the transfer is already committed. Other vectors-only
+transfers report `semantic_status="skipped"` and the completed or skipped vector status.
+The shared-resource aliases `/api/v1/resources/cp`, `/api/v1/resources/mv`, and
+`DELETE /api/v1/resources` support the same parameter. `mkdir` keeps its current directory
+initialization behavior.
+
+Vectors-only resource deletion still unlinks memory references deterministically,
+but skips the session memory extraction that would otherwise rewrite those memories with a VLM.
+
 ## API Reference
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
@@ -676,6 +693,7 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 | uri | str | Yes | - | Viking URI to remove |
 | wait | bool | No | False | Wait for the semantic refresh after deletion |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
@@ -775,6 +793,7 @@ Files use Exact Locks on both paths; directories use Tree Locks on both subtrees
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI, including the new file or directory name |
 | recursive | bool | No | False | Required when the source is a directory |
@@ -861,6 +880,7 @@ Files use two Exact Locks; directories use Tree Locks on the source and destinat
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
+| processing_mode | string | No | `semantic_and_vectors` | `vectors_only` skips VLM and parent semantic refresh while maintaining file vectors |
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI |
 
@@ -937,3 +957,24 @@ On case-insensitive `localfs`, both `from_uri` and `to_uri` may be affected by c
 - [Viking URI](../concepts/04-viking-uri.md) - URI specification
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2
 - [Resources](02-resources.md) - Resource management
+
+### Skip semantic refresh through SDKs
+
+```python
+client.rm("viking://resources/docs/old.md", processing_mode="vectors_only")
+client.mv("viking://resources/a.md", "viking://resources/b.md", processing_mode="vectors_only")
+```
+
+```typescript
+await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
+await client.move("viking://resources/a.md", "viking://resources/b.md", { processingMode: "vectors_only" });
+```
+
+```go
+err := client.MoveWithOptions(ctx, "viking://resources/a.md", "viking://resources/b.md",
+    &openviking.MoveOptions{ProcessingMode: "vectors_only"})
+```
+
+SDK return types are unchanged. Use HTTP directly when you need the transfer task ID or
+indexing status. Omitted and explicit `semantic_and_vectors` modes are not serialized,
+so existing calls remain compatible with older servers.

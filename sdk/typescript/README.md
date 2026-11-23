@@ -143,3 +143,16 @@ await client.importOVPack(packPath, "viking://resources", {
 ## Release
 
 Pushing a tag such as `typescript-sdk@0.1.0` publishes the matching package version automatically. The same workflow can be started manually from GitHub Actions. The first publish uses the repository `NPM_TOKEN` with `@openviking` scope access; after the package exists, configure npm Trusted Publishing for repository `volcengine/OpenViking` and workflow `typescript-sdk-release.yml` so subsequent publishes use OIDC like `@openviking/cli`.
+
+## Filesystem semantic processing
+
+Remove and move calls default to `semantic_and_vectors`. Use `vectors_only` to skip
+VLM and parent semantic queues while preserving file vector cleanup and URI mapping.
+Parent summaries can remain stale until a later semantic reindex. Default modes are
+omitted from HTTP payloads for older-server compatibility; return types stay unchanged.
+Use HTTP directly when you need a transfer task ID or indexing status.
+
+```ts
+await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
+await client.move("viking://resources/a.md", "viking://resources/b.md", { processingMode: "vectors_only" });
+```

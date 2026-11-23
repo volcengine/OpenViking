@@ -131,3 +131,15 @@ await client.importOVPack(packPath, "viking://resources", {
 ## 发布
 
 推送 `typescript-sdk@0.1.0` 格式的 tag 会自动发布对应版本，也可以从 GitHub Actions 手动触发同一 workflow。首次发布使用具备 `@openviking` scope 权限的仓库 `NPM_TOKEN`；包创建后，需要在 npm 为仓库 `volcengine/OpenViking` 和 workflow `typescript-sdk-release.yml` 配置 Trusted Publisher，后续发布即可像 `@openviking/cli` 一样使用 OIDC。
+
+## 文件系统语义处理
+
+删除和移动默认采用 `semantic_and_vectors`。选择 `vectors_only` 可以跳过 VLM
+和父目录语义队列，同时保留文件向量清理及 URI 映射维护。父目录摘要可能保持旧内容，
+需要时执行语义 reindex。默认模式不会出现在 HTTP 参数中，兼容旧服务端；返回类型不变。
+需要转移 task ID 或索引状态时使用 HTTP。
+
+```ts
+await client.remove("viking://resources/docs/old.md", { processingMode: "vectors_only" });
+await client.move("viking://resources/a.md", "viking://resources/b.md", { processingMode: "vectors_only" });
+```

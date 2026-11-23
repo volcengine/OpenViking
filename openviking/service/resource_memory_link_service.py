@@ -23,6 +23,11 @@ from openviking.core.namespace import (
 from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import TextPart
 from openviking.observability.log_safety import safe_uri_for_log
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+)
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_updater import MemoryUpdateResult
@@ -352,6 +357,7 @@ class ResourceMemoryLinkService:
         ctx: RequestContext,
         resource_uri: str,
         recursive: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         """Commit mutable memory updates and unlink stale references to a deleted resource."""
         if context_type_for_uri(resource_uri) != "resource":
@@ -366,21 +372,24 @@ class ResourceMemoryLinkService:
             return {"status": "no_references", "memory_uris": []}
 
         memory_uris = self._memory_uris_from_matches(matches)
-        try:
-            commit_result = await self.on_resource_deleted(
-                ctx=ctx,
-                resource_uri=resource_uri,
-                memory_uris=memory_uris,
-                recursive=recursive,
-            )
-        except Exception as exc:
-            logger.info(
-                "resource deletion memory commit failed; continuing reference cleanup uri=%s error_type=%s",
-                safe_uri_for_log(resource_uri),
-                type(exc).__name__,
-                extra={"degraded": True, "error_type": type(exc).__name__},
-            )
-            commit_result = {"status": "failed", "error": str(exc)}
+        if processing_mode == VECTORS_ONLY:
+            commit_result = {"status": "skipped", "reason": "vectors_only"}
+        else:
+            try:
+                commit_result = await self.on_resource_deleted(
+                    ctx=ctx,
+                    resource_uri=resource_uri,
+                    memory_uris=memory_uris,
+                    recursive=recursive,
+                )
+            except Exception as exc:
+                logger.info(
+                    "resource deletion memory commit failed; continuing reference cleanup uri=%s error_type=%s",
+                    safe_uri_for_log(resource_uri),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
+                commit_result = {"status": "failed", "error": str(exc)}
 
         post_commit_matches = await self._find_referencing_memories(
             ctx=ctx,

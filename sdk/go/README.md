@@ -359,3 +359,17 @@ resource, reads and updates it, runs semantic retrieval, exercises watch and
 skill management APIs, then creates a multi-message session, commits it,
 polls the memory extraction task, and searches both user and peer-scoped
 memories.
+
+## Filesystem semantic processing
+
+Remove and move calls default to `semantic_and_vectors`. Use `vectors_only` to skip
+VLM and parent semantic queues while preserving file vector cleanup and URI mapping.
+Parent summaries can remain stale until a later semantic reindex. Default modes are
+omitted from HTTP payloads for older-server compatibility; return types stay unchanged.
+Use HTTP directly when you need a transfer task ID or indexing status.
+
+```go
+err := client.MoveWithOptions(ctx, "viking://resources/a.md", "viking://resources/b.md",
+    &openviking.MoveOptions{ProcessingMode: "vectors_only"})
+// RemoveOptions also accepts ProcessingMode.
+```

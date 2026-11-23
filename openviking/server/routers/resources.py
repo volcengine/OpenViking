@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Literal, Optional
+from typing import Annotated, Any, Dict, Literal, Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_content_target_uri, validate_request_viking_uri
+from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -62,7 +63,12 @@ async def copy_resource(
     from_uri = _validate_shared_resource_uri(request.from_uri, _ctx, field_name="from_uri")
     to_uri = _validate_shared_resource_uri(request.to_uri, _ctx, field_name="to_uri")
     return await copy_filesystem_entry(
-        CpRequest(from_uri=from_uri, to_uri=to_uri, recursive=request.recursive),
+        CpRequest(
+            from_uri=from_uri,
+            to_uri=to_uri,
+            recursive=request.recursive,
+            processing_mode=request.processing_mode,
+        ),
         _ctx=_ctx,
     )
 
@@ -76,7 +82,7 @@ async def move_resource(
     from_uri = _validate_shared_resource_uri(request.from_uri, _ctx, field_name="from_uri")
     to_uri = _validate_shared_resource_uri(request.to_uri, _ctx, field_name="to_uri")
     return await move_filesystem_entry(
-        MvRequest(from_uri=from_uri, to_uri=to_uri),
+        MvRequest(from_uri=from_uri, to_uri=to_uri, processing_mode=request.processing_mode),
         _ctx=_ctx,
     )
 
@@ -86,6 +92,7 @@ async def delete_resource(
     uri: str = Query(..., description="URI below viking://resources/"),
     recursive: bool = Query(False, description="Remove a directory recursively"),
     wait: bool = Query(True, description="Wait for semantic index cleanup"),
+    processing_mode: Annotated[ProcessingMode, Query()] = DEFAULT_PROCESSING_MODE,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete one shared resource without exposing general filesystem deletion."""
@@ -97,6 +104,11 @@ async def delete_resource(
         uri=resolved,
         recursive=recursive,
         wait=wait,
+        **(
+            {"processing_mode": processing_mode}
+            if processing_mode != DEFAULT_PROCESSING_MODE
+            else {}
+        ),
         _ctx=_ctx,
     )
 

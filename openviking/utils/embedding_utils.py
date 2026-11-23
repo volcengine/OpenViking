@@ -832,6 +832,29 @@ async def index_resource(
     viking_fs = get_viking_fs()
     context_type = context_type_for_uri(uri)
 
+    stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+    if not stat.get("isDir", stat.get("is_dir", False)):
+        parent = VikingURI(uri).parent
+        if parent is None:
+            raise ValueError(f"file has no parent URI: {uri}")
+        vector_store = viking_fs._get_vector_store()
+        existing = (await vector_store.fetch_by_uri(uri, ctx=ctx) if vector_store else None) or {}
+        await vectorize_file(
+            file_path=uri,
+            summary_dict={
+                "name": uri.rsplit("/", 1)[-1],
+                "summary": existing.get("abstract") or "",
+            },
+            parent_uri=parent.uri,
+            context_type=context_type,
+            ctx=ctx,
+            ingest_options=ingest_options,
+            scalar_override=(
+                {"created_at": existing["created_at"]} if existing.get("created_at") else None
+            ),
+        )
+        return
+
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"
     overview_uri = f"{uri}/.overview.md"

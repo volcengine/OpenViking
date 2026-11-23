@@ -221,3 +221,16 @@ go run ./examples/basic_usage
 cd sdk/go
 go test ./...
 ```
+
+## 文件系统语义处理
+
+删除和移动默认采用 `semantic_and_vectors`。选择 `vectors_only` 可以跳过 VLM
+和父目录语义队列，同时保留文件向量清理及 URI 映射维护。父目录摘要可能保持旧内容，
+需要时执行语义 reindex。默认模式不会出现在 HTTP 参数中，兼容旧服务端；返回类型不变。
+需要转移 task ID 或索引状态时使用 HTTP。
+
+```go
+err := client.MoveWithOptions(ctx, "viking://resources/a.md", "viking://resources/b.md",
+    &openviking.MoveOptions{ProcessingMode: "vectors_only"})
+// RemoveOptions also accepts ProcessingMode.
+```

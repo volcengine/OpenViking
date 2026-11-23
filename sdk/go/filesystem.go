@@ -193,15 +193,27 @@ func (c *Client) Remove(ctx context.Context, uri string, opts *RemoveOptions) er
 	query.Set("uri", NormalizeURI(uri))
 	queryBool(query, "recursive", opts.Recursive)
 	queryBool(query, "wait", opts.Wait)
+	if opts.ProcessingMode != "" && opts.ProcessingMode != "semantic_and_vectors" {
+		query.Set("processing_mode", opts.ProcessingMode)
+	}
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/fs", query, nil, nil)
 }
 
 // Move moves a URI to another URI.
 func (c *Client) Move(ctx context.Context, fromURI, toURI string) error {
-	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mv", nil, map[string]any{
+	return c.MoveWithOptions(ctx, fromURI, toURI, nil)
+}
+
+// MoveWithOptions moves a URI while optionally skipping parent semantic refresh.
+func (c *Client) MoveWithOptions(ctx context.Context, fromURI, toURI string, opts *MoveOptions) error {
+	payload := map[string]any{
 		"from_uri": NormalizeURI(fromURI),
 		"to_uri":   NormalizeURI(toURI),
-	}, nil)
+	}
+	if opts != nil && opts.ProcessingMode != "semantic_and_vectors" {
+		setString(payload, "processing_mode", opts.ProcessingMode)
+	}
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mv", nil, payload, nil)
 }
 
 // Read reads file content.

@@ -43,6 +43,12 @@ from openviking.pyagfs.exceptions import (
     AGFSNotADirectoryError,
     AGFSNotFoundError,
 )
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+    normalize_processing_mode,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
@@ -682,19 +688,31 @@ class FSService:
         directory_uri = VikingURI(abstract_uri).parent.uri
         return directory_uri, abstract_uri
 
+    @staticmethod
+    def _validate_processing_mode(mode: str) -> ProcessingMode:
+        try:
+            return normalize_processing_mode(mode)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+
     async def rm(
         self,
         uri: str,
         ctx: RequestContext,
         recursive: bool = False,
         wait: bool = False,
+        *,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Optional[Dict[str, Any]]:
+        processing_mode = self._validate_processing_mode(processing_mode)
+
         async def execute() -> Optional[Dict[str, Any]]:
             return await self._rm(
                 uri,
                 ctx,
                 recursive=recursive,
                 wait=wait,
+                processing_mode=processing_mode,
             )
 
         result, _task_id = await run_tracked_operation(
@@ -713,6 +731,8 @@ class FSService:
         ctx: RequestContext,
         recursive: bool = False,
         wait: bool = False,
+        *,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Optional[Dict[str, Any]]:
         """Remove content and refresh derived data without changing Compile metadata."""
         viking_fs = self._ensure_initialized()
@@ -727,7 +747,11 @@ class FSService:
             return result
 
         context_type = context_type_for_uri(uri)
-        refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
+        refresh_parent_uri = (
+            self._semantic_refresh_parent_uri(uri, context_type)
+            if processing_mode != VECTORS_ONLY
+            else None
+        )
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
         parent_uri = VikingURI(uri).parent
         if parent_uri is not None and await viking_fs.exists(parent_uri.uri, ctx=ctx):
@@ -787,6 +811,9 @@ class FSService:
                 )
             if queue_status is not None:
                 result["queue_status"] = queue_status
+        if processing_mode == VECTORS_ONLY and isinstance(result, dict):
+            result["semantic_status"] = "skipped"
+            result["vector_status"] = "complete"
         return result
 
     @staticmethod
@@ -1044,15 +1071,20 @@ class FSService:
         to_uri: str,
         recursive: bool,
         ctx: RequestContext,
+        *,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         """Copy a resource without exposing a cancellable partial transaction."""
+        processing_mode = self._validate_processing_mode(processing_mode)
         from_uri = VikingFS._normalize_transfer_uri(from_uri)
         to_uri = VikingFS._normalize_transfer_uri(to_uri)
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
         validate_account_memory_template_transfer(to_uri)
         return await self._finish_transfer_after_caller_cancel(
-            self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
+            self._cp_and_refresh(
+                from_uri, to_uri, recursive=recursive, ctx=ctx, processing_mode=processing_mode
+            ),
             operation="copy",
         )
 
@@ -1063,6 +1095,7 @@ class FSService:
         *,
         recursive: bool,
         ctx: RequestContext,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         """Copy and refresh as one cancellation-safe unit."""
         viking_fs = self._ensure_initialized()
@@ -1086,6 +1119,13 @@ class FSService:
         result.setdefault("from", from_uri)
         result.setdefault("to", to_uri)
         result.setdefault("recursive", recursive)
+        if processing_mode == VECTORS_ONLY:
+            result["semantic_status"] = "skipped"
+            result["vector_status"] = "complete" if target_indexed else "skipped"
+            if not source_indexed and target_indexed:
+                result.update(await self._enqueue_transfer_vectors(to_uri, ctx))
+            return result
+
         context_type = context_type_for_uri(to_uri)
         if not source_indexed and target_indexed:
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
@@ -1148,15 +1188,23 @@ class FSService:
             result["semantic_error"] = str(exc)
         return result
 
-    async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
+    async def mv(
+        self,
+        from_uri: str,
+        to_uri: str,
+        ctx: RequestContext,
+        *,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+    ) -> Dict[str, Any]:
         """Move a resource without exposing a cancellable partial transaction."""
+        processing_mode = self._validate_processing_mode(processing_mode)
         from_uri = VikingFS._normalize_transfer_uri(from_uri)
         to_uri = VikingFS._normalize_transfer_uri(to_uri)
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
         validate_account_memory_template_transfer(to_uri)
-        await self._finish_transfer_after_caller_cancel(
-            self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
+        return await self._finish_transfer_after_caller_cancel(
+            self._mv_and_refresh(from_uri, to_uri, ctx=ctx, processing_mode=processing_mode),
             operation="move",
         )
 
@@ -1166,7 +1214,8 @@ class FSService:
         to_uri: str,
         *,
         ctx: RequestContext,
-    ) -> None:
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+    ) -> Dict[str, Any]:
         """Move content and Watch state, migrate exact-target Compile settings, and refresh parents."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
@@ -1249,6 +1298,17 @@ class FSService:
                     raise
 
         await move()
+        result: Dict[str, Any] = {
+            "from": from_uri,
+            "to": to_uri,
+            "semantic_status": "skipped",
+            "vector_status": "complete" if source_indexed and target_indexed else "skipped",
+        }
+        if processing_mode == VECTORS_ONLY:
+            if not source_indexed and target_indexed:
+                result.update(await self._enqueue_transfer_vectors(to_uri, ctx))
+            return result
+
         rebuild_target = not source_indexed and target_indexed
         if rebuild_target:
             await self._refresh_move_parents(
@@ -1265,14 +1325,18 @@ class FSService:
             )
             if rebuild_root_uri:
                 try:
-                    await self._enqueue_transfer_rebuild(
+                    result["semantic_status"] = await self._enqueue_transfer_rebuild(
                         root_uri=rebuild_root_uri,
                         target_uri=to_uri,
                         recursive=target_is_dir,
                         context_type=context_type,
                         ctx=ctx,
                     )
+                    result["vector_status"] = result["semantic_status"]
                 except Exception as exc:
+                    result["vector_status"] = "failed"
+                    result["semantic_status"] = "failed"
+                    result["semantic_error"] = str(exc)
                     logger.info(
                         "Move committed with failed semantic rebuild",
                         extra={
@@ -1282,7 +1346,42 @@ class FSService:
                         },
                     )
         else:
-            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+            result["semantic_status"] = (
+                await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+                or "skipped"
+            )
+        return result
+
+    async def _enqueue_transfer_vectors(
+        self, target_uri: str, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        """Report post-commit indexing failure without undoing a completed transfer."""
+        from openviking.service.reindex_executor import ReindexExecutor
+
+        try:
+            queued = await ReindexExecutor().execute(
+                uri=target_uri,
+                mode=VECTORS_ONLY,
+                wait=False,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.info(
+                "Transfer committed with failed vector rebuild",
+                extra={
+                    "target_id": safe_uri_for_log(target_uri),
+                    "error_type": type(exc).__name__,
+                    "degraded": True,
+                },
+            )
+            return {
+                "vector_status": "failed",
+                "vector_error": {
+                    "code": getattr(exc, "code", "INTERNAL"),
+                    "message": str(exc),
+                },
+            }
+        return {"vector_status": "queued", "task_id": queued["task_id"]}
 
     @asynccontextmanager
     async def _transfer_scope(
@@ -1364,10 +1463,10 @@ class FSService:
         to_uri: str,
         ctx: RequestContext,
         refresh_target: bool = True,
-    ) -> None:
+    ) -> str:
         """Queue transfer refreshes for both affected parents after mv commits."""
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
-            return
+            return "skipped"
 
         source_context_type = context_type_for_uri(from_uri)
         target_context_type = context_type_for_uri(to_uri)
@@ -1381,9 +1480,10 @@ class FSService:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
         failed_refreshes = 0
+        queued_refreshes = 0
         for parent_uri, changed_uri, change_kind, context_type in refreshes:
             try:
-                await self._enqueue_copy_refresh(
+                status = await self._enqueue_copy_refresh(
                     root_uri=parent_uri,
                     source_uri=from_uri,
                     copied_uri=changed_uri,
@@ -1391,6 +1491,7 @@ class FSService:
                     context_type=context_type,
                     ctx=ctx,
                 )
+                queued_refreshes += status == "queued"
             except Exception as exc:
                 failed_refreshes += 1
                 logger.debug(
@@ -1407,6 +1508,8 @@ class FSService:
                 "Move committed with incomplete parent semantic refresh",
                 extra={"total": len(refreshes), "failed": failed_refreshes, "degraded": True},
             )
+
+        return "failed" if failed_refreshes else "queued" if queued_refreshes else "skipped"
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
@@ -2707,8 +2810,10 @@ class FSService:
         ctx: RequestContext,
         *,
         dry_run: bool = False,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
         """Restore and snapshot content; a supplied commit also rejects uncommitted edits."""
+        processing_mode = self._validate_processing_mode(processing_mode)
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
@@ -2775,6 +2880,11 @@ class FSService:
             use_snapshot=True,
             tags=conflict_tags,
             tag_mode="append",
+            **(
+                {"processing_mode": processing_mode}
+                if processing_mode != DEFAULT_PROCESSING_MODE
+                else {}
+            ),
         )
         return result
 

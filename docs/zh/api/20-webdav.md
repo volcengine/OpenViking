@@ -44,9 +44,14 @@ OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层
 | 请求头 | 使用方法 | 必填 | 说明 |
 |--------|----------|------|------|
 | `X-API-Key` | 除 `OPTIONS` 外 | 取决于鉴权模式 | OpenViking API Key；trusted 模式还可能需要身份头 |
+| `X-OpenViking-Processing-Mode` | `PUT`、`DELETE`、`MOVE` | 否 | 默认 `semantic_and_vectors`，可选 `vectors_only`；非法值在写入前返回 400 |
 | `Depth` | `PROPFIND` | 否 | `0` 仅返回目标；其他值按一级深度处理 |
 | `Destination` | `MOVE` | 是 | `/webdav/resources` 下的目标路径 |
 | `Overwrite` | `MOVE` | 否 | 默认 `T`；设为 `F` 时不覆盖已有目标 |
+
+设置 `vectors_only` 后，`PUT` 仍保存文本并提交文件向量；`DELETE`、`MOVE`
+仍维护向量和 URI 映射，但不提交语义处理，也不重算父目录摘要。已有摘要可能过期，
+需要时显式执行语义 reindex。该请求头不改变 `MKCOL` 的目录初始化行为。
 
 ### 查询目录
 

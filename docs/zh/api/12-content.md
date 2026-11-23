@@ -210,6 +210,10 @@ ov read viking://resources/docs/api.md
 
 写入文件，并自动刷新相关语义与向量。
 
+普通 resource/skill 正文写入的 `vectors_only` 跳过 VLM 和 SemanticQueue，
+保留已有摘要，因此摘要可能过期。memory 写入及已有语义 sidecar 的编辑继续采用
+专用 overview/embedding 维护。`defer_processing=true` 优先，跳过全部索引处理。
+
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
@@ -219,6 +223,7 @@ ov read viking://resources/docs/api.md
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | use_snapshot | bool | 否 | `false` | 在内容锁内为写入文件保存快照|
+| processing_mode | string | 否 | `semantic_and_vectors` | `vectors_only` 维护文件向量，不重算 resource/skill 摘要或父目录语义 |
 | defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，不派发语义或向量处理；FILE_ONLY 处理行为不变 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |

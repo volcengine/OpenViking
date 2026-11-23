@@ -2495,3 +2495,55 @@ func TestMemoryCompileInputOmitsAbsentSources(t *testing.T) {
 		t.Fatalf("absent sources must not be null: %s", encoded)
 	}
 }
+
+func TestFilesystemProcessingModes(t *testing.T) {
+	for _, mode := range []string{"", "semantic_and_vectors", "vectors_only"} {
+		t.Run(mode, func(t *testing.T) {
+			client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				expected := ""
+				if mode == "vectors_only" {
+					expected = mode
+				}
+				if r.Method == http.MethodDelete {
+					if r.URL.Query().Get("processing_mode") != expected {
+						t.Errorf("query: %s", r.URL.RawQuery)
+					}
+				} else {
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					value, present := body["processing_mode"]
+					if expected == "" && present || expected != "" && value != expected {
+						t.Errorf("body: %#v", body)
+					}
+				}
+				writeOK(t, w, map[string]any{})
+			}))
+			defer closeServer()
+			if err := client.Remove(context.Background(), "resources/a.md", &RemoveOptions{ProcessingMode: mode}); err != nil {
+				t.Fatal(err)
+			}
+			if err := client.MoveWithOptions(context.Background(), "resources/a.md", "resources/b.md", &MoveOptions{ProcessingMode: mode}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestMoveLegacySignature(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := body["processing_mode"]; present {
+			t.Fatal("legacy Move must omit processing_mode")
+		}
+		writeOK(t, w, map[string]any{})
+	}))
+	defer closeServer()
+	if err := client.Move(context.Background(), "resources/a.md", "resources/b.md"); err != nil {
+		t.Fatal(err)
+	}
+}

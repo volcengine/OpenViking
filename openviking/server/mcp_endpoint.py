@@ -1753,6 +1753,7 @@ async def write(
     resolve_conflicts: bool = False,
     use_snapshot: bool = False,
     defer_processing: bool = False,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
@@ -1762,6 +1763,8 @@ async def write(
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - resolve_conflicts: mark this edit as conflict resolution for an existing resource
       Markdown file in replace mode (including its create alias); defaults to false.
+    - processing_mode="vectors_only": skip VLM and semantic queue processing;
+      preserve existing summaries and update file vectors only.
     - defer_processing: save content without semantic or vector processing. Run reindex
       for this URI before relying on search; defaults to false.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
@@ -1785,6 +1788,7 @@ async def write(
         resolve_conflicts=resolve_conflicts,
         use_snapshot=use_snapshot,
         defer_processing=defer_processing,
+        processing_mode=processing_mode,
     )
     written = result.get("written_bytes", 0)
     message = (
@@ -1807,8 +1811,11 @@ async def edit(
             deprecated=True, description="Deprecated compatibility parameter; accepted and ignored."
         ),
     ] = None,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
 ) -> str:
     """Replace an exact string with new text in an existing viking:// file. Use this for targeted changes instead of rewriting the whole file with the write tool. old_string must match the file's current content exactly, including indentation and newlines; use the read tool first to see it. The edit fails and the file is left unchanged if old_string is not found, or if it matches more than once and replace_all is false (pass more surrounding context to make it unique, or set replace_all=true to replace every occurrence). Pass new_string="" to delete old_string.
+
+    processing_mode="vectors_only" skips VLM/semantic queues and preserves old summaries.
 
     Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change).
 
@@ -1848,6 +1855,7 @@ async def edit(
         ctx=ctx,
         mode="replace",
         wait=wait,
+        processing_mode=processing_mode,
     )
     written = result.get("written_bytes", 0)
     message = f"Edited {result.get('uri', uri)} ({written} bytes written)."
@@ -2699,15 +2707,21 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 @_mcp_error_results()
 @mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
-async def forget(uri: str, recursive: bool = False) -> str:
+async def forget(
+    uri: str,
+    recursive: bool = False,
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
+) -> str:
     """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.
+
+    processing_mode="vectors_only" skips parent semantic refresh; target vectors are still deleted.
 
     Deleting a skill directory this way leaves the skill's stored privacy values behind:
     remove a skill with ``ov skills remove <name>`` or ``DELETE /api/v1/skills/{name}``."""
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
-    await service.fs.rm(resolved_uri, ctx=ctx, recursive=recursive)
+    await service.fs.rm(resolved_uri, ctx=ctx, recursive=recursive, processing_mode=processing_mode)
     return f"Deleted: {resolved_uri}"
 
 

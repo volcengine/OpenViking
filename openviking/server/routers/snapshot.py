@@ -19,6 +19,11 @@ from openviking.pyagfs.exceptions import (
     AGFSPathNotFoundError,
     GitRestoreWritebackPartialError,
 )
+from openviking.resource.processing_mode import (
+    DEFAULT_PROCESSING_MODE,
+    VECTORS_ONLY,
+    ProcessingMode,
+)
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -130,6 +135,7 @@ class RestoreRequest(BaseModel):
     )
     branch: str = "main"
     dry_run: bool = False
+    processing_mode: ProcessingMode | None = None
     message: Optional[str] = None
     author_name: Optional[str] = None
     author_email: Optional[str] = None
@@ -143,6 +149,8 @@ class RestoreRequest(BaseModel):
                 raise ValueError("path requires restore_commit_id")
         elif not self.source_commit:
             raise ValueError("source_commit is required")
+        if self.path is None and self.processing_mode not in {None, VECTORS_ONLY}:
+            raise ValueError("directory restore only supports processing_mode=vectors_only")
         return self
 
 
@@ -190,6 +198,11 @@ async def restore(
                 current_commit_id=request.current_commit_id,
                 ctx=_ctx,
                 dry_run=request.dry_run,
+                **(
+                    {"processing_mode": request.processing_mode}
+                    if request.processing_mode not in {None, DEFAULT_PROCESSING_MODE}
+                    else {}
+                ),
             )
             return Response(status="ok", result=result)
         result = await service.fs.restore(
