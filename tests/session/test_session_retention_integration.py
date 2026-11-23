@@ -25,6 +25,7 @@ from openviking.session.checkpoints import (
 )
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.session import Session, _ArchiveSummaryResult
+from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InternalError, UnavailableError
 
@@ -1610,6 +1611,69 @@ async def test_commit_externalizes_tool_outputs_across_the_whole_turn(
     assert any(part.tool_output_ref for part in tool_parts)
     assert all(part.tool_output_group_original_chars == 100_000 for part in tool_parts)
     assert any(part.tool_output_externalized_reason == "turn_budget" for part in tool_parts)
+
+
+@pytest.mark.parametrize(
+    ("reply", "preview", "first_status"),
+    [("OK", "OK", "skipped"), ("long reply " * 100 + "tail", "tail", "accepted")],
+    ids=["unchanged", "truncated"],
+)
+async def test_turn_budget_repeat_commit_tracks_new_archive_content(
+    client, monkeypatch, reply, preview, first_status
+):
+    session = client(session_id="turn_budget_repeat_commit_test")
+    await session.ensure_exists()
+    user = await session.add_message_async("user", [TextPart("U" * 800)])
+    assistant = await session.add_message_async("assistant", [TextPart(reply)])
+    read_bytes = session._viking_fs.read_file_bytes
+    live_uri = f"{session.uri}/messages.jsonl"
+    original_bytes = await read_bytes(live_uri, ctx=session.ctx)
+
+    queue_manager = get_queue_manager()
+    enqueue = queue_manager.enqueue
+    enqueued = []
+
+    async def capture_enqueue(queue_name, data, **keys):
+        if queue_name == QueueManager.SESSION_COMMIT:
+            enqueued.append((data["task_id"], data["archive_uri"]))
+        return await enqueue(queue_name, data, **keys)
+
+    monkeypatch.setattr(queue_manager, "enqueue", capture_enqueue)
+    options = {
+        "retention_mode": "turn_budget",
+        "keep_recent_turn_count": 1,
+        "retained_message_token_budget": 120,
+        "memory_policy": {name: {"enabled": False} for name in ("working_memory", "self", "peer")},
+    }
+    first = await session.commit_async(**options)
+    retained_bytes = await read_bytes(live_uri, ctx=session.ctx)
+    fresh = client(session_id=session.session_id)
+    await fresh.load()
+    second = await fresh.commit_async(**options)
+
+    assert (first["status"], second["status"]) == (first_status, "skipped")
+    for result in (first, second):
+        assert result["budget_exceeded"] is True
+        if result["status"] == "skipped":
+            assert result["task_id"] is result["archive_uri"] is None
+            assert result["archived"] is False
+
+    assert await read_bytes(live_uri, ctx=session.ctx) == retained_bytes
+    assert retained_bytes.splitlines()[0] == original_bytes.splitlines()[0]
+    assert [message.id for message in fresh.messages] == [user.id, assistant.id]
+    assert [message.content for message in fresh.messages] == [user.content, preview]
+    archives = await fresh._archives.list_refs()
+    if first_status == "accepted":
+        assert first["archived"] is True
+        assert first["task_id"]
+        assert [archive["archive_uri"] for archive in archives] == [first["archive_uri"]]
+        assert enqueued == [(first["task_id"], first["archive_uri"])]
+        assert await read_bytes(f"{first['archive_uri']}/messages.jsonl", ctx=session.ctx) == (
+            original_bytes
+        )
+    else:
+        assert retained_bytes == original_bytes
+        assert archives == enqueued == []
 
 
 async def test_turn_budget_commit_archives_complete_old_turn_and_keeps_latest_user(

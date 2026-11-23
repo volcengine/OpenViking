@@ -150,6 +150,47 @@ def test_oversized_latest_turn_keeps_anchor_and_atomic_raw_tail():
     assert plan.checkpoint_source_message_ids == archived_ids[1:]
 
 
+@pytest.mark.parametrize("has_early_step", [False, True], ids=["tail_only", "with_prefix"])
+def test_oversized_user_anchor_does_not_archive_unchanged_reply(has_early_step):
+    anchor = _message("u1", "user", "U" * 800)
+    early_step = _message("a1", "assistant", "early step")
+    reply = _message("a2", "assistant", "OK")
+    messages = [anchor, early_step, reply] if has_early_step else [anchor, reply]
+
+    plan = plan_retention(messages, keep_recent_turn_count=1, token_budget=120)
+
+    assert plan.archive_messages == ([anchor, early_step] if has_early_step else [])
+    assert plan.checkpoint_source_message_ids == (["a1"] if has_early_step else [])
+    assert plan.retained_messages == [anchor, reply]
+    assert plan.raw_tail_start_message_id == "a2"
+    assert plan.partial_turn is has_early_step
+    assert plan.budget_exceeded is True
+
+
+def test_retention_keeps_atomic_tool_tail_when_fixed_fields_cannot_fit():
+    anchor = _message("u1", "user", "query")
+    call = Message(
+        id="a1",
+        role="assistant",
+        parts=[TextPart("inspect"), ToolPart(tool_id="tool-call", tool_name="read")],
+    )
+    result = Message(
+        id="tr1",
+        role="user",
+        parts=[ToolPart(tool_id="tool-call", tool_name="read", tool_output="result")],
+    )
+    messages = [anchor, call, result]
+
+    plan = plan_retention(messages, keep_recent_turn_count=1, token_budget=2)
+
+    assert plan.archive_messages == []
+    assert plan.checkpoint_source_message_ids == []
+    assert plan.retained_messages == messages
+    assert plan.raw_tail_start_message_id == "a1"
+    assert plan.partial_turn is False
+    assert plan.budget_exceeded is True
+
+
 def test_oversized_final_step_archives_full_source_and_retains_preview():
     final_text = ("HEAD-" * 1000) + ("TAIL-" * 1000)
     messages = [
