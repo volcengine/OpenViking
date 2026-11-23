@@ -956,7 +956,7 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
-    if not config.vlm.is_available():
+    if not config.vlm.model:
         errors.append(
             "A VLM is required. Configure the vlm section in ov.conf or run openviking-server init."
         )
@@ -998,8 +998,6 @@ def initialize_openviking_config(
         config.default_account = user._account_id
         config.default_user = user._user_id
 
-    is_valid_openviking_config(config)
-
     # Configure storage based on provided parameters
     if path:
         # Explicit local workspace override
@@ -1015,5 +1013,9 @@ def initialize_openviking_config(
         config.storage.vectordb.path = resolved
 
     config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
+
+    # Validate configuration
+    if not is_valid_openviking_config(config):
+        raise ValueError("Invalid OpenViking configuration")
 
     return config
