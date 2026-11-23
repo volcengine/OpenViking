@@ -97,7 +97,10 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_TEMP_DIR', undefined);
     setEnv('TMPDIR', '/tmp/system-temp');
     const original = getConfig();
-    assert.equal(original.tempDir, '/root/.local/share/superagent-primary/tmp');
+    // The manifest's data directory keeps its POSIX form, but the default temp
+    // directory is a local path this host joins itself.
+    assert.equal(original.dataDir, '/root/.local/share/superagent-primary');
+    assert.equal(original.tempDir, path.join(original.dataDir, 'tmp'));
     setEnv('OV_SUPERAGENT_TEMP_DIR', '/tmp/superagent-primary/');
     const configured = getConfig();
     assert.equal(configured.tempDir.startsWith('/') ? path.posix.resolve(configured.tempDir) : path.resolve(configured.tempDir), '/tmp/superagent-primary');

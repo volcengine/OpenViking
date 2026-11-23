@@ -220,16 +220,19 @@ function manifestString(value, name, { maxLength = 128 } = {}) {
   return normalized;
 }
 
-function manifestJoin(base, ...parts) {
-  return String(base).startsWith('/') ? path.posix.join(base, ...parts) : path.join(base, ...parts);
-}
+// Only the manifest's own storage directories keep POSIX semantics when a
+// manifest written for a POSIX deployment is read on Windows; resolving them
+// with the host rules would produce a `C:\root...`. Any other path (the
+// OpenViking config file, a mailbox file) is local to the host that runs it.
+const POSIX_MANIFEST_FIELDS = Object.freeze(['dataDir', 'tempDir', 'workspace']);
 
 function manifestAbsolutePath(value, name) {
   const normalized = manifestString(value, name, { maxLength: 4096 });
   if (!path.isAbsolute(normalized)) throw new Error(`${name} must be an absolute path`);
-  // A POSIX path describes a POSIX deployment even when the manifest is edited
-  // on Windows; resolving it with the host rules would produce a `C:\root...`.
-  return normalized.startsWith('/') ? path.posix.normalize(normalized) : path.normalize(normalized);
+  const field = name.slice(name.lastIndexOf('.') + 1);
+  return POSIX_MANIFEST_FIELDS.includes(field) && normalized.startsWith('/')
+    ? path.posix.normalize(normalized)
+    : path.normalize(normalized);
 }
 
 function optionalManifestString(value, name) {
@@ -628,7 +631,9 @@ function selectDeploymentAgent(deployment, id = deployment.defaultInstance) {
 // directory, shared by every process of the OS user, so even an inert plugin
 // gets its own directories under the instance's data directory.
 function openVikingAgentEnv(agent) {
-  const state = manifestJoin(agent.dataDir, 'openviking');
+  // The OpenViking plugin state is local to the daemon that runs it, not a
+  // directory named by the manifest: join it with the host's rules.
+  const state = path.join(agent.dataDir, 'openviking');
   return {
     OPENVIKING_CLI_CONFIG_FILE: agent.ovConfig,
     OPENVIKING_CREDENTIAL_SOURCE: 'cli',
@@ -640,11 +645,11 @@ function openVikingAgentEnv(agent) {
     OPENVIKING_WORKSPACE_PEER: '0',
     OPENVIKING_RECALL_PEER_SCOPE: 'all',
     OPENVIKING_HOME: state,
-    OPENVIKING_STATE_DIR: manifestJoin(state, 'state'),
-    OPENVIKING_HOOK_STATE_DIR: manifestJoin(state, 'hook-state'),
-    OPENVIKING_CODEX_STATE_DIR: manifestJoin(state, 'codex-plugin-state'),
-    OPENVIKING_PENDING_DIR: manifestJoin(state, 'pending'),
-    OPENVIKING_RECALL_LEDGER_DIR: manifestJoin(state, 'recall-ledger'),
+    OPENVIKING_STATE_DIR: path.join(state, 'state'),
+    OPENVIKING_HOOK_STATE_DIR: path.join(state, 'hook-state'),
+    OPENVIKING_CODEX_STATE_DIR: path.join(state, 'codex-plugin-state'),
+    OPENVIKING_PENDING_DIR: path.join(state, 'pending'),
+    OPENVIKING_RECALL_LEDGER_DIR: path.join(state, 'recall-ledger'),
   };
 }
 

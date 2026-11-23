@@ -281,7 +281,7 @@ export const TOOLS = [
     name: 'task_report',
     worker: true,
     title: 'Report on this task',
-    description: 'Report your task\'s outcome to the agent, which relays it to the requester. Finish every turn with it. done: draft is the reply, ready to send. needs_user: question is the one thing a person must decide. blocked, dropped, failed: why, in summary. progress: an interim note that does not end the task.',
+    description: 'Report your task\'s outcome to the agent, which relays it to the requester. Finish every turn with it. done: draft is the reply, ready to send. needs_user: question is the one thing a person must decide, tell you or do (say who, and what) before you go on; the task waits for the answer. blocked (a missing access or prerequisite no one can clear now; it ends the task, and the request that clears it takes the task up again), dropped, failed: why, in summary. progress: an interim note that does not end the task.',
     inputSchema: schema({
       state: { type: 'string', enum: ['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed'] },
       summary: { type: 'string', maxLength: 4_000, description: 'What you did and found, with evidence. For the agent, not the requester.' },
