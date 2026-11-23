@@ -84,10 +84,10 @@ async def test_openai_vlm_applies_http_config_and_closes_clients(monkeypatch):
         assert async_client.is_closed()
 
 
-def test_openai_completion_uses_default_timeout(monkeypatch):
+def test_openai_completion_uses_default_timeout(mock_openai_transport):
     requests = []
 
-    def send(client, request, **kwargs):
+    def respond(request):
         requests.append(request)
         return httpx.Response(
             200,
@@ -95,7 +95,7 @@ def test_openai_completion_uses_default_timeout(monkeypatch):
             json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
         )
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    mock_openai_transport(respond)
     config = VLMConfig(
         provider="openai",
         model="gpt-4o-mini",
@@ -127,10 +127,10 @@ def test_litellm_completion_uses_configured_timeout(monkeypatch):
     assert provider.call_args.kwargs["timeout"] == 90.0
 
 
-def test_codex_completion_uses_configured_timeout(monkeypatch):
+def test_codex_completion_uses_configured_timeout(mock_openai_transport):
     requests = []
 
-    def send(client, request, **kwargs):
+    def respond(request):
         requests.append(request)
         event = {
             "type": "response.completed",
@@ -150,7 +150,7 @@ def test_codex_completion_uses_configured_timeout(monkeypatch):
             text=f"event: response.completed\ndata: {json.dumps(event)}\n\n",
         )
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    mock_openai_transport(respond)
     config = VLMConfig(
         provider="openai-codex",
         model="gpt-5.3-codex",

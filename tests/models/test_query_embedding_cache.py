@@ -89,7 +89,7 @@ async def test_an_aborted_request_does_not_leave_its_query_cached():
     assert (await embed_compat(embedder, "alpha", is_query=True)).dense_vector == [2.0]
 
 
-async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
+async def test_account_query_cache_isolated_by_account_and_config(mock_openai_transport):
     from openviking.config.binding import manager_over_source
     from openviking.config.embedding import AccountEmbeddingProvider
     from openviking.config.source import MemoryConfigSource
@@ -102,7 +102,7 @@ async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
 
     requests = []
 
-    async def send(client, request, **kwargs):
+    def respond(request):
         assert request.url.path == "/v1/embeddings"
         assert json.loads(request.content)["input"] == "same-text"
         requests.append(request.headers["Authorization"])
@@ -117,7 +117,7 @@ async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
             },
         )
 
-    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    mock_openai_transport(respond)
     base = OpenVikingConfig.from_dict(
         {
             "embedding": {

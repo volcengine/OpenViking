@@ -20,8 +20,8 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
         pytest.param("<think>no final answer</think>", "", id="reasoning-only"),
     ],
 )
-def test_completion_returns_only_final_text(monkeypatch, content, expected):
-    def send(client, request, **kwargs):
+def test_completion_returns_only_final_text(mock_openai_transport, content, expected):
+    def respond(request):
         return httpx.Response(
             200,
             request=request,
@@ -32,7 +32,7 @@ def test_completion_returns_only_final_text(monkeypatch, content, expected):
             },
         )
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    mock_openai_transport(respond)
     config = VLMConfig(
         provider="openai",
         model="gpt-4o-mini",

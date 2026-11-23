@@ -13,10 +13,10 @@ MODEL = "nomic-embed-text"
 
 
 @pytest.fixture
-def embedding_requests(monkeypatch):
+def embedding_requests(mock_openai_transport):
     requests = []
 
-    def send(client, request, **kwargs):
+    def respond(request):
         requests.append(request)
         return httpx.Response(
             200,
@@ -29,7 +29,7 @@ def embedding_requests(monkeypatch):
             },
         )
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    mock_openai_transport(respond)
     return requests
 
 
