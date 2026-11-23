@@ -814,6 +814,8 @@ class FSService:
         if processing_mode == VECTORS_ONLY and isinstance(result, dict):
             result["semantic_status"] = "skipped"
             result["vector_status"] = "complete"
+            if queue_status is not None:
+                result["queue_status"] = queue_status
         return result
 
     @staticmethod

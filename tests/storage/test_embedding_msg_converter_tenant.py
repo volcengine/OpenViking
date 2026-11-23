@@ -84,3 +84,14 @@ def test_embedding_msg_converter_persists_ingestion_source_type():
 
     assert msg is not None
     assert msg.source_type == "repository"
+
+
+@pytest.mark.parametrize("action", [IndexAction.MERGE, IndexAction.UPSERT])
+def test_context_embedding_merge_does_not_overwrite_access_count(action):
+    context = Context(uri="viking://resources/doc.md", abstract="summary", active_count=42)
+    msg = EmbeddingMsgConverter.from_context(context, action=action)
+    assert msg is not None
+    if action is IndexAction.MERGE:
+        assert "active_count" not in msg.context_data
+    else:
+        assert msg.context_data["active_count"] == 42

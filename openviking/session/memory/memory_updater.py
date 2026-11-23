@@ -970,6 +970,8 @@ class MemoryUpdater:
         ingest_options=None,
     ) -> bool:
         if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
+            if strict:
+                raise RuntimeError("Memory vectorization requires an initialized embedding queue")
             return False
         try:
             from openviking.session.memory.memory_type_registry import get_default_registry

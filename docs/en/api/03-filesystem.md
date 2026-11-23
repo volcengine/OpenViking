@@ -24,7 +24,7 @@ For FILE_ONLY→INDEXED transfers, `vectors_only` schedules a target-scoped rein
 and `vector_error` (`code`, `message`); the transfer is already committed. Other vectors-only
 transfers report `semantic_status="skipped"` and the completed or skipped vector status.
 The shared-resource aliases `/api/v1/resources/cp`, `/api/v1/resources/mv`, and
-`DELETE /api/v1/resources` support the same parameter. `mkdir` keeps its current directory
+`DELETE /api/v1/resources?uri={uri}` support the same parameter. `mkdir` keeps its current directory
 initialization behavior.
 
 Vectors-only resource deletion still unlinks memory references deterministically,

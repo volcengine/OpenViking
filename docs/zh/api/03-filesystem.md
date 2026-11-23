@@ -21,7 +21,7 @@ FILE_ONLY→INDEXED 的 `vectors_only` 转移会对目标提交 reindex，返回
 `vector_status="queued"`。入队失败返回 `vector_status="failed"`、
 `vector_error`（`code`、`message`）；已提交的转移不会回滚。其他 vectors-only 转移返回
 `semantic_status="skipped"`，向量状态为已完成或跳过。共享资源别名
-`/api/v1/resources/cp`、`/api/v1/resources/mv`、`DELETE /api/v1/resources` 支持同一参数。
+`/api/v1/resources/cp`、`/api/v1/resources/mv`、`DELETE /api/v1/resources?uri={uri}` 支持同一参数。
 `mkdir` 保持当前目录初始化行为。
 
 vectors-only 资源删除仍确定性清除 memory 引用，但跳过用于模型重写 memory 的 session extraction。

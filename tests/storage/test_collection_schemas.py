@@ -662,6 +662,7 @@ async def test_embedding_handler_merge_not_found_creates_from_generated_vector(m
     assert result.outcome is ProcessOutcome.SUCCESS
     assert captured["data"]["id"] == "generated-id"
     assert captured["data"]["vector"] == [0.1, 0.2]
+    assert captured["data"]["active_count"] == 0
     assert captured["data"]["search_tags"] == ["scope=new"]
 
 

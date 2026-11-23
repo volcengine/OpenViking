@@ -960,6 +960,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                                 [f"memory_type={extracted_memory_type}"],
                             )
                         if not existing_records:
+                            inserted_data.setdefault("active_count", 0)
                             missing_fields = missing_initial_record_fields(inserted_data)
                             if missing_fields:
                                 raise RuntimeError(

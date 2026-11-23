@@ -2619,3 +2619,56 @@ async def test_fs_rejects_invalid_processing_mode_before_mutation(request_contex
                 **kwargs,
             )
     native.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_rm_reembeds_each_changed_memory_once(request_context, monkeypatch):
+    memory_uri = "viking://user/test-user/memories/entities/a.md"
+    cleanup = SimpleNamespace(
+        before_resource_delete=AsyncMock(
+            return_value={"memory_uris": [memory_uri, memory_uri], "deleted_memory_uris": []}
+        )
+    )
+    vikingdb = SimpleNamespace(has_queue_manager=True)
+    fs = _FakeVikingFS()
+    service = FSService(viking_fs=fs, vikingdb=vikingdb, resource_memory_link_service=cleanup)
+    from openviking.session.memory.memory_updater import MemoryUpdater
+
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(MemoryUpdater, "refresh_file_embedding", refresh)
+    monkeypatch.setattr(MemoryUpdater, "refresh_schema_overview", AsyncMock(return_value=False))
+    deleted = await service.rm(
+        "viking://resources/a.md", request_context, processing_mode="vectors_only", wait=False
+    )
+    refresh.assert_awaited_once_with(
+        viking_fs=fs,
+        vikingdb=vikingdb,
+        uri=memory_uri,
+        memory_type="entities",
+        ctx=request_context,
+        strict=True,
+    )
+    assert deleted["vector_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_rm_removes_unvectorizable_changed_memory_index(
+    request_context, monkeypatch
+):
+    memory_uri = "viking://user/test-user/memories/entities/a.md"
+    cleanup = SimpleNamespace(
+        before_resource_delete=AsyncMock(return_value={"memory_uris": [memory_uri]})
+    )
+    vikingdb = SimpleNamespace(has_queue_manager=True, delete_uris=AsyncMock())
+    service = FSService(
+        viking_fs=_FakeVikingFS(), vikingdb=vikingdb, resource_memory_link_service=cleanup
+    )
+    from openviking.session.memory.memory_updater import MemoryUpdater
+
+    monkeypatch.setattr(MemoryUpdater, "refresh_file_embedding", AsyncMock(return_value=False))
+    monkeypatch.setattr(MemoryUpdater, "refresh_schema_overview", AsyncMock(return_value=False))
+    result = await service.rm(
+        "viking://resources/a.md", request_context, processing_mode="vectors_only", wait=False
+    )
+    vikingdb.delete_uris.assert_awaited_once_with(request_context, [memory_uri], recursive=False)
+    assert result["vector_status"] == "complete"

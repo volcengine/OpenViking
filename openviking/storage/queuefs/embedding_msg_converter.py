@@ -42,6 +42,9 @@ class EmbeddingMsgConverter:
             return None
 
         context_data = context.to_dict()
+        if action == IndexAction.MERGE:
+            # Embedding updates do not change access frequency; inherit the worker's latest value.
+            context_data.pop("active_count", None)
 
         # Account identity is required at the queue boundary. Do not silently
         # route a malformed or legacy message to the default Account.
