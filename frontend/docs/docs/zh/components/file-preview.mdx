@@ -108,16 +108,17 @@ import '@openviking/react/components/file-preview/style.css';
 
 三种页签共有的字段。内容页签没有标题行，`toolbar`、`onOpenParent`、`onCopyPath` 和 `labels` 对它无效。
 
-| 参数         | 说明                                                                                          | 类型                         | 默认值                                         |
-| ------------ | --------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------- |
-| key          | 页签的唯一标识                                                                                | `string`                     | 必填                                           |
-| title        | 页签行显示的内容，可以是文本或带样式的节点                                                    | `ReactNode`                  | 文件页签为 `source.fileName`，目录页签为 `key` |
-| icon         | 页签图标，省略时不占图标位，按文件名取图标可用 `@openviking/react/icons` 的 `getFileTypeIcon` | `ReactNode`                  | -                                              |
-| disabled     | 禁用该页签，禁用后不能选中                                                                    | `boolean`                    | `false`                                        |
-| toolbar      | 隐藏该页签的内置入口，不能重新打开顶层已关闭的入口                                            | `FilePreviewToolbarOptions`  | -                                              |
-| onOpenParent | 文件页签的 `operations.openParent` 完成后触发，参数为被点击层级的完整 URI，目录页签不触发     | `(uri: string) => void`      | -                                              |
-| onCopyPath   | 路径复制成功后触发，参数与写入剪贴板的格式化路径一致                                          | `(path: string) => void`     | -                                              |
-| labels       | 覆盖该页签的文案，优先于顶层 `labels`                                                         | `Partial<FilePreviewLabels>` | -                                              |
+| 参数         | 说明                                                                                          | 类型                               | 默认值                                         |
+| ------------ | --------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------- |
+| key          | 页签的唯一标识                                                                                | `string`                           | 必填                                           |
+| title        | 页签行显示的内容，可以是文本或带样式的节点                                                    | `ReactNode`                        | 文件页签为 `source.fileName`，目录页签为 `key` |
+| badge        | 标题旁的正数角标，超过 99 显示 `99+`；`label` 提供悬浮提示和无障碍说明                        | `{ count: number; label: string }` | -                                              |
+| icon         | 页签图标，省略时不占图标位，按文件名取图标可用 `@openviking/react/icons` 的 `getFileTypeIcon` | `ReactNode`                        | -                                              |
+| disabled     | 禁用该页签，禁用后不能选中                                                                    | `boolean`                          | `false`                                        |
+| toolbar      | 隐藏该页签的内置入口，不能重新打开顶层已关闭的入口                                            | `FilePreviewToolbarOptions`        | -                                              |
+| onOpenParent | 文件页签的 `operations.openParent` 完成后触发，参数为被点击层级的完整 URI，目录页签不触发     | `(uri: string) => void`            | -                                              |
+| onCopyPath   | 路径复制成功后触发，参数与写入剪贴板的格式化路径一致                                          | `(path: string) => void`           | -                                              |
+| labels       | 覆盖该页签的文案，优先于顶层 `labels`                                                         | `Partial<FilePreviewLabels>`       | -                                              |
 
 ### FilePreviewFileTab
 

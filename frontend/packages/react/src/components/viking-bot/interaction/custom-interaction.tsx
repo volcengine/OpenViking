@@ -21,7 +21,7 @@ export function CustomInteraction({
 }) {
   const active = useViewActive();
   const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<unknown>();
+  const [failure, setFailure] = useState<{ cause: unknown }>();
   const lifetime = useRef(true);
   const locked = useRef(false);
   useEffect(() => {
@@ -35,13 +35,15 @@ export function CustomInteraction({
   const blocked = Boolean(disabled || busy || !active);
   const message =
     error ??
-    (failure ? interactionError(failure, labels, 'submitFailed') : undefined);
+    (failure
+      ? interactionError(failure.cause, labels, 'submitFailed')
+      : undefined);
   return (
     <>
       {message ? (
         <ErrorNotification
           title={labels.submitFailed}
-          error={failure}
+          error={failure?.cause}
           identity={error ?? failure}
           locale={locale}
         >
@@ -62,7 +64,7 @@ export function CustomInteraction({
             try {
               await onSubmit?.({ kind: 'custom', value });
             } catch (cause) {
-              if (lifetime.current) setFailure(cause);
+              if (lifetime.current) setFailure({ cause });
             } finally {
               locked.current = false;
               if (lifetime.current) setPending(false);
