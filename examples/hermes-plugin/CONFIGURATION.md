@@ -394,26 +394,6 @@ The plugin retains the existing `keep_recent_count: 0` commit behavior.
 The threshold is not a hard limit on extraction input: one turn can
 exceed it, and the server may include other context during extraction.
 
-### Session history
-
-`viking_session_history` searches and reads the saved record of the current
-conversation: messages, tool calls and their full outputs. It looks in the current
-session by default. When Hermes compresses a conversation into a new session, or
-`/branch` forks it, the lookup also covers the earlier sessions of that
-conversation, newest first, up to ten. Pass `session` to look in other sessions.
-
-After a compression or `/resume`, the next turn's recall context also carries a
-short note naming the session and the tool. Hermes keeps that turn's context, so
-the note stays visible on later turns. To leave it out, set:
-
-```yaml
-memory:
-  openviking:
-    session_history_pointer: false
-```
-
-`OPENVIKING_SESSION_HISTORY_POINTER` overrides the YAML value.
-
 ### Non-primary contexts
 
 When Hermes initializes the provider with `agent_context` set to `cron`, `subagent`,

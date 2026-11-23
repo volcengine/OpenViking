@@ -234,7 +234,7 @@ worker 在追加消息或 commit 前重新读取配置，检查连接身份、�
 工具默认关闭。设置 `plugin.magpie.mcpEnabled: true`，或在 Magpie 选项中保存 `mcpEnabled: true`，然后在 Magpie Library/MCP 路由
 中为需要的 Agent 开启插件服务。也可通过 Magpie 的 `/mcp/magpie/tools` 访问。
 
-提供 `status`、`find`、`rule_search`、`read`、`ls`、`remember`、`session_history`，实际名称由 Magpie 加插件前缀。
+提供 `status`、`find`、`rule_search`、`read`、`ls`、`remember`，实际名称由 Magpie 加插件前缀。
 `status` 检查鉴权后的连接；`read` 最多读取 200 行，`ls` 最多返回 100 项。
 
 `rule_search` 接收 `task_context` 与可选的 `rule_probability_threshold`（默认 `0.65`），
@@ -250,11 +250,6 @@ worker 在追加消息或 commit 前重新读取配置，检查连接身份、�
 配置了 `actor_peer_id` 时，也将其写入消息的 `peer_id`，保留项目记忆的归属。
 返回任务 ID 不代表记忆已生成。写入不自动重试；中断可能留下未完成的 Session，
 结果不明确时应先检查 OV 再决定是否重试。
-
-`session_history` 通过 `POST /api/v1/sessions/history` 搜索和读取已采集会话的保存记录，必须传 `session`；服务端没有该接口时返回 `unsupported` 错误。
-已采集的会话开头发生变化且不止一轮用户消息（压缩或截断历史）后，后续请求会在第一条这样的用户消息上附加
-`<openviking-context source="session-history">` 提示，给出该会话的 OV Session 和 `session_history` 工具。
-Magpie 调用工具时不提供会话信息，因此提示要求模型自己传 `session`。复用同一 Session ID 的新对话从第二轮起看起来一样，也会收到提示。设置 `plugin.magpie.sessionHistoryPointer: false` 可关闭。
 
 工具错误保留脱敏的 HTTP 状态、错误类别和追踪 ID，区分不存在、冲突、限流、超时和取消。
 自动召回仍在错误时放行原请求，诊断仅记录固定状态。

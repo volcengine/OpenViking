@@ -286,15 +286,6 @@ it is not proof that new memories were produced. A lost commit acknowledgement
 is reconciled from session metadata before any further appends. An unresolved
 outcome pauses the queue rather than requesting extraction twice.
 
-When a captured conversation comes back with a different opening and more than
-one user turn (a compaction or a trimmed history), its later requests get a
-short `<openviking-context source="session-history">` note on the first such
-user message, naming the conversation's OV session and the `session_history`
-tool. Magpie gives tools no conversation, so the note asks the model to pass
-`session` itself. A new chat that reuses the session ID looks the same from its
-second turn and also gets the note. Set
-`plugin.magpie.sessionHistoryPointer: false` to leave it out.
-
 Before either recall or capture, Magpie checks for complete, nonempty
 `<openviking-context>`, `<relevant-memory>` or `<relevant-memories>` envelopes
 on their own lines in system/user text. Markdown code fences, blockquotes,
@@ -357,7 +348,6 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | `read` | Read up to 200 lines from a `viking://` URI |
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
-| `session_history` | Search and read a captured conversation's saved record (`POST /api/v1/sessions/history`); `session` is required; a server without that route fails with `unsupported` |
 
 `rule_search` takes `task_context` and optional `rule_probability_threshold`
 (default `0.65`), requires a server with `POST /api/v1/rules/search`, and preserves
@@ -365,8 +355,7 @@ all returned Rule text. Check conditions and exceptions before acting.
 
 With the npm installation, Magpie's current tool naming rules produce
 `magpie-plugin_status`, `magpie-plugin_find`, `magpie-plugin_read`,
-`magpie-plugin_ls`, `magpie-plugin_rule_search`, `magpie-plugin_remember` and
-`magpie-plugin_session_history`.
+`magpie-plugin_ls`, `magpie-plugin_rule_search` and `magpie-plugin_remember`.
 Source-folder installations use the folder's name as the prefix instead.
 The tool callback has
 no authenticated caller identity: **enabling tools delegates this file's OV

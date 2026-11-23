@@ -1,4 +1,4 @@
-import { historyPointer, recallRequest } from "./runtime.mjs";
+import { recallRequest } from "./runtime.mjs";
 import { loadConfig } from "./config.mjs";
 import { prepareCapture, finishCapture } from "./capture.mjs";
 import { bypassedSession } from "./scope.mjs";
@@ -15,8 +15,7 @@ export async function onRequest(body, ctx) {
     try { await prepareCapture(body, ctx, cfg, ctx.options); }
     catch { delete ctx.state.capture; }
     if (ctx.state.nativeOwner) { ctx.report?.("skipped", 0); return; }
-    const recalled = await recallRequest(body, ctx, process.env, cfg, startedAt);
-    return await historyPointer(body, recalled, ctx, cfg).catch(() => recalled);
+    return await recallRequest(body, ctx, process.env, cfg, startedAt);
   } catch { ctx.report?.("unavailable", 0); }
 }
 

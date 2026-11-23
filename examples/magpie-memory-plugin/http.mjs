@@ -38,7 +38,7 @@ export async function request(cfg, path, { body, signal, timeoutMs = cfg.timeout
     });
     const traceId = result?.result?.trace_id || result?.error?.trace_id || result?.trace_id;
     if (!response.ok) {
-      const code = ({ 400: "invalid", 401: "unauthorized", 403: "unauthorized", 404: "not_found", 405: "unsupported",
+      const code = ({ 400: "invalid", 401: "unauthorized", 403: "unauthorized", 404: "not_found",
         408: "timeout", 409: "conflict", 422: "invalid", 429: "rate_limited" })[response.status]
         || (response.status >= 500 ? "unavailable" : "http_error");
       throw new PluginError(code, response.status, traceId);

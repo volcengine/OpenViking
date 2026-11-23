@@ -41,7 +41,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
 | [OpenClaw](#openclaw) | Context-engine plugin | 16 native tools, 15 enabled by default |
-| [Hermes](#hermes) | Hermes memory provider | 8 native `viking_*` tools in the updated external plugin; 6 in older bundled providers |
+| [Hermes](#hermes) | Hermes memory provider | 7 native `viking_*` tools in the updated external plugin; 6 in older bundled providers |
 | [MCP clients, Agent Plugins](#other-integrations) | MCP only | Server MCP tools |
 | [ov CLI](#ov-cli) | Command-line client | Every operation as an explicit command; no agent involved |
 
@@ -156,7 +156,7 @@ OpenClaw registers its own tools instead of passing MCP tools through.
 
 ### Hermes tools
 
-The updated Hermes external plugin has eight tools: `viking_search`, `viking_rule_search`, `viking_read`, `viking_browse`, `viking_session_history`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill installation tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. Older bundled providers have the original six tools. See [Hermes](#hermes) for distribution differences.
+The updated Hermes external plugin has seven tools: `viking_search`, `viking_rule_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, and `viking_add_resource`. There is no skill installation tool. `viking_remember` submits a fact through its own session and returns before extraction finishes; extraction may add, merge, or skip the fact. Older bundled providers have the original six tools. See [Hermes](#hermes) for distribution differences.
 
 <a id="_3-5-type-boundaries-for-writes-and-deletes"></a><a id="_3-5-1-write-boundary"></a><a id="_3-5-2-delete-boundary"></a>
 
@@ -329,7 +329,7 @@ These settings apply to automatic recall only. An explicit MCP `search` call use
 
 ### Keeping injected context out of capture
 
-Injected context is wrapped in fixed tags such as `<openviking-context>`, and capture removes those blocks before sending a turn, so recalled memories are not stored again as new conversation. The shared capture code also removes digest blocks, metadata fences, and timestamp prefixes. TRAE and ZCode use their own cleaning functions; ZCode's removes three kinds of injected block. OpenClaw removes `<relevant-memories>` both when it captures a turn and when it builds the next recall query. Hermes drops the calls and results of its five read-only tools (`viking_search`, `viking_rule_search`, `viking_read`, `viking_browse`, `viking_session_history`) from the captured batch and keeps write-tool calls.
+Injected context is wrapped in fixed tags such as `<openviking-context>`, and capture removes those blocks before sending a turn, so recalled memories are not stored again as new conversation. The shared capture code also removes digest blocks, metadata fences, and timestamp prefixes. TRAE and ZCode use their own cleaning functions; ZCode's removes three kinds of injected block. OpenClaw removes `<relevant-memories>` both when it captures a turn and when it builds the next recall query. Hermes drops the calls and results of its three read-only tools from the captured batch and keeps write-tool calls.
 
 <a id="_3-3-session-and-commit-lifecycle"></a>
 
