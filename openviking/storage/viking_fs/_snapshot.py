@@ -42,10 +42,7 @@ class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
 
     def _snapshot_read_check_uris(self, uris: List[str], ctx: RequestContext) -> List[str]:
-        """Return commit/diff-paths targets that require ordinary read authorization.
-
-        GLOBAL can snapshot other users' memories/resources/peers/skills subtrees.
-        """
+        """Return commit/diff-paths targets that require ordinary read authorization."""
         checked = []
         for uri in uris:
             parts = self._safe_uri_parts(uri)
@@ -255,7 +252,6 @@ class _SnapshotMixin:
             number of candidate paths skipped by the account ``.ovgitignore``
             rules (system pruning is not counted). Noop omits ``changed``.
             The first commit creates a valid snapshot even with no file changes.
-            GLOBAL can snapshot other users' memories/resources/peers/skills subtrees.
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
@@ -835,8 +831,7 @@ class _SnapshotMixin:
     ) -> List[Dict[str, str]]:
         """List files changed under ``dirs`` between two commits.
 
-        ``base=None`` treats every file as added. For GLOBAL reads, skip cross-user
-        directories with no visible content and return only readable files.
+        ``base=None`` treats every file as added.
         Omit derived summaries so regeneration does not count as a source change.
         """
         real_ctx = self._ctx_or_default(ctx)
