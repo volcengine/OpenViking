@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.message import Message, TextPart
+from openviking.prompts import manager as prompt_manager
 from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
@@ -18,7 +19,7 @@ from openviking.session import Session
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
 from openviking_cli.exceptions import NotFoundError
-from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config import OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -748,17 +749,42 @@ class TestGetSessionContext:
 class TestGetSessionArchive:
     """Test get_session_archive"""
 
+    @pytest.mark.parametrize("summary_format", ["structured", "compact", "wrapped", "custom"])
     async def test_get_session_archive_returns_messages_and_working_memory(
-        self, client: partial, monkeypatch
+        self, client: partial, monkeypatch, tmp_path, summary_format
     ):
         session = client(session_id="session_archive_expand_test")
         await session.ensure_exists()
-        overviews = iter(
-            (
-                "# Working Memory\n\n## Session Title\n验收流程\n\n## Current State\n等待验收。",
-                "# Working Memory\n\n## Session Title\n验收流程\n\n## Current State\n验收通过。",
-            )
+        template = (
+            "# Working Memory\n\n## Session Title\nSign-off review\n\n## Current State\n{state}"
         )
+        if summary_format == "compact":
+            template = "# Working Memory\n\n**Status**: {state}"
+        elif summary_format == "wrapped":
+            template = template.replace("{state}", "**Status**:\n{state}")
+        elif summary_format == "custom":
+            relative_path = "compression/ov_wm_v2.yaml"
+            bundled = prompt_manager.PromptManager._get_bundled_templates_dir() / relative_path
+            override = tmp_path / relative_path
+            override.parent.mkdir()
+            description = "_Record the latest sign-off outcome here._"
+            source = bundled.read_text(encoding="utf-8")
+            before, state_section = source.split("  ## Current State\n", 1)
+            _, remaining = state_section.split("\n", 1)
+            override.write_text(
+                f"{before}  ## Current State\n  {description}\n{remaining}", encoding="utf-8"
+            )
+            monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(tmp_path))
+            monkeypatch.setattr(prompt_manager, "_default_manager", None)
+            prompt = prompt_manager.render_prompt(
+                "compression.ov_wm_v2", {"messages": "", "output_language": "en"}
+            )
+            assert description in prompt
+            template = prompt[prompt.index("# Working Memory\n") :].split("\n## Task & Goals")[0]
+            template = template.rstrip() + "\n{state}"
+
+        states = ("Sign-off pending.", "Sign-off complete.")
+        overviews = iter(template.format(state=state) for state in states)
 
         async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
             del self, latest_archive_overview, kwargs
@@ -775,23 +801,22 @@ class TestGetSessionArchive:
             task = await _wait_for_task(result["task_id"])
             assert task["status"] == "completed", task
 
-        for archive_id, turn, expected in (
-            ("archive_001", "one", "等待验收。"),
-            ("archive_002", "two", "验收通过。"),
-        ):
+        for index, (turn, expected) in enumerate(zip(messages_by_turn, states, strict=True), 1):
+            archive_id = f"archive_{index:03d}"
             archive_uri = f"{session.uri}/history/{archive_id}"
-            stored = await session._viking_fs.read_file(
-                f"{archive_uri}/.abstract.md", ctx=session.ctx
-            )
+            abstract_uri = f"{archive_uri}/.abstract.md"
+            stored = await session._viking_fs.read_file(abstract_uri, ctx=session.ctx)
             assert body_for_preview(stored) == expected
 
             archive = await session.get_session_archive(archive_id)
             assert archive["archive_id"] == archive_id
             assert archive["abstract"] == expected
-            assert archive["overview"] == (
-                f"# Working Memory\n\n## Session Title\n验收流程\n\n## Current State\n{expected}"
-            )
+            assert archive["overview"] == template.format(state=expected)
             assert archive["messages"] == messages_by_turn[turn]
+
+            await session._viking_fs.write_file(abstract_uri, "# Working Memory", ctx=session.ctx)
+            historical = await session.get_session_archive(archive_id)
+            assert historical["abstract"] == expected
 
     @pytest_asyncio.fixture
     async def historical_archive(self, client: partial):
@@ -902,10 +927,21 @@ class TestGetSessionArchive:
                 "***\n\n"
                 "## Session Title\n"
                 "_A short and distinctive 5-10 word descriptive title for the session. "
-                "Info-dense, no filler._\n\n"
-                "## Key Facts & Decisions\n**Owner**: Review team",
+                "Info-dense, no filler._",
                 "",
                 id="template-only",
+            ),
+            pytest.param(
+                "# Working Memory\n\n## Current State\n## Key Facts & Decisions\n"
+                "**Owner**: Review team",
+                "Review team",
+                id="other-section",
+            ),
+            pytest.param("# Working Memory", "", id="fixed-title-only"),
+            pytest.param(
+                "# Working Memory\n\nSign-off complete.",
+                "Sign-off complete.",
+                id="compact-prose",
             ),
             pytest.param(
                 "# Session Summary\n\n**Status**: Review pending.",

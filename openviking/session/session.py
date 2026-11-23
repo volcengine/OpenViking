@@ -159,7 +159,7 @@ def _estimate_summary_template_tokens(
     if is_update:
         variables["wm_section_reminders"] = wm.build_wm_section_reminders(latest_archive_overview)
     prompt = render_prompt(
-        "compression.ov_wm_v2_update" if is_update else "compression.ov_wm_v2",
+        "compression.ov_wm_v2_update" if is_update else wm.WM_CREATE_PROMPT_ID,
         variables,
     )
     return max(0, estimate_text_tokens(prompt) - estimate_text_tokens(latest_archive_overview))
@@ -3996,7 +3996,7 @@ class Session:
                 f"{len(latest_archive_overview or '')}B)"
             )
             prompt = render_prompt(
-                "compression.ov_wm_v2",
+                wm.WM_CREATE_PROMPT_ID,
                 {
                     "messages": formatted,
                     "latest_archive_overview": latest_archive_overview or "",
@@ -4247,7 +4247,7 @@ class Session:
         from openviking.prompts import render_prompt
 
         prompt = render_prompt(
-            "compression.ov_wm_v2",
+            wm.WM_CREATE_PROMPT_ID,
             {
                 "messages": formatted_messages,
                 "latest_archive_overview": prior_overview,

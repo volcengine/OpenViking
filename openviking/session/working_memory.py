@@ -13,19 +13,21 @@ Memory document stored at ``archive_NNN/.overview.md``.
   requested checkpoint summaries, then run section-level merge against the
   previous WM.
 
-This module holds only pure/stateless helpers (string, dict and regex
-transforms plus the tool schemas). It has no dependency on the ``Session``
-object, so it can be imported and unit-tested in isolation. ``Session``
-composes these functions during Phase 2 processing.
+This module holds the document helpers and tool schemas used during Phase 2
+processing. It has no dependency on the ``Session`` object.
 """
 
 import json
 import re
+from functools import cache
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from yaml import YAMLError
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.observability.log_safety import short_hash
+from openviking.prompts.manager import PromptManager, get_manager
 from openviking.session.retention import UserTurn, build_turns
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -82,6 +84,7 @@ def wm_debug(msg: str, *args: Any) -> None:
 # =====================================================================
 
 WM_DOCUMENT_TITLE = "# Working Memory"
+WM_CREATE_PROMPT_ID = "compression.ov_wm_v2"
 
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
@@ -358,35 +361,62 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
     return sections
 
 
-# Fixed instructions in compression.ov_wm_v2, in abstract selection order.
-_WM_ABSTRACT_SECTIONS = (
-    (
-        "## Current State",
-        "_2-5 sentences MAX: What is the latest status? What is unresolved or pending? "
-        "Immediate next steps. NOT a fact dump._",
-    ),
-    (
-        "## Session Title",
-        "_A short and distinctive 5-10 word descriptive title for the session. "
-        "Info-dense, no filler._",
-    ),
-)
 _WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
+_WM_BOLD_LABEL_RE = re.compile(r"^\*\*[^*]+\*\*:\s*")
+
+
+def _wm_template_descriptions(template: str) -> dict[str, str]:
+    # The first line under each canonical heading in the output example is its description.
+    _, _, example = f"\n{template}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
+    return {
+        header: body.split("\n", 1)[0]
+        for header, body in parse_wm_sections(example).items()
+        if body and header.removeprefix("## ") in WM_SEVEN_SECTIONS
+    }
+
+
+@cache
+def _bundled_wm_template_descriptions() -> dict[str, str]:
+    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
+    return _wm_template_descriptions(manager.load_template(WM_CREATE_PROMPT_ID).template)
+
+
+def _first_wm_abstract_line(body: str, descriptions: set[str]) -> str:
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if line in descriptions:
+            continue
+        line = _WM_BOLD_LABEL_RE.sub("", line)
+        if line and not _WM_HEADING_OR_RULE_RE.fullmatch(line):
+            return line
+    return ""
 
 
 def extract_wm_abstract(text: str) -> Optional[str]:
     """Return a v2 abstract, or None if the document has no Working Memory title."""
-    first_line = next(iter(text.lstrip().splitlines()), "").strip()
-    if first_line != WM_DOCUMENT_TITLE:
+    lines = text.lstrip().splitlines()
+    if not lines or lines[0].strip() != WM_DOCUMENT_TITLE:
         return None
 
-    sections = parse_wm_sections(text)
-    for header, instruction in _WM_ABSTRACT_SECTIONS:
-        for raw_line in sections.get(header, "").splitlines():
-            line = raw_line.strip()
-            if line and line != instruction and not _WM_HEADING_OR_RULE_RE.fullmatch(line):
-                return line
-    return ""
+    body = "\n".join(lines[1:])
+    sections = parse_wm_sections(body)
+    if not sections:
+        return _first_wm_abstract_line(body, set())
+
+    bundled = _bundled_wm_template_descriptions()
+    try:
+        active = _wm_template_descriptions(
+            get_manager().load_template(WM_CREATE_PROMPT_ID).template
+        )
+    except (OSError, ValueError, YAMLError):
+        # Archive reads can still use the bundled descriptions if an override is broken.
+        active = {}
+
+    for header in ("## Current State", "## Session Title"):
+        descriptions = {bundled.get(header, ""), active.get(header, "")}
+        if abstract := _first_wm_abstract_line(sections.get(header, ""), descriptions):
+            return abstract
+    return _first_wm_abstract_line(body, set(bundled.values()) | set(active.values()))
 
 
 _WM_SECTION_BULLET_THRESHOLD = 25

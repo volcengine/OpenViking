@@ -483,6 +483,11 @@ Recommended approach:
 3. Only modify the prompt body or output requirements
 4. Avoid changing variable names that callers already depend on
 
+When overriding `compression.ov_wm_v2`, keep the canonical Working Memory headings
+in the output example. Put each fixed section description on the first nonblank
+line under its heading and keep it on a single line. Archive abstracts use the
+loaded template to skip those descriptions.
+
 Example directory:
 
 ```text
