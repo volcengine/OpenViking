@@ -104,6 +104,7 @@ function MarkdownCodeBlock({ children }: { children?: ReactNode }) {
       language={child.props.className?.replace(/^language-/, '')}
       display={code.split(keyToken).join('********')}
       copyText={code.split(keyToken).join(apiKey)}
+      hasKey={code.includes(keyToken)}
     />
   );
 }

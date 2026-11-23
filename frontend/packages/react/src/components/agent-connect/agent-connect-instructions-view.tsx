@@ -74,6 +74,7 @@ export function AgentConnectInstructionsView({
               language="bash"
               display={command.display}
               copyText={command.copy}
+              hasKey
             />
             {instructions.display.slice(commandOffset + command.display.length)}
           </>
