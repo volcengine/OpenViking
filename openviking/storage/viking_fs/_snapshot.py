@@ -15,7 +15,7 @@ from openviking.pyagfs.exceptions import (
     AGFSResourceExhaustedError,
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AccessDecision, RequestContext, Role
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_work_index import detach_task_context
 from openviking.storage.acl import AclAction
@@ -835,15 +835,32 @@ class _SnapshotMixin:
     ) -> List[Dict[str, str]]:
         """List files changed under ``dirs`` between two commits.
 
-        ``base=None`` treats every file as added. GLOBAL can compare other users'
-        memories/resources/peers/skills subtrees; other scopes require read access.
-        Derived summaries (.abstract.md / .overview.md / .relations.json) are
-        omitted so regenerated summaries do not count as source changes.
+        ``base=None`` treats every file as added. For GLOBAL reads, skip cross-user
+        directories with no visible content and return only readable files.
+        Omit derived summaries so regeneration does not count as a source change.
         """
         real_ctx = self._ctx_or_default(ctx)
-        await self._ensure_access_many(
-            self._snapshot_read_check_uris(dirs, real_ctx), real_ctx, action=AclAction.READ
-        )
+        checked_dirs = self._snapshot_read_check_uris(dirs, real_ctx)
+        await self._ensure_access_many(checked_dirs, real_ctx, action=AclAction.READ)
+        scoped_contexts: Dict[str, RequestContext] = {}
+        if len(checked_dirs) < len(dirs):
+            allowed_dirs = set(checked_dirs)
+            owner_dirs: Dict[str, List[str]] = {}
+            for uri in dirs:
+                if uri not in allowed_dirs:
+                    owner_dirs.setdefault(self._safe_uri_parts(uri)[1], []).append(uri)
+            for owner, targets in owner_dirs.items():
+                try:
+                    scoped_ctx = self.authorize_read(real_ctx, targets)
+                except PermissionDeniedError:
+                    continue
+                scoped_contexts[owner] = scoped_ctx
+                # A directory can contain readable files even if it cannot be read itself.
+                allowed_dirs.update(uri for uri in targets if self._is_traversable(uri, scoped_ctx))
+            dirs = [uri for uri in dirs if uri in allowed_dirs]
+            if not dirs:
+                return []
+
         changes = await self._async_agfs.run(
             "git_diff_paths",
             account=real_ctx.account_id,
@@ -851,11 +868,35 @@ class _SnapshotMixin:
             head=head,
             paths=[self._uri_to_tree_path(uri, ctx=real_ctx) for uri in dirs],
         )
-        return [
+        source_changes = [
             {"uri": self._tree_path_to_uri(path), "change_type": change}
             for path, change in changes
             if path.rsplit("/", 1)[-1] not in _DERIVED_FILE_NAMES
         ]
+        if real_ctx.role == Role.GLOBAL and source_changes:
+            return self._filter_global_snapshot_changes(source_changes, real_ctx, scoped_contexts)
+        return source_changes
+
+    def _filter_global_snapshot_changes(
+        self,
+        changes: List[Dict[str, str]],
+        ctx: RequestContext,
+        scoped_contexts: Dict[str, RequestContext],
+    ) -> List[Dict[str, str]]:
+        """Filter cross-user file changes using the owner scopes resolved before Git traversal."""
+        visible = []
+        for change in changes:
+            uri = change["uri"]
+            parts = self._safe_uri_parts(uri)
+            if parts[:1] == ["user"] and len(parts) >= 2 and parts[1] != ctx.user.user_id:
+                scoped_ctx = scoped_contexts.get(parts[1])
+                if (
+                    scoped_ctx is None
+                    or self._access_decision(uri, scoped_ctx) is not AccessDecision.ALLOWED
+                ):
+                    continue
+            visible.append(change)
+        return visible
 
     def _collect_restore_vector_tasks(
         self,

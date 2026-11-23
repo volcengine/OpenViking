@@ -11,9 +11,12 @@ existing files get Exact, directories Tree.
 
 import os
 import uuid
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from openviking.core.global_policy import parse_global_policy
 from openviking.pyagfs import get_binding_client
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
@@ -212,7 +215,38 @@ async def test_global_snapshot_scope(snapshot_env, owner, directory):
     target.write_text("content")
     snapshot = await vfs.commit(message="snapshot", paths=[uri], ctx=ctx)
     page = await service.diff_paths([uri], from_ref=None, to_ref=snapshot["commit_oid"], ctx=ctx)
-    assert page["changes"] == [{"uri": f"{uri}/note.md", "change_type": "added"}]
-    if scope.startswith("bob/"):
+    if owner == "bob":
+        assert page["changes"] == []
+        assert page["total"] == 0
         with pytest.raises(PermissionDeniedError):
             await vfs.show(snapshot["commit_oid"], path=f"{uri}/note.md", ctx=ctx)
+    else:
+        assert page["changes"] == [{"uri": f"{uri}/note.md", "change_type": "added"}]
+
+
+async def test_global_diff_skips_unshared_dirs_before_git():
+    shared = "user/bob/resources/shared"
+    private = "user/bob/resources/private"
+    git_diff = Mock(return_value=[(f"{shared}/note.md", "added"), (f"{shared}/hidden.md", "added")])
+    vfs = VikingFS(agfs=SimpleNamespace(git_diff_paths=git_diff))
+    policy = parse_global_policy(
+        "---\ntype: global-access-policy\nschema_version: 1\ndefault: deny\nrules:\n"
+        "  - effect: allow\n    path: resources/shared/note.md\n    recursive: false\n---\n"
+    )
+    for_owner = Mock(return_value=policy)
+    vfs.set_global_policy_service(SimpleNamespace(for_owner=for_owner))
+    service = FSService(viking_fs=vfs)
+    ctx = _ctx(Role.GLOBAL)
+
+    page = await service.diff_paths(
+        [f"viking://{private}", f"viking://{shared}"], from_ref=None, to_ref="main", ctx=ctx
+    )
+    git_diff.assert_called_once_with(account="test", base=None, head="main", paths=[shared])
+    for_owner.assert_called_once_with(ctx, "bob")
+    assert page["changes"] == [{"uri": f"viking://{shared}/note.md", "change_type": "added"}]
+    assert page["total"] == 1
+
+    git_diff.reset_mock()
+    page = await service.diff_paths([f"viking://{private}"], from_ref=None, to_ref="main", ctx=ctx)
+    git_diff.assert_not_called()
+    assert page["total"] == 0

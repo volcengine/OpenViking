@@ -2829,11 +2829,8 @@ class FSService:
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        """Page changed source URIs between snapshots; a null base means an empty tree.
-
-        GLOBAL can list changes in other users' memories/resources/peers/skills.
-        Other targets require current read permission, including deleted paths.
-        Any other denied descendant rejects the query without exposing its URI.
+        """
+            Page changed source URIs between snapshots; a null base means an empty tree.
         """
         viking_fs = self._ensure_initialized()
         if not paths or not to_ref.strip() or (from_ref is not None and not from_ref.strip()):
