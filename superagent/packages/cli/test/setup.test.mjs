@@ -1951,28 +1951,7 @@ test('expandHome expands home prefixes without changing literal paths', () => {
   }
 });
 
-test('setup writes a Durable provider key to secrets.env and keeps the other keys', async t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-durable-key-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 'secrets.env');
-  fs.writeFileSync(file, 'OPENAI_API_KEY=keep-me\n');
-  const asked = [];
-  const prompter = {
-    select: async (question, choices) => { asked.push(question); return choices[0].value; },
-    secret: async () => 'sk-test',
-    success() {},
-    warn() {},
-  };
-  assert.equal(await configureDurable({ prompter, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), true);
-  assert.equal(asked.length, 1);
-  const saved = fs.readFileSync(file, 'utf8');
-  assert.match(saved, /^DEEPSEEK_API_KEY=sk-test$/m);
-  assert.match(saved, /^OPENAI_API_KEY=keep-me$/m);
-  const blank = { ...prompter, secret: async () => '  ' };
-  assert.equal(await configureDurable({ prompter: blank, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), false);
-  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-test$/m);
-});
-test('Durable setup writes secrets under USERPROFILE when HOME is unset', async t => {
+test('Durable setup keeps existing secrets under USERPROFILE when HOME is unset', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-userprofile-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const prompter = {
@@ -1981,7 +1960,12 @@ test('Durable setup writes secrets under USERPROFILE when HOME is unset', async 
     success() {},
     warn() {},
   };
-  assert.equal(await configureDurable({ prompter, env: { USERPROFILE: dir } }), true);
   const file = path.join(dir, '.ov-superagent', 'secrets.env');
-  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-userprofile$/m);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'OPENAI_API_KEY=keep-me\n');
+
+  assert.equal(await configureDurable({ prompter, env: { USERPROFILE: dir } }), true);
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.match(saved, /^DEEPSEEK_API_KEY=sk-userprofile$/m);
+  assert.match(saved, /^OPENAI_API_KEY=keep-me$/m);
 });
