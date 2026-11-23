@@ -11,10 +11,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 
-import { ROOT, SKILL_TARGETS } from "./sync.mjs";
+import { ROOT, SKILLS_DIR, SKILL_TARGETS } from "./sync.mjs";
 import { stripJsonc } from "./lib/install/jsonc-edit.mjs";
 
 function withTemp(fn) {
@@ -90,7 +90,9 @@ test("sync runs through a symlinked directory", () => {
     const shared = join(tree, "examples/memory-plugin-shared");
     mkdirSync(join(shared, "lib"), { recursive: true });
     copyFileSync(join(ROOT, "examples/memory-plugin-shared/sync.mjs"), join(shared, "sync.mjs"));
-    for (const { skill } of SKILL_TARGETS) mkdirSync(join(tree, "examples/skills", skill), { recursive: true });
+    for (const { skill, source = SKILLS_DIR } of SKILL_TARGETS) {
+      mkdirSync(join(tree, relative(ROOT, source), skill), { recursive: true });
+    }
     const result = runThroughLink(tmp, tree, "examples/memory-plugin-shared/sync.mjs");
     assert.equal(result.status, 0, output(result));
     assert.ok(existsSync(join(shared, "lib/MANIFEST")), output(result));

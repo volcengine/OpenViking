@@ -35,7 +35,7 @@ function hookCommands(value, out = []) {
   return out;
 }
 
-const HOST_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search"];
+const HOST_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search", "ov-memory-doctor"];
 
 function writeJson(file, value) {
   mkdirSync(dirname(file), { recursive: true });
@@ -56,6 +56,23 @@ function runInstaller(home, args, extraEnv = {}, script = installer) {
     },
     encoding: "utf8",
   });
+}
+
+// What the installed doctor, given no client name, makes of its own install.
+function doctorInstall(home, script, extraEnv = {}) {
+  const run = spawnSync(process.execPath, [script, "--offline", "--json"], {
+    cwd: home,
+    // Only node on PATH, so the `<client> --version` probe starts no real host.
+    env: { ...process.env, HOME: home, PATH: dirname(process.execPath), ...extraEnv },
+    encoding: "utf8",
+  });
+  const report = JSON.parse(run.stdout);
+  const findings = report.sections.find((section) => section.title === "Plugin install").findings;
+  return {
+    client: report.resolved.client,
+    problems: findings.filter((finding) => ["fail", "warn"].includes(finding.level)).map((finding) => finding.title),
+    notes: findings.filter((finding) => finding.level === "info").map((finding) => finding.title),
+  };
 }
 
 function runInstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
@@ -161,6 +178,16 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     const registry = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
     assert.deepEqual(registry.plugins.map((plugin) => plugin.id).sort(), ["openviking-memory", "third-party"]);
     assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "kimicode", "lib", "install", "kimicode-plugin.mjs")));
+    const kimiDoctor = join(root, "agent-integrations", "kimicode", "scripts", "ov-memory-doctor.mjs");
+    const kimiReport = doctorInstall(home, kimiDoctor);
+    assert.equal(kimiReport.client, "kimicode");
+    assert.deepEqual(kimiReport.problems, []);
+    writeJson(join(home, ".kimi-code", "plugins", "installed.json"), {
+      ...registry,
+      plugins: registry.plugins.map((plugin) => (plugin.id === "openviking-memory" ? { ...plugin, enabled: false } : plugin)),
+    });
+    assert.deepEqual(doctorInstall(home, kimiDoctor).problems, ["Kimi Code has not loaded this plugin"]);
+    writeJson(join(home, ".kimi-code", "plugins", "installed.json"), registry);
 
     const removed = runInstaller(home, ["--harness", "kimicode", "--uninstall", "--yes"]);
     assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
@@ -237,8 +264,21 @@ exit 0
     const installAt = commands.indexOf("plugins install openviking-memory@openviking -s user");
     assert.ok(removeAt !== -1 && removeAt < addAt && addAt < installAt, commands.join("\n"));
 
+    const qoderDoctor = join(root, "agent-integrations", "qoder", "scripts", "ov-memory-doctor.mjs");
+    const doctorEnv = { QODER_CONFIG_DIR: qoderHome };
+    assert.deepEqual(doctorInstall(home, qoderDoctor, doctorEnv).problems, ["Qoder CLI has not loaded this plugin"]);
     const cached = join(qoderHome, "plugins", "cache", "openviking", "openviking-memory", plugin.version);
     mkdirSync(cached, { recursive: true });
+    const qoderReport = doctorInstall(home, qoderDoctor, doctorEnv);
+    assert.equal(qoderReport.client, "qoder");
+    assert.deepEqual(qoderReport.problems, []);
+    // Qoder marks the cached copy on uninstall instead of deleting it.
+    writeFileSync(join(cached, ".orphaned_at"), "1");
+    assert.deepEqual(doctorInstall(home, qoderDoctor, doctorEnv).problems, ["Qoder CLI has not loaded this plugin"]);
+    rmSync(join(cached, ".orphaned_at"));
+    writeJson(join(qoderHome, "settings.json"), { enabledPlugins: { "openviking-memory@openviking": false } });
+    assert.deepEqual(doctorInstall(home, qoderDoctor, doctorEnv).problems, ["Qoder CLI has not loaded this plugin"]);
+    rmSync(join(qoderHome, "settings.json"));
     writeFileSync(cliLog, "");
     const removed = runInstaller(home, ["--harness", "qoder", "--uninstall", "--yes"], env);
     assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
@@ -762,6 +802,9 @@ for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
       assert.ok(existsSync(join(home, ".openviking", "agent-integrations", client, "scripts", "hook.mjs")));
       const skills = join(home, `.${client}`, "skills");
       for (const skill of HOST_SKILLS) assert.ok(existsSync(join(skills, skill, "SKILL.md")), skill);
+      const report = doctorInstall(home, join(home, ".openviking", "agent-integrations", client, "scripts", "ov-memory-doctor.mjs"));
+      assert.equal(report.client, client);
+      assert.deepEqual(report.problems, []);
 
       // A skill the user edited is theirs: uninstall removes only the untouched copies.
       writeFileSync(join(skills, "openviking-skills", "SKILL.md"), "Edited by the user.\n");
@@ -950,6 +993,9 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
     });
     assert.equal(sessionStart.status, 0, sessionStart.stderr);
     assert.equal(JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).client, "antigravity");
+    const report = doctorInstall(home, join(runtime, "scripts", "ov-memory-doctor.mjs"));
+    assert.equal(report.client, "antigravity");
+    assert.deepEqual(report.problems, []);
     // One host's installation carries no other host's configuration.
     assert.equal(existsSync(join(runtime, "hosts", "cursor")), false);
 
@@ -1010,6 +1056,9 @@ test("Antigravity adds no second MCP server beside one the user configured", () 
     assert.equal(existsSync(join(pluginDir, "mcp_config.json")), false);
     assert.ok(existsSync(join(pluginDir, "skills", "openviking-memory", "SKILL.md")));
     assert.equal(readFileSync(userMcp, "utf8"), own);
+    const report = doctorInstall(home, join(home, ".openviking", "agent-integrations", "antigravity", "scripts", "ov-memory-doctor.mjs"));
+    assert.deepEqual(report.problems, []);
+    assert.ok(report.notes.some((note) => note.startsWith("the installer wrote no MCP server")), report.notes.join("\n"));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

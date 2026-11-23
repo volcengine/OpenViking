@@ -2717,7 +2717,7 @@ agent_remove_trae_cli_configs() { # agent_remove_trae_cli_configs <hooks> <traec
 # The skills a host without a plugin format reads from the user's own skills
 # directory. Each copy is tracked, so a skill the user wrote or edited under the
 # same name is left alone on upgrade and uninstall.
-HOST_SKILLS="openviking-memory openviking-skills ov-experience-memory openviking-rule-search"
+HOST_SKILLS="openviking-memory openviking-skills ov-experience-memory openviking-rule-search ov-memory-doctor"
 
 install_host_skills() { # install_host_skills <client> <source-dir> <skills-dir>
   local client="$1" source="$2" dest="$3" lib skill
@@ -3084,7 +3084,7 @@ install_kimicode() {
     rm -rf "$bundle"
     return 1
   }
-  rm -rf "$root/tests"
+  rm -rf "$root/tests" "$root/skills"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
   cp "$root/hosts/kimicode/kimi.plugin.json" "$bundle/kimi.plugin.json" || {
     rm -rf "$bundle"
@@ -3210,7 +3210,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   rm -rf "$bundle"
   mkdir -p "$bundle"
   root="$(assemble_agent_integration "$host" "$host" "$bundle")" || { rm -rf "$bundle"; return 1; }
-  rm -rf "$root/tests"
+  rm -rf "$root/tests" "$root/skills"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
   # Keep this host's config directory aside before the adapters are pruned.
   config="$bundle/$host-config"
@@ -4037,16 +4037,20 @@ EOF
     next_steps "$label" "$(t "restart $label" "重启 $label")" "$rerun" "$doctor" "$uninstall $client"
   done
   if contains_harness kimicode; then
-    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "" "$uninstall kimicode"
+    doctor="node $(short_path "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs")"
+    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "$doctor" "$uninstall kimicode"
   fi
   if contains_harness antigravity; then
-    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "" "$uninstall antigravity"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/antigravity/scripts/ov-memory-doctor.mjs")"
+    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "$doctor" "$uninstall antigravity"
   fi
   if contains_harness codebuddy; then
-    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/codebuddy/marketplace/openviking-memory/agent-integrations/codebuddy/scripts/ov-memory-doctor.mjs")"
+    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "$doctor" "$uninstall codebuddy"
   fi
   if contains_harness qoder; then
-    next_steps "Qoder CLI" "$(t "start a new $(qoder_clis | sed 's/ / or /') session" "新建一个 $(qoder_clis | sed 's/ / 或 /') 会话")" "$rerun" "" "$uninstall qoder"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs")"
+    next_steps "Qoder CLI" "$(t "start a new $(qoder_clis | sed 's/ / or /') session" "新建一个 $(qoder_clis | sed 's/ / 或 /') 会话")" "$rerun" "$doctor" "$uninstall qoder"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
     next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \

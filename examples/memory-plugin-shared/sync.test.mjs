@@ -107,9 +107,9 @@ test("every shared module is reachable from some plugin", async () => {
   );
 });
 
-test("vendored skills are byte-identical to examples/skills", async () => {
-  for (const { skill, dir } of SKILL_TARGETS) {
-    const files = (await readdir(join(SKILLS_DIR, skill))).sort();
+test("vendored skills are byte-identical to their source", async () => {
+  for (const { skill, dir, source = SKILLS_DIR } of SKILL_TARGETS) {
+    const files = (await readdir(join(source, skill))).sort();
     assert.ok(files.includes("SKILL.md"), `${skill} must ship a SKILL.md`);
 
     const target = join(dir, skill);
@@ -121,7 +121,7 @@ test("vendored skills are byte-identical to examples/skills", async () => {
     for (const file of files) {
       assert.equal(
         await readFile(join(target, file), "utf-8"),
-        await readFile(join(SKILLS_DIR, skill, file), "utf-8"),
+        await readFile(join(source, skill, file), "utf-8"),
         `${relative(ROOT, join(target, file))} is out of sync; run node examples/memory-plugin-shared/sync.mjs`,
       );
     }
@@ -130,12 +130,12 @@ test("vendored skills are byte-identical to examples/skills", async () => {
 
 // copySkill copies a flat file list; a subdirectory would crash the sync.
 test("synced skills keep a flat file layout", async () => {
-  for (const skill of new Set(SKILL_TARGETS.map((target) => target.skill))) {
-    const entries = await readdir(join(SKILLS_DIR, skill), { withFileTypes: true });
+  for (const sourceDir of new Set(SKILL_TARGETS.map((target) => join(target.source || SKILLS_DIR, target.skill)))) {
+    const entries = await readdir(sourceDir, { withFileTypes: true });
     assert.deepEqual(
       entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
       [],
-      `examples/skills/${skill} must not contain subdirectories`,
+      `${relative(ROOT, sourceDir)} must not contain subdirectories`,
     );
   }
 });
