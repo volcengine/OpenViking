@@ -37,6 +37,7 @@ import '@openviking/react/components/agent-connect/style.css';
 | ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
 | apiKey           | 写入接入说明的 API Key，界面脱敏显示，复制时使用原值                                               | `string`                                    | 必填                                                    |
 | baseUrl          | OpenViking 服务地址，替换接入说明里的默认地址                                                      | `string`                                    | `https://api.vikingdb.cn-beijing.volces.com/openviking` |
+| isPrelaunch      | 使用预发布接入地址（优先于 baseUrl），适用于所有接入示例                                           | `boolean`                                   | `false`                                                 |
 | isEnterprise     | 企业版数据库标识，为支持官方安装器的 Agent 使用团队接入文案                                        | `boolean`                                   | `false`                                                 |
 | agreementUrl     | 用户协议链接，提供后页脚显示协议链接，省略时只显示数据访问提示                                     | `string`                                    | -                                                       |
 | showOverseasTag  | 「境外」标签的范围：省略时标记 Codex 和 Claude Code，`true` 标记全部适用的 Agent，`false` 隐藏标签 | `boolean`                                   | -                                                       |
