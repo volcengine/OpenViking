@@ -2809,12 +2809,16 @@ class VikingVectorIndexBackend:
 
     async def delete_uris(
         self, ctx: RequestContext, uris: List[str], *, recursive: bool = False
-    ) -> None:
+    ) -> int:
+        """Return the number of records submitted for URI-scoped deletion."""
+        deleted_count = 0
         if recursive:
             backend = await self._get_backend_for_context(ctx)
             for uri in uris:
-                await backend.delete_by_filter(self._uri_transfer_filter(ctx, uri, recursive=True))
-            return
+                deleted_count += await backend.delete_by_filter(
+                    self._uri_transfer_filter(ctx, uri, recursive=True)
+                )
+            return deleted_count
         for uri in uris:
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
@@ -2822,7 +2826,8 @@ class VikingVectorIndexBackend:
             ]
 
             backend = await self._get_backend_for_context(ctx)
-            await backend.delete_by_filter(And(conds))
+            deleted_count += await backend.delete_by_filter(And(conds))
+        return deleted_count
 
     def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
         scopes: List[FilterExpr] = [Eq("uri", uri)]

@@ -23,6 +23,8 @@ Once installed, start a new Cursor session and ask it to follow https://docs.ope
 - The OpenViking MCP server with tools such as `search`, `read`, `remember`, and `add_skill`; `search` with `mode="context"` returns assembled context.
 - An always-on Rule and the `openviking-memory` Skill, which tell the Agent how to use injected context and memory tools, plus the `openviking-skills` Skill for finding, using, creating (`add_skill`), sharing, and migrating skills stored in OpenViking.
 - The `ov-experience-memory` Skill, which has the Agent search and apply prior task Experience before executable work. Successful OpenViking MCP `read` calls are captured with the conversation. When the `session commit` containing the read produces trajectories, those trajectories can be queried for the Experience.
+- The `openviking-rule-search` Skill, which retrieves the OpenViking Rules that apply to a planned action and checks compliance.
+- The `ov-memory-doctor` Skill, which diagnoses and fixes the integration's install, the client configuration, and the connection to the OpenViking server by running `node ~/.openviking/agent-integrations/cursor/scripts/ov-memory-doctor.mjs`.
 
 ## Verify
 

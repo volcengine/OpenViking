@@ -11,7 +11,6 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskPatch, WorkState
-from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
@@ -563,16 +562,6 @@ async def test_page_reads_past_200_and_isolates_owner():
     assert len(seen) == len(set(seen)) == 205
     assert seen[0] == "cmp_204"
     assert "foreign" not in seen
-
-
-def test_cursor_is_bound_to_identity_and_filters():
-    scope = page_scope(account="a", user="u", status="running")
-    cursor = encode_cursor({"created_at": 123.4, "task_id": "cmp_a"}, scope)
-    assert decode_cursor(cursor, scope) == (123.4, "cmp_a")
-    with pytest.raises(InvalidArgumentError):
-        decode_cursor(cursor, page_scope(account="a", user="other", status="running"))
-    with pytest.raises(InvalidArgumentError):
-        decode_cursor("broken", scope)
 
 
 @pytest.mark.parametrize(

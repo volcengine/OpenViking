@@ -73,9 +73,13 @@ test("a grep for the literal text viking:// is left alone", () => {
   assert.deepEqual(qoder.guard(event("Grep", { pattern: "viking://", path: "/tmp" })), {});
 });
 
-test("a shell command carrying viking:// is never denied", () => {
+test("a shell command carrying viking:// runs with a notice and no decision", () => {
   const out = qoder.guard(event("Bash", { command: "cat viking://user/x" }));
-  assert.ok(!out.hookSpecificOutput || !out.hookSpecificOutput.permissionDecision);
+  assert.deepEqual(Object.keys(out.hookSpecificOutput), ["hookEventName", "additionalContext"]);
+  assert.match(out.hookSpecificOutput.additionalContext, /mcp_call\(toolName="mcp__openviking__read"/);
+  assert.deepEqual(qoder.guard(event("Bash", { command: "ls /tmp" })), {});
+  const matcher = JSON.parse(readFileSync(join(ROOT, "hosts", "qoder", "hooks.json"), "utf8")).hooks.PreToolUse[0].matcher;
+  assert.ok(matcher.split("|").includes("Bash"), matcher);
 });
 
 test("an empty or malformed payload produces no opinion and exits cleanly", async () => {

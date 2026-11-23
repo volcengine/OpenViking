@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import base64
 import json
 import os
 import threading
@@ -29,12 +30,15 @@ from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.cache_config import CacheConfig
 from tests.server.account_store_fakes import InMemoryAGFS
 
 
@@ -439,7 +443,7 @@ async def test_mysql_load_creates_default_account():
         await engine.dispose()
 
 
-async def test_distributed_authentication_state_is_shared_and_service_scoped():
+async def test_distributed_authentication_state_is_shared_and_service_scoped(tmp_path):
     """Key rotation and group deletion refresh caches within the owning service."""
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     redis_url = os.environ.get("OV_TEST_REDIS")
@@ -448,35 +452,44 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
 
     service_name = f"test-{uuid4().hex}"
     isolated_service_name = f"test-{uuid4().hex}"
-    key_prefix = f"ov:test:{uuid4().hex}"
     params = {
         "mysql": json.loads(raw_mysql),
-        "cache": {
-            "provider": "redis",
-            "params": {
-                "mode": "standalone",
-                "endpoints": [redis_url],
-                "key_prefix": key_prefix,
-            },
-        },
+        "cache": {"instance": "accountstore"},
     }
+    cache_client = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(path=str(tmp_path), backend="memory"),
+            cache=CacheConfig(
+                instances={
+                    "default": {"provider": "redis", "params": {"endpoints": [redis_url]}},
+                    "accountstore": {
+                        "provider": "redis",
+                        "params": {"endpoints": [redis_url]},
+                    },
+                }
+            ),
+            service_name=service_name,
+            account_store_cache_instance="accountstore",
+        )
+    )
+    viking_fs = SimpleNamespace(agfs=cache_client)
     writer = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
     )
     reader = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
     )
     isolated = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=isolated_service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
@@ -562,15 +575,22 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
     finally:
         try:
 
-            async def clear_test_cache():
-                redis_client = writer._store._redis
-                if redis_client is None:
-                    return
-                keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}:*")]
+            redis = pytest.importorskip("redis.asyncio")
+            redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+            try:
+                account_tag = base64.urlsafe_b64encode(
+                    f"{service_name}\0acme".encode()
+                ).decode().rstrip("=")
+                keys = [
+                    key
+                    async for key in redis_client.scan_iter(
+                        match=f"ov:account-cache:v2:{{{account_tag}}}:*"
+                    )
+                ]
                 if keys:
                     await redis_client.delete(*keys)
-
-            await writer._store._redis_runtime.run(clear_test_cache)
+            finally:
+                await redis_client.aclose()
             async with engine.begin() as connection:
                 await connection.execute(
                     delete(Account).where(
@@ -794,10 +814,15 @@ async def test_redis_batch_group_removal_invalidates_account_after_attempt(monke
         _engine_options={},
         remove_group_members=AsyncMock(return_value=True),
     )
+    cache_runtime = SimpleNamespace(
+        default_ttl_seconds=60,
+        register_script=lambda *_: None,
+    )
     store = RedisMySQLAccountStore(
         service_name="test-remove",
         mysql_store=cast(MySQLAccountStore, mysql),
-        params={"cache": {"provider": "redis", "params": {}}},
+        cache_runtime=cache_runtime,
+        params={"cache": {"instance": "default"}},
     )
 
     bump = AsyncMock()

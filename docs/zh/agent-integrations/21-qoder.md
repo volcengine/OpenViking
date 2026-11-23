@@ -25,7 +25,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - 生命周期 Hook：加载画像、提问时召回、捕获对话、提交 session，以及 `viking://` URI 保护。
 - 以 stdio 代理形式提供的 OpenViking MCP 服务，含 `search`、`read`、`remember`、`add_skill` 等工具。
-- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
+- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
 
 `PATH` 中的每个 Qoder CLI 版本都会装上插件：`qodercli` 装在 `~/.qoder`（`QODER_CONFIG_DIR`），国内版 `qoderclicn` 装在 `~/.qoder-cn`（`QODERCN_CONFIG_DIR`）。卸载时两处都会移除。
 
@@ -39,7 +39,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。
-- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。`mcp_call` 上的第二个 `PreToolUse` 条目在 `session_history` 调用没传 `session` 参数时补上当前会话。
+- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。`mcp_call` 上的第二个 `PreToolUse` 条目在 `session_history` 调用没传 `session` 参数时补上当前会话。
 - 压缩或恢复之后，**SessionStart** 还会追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具。
 - **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
 

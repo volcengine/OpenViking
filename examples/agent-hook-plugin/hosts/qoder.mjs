@@ -18,7 +18,7 @@ function viaMcpCall(example) {
 }
 
 const QODER_TOOL_HINTS = Object.fromEntries(
-  ["read", "glob", "grep", "edit", "write"].map((name) => {
+  ["read", "glob", "grep", "edit", "write", "bash"].map((name) => {
     const { tool, example } = DEFAULT_TOOL_HINTS[name];
     return [name, { tool, example: (uri, input) => viaMcpCall(example(uri, input)) }];
   }),

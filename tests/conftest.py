@@ -5,6 +5,7 @@
 
 import asyncio
 import socket
+from functools import partial
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -51,6 +52,37 @@ def test_data_dir(temp_dir: Path) -> Path:
     data_dir = temp_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+@pytest.fixture
+def mock_openai_transport(monkeypatch):
+    """Give the real OpenAI SDK an explicit in-process HTTP transport."""
+    import httpx
+    import openai
+
+    def install(handler):
+        transport = httpx.MockTransport(handler)
+        sync_client = partial(httpx.Client, transport=transport)
+        async_client = partial(httpx.AsyncClient, transport=transport)
+
+        def inject_http_client(sdk_class, make_http_client):
+            original_init = sdk_class.__init__
+
+            def init(client, **kwargs):
+                if kwargs.get("http_client") is None:
+                    kwargs["http_client"] = make_http_client()
+                original_init(client, **kwargs)
+
+            monkeypatch.setattr(sdk_class, "__init__", init)
+
+        # Embedders pass their own HTTP clients. Route those through the same
+        # transport, and inject a client for backends that omit http_client.
+        monkeypatch.setattr(openai, "DefaultHttpxClient", sync_client)
+        monkeypatch.setattr(openai, "DefaultAsyncHttpxClient", async_client)
+        inject_http_client(openai.OpenAI, sync_client)
+        inject_http_client(openai.AsyncOpenAI, async_client)
+
+    return install
 
 
 @pytest.fixture
@@ -105,6 +137,7 @@ async def service(
         config_dict={
             # Domain tests use a file-only fake; Watch leadership has dedicated fixtures.
             "enable_watch_scheduler": False,
+            "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "test-key"},
             "storage": {
                 "workspace": str(test_data_dir),
                 "agfs": {"backend": "local"},

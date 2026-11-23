@@ -383,3 +383,20 @@ function response(result, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+test("mcpEnabled false mounts neither the MCP tools nor the skills", () => {
+  const mounted = (input) => {
+    let count = 0;
+    apply({
+      logger: { debug() {} },
+      provide() {},
+      effect: (execute) => { execute(); return async () => {}; },
+      tools: { register() {} },
+      plugin() { count += 1; },
+      on() {},
+    }, { endpoint: "http://127.0.0.1:1933", workspacePeer: false, ...input });
+    return count;
+  };
+  assert.equal(mounted({}), 2);
+  assert.equal(mounted({ mcpEnabled: false }), 0);
+});

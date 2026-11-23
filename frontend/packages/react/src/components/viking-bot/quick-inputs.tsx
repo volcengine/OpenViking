@@ -19,8 +19,10 @@ export function QuickInputs({
           disabled={disabled}
           onClick={() => onSelect(item)}
         >
-          {item.icon}
-          {item.label}
+          {item.icon && (
+            <span className="ov-viking-bot__quick-input-icon">{item.icon}</span>
+          )}
+          <span className="ov-viking-bot__quick-input-label">{item.label}</span>
         </button>
       ))}
     </div>

@@ -502,7 +502,7 @@ class VikingDBManagerProxy:
     async def delete_account_data(self, account_id: str) -> int:
         return await self._manager.delete_account_data(account_id, ctx=self._ctx)
 
-    async def delete_uris(self, uris: List[str]) -> None:
+    async def delete_uris(self, uris: List[str]) -> int:
         return await self._manager.delete_uris(self._ctx, uris)
 
     async def copy_uri_mapping(

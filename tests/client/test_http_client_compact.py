@@ -125,21 +125,13 @@ async def test_add_resource_omits_empty_args_and_null_fields():
 
 async def test_add_resource_keeps_explicit_args():
     client, fake = _client_with_fake()
-
-    await client.add_resource("https://example.com/doc", args={"feishu_access_token": "u-x"})
-
-    payload = fake.calls[-1]["json"]
-    assert payload["args"] == {"feishu_access_token": "u-x"}
-
-
-async def test_add_resource_keeps_explicit_no_split_mode():
-    client, fake = _client_with_fake()
-
+    args = {"feishu_access_token": "u-x", "parse_mode": "no_split"}
     await client.add_resource(
-        "https://example.com/doc",
-        args={"parse_mode": "no_split"},
+        "https://example.feishu.cn/docx/example",
+        options={"args": args},
     )
 
     payload = fake.calls[-1]["json"]
-    assert payload["args"] == {"parse_mode": "no_split"}
+    assert payload["args"] == args
+    assert "feishu_access_token" not in payload
     assert "parse_mode" not in payload

@@ -23,6 +23,8 @@ curl -fsSL https://openviking.ai/install | bash
 - OpenViking MCP Server：提供 `search`、`read`、`remember`、`add_skill` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
 - always-on Rule 和 `openviking-memory` Skill：告诉 Agent 如何使用已注入的上下文和记忆工具；另有 `openviking-skills` Skill，讲如何查找、使用、创建（`add_skill`）、共享和迁移存放在 OpenViking 里的 skill。
 - `ov-experience-memory` Skill：让 Agent 在执行类任务前检索并应用以往任务的 Experience。成功的 OpenViking MCP `read` 会与对话一起上报；包含该读取记录的 `session commit` 生成轨迹后，可查询经验的应用轨迹。
+- `openviking-rule-search` Skill：检索适用于当前操作的 OpenViking Rule，并检查是否合规。
+- `ov-memory-doctor` Skill：运行 `node ~/.openviking/agent-integrations/cursor/scripts/ov-memory-doctor.mjs`，诊断并修复集成安装、客户端配置以及与 OpenViking 服务端的连接。
 
 ## 验证
 

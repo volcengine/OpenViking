@@ -104,6 +104,9 @@ async function sessionStart(ctx) {
       return pointer;
     }
     await writeHookState(clientId, ctx.nativeSessionId, { ...next, lastSessionStartAt: now });
+    if (host.pendingReplayLimit && !process.env.OPENVIKING_PENDING_REPLAY_LIMIT) {
+      process.env.OPENVIKING_PENDING_REPLAY_LIMIT = String(host.pendingReplayLimit);
+    }
     await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
     if ((host.profileStage || "session-start") !== "session-start") return pointer;
     const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {

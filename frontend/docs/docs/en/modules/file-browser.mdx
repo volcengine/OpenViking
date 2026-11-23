@@ -343,14 +343,16 @@ All fields are optional, and omitted fields follow `locale`.
 
 All fields are optional, and omitted fields follow `locale`. Text inside a dashboard is overridden through that dashboard's own `labels`, which you pass when you render it in `renderDashboard`.
 
-| Property        | Description                                                | Type     | Default                                  |
-| --------------- | ---------------------------------------------------------- | -------- | ---------------------------------------- |
-| experienceTitle | Title of the experience dashboard tab                      | `string` | `'Experience dashboard'`                 |
-| wikiTitle       | Title of the Wiki dashboard tab                            | `string` | `'Dashboard'`                            |
-| openExperience  | Name of the experience dashboard icon in the tree          | `string` | `'Open experience dashboard'`            |
-| openWiki        | Name of the Wiki dashboard icon in the tree                | `string` | `'Open Wiki dashboard'`                  |
-| wikiConflicts   | Name of the Wiki dashboard icon when conflicts are pending | `string` | `'View pending Wiki conflicts'`          |
-| failed          | Message shown when dashboard information fails to load     | `string` | `'Could not load dashboard information'` |
+| Property              | Description                                                                    | Type                        | Default                                     |
+| --------------------- | ------------------------------------------------------------------------------ | --------------------------- | ------------------------------------------- |
+| experienceTitle       | Title of the experience dashboard tab                                          | `string`                    | `'Experience dashboard'`                    |
+| wikiTitle             | Title of the Wiki dashboard tab                                                | `string`                    | `'Dashboard'`                               |
+| openExperience        | Name of the experience dashboard icon in the tree                              | `string`                    | `'Open experience dashboard'`               |
+| openWiki              | Name of the Wiki dashboard icon in the tree                                    | `string`                    | `'Open Wiki dashboard'`                     |
+| wikiConflicts         | Name of the Wiki dashboard icon when conflicts are pending                     | `string`                    | `'View pending Wiki conflicts'`             |
+| wikiConflictCount     | Tooltip for the Wiki tab badge: unresolved conflict records in a file          | `(count: number) => string` | `'{count} unresolved conflicts'`            |
+| wikiConflictFileCount | Tooltip for the Wiki tab badge: files with unresolved conflicts in a directory | `(count: number) => string` | `'{count} files with unresolved conflicts'` |
+| failed                | Message shown when dashboard information fails to load                         | `string`                    | `'Could not load dashboard information'`    |
 
 ### FileBrowserWorkflowLabels
 

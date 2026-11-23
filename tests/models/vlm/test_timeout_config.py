@@ -10,48 +10,20 @@ OpenAI and LiteLLM clients.
 """
 
 import asyncio
+import json
 from unittest import mock
 
+import httpx
 import pytest
+from litellm import ModelResponse
 from pydantic import ValidationError
 
-from openviking.models.vlm.backends.openai_vlm import (
-    OpenAIVLM,
-    _build_openai_client_kwargs,
-)
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
-def test_vlm_config_accepts_timeout():
-    cfg = VLMConfig(model="gpt-4o-mini", api_key="sk-x", timeout=120.0)
-    assert cfg.timeout == 120.0
-
-
-def test_vlm_config_timeout_defaults_to_600():
-    cfg = VLMConfig(model="gpt-4o-mini", api_key="sk-x")
-    assert cfg.timeout == 600.0
-
-
 def test_vlm_config_rejects_non_positive_timeout():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="timeout"):
         VLMConfig(model="gpt-4o-mini", api_key="sk-x", timeout=0)
-
-
-def test_build_openai_client_kwargs_default_timeout():
-    kwargs = _build_openai_client_kwargs("openai", "sk-x", "https://example.invalid", None, None)
-    assert kwargs["timeout"] == 600.0
-
-
-def test_build_openai_client_kwargs_custom_timeout():
-    kwargs = _build_openai_client_kwargs(
-        "openai",
-        "sk-x",
-        "https://example.invalid",
-        None,
-        None,
-        timeout=120.0,
-    )
-    assert kwargs["timeout"] == 120.0
 
 
 @pytest.mark.asyncio
@@ -112,71 +84,83 @@ async def test_openai_vlm_applies_http_config_and_closes_clients(monkeypatch):
         assert async_client.is_closed()
 
 
-def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
-    vlm = OpenAIVLM(
-        {
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "api_key": "sk-x",
-            "api_base": "https://example.invalid",
-        }
+def test_openai_completion_uses_default_timeout(mock_openai_transport):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    mock_openai_transport(respond)
+    config = VLMConfig(
+        provider="openai",
+        model="gpt-4o-mini",
+        api_key="test-key",
+        api_base="https://provider.example.test/v1",
     )
-    assert vlm.timeout == 600.0
+    try:
+        assert config.get_completion("hello") == "ok"
+    finally:
+        config.close()
+    [request] = requests
+    assert request.extensions["timeout"]["read"] == 600.0
 
-    with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
-        vlm.get_client()
-    assert fake.call_args.kwargs.get("timeout") == 600.0
-    assert "http_client" not in fake.call_args.kwargs
 
-
-def test_litellm_build_kwargs_includes_timeout():
-    from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
-
-    vlm = LiteLLMVLMProvider(
-        {
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "api_key": "sk-x",
-            "api_base": "https://example.invalid",
-            "timeout": 90.0,
-        }
+def test_litellm_completion_uses_configured_timeout(monkeypatch):
+    provider = mock.Mock(
+        return_value=ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
     )
-    kwargs = vlm._build_text_kwargs(prompt="hi")
-    assert kwargs["timeout"] == 90.0
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.completion", provider)
+    config = VLMConfig(
+        provider="litellm", model="openai/gpt-4o-mini", api_key="test-key", timeout=90.0
+    )
+    try:
+        assert config.get_completion("hello") == "ok"
+    finally:
+        config.close()
+
+    provider.assert_called_once()
+    assert provider.call_args.kwargs["timeout"] == 90.0
 
 
-def test_vlm_config_propagates_timeout_to_codex_backend():
-    cfg = VLMConfig(
+def test_codex_completion_uses_configured_timeout(mock_openai_transport):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        event = {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "timeout ok"}],
+                    }
+                ]
+            },
+        }
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"Content-Type": "text/event-stream"},
+            text=f"event: response.completed\ndata: {json.dumps(event)}\n\n",
+        )
+
+    mock_openai_transport(respond)
+    config = VLMConfig(
         provider="openai-codex",
         model="gpt-5.3-codex",
         api_key="oauth-token",
-        api_base="https://example.invalid/codex",
+        api_base="https://provider.example.test/codex",
         timeout=45.0,
     )
 
-    vlm = cfg.get_vlm_instance()
+    assert config.get_completion("hello") == "timeout ok"
 
-    assert vlm.timeout == 45.0
-
-
-def test_codex_vlm_propagates_config_timeout():
-    from openviking.models.vlm.backends.codex_vlm import CodexVLM
-    from tests.unit.test_codex_vlm import _build_final_response, _MockResponsesStream
-
-    vlm = CodexVLM(
-        {
-            "provider": "openai-codex",
-            "model": "gpt-5.3-codex",
-            "api_key": "oauth-token",
-            "api_base": "https://example.invalid/codex",
-            "timeout": 45.0,
-        }
-    )
-
-    with mock.patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI") as fake:
-        fake.return_value.responses.create.return_value = _MockResponsesStream(
-            _build_final_response("timeout ok")
-        )
-        assert vlm.get_completion("hello") == "timeout ok"
-
-    assert fake.call_args.kwargs.get("timeout") == 45.0
+    [request] = requests
+    assert request.url.path == "/codex/responses"
+    assert request.extensions["timeout"]["read"] == 45.0
