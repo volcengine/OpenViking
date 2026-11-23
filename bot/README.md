@@ -426,6 +426,14 @@ For the complete loading order, file responsibilities, and customization boundar
 
 `readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.
 
+### Webz.io News Search
+
+Set `bot.tools.web.search.backend` to `"webz"` in `ov.conf` and provide
+`WEBZ_API_TOKEN` in the VikingBot process environment. The `web_search` tool
+will search recent news and accepts optional language, country, publication date,
+sentiment, domain, and ticker filters. The default `"auto"` mode uses the existing
+general web providers.
+
 ### Scheduled Task Configuration
 
 Scheduled tasks are disabled by default. Set `bot.tools.cron.enabled` to `true` in `ov.conf` to enable them:
