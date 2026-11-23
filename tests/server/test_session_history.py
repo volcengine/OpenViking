@@ -854,7 +854,7 @@ async def test_one_read_per_tool_result_per_call(service, monkeypatch):
     monkeypatch.setattr(service.viking_fs, "read_file", counting_read)
     monkeypatch.setattr(service.fs, "make_visible", counting_visible)
     text = await _call(action="search", query="xxxx", limit=30, session=sid)
-    assert len(_ids(text)) == 30
+    assert len(_printed(text)) == 30
     assert sum(uri.endswith("output.txt") for uri in reads) == 1
     assert sum(uri.endswith("output.txt") for uri in visible) == 1
 
@@ -1407,6 +1407,26 @@ async def test_a_long_line_prints_a_window_around_the_match(service):
     ]
     assert f"[{h}#1 @{window}] user · 2026-11-02T00:00:00Z · part of a 2006-char line" in found
     assert f"[{h}#1 @{text.index(whole_line)}]\n" in found
+    await _read_back(printed, sid)
+
+
+async def test_far_apart_matches_in_a_long_line_each_get_a_window(service):
+    sid = "hist-long-line-many"
+    h = hashlib.sha256(sid.encode()).hexdigest()[:6]
+    rows = [f"shard {n:02d} note: retried txn TX-{n:04d} once" + "." * 600 for n in range(8)]
+    text = " ".join(rows) + " retried retried"
+    await _add(service, sid, "user", TextPart(text), at="2026-11-02T00:00:00Z")
+
+    found = await _call(action="search", query="retried", session=sid)
+    printed = _printed(found)
+    assert 'Search "retried": 9 matching lines in 1 item, oldest first.' in found
+    assert len(printed) == history.LINES_PER_ITEM
+    assert [f"TX-{n:04d}" in line for n, (_id, _offset, line) in enumerate(printed)] == [True] * 5
+    offsets = [offset for _id, offset, _line in printed]
+    ends = [offset + len(line) for _id, offset, line in printed]
+    assert all(end <= start for end, start in zip(ends, offsets[1:], strict=False))
+    sixth = text.index("retried txn TX-0005") - history.LINE_WINDOW_CHARS
+    assert f"(4 more matching lines in {h}#1, from @{sixth}.)" in found
     await _read_back(printed, sid)
 
 

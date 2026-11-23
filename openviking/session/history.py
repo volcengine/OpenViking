@@ -1059,24 +1059,28 @@ class _Line:
 
 
 def _matching_lines(text: str, spans: Sequence[tuple[int, int]]) -> List[_Line]:
-    """The distinct lines holding a match, in order; a long line becomes a window."""
+    """The distinct lines holding a match, in order.
+
+    A long line is printed as a window around a match; a match beyond the window gets its own.
+    """
     breaks = [match.span() for match in _LINE_BREAK_RE.finditer(text)]
     starts = [0, *(end for _start, end in breaks)]
     ends = [*(start for start, _end in breaks), len(text)]
     lines: List[_Line] = []
-    following = 0  # start of the line after the last one printed
+    covered = 0  # matches before this position are already printed
     for match_start, match_end in sorted(spans):
-        if lines and match_start < following:
+        if lines and match_start < covered:
             continue
         index = bisect.bisect_right(starts, match_start) - 1
-        following = starts[index + 1] if index + 1 < len(starts) else len(text) + 1
         start, end = starts[index], ends[index]
         if end - start > LONG_LINE_CHARS:
-            window_start = max(start, match_start - LINE_WINDOW_CHARS)
+            window_start = max(start, covered, match_start - LINE_WINDOW_CHARS)
             window_end = min(end, max(match_end, match_start + 1) + LINE_WINDOW_CHARS)
             lines.append(_Line(window_start, window_end, end - start))
+            covered = window_end
         else:
             lines.append(_Line(start, end, 0))
+            covered = starts[index + 1] if index + 1 < len(starts) else len(text) + 1
     return lines
 
 
