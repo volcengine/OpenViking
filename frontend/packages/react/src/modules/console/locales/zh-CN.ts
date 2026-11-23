@@ -46,7 +46,7 @@ const messages: typeof enUS = {
   },
   compileQuickInputs: {
     createWiki: {
-      label: '创建 Wiki',
+      label: 'Wiki',
       prompt: '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
     },
     dailyReport: {

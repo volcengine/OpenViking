@@ -107,7 +107,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
     quickInputs: [
       {
         id: 'wiki',
-        label: zh ? '创建 Wiki' : 'Create Wiki',
+        label: 'Wiki',
         prompt: prompts[0],
         icon: <VikingBotIcon name="book" viewBox="-0.833333 -2.357143 16 16" />,
       },
