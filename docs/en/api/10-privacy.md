@@ -634,6 +634,8 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 
 > Output replacement applies only to the external command's `stdout` and `stderr`, not to files it writes or data it sends over the network.
 
+When both streams are redirected into a regular log file, the CLI relays them together in write order if the system confirms they share one open file description. Separate relays preserve the order within each stream.
+
 ```bash
 # 1. Pass via environment variable (recommended to keep sensitive values out of argv)
 ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user

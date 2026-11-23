@@ -633,6 +633,8 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 
 > 输出替换仅作用于该外部命令的 `stdout` 和 `stderr`，不会处理其写入文件或发送到网络的内容。
 
+两个流重定向到同一个普通日志文件时，系统能确认它们共享同一次打开，CLI 就会按写入顺序合并转发。分开转发时，每个流各自的顺序照常保留。
+
 ```bash
 # 1. 通过环境变量传入（推荐，避免敏感值出现在进程参数中）
 ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user

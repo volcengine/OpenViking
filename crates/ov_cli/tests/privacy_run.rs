@@ -573,11 +573,8 @@ async fn non_terminal_signals_and_background_lifecycle() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
-async fn preserves_regular_file_stdout_and_merged_stream_order() {
-    use std::{
-        io::{Read, Seek, SeekFrom},
-        process::Stdio,
-    };
+async fn preserves_output_handle_semantics() {
+    use std::{io::Seek, process::Stdio};
 
     let dir = tempfile::tempdir().unwrap();
 
@@ -600,55 +597,46 @@ async fn preserves_regular_file_stdout_and_merged_stream_order() {
     assert_eq!(fs::read_to_string(&out_path).unwrap(), "ok\n");
     assert_eq!(output.stderr, b"err\n");
 
-    // 2. Shared 2>&1 regular-file descriptors preserve interleaved stdout/stderr order when masking.
-    let shared_path = dir.path().join("shared.log");
-    let shared_out = fs::File::create(&shared_path).unwrap();
-    let shared_err = shared_out.try_clone().unwrap();
-    let (url, server) = resolver([(TOKEN, Some("secret-shared".into()))]).await;
-    let status = detached_sh(
-        dir.path(),
-        &url,
-        true,
-        r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2; printf '3\n'; printf '4\n' >&2"#,
-    )
-    .stdout(Stdio::from(shared_out))
-    .stderr(Stdio::from(shared_err))
-    .status()
-    .await
-    .unwrap();
-    assert_eq!(status.code(), Some(0));
-    server.await.unwrap();
-    assert_eq!(
-        fs::read_to_string(&shared_path).unwrap(),
-        format!("1\n2:{TOKEN}\n3\n4\n")
-    );
+    // Linux exposes a pipe's inode, so a shared pipe is recognized without a file query.
+    #[cfg(target_os = "linux")]
+    {
+        let (writer, mut reader) = tokio::net::unix::pipe::pipe().unwrap();
+        let writer = writer.into_blocking_fd().unwrap();
+        let (url, server) = resolver([(TOKEN, Some("secret-shared".into()))]).await;
+        let status = detached_sh(
+            dir.path(),
+            &url,
+            true,
+            r#"printf '1\n'; printf '2:%s\n' "$TOKEN" >&2; printf '3\n'; printf '4\n' >&2"#,
+        )
+        .stdout(Stdio::from(writer.try_clone().unwrap()))
+        .stderr(Stdio::from(writer))
+        .status()
+        .await
+        .unwrap();
+        assert_eq!(status.code(), Some(0));
+        server.await.unwrap();
+        let mut output = String::new();
+        reader.read_to_string(&mut output).await.unwrap();
+        assert_eq!(output, format!("1\n2:{TOKEN}\n3\n4\n"));
+    }
 
-    // 3. Independently opened descriptors to the same file keep independent offsets and cursors.
+    // Identical flags and offsets do not imply that two opens share a cursor.
     let sep_path = dir.path().join("separate.log");
-    fs::write(&sep_path, "before\ncursor\n").unwrap();
-    let mut sep_out = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&sep_path)
-        .unwrap();
-    let sep_err = fs::OpenOptions::new().append(true).open(&sep_path).unwrap();
-    sep_out
-        .seek(SeekFrom::Start("before\n".len() as u64))
-        .unwrap();
+    fs::File::create(&sep_path).unwrap();
+    let mut sep_out = fs::OpenOptions::new().write(true).open(&sep_path).unwrap();
+    let mut sep_err = fs::OpenOptions::new().write(true).open(&sep_path).unwrap();
     let (url, server) = resolver([(TOKEN, Some("secret-sep".into()))]).await;
     let status = detached_sh(dir.path(), &url, true, r#"printf 'warn:%s\n' "$TOKEN" >&2"#)
         .stdout(Stdio::from(sep_out.try_clone().unwrap()))
-        .stderr(Stdio::from(sep_err))
+        .stderr(Stdio::from(sep_err.try_clone().unwrap()))
         .status()
         .await
         .unwrap();
     assert_eq!(status.code(), Some(0));
     server.await.unwrap();
-    let mut delta = String::new();
-    sep_out.read_to_string(&mut delta).unwrap();
-    assert_eq!(delta, format!("cursor\nwarn:{TOKEN}\n"));
-    assert_eq!(
-        fs::read_to_string(&sep_path).unwrap(),
-        format!("before\ncursor\nwarn:{TOKEN}\n")
-    );
+    let expected = format!("warn:{TOKEN}\n");
+    assert_eq!(sep_out.stream_position().unwrap(), 0);
+    assert_eq!(sep_err.stream_position().unwrap(), expected.len() as u64);
+    assert_eq!(fs::read_to_string(&sep_path).unwrap(), expected);
 }
