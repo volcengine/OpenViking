@@ -1,9 +1,13 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 // The disk side of task directories (workers scheduler): what a directory
 // holds, which of it a package manager or build tool makes again from what is
@@ -23,13 +27,17 @@ const BUILD_DIRS = new Map([['target', ['Cargo.toml', 'pom.xml']]]);
 
 export const TRASH = '.trash';
 
-// What a directory takes on disk, and the dependency folders in it. Links are
-// counted as themselves and never followed; a file with several links counts
-// once. Nothing under `.git` or inside a dependency folder is a dependency
-// folder of its own. `stopped()` ends the walk early (shutdown).
+const GIT_TIMEOUT_MS = 30_000;
+
+// What a directory takes on disk, the dependency folders in it, and the git
+// repositories in it (each folder with a `.git`, a directory or the file of a
+// worktree or submodule). Links are counted as themselves and never followed;
+// a file with several links counts once. Nothing under `.git` or inside a
+// dependency folder is a dependency folder or a repository of its own.
+// `stopped()` ends the walk early (shutdown).
 export async function scanDir(root, { stopped = () => false } = {}) {
   const seen = new Set();
-  const result = { bytes: 0, dependencyBytes: 0, dependencies: [] };
+  const result = { bytes: 0, dependencyBytes: 0, dependencies: [], repos: [] };
   const size = (info) => {
     if (info.nlink > 1 && !info.isDirectory()) {
       const key = `${info.dev}:${info.ino}`;
@@ -43,6 +51,7 @@ export async function scanDir(root, { stopped = () => false } = {}) {
     let entries;
     try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return 0; }
     const names = new Set(entries.map((entry) => entry.name));
+    if (!inside && entries.some((entry) => entry.name === '.git' && (entry.isDirectory() || entry.isFile()))) result.repos.push(dir);
     let bytes = 0;
     const files = entries.filter((entry) => !entry.isDirectory());
     const stats = await Promise.all(files.map((entry) => fs.promises.lstat(path.join(dir, entry.name)).catch(() => null)));
@@ -67,6 +76,46 @@ export async function scanDir(root, { stopped = () => false } = {}) {
   };
   result.bytes = await walk(root, { inside: false });
   return result;
+}
+
+// The repositories among these that hold work which exists nowhere else, with
+// why: `uncommitted` changes (untracked files included), or `unpushed`
+// commits (on a branch, a tag, a detached HEAD or the stash) that no
+// remote-tracking branch has; a repository with no remote has nothing pushed.
+// A folder whose `.git` git does not take for a repository holds none. One
+// git cannot answer for (a timeout, an error, no git) is `unknown`: it may
+// hold such work.
+export async function unsavedWork(repos, { stopped = () => false, git = runGit } = {}) {
+  const found = [];
+  for (const repo of repos) {
+    if (stopped()) break;
+    const reason = await repoWork(repo, git);
+    if (reason) found.push({ repo, reason });
+  }
+  return found;
+}
+
+async function repoWork(repo, git) {
+  try {
+    if ((await git(repo, ['status', '--porcelain'])).trim()) return 'uncommitted';
+    if ((await git(repo, ['log', '--all', '--not', '--remotes', '--format=%H', '-1'])).trim()) return 'unpushed';
+    return null;
+  } catch (error) {
+    return /not a git repository/i.test(String(error?.stderr ?? '')) ? null : 'unknown';
+  }
+}
+
+// Read-only, and only this repository: never one a folder above it is in
+// (GIT_CEILING_DIRECTORIES), no lock a worker's git could trip on
+// (GIT_OPTIONAL_LOCKS), and no command its config names (core.fsmonitor).
+async function runGit(repo, args) {
+  const { stdout } = await execFileAsync('git', ['-C', repo, '-c', 'core.fsmonitor=false', ...args], {
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: 4 * 1024 * 1024,
+    windowsHide: true,
+    env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(repo), GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+  });
+  return stdout;
 }
 
 // Move a directory out of the way in one step: whatever runs next finds it

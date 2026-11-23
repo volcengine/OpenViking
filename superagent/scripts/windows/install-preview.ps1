@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
 # OpenViking SuperAgent installer for Windows x64. The steps and the words are scripts/install.sh's:
@@ -485,6 +485,78 @@ function Assert-SameRelease([string]$stageDir, [string]$existing) {
     }
 }
 
+# Reinstalling the same build must not look hung. The build writes the exact
+# commit into windows-preview.json, and extracting it twice produces the same
+# file count and byte size, so those two cheap checks identify the same release.
+# Hashing all 24k files twice (Assert-SameRelease) took minutes and printed
+# nothing; keep it for a tree whose metadata or shape differs.
+function Release-Identity([string]$dir) {
+    $meta = Join-Path $dir 'windows-preview.json'
+    if (-not (Test-Path -LiteralPath $meta -PathType Leaf)) { return $null }
+    try {
+        $json = Get-Content -LiteralPath $meta -Raw | ConvertFrom-Json
+        return "$($json.version)|$($json.commit)|$($json.node)"
+    } catch { return $null }
+}
+function Release-Shape([string]$root) {
+    $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+    if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Not a plain release directory: $root"
+    }
+    $count = 0
+    $bytes = 0L
+    $stack = New-Object 'System.Collections.Generic.Stack[string]'
+    $stack.Push($root)
+    while ($stack.Count) {
+        $directory = $stack.Pop()
+        foreach ($item in Get-ChildItem -LiteralPath $directory -Force) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Linked release entry: $($item.FullName)" }
+            if ($item.PSIsContainer) { $stack.Push($item.FullName) }
+            else { $count++; $bytes += $item.Length }
+        }
+    }
+    return "$count|$bytes"
+}
+function Get-ReleaseTreeDigest([string]$dir, [string]$node) {
+    $script = @'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+const root = process.argv[1];
+const hash = createHash("sha256");
+const walk = (directory) => {
+  const entries = fs.readdirSync(directory, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name);
+    const relative = path.relative(root, full).split(path.sep).join("/");
+    if (relative === "windows-preview.json") continue;
+    if (entry.isDirectory()) { walk(full); continue; }
+    const data = fs.readFileSync(full);
+    hash.update(relative); hash.update("\0"); hash.update(String(data.length)); hash.update("\0"); hash.update(data);
+  }
+};
+walk(root);
+process.stdout.write(hash.digest("hex"));
+'@
+    $out = & $node --input-type=module -e $script $dir
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+    return ($out | Out-String).Trim()
+}
+function Test-SameRelease([string]$stageDir, [string]$existing) {
+    if (-not (Release-Identity $stageDir) -or (Release-Identity $stageDir) -ne (Release-Identity $existing)) { return $false }
+    if ((Release-Shape $stageDir) -ne (Release-Shape $existing)) { return $false }
+    # Same version and same shape still is not proof: a byte-edited file keeps
+    # both. Compare the digest the build recorded for this tree.
+    $meta = $null
+    try { $meta = Get-Content -LiteralPath (Join-Path $stageDir 'windows-preview.json') -Raw | ConvertFrom-Json } catch { return $false }
+    if (-not $meta.treeSha256) { return $false }
+    $node = Join-Path $stageDir 'runtime\node.exe'
+    if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { return $false }
+    $digest = Get-ReleaseTreeDigest $existing $node
+    return [bool]$digest -and $digest -eq $meta.treeSha256
+}
+
 # ---- Install --------------------------------------------------------------
 function Install-Release([string]$stageDir, [string]$version) {
     $releasesRoot = Join-Path $SuperAgentHome 'releases'
@@ -493,9 +565,13 @@ function Install-Release([string]$stageDir, [string]$version) {
     $current = Join-Path $SuperAgentHome 'current'
     $previous = Get-Link $current
     if (Test-Path -LiteralPath $place) {
+        # A same-version reinstall used to hash both 24k-file trees without
+        # printing anything, which looked like a hang. The identity and shape
+        # check below is quick; name it so the wait is visible.
+        Note (M "核对已安装的 $version" "Checking the installed $version")
         # Compare complete file contents, not merely an untrusted version string.
         # Refuse any links in an existing tree before descending into it.
-        Assert-SameRelease $stageDir $place
+        if (-not (Test-SameRelease $stageDir $place)) { Assert-SameRelease $stageDir $place }
         Remove-Item -LiteralPath $stageDir -Recurse -Force
         $InstallerState.Stage = ''
         if ($previous -and ([IO.Path]::GetFullPath($previous) -eq $place)) {
@@ -537,14 +613,12 @@ function Write-Launcher([string]$nodeRelative, [string]$mjsRelative) {
 
 function Add-ToPath([string]$binDir) {
     $separator = [IO.Path]::PathSeparator
-    # This terminal first: the installer usually runs inside the shell the user
-    # typed in, and a child process cannot change its parent's PATH.
+    # This terminal first when the installer runs with & (same process): setup
+    # starts from here. A `pwsh -File` run is a child process, so its parent only
+    # sees the user PATH from a new terminal; the messages below name the full
+    # command for that case.
     $parts = @($env:PATH -split [regex]::Escape($separator) | Where-Object { $_ })
     if ($parts -notcontains $binDir) { $env:PATH = (@($binDir) + $parts) -join $separator }
-    # Do not rely on PowerShell noticing a PATH change after it has started. An
-    # alias in the global scope survives this script (including irm | iex) and
-    # pins the command to this install, so the recovery commands printed by a
-    # failed setup work in the same terminal. New terminals use the user PATH.
     Set-Alias -Name 'ov-superagent' -Value (Join-Path $binDir 'ov-superagent.cmd') -Scope Global -Force -ErrorAction Stop
     if (-not $PersistPath) { return }
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -552,9 +626,9 @@ function Add-ToPath([string]$binDir) {
     if ($persistent -contains $binDir) { return }
     try {
         [Environment]::SetEnvironmentVariable('Path', (@($binDir) + $persistent) -join $separator, 'User')
-        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已加进 PATH：这个终端和新开的终端都能直接用 ov-superagent" "$(Short $binDir) is on the PATH: this terminal and new ones know ov-superagent")${RESET}")
+        Ok ("$(M '命令' 'Command ')  ${GRAY}$(M "$(Short $binDir) 已写入用户 PATH：新开的终端可以直接用 ov-superagent；当前终端请用 $(Short (Join-Path $binDir 'ov-superagent.cmd'))" "$(Short $binDir) is saved in the user PATH: new terminals know ov-superagent; in this terminal use $(Short (Join-Path $binDir 'ov-superagent.cmd'))")${RESET}")
     } catch {
-        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，这个终端里可以直接用 ov-superagent。新终端要直接用，请手动加入：$binDir" "Could not write the user PATH; OpenViking SuperAgent is installed and this terminal knows ov-superagent. For new terminals, add this yourself: $binDir")
+        Warn (M "写不了用户 PATH；OpenViking SuperAgent 已安装完成，请直接用 $(Join-Path $binDir 'ov-superagent.cmd')" "Could not write the user PATH; OpenViking SuperAgent is installed: run $(Join-Path $binDir 'ov-superagent.cmd') directly")
     }
 }
 
@@ -659,6 +733,7 @@ if ($Isolated) {
     } catch { Die (M "写不了 $(Short $SuperAgentHome)：$($_.Exception.Message)" "cannot write $(Short $SuperAgentHome)`: $($_.Exception.Message)") }
 }
 
+Note (M '解压安装包' 'Unpacking the package')
 try { Expand-Package $archive $InstallerState.Stage }
 catch { $detail = $_.Exception.Message; Die ((M '解压失败：' 'unpacking failed: ') + $detail) }
 
@@ -743,9 +818,9 @@ if ($Isolated) {
     # did not get through, is not an install failure: name what is left to do
     # instead of throwing a stack trace over the advice.
     if ($LASTEXITCODE) {
-        Note (M "安装已完成，setup 没有跑完（退出码 $LASTEXITCODE）：之后运行 ov-superagent setup 继续" "Installed; setup did not finish (exit $LASTEXITCODE). Run ov-superagent setup later to continue")
+        Note (M "安装已完成，setup 没有跑完（退出码 $LASTEXITCODE）：之后运行 $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup 继续；新开的终端里可以直接用 ov-superagent setup" "Installed; setup did not finish (exit $LASTEXITCODE). Run $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup later to continue; a new terminal can use ov-superagent setup")
     }
 } else {
-    Note (M '下一步：运行 ov-superagent setup' 'next: run ov-superagent setup')
+    Note (M "下一步：运行 $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup（新开的终端里可以简写为 ov-superagent setup）" "next: run $(Join-Path (Join-Path $SuperAgentHome 'bin') 'ov-superagent.cmd') setup (a new terminal can use ov-superagent setup)")
 }
 } finally { Cleanup }

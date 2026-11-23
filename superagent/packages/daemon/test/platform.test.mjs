@@ -133,6 +133,22 @@ test('npm shim entrypoints remain private while invocation validates standard sh
   }
 });
 
+test('Promise execFile runs the Desktop CLI with its Electron env and arguments', { skip: process.platform === 'win32' ? false : 'Windows-only shim' }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-dsh-promise-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, 'DeepSeek Harness.exe');
+  const entrypoint = path.join(root, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js');
+  const shim = path.join(root, 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd');
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.mkdirSync(path.dirname(shim), { recursive: true });
+  fs.copyFileSync(process.execPath, executable);
+  fs.writeFileSync(entrypoint, 'process.stdout.write([process.env.ELECTRON_RUN_AS_NODE || "unset", ...process.argv.slice(2)].join(" "));');
+  fs.writeFileSync(shim, String.raw`"%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" %*`);
+  const { promisify } = await import('node:util');
+  const { stdout } = await promisify(windows.execFile)(shim, ['--version']);
+  assert.equal(stdout.trim(), '1 --version');
+});
+
 test('a release bin\\pm2.cmd runs that release\'s pm2 with that release\'s Node', t => {
   const release = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-release-shim-'));
   t.after(() => fs.rmSync(release, { recursive: true, force: true }));

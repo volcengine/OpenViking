@@ -10,11 +10,17 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+const posixTest = (name, fn) => test(name, { skip: SKIP_POSIX }, fn);
 const INSTALLER = fileURLToPath(new URL('../../../scripts/install.sh', import.meta.url));
 const WINDOWS_INSTALLER = fileURLToPath(new URL('../../../scripts/windows/install-preview.ps1', import.meta.url));
 const PLATFORM = `${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`;
-const SH = execFileSync('sh', ['-c', 'command -v sh'], { encoding: 'utf8' }).trim();
-const GREP = execFileSync('sh', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
+// install.sh and the scripts it exercises are POSIX programs. Windows uses
+// scripts/windows/install-preview.ps1 and windows-home.test.mjs instead, so the
+// POSIX cases are skipped there rather than run without a shell.
+const POSIX = process.platform !== 'win32';
+const SKIP_POSIX = POSIX ? false : 'install.sh is a POSIX installer; Windows installs through install-preview.ps1';
+const SH = POSIX ? execFileSync('sh', ['-c', 'command -v sh'], { encoding: 'utf8' }).trim() : '';
+const GREP = POSIX ? execFileSync('sh', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim() : '';
 
 test('installer headers use the OpenViking SuperAgent brand', () => {
   for (const installer of [INSTALLER, WINDOWS_INSTALLER]) {
@@ -95,7 +101,7 @@ process.exit(Number(process.env.TEST_${kind.toUpperCase()}_STATUS || 0));
   return { root, home, bin, superagent, archive, install, pm2Calls: () => fs.existsSync(path.join(root, 'pm2-calls')) };
 }
 
-test('native Termux arm64 reuses linux-arm64 with PATH Node, native launchers and no desktop Node execution', (t) => {
+posixTest('native Termux arm64 reuses linux-arm64 with PATH Node, native launchers and no desktop Node execution', (t) => {
   const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
   const result = m.install('--lang', 'en', '--file', m.archive('0.5.0', { platform: 'linux-arm64', nodeWorks: false }));
   assert.equal(result.status, 0, result.stderr);
@@ -114,7 +120,7 @@ test('native Termux arm64 reuses linux-arm64 with PATH Node, native launchers an
   assert.equal(fs.existsSync(path.join(m.superagent, 'deploy.lock')), false);
 });
 
-test('native Termux online latest fetch uses only linux-arm64 release assets and leaves native tools untouched', (t) => {
+posixTest('native Termux online latest fetch uses only linux-arm64 release assets and leaves native tools untouched', (t) => {
   const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
   const archive = m.archive('0.7.0', { platform: 'linux-arm64', nodeWorks: false });
   const name = path.basename(archive);
@@ -157,7 +163,7 @@ esac
   assert.deepEqual(fs.readdirSync(path.join(m.superagent, 'releases')), ['0.7.0']);
 });
 
-test('native Termux honors an explicit native LARK_CLI_BIN without modifying it or requiring PATH lark-cli', (t) => {
+posixTest('native Termux honors an explicit native LARK_CLI_BIN without modifying it or requiring PATH lark-cli', (t) => {
   const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
   const override = path.join(m.root, "custom 'lark' $cli\\bin");
   fs.renameSync(path.join(m.bin, 'lark-cli'), override);
@@ -199,7 +205,7 @@ for (const [name, options, message] of [
   ['invalid lark-cli version', { larkVersion: 'not-a-version' }, /invalid version/],
   ['unsupported Android CPU', { arch: 'x86_64' }, /Only native Termux arm64/],
 ]) {
-  test(`native Termux refuses ${name} before activation`, (t) => {
+  posixTest(`native Termux refuses ${name} before activation`, (t) => {
     const m = machine(t, { userspace: 'bionic', arch: 'aarch64', ...options });
     const result = m.install('--file', m.archive('0.5.0', { platform: 'linux-arm64' }));
     assert.notEqual(result.status, 0);
@@ -210,7 +216,7 @@ for (const [name, options, message] of [
 }
 
 for (const [binary, message] of [['node', /Node >=22\.19\.0 must be installed on PATH/], ['lark-cli', /lark-cli must be installed on PATH/]]) {
-  test(`native Termux requires ${binary} on PATH`, (t) => {
+  posixTest(`native Termux requires ${binary} on PATH`, (t) => {
     const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
     const archive = m.archive('0.5.0', { platform: 'linux-arm64' });
     fs.unlinkSync(path.join(m.bin, binary));
@@ -222,7 +228,7 @@ for (const [binary, message] of [['node', /Node >=22\.19\.0 must be installed on
   });
 }
 
-test('native Termux preserves checksum, deployment lock, runtime and OV activation gates', (t) => {
+posixTest('native Termux preserves checksum, deployment lock, runtime and OV activation gates', (t) => {
   const m = machine(t, { userspace: 'bionic', arch: 'aarch64', nodeVersion: '24.0.0' });
   const archive = m.archive('0.5.0', { platform: 'linux-arm64' });
   assert.equal(m.install('--file', archive).status, 0);
@@ -251,7 +257,7 @@ test('native Termux preserves checksum, deployment lock, runtime and OV activati
 });
 
 for (const kind of ['pi', 'durable']) {
-  test(`native Termux fails closed and cleans pending release if ${kind} check is missing`, (t) => {
+  posixTest(`native Termux fails closed and cleans pending release if ${kind} check is missing`, (t) => {
     const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
     const result = m.install('--file', m.archive('0.5.0', { platform: 'linux-arm64', omitCheck: kind }));
     assert.notEqual(result.status, 0);
@@ -264,7 +270,7 @@ for (const kind of ['pi', 'durable']) {
 }
 
 for (const [command, message] of [['ln', /Cannot replace the release Node/], ['cp', /Cannot replace the release pm2 launcher/], ['chmod', /Cannot replace the release pm2 launcher/]]) {
-  test(`native Termux cleans pending release when ${command} replacement fails`, (t) => {
+  posixTest(`native Termux cleans pending release when ${command} replacement fails`, (t) => {
     const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
     assert.equal(m.install('--file', m.archive('0.5.0', { platform: 'linux-arm64' })).status, 0);
     const active = fs.realpathSync(path.join(m.superagent, 'current'));
@@ -281,7 +287,7 @@ for (const [command, message] of [['ln', /Cannot replace the release Node/], ['c
   });
 }
 
-test('inherited Termux variables and Bionic mappings do not misclassify a glibc guest', (t) => {
+posixTest('inherited Termux variables and Bionic mappings do not misclassify a glibc guest', (t) => {
   const m = machine(t);
   const result = m.install('--file', m.archive('0.5.0'));
   assert.equal(result.status, 0, result.stderr);
@@ -290,14 +296,14 @@ test('inherited Termux variables and Bionic mappings do not misclassify a glibc 
   assert.ok(fs.existsSync(path.join(m.root, 'bundled-node-calls')));
 });
 
-test('musl guests retain rejection even with Termux variables and Bionic mappings', (t) => {
+posixTest('musl guests retain rejection even with Termux variables and Bionic mappings', (t) => {
   const m = machine(t, { userspace: 'musl' });
   const result = m.install('--file', m.archive('0.5.0'));
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /musl/);
 });
 
-test('installs a release under ~/.ov-superagent, adds the launcher and PATH, and never touches pm2', (t) => {
+posixTest('installs a release under ~/.ov-superagent, adds the launcher and PATH, and never touches pm2', (t) => {
   const m = machine(t);
   const bashRc = path.join(m.home, process.platform === 'darwin' ? '.bash_profile' : '.bashrc');
   const first = m.install('--file', m.archive('0.5.0'));
@@ -327,7 +333,7 @@ test('installs a release under ~/.ov-superagent, adds the launcher and PATH, and
   assert.equal(m.pm2Calls(), false);
 });
 
-test('a shell rc file that cannot be written does not turn a completed install into a failure', (t) => {
+posixTest('a shell rc file that cannot be written does not turn a completed install into a failure', (t) => {
   const m = machine(t);
   fs.mkdirSync(path.join(m.home, '.zshrc'));
   const result = m.install('--file', m.archive('0.5.0'), { SHELL: '/bin/zsh' });
@@ -337,7 +343,7 @@ test('a shell rc file that cannot be written does not turn a completed install i
   assert.match(result.stderr, /export PATH="\$HOME\/\.ov-superagent\/bin:\$PATH"/);
 });
 
-test('refuses a corrupted archive, another platform, or a Node that cannot run here, leaving the install as it was', (t) => {
+posixTest('refuses a corrupted archive, another platform, or a Node that cannot run here, leaving the install as it was', (t) => {
   const m = machine(t);
   assert.equal(m.install('--file', m.archive('0.5.0')).status, 0);
   const corrupted = m.archive('0.6.0');
@@ -358,7 +364,7 @@ test('refuses a corrupted archive, another platform, or a Node that cannot run h
   assert.equal(fs.existsSync(path.join(m.superagent, 'deploy.lock')), false);
 });
 
-test('waits for a running upgrade instead of racing it', (t) => {
+posixTest('waits for a running upgrade instead of racing it', (t) => {
   const m = machine(t);
   fs.mkdirSync(path.join(m.superagent, 'deploy.lock'), { recursive: true });
   const blocked = m.install('--file', m.archive('0.5.0'));
@@ -367,7 +373,7 @@ test('waits for a running upgrade instead of racing it', (t) => {
   assert.ok(fs.existsSync(path.join(m.superagent, 'deploy.lock')), 'someone else\'s lock is left alone');
 });
 
-test('an unavailable OV blocks even --no-setup and preserves the active installation', (t) => {
+posixTest('an unavailable OV blocks even --no-setup and preserves the active installation', (t) => {
   const m = machine(t);
   const missing = m.install('--file', m.archive('0.5.0', { ovWorks: false }));
   assert.notEqual(missing.status, 0);
@@ -381,14 +387,14 @@ test('an unavailable OV blocks even --no-setup and preserves the active installa
   assert.deepEqual(fs.readdirSync(path.join(m.superagent, 'releases')), ['0.5.0']);
 });
 
-test('no variable runs into non-ASCII text, which macOS /bin/sh would read as part of its name', () => {
+posixTest('no variable runs into non-ASCII text, which macOS /bin/sh would read as part of its name', () => {
   const offending = fs.readFileSync(INSTALLER, 'utf8').split('\n')
     .map((line, index) => [index + 1, line])
     .filter(([, line]) => !line.trimStart().startsWith('#') && /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/.test(line));
   assert.deepEqual(offending, []);
 });
 
-test('the installer speaks the language the ov-superagent command would: --lang or OV_SUPERAGENT_LANG, the saved one, then Chinese', (t) => {
+posixTest('the installer speaks the language the ov-superagent command would: --lang or OV_SUPERAGENT_LANG, the saved one, then Chinese', (t) => {
   const m = machine(t);
   const english = m.install('--file', m.archive('0.5.0'), { LANG: 'en_US.UTF-8', OV_SUPERAGENT_LANG: 'en' });
   assert.equal(english.status, 0, english.stderr);
@@ -405,7 +411,7 @@ test('the installer speaks the language the ov-superagent command would: --lang 
 });
 
 
-test('a legacy home is left untouched and does not block a fresh install', (t) => {
+posixTest('a legacy home is left untouched and does not block a fresh install', (t) => {
   const m = machine(t);
   for (const name of ['.vika', '.ovsa', '.superagent']) {
     const legacy = path.join(m.home, name);
@@ -426,7 +432,7 @@ test('a legacy home is left untouched and does not block a fresh install', (t) =
 });
 
 for (const userspace of ['bionic', 'glibc']) {
-  test(`legacy runit cleanup is narrowly scoped (${userspace})`, (t) => {
+  posixTest(`legacy runit cleanup is narrowly scoped (${userspace})`, (t) => {
     const m = machine(t, { userspace, arch: 'aarch64' });
     const serviceRoot = path.join(m.root, 'services');
     const calls = path.join(m.root, 'sv-calls');
@@ -460,7 +466,7 @@ printf '%s\\n' "$*" >> '${calls}'
   });
 }
 
-test('refused native Termux installs leave legacy runit services running and enabled', (t) => {
+posixTest('refused native Termux installs leave legacy runit services running and enabled', (t) => {
   const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
   fs.mkdirSync(path.join(m.home, '.vika'));
   const serviceRoot = path.join(m.root, 'services');
@@ -495,7 +501,7 @@ printf '%s\\n' "$*" >> '${calls}'
   }
 });
 
-test('legacy runit cleanup refuses service, run and down symlinks', (t) => {
+posixTest('legacy runit cleanup refuses service, run and down symlinks', (t) => {
   const m = machine(t, { userspace: 'bionic', arch: 'aarch64' });
   const serviceRoot = path.join(m.root, 'services');
   fs.mkdirSync(serviceRoot);
@@ -543,7 +549,7 @@ exit 0
   return { ...m, legacy, read };
 }
 
-test('a legacy install has its pm2 apps deleted and its autostart disabled, its data kept', (t) => {
+posixTest('a legacy install has its pm2 apps deleted and its autostart disabled, its data kept', (t) => {
   const m = legacyMachine(t);
   const units = path.join(m.home, '.config', 'systemd', 'user');
   fs.mkdirSync(units, { recursive: true });
@@ -569,7 +575,7 @@ test('a legacy install has its pm2 apps deleted and its autostart disabled, its 
   assert.equal(m.pm2Calls(), false, 'the release pm2 is preferred over one on PATH');
 });
 
-test('a legacy pm2 failure never fails the install', (t) => {
+posixTest('a legacy pm2 failure never fails the install', (t) => {
   const m = legacyMachine(t);
   fs.writeFileSync(path.join(m.legacy, 'releases', '0.4.0', 'bin', 'pm2'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
   const installed = m.install('--file', m.archive('0.5.0'));
@@ -577,7 +583,7 @@ test('a legacy pm2 failure never fails the install', (t) => {
   assert.equal(m.read(), '', 'no autostart entries, so nothing else is called');
 });
 
-test('without a legacy release pm2, the pm2 on PATH is used against the legacy PM2_HOME', (t) => {
+posixTest('without a legacy release pm2, the pm2 on PATH is used against the legacy PM2_HOME', (t) => {
   const m = legacyMachine(t);
   fs.rmSync(path.join(m.legacy, 'releases'), { recursive: true });
   const installed = m.install('--file', m.archive('0.5.0'));

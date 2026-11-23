@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
 import { safeError } from './logger.mjs';
-import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, scanDir, TRASH } from './task-dirs.mjs';
+import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, scanDir, TRASH, unsavedWork } from './task-dirs.mjs';
 import { classifyWorkerFailure } from './worker-settings.mjs';
 import { recentTranscript, TRANSCRIPT_FORMATS } from './worker-transcript.mjs';
 
@@ -89,11 +89,23 @@ const HINT_REQUEST_CHARS = 40;
 export const DIR_PRUNE_DAYS = 3;
 export const DIR_REMOVE_DAYS = 14;
 export const DIR_BUDGET_GB = 20;
+// A task waiting for a person's answer with nothing for this many days is
+// dormant (dormantBefore): a question asked on a Friday is still near on
+// Monday. The config overrides it; 0 turns it off.
+export const DORMANT_DAYS = 5;
 const SWEEP_DELAY_MS = 60_000;
 const SWEEP_MS = 3_600_000;
 
 export const REPORT_STATES = Object.freeze(['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed']);
-const ENDED = new Set(['done', 'dropped', 'failed', 'stopped']);
+// The statuses a task ends with: its round is over, and the next request on
+// it reopens it for a round of its own (stopped excepted). `blocked` is one of
+// them: a round its worker could not finish for a missing access or
+// prerequisite ends there, and the input that clears it reopens the task. Only
+// `waiting` keeps a task live for a person: its worker asked one thing and
+// goes on in the same round when it is answered.
+const ENDED_STATUSES = Object.freeze(['done', 'blocked', 'dropped', 'failed', 'stopped']);
+const ENDED = new Set(ENDED_STATUSES);
+const ENDED_SQL = `(${ENDED_STATUSES.map((status) => `'${status}'`).join(', ')})`;
 const STATUS_FOR = { done: 'done', needs_user: 'waiting', blocked: 'blocked', dropped: 'dropped', failed: 'failed' };
 
 const SCHEMA = `
@@ -333,10 +345,11 @@ export class TaskManager {
       if (column === 'settled_at_ms') this.db.exec('UPDATE task_report_deliveries SET settled_at_ms = created_at_ms WHERE inbox_id IS NOT NULL');
     }
     this.db.exec(INDEXES);
+    this.endBlocked();
     // Tasks from before rounds had one: the request that created them.
     this.db.exec(`INSERT OR IGNORE INTO task_rounds(task_id, round, ${ORIGIN.join(', ')}, opened_at_ms, ended_at_ms, outcome)
       SELECT id, 1, ${ORIGIN.join(', ')}, created_at_ms, ended_at_ms,
-        CASE WHEN status IN ('done', 'dropped', 'failed', 'stopped') THEN status END
+        CASE WHEN status IN ${ENDED_SQL} THEN status END
       FROM tasks WHERE round = 1 AND id NOT IN (SELECT task_id FROM task_rounds)`);
     // Worker authority tokens: token -> task id, for the turn that holds it.
     this.tokens = new Map();
@@ -351,6 +364,22 @@ export class TaskManager {
     this.sweeping = null;
     // Task directories on disk at the last sweep, after its clean-up.
     this.disk = null;
+  }
+
+  // Tasks a daemon from before left `blocked`, when it kept a task live until
+  // someone wrote to it again: one nobody wrote to stayed in the working set,
+  // the live list and the held directories for good. Each ends, with its
+  // round, when its worker last moved it.
+  endBlocked() {
+    if (!this.db.prepare("SELECT 1 FROM tasks WHERE status = 'blocked' AND ended_at_ms IS NULL LIMIT 1").get()) return;
+    const ended = this.transaction(() => {
+      this.db.exec(`UPDATE task_rounds SET outcome = 'blocked',
+          ended_at_ms = (SELECT t.updated_at_ms FROM tasks t WHERE t.id = task_rounds.task_id)
+        WHERE ended_at_ms IS NULL AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = task_rounds.task_id
+          AND t.round = task_rounds.round AND t.status = 'blocked' AND t.ended_at_ms IS NULL)`);
+      return Number(this.db.prepare("UPDATE tasks SET ended_at_ms = updated_at_ms WHERE status = 'blocked' AND ended_at_ms IS NULL").run().changes);
+    });
+    this.logger?.info('tasks_blocked_ended', { tasks: ended });
   }
 
   transaction(fn) {
@@ -375,17 +404,42 @@ export class TaskManager {
     return Boolean(task) && !ENDED.has(task.status);
   }
 
-  // The working set the router is shown: every live task and the most recent
-  // ended ones. Older tasks stay in the table for task_list and exact links.
-  // A task has an end time exactly while it is ended (setStatus, stop,
-  // openRound, runTurn keep that), so both reads walk the end-time index
-  // instead of every task.
+  // The working set the router is shown: every live task but a dormant one,
+  // and the most recent ended ones. Older tasks stay in the table for
+  // task_list and exact links. A task has an end time exactly while it is
+  // ended (setStatus, stop, openRound, runTurn keep that), so both reads walk
+  // the end-time index instead of every task.
   workingSet() {
     const live = this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NULL
-      AND status NOT IN ('done', 'dropped', 'failed', 'stopped') ORDER BY created_at_ms`).all();
+      AND status NOT IN ${ENDED_SQL} AND (status != 'waiting' OR updated_at_ms >= ?) ORDER BY created_at_ms`).all(this.dormantBefore());
     const ended = this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NOT NULL
-      AND status IN ('done', 'dropped', 'failed', 'stopped') ORDER BY ended_at_ms DESC LIMIT ?`).all(RECENT_ENDED);
+      AND status IN ${ENDED_SQL} ORDER BY ended_at_ms DESC LIMIT ?`).all(RECENT_ENDED);
     return [...live, ...ended];
+  }
+
+  // A task waiting for a person that has not moved since this time is
+  // dormant: its question went unanswered for days. It stays live (an answer
+  // goes on in the same round, its directory stays held), but it is out of
+  // the working set, so it no longer takes a place in every nearby input's
+  // hint, nor answers for a person's every word in a direct chat. A reply to
+  // its messages, its thread or its id still finds it.
+  dormantBefore() {
+    const days = this.dormantDays();
+    return days > 0 ? this.now() - days * 86_400_000 : -1;
+  }
+
+  dormantDays() {
+    return Number.isFinite(this.config.taskDormantDays) ? this.config.taskDormantDays : DORMANT_DAYS;
+  }
+
+  isDormant(task) {
+    return task?.status === 'waiting' && task.updated_at_ms < this.dormantBefore();
+  }
+
+  // The dormant tasks, the last to move first.
+  dormant() {
+    return this.db.prepare(`SELECT * FROM tasks WHERE ended_at_ms IS NULL AND status = 'waiting' AND updated_at_ms < ?
+      ORDER BY updated_at_ms DESC`).all(this.dormantBefore());
   }
 
   // Tasks asked in a thread, any round, the latest first: the exact signal
@@ -420,7 +474,7 @@ export class TaskManager {
   liveHolder(seq) {
     return this.db.prepare(`SELECT t.id FROM task_inputs i JOIN tasks t ON t.id = i.task_id
       WHERE i.seq = ? AND i.role = 'owner' AND i.handed_back_at_ms IS NULL
-        AND t.status NOT IN ('done', 'dropped', 'failed', 'stopped') LIMIT 1`).get(seq)?.id ?? null;
+        AND t.status NOT IN ${ENDED_SQL} LIMIT 1`).get(seq)?.id ?? null;
   }
 
   workerFor(token) {
@@ -507,17 +561,26 @@ export class TaskManager {
       const task = this.get(taskId);
       return task ? [this.card(task, { detail: true })] : [];
     }
+    // A search looks past the working set at the dormant tasks too.
     let rows = requester
       ? this.db.prepare(`SELECT * FROM tasks WHERE id IN (SELECT task_id FROM task_rounds
             WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'})
           ORDER BY updated_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), ASKER_TASKS])
-      : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all() : this.workingSet();
+      : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all()
+        : [...this.workingSet(), ...(query ? this.dormant() : [])];
     if (query) {
       const grams = bigrams(query);
       rows = rows.map((task) => ({ task, score: similarity(grams, bigrams(`${task.title} ${task.summary}`)) }))
         .filter((row) => row.score > 0.15).sort((a, b) => b.score - a.score).map((row) => row.task);
     }
-    return rows.map((task) => this.card(task));
+    const lines = rows.map((task) => this.card(task));
+    // The working set leaves the dormant tasks out: they are named, so a
+    // question about them still finds them.
+    const dormant = requester || includeEnded || query ? [] : this.dormant();
+    if (dormant.length) {
+      lines.push(`Also waiting, with nothing for days: ${dormant.map((task) => `${task.id} (${this.ago(task.updated_at_ms)})`).join(', ')}. task_id= shows one.`);
+    }
+    return lines;
   }
 
   // Message ids that belong to a task: its routed inputs and what the router
@@ -576,15 +639,20 @@ export class TaskManager {
       const score = similarity(query, bigrams(`${task.title} ${task.summary}`));
       if (score > 0.25 && (owner || hits.has(task.id))) add(task, 'similar words', 1);
     }
-    return [...hits.values()].sort((a, b) => b.weight - a.weight).slice(0, CANDIDATES);
+    // Of equal weight, the task that moved last first: never the oldest live
+    // one ahead of one that ended minutes ago.
+    return [...hits.values()].sort((a, b) => b.weight - a.weight || b.task.updated_at_ms - a.task.updated_at_ms).slice(0, CANDIDATES);
   }
 
   // What a task is doing, as the router needs it to route: working, waiting
-  // for whom, or ended and how long ago, and how many rounds it had.
+  // for whom and for how long, or ended and how long ago, and how many rounds
+  // it had.
   state(task) {
     const rounds = task.round > 1 ? `, ${task.round} rounds` : '';
     if (task.status === 'running' || task.status === 'queued') return `working${rounds}`;
-    if (task.status === 'waiting') return `waiting for ${this.roundOf(task).requester_name ?? task.requester_name ?? 'the requester'}${rounds}`;
+    if (task.status === 'waiting') {
+      return `waiting for ${this.roundOf(task).requester_name ?? task.requester_name ?? 'the requester'} for ${this.ago(task.updated_at_ms)}${rounds}`;
+    }
     if (!ENDED.has(task.status)) return `${task.status}${rounds}`;
     return `${task.status} ${this.ago(task.ended_at_ms ?? task.updated_at_ms)} ago${rounds}`;
   }
@@ -667,7 +735,8 @@ export class TaskManager {
   // and reach its worker while it works (or wake a waiting one); `context`
   // ones are background. An owner input to a task that ended is a new
   // request on the same work: it reopens the task for a round of its own
-  // (openRound). A stopped task stays stopped, and background reopens nothing.
+  // (openRound), also one that ended blocked, when the input clears what
+  // blocked it. A stopped task stays stopped, and background reopens nothing.
   route(taskId, rows, role, { requester = null } = {}) {
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
@@ -685,7 +754,7 @@ export class TaskManager {
       const round = ended ? this.openRound(task, rows[0], requester) : null;
       for (const row of rows) this.addInput(taskId, row, role, round?.round ?? task.round);
       this.touch(taskId);
-      if (role === 'owner' && (task.status === 'waiting' || task.status === 'blocked')) this.setStatus(taskId, 'queued');
+      if (role === 'owner' && task.status === 'waiting') this.setStatus(taskId, 'queued');
       return round;
     });
     if (opened) {
@@ -1072,12 +1141,20 @@ export class TaskManager {
       ].join('\n');
     }
     if (opening) {
+      // A round that ended blocked or failed left the work unfinished: the
+      // request that reopens it most often says what stood in the way is gone.
+      const unfinished = ['blocked', 'failed'].includes(round.reopened_from);
       return [
-        `[task ${task.id}] Round ${task.round}: a new request on this task, from ${round.requester_name ?? 'the requester'}. Your result for the previous round went to the requester; this is more work on the same task.`,
+        `[task ${task.id}] Round ${task.round}: a new request on this task, from ${round.requester_name ?? 'the requester'}. ${unfinished
+          ? `Your previous round ended ${round.reopened_from}, and the requester was told why; this request takes the same work up again.`
+          : 'Your result for the previous round went to the requester; this is more work on the same task.'}`,
         ...owner.map((row) => row.text),
         ...(context.length ? ['Context only (act on it only if it changes your task):', ...context.map((row) => row.text)] : []),
+        ...(unfinished && task.summary ? ['Why the previous round ended:', quoted(clip(task.summary, SUMMARY_CHARS))] : []),
         ...dirNote,
-        'Before you start, check the state of your directory and of what you changed outside it (a branch may have moved or been merged since). Finish with task_report: its result answers this request.',
+        unfinished
+          ? 'Before you start, check whether what stopped the previous round is resolved, and the state of your directory and of what you changed outside it. If it still stands in the way, report blocked again with what is missing now. Finish with task_report: its result answers this request.'
+          : 'Before you start, check the state of your directory and of what you changed outside it (a branch may have moved or been merged since). Finish with task_report: its result answers this request.',
       ].join('\n');
     }
     const unsent = (this.catchUp.get(task.id) ?? 0) > 0;
@@ -1497,7 +1574,7 @@ export class TaskManager {
   heldDirs() {
     const ids = [...this.running.keys()];
     const rows = this.db.prepare(`SELECT t.workdir AS own, p.workdir AS parent FROM tasks t LEFT JOIN tasks p ON p.id = t.parent_id
-      WHERE t.status NOT IN ('done', 'dropped', 'failed', 'stopped')${ids.length ? ` OR t.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(...ids);
+      WHERE t.status NOT IN ${ENDED_SQL}${ids.length ? ` OR t.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(...ids);
     return new Set(rows.flatMap((row) => [row.own, row.parent]).filter(Boolean));
   }
 
@@ -1544,6 +1621,12 @@ export class TaskManager {
         if (this.stopped) return null;
         sizes.set(dir, await scanDir(dir, { stopped: () => this.stopped }));
       }
+      // Whether the repositories of a directory the clean-up may delete
+      // whole hold work that exists nowhere else.
+      for (const dir of this.removable(sizes, busy)) {
+        if (this.stopped) return null;
+        sizes.get(dir).unsaved = await unsavedWork(sizes.get(dir).repos, { stopped: () => this.stopped });
+      }
       if (this.stopped) return null;
       const result = this.cleanDirs(sizes, busy);
       for (const trash of trashes) await emptyTrash(trash);
@@ -1552,18 +1635,47 @@ export class TaskManager {
     return this.sweeping;
   }
 
+  // When the tasks of each directory last ended (or last moved, one live).
+  dirsEndedAt() {
+    return new Map(this.db.prepare(`SELECT workdir, MAX(COALESCE(ended_at_ms, updated_at_ms)) AS at FROM tasks
+      GROUP BY workdir`).all().map((row) => [row.workdir, row.at]));
+  }
+
+  // Directories no task uses, the one that ended longest ago first.
+  idleDirs(sizes, busy, endedAt) {
+    const held = new Set([...busy, ...this.heldDirs()]);
+    return [...sizes.keys()].filter((dir) => !held.has(dir) && this.dirState(dir)?.removed_at_ms == null)
+      .sort((a, b) => endedAt.get(a) - endedAt.get(b));
+  }
+
+  // The idle directories a clean-up may delete whole: those past the age to
+  // remove, and every one while all directories take more than the budget.
+  removable(sizes, busy) {
+    const { removeMs, budget } = this.dirLimits();
+    const endedAt = this.dirsEndedAt();
+    const idle = this.idleDirs(sizes, busy, endedAt);
+    if (budget > 0 && [...sizes.values()].reduce((sum, scan) => sum + scan.bytes, 0) > budget) return idle;
+    return removeMs > 0 ? idle.filter((dir) => this.now() - endedAt.get(dir) >= removeMs) : [];
+  }
+
+  // A directory whose repositories hold work that exists nowhere else (a
+  // branch never pushed, often because pushing was what blocked its task) is
+  // not deleted whole for its age: only its dependency folders go, and the
+  // directory only past the budget, after every other one. A directory the
+  // sweep did not check (it went idle since) counts as holding such work when
+  // it has a repository.
   cleanDirs(sizes, busy = new Set()) {
     const { pruneMs, removeMs, budget } = this.dirLimits();
     const now = this.now();
-    const held = new Set([...busy, ...this.heldDirs()]);
-    const endedAt = new Map(this.db.prepare(`SELECT workdir, MAX(COALESCE(ended_at_ms, updated_at_ms)) AS at FROM tasks
-      GROUP BY workdir`).all().map((row) => [row.workdir, row.at]));
+    const endedAt = this.dirsEndedAt();
     const left = new Map([...sizes].map(([dir, scan]) => [dir, scan.bytes]));
     const total = () => [...left.values()].reduce((sum, bytes) => sum + bytes, 0);
-    // Directories no task uses, the one that ended longest ago first.
-    const idle = [...sizes.keys()].filter((dir) => !held.has(dir) && this.dirState(dir)?.removed_at_ms == null)
-      .sort((a, b) => endedAt.get(a) - endedAt.get(b));
-    const done = { pruned: [], removed: [], freed: 0 };
+    const idle = this.idleDirs(sizes, busy, endedAt);
+    const unsaved = (dir) => {
+      const scan = sizes.get(dir);
+      return scan.unsaved ? scan.unsaved.length > 0 : (scan.repos?.length ?? 0) > 0;
+    };
+    const done = { pruned: [], removed: [], kept: [], freed: 0 };
     const trash = path.join(this.config.workspace, 'tasks', TRASH);
     const prune = (dir) => {
       if (!left.has(dir)) return;
@@ -1588,12 +1700,15 @@ export class TaskManager {
         this.logger?.warn('task_dir_remove_failed', { dir, error: safeError(error) });
         return;
       }
+      if (unsaved(dir)) {
+        this.logger?.warn('task_dir_removed_unsaved', { dir, budget, repos: sizes.get(dir).unsaved ?? sizes.get(dir).repos });
+      }
       this.markDir(dir, 'removed_at_ms');
       // Its worker's sessions: a task that follows it now starts from its
       // summary instead of a copy of its session, and a round that reopens it
       // from the task record.
       this.db.prepare(`UPDATE tasks SET native_session = NULL WHERE workdir = ?
-        AND status IN ('done', 'dropped', 'failed', 'stopped')`).run(dir);
+        AND status IN ${ENDED_SQL}`).run(dir);
       if (this.config.dataDir) {
         for (const { id } of this.db.prepare('SELECT id FROM tasks WHERE workdir = ?').all(dir)) {
           const sessions = path.join(this.config.dataDir, 'workers', id);
@@ -1609,20 +1724,25 @@ export class TaskManager {
     };
     for (const dir of idle) {
       const age = now - endedAt.get(dir);
-      if (removeMs > 0 && age >= removeMs) remove(dir);
+      if (removeMs > 0 && age >= removeMs && !unsaved(dir)) remove(dir);
       else if (pruneMs > 0 && age >= pruneMs) prune(dir);
     }
     if (budget > 0) {
       for (const dir of idle) if (total() > budget) prune(dir);
+      for (const dir of idle) if (total() > budget && !unsaved(dir)) remove(dir);
       for (const dir of idle) if (total() > budget) remove(dir);
       if (total() > budget) this.logger?.warn('task_dirs_over_budget', { bytes: total(), budget });
     }
+    if (removeMs > 0) {
+      done.kept = idle.filter((dir) => left.has(dir) && now - endedAt.get(dir) >= removeMs).map((dir) => path.basename(dir));
+    }
     this.disk = { bytes: total(), budget, at: now };
     if (done.pruned.length || done.removed.length) {
-      this.logger?.info('task_dirs_cleaned', { pruned: done.pruned, removed: done.removed, freed: done.freed });
+      this.logger?.info('task_dirs_cleaned', { pruned: done.pruned, removed: done.removed, kept: done.kept, freed: done.freed });
       this.recordActivity('task.dirs_cleaned', {
-        summary: `freed ${formatBytes(done.freed)}: dependencies of ${done.pruned.length}, whole directories of ${done.removed.length}`,
-        metadata: { pruned: done.pruned, removed: done.removed, freedBytes: done.freed, bytes: total() },
+        summary: `freed ${formatBytes(done.freed)}: dependencies of ${done.pruned.length}, whole directories of ${done.removed.length}`
+          + `${done.kept.length ? `; kept ${done.kept.length} with unpushed work` : ''}`,
+        metadata: { pruned: done.pruned, removed: done.removed, kept: done.kept, freedBytes: done.freed, bytes: total() },
       });
     }
     return { ...done, bytes: total() };
@@ -1641,6 +1761,7 @@ export class TaskManager {
     const delivery = this.delivery(task);
     return {
       ...task,
+      dormant: this.isDormant(task),
       turnStartedAt: this.running.get(task.id)?.startedAt ?? null,
       chatName: this.chatName(task.origin_chat),
       report: delivery ? { id: delivery.reportId, state: delivery.reportState, createdAt: delivery.createdAt,
@@ -1649,9 +1770,9 @@ export class TaskManager {
   }
 
   overview({ recent = 5 } = {}) {
-    const live = this.db.prepare(`SELECT * FROM tasks WHERE status NOT IN ('done', 'dropped', 'failed', 'stopped')
+    const live = this.db.prepare(`SELECT * FROM tasks WHERE status NOT IN ${ENDED_SQL}
       ORDER BY created_at_ms`).all();
-    const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ('done', 'dropped', 'failed', 'stopped')
+    const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ${ENDED_SQL}
       ORDER BY ended_at_ms DESC LIMIT ?`).all(recent);
     const reserved = [...this.running.values()].filter((slot) => slot.reserved).length;
     return {
@@ -1660,6 +1781,7 @@ export class TaskManager {
       total: Number(this.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n),
       slots: { used: this.running.size - reserved, of: this.slots, reserved, reservedOf: this.reservedSlots },
       disk: this.disk,
+      dormantDays: this.dormantDays(),
     };
   }
 

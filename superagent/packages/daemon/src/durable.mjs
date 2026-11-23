@@ -4,13 +4,13 @@
 import { spawnDetached, processOptions } from './platform/index.mjs';
 
 import { spawn as nodeSpawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { terminateProcessTree } from './process-utils.mjs';
 import { agentToolEnv } from './actions/api.mjs';
-import { assembleConversationPolicy } from './conversation-policy.mjs';
+import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
 import {
   DURABLE_VERSION,
   assertDurableVersion,
@@ -125,10 +125,7 @@ export class DurableAgent {
   get threadId() { return this.sessionId; }
 
   get policyHash() {
-    return createHash('sha256')
-      .update(this.systemPrompt).update('\0')
-      .update(this.config.workspace).update('\0')
-      .update('durable-host-v1').digest('hex');
+    return policyHashOf(this.systemPrompt, this.config.workspace, 'durable-host-v1');
   }
 
   get state() {

@@ -26,6 +26,7 @@ import {
   dshCommand,
   dshProfilePatchHash,
   dshProfilePatchPath,
+  dshVersionText,
   parseDshModel,
   prepareDshEnvironment,
   retryDshNotReady,
@@ -95,8 +96,8 @@ export default {
   async _probeVersion(env) {
     assertDshNodeVersion();
     if (this._versionProbe) {
-      const text = await this._versionProbe();
-      this.dshVersion = assertSupportedDshVersion(text);
+      const text = dshVersionText(await this._versionProbe());
+      this.dshVersion = text ? assertSupportedDshVersion(text) : '';
       return this.dshVersion;
     }
     const bin = this.config.dshBin || 'dsh';
@@ -116,7 +117,9 @@ export default {
         settled = true;
         clearTimeout(timer);
         if (error) reject(error);
-        else resolve(stdout.trim());
+        // DSH Desktop sometimes logs the version to stderr instead, or answers
+        // nothing at all; setup and the daemon read it the same way.
+        else resolve(dshVersionText(stdout, stderr));
       };
       const timer = setTimeout(() => {
         terminateProcessTree(child, 'SIGKILL');
@@ -133,7 +136,9 @@ export default {
         else finish(new Error(`dsh --version failed (code ${code}, signal ${signal})${stderr ? `; stderr: ${stderr}` : ''}`));
       });
     });
-    this.dshVersion = assertSupportedDshVersion(output);
+    // An empty answer is not a rejected version: the bridge handshake below is
+    // the real compatibility gate and reports the version it can serve.
+    this.dshVersion = output ? assertSupportedDshVersion(output) : '';
     return this.dshVersion;
   },
 

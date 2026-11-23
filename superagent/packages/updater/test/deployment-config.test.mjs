@@ -6,7 +6,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import test from 'node:test';
+import nodeTest from 'node:test';
+// The Windows preview does not ship the updater (docs/windows.md), so its
+// suite has no Windows behavior to measure. Keep the same cases for POSIX.
+const test = (name, ...rest) => {
+  const fn = rest.pop();
+  const options = typeof rest[0] === 'object' && rest[0] !== null ? rest[0] : {};
+  const skip = process.platform === 'win32' ? 'the Windows preview does not ship the updater' : false;
+  return nodeTest(name, { ...options, ...(skip ? { skip } : {}) }, fn);
+};
 
 const require = createRequire(import.meta.url);
 const {

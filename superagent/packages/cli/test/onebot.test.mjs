@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -101,7 +102,7 @@ for (const language of ['zh', 'en']) test(`the address and token are checked, th
   assert.equal(ws.opened[0].readyState, 3);
   const policy = path.join(f.dataDir, 'onebot', 'config.json');
   assert.deepEqual(JSON.parse(fs.readFileSync(policy, 'utf8')), { groups: { '*': 'ambient' } });
-  assert.equal(fs.statSync(policy).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(policy).mode & 0o777, 0o600);
   const text = f.text();
   // The address saved before is offered again.
   assert.ok(text.includes('(ws://old.example:3001/)'));
@@ -130,7 +131,7 @@ test('the owner\'s policy file is kept, and without a group list the owner is to
   await connectOneBot({ ...f.options, WebSocketImpl: server(f.text, { groups: [] }).Socket });
   assert.equal(f.state.account().ownerId, OWNER);
   assert.equal(fs.readFileSync(policy, 'utf8'), '{"groups":{"123456789":"ambient"}}\n');
-  assert.equal(fs.statSync(policy).mode & 0o777, 0o644);
+  if (supportsFileModes) assert.equal(fs.statSync(policy).mode & 0o777, 0o644);
   assert.match(f.text(), /没有读到这个账号所在的群；群号可以在 QQ 的群资料里看到/);
   assert.ok(f.text().includes(`已有的 ${policy} 保留不动：没写在里面的群按 "ambient"，写在里面的群各按自己那一项。`));
   assert.doesNotMatch(f.text(), /每个群默认都接入|绑定后，这个号会跟进它所在的每个群/);

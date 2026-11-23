@@ -8,7 +8,7 @@ export const processOptions = Object.freeze({});
 export function normalizeEnvironment(env = process.env) { return env; }
 export function executableInvocation(command, args) { return { command, args }; }
 export function isNamedPipe() { return false; }
-export function localSocketPath(directory, name = 'actions') { return path.join(directory, `${name}.sock`); }
+export function localSocketPath(directory, name = 'actions') { return path.posix.join(directory, `${name}.sock`); }
 export function homeDir(env = process.env) { return env.HOME; }
 export function binName(name) { return name; }
 export function expandHome(value, home) { return value === '~' ? home : value.replace(/^~(?=\/)/, home); }

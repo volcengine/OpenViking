@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -29,7 +30,7 @@ test('web auth saves the key and host, keeps other secrets, restarts the Web, an
 
   assert.equal(await webAuthCommand(['--host', '0.0.0.0'], options), 0);
   const key = fs.readFileSync(secrets, 'utf8').match(/^ARK_API_KEY=keep-me\nOV_SUPERAGENT_WEB_API_KEY=([\w-]{43})\n$/)[1];
-  assert.equal(fs.statSync(secrets).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(secrets).mode & 0o777, 0o600);
   assert.deepEqual(readManifest(env).value.web, { host: '0.0.0.0' });
   assert.equal(restarts, 1);
 

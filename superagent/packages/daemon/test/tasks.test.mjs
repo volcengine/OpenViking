@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
-import { moveToTrash, scanDir } from '../src/task-dirs.mjs';
+import { moveToTrash, scanDir, unsavedWork } from '../src/task-dirs.mjs';
+import { directoryLink } from './symlink-fixture.mjs';
 
 // A worker that finishes when the test says so, after doing what the test
 // scripted for that turn (a report, an input arriving mid-turn, ...).
@@ -64,6 +65,8 @@ function setup(t, options = {}) {
   return { db, tasks, executor, inbox, relayed, activities, workspace, ingest };
 }
 
+function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 describe('TaskManager', () => {
   it('does not leave a runnable task with a partially recorded request', (t) => {
     const { tasks, db, executor } = setup(t);
@@ -83,7 +86,8 @@ describe('TaskManager', () => {
     assert.match(turn.prompt, /^\[task t1\] 查 X 变慢\nRequested by Alice in chat=oc_a thread=omt_1 \(source=lark\)\./);
     assert.match(turn.prompt, /\[chat=oc_a msg=om_\d+ event=e\d+\] 帮我查下 X 为什么慢/);
     assert.match(turn.prompt, /Routing note from the agent: Alice 只要上周的数据/);
-    assert.match(turn.prompt, new RegExp(`Your directory: ${path.join(workspace, 'tasks', 't1')}`));
+    const escapedDirectory = escapeRegExp(path.join(workspace, 'tasks', 't1'));
+    assert.match(turn.prompt, new RegExp(`Your directory: ${escapedDirectory}`));
     assert.ok(fs.existsSync(path.join(workspace, 'tasks', 't1')));
     assert.equal(tasks.workerFor(turn.authority), 't1');
     assert.equal(tasks.get('t1').status, 'running');
@@ -196,6 +200,71 @@ describe('TaskManager', () => {
     assert.throws(() => tasks.route('t1', [row()], 'owner'), (error) => error.code === 'task_ended' && /t1 was stopped\. Work on it again is a new task: task_create with follows=t1/.test(error.message));
   });
 
+  it('ends a round its worker reports blocked, and takes the task up again when what blocked it is cleared', async (t) => {
+    const { tasks, executor, relayed, activities } = setup(t);
+    tasks.create({ rows: [row({ thread_id: 'omt_1', content: '修一下 slugify 并推到 main' })], title: 'slugify 修复', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'blocked', summary: '没有仓库写权限，修复在本地分支 fix/slugify 上推不上去', draft: '修好了，但没有写权限，推不上去', artifacts: ['fix/slugify'] });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    const task = tasks.get('t1');
+    assert.equal(task.status, 'blocked');
+    assert.ok(task.ended_at_ms, 'the round is over');
+    assert.equal(tasks.isLive(task), false);
+    assert.deepEqual(tasks.rounds('t1').map((round) => round.outcome), ['blocked']);
+    assert.match(relayed[0].item.text, /^\[task report\] task=t1 state=blocked title="slugify 修复" requester=Alice\n/);
+    assert.equal(tasks.heldDirs().has(task.workdir), false, 'its directory is swept like any ended task\'s');
+    assert.match(tasks.hintFor({ chatId: 'oc_a', threadId: 'omt_1', content: 'x', senderId: 'ou_alice' }),
+      /t1 \[blocked 0m ago\] "slugify 修复" last asked: "修一下 slugify 并推到 main" \(same thread\)/);
+    assert.throws(() => tasks.route('t1', [row({ thread_id: 'omt_1' })], 'context'), (error) => error.code === 'task_ended');
+    tasks.settleReports({ taskIds: ['t1'], by: 'reply_message' });
+
+    assert.equal(tasks.route('t1', [row({ thread_id: 'omt_1', content: '权限开好了，再推一下' })], 'owner', { requester: 'Alice' }).status, 'running');
+    assert.deepEqual(activities.filter((entry) => entry.kind === 'task.reopened').map((entry) => entry.metadata),
+      [{ task: 't1', round: 2, from: 'blocked', workdir: 'kept', session: 'kept' }]);
+    assert.match(executor.turns[1].prompt, new RegExp([
+      '^\\[task t1\\] Round 2: a new request on this task, from Alice\\. Your previous round ended blocked, and the requester was told why; this request takes the same work up again\\.',
+      '\\[chat=oc_a msg=om_\\d+ event=e\\d+\\] 权限开好了，再推一下',
+      'Why the previous round ended:',
+      '\\| 没有仓库写权限，修复在本地分支 fix/slugify 上推不上去',
+      'Before you start, check whether what stopped the previous round is resolved, [^\\n]*If it still stands in the way, report blocked again with what is missing now\\.',
+    ].join('\\n')));
+    assert.equal(executor.turns[1].task.native_session, tasks.get('t1').session_id, 'the session carries on');
+  });
+
+  it('ends the tasks a daemon from before left blocked, with their round, when their worker last moved them', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { db, tasks, executor, inbox, workspace } = setup(t, { now: () => now });
+    for (const [index, state] of ['blocked', 'needs_user', 'blocked'].entries()) {
+      tasks.create({ rows: [row()], title: state, runtime: 'pi' });
+      tasks.report(`t${index + 1}`, { state, summary: 'x', question: state === 'needs_user' ? '选 A 还是 B？' : '' });
+      executor.turns[index].finish({ text: '' });
+      await settle();
+      now += day;
+    }
+    // What a daemon from before left: blocked tasks live with their round
+    // open, and t3 from before rounds, with none.
+    db.exec("UPDATE tasks SET ended_at_ms = NULL WHERE status = 'blocked'");
+    db.exec("UPDATE task_rounds SET ended_at_ms = NULL, outcome = NULL WHERE task_id = 't1'");
+    db.exec("DELETE FROM task_rounds WHERE task_id = 't3'");
+    const moved = ['t1', 't3'].map((id) => tasks.get(id).updated_at_ms);
+    now += 10 * day;
+    const logged = [];
+    const logger = { info: (event, fields) => logged.push([event, fields]), warn() {}, error() {} };
+    const restarted = new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '', now: () => now, logger });
+    t.after(() => restarted.shutdown());
+    assert.deepEqual(['t1', 't2', 't3'].map((id) => [restarted.get(id).status, restarted.get(id).ended_at_ms]),
+      [['blocked', moved[0]], ['waiting', null], ['blocked', moved[1]]]);
+    assert.deepEqual(['t1', 't3'].map((id) => restarted.rounds(id).map((round) => [round.outcome, round.ended_at_ms])),
+      [[['blocked', moved[0]]], [['blocked', moved[1]]]]);
+    assert.deepEqual(logged, [['tasks_blocked_ended', { tasks: 2 }]]);
+    assert.deepEqual(restarted.overview().live.map((task) => task.id), ['t2'], 'only the question waiting for a person is live');
+    assert.deepEqual(restarted.workingSet().map((task) => task.id), ['t3', 't1'], 'and t2, waiting ten days, is dormant');
+    assert.equal(restarted.isDormant(restarted.get('t2')), true);
+    new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '', logger }).shutdown();
+    assert.equal(logged.length, 1, 'once');
+  });
+
   it('starts a round from the task record when its directory and session were cleaned up, or its session grew too large', async (t) => {
     const day = 86_400_000;
     let now = Date.parse('2026-11-01T00:00:00Z');
@@ -242,7 +311,7 @@ describe('TaskManager', () => {
     const brief = executor.turns.at(-1).prompt;
     assert.match(brief, /^Your session from the earlier rounds of this task was deleted to save disk some days after it ended: this brief is rebuilt from the task record\.\n\[task t1\] A\n/);
     assert.match(brief, /This task has had 2 rounds, each a request on the same work, answered in turn; the last is the one to do now\. The requests, as the agent received them:\nRound 1, from Alice \(done\):\n\[chat=oc_a msg=om_\d+ event=e\d+\] 做 A\nRound 2 \(now\), from Bob:\n\[chat=oc_a msg=om_\d+ event=e\d+\] 再加个参数\n/);
-    assert.match(brief, new RegExp(`Your directory: ${dir}\\nYour directory \\(${dir}\\) was deleted to save disk some days after the task ended, and is empty again: start from your results`));
+    assert.match(brief, new RegExp(`Your directory: ${escapeRegExp(dir)}\\nYour directory \\(${escapeRegExp(dir)}\\) was deleted to save disk some days after the task ended, and is empty again: start from your results`));
     assert.match(brief, /What your earlier rounds found:\n\| A 的结论\nYour answer to the previous round \(the requester has it\):\n\| A 做完了\nPrevious artifacts: \["branch-A"\]\nWork on the request of round 2, then finish with task_report: its result answers that request\./);
   });
 
@@ -366,7 +435,7 @@ describe('TaskManager', () => {
     const brief = executor.turns[1].prompt;
     assert.match(brief, /^\[task t2\] 写手册\n/);
     assert.match(brief, /This task follows t1 "查 X" \(done\), earlier work it builds on\. Its request:\n\| \[chat=oc_a msg=om_\d+ event=e\d+\] 查一下 X/);
-    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks\/t1\n/);
+    assert.match(brief, /What that work found:\n\| X 慢在索引\nIts last answer to the requester:\n\| X 慢是因为缺索引\nIts artifacts: notes\.md\nIts directory, with whatever it left there: .*tasks[\\/]t1\n/);
     assert.match(tasks.list()[0], /^t2 \[running\] "写手册" for unknown in chat=oc_a \(follows t1\) · working for 0m$/);
   });
 
@@ -387,7 +456,7 @@ describe('TaskManager', () => {
     const kept = [['repo', 'src', 'a.js'], ['repo', 'target', 'notes.md'], ['repo', '.git', 'node_modules', 'pack'], ['rust', 'Cargo.toml'],
       ['repo', 'src', 'constructor', 'index.js'], ['repo', 'src', 'hasOwnProperty', 'index.js']].map((parts) => path.join(dir, ...parts));
     for (const file of [...gone, ...kept, path.join(dir, 'repo', 'env', 'pyvenv.cfg'), path.join(dataDir, 'workers', 't1', 'session.jsonl')]) write(file);
-    fs.symlinkSync(path.dirname(outside), path.join(dir, 'repo', 'src', 'node_modules'));
+    directoryLink(path.dirname(outside), path.join(dir, 'repo', 'src', 'node_modules'));
     await tasks.sweepDirs();
     assert.ok(gone.every((file) => fs.existsSync(file)), 'nothing of a live task');
     tasks.report('t1', { state: 'done', draft: 'a' });
@@ -409,7 +478,7 @@ describe('TaskManager', () => {
     // is deleted from the directory its brief points to while it works.
     tasks.create({ rows: [row()], title: 'B', runtime: 'pi', parent: 't1' });
     assert.equal(tasks.get('t2').workdir, path.join(workspace, 'tasks', 't2'));
-    assert.match(executor.turns[1].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${dir}\\nIts dependency folders \\(node_modules, virtual environments, build caches\\) were deleted to save disk: install again only what you need\\.\\n`));
+    assert.match(executor.turns[1].prompt, new RegExp(`\\nIts directory, with whatever it left there: ${escapeRegExp(dir)}\\nIts dependency folders \\(node_modules, virtual environments, build caches\\) were deleted to save disk: install again only what you need\\.\\n`));
     write(path.join(dataDir, 'workers', 't2', 'session.jsonl'));
     now += 30 * day;
     assert.deepEqual(await tasks.sweepDirs().then(({ pruned: a, removed: b }) => [a, b]), [[], []]);
@@ -450,14 +519,14 @@ describe('TaskManager', () => {
     // A scan found repo/node_modules; then repo became a link to a directory outside.
     const scan = await scanDir(dir);
     fs.rmSync(path.join(dir, 'repo'), { recursive: true });
-    fs.symlinkSync(outside, path.join(dir, 'repo'));
+    directoryLink(outside, path.join(dir, 'repo'));
     tasks.config.taskDirBudgetGb = 1e-12;
     const result = tasks.cleanDirs(new Map([[dir, scan]]));
     assert.deepEqual([result.pruned, result.removed], [[], ['t1']], 'the directory goes, with the link in it');
     // A trash that is a link: nothing is moved into it, and it goes as a link.
     const trash = path.join(workspace, 'tasks', '.trash');
     fs.rmSync(trash, { recursive: true, force: true });
-    fs.symlinkSync(outside, trash);
+    directoryLink(outside, trash);
     const kept = path.join(workspace, 'tasks', 'kept');
     fs.mkdirSync(kept);
     assert.throws(() => moveToTrash(kept, trash), /not a directory of its own/);
@@ -511,6 +580,75 @@ describe('TaskManager', () => {
     tasks.config.taskDirBudgetGb = 0;
     assert.deepEqual(await tasks.sweepDirs().then(({ pruned, removed }) => [pruned, removed]), [[], []], '0 turns the budget off');
   });
+
+  it('keeps a directory whose repository holds work that exists nowhere else past its age, and deletes it last past the budget',
+    { skip: spawnSync('git', ['--version']).status !== 0 && 'no git' }, async (t) => {
+      const day = 86_400_000;
+      let now = Date.parse('2026-11-01T00:00:00Z');
+      const warned = [];
+      const logger = { info() {}, warn: (event, fields) => warned.push([event, fields]), error() {} };
+      const { tasks, executor, workspace } = setup(t, { now: () => now, logger });
+      const git = (cwd, ...args) => {
+        const result = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args],
+          { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull } });
+        assert.equal(result.status, 0, result.stderr);
+      };
+      const remote = path.join(workspace, 'remote.git');
+      const seed = path.join(workspace, 'seed');
+      git(workspace, 'init', '-q', '--bare', remote);
+      git(workspace, 'clone', '-q', remote, seed);
+      fs.writeFileSync(path.join(seed, 'a.js'), 'a');
+      fs.writeFileSync(path.join(seed, '.gitignore'), 'node_modules/\n');
+      git(seed, 'add', '.');
+      git(seed, 'commit', '-qm', 'a');
+      git(seed, 'push', '-q', 'origin', 'HEAD:main');
+      // A commit of each task's own (the same content in the same second
+      // would be the commit another task pushed).
+      const commit = (repo) => {
+        git(repo, 'checkout', '-qb', 'fix');
+        fs.writeFileSync(path.join(repo, 'b.js'), repo);
+        git(repo, 'add', '.');
+        git(repo, 'commit', '-qm', 'b');
+      };
+      // What each task left in its clone.
+      const leaves = [
+        ['pushed', (repo) => { commit(repo); git(repo, 'push', '-q', 'origin', 'fix'); }],
+        ['unpushed', commit],
+        ['uncommitted', (repo) => fs.writeFileSync(path.join(repo, 'a.js'), 'changed')],
+        ['untracked', (repo) => fs.writeFileSync(path.join(repo, 'notes.md'), 'n')],
+      ];
+      for (const [index, [title, leave]] of leaves.entries()) {
+        tasks.create({ rows: [row()], title, runtime: 'pi' });
+        const repo = path.join(tasks.get(`t${index + 1}`).workdir, 'repo');
+        git(workspace, 'clone', '-q', '-b', 'main', remote, repo);
+        fs.mkdirSync(path.join(repo, 'node_modules'));
+        fs.writeFileSync(path.join(repo, 'node_modules', 'dep.js'), 'x');
+        leave(repo);
+        tasks.report(`t${index + 1}`, { state: 'blocked', summary: title });
+        executor.turns[index].finish({ text: '' });
+        await settle();
+        now += 60_000;
+      }
+      now += 15 * day;
+      const swept = await tasks.sweepDirs();
+      assert.deepEqual([swept.removed, swept.kept, swept.pruned], [['t1'], ['t2', 't3', 't4'], ['t2', 't3', 't4']],
+        'only what is pushed goes for its age; the others lose their dependency folders only');
+      assert.deepEqual(warned, []);
+      tasks.config.taskDirBudgetGb = 1e-12;
+      assert.deepEqual((await tasks.sweepDirs()).removed, ['t2', 't3', 't4'], 'past the budget, the longest ended first');
+      assert.deepEqual(warned.map(([event, fields]) => [event, path.basename(fields.dir), fields.repos.map((repo) => repo.reason)]),
+        [['task_dir_removed_unsaved', 't2', ['unpushed']], ['task_dir_removed_unsaved', 't3', ['uncommitted']], ['task_dir_removed_unsaved', 't4', ['uncommitted']]]);
+
+      // A worktree or submodule is a repository too; a repository git cannot
+      // answer for may hold such work, a `.git` it does not take for one holds none.
+      const worktree = path.join(workspace, 'wt');
+      fs.mkdirSync(worktree);
+      fs.writeFileSync(path.join(worktree, '.git'), 'gitdir: /elsewhere\n');
+      assert.deepEqual((await scanDir(workspace)).repos.filter((repo) => repo === worktree), [worktree]);
+      const failing = (stderr) => async () => { throw Object.assign(new Error('git failed'), { stderr }); };
+      assert.deepEqual(await unsavedWork(['/r'], { git: failing('') }), [{ repo: '/r', reason: 'unknown' }]);
+      assert.deepEqual(await unsavedWork(['/r'], { git: failing('fatal: not a git repository (or any of the parent directories): .git') }), []);
+    });
 
   it('answers a progress question: what one person asked for, how long it has worked and what became of its result', async (t) => {
     const { tasks, executor, db } = setup(t);
@@ -593,9 +731,9 @@ describe('TaskManager', () => {
     executor.turns[0].finish({ text: '' });
     await settle();
     const inThread = { chatId: 'oc_a', threadId: 'omt_9', senderId: 'ou_alice', scopeKey: origin.scope_key, content: '要' };
-    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice] "排查飞书名字泄露问题" now on: "排查飞书名字泄露" (same thread, waiting for this person)');
+    assert.equal(tasks.hintFor(inThread, {}), '[daemon tasks] near this input: t1 [waiting for Alice for 0m] "排查飞书名字泄露问题" now on: "排查飞书名字泄露" (same thread, waiting for this person)');
     const reply = { chatId: 'oc_a', threadId: null, senderId: 'ou_bob', scopeKey: 'lark:oc_a:', content: 'ok', parentId: origin.message_id };
-    assert.match(tasks.hintFor(reply, {}), /t1 \[waiting for Alice\] .*\(replies to its message\)/);
+    assert.match(tasks.hintFor(reply, {}), /t1 \[waiting for Alice for 0m\] .*\(replies to its message\)/);
     const sameChat = { chatId: 'oc_a', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_a:', content: '飞书名字泄露那个怎么样了' };
     assert.equal(tasks.hintFor(sameChat, {}), '', 'similar words alone point nowhere');
     const elsewhere = { chatId: 'oc_b', senderId: 'ou_alice', scopeKey: 'lark:oc_b:', content: '飞书名字泄露那个怎么样了' };
@@ -604,6 +742,58 @@ describe('TaskManager', () => {
     tasks.report('t1', { state: 'done', draft: 'ok' });
     tasks.setStatus('t1', 'done');
     assert.match(tasks.hintFor(inThread, {}), /t1 \[done 0m ago\] "排查飞书名字泄露问题" last asked: "排查飞书名字泄露" \(same thread\)/);
+  });
+
+  it('takes a question nobody answered for days out of the working set, and finds it again by a reply, its id or its answer', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-06T10:00:00Z');
+    const { tasks, executor, ingest } = setup(t, { now: () => now });
+    // On a Friday Alice asks in a direct chat, and the worker asks her back.
+    const dm = { chat_id: 'oc_dm', chat_type: 'p2p', scope_key: 'lark:oc_dm:' };
+    const origin = row({ ...dm, content: '帮我把飞书账号改名' });
+    ingest(origin);
+    tasks.create({ rows: [origin], title: '飞书账号改名', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'needs_user', question: '是哪个账号？' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    const fromAlice = (content, fields = {}) => ({ chatId: 'oc_dm', threadId: null, senderId: 'ou_alice', scopeKey: 'lark:oc_dm:', content, ...fields });
+    now += 3 * day;
+    assert.match(tasks.hintFor(fromAlice('工作号那个')), /t1 \[waiting for Alice for 3d\] "飞书账号改名" .*\(waiting for this person\)$/, 'on Monday it is still near');
+
+    now += 2 * day + 60_000;
+    assert.equal(tasks.isDormant(tasks.get('t1')), true);
+    assert.deepEqual(tasks.workingSet().map((task) => task.id), []);
+    assert.equal(tasks.hintFor(fromAlice('工作号那个')), '', 'not on every word she says in the chat');
+    assert.equal(tasks.hintFor({ ...fromAlice('飞书账号改名那个呢'), chatId: 'oc_b', scopeKey: 'lark:oc_b:' }, { owner: true }), '', 'nor on similar words elsewhere');
+    assert.match(tasks.hintFor(fromAlice('工作号那个', { parentId: origin.message_id })),
+      /t1 \[waiting for Alice for 5d\] .*\(replies to its message, waiting for this person\)$/);
+    assert.deepEqual(tasks.overview().live.map((task) => [task.id, task.dormant]), [['t1', true]], 'still live');
+    assert.equal(tasks.heldDirs().has(tasks.get('t1').workdir), true, 'its directory stays');
+    assert.deepEqual(tasks.list(), ['Also waiting, with nothing for days: t1 (5d). task_id= shows one.']);
+    assert.match(tasks.list({ query: '飞书账号改名' })[0], /^t1 \[waiting\] "飞书账号改名"/, 'a search looks past the working set');
+    tasks.config.taskDormantDays = 0;
+    assert.deepEqual(tasks.workingSet().map((task) => task.id), ['t1'], '0 turns it off');
+    delete tasks.config.taskDormantDays;
+
+    // Her answer goes on in the same round, and the task is back.
+    assert.equal(tasks.route('t1', [row({ ...dm, content: '工作号那个' })], 'owner').status, 'running');
+    assert.equal(tasks.get('t1').round, 1);
+    assert.deepEqual(tasks.workingSet().map((task) => task.id), ['t1']);
+  });
+
+  it('ranks tasks of equal weight by when they last moved, not when they were created', async (t) => {
+    const day = 86_400_000;
+    let now = Date.parse('2026-11-01T00:00:00Z');
+    const { tasks, executor } = setup(t, { now: () => now });
+    for (const [index, state] of ['needs_user', 'done'].entries()) {
+      tasks.create({ rows: [row({ chat_id: `oc_${index}`, scope_key: `lark:oc_${index}:` })], title: '飞书账号改名', runtime: 'pi' });
+      tasks.report(`t${index + 1}`, { state, question: state === 'needs_user' ? '哪个账号？' : '', draft: 'x' });
+      executor.turns[index].finish({ text: '' });
+      await settle();
+      now += 2 * day;
+    }
+    const hint = tasks.hintFor({ chatId: 'oc_x', senderId: 'ou_owner', scopeKey: 'lark:oc_x:', content: '飞书账号改名' }, { owner: true });
+    assert.match(hint, /near this input: t2 \[done 2d ago\] [^·]*· t1 \[waiting for the requester for 4d\] /);
   });
 
   it('knows a reply to the message that relayed a task\'s result, whatever input the router decided it on', async (t) => {

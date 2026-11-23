@@ -124,7 +124,37 @@ claims so the inputs can be replayed. `task_reports` is the append-only list of
 reports.
 
 Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
-person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`.
+person), and the ended `done`, `blocked`, `dropped`, `failed`, `stopped`.
+
+`waiting` is the only status that keeps a task live without a worker on it:
+its worker asked one thing a person can answer or do (decide, tell, grant an
+access, confirm), and goes on in the same round when they do. A round its
+worker cannot finish for a missing access or prerequisite that no one can
+clear now ends `blocked`, like one that `failed`: the requester is told what
+is missing, and the input that clears it reopens the task for a round. A
+`blocked` task used to stay live until someone wrote to it again. Nothing
+aged it: on one long-running instance six sat for up to twelve days with no
+worker, counted as in progress by `/tasks`, kept in every input's working set
+and holding their directories, one of them blocked only because its worker
+could not edit a pull request's description after the work was done. A
+daemon that starts on such tasks ends each, with its round, when its worker
+last moved it.
+
+A `waiting` task can wait as long: nobody may ever answer. With nothing for
+`OV_SUPERAGENT_TASK_DORMANT_DAYS` (5 by default: a question asked on a Friday
+is still near on Monday; 0 turns it off) it is **dormant**. It stays live: an
+answer still goes on in the same round, and its directory stays held. But it
+leaves the working set, so it no longer takes one of the three places in
+every nearby input's `[daemon tasks]` line, nor counts as waiting for its
+requester on everything they say in a direct chat. A reply to its messages
+or a line in its thread still finds it, as do `task_list` with `for_event`,
+`query` or its id; the default `task_list` names the dormant tasks in one
+line, and `/tasks` lists them apart, in one line at the end. The router is
+told that a question nobody answered for days drops out of its hints, and to
+look an answer that comes that late up with `for_event`. Of tasks with equal
+weight in a hint, the one that moved last comes first, not the one created
+first: a live task created days ago no longer goes before one that ended
+minutes ago.
 
 ### A task is one result, pushed forward in rounds
 
@@ -168,8 +198,8 @@ pull request, a document), and it takes only what is about that result:
   person waiting behind it. People's talk, a remark on a result included,
   never reopens a task. The `[daemon tasks]` line lists the tasks near an
   input (same thread as any of their rounds, a reply to their messages,
-  waiting for this person), what each is doing (`working`, `waiting for …`,
-  `done 12m ago, 3 rounds`) and the first 40 characters of what its current
+  waiting for this person), what each is doing (`working`, `waiting for … for
+  2d`, `done 12m ago, 3 rounds`) and the first 40 characters of what its current
   round asks (`now on:`) or its last one asked (`last asked:`): a title is
   written when a task is created and says nothing of its later rounds. A
   reply to a message the router sent for a task counts as a reply to that
@@ -178,8 +208,8 @@ pull request, a document), and it takes only what is about that result:
   message (about 4% of relayed results in replays were otherwise not linked).
   "Same requester" is no longer a reason, and similar words only rank what an
   exact signal found, or point the owner across chats. Similar words look only
-  at the working set (live tasks and the 32 that ended last, about a day of
-  tasks online); the exact signals reach past it: the task a line replies to,
+  at the working set (live tasks but the dormant ones, and the 32 that ended
+  last, about a day of tasks online); the exact signals reach past it: the task a line replies to,
   and the latest ten tasks asked in its thread, however long ago. Every one of
   these reads goes through an index (the working set by end time, a message's
   task, a thread's tasks), so a hint costs about the same with 100 000 tasks as
@@ -187,12 +217,14 @@ pull request, a document), and it takes only what is about that result:
   100 000). The rule for a working task is the one from before rounds,
   unchanged.
 - **An ended task takes a new request as a round.** `owner` input to a task
-  that is `done`, `dropped` or `failed` reopens it for its next round
+  that is `done`, `blocked`, `dropped` or `failed` reopens it for its next round
   (`task_rounds`); `context` reopens nothing, and a `stopped` task stays
   stopped (work on it again is a new task that follows it). A round records
   where it was asked and by whom: its report says `round=N`, its origin is that
   round's message, so the answer goes there and an answer there settles that
-  round's report. A delivery that names the task (`task_ids`) settles the
+  round's report. A round that reopens a task which ended `blocked` or
+  `failed` is told so, with why, and to check first whether that still
+  stands. A delivery that names the task (`task_ids`) settles the
   reports of the round it answers, never the task's other rounds: the round
   it was decided on (its origin, or another input of it), else the rounds
   asked where it went; only an answer given where no round was asked settles
@@ -243,7 +275,7 @@ pull request, a document), and it takes only what is about that result:
 | `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title, an optional note, and `follows` when it builds on a task's result as a separate one. |
 | `task_route` | Lines for a task: `owner` (something on the result it works toward or delivered; for an ended task, a new round) or `context` (background for a task at work). Refused for a stopped task, and `context` for an ended one. |
 | `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
-| `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
+| `task_list` | The working set (every live task but the dormant ones, named in one line, and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles, dormant tasks included. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
 
 Routing an input to a task records it as decided (`decisions`, `silent`), so the
 turn-end check does not ask again; the relayed result records the delivery over
@@ -443,6 +475,20 @@ follows one whose directory was deleted starts from its report, as when its
 session cannot be forked; one whose parent lost its dependency folders is told
 to install again what it needs.
 
+A directory whose git repositories hold work that exists nowhere else is not
+deleted whole for its age: changes not committed (untracked files included),
+or commits on a branch, a tag, a detached HEAD or the stash that no
+remote-tracking branch has (a repository with no remote has nothing pushed).
+That is often the very work a `blocked` task could not push. Its dependency
+folders still go after 3 days; the directory goes only past the budget,
+after every directory without such work, with a `task_dir_removed_unsaved`
+warning. A repository git cannot answer for (a timeout, an error) counts as
+holding such work; a `.git` git does not take for a repository counts as
+none. The sweep asks git only about the directories it may delete whole,
+read-only (`git status`, `git log --all --not --remotes`), with no optional
+locks, no `core.fsmonitor`, and never about a repository above the one it
+names.
+
 The daemon sweeps a minute after it starts and every hour. Measuring runs in
 the background; choosing what to delete and moving it to a trash folder next
 to it happen in one step, so a task never starts in, or reads, a directory
@@ -531,9 +577,25 @@ the reply text, so a rewritten reply is a new message).
   action. Selected final reports still awaiting the inbox are delivered again
   through their idempotent receipt.
 
-The owner sees the tasks with `/tasks` in a direct chat (live ones, recent
-ended ones, slots, whether each result reached the requester), one task with
-`/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
+The owner sees the tasks with `/tasks` in a direct chat (how many are running,
+queued, waiting for a reply and dormant; the tasks with a worker on them, then
+the questions waiting, the latest first; recent ended ones; the dormant ones
+in one line; slots; whether each result reached the requester). On Lark the
+overview is a card (Card JSON 2.0, Lark 7.20 or later): a table per group of
+tasks, with the status as a coloured tag, every @ of what people wrote shown
+as ＠ (Lark refuses a bot message with an email address in it); elsewhere,
+and when Lark refuses the card, it is the text. A group shows by its name
+(clipped), a direct chat as `飞书私聊` / `微信私聊` (it has no name). At the
+end of the card a dropdown lists every task it shows: choosing one sends that
+task's card, exactly as `/tasks t12` would. The choice comes back as a card
+callback on a card this daemon registered when it sent it, and runs as that
+command only in a direct chat, only `/tasks` and only a task id, with the
+owner checks of a typed command and without the model. `/tasks t12` is a card
+too: its facts, its requests round by round, the user's additions and extra
+context (each with its round, its kind and whether its worker has read it),
+its results (one per round, plus any a newer addition superseded) and its
+runtime moves; the text says the same. The owner stops a task with
+`/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort). The Core answers these without the model.
 

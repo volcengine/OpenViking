@@ -5,10 +5,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { CodexAgent } from '../src/codex.mjs';
+import { supportsShellScripts } from '../src/platform/index.mjs';
 import {
   DEFAULT_PROMPT_DIR,
   assembleConversationPolicy,
@@ -16,6 +18,8 @@ import {
   assembleVolcSelfHostedConversationPolicy,
   assembleWorkerPolicy,
   docCommentNotice,
+  normalizePolicyText,
+  policyHashOf,
   OV_SOUL_URI,
   loadSoul,
   rolePresetText,
@@ -26,7 +30,7 @@ import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
-const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8');
+const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8').replace(/\r\n?/g, '\n');
 const role = (name) => rolePresetText(name);
 
 describe('conversation policy assemble', () => {
@@ -238,7 +242,11 @@ describe('conversation policy assemble', () => {
     assert.ok(assembleWorkerPolicy({}).includes(never(cliCommandCode(packageDir))));
   });
 
-  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
+  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', {
+    // The fenced commands run through /bin/sh with a POSIX PATH and $HOME, which
+    // is what the rendered policy is for; the quoting is asserted on POSIX.
+    skip: supportsShellScripts ? false : 'runs the rendered command through /bin/sh',
+  }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'workspace');
@@ -574,5 +582,59 @@ describe('Volc', () => {
     }
     assert.match(assembleVolcSelfHostedConversationPolicy(config), /--idempotency-key <stable-key>/);
     assert.match(assembleVolcConversationPolicy({}), /## Role\n\nYour soul [^\n]*\n\nRole boundary:/);
+  });
+});
+
+describe('policy text is independent of the host', () => {
+  const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
+  const codex = (config) => new CodexAgent({ workspace: '/srv/superagent/workspace', agentName: 'Tester', ...config }, {
+    getCognitionState: () => ({ runtime: 'codex', epoch: 1, authorityToken: 'token' }), getSetting: () => null,
+  }, quiet);
+
+  // A Windows checkout hands the prompt files back with CRLF, and a soul an
+  // editor or another host wrote can carry them too.
+  const crlfCheckout = (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-crlf-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const promptDir = path.join(root, 'agent');
+    fs.cpSync(DEFAULT_PROMPT_DIR, promptDir, { recursive: true });
+    const files = fs.readdirSync(promptDir, { recursive: true }).filter((name) => name.endsWith('.md'));
+    assert.ok(files.length > 5, 'the whole prompt tree is copied');
+    for (const name of files) {
+      const file = path.join(promptDir, name);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n'));
+    }
+    return promptDir;
+  };
+
+  it('assembles, and hashes, a CRLF checkout exactly like an LF one', (t) => {
+    const promptDir = crlfCheckout(t);
+    assert.equal(normalizePolicyText('a\r\nb\rc\nd'), 'a\nb\nc\nd');
+    for (const connectors of [['lark'], ['lark', 'email'], ['qq', 'onebot']]) {
+      const lfSoul = role('colleague');
+      const crlfSoul = lfSoul.replace(/\n/g, '\r\n');
+      const lf = assembleConversationPolicy({ connectors, soulText: lfSoul });
+      const crlf = assembleConversationPolicy({ promptDir, connectors, soulText: crlfSoul });
+      assert.ok(!crlf.includes('\r'), connectors.join('+'));
+      assert.equal(crlf, lf, connectors.join('+'));
+      assert.equal(codex({ promptDir, connectors, soulText: crlfSoul }).policyHash,
+        codex({ connectors, soulText: lfSoul }).policyHash, connectors.join('+'));
+    }
+    assert.equal(assembleWorkerPolicy({ promptDir, soulText: 'You are a worker.\r\n' }),
+      assembleWorkerPolicy({ soulText: 'You are a worker.\n' }));
+    assert.equal(codex({ promptDir, soulText: 'You are a worker.\r\n' }).policyHash,
+      codex({ soulText: 'You are a worker.\n' }).policyHash);
+    assert.equal(rolePresetText('colleague', promptDir), role('colleague'));
+    assert.equal(rolePrompt({ soulText: 'You are {{AGENT_NAME}}.\r\n', agentName: 'Fern' }), 'You are Fern.');
+  });
+
+  it('hashes LF policy text to the digest it had before, so an upgrade keeps its stored session', () => {
+    const text = assembleConversationPolicy({ connectors: ['lark'] });
+    // The digest as every runtime computed it before the normalization layer:
+    // text, NUL, workspace, NUL, policy version.
+    const before = (value) => createHash('sha256').update(value).update('\0')
+      .update('/srv/superagent/workspace').update('\0').update('steer-v2').digest('hex');
+    assert.equal(policyHashOf(text, '/srv/superagent/workspace', 'steer-v2'), before(text));
+    assert.equal(policyHashOf(text.replace(/\n/g, '\r\n'), '/srv/superagent/workspace', 'steer-v2'), before(text));
   });
 });

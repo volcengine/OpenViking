@@ -13,6 +13,16 @@ import { OV_SOUL_URI } from './conversation-policy.mjs';
 import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
 import { RUNTIME_IDS } from './runtime-catalog.mjs';
 
+// A deployment manifest may name its storage directories with POSIX paths even
+// when setup reads it on Windows. Only those manifest settings keep POSIX
+// semantics; a path this daemon derives locally (database, lock, default temp)
+// is joined with the host's rules.
+const MANIFEST_DIR_ENV = Object.freeze([
+  'OV_SUPERAGENT_DATA_DIR', 'OV_SUPERAGENT_WORKSPACE', 'OV_SUPERAGENT_TEMP_DIR',
+]);
+const manifestDirEnv = (name, value) => (MANIFEST_DIR_ENV.includes(name) && String(value).startsWith('/')
+  ? path.posix.resolve(value) : path.resolve(value));
+
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
 // TraeX installs under any of these names; without a configured binary, use
@@ -151,9 +161,9 @@ function pathsOverlap(left, right) {
 }
 
 export function getConfig() {
-  const dataDir = path.resolve(
-    process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.ov-superagent', 'data'),
-  );
+  const configuredDataDir = process.env.OV_SUPERAGENT_DATA_DIR
+    || path.join(os.homedir(), '.ov-superagent', 'data');
+  const dataDir = manifestDirEnv('OV_SUPERAGENT_DATA_DIR', configuredDataDir);
   const primaryRuntime = process.env.OV_SUPERAGENT_PRIMARY_RUNTIME
     ? enumEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', '', RUNTIME_IDS) : '';
   const fallbackRuntime = enumEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'codex', RUNTIME_IDS);
@@ -161,10 +171,9 @@ export function getConfig() {
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
     throw new Error('OV_SUPERAGENT_TEMP_DIR must be an absolute path');
   }
-  const workspace = path.resolve(
-    process.env.OV_SUPERAGENT_WORKSPACE
-      || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace'),
-  );
+  const configuredWorkspace = process.env.OV_SUPERAGENT_WORKSPACE
+    || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace');
+  const workspace = manifestDirEnv('OV_SUPERAGENT_WORKSPACE', configuredWorkspace);
   const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
   assertLoopbackHost(host);
   const channel = enumEnv('OV_SUPERAGENT_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']);
@@ -215,7 +224,7 @@ export function getConfig() {
     dataDir,
     databasePath: path.join(dataDir, 'superagent.sqlite3'),
     lockPath: path.join(dataDir, 'daemon.lock'),
-    tempDir: configuredTempDir ? path.normalize(configuredTempDir) : path.join(dataDir, 'tmp'),
+    tempDir: configuredTempDir ? manifestDirEnv('OV_SUPERAGENT_TEMP_DIR', configuredTempDir) : path.join(dataDir, 'tmp'),
     workspace,
     promptDir,
     soulUri: soulUriEnv(),
@@ -360,6 +369,10 @@ export function getConfig() {
     taskDirPruneDays: intEnv('OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS', 3, { min: 0, max: 3_650 }),
     taskDirRemoveDays: intEnv('OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS', 14, { min: 0, max: 3_650 }),
     taskDirBudgetGb: intEnv('OV_SUPERAGENT_TASK_DIR_BUDGET_GB', 20, { min: 0, max: 1_000_000 }),
+    // A task waiting for a person's answer with nothing for this many days
+    // leaves the working set the router's task hints draw on: only a reply
+    // to its messages, its thread or its id still finds it. 0 turns it off.
+    taskDormantDays: intEnv('OV_SUPERAGENT_TASK_DORMANT_DAYS', 5, { min: 0, max: 3_650 }),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,6 +16,7 @@ import { normalizeLarkMessage, normalizeLarkEvent } from '../src/connectors/lark
 import { resolveCardAction, settledChoiceCard } from '../src/card-messages.mjs';
 import { fakeConnectors, larkConnectors, larkSuccess as success } from './action-fixture.mjs';
 import { chatEvent } from './event-fixture.mjs';
+import { fileLink } from './symlink-fixture.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 const profile = 'test-profile';
@@ -52,7 +54,7 @@ function fixture(t, { thread = false, run } = {}) {
     config: { profile, workspace, tempDir, maxReplyChars: 30_000 }, store, connectors, logger,
   });
   const call = (tool, input) => service.call(tool, input, { authority });
-  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { store.close(); removeTempDir(directory); });
   return { directory, workspace, tempDir, databasePath, store, service, call, calls: connectors.calls };
 }
 
@@ -98,11 +100,11 @@ it('sends a document snapshot from the workspace into the original thread and cl
 it('rejects traversal, URLs, escaped symlinks, directories, oversized files, and mixed bodies before sending', async (t) => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.directory, 'outside.pdf'), 'private');
-  fs.symlinkSync(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
+  const linked = fileLink(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
   fs.mkdirSync(path.join(f.workspace, 'folder'));
   const fd = fs.openSync(path.join(f.workspace, 'large.pdf'), 'w');
   fs.ftruncateSync(fd, MAX_FILE_BYTES + 1); fs.closeSync(fd);
-  for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', 'link.pdf', 'folder', 'large.pdf']) {
+  for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', ...(linked ? ['link.pdf'] : []), 'folder', 'large.pdf']) {
     await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, file_path }));
   }
   await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent,
@@ -254,7 +256,7 @@ it('registers a cross-channel card where it landed, not where the decision came 
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
   const store = new Store(path.join(directory, 'state.sqlite3'), logger);
-  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { store.close(); removeTempDir(directory); });
   store.initializeCognition('pi', authority);
   const groupMessage = normalizeEvent({ type: 'im.message.receive_v1', event_id: 'evt-group',
     message_id: 'om_groupmsg123456', chat_id: chatId, chat_type: 'group', message_type: 'text',

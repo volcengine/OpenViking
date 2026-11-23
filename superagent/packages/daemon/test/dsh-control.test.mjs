@@ -3,15 +3,17 @@
 // The short-lived DSH control process: patch, handshake, settings and credentials calls, teardown.
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn } from '../src/platform/index.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import {
   CONTROL_PATCH_FILE, DshControlClient, DshControlError, controlPatchPath,
   withDshControl, writeControlPatch,
 } from '../src/dsh-control.mjs';
+import { installNodeCommand } from './fake-executable.mjs';
 
 // A stand-in for `dsh`: it speaks the superagent bridge surface this client uses,
 // keeps its state in FAKE_DSH_STATE, and appends every frame it receives so a
@@ -178,8 +180,9 @@ function readJsonLines(file) {
 function fakeDsh(t, { mode = 'normal', state = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-dsh-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const script = path.join(dir, 'dsh');
-  fs.writeFileSync(script, FAKE_DSH, { mode: 0o755 });
+  // A stand-in the product can start: a shebang script on POSIX, a Node
+  // entrypoint on Windows, where CreateProcess cannot run the former.
+  const script = installNodeCommand(dir, 'dsh', { body: FAKE_DSH });
   const stateDir = path.join(dir, 'state');
   fs.mkdirSync(stateDir, { mode: 0o700 });
   const statePath = path.join(stateDir, 'state.json');
@@ -222,7 +225,7 @@ test('the control patch carries the bridge only, never a provider or MCP section
   const patchPath = writeControlPatch({ dataDir, policy: 'model control' });
   assert.equal(patchPath, controlPatchPath(dataDir));
   assert.equal(path.basename(patchPath), CONTROL_PATCH_FILE);
-  assert.equal(fs.statSync(patchPath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(patchPath).mode & 0o777, 0o600);
   const patch = JSON.parse(fs.readFileSync(patchPath, 'utf8'));
   const rows = patch.filter((row) => row && typeof row === 'object');
   assert.ok(rows.some((row) => Array.isArray(row.insert)

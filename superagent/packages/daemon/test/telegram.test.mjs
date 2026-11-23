@@ -1,12 +1,14 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { TelegramApi, TelegramError, DOWNLOAD_BYTES, DOCUMENT_BYTES } from '../src/telegram/api.mjs';
 import { TelegramState } from '../src/telegram/state.mjs';
 import { loginTelegram } from '../src/telegram/auth.mjs';
@@ -21,6 +23,7 @@ import { Harness } from '../src/harness.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { invokeOperation } from '../src/connectors/operations.mjs';
 import { chatEvent, mailEvent } from './event-fixture.mjs';
+import { fileLink } from './symlink-fixture.mjs';
 
 const TOKEN = '123456:abcdefghijklmnopqrstuvwxyz_TEST';
 const account = { botId: '123456', ownerId: '9007199254740000', chatId: '9007199254740000', token: TOKEN, offset: 0, activatedAt: 0 };
@@ -37,7 +40,7 @@ const pending = (signal) => new Promise((_, reject) => {
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-telegram-'));
   const state = new TelegramState(dir);
-  t.after(() => { state.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { state.close(); removeTempDir(dir); });
   return { dir, state };
 }
 function provider(fn, { webhook = '', botId = Number(account.botId) } = {}) {
@@ -91,8 +94,8 @@ test('pairs only a fresh private start challenge, stores numeric identities prec
   assert.equal(result.ownerId, account.ownerId);
   assert.equal(state.account().offset, 5);
   assert.equal(state.account().token, TOKEN);
-  assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
+  if (supportsFileModes) assert.equal(fs.statSync(state.databasePath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(state.directory).mode & 0o777, 0o700);
   state.acquire(); state.release();
 });
 
@@ -272,8 +275,8 @@ test('uploads files through multipart and checks size/symlinks before network; i
   assert.equal(filePayload({ path: name }, account.chatId).method, 'sendDocument');
   fs.truncateSync(name, DOCUMENT_BYTES + 1);
   assert.throws(() => filePayload({ path: name }, account.chatId), /50 MB/);
-  const link = path.join(dir, 'link'); fs.symlinkSync(name, link);
-  assert.throws(() => filePayload({ path: link }, account.chatId));
+  const link = path.join(dir, 'link');
+  if (fileLink(name, link)) assert.throws(() => filePayload({ path: link }, account.chatId));
 });
 
 test('downloads bounded media from the fixed host without redirects, sanitizes names, and rejects unsafe paths', async (t) => {
@@ -290,7 +293,7 @@ test('downloads bounded media from the fixed host without redirects, sanitizes n
   const got = await downloadFile(api, media, state.mediaDirectory, AbortSignal.timeout(1000));
   assert.deepEqual(fs.readFileSync(got.path), bytes);
   assert.equal(got.name, 'private.txt');
-  assert.equal(fs.statSync(got.path).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(got.path).mode & 0o777, 0o600);
   for (filePath of ['https://evil.example/file', '../file', '/file', 'a/%2e%2e/file', 'file?token=evil']) {
     await assert.rejects(downloadFile(api, media, state.mediaDirectory, AbortSignal.timeout(1000)), /Invalid Telegram file path/);
   }
