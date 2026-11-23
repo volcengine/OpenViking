@@ -44,6 +44,23 @@ INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "研发周报"}
 
 
+@pytest.mark.parametrize("source", ["viking://resources", "viking://user/"])
+@pytest.mark.parametrize("saved", [False, True])
+async def test_compile_rejects_root_sources(service, client, source, saved):
+    """Reject a namespace root in any source position and suggest concrete directories."""
+    service.compile.configure_local_backend("http://localhost:1", "")
+    path = "/api/v1/compile/create" if saved else "/api/v1/compile"
+    body = {**(SAVED_INPUTS if saved else INPUTS), "from": [SOURCE, source]}
+
+    response = await client.post(path, json=body)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["message"] == (
+        "Compile --from rejects viking://resources and viking://user. Use a "
+        "subdirectory such as viking://resources/test or viking://user/default/resources."
+    )
+
+
 @pytest.mark.parametrize("body", [b'{"error":{"message":"Ark unavailable"}}', b"unavailable"])
 async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
     """Runtime 424 preserves request context even when the response is not JSON."""
