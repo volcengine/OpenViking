@@ -83,13 +83,7 @@ Capabilities are optional modules:
 Connector. `content` lists the message bodies an action accepts (`markdown`,
 `file`, `file_key`, `card`); `mentions` and `thread` opt into those Lark
 features; `idempotent: true` means the provider honours the idempotency key, so
-the Core may retry an `UNCERTAIN` attempt with the same key;
-`reply_target: "chat"` on `message.reply` declares a group-level reply.
-Core resolves the target from the indexed message in the same Connector
-instance and adds the trusted `chat_id` to the action input alongside
-`message_id`. A missing indexed group returns `unknown_message` before
-an Outbox reservation. The Connector may use `chat_id` to send a new
-group message; thread routing requires its own advertised support; `interim: false`
+the Core may retry an `UNCERTAIN` attempt with the same key; `interim: false`
 means the target takes no interim message (staged replies), only the result;
 `approval: true`
 means the action speaks for the owner (an email reply), so the Core never runs it
@@ -102,6 +96,13 @@ retried and never interim, and no `message.send`). `queries` lists the
 read-only operations. The Core offers an agent tool only when some configured
 Connector declares the operation behind it, and checks every call against the
 target Connector's declaration.
+
+`reply_target: "chat"` on `message.reply` declares a group-level reply.
+Core resolves the group from the indexed message in the same Connector
+instance and includes the trusted `chat_id` alongside `message_id` in the
+action input. A missing indexed group returns `unknown_message` before
+an Outbox reservation. The Connector uses `chat_id` to send a new group
+message. Thread routing requires separately advertised support.
 
 Version 0.2 implements `events`, `actions` and `queries`. Future `search` results should
 reuse the team's normalized Document shape. Future `sync` implementations

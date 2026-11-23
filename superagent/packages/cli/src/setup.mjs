@@ -117,7 +117,7 @@ const imChoices = () => [
 ].filter(choice => capabilities.connectors[choice.value] !== false);
 
 // IMs connected by pasting tokens rather than scanning a code.
-const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot'];
+const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot', 'dingtalk'];
 
 // Where the Feishu/Lark bot app comes from. The same scan page can create an
 // app or pick one the scanner owns or administers. A test tenant cannot scan
@@ -1770,6 +1770,7 @@ function connectionSteps(prompter, connectors, { saving = false, larkSource = 's
     if (im === 'qq') return t('QQ AppID / AppSecret + 私聊验证码绑定', 'QQ AppID / AppSecret + private-chat verification code');
     if (im === 'slack') return t('Slack 新建或选已有 App + 两个 token + 私聊口令绑定', 'Slack app (new or existing) + two tokens + a code in a direct message');
     if (im === 'onebot') return t(`${IM_LABELS.onebot} WebSocket 地址 + access token + 私聊口令绑定`, `${IM_LABELS.onebot} WebSocket address + access token + a code in a private message`);
+    if (im === 'dingtalk') return t('钉钉 AppKey + AppSecret', 'DingTalk AppKey + AppSecret');
     const scans = scansOf(im, larkSource, larkAccess);
     return t(`${IM_LABELS[im]} ${scans} 次`, `${IM_LABELS[im]} ${scans} ${scans === 1 ? 'scan' : 'scans'}`);
   });

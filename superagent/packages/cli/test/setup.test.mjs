@@ -508,6 +508,17 @@ test('adding OneBot to an existing instance connects only it, next to nothing el
   assert.match(h.written(), /它会跟进所在的每个群，在 ~[\\/]\.ov-superagent[\\/]data[\\/]asd[\\/]onebot[\\/]config\.json 里可以把群改成 "mention" 或 "off"/);
 });
 
+test('adding DingTalk requires an owner-capable primary and connects only the new group bot', async (t) => {
+  const h = harness(t, ['2', '5', '8', '1,8', '11']);
+  const before = existing(h, {});
+  h.options.connect.dingtalk = async ({ plan }) => { h.calls.push(['dingtalk', plan.dataDir]); };
+  assert.equal(await setupCommand(h.options), 0);
+  assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'dingtalk'], channel: 'lark' }]);
+  assert.deepEqual(h.calls, [['dingtalk', before.dataDir], ['restart', 'asd']]);
+  assert.match(h.written(), /钉钉群机器人需要另选一个支持 owner 私聊的主渠道/);
+  assert.match(h.written(), /接下来接入：钉钉 AppKey \+ AppSecret/);
+});
+
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
   const h = harness(t, ['2', '5', '1,4', '7', '2', '11']);
   const before = existing(h, { connectors: ['lark', 'slack'] });

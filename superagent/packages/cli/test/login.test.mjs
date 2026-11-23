@@ -8,6 +8,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { loginCommand } from '../src/login.mjs';
+import { connectDingTalk } from '../src/dingtalk.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { larkScopes } from '../src/setup.mjs';
 import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
@@ -72,6 +73,35 @@ test('DingTalk login renews only the secondary connector and restarts after succ
   m.options.connect.dingtalk = async () => { throw new Error('invalid app credentials'); };
   await assert.rejects(loginCommand(['dingtalk', 'work'], m.options), /invalid app credentials/);
   assert.deepEqual(m.calls, []);
+});
+
+test('DingTalk credential rotation keeps the original file until OAuth validation succeeds', async (t) => {
+  const m = machine(t, () => []);
+  const dataDir = path.join(m.home, 'ding-instance');
+  const file = path.join(dataDir, 'dingtalk.json');
+  fs.mkdirSync(dataDir);
+  fs.writeFileSync(file, 'previous credentials');
+  const prompter = {
+    section() {},
+    info() {},
+    text: async (label, options) => options.initial ?? 'fixture-key',
+    secret: async () => 'fixture-secret',
+  };
+  let valid = false;
+  t.mock.method(globalThis, 'fetch', async (url, request) => {
+    assert.equal(url, 'https://api.dingtalk.com/v1.0/oauth2/accessToken');
+    assert.deepEqual(JSON.parse(request.body), { appKey: 'fixture-key', appSecret: 'fixture-secret' });
+    return valid ? Response.json({ accessToken: 'fixture-token', expireIn: 7200 }) : new Response('', { status: 403 });
+  });
+  await assert.rejects(connectDingTalk({ plan: { dataDir }, prompter }), /HTTP 403/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'previous credentials');
+  valid = true;
+  await connectDingTalk({ plan: { dataDir }, prompter });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    clientId: 'fixture-key', clientSecret: 'fixture-secret', robotCode: 'fixture-key',
+  });
+  assert.deepEqual(fs.readdirSync(dataDir), ['dingtalk.json']);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 });
 
 test('a mailbox password is renewed for the mailbox chosen, and the instance restarts', async (t) => {

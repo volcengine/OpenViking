@@ -134,7 +134,7 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
     source: 'dingtalk', message_id: 'om_foreign', markdown: 'Do not send', decision_id: event.id,
   }), /original message has no known chat/);
   assert.deepEqual(sends, []);
-  await call('reply_message', { source: 'dingtalk', message_id: messageId, markdown: 'Timer created', decision_id: event.id });
+  await call('reply_message', { message_id: messageId, markdown: 'Timer created', decision_id: event.id });
 
   now += 60_000;
   const submitted = [];
