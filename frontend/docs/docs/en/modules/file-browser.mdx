@@ -659,12 +659,16 @@ Pass `experienceDashboardSlots.sections` to customize the built-in dashboard whi
 
 ### Tree width
 
-- When the container is narrower than 521px, the tree and preview stack and the horizontal resizer is hidden.
-
 - A draggable divider sits between the tree and the preview: drag it, or focus it and press the left and right arrow keys (16px each). Its accessible name comes from `labels.resizeTree`.
-- The tree is 352px wide by default and at least 200px. Its maximum is the smaller of 520px and the container width minus 321px (the preview keeps at least 320px, plus a 1px divider), so in a narrow column the tree shrinks instead of crowding out the preview.
+- The default tree width is 352px in Chinese and 500px in English. In the side-by-side layout, the tree is at least 200px wide. Its maximum is the smaller of 520px and the container width minus 321px, leaving at least 321px for the preview and divider.
 - The width applies to the current instance only and is not written to `localStorage`; whether to remember it is up to your app.
 - The current width is written as the CSS variable `--ov-file-browser-tree-width` in the root element's inline style. You can read it, but overriding it has no effect.
+
+### Tree height
+
+- When the container is narrower than 521px, the tree and preview stack. The tree starts at 40% of the container height, subject to the divider's limits.
+- Drag the divider up or down, or focus it and press the up and down arrow keys (16px each). The tree keeps at least 160px and the preview keeps at least 240px while resizing.
+- At a container height of 401px or less, the divider becomes a static line and the tree uses the 40% split. Each instance remembers its adjusted width and height separately.
 
 ## Analytics
 
