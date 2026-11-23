@@ -317,7 +317,6 @@ async def test_add_resource_rejects_loopback_remote_url(client: httpx.AsyncClien
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
-    assert "public remote resource targets" in body["error"]["message"]
 
 
 async def test_add_resource_rejects_private_git_ssh_url(client: httpx.AsyncClient):

@@ -3,6 +3,7 @@
 import os
 from typing import Dict, Optional
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.storage.vectordb.project.local_project import (
     LocalProject,
     get_or_create_local_project,
@@ -14,7 +15,9 @@ from openviking.storage.vectordb.utils.path_safety import (
     safe_join_name,
 )
 from openviking.storage.vectordb.utils.validation import validate_name_str
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_or_create_project_group(path: str = ""):
@@ -75,7 +78,7 @@ class ProjectGroup:
         Scan all subdirectories under path, each subdirectory is treated as a project
         """
         if not os.path.exists(self.path):
-            logger.info(f"ProjectGroup path does not exist: {self.path}")
+            logger.info("ProjectGroup path does not exist: %s", safe_path_for_log(str(self.path)))
             # Create default project
             default_path = safe_join(self.path, "default")
             os.makedirs(default_path, exist_ok=True)
@@ -86,15 +89,26 @@ class ProjectGroup:
         try:
             entries = os.listdir(self.path)
         except Exception as e:
-            logger.error(f"Failed to list directory {self.path}: {e}")
+            logger.info(
+                "Failed to list directory %s: %s",
+                safe_path_for_log(str(self.path)),
+                type(e).__name__,
+            )
             return
 
         loaded_count = 0
+        skipped_projects = 0
         for entry in entries:
             try:
                 entry_path = safe_join(self.path, entry)
-            except ValueError:
-                logger.warning(f"Skipping invalid project directory under {self.path}: {entry}")
+            except ValueError as _log_error:
+                skipped_projects += 1
+                logger.debug(
+                    "Skipping invalid project directory under %s: %s error_type=%s",
+                    safe_path_for_log(str(self.path)),
+                    safe_path_for_log(str(entry)),
+                    type(_log_error).__name__,
+                )
                 continue
 
             # Only process directories
@@ -106,16 +120,27 @@ class ProjectGroup:
 
             try:
                 # Load project
-                logger.info(f"Loading project: {project_name} from {entry_path}")
+                logger.debug(
+                    "Loading project: %s from %s",
+                    short_hash(str(project_name)),
+                    safe_path_for_log(str(entry_path)),
+                )
                 project = get_or_create_local_project(path=str(entry_path))
                 self.projects.set(project_name, project)
                 loaded_count += 1
-                logger.info(f"Successfully loaded project: {project_name}")
+                logger.debug("Successfully loaded project: %s", short_hash(str(project_name)))
             except Exception as e:
-                logger.error(f"Failed to load project from {entry_path}: {e}")
+                skipped_projects += 1
+                logger.debug(
+                    "Failed to load project from %s: %s",
+                    safe_path_for_log(str(entry_path)),
+                    type(e).__name__,
+                )
                 continue
 
-        logger.info(f"Loaded {loaded_count} projects from {self.path}")
+        if skipped_projects:
+            logger.info("Project loading incomplete skipped=%d degraded=true", skipped_projects)
+        logger.info("Loaded %s projects from %s", loaded_count, safe_path_for_log(str(self.path)))
 
         # If no projects loaded, create default project
         if loaded_count == 0:
@@ -188,11 +213,15 @@ class ProjectGroup:
             validate_name_str(project_name)
             project_path = safe_join_name(self.path, project_name)
             os.makedirs(project_path, exist_ok=True)
-            logger.info(f"Creating persistent project: {project_name} at {project_path}")
+            logger.debug(
+                "Creating persistent project: %s at %s",
+                short_hash(str(project_name)),
+                safe_path_for_log(str(project_path)),
+            )
             project = get_or_create_local_project(path=str(project_path))
         else:
             # Volatile project
-            logger.info(f"Creating volatile project: {project_name}")
+            logger.debug("Creating volatile project: %s", short_hash(str(project_name)))
             project = get_or_create_local_project(path="")
 
         self.projects.set(project_name, project)
@@ -252,7 +281,7 @@ class ProjectGroup:
                 project.drop_collection(collection_name)
             project.close()
             self.projects.remove(project_name)
-            logger.info(f"Deleted project: {project_name}")
+            logger.debug("Deleted project: %s", short_hash(str(project_name)))
 
     def drop_project(self, project_name: str):
         """

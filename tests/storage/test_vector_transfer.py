@@ -108,7 +108,11 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         del output_fields, ctx
         self.scroll_filters.append(filter)
         offset = int(cursor or 0)
-        ordered = [dict(self.records[key]) for key in sorted(self.records)]
+        ordered = [
+            dict(self.records[key])
+            for key in sorted(self.records)
+            if _matches_filter(filter, self.records[key])
+        ]
         page = ordered[offset : offset + limit]
         next_cursor = str(offset + limit) if offset + limit < len(ordered) else None
         return page, next_cursor
@@ -171,8 +175,8 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         return deleted
 
     async def _strict_transfer_count(self, ctx, filter):
-        del ctx, filter
-        return len(self.records)
+        del ctx
+        return sum(_matches_filter(filter, record) for record in self.records.values())
 
     async def _strict_transfer_page(self, ctx, filter, *, limit, cursor, output_fields):
         return await self.scroll(
@@ -208,6 +212,8 @@ def _matches_filter(expr, record: dict[str, Any]) -> bool:
         return expr.substring in str(record.get(expr.field, ""))
     if isinstance(expr, Range):
         value = record[expr.field]
+        if value is None:
+            return False
         return (
             (expr.gte is None or value >= expr.gte)
             and (expr.gt is None or value > expr.gt)
@@ -236,6 +242,11 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
         self.acl_manager = AclManager(self, _EnabledAclConfig())
         self.scroll_output_fields = []
 
+    async def _get_backend_for_context(self, ctx):
+        backend = await super()._get_backend_for_context(ctx)
+        backend.delete_by_filter = self.delete_by_filter
+        return backend
+
     async def scroll(
         self,
         filter=None,
@@ -257,6 +268,16 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
         page = ordered[offset : offset + limit]
         next_cursor = str(offset + limit) if offset + limit < len(ordered) else None
         return page, next_cursor
+
+    async def delete_by_filter(self, filter):
+        ids = [
+            record_id
+            for record_id, record in self.records.items()
+            if _matches_filter(filter, record)
+        ]
+        for record_id in ids:
+            del self.records[record_id]
+        return len(ids)
 
     async def _strict_transfer_count(self, ctx, filter):
         del ctx
@@ -558,8 +579,11 @@ async def test_transfer_scan_emits_supported_aggregate_request(
 
 
 @pytest.mark.asyncio
-async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeypatch):
-    source = "viking://resources/source.md"
+async def test_private_adapter_reads_file_and_manifest_vectors(monkeypatch):
+    source_root = "viking://resources/source"
+    source = f"{source_root}/a.md"
+    target = "viking://resources/target"
+    source_path = "/resources/source/a.md"
     backend = _MemoryTransferBackend([])
     adapter = VikingDBPrivateCollectionAdapter(
         host="unused.invalid",
@@ -601,7 +625,7 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
                             {
                                 "op": "must",
                                 "field": "uri",
-                                "conds": ["/resources/source.md"],
+                                "conds": [source_path],
                                 "para": "-d=0",
                             },
                         ],
@@ -610,18 +634,28 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
             }
             return {
                 "data": [
-                    {"id": "file", "fields": {"uri": "/resources/source.md"}},
-                    {"id": "gone", "fields": {"uri": "/resources/source.md"}},
+                    {"id": "file", "fields": {"uri": source_path}},
+                    {"id": "gone", "fields": {"uri": source_path}},
                 ]
             }
+        if path == "/api/vikingdb/data/search/scalar":
+            assert data["field"] == "updated_at" and data["order"] == "asc"
+            scope = data["filter"]["conds"][1]["conds"][1]
+            if scope.get("para") == "-d=-1":
+                assert scope["conds"] == ["/resources/source"]
+                return {"data": [{"id": "file", "fields": {"uri": source_path}}]}
+            assert scope["conds"] == ["/resources/target/a.md"]
+            assert scope["para"] == "-d=0"
+            return {"data": []}
         if path == "/api/vikingdb/data/fetch_in_collection":
-            assert data["ids"] == ["file", "gone"]
+            manifest = "/api/vikingdb/data/search/scalar" in paths
+            assert data["ids"] == (["file"] if manifest else ["file", "gone"])
             return {
                 "fetch": [
                     {
                         "id": "file",
                         "fields": {
-                            "uri": "/resources/source.md",
+                            "uri": source_path,
                             "account_id": "acct",
                             "vector": [0.1, 0.2],
                         },
@@ -629,7 +663,7 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
                 ],
                 "ids_not_exist": ["gone"],
             }
-        raise AssertionError(f"Legacy reads must not use aggregate or scalar search: {path}")
+        raise AssertionError(f"Unexpected transfer request: {path}")
 
     monkeypatch.setattr(collection, "_data_post", data_post)
     records, _ = await backend._read_uri_transfer_entries(
@@ -637,6 +671,20 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
     )
     assert [(r["id"], r["uri"], r["vector"]) for r in records] == [("file", source, [0.1, 0.2])]
     assert paths == ["/api/vikingdb/data/search/vector", "/api/vikingdb/data/fetch_in_collection"]
+
+    paths.clear()
+    await backend.copy_uri_mapping(
+        _ctx(), source_root, target, recursive=True, source_uris=[source]
+    )
+    copied = _records_under(backend, target)
+    assert [(record["uri"], record["vector"]) for record in copied] == [
+        (f"{target}/a.md", [0.1, 0.2])
+    ]
+    assert paths == [
+        "/api/vikingdb/data/search/scalar",
+        "/api/vikingdb/data/fetch_in_collection",
+        "/api/vikingdb/data/search/scalar",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1172,18 +1220,16 @@ async def test_incremental_inventory_recovers_known_uris_without_rescanning(
     # complete inventory; it remains available for the planner to repair.
     expected[f"{root}/unindexed.py"] = {2}
 
+    records = await backend.get_incremental_inventory_under_uri(
+        root, ctx=_ctx(), batch_size=3, expected_levels=expected
+    )
+    expected_ids = set(backend.records)
     if known_missing_uri:
-        records = await backend.get_incremental_inventory_under_uri(
-            root, ctx=_ctx(), batch_size=3, expected_levels=expected
-        )
-        assert set(records) == set(backend.records)
         assert records["deleted-l2"]["md5"] == "old"
     else:
-        with pytest.raises(RuntimeError, match="4 unique records but count was 5"):
-            await backend.get_incremental_inventory_under_uri(
-                root, ctx=_ctx(), batch_size=3, expected_levels=expected
-            )
-    assert count.await_count == 1
+        expected_ids.remove("deleted-l2")
+    assert set(records) == expected_ids
+    count.assert_not_awaited()
     assert len(scan_calls) == (1 if incomplete_scan == "short" else 2)
     if incomplete_scan == "duplicate":
         assert Range("updated_at", gte=11) in scan_calls[1]["filter"].conds
@@ -1193,19 +1239,16 @@ async def test_incremental_inventory_recovers_known_uris_without_rescanning(
 
 
 @pytest.mark.asyncio
-async def test_incremental_inventory_rejects_count_undershoot_without_retry(monkeypatch):
-    root = "viking://resources/docs"
-    backend = _MemoryTransferBackend(
-        [_record("root-l0", root, level=0), _record("root-l1", root, level=1)]
+async def test_incremental_inventory_returns_file_record_without_count(monkeypatch):
+    uri = "viking://resources/docs/manifest.json"
+    backend = _MemoryTransferBackend([_record("manifest-l2", uri)])
+    count = AsyncMock(return_value=0)
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    records = await backend.get_incremental_inventory_under_uri(
+        uri, ctx=_ctx(), recursive=False, expected_levels={uri: {2}}
     )
-    monkeypatch.setattr(
-        backend,
-        "_strict_transfer_count",
-        AsyncMock(return_value=1),
-    )
-    with pytest.raises(RuntimeError, match="2 unique records but count was 1"):
-        await backend.get_incremental_inventory_under_uri(root, ctx=_ctx(), batch_size=2)
-    assert backend._strict_transfer_count.await_count == 1
+    assert set(records) == {"manifest-l2"}
+    count.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1341,18 +1384,45 @@ async def test_direct_recursive_transfer_keeps_complete_target_scan(transfer_met
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
-async def test_target_replacement_cleans_exact_entries_across_batches(transfer_method):
+async def test_target_replacement_cleans_exact_entries_across_batches(transfer_method, monkeypatch):
     source, target = "viking://resources/source", "viking://resources/target"
     source_records = [_record(f"source-{i}", f"{source}/file-{i}.md") for i in range(101)]
+    source_records.extend(
+        [
+            _record("source-l0", source, level=0),
+            _record("source-l1", source, level=1, updated_at=None),
+        ]
+    )
     old_records = [_record(f"old-{i}", f"{target}/file-{i}.md") for i in range(101)]
-    backend = _RealAclMemoryTransferBackend(source_records + old_records)
-    backend.acl_manager = None
+    backend = _MemoryTransferBackend(source_records + old_records)
+    backend.backend_mode = "pgvector"
 
-    result = await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
+    async def query(*, filter, limit, offset=0, order_by=None, order_desc=False, **kwargs):
+        records = [r for r in backend.records.values() if _matches_filter(filter, r)]
+        if order_by == "updated_at":
+            records.sort(
+                key=lambda r: (r["updated_at"] is None, r["updated_at"] or 0),
+                reverse=order_desc,
+            )
+        return records[offset : offset + limit]
 
-    assert result.written == 101
-    assert len(_records_under(backend, target)) == 101
+    monkeypatch.setattr(backend, "_query", query)
+    count = AsyncMock(side_effect=RuntimeError("count unavailable"))
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    result = await getattr(backend, transfer_method)(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=sorted({record["uri"] for record in source_records}),
+    )
+
+    assert result.written == len(source_records)
+    assert {(record["uri"], record["level"]) for record in _records_under(backend, target)} == {
+        (record["uri"].replace(source, target, 1), record["level"]) for record in source_records
+    }
     assert not set(backend.records).intersection(record["id"] for record in old_records)
+    count.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1423,12 +1493,20 @@ async def test_uri_mapping_source_uris_limits_source_and_target_replacement_scop
         ]
     )
 
-    result = await getattr(backend, transfer_method)(
+    transfer = getattr(backend, transfer_method)
+    original_records = dict(backend.records)
+    empty = await transfer(_ctx(), source, target, recursive=True, source_uris=[])
+    assert (empty.scanned, empty.written, empty.deleted, empty.batches) == (0, 0, 0, 0)
+    assert backend.records == original_records
+    assert not backend.query_calls
+
+    result = await transfer(
         _ctx(),
         source,
         target,
         recursive=True,
         source_uris=[source, f"{source}/a.md"],
+        source_expected_levels={source: {2}, f"{source}/a.md": {2}},
     )
 
     assert result.scanned == 2

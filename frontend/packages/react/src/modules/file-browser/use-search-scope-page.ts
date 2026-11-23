@@ -4,6 +4,7 @@ import type { OvRequestOptions } from '../../client/types.js';
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
 import { DirectoryQueries } from '../../shared/directory-tree/directory-queries.js';
 import { useQueryScope } from '../../shared/request/use-query-scope.js';
+import { useUserRootMode } from '../../shared/directory-tree/user-root-context.js';
 
 const noSubscribe = () => () => {};
 const noSnapshot = () => undefined;
@@ -12,7 +13,8 @@ export function useSearchScopePage(
   uri: string | undefined,
   requestOptions?: OvRequestOptions,
 ) {
-  const { request, error, aborted } = useQueryScope(
+  const userRootMode = useUserRootMode();
+  const { request, error, aborted, retry } = useQueryScope(
     useOvClient('local'),
     requestOptions,
     'file_browser_directory_load',
@@ -20,8 +22,10 @@ export function useSearchScopePage(
   const [target, setTarget] = useState<string>();
   const session = useMemo(
     () =>
-      request && target ? new DirectoryQueries(request, target) : undefined,
-    [request, target],
+      request && target
+        ? new DirectoryQueries(request, target, undefined, userRootMode)
+        : undefined,
+    [request, target, userRootMode],
   );
   const dirs = useSyncExternalStore(
     aborted ? noSubscribe : (session?.subscribe ?? noSubscribe),
@@ -51,7 +55,9 @@ export function useSearchScopePage(
   return {
     page,
     load: (next: string, previous?: { error?: boolean }) => {
+      if (aborted) return;
       if (next !== target) setTarget(next);
+      else if (!request && error) retry();
       else if (session)
         void session.load(
           next,

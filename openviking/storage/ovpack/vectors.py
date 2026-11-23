@@ -223,9 +223,9 @@ async def choose_vector_restore_action(
                 "ovpack dense vector snapshot cannot be restored into a sparse or hybrid index",
                 details={"reason": unsupported_reason},
             )
-        logger.info(
-            "[ovpack] Recomputing vectors because dense snapshot restore is unsupported: "
-            f"{unsupported_reason}"
+        logger.debug(
+            "Recomputing vectors because dense snapshot restore is unsupported: %s",
+            type(unsupported_reason).__name__,
         )
         return "recompute"
 
@@ -237,7 +237,9 @@ async def choose_vector_restore_action(
                 "ovpack dense vector snapshot is incompatible with current embedding config",
                 details={"reason": reason},
             )
-        logger.info(f"[ovpack] Recomputing vectors because snapshot is incompatible: {reason}")
+        logger.debug(
+            "Recomputing vectors because snapshot is incompatible: %s", type(reason).__name__
+        )
         return "recompute"
 
     return "restore"

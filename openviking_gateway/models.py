@@ -32,6 +32,8 @@ class Policy(BaseModel):
     name: str = "Default"
     recall: bool = True
     profile: bool = True
+    # The user's soul.md, their standing instructions to the model, added whole.
+    soul: bool = True
     profile_max_tokens: int = Field(default=4000, ge=0, le=32000)
     capture: bool = True
     context_types: list[str] = Field(default_factory=lambda: ["memory", "resource", "skill"])

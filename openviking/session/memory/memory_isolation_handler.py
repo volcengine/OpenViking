@@ -275,7 +275,7 @@ class MemoryIsolationHandler:
         try:
             msg_range = self._extract_context.read_message_ranges(str(ranges))
         except Exception:
-            logger.warning("Failed to parse memory ranges for peer memory: %s", ranges)
+            logger.info("memory ranges invalid; skipping range_type=%s", type(ranges).__name__)
             return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
 
         target_ids = []

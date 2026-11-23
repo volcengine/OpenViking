@@ -117,7 +117,9 @@ export function PreviewCompileDetails(props: Props & { compileName?: string }) {
               text.schedule,
               rule
                 ? [
-                    rule.frequency === 'daily' ? text.daily : weekday,
+                    rule.frequency === 'daily'
+                      ? text.daily
+                      : text.weeklySchedule(weekday),
                     time,
                   ].join(' ')
                 : text.noSchedule,

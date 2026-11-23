@@ -63,7 +63,7 @@ export function previewPolicy({
     fileHistory,
     versionedFile: wiki && isFile && !summary,
     importPack: !isFile && !system && canWrite && supportsPack(uri),
-    exportPack: !system && supportsPack(uri),
+    exportPack: !isFile && !system && supportsPack(uri),
     delete: isFile && !system && !summary && uri !== rootUri && canManage,
     configure: !isFile && !system && wiki && dashboard.isRoot === true,
   };

@@ -94,7 +94,14 @@ class StorageConfig(BaseModel):
 class GatewayConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # Settings an upgraded configuration may still carry; rejecting them would stop the host.
-    removed_fields: ClassVar[frozenset[str]] = frozenset({"encryption_key_env", "session_ttl_days"})
+    removed_fields: ClassVar[frozenset[str]] = frozenset(
+        {
+            "encryption_key_env",
+            "session_ttl_days",
+            "capture_concurrency",
+            "capture_delivery_records",
+        }
+    )
 
     public_url: str = ""
     mcp_file_links: Literal["proxy", "direct"] = "proxy"
@@ -109,8 +116,7 @@ class GatewayConfig(BaseModel):
     default_upstreams: dict[str, Upstream] = Field(default_factory=dict, repr=False)
     default_profile: Policy = Field(default_factory=Policy)
     min_server_version: str = "0.4.16"
-    # The 3600 floor keeps sessions alive past capture's default 600-second idle tail.
-    session_ttl_seconds: int = Field(default=30 * 86400, ge=3600)
+    session_ttl_seconds: int = Field(default=86400, ge=3600)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)
     request_log_sink: Literal["store", "stdout", "file"] = "store"
     # The file sink's JSON lines; it rotates at request_log_max_bytes and keeps four old files.
@@ -136,11 +142,12 @@ class GatewayConfig(BaseModel):
     openviking_breaker_failures: int = Field(default=0, ge=0)
     openviking_breaker_seconds: float = Field(default=30, gt=0)
     health_interval_seconds: float = Field(default=60, ge=1)
-    capture_concurrency: int = Field(default=1, ge=1)
+    # Leave committing saved conversations to OpenViking's session auto-commit. Its idle
+    # commit needs memory.session_auto_commit.enabled on the server; without that setting
+    # here, the gateway commits and works with any server.
+    openviking_auto_commit: bool = False
     # Model requests in flight per process above which new ones get 503; 0 means no limit.
     max_inflight_requests: int = Field(default=0, ge=0)
-    # Write a capture record for every delivery, commit and failed attempt.
-    capture_delivery_records: bool = False
     client_rules: ClientRules = Field(default_factory=ClientRules)
 
     @model_validator(mode="after")
@@ -157,10 +164,10 @@ class GatewayConfig(BaseModel):
         if not isinstance(value, dict):
             return value
         if found := cls.removed_fields.intersection(value):
-            logger.warning(
-                "Ignoring removed gateway settings %s. "
-                "See docs/en/guides/22-gateway-operations.md#migration",
-                ", ".join(sorted(found)),
+            logger.info(
+                "removed gateway configuration settings ignored skipped=%d",
+                len(found),
+                extra={"degraded": True, "skipped": len(found)},
             )
         value = {key: item for key, item in value.items() if key not in found}
         for field in cls.model_fields:

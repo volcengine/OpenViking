@@ -45,6 +45,8 @@ export interface VikingBotChatService {
   stream: (
     input: VikingBotChatInput,
     signal: AbortSignal,
+    /** Report acceptance of this input before any response events are available. */
+    onAccepted?: () => void,
   ) => AsyncIterable<VikingBotChatEvent>;
   createSession: (signal: AbortSignal) => Promise<VikingBotSession>;
   loadMessages: (
@@ -59,6 +61,19 @@ export interface VikingBotChatService {
     message: VikingBotMessage,
     signal: AbortSignal,
   ) => Promise<void>;
+  /** Read the current submission task, if it covers the latest messages. */
+  getSessionCommitTask?: (
+    id: string,
+    signal: AbortSignal,
+  ) => Promise<TaskReference | undefined>;
+  /** Submit the conversation for asynchronous memory extraction. */
+  commitSession?: (
+    id: string,
+    signal: AbortSignal,
+  ) => Promise<
+    | { status: 'accepted'; taskId: string }
+    | { status: 'skipped'; reason?: string }
+  >;
   interrupt?: (
     id: string,
     signal: AbortSignal,
@@ -104,7 +119,7 @@ export interface UseVikingBotChatOptions extends VikingBotHookOptions {
 export interface VikingBotChatState {
   /** Draft ownership changes on every history load, even for the same session ID. */
   historyKey?: object;
-  /** A normal terminal event in the current stream permits HITL. */
+  /** Live reply outcome: true for completion, false while underway or stopped, and undefined for loaded history. */
   responseComplete?: boolean;
   sessionId?: string;
   messages: readonly VikingBotMessage[];
@@ -123,6 +138,9 @@ export interface VikingBotChatResult extends VikingBotChatState {
   /** True only when this service supplies an actual interrupt operation. */
   canInterrupt: boolean;
   canSteer: boolean;
+  /** Commits the current session after its pending message writes finish. */
+  commitSession?: NonNullable<VikingBotChatService['commitSession']>;
+  getSessionCommitTask?: VikingBotChatService['getSessionCommitTask'];
   /** For a new turn, the optional callback runs once the stream acknowledges the input. */
   send: (
     input: string | VikingBotDraft,

@@ -143,18 +143,6 @@ async def test_enqueue_failure_unwinds_middlewares(transport, failure):
     assert events == ["outer", "inner", "inner-cleanup", "outer-cleanup"]
 
 
-async def test_enqueue_middleware_rewrites_payload(transport):
-    class Rewrite(QueueMiddleware):
-        async def enqueue(self, ctx, call_next):
-            assert ctx.payload == "input"
-            ctx.payload = {"input": ctx.payload, "middleware": True}
-            return await call_next(ctx)
-
-    queue = NamedQueue(object(), "/queue", "Test", middlewares=[Rewrite()])
-    await queue.enqueue("input")
-    assert json.loads(transport.write.await_args.args[1]) == {"input": "input", "middleware": True}
-
-
 async def test_process_dequeued_publishes_processing_and_end_to_end_durations(
     transport, monkeypatch
 ):

@@ -1,61 +1,74 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""One capture document per client session; the mailbox is its only authority.
+"""One capture document per client session: its OpenViking session and how far it is saved.
 
-Requests replace the unconfirmed tail, and a gateway cut confirms the history
-before it at once. The sole lease holder advances delivery and archives. A
-changed confirmed prefix starts a new OpenViking session that remembers the
-earlier ones. Replay records are independent: a failed capture never
-invalidates an old replacement.
+The request that ends a turn writes the turn to OpenViking. A gateway cut inside a turn
+writes the history before it at once, and so does Claude Code's or Codex's compaction
+request inside a turn. A commit then archives the saved messages and extracts memories from
+them: the gateway commits, or with ``openviking_auto_commit`` OpenViking does by itself.
+The document holds no conversation text, only where the session stands and when its idle
+commit is due. Replay records are independent: a failed save never invalidates an old
+replacement.
 """
 
 import asyncio
-import copy
 import hashlib
 import logging
 import time
 import uuid
 from collections import Counter
-from itertools import pairwise
 
 import async_timeout
 import orjson
 
-from .archives import TERMINAL, observe_archive
-from .capture_store import Document, LeaseLost
-from .client import CALL, CallContext, VikingError
+from openviking.observability.log_safety import safe_log_fields, short_hash
+
+from .capture_store import Document
+from .client import without_deadline
 from .models import Policy
 from .notices import without_notices
 from .protocols import (
     clean_text,
-    is_user,
     normalize,
     string_type,
     text_content,
     unwrap_client,
 )
-from .records import RecordKind as K
-from .sinks import Stats
-from .tool_protocols import reply_chain
 
 logger = logging.getLogger(__name__)
-MAX_ATTEMPTS = 5
-RECOVERY_SECONDS = 300
-DELIVERY_SECONDS = 100  # below the 120 s claim lease
 MAX_PREVIOUS = 5
 SOURCE = "gateway:"
+# OpenViking accepts this many messages in one write.
+BATCH = 100
+# How long a request waits for the write at a cut inside its turn.
+CUT_SECONDS = 10
+# Each process looks this often for idle commits overdue by as long: ones whose process
+# went away before the commit, and ones that failed.
+SWEEP_SECONDS = 60
+# OpenViking's answers to a commit that no later try changes: it rejects the key, or has
+# no such session.
+REFUSED = (401, 403, 404)
+# ``created`` says who commits the OpenViking session as it was last set up. ``idle_at``
+# is when the gateway's idle commit is due, for the key ``account`` and ``credential_id`` name.
+# ``answered`` is the last message of the request whose reply ended the latest saved turn.
+FIELDS = (
+    "ov_session",
+    "delivered",
+    "answered",
+    "created",
+    "reason",
+    "previous",
+    "peers",
+    "idle_at",
+    "account",
+    "credential_id",
+)
 
 
 def new_capture(reason="", old=None):
     value = {
         "ov_session": "gateway-" + uuid.uuid4().hex,
         "delivered": "",
-        "pending": [],
-        "retained": [],
-        "tokens": 0,
-        "archive": None,
-        "error": {},
-        "idle": False,
         "reason": reason,
         "previous": lineage(old or {})[:MAX_PREVIOUS],
     }
@@ -65,146 +78,285 @@ def new_capture(reason="", old=None):
     return value
 
 
+def current(value):
+    """The document's fields, or a new document; earlier versions also queued messages here."""
+    return {key: value[key] for key in FIELDS if key in value} if value else new_capture()
+
+
 def lineage(value):
     """The OpenViking sessions holding this history's saved messages, newest first."""
     previous = value.get("previous", [])
     return [value["ov_session"], *previous] if value.get("delivered") else list(previous)
 
 
-def ready_at(state):
-    if state.get("error"):
-        return state["error"]["retry_at"]
-    archive = state.get("archive")
-    times = [turn["ready"] for turn in state.get("pending", [])[:1]]
-    if archive and archive["status"] not in TERMINAL:
-        times.append(archive.get("next_check", 0))
-    return min(times) if times else None
-
-
-async def reset_capture(queue, scope, session, reason):
+async def reset_capture(store, scope, session, reason):
+    """Start a new OpenViking session; the next finished turn writes the whole history to it."""
     while True:
-        old = await queue.get(scope, session)
+        old = await store.get(scope, session)
         value = new_capture(reason, old.value)
-        if await queue.swap(scope, session, old, value, None):
+        if await store.swap(scope, session, old, value):
             return value
 
 
+def anchor_of(captured):
+    """The anchor of the message a captured message was made from."""
+    return captured["source_message_ids"][0].removeprefix(SOURCE)
+
+
+def segment(value, messages, chain, start, stop):
+    """messages[start:stop] as OpenViking messages, the users' naming their peers."""
+    peers = peer_anchors(value.get("peers"), messages[:stop], chain[:stop])
+    return with_peers(capture_messages(messages[start:stop], chain[start:stop]), peers)
+
+
 class CapturePipeline:
-    def __init__(self, queue):
-        self.queue = queue
+    """Saves turns and, unless OpenViking commits by itself, commits what they saved.
 
-    @staticmethod
-    def turns(messages, chain, start, stop, confirmed, idle_seconds, peers=None):
-        """Split messages[start:stop] at real user messages into delivery segments.
+    A turn's end commits at once when the uncommitted messages reach the profile's
+    ``commit_tokens``, keeping the latest ``keep_recent_messages`` live. Everything
+    left is committed once no turn has ended for ``idle_seconds``. That wait is a
+    timer in this process; the capture document records when it is due, so any
+    process finds the commit in ``sweep`` if this one is gone by then or failed.
+    Whoever makes it reads the OpenViking key from the stored key record at that
+    time, so a key revoked meanwhile commits nothing.
+    """
 
-        A segment that does not start at a user message continues the turn
-        before it. Its anchor is its last captured message, so the delivered
-        position always has a prefix anchor and a source ID.
-        """
-        bounds = [start, *(i for i in range(start + 1, stop) if is_user(messages[i])), stop]
-        call = CALL.get()
-        request = {"request_id": call.request_id} if call and call.request_id else {}
-        turns = []
-        for begin, end in pairwise(bounds):
-            captured = with_peers(capture_messages(messages[begin:end], chain[begin:end]), peers)
-            if captured:
-                turns.append(
-                    {
-                        "anchor": captured[-1]["source_message_ids"][0].removeprefix(SOURCE),
-                        "messages": captured,
-                        "continued": not is_user(messages[begin]),
-                        "confirmed": confirmed,
-                        "ready": 0 if confirmed else time.time() + idle_seconds,
-                        "queued_at": time.time(),
-                        **request,
-                    }
-                )
-        return turns
+    def __init__(self, store, viking=None, auto_commit=False, management=None):
+        self.store, self.viking, self.auto_commit = store, viking, auto_commit
+        self.management = management
+        # Idle commits waiting in this process with their due times and the ones
+        # running, by session, and every commit in flight.
+        self.timers, self.running, self.tasks = {}, set(), set()
 
-    @classmethod
-    def advance(cls, value, messages, chain, user, stop, confirmed, idle_seconds):
-        """Queue messages[:stop] after the delivered and confirmed part of a capture.
-
-        Everything before the user message at ``user`` is confirmed. Confirmed
-        content missing from this history belongs to another branch, and a tail
-        delivered while idle may lack its unanswered tool calls, so either one
-        starts a new OpenViking session that receives the whole history again.
-        Returns the new value and the segments it added.
-        """
-        positions = {a: i for i, a in enumerate(chain) if a}
-        held = [t for t in value["pending"] if t["confirmed"]]
-        ends = [a for a in (value["delivered"], *(t["anchor"] for t in held)) if a]
-        reason = ""
-        if any(a not in positions for a in ends):
-            reason = "history_changed"
-        elif value["delivered"] and value.get("idle") and positions[value["delivered"]] >= user:
-            reason = "continued_after_idle"
-        if reason:
-            value, held, ends = {**value, **new_capture(reason, value)}, [], []
-        start = 1 + max((positions[a] for a in ends), default=-1)
-        split = min(max(start, user), stop)
-        peers = peer_anchors(value.get("peers"), messages[:stop], chain[:stop])
-        added = [
-            *cls.turns(messages, chain, start, split, True, 0, peers),
-            *cls.turns(messages, chain, split, stop, confirmed, idle_seconds, peers),
-        ]
-        return {**value, "pending": [*held, *added]}, added
-
-    async def confirm(self, request, credential, policy):
+    async def open(self, request):
+        """Name this history's OpenViking session and the peer of each new user message."""
         old = request.capture
-        positions = set(request.capture_chain)
-        user_anchor = request.capture_chain[request.anchor]
         while True:
-            value = old.value or new_capture()
-            # The worker may be writing a due tail, so a changed one starts over here;
-            # advance() drops any other unconfirmed tail.
-            now = time.time()
-            if any(t["anchor"] not in positions for t in value["pending"] if t["ready"] <= now):
-                value = new_capture("history_changed", value)
-            value = record_peers(value, request)
-            value, _ = await asyncio.to_thread(
-                self.advance,
-                value,
-                request.messages,
-                request.capture_chain,
-                request.anchor,
-                request.anchor,
-                True,
-                0,
-            )
-            # A new authenticated request supplies the key a paused delivery lacked.
-            if value.get("error", {}).get("reason") in {
-                "gateway_key_revoked",
-                "gateway_key_missing",
-            }:
-                value["error"] = {}
-            # Reusing a prepared prompt does not generate another queue write.
-            value.update(
-                request_anchor=user_anchor,
-                credential_id=credential["id"],
-                credential_source=credential.get("source", "issued"),
-                account=credential["account"],
-                user_id=credential["user_id"],
-                protocol=request.protocol,
-                policy=policy.model_dump(),
-            )
-            if value == old.value or await self.queue.swap(
-                request.scope, request.session, old, value, ready_at(value)
+            value = record_peers(current(old.value), request)
+            if value == old.value or await self.store.swap(
+                request.scope, request.session, old, value
             ):
                 request.capture = Document(value, old.version + (value != old.value))
-                request.capture_target = value["ov_session"]
-                self.metrics(request, policy)
                 return
-            old = await self.queue.get(request.scope, request.session)
+            old = await self.store.get(request.scope, request.session)
 
-    async def confirm_cut(self, request, anchor):
-        """Queue the history up to a gateway cut as confirmed and ready at once.
+    async def save(self, request, credential, messages, chain, stop=None):
+        """Write what OpenViking lacks of messages[:stop]; returns how many messages went.
 
-        The model may search the saved session right after the cut, so delivery
-        does not wait for the turn to end. confirm() covers cuts before a user
-        message; this is for cuts inside a turn.
+        Writing starts after the cursor, the last message written. A history without
+        the cursor is another branch or was edited: it goes on in the same OpenViking
+        session from the turn's user message, so OpenViking may then hold a message of
+        it twice, and keeps what the client dropped. A write whose response is lost is
+        sent again by the next turn; that rare duplicate is accepted too.
         """
-        chain = request.capture_chain
+        ended, stop = stop is None, len(messages) if stop is None else stop
+        policy = Policy.model_validate(request.root["policy"])
+        doc = await self.store.get(request.scope, request.session)
+        value = current(doc.value)
+        # A history ending where a saved turn's request ended, as a compaction after that
+        # turn sends it, was written when the turn ended.
+        if not ended and chain[stop - 1] == value.get("answered"):
+            return 0
+        positions = {anchor: index for index, anchor in enumerate(chain) if anchor}
+        cursor = value["delivered"]
+        if cursor in positions:
+            start = positions[cursor] + 1
+        else:
+            start = request.anchor if cursor else 0
+        captured = await asyncio.to_thread(segment, value, messages, chain, start, stop)
+        if not captured:
+            return 0
+        key, session = credential["openviking_key"], value["ov_session"]
+        committer = "openviking" if self.auto_commit else "gateway"
+        sent = 0
+        # The reply is out, or a summary call took the time: the request's budget is over.
+        with without_deadline():
+            # Also after the setting changed: the session then gets the other policy.
+            if value.get("created") != committer:
+                await self.viking.create_session(key, session, policy, self.auto_commit)
+            while captured:
+                batch, captured = captured[:BATCH], captured[BATCH:]
+                written = await self.viking.write(key, session, batch)
+                sent += len(batch)
+                mark = {"created": committer}
+                if ended and not captured:
+                    mark["answered"] = request.capture_chain[-1]
+                if self.auto_commit:
+                    mark["idle_at"] = None
+                elif ended and not captured:
+                    mark.update(
+                        idle_at=time.time() + policy.idle_seconds,
+                        account=credential["account"],
+                        credential_id=credential["id"],
+                    )
+                anchor = anchor_of(batch[-1]) or value["delivered"]
+                doc = await self.moved(request, doc, value, positions, cursor, anchor, mark)
+                if doc is None:
+                    return sent
+                request.capture, value = doc, doc.value
+                # What another save of this history wrote meanwhile is not written again.
+                reached = positions.get(value["delivered"], -1)
+                captured = [
+                    m for m in captured if positions.get(anchor_of(m), reached + 1) > reached
+                ]
+        if ended and not self.auto_commit:
+            if (written or {}).get("pending_tokens", 0) >= policy.commit_tokens:
+                self.spawn(self.commit(key, session, policy.keep_recent_messages))
+            # Not when another save wrote this one's last messages: that one waits.
+            if mark.get("idle_at"):
+                self.wait((request.scope, request.session), mark["idle_at"])
+        return sent
+
+    def wait(self, name, due):
+        """Make the idle commit of ``name`` at ``due``; a later turn of it waits anew."""
+        if name in self.timers:
+            self.timers.pop(name)[0].cancel()
+        timer = asyncio.get_running_loop().call_later(max(due - time.time(), 0), self.idle, name)
+        self.timers[name] = (timer, due)
+
+    def idle(self, name):
+        self.spawn(self.idle_commit(name, self.timers.pop(name)[1]))
+
+    async def idle_commit(self, name, due):
+        """Commit everything with the stored key, then clear the due time.
+
+        A failed commit leaves the due time for ``sweep``. One that OpenViking refuses
+        is given up, and a key that was revoked, or whose record expired, commits
+        nothing: the conversation's next turn waits anew.
+        """
+        self.running.add(name)
+        try:
+            doc = await self.due(name, due)
+            if not doc:
+                return
+            value = doc.value
+            key = await self.management.get(value["account"], "keys", value["credential_id"])
+            if key and not await self.commit(key["openviking_key"], value["ov_session"], 0):
+                return
+            while doc:
+                done = {k: v for k, v in doc.value.items() if k != "idle_at"}
+                if await self.store.swap(*name, doc, done):
+                    return
+                doc = await self.due(name, due)
+        except Exception as error:
+            logger.info(
+                "gateway idle commit failed; retaining pending commit error_type=%s",
+                type(error).__name__,
+                extra={"degraded": True, "error_type": type(error).__name__},
+            )
+        finally:
+            self.running.discard(name)
+
+    async def due(self, name, due):
+        """The document while it still waits for the idle commit due at ``due``.
+
+        Not once a later turn waits anew, here or in another process, a reset left
+        the session behind, or another process made the commit.
+        """
+        doc = await self.store.get(*name)
+        return doc if doc.value.get("idle_at") == due else None
+
+    async def sweep(self):
+        """Make the idle commits that are overdue, one at a time."""
+        if self.viking.unavailable_reason:
+            return
+        before = time.time() - SWEEP_SECONDS
+        for name in await self.store.waiting(before):
+            if name in self.running:
+                continue
+            try:
+                doc = await self.store.get(*name)
+                due = doc.value.get("idle_at")
+                if due is None:
+                    # An earlier version listed it, or its document expired.
+                    await self.store.forget(*name, doc.version)
+                elif due <= before:
+                    # Not one that a turn ending meanwhile set to a later time.
+                    await self.idle_commit(name, due)
+            except Exception as error:
+                logger.info(
+                    "gateway overdue commit check failed error_type=%s",
+                    type(error).__name__,
+                    extra={"degraded": True, "error_type": type(error).__name__},
+                )
+
+    async def commit(self, key, session, keep):
+        """Commit; False when it failed and a later try may succeed."""
+        try:
+            with without_deadline():
+                await self.viking.commit(key, session, keep)
+        except Exception as error:
+            error_code = (
+                safe_log_fields({"error_code": getattr(error, "reason", None)}).get("error_code")
+                or type(error).__name__
+            )
+            logger.info(
+                "gateway session commit failed session_hash=%s error_type=%s error_code=%s",
+                short_hash(str(session)),
+                type(error).__name__,
+                error_code,
+                extra={
+                    "degraded": True,
+                    "error_type": type(error).__name__,
+                    "error_code": error_code,
+                    "operation": "gateway.commit",
+                },
+            )
+            return getattr(error, "status", None) in REFUSED
+        return True
+
+    def spawn(self, work):
+        task = asyncio.ensure_future(work)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def close(self):
+        """Stop waiting. What was due stays recorded, and ``sweep`` finds it."""
+        for timer, _ in self.timers.values():
+            timer.cancel()
+        self.timers.clear()
+        for task in list(self.tasks):
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+
+    async def moved(self, request, doc, value, positions, begun, anchor, mark):
+        """Store ``mark`` and move the cursor to ``anchor`` after a write, never back.
+
+        ``begun`` is the cursor this save started from and ``positions`` where each
+        message of its history stands. Another save may have moved the cursor
+        meanwhile. One of this history that got less far is passed; one that got
+        further keeps its cursor. Returns None when this save has nothing to add:
+        after a reset, or when the cursor left this history through a save that began
+        where this one did, and so wrote these messages. A save that began at its own
+        turn, because its history lacked the cursor, goes on and leaves the cursor.
+        """
+        session = value["ov_session"]
+        while True:
+            cursor = value["delivered"]
+            if value["ov_session"] != session:
+                return None
+            if cursor != begun:
+                ahead = positions.get(cursor)
+                if ahead is None and (not begun or begun in positions):
+                    return None
+                if ahead is None or ahead > positions.get(anchor, -1):
+                    anchor = cursor
+            value = {**value, "delivered": anchor, **mark}
+            if await self.store.swap(request.scope, request.session, doc, value):
+                return Document(value, doc.version + 1)
+            doc = await self.store.get(request.scope, request.session)
+            value = current(doc.value)
+
+    async def save_cut(self, request, credential, anchor, messages=None, chain=None):
+        """Write the history up to a cut inside a turn, without waiting for its end.
+
+        The model may search the saved session right after the cut. A turn's end covers
+        cuts before a user message, and whatever this write could not save. ``messages``
+        and ``chain`` replace the request's history, as a client's compaction request
+        without its appended text.
+        """
+        messages = request.messages if messages is None else messages
+        chain = request.capture_chain if chain is None else chain
         if (
             request.disabled
             or request.anchor < 0
@@ -213,344 +365,34 @@ class CapturePipeline:
             or not Policy.model_validate(request.root["policy"]).capture
         ):
             return
-        old = request.capture
-        while True:
-            if (
-                old.value.get("ov_session") != request.capture_target
-                or old.value.get("request_anchor") != chain[request.anchor]
-            ):
-                return  # A newer request or explicit reset owns the capture document.
-            value, added = await asyncio.to_thread(
-                self.advance,
-                old.value,
-                request.messages,
-                chain,
-                request.anchor,
-                chain.index(anchor) + 1,
-                True,
-                0,
+        # The request waits for this write, so one that cannot finish soon is left out.
+        if self.viking.unavailable_reason:
+            return
+        try:
+            async with async_timeout.timeout(CUT_SECONDS):
+                await self.save(request, credential, messages, chain, chain.index(anchor) + 1)
+        except Exception as error:
+            error_code = (
+                safe_log_fields({"error_code": getattr(error, "reason", None)}).get("error_code")
+                or type(error).__name__
             )
-            if not added:
-                return  # Everything up to the cut is already delivered or queued.
-            if await self.queue.swap(request.scope, request.session, old, value, ready_at(value)):
-                request.capture = Document(value, old.version + 1)
-                request.capture_target = value["ov_session"]
-                return
-            old = await self.queue.get(request.scope, request.session)
+            logger.error(
+                "gateway history save before compaction failed; continuing compaction error_type=%s error_code=%s",
+                type(error).__name__,
+                error_code,
+                extra={
+                    "degraded": True,
+                    "error_type": type(error).__name__,
+                    "error_code": error_code,
+                },
+            )
 
     @staticmethod
     def metrics(request, policy):
-        value = request.capture.value
-        error = value.get("error", {})
         request.metrics.update(
-            capture_status=(
-                "paused"
-                if error.get("retry_at") is None or error["attempts"] >= MAX_ATTEMPTS
-                else "retrying"
-            )
-            if error
-            else ("active" if policy.capture else "disabled"),
-            capture_reason=error.get("reason", value.get("reason", "")),
-            capture_retry_at=error.get("retry_at"),
+            capture_status="active" if policy.capture else "disabled",
+            capture_reason=request.capture.value.get("reason", ""),
         )
-
-    async def stage(self, request, response, policy):
-        messages = [*request.messages, *response.output]
-        chain = reply_chain(request, response.output)
-        while True:
-            old = await self.queue.get(request.scope, request.session)
-            if (
-                old.value.get("ov_session") != request.capture_target
-                or old.value.get("request_anchor") != request.capture_chain[request.anchor]
-            ):
-                return  # A newer request or explicit reset superseded this response.
-            # Tool continuations replace the unconfirmed tail in place, after
-            # anything a cut inside this turn already confirmed.
-            value, added = await asyncio.to_thread(
-                self.advance,
-                old.value,
-                messages,
-                chain,
-                request.anchor,
-                len(messages),
-                False,
-                policy.idle_seconds,
-            )
-            if not added:
-                return
-            if await self.queue.swap(request.scope, request.session, old, value, ready_at(value)):
-                return
-
-
-class BranchChanged(Exception):
-    pass
-
-
-class CaptureWorker:
-    def __init__(
-        self, store, management, viking, session_ttl=30 * 86400, records=False, stats=None
-    ):
-        self.queue, self.replay = store.capture, store.replay
-        self.management, self.viking = management, viking
-        # The status line's delivery counters; a worker without one counts for nobody.
-        self.stats = stats or Stats()
-        # ``records`` writes a row for every delivery, commit and failed attempt.
-        self.session_ttl, self.records = session_ttl, records
-
-    async def save(self, item, previous, value, written=None):
-        """Merge worker-owned progress into a concurrently updated request tail.
-
-        ``written`` is the delivered message when this save moves ``delivered``.
-        """
-        while True:
-            if await self.queue.swap(
-                item["scope"],
-                item["session"],
-                previous,
-                value,
-                ready_at(value),
-                owner=item["owner"],
-            ):
-                return Document(value, previous.version + 1)
-            fresh = await self.queue.get(item["scope"], item["session"])
-            if fresh.value.get("ov_session") != value["ov_session"]:
-                raise BranchChanged
-            # The writer may only advance through the queued messages it read.
-            pending = fresh.value["pending"]
-            if value["delivered"] != previous.value["delivered"]:
-                pending = remaining(pending, written)
-                if pending is None:
-                    # An idle reply was edited, or gained its tool results, while its
-                    # HTTP write was in flight.
-                    await reset_capture(
-                        self.queue,
-                        item["scope"],
-                        item["session"],
-                        "history_changed_during_delivery",
-                    )
-                    raise BranchChanged
-            value = {
-                **fresh.value,
-                **{
-                    key: value[key]
-                    for key in ("delivered", "retained", "tokens", "archive", "error", "idle")
-                    if key in value
-                },
-                "pending": pending,
-            }
-            previous = fresh
-
-    async def once(self):
-        item = await self.queue.claim()
-        if item is None:
-            return False
-        try:
-            async with async_timeout.timeout(DELIVERY_SECONDS):
-                await self.deliver(item)
-        except (BranchChanged, LeaseLost):
-            pass
-        except Exception as error:
-            old = await self.queue.get(item["scope"], item["session"])
-            if old.value.get("ov_session") == item["document"].value.get("ov_session"):
-                self.stats.capture_failed += 1
-                previous = old.value.get("error", {})
-                attempts = previous.get("attempts", 0) + 1
-                reason = getattr(error, "reason", "delivery_failed")
-                if reason == "openviking_http_401" and await self.revoked(old.value):
-                    await self.management.delete(
-                        old.value["account"], "keys", old.value["credential_id"]
-                    )
-                backoff = RECOVERY_SECONDS if attempts >= MAX_ATTEMPTS else 10 * 2 ** (attempts - 1)
-                # An account without an order or over its rate needs longer than a blip.
-                if reason == "openviking_http_402":
-                    backoff = 3600
-                elif reason == "openviking_http_429":
-                    backoff = max(backoff, 60)
-                failure = {
-                    "attempts": attempts,
-                    "reason": reason,
-                    "retry_at": time.time() + backoff,
-                }
-                await self.save(item, old, {**old.value, "error": failure})
-                # Record status changes only, unless every attempt is recorded: a paused
-                # capture retries forever.
-                changed = attempts in (1, MAX_ATTEMPTS) or reason != previous.get("reason")
-                if changed or self.records:
-                    status = "paused" if attempts >= MAX_ATTEMPTS else "retrying"
-                    await self.log(item, old.value, status, reason, attempts=attempts)
-                if changed:
-                    logger.warning("Capture %s: %s (attempt %s)", item["session"], reason, attempts)
-                else:
-                    logger.debug("Capture %s: %s (attempt %s)", item["session"], reason, attempts)
-        finally:
-            await self.queue.release(item)
-        return True
-
-    async def revoked(self, state):
-        """Confirm a delivery 401 on /health, as authentication does, before dropping the key.
-
-        OpenViking also answers 401 for upstream model failures such as an invalid VLM key.
-        """
-        key = await self.management.get(state["account"], "keys", state["credential_id"])
-        if not key:
-            return False
-        try:
-            await self.viking.identify(key["openviking_key"])
-        except VikingError as error:
-            return error.reason == "openviking_http_401"
-        return False
-
-    async def log(self, item, state, status, reason, **fields):
-        await self.management.log(
-            state["account"],
-            {
-                "kind": "capture",
-                "event": "capture",
-                "session": item["session"],
-                "protocol": state["protocol"],
-                "credential_id": state["credential_id"],
-                "capture_status": status,
-                "capture_reason": reason,
-                **fields,
-            },
-            # Capture states written before schema 6 carry no user.
-            user_id=state.get("user_id"),
-        )
-
-    async def deliver(self, item):
-        doc = await self.queue.get(item["scope"], item["session"])
-        state = copy.deepcopy(doc.value)
-        if state.get("ov_session") != item["document"].value.get("ov_session"):
-            return
-        disabled = await self.replay.read(item["scope"], item["session"], [""])
-        key = await self.management.get(state["account"], "keys", state["credential_id"])
-        if (K.DISABLED, "") in disabled:
-            state["pending"] = []
-            state["archive"] = None
-            state["error"] = {}
-            await self.save(item, doc, state)
-            return
-        if not key:
-            now = time.time()
-            previous = state.get("error") or {}
-            if (
-                state.get("credential_source", "issued") != "openviking"
-                or previous.get("reason") == "openviking_http_401"
-                or now - previous.get("since", now) > self.session_ttl
-            ):
-                # No retries: periodic saves would refresh touched and defeat TTL expiry.
-                # A new authenticated request supplies a key and clears this pause.
-                state["error"] = {"attempts": 0, "reason": "gateway_key_revoked", "retry_at": None}
-                if not await self.queue.swap(
-                    item["scope"], item["session"], doc, state, None, owner=item["owner"]
-                ):
-                    raise BranchChanged
-                self.stats.capture_failed += 1
-                await self.log(item, state, "paused", "gateway_key_revoked")
-                return
-            # The record of an OpenViking key that OpenViking did not reject has expired or
-            # was evicted; the user's next request writes it again. Retry until the session
-            # itself would have expired.
-            first = previous.get("reason") != "gateway_key_missing"
-            state["error"] = {
-                "attempts": previous.get("attempts", 0) + 1,
-                "reason": "gateway_key_missing",
-                "since": previous.get("since", now),
-                "retry_at": now + RECOVERY_SECONDS,
-            }
-            if not await self.queue.swap(
-                item["scope"], item["session"], doc, state, ready_at(state), owner=item["owner"]
-            ):
-                raise BranchChanged
-            self.stats.capture_failed += 1
-            if first or self.records:
-                await self.log(
-                    item,
-                    state,
-                    "retrying",
-                    "gateway_key_missing",
-                    attempts=state["error"]["attempts"],
-                )
-            return
-        token, session = key["openviking_key"], state["ov_session"]
-        policy = Policy.model_validate(state["policy"])
-        if state.get("error"):
-            await self.viking.health(token)
-        await self.viking.create_session(token, session, policy.capture_memory_types)
-        # A write or commit whose response is lost is sent again; the rare
-        # duplicate in OpenViking is accepted.
-        delivered = []
-        while state["pending"] and state["pending"][0]["ready"] <= time.time():
-            turn = state["pending"][0]
-            # The writes carry the ID of the request that queued the turn.
-            bound = CALL.set(CallContext(request_id=turn.get("request_id", "")))
-            try:
-                for offset in range(0, len(turn["messages"]), 100):
-                    await self.viking.write(token, session, turn["messages"][offset : offset + 100])
-            finally:
-                CALL.reset(bound)
-            delivered.append(turn)
-            count = len(turn["messages"])
-            if turn.get("continued") and state["retained"]:
-                # Commits keep whole turns, so a continuation joins its turn.
-                count += state["retained"].pop()["count"]
-            state["retained"].append({"anchor": turn["anchor"], "count": count})
-            state["tokens"] += sum(
-                (len(orjson.dumps(m["parts"])) + 2) // 3 for m in turn["messages"]
-            )
-            state["delivered"] = turn["anchor"]
-            state["pending"] = state["pending"][1:]
-            state["idle"] = not turn["confirmed"]
-            doc = await self.save(item, doc, state, turn["messages"][-1])
-            state = copy.deepcopy(doc.value)
-        if delivered:
-            self.stats.capture_delivered += 1
-        if delivered and self.records:
-            queued = [t["queued_at"] for t in delivered if "queued_at" in t]
-            first = delivered[0].get("request_id")
-            await self.log(
-                item,
-                state,
-                "active",
-                "delivered",
-                turns=len(delivered),
-                messages=sum(len(t["messages"]) for t in delivered),
-                **({"lag_ms": round((time.time() - min(queued)) * 1000, 2)} if queued else {}),
-                **({"request_id": first} if first else {}),
-                openviking_session=session,
-            )
-        # Each save may merge a concurrent request, so continue from what it stored.
-        if state.get("archive") and state["archive"]["status"] not in TERMINAL:
-            state["archive"] = await observe_archive(self.viking, state["archive"], token)
-            doc = await self.save(item, doc, state)
-            state = copy.deepcopy(doc.value)
-        if state.get("error"):
-            state["error"] = {}
-            doc = await self.save(item, doc, state)
-            state = copy.deepcopy(doc.value)
-            await self.log(item, state, "active", "delivery_recovered")
-        if state.get("archive") and state["archive"]["status"] not in TERMINAL:
-            return
-        pending = await self.viking.pending_tokens(token, session)
-        if pending < policy.commit_tokens and not state.get("idle"):
-            return
-        retained, keep = 0, 0
-        if not state.get("idle"):
-            for turn in reversed(state["retained"]):
-                if keep >= policy.keep_recent_messages:
-                    break
-                retained += 1
-                keep += turn["count"]
-        archived = state["retained"][: len(state["retained"]) - retained]
-        if not archived:
-            return
-        uri = (await self.viking.commit(token, session, keep)).get("archive_uri")
-        archive = {"status": "pending", "archive_uri": uri, "created": time.time()}
-        state["archive"] = archive if uri else None
-        state["retained"] = state["retained"][len(archived) :]
-        await self.save(item, doc, state)
-        if self.records:
-            await self.log(item, state, "active", "committed", openviking_session=session)
 
 
 def peer_keys(messages, chain):
@@ -578,7 +420,7 @@ def record_peers(value, request):
     A session may hold several peers' messages, as a group chat does: a message keeps
     the peer of the request that first brought it, None when that request had no peer,
     and later requests leave it unchanged. The map covers the user messages of the
-    current history, so a new OpenViking session receiving the history again finds them.
+    current history, so a turn saved late still names the peers of its messages.
     User messages after the request's last one, such as text sent beside a tool
     result, are not mapped and carry no peer.
     """
@@ -601,11 +443,7 @@ def peer_anchors(peers, messages, chain):
 
 
 def with_peers(captured, peers):
-    """Captured messages with the user's naming their peer, by anchor; an assistant has none.
-
-    The queue holds these copies, so a delivered message compares equal to the same
-    message queued again.
-    """
+    """Captured messages with the user's naming their peer, by anchor; an assistant has none."""
     if not peers:
         return captured
     return [
@@ -615,19 +453,6 @@ def with_peers(captured, peers):
         else m
         for m in captured
     ]
-
-
-def remaining(pending, written):
-    """The queue after a delivered message, trimming a segment re-queued around it.
-
-    None when the queue no longer holds the message exactly as it was written.
-    """
-    for index, turn in enumerate(pending):
-        if written in turn["messages"]:
-            rest = turn["messages"][turn["messages"].index(written) + 1 :]
-            head = [{**turn, "messages": rest, "continued": True}] if rest else []
-            return head + pending[index + 1 :]
-    return None
 
 
 def capture_messages(messages, chain):

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -171,7 +172,11 @@ class Summarizer:
                     semantic_action = decision.action
                 except LockAcquisitionError:
                     # Parent aggregation is best-effort; changed-file work still runs.
-                    logger.info("Skipping busy parent semantic refresh: %s", parent_uri)
+                    logger.info(
+                        "parent semantic refresh busy; keeping changed-file work uri=%s",
+                        safe_uri_for_log(parent_uri),
+                        extra={"degraded": True},
+                    )
                     semantic_action = FreshnessAction.NOOP
             parent_actions[parent_uri] = semantic_action.value
             aggregate_directory = semantic_action is FreshnessAction.REFRESH_NOW
@@ -269,8 +274,10 @@ class Summarizer:
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
-            logger.error(
-                f"temp_uris length ({len(temp_uris)}) must match resource_uris length ({len(resource_uris)})"
+            logger.info(
+                "semantic generation rejected; mismatched URI counts source_count=%d target_count=%d",
+                len(temp_uris),
+                len(resource_uris),
             )
             return {
                 "status": "error",
@@ -285,7 +292,9 @@ class Summarizer:
         lock_guard = (
             lock
             if isinstance(lock, PathLockGuard)
-            else PathLockGuard(agfs, lock) if lock is not None else None
+            else PathLockGuard(agfs, lock)
+            if lock is not None
+            else None
         )
         lock_handoff: Optional[Dict[str, Any]] = None
         if lock_guard is not None:
@@ -370,11 +379,15 @@ class Summarizer:
                         lock.update(lock_guard.lease)
                     raise
                 if enqueue_id == "deduplicated":
-                    logger.info("Semantic generation already queued for: %s", target_uri)
+                    logger.debug(
+                        "semantic generation already queued uri=%s", safe_uri_for_log(target_uri)
+                    )
                     continue
                 enqueued_count += 1
-                logger.info(
-                    f"Enqueued semantic generation for: {target_uri} (skip_vectorization={skip_vectorization})"
+                logger.debug(
+                    "semantic generation enqueued uri=%s skip_vectorization=%s",
+                    safe_uri_for_log(target_uri),
+                    skip_vectorization,
                 )
 
         return {

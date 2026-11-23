@@ -19,7 +19,14 @@ export function initialAnswer(
     return request.initialValue === undefined
       ? undefined
       : { kind: 'repair', value: request.initialValue };
-  return { kind: 'schedule', value: request.initialValue };
+  const value = request.initialValue;
+  return {
+    kind: 'schedule',
+    value:
+      value.mode !== 'none' && !value.time
+        ? { ...value, time: defaultScheduleTime() }
+        : value,
+  };
 }
 
 export function validateAnswer(
@@ -51,4 +58,13 @@ export function validateAnswer(
       answer.value.weekday > 7)
   )
     return 'weekdayRequired';
+}
+
+/** Spread newly enabled schedules across wall-clock minutes. */
+export function defaultScheduleTime() {
+  const minutes = Math.floor(Math.random() * 24 * 60);
+  const hours = Math.floor(minutes / 60);
+  return [hours, minutes % 60]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
 }

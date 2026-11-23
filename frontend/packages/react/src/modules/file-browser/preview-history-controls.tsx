@@ -1,11 +1,13 @@
 import { Switch } from '../../shared/primitives/switch/switch.js';
-import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
-import { Button } from '../../shared/primitives/button/button.js';
+import { PathCopyButton } from '../../shared/path-copy-button/path-copy-button.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import type { usePreviewHistory } from './use-preview-history.js';
 import type { PreviewHistoryProps } from './preview-history.js';
-import type { PreviewHistoryEntry } from './preview-workflow-types.js';
+import type {
+  FileBrowserWorkflowLabels,
+  PreviewHistoryEntry,
+} from './preview-workflow-types.js';
 export function historyVersionLabel(
   entry: PreviewHistoryEntry,
   locale: PreviewHistoryProps['locale'],
@@ -23,6 +25,16 @@ export function historyVersionLabel(
     parts.find((item) => item.type === type)?.value;
   return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`;
 }
+
+export function historyVersionBadge(
+  entry: PreviewHistoryEntry,
+  deleted: boolean,
+  text: FileBrowserWorkflowLabels,
+) {
+  if (deleted) return text.deletedBadge;
+  return entry.restored ? text.rollbackBadge : undefined;
+}
+
 export function PreviewHistoryControls({
   history,
   text,
@@ -59,16 +71,23 @@ export function PreviewHistoryControls({
       >
         {entries
           .filter((entry) => !comparison || entry.id !== history.selected?.id)
-          .map((entry) => (
-            <SelectOption key={entry.id} value={entry.id}>
-              {historyVersionLabel(entry, locale)}
-              {entry.restored ? (
-                <span className="ov-file-history__version-badge">
-                  {text.rollbackBadge}
-                </span>
-              ) : null}
-            </SelectOption>
-          ))}
+          .map((entry) => {
+            const badge = historyVersionBadge(
+              entry,
+              history.deletedIds.has(entry.id),
+              text,
+            );
+            return (
+              <SelectOption key={entry.id} value={entry.id}>
+                {historyVersionLabel(entry, locale)}
+                {badge ? (
+                  <span className="ov-file-history__version-badge">
+                    {badge}
+                  </span>
+                ) : null}
+              </SelectOption>
+            );
+          })}
       </Select>
       {!comparison ? (
         <>
@@ -93,22 +112,20 @@ export function PreviewHistoryPath({
 }: {
   path: string;
   text: PreviewHistoryProps['text'];
-  onCopy: () => void;
+  onCopy: () => Promise<boolean>;
 }) {
   return (
     <div className="ov-file-history__file-path">
       <Tooltip content={path}>
         <span>{path}</span>
       </Tooltip>
-      <Tooltip content={text.copyPath} focusVisibleOnly>
-        <Button
-          size="small"
-          type="text"
-          aria-label={text.copyPath}
-          icon={<CopyIcon aria-hidden="true" />}
-          onClick={onCopy}
-        />
-      </Tooltip>
+      <PathCopyButton
+        key={path}
+        label={text.copyPath}
+        successLabel={text.pathCopied ?? text.copied}
+        failureLabel={text.copyFailed}
+        onClick={onCopy}
+      />
     </div>
   );
 }

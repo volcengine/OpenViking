@@ -46,8 +46,7 @@ def load_config() -> StandaloneGatewayConfig:
 def factory():
     """uvicorn factory: every worker rebuilds the configuration from the environment."""
     config = load_config()
-    if config.log_path:
-        configure_logging(config.log_path)
+    configure_logging(config.log_path)
     return create_standalone_app(config)
 
 
@@ -146,7 +145,9 @@ def main():
         os.environ[CONFIG_ENVIRONMENT] = str(Path(config).expanduser().resolve())
     if args.command == "init":
         raise SystemExit(init(Path(os.environ.get(CONFIG_ENVIRONMENT) or USER_CONFIG).expanduser()))
+    configure_logging()
     config = load_config()
+    configure_logging(config.log_path)
     import uvicorn
 
     asyncio.run(check_openviking(config))
@@ -165,7 +166,7 @@ def main():
         # Signed upload tokens live in query strings; log request metadata only.
         access_log=False,
         # With a log file, uvicorn's own loggers reach the root handler factory() installs.
-        **({"log_config": None} if config.log_path else {}),
+        log_config=None,
     )
 
 

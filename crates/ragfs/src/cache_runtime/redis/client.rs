@@ -421,7 +421,7 @@ impl RedisClient {
     pub(super) async fn execute_script(
         &self,
         script_id: &str,
-        lua: &'static str,
+        lua: String,
         keys: Vec<String>,
         args: Vec<Bytes>,
     ) -> CacheResult<ScriptValue> {
@@ -432,7 +432,7 @@ impl RedisClient {
         };
         let sha = match cached_sha {
             Some(sha) => sha,
-            None => self.load_script(script_id, lua).await?,
+            None => self.load_script(script_id, lua.clone()).await?,
         };
         match self.evalsha(&sha, keys.clone(), args.clone()).await {
             Err(CacheError::NoScript(_)) => {
@@ -443,7 +443,7 @@ impl RedisClient {
         }
     }
 
-    async fn load_script(&self, script_id: &str, lua: &'static str) -> CacheResult<String> {
+    async fn load_script(&self, script_id: &str, lua: String) -> CacheResult<String> {
         let sha: String = if self.deployment_mode == RedisDeploymentMode::Cluster {
             self.execute("SCRIPT LOAD", self.client.script_load_cluster(lua))
                 .await?

@@ -16,6 +16,7 @@ export {
 } from './interaction/index.js';
 export type { InteractionLabels } from './interaction/index.js';
 export { DEFAULT_LABELS } from './labels.js';
+export type { VikingBotDebugContext } from './message-debug.js';
 export {
   groupByActivity,
   groupMessages,

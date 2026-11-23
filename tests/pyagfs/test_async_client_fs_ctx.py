@@ -15,7 +15,6 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict[str, str] | None]] = []
         self.list_options: dict[str, Any] = {}
-        self.tree_options: dict[str, Any] = {}
 
     def write(self, path: str, data: bytes, *, ctx: dict[str, str] | None = None) -> str:
         """Record write ctx and return a stable fake backend id."""
@@ -37,18 +36,6 @@ class _RecordingClient:
         """Record listing options and return an empty result."""
         self.calls.append(("ls", path, ctx))
         self.list_options = options
-        return []
-
-    def tree_directory(
-        self,
-        path: str,
-        *,
-        ctx: dict[str, str] | None = None,
-        **options: Any,
-    ) -> list[dict[str, Any]]:
-        """Record tree options and return an empty result."""
-        self.calls.append(("tree_directory", path, ctx))
-        self.tree_options = options
         return []
 
 
@@ -89,17 +76,6 @@ async def test_async_client_uses_system_ctx_for_non_local_agfs_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_client_passes_directories_only_to_tree_directory() -> None:
-    client = _RecordingClient()
-    agfs = AsyncAGFSClient(client)
-
-    await agfs.tree_directory("/local/acct-1/data", directories_only=True)
-
-    assert client.calls == [("tree_directory", "/local/acct-1/data", {"account_id": "acct-1"})]
-    assert client.tree_options["directories_only"] is True
-
-
-@pytest.mark.asyncio
 async def test_async_client_preserves_explicit_fs_ctx() -> None:
     client = _RecordingClient()
     agfs = AsyncAGFSClient(client)
@@ -114,12 +90,15 @@ async def test_async_client_preserves_explicit_fs_ctx() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_client_rejects_cross_account_mv() -> None:
+async def test_async_client_rejects_cross_account_transfer() -> None:
     client = _RecordingClient()
     agfs = AsyncAGFSClient(client)
 
+    source, target = "/local/a/data/file.txt", "/local/b/data/file.txt"
     with pytest.raises(ValueError, match="cross-account"):
-        await agfs.mv("/local/a/data/file.txt", "/local/b/data/file.txt")
+        await agfs.mv(source, target)
+    with pytest.raises(ValueError, match="cross-account"):
+        await agfs._copy_file(source, target, fs_ctx={"account_id": "a", "lease_ref": "lease"})
 
 
 @pytest.mark.asyncio
@@ -167,188 +146,88 @@ def test_cp_rejects_cross_encryption_domain_raw_copy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_cp_streams_when_same_mount_fast_path_is_unavailable() -> None:
-    class _FallbackClient:
-        def __init__(self) -> None:
-            self.cat_calls: list[tuple[str, bool, dict[str, str] | None]] = []
-            self.written_chunks: list[bytes] = []
-
-        def stat(self, path: str, *, ctx: dict[str, str] | None = None) -> dict[str, Any]:
-            del ctx
-            return {"isDir": path.endswith("/data")}
-
-        def copy_within_mount(
-            self, source: str, target: str, *, ctx: dict[str, str] | None = None
-        ) -> dict[str, bool]:
-            del source, target, ctx
-            return {"performed": False}
-
-        def cat(
-            self,
-            path: str,
-            *,
-            stream: bool = False,
-            ctx: dict[str, str] | None = None,
-        ):
-            self.cat_calls.append((path, stream, ctx))
-            if not stream:
-                raise AssertionError("fallback copy loaded the complete file")
-            return iter((b"first", b"second"))
-
-        def write(self, path: str, data, *, ctx: dict[str, str] | None = None) -> str:
-            del path, ctx
-            self.written_chunks = list(data)
-            return "written"
-
-    client = _FallbackClient()
-    agfs = AsyncAGFSClient(client)
-
-    await agfs.cp(
-        "/local/acct/data/source.bin",
-        "/local/acct/data/target.bin",
-        fs_ctx={"account_id": "acct", "lease_ref": "lease"},
-    )
-
-    assert client.cat_calls == [
-        (
-            "/local/acct/data/source.bin",
+@pytest.mark.parametrize(
+    ("options", "supports_fast_copy", "supports_streaming", "expected_io"),
+    [
+        pytest.param({}, True, True, ["read chunks", "write chunks"], id="default-streaming"),
+        pytest.param(
+            {"allow_same_mount_fast_path": True},
             True,
-            {"account_id": "acct", "lease_ref": "lease"},
-        )
-    ]
-    assert client.written_chunks == [b"first", b"second"]
+            True,
+            ["raw copy"],
+            id="raw-copy-opt-in",
+        ),
+        pytest.param(
+            {"allow_same_mount_fast_path": True},
+            False,
+            True,
+            ["raw copy", "read chunks", "write chunks"],
+            id="raw-copy-declined",
+        ),
+        pytest.param(
+            {},
+            True,
+            False,
+            ["read chunks", "read buffer", "write buffer"],
+            id="binding-without-streaming",
+        ),
+    ],
+)
+async def test_async_cp_copies_bytes_using_the_supported_io(
+    options, supports_fast_copy, supports_streaming, expected_io
+) -> None:
+    source = "/local/acct/data/source.bin"
+    target = "/local/acct/data/target.bin"
+    fs_ctx = {"account_id": "acct", "lease_ref": "lease"}
+    payload = b"firstsecond"
+    files = {source: payload}
+    operations = []
+    metadata_reads = []
 
+    class Client:
+        def stat(self, path, *, ctx=None):
+            assert ctx == fs_ctx
+            metadata_reads.append(path)
+            return {"isDir": path == "/local/acct/data"}
 
-@pytest.mark.asyncio
-async def test_async_cp_streams_by_default_when_same_mount_fast_path_is_available() -> None:
-    class _FastPathClient:
-        def __init__(self) -> None:
-            self.fast_path_calls: list[tuple[str, str]] = []
-            self.cat_calls: list[tuple[str, bool]] = []
-            self.written_chunks: list[bytes] = []
+        def copy_within_mount(self, src, dst, *, ctx=None):
+            assert ctx == fs_ctx
+            operations.append("raw copy")
+            if supports_fast_copy:
+                files[dst] = files[src]
+            return {"performed": supports_fast_copy}
 
-        def stat(self, path: str, *, ctx: dict[str, str] | None = None) -> dict[str, Any]:
-            del ctx
-            return {"isDir": path.endswith("/data")}
-
-        def copy_within_mount(
-            self, source: str, target: str, *, ctx: dict[str, str] | None = None
-        ) -> dict[str, bool]:
-            del ctx
-            self.fast_path_calls.append((source, target))
-            return {"performed": True}
-
-        def cat(
-            self,
-            path: str,
-            *,
-            stream: bool = False,
-            ctx: dict[str, str] | None = None,
-        ):
-            del ctx
-            self.cat_calls.append((path, stream))
-            return iter((b"first", b"second"))
-
-        def write(self, path: str, data, *, ctx: dict[str, str] | None = None) -> str:
-            del path, ctx
-            self.written_chunks = list(data)
-            return "written"
-
-    client = _FastPathClient()
-    agfs = AsyncAGFSClient(client)
-
-    await agfs.cp(
-        "/local/acct/data/source.bin",
-        "/local/acct/data/target.bin",
-    )
-
-    assert client.fast_path_calls == []
-    assert client.cat_calls == [("/local/acct/data/source.bin", True)]
-    assert client.written_chunks == [b"first", b"second"]
-
-
-@pytest.mark.asyncio
-async def test_async_cp_can_explicitly_use_same_mount_fast_path() -> None:
-    class _FastPathClient:
-        def __init__(self) -> None:
-            self.fast_path_calls: list[tuple[str, str]] = []
-
-        def stat(self, path: str, *, ctx: dict[str, str] | None = None) -> dict[str, Any]:
-            del ctx
-            return {"isDir": path.endswith("/data")}
-
-        def copy_within_mount(
-            self, source: str, target: str, *, ctx: dict[str, str] | None = None
-        ) -> dict[str, bool]:
-            del ctx
-            self.fast_path_calls.append((source, target))
-            return {"performed": True}
-
-        def cat(self, *args, **kwargs):
-            raise AssertionError("explicit fast path must not stream file bytes")
-
-    client = _FastPathClient()
-    agfs = AsyncAGFSClient(client)
-
-    await agfs.cp(
-        "/local/acct/data/source.bin",
-        "/local/acct/data/target.bin",
-        allow_same_mount_fast_path=True,
-    )
-
-    assert client.fast_path_calls == [
-        ("/local/acct/data/source.bin", "/local/acct/data/target.bin")
-    ]
-
-
-@pytest.mark.asyncio
-async def test_async_cp_falls_back_to_complete_write_when_binding_cannot_stream() -> None:
-    class _BindingClient:
-        def __init__(self) -> None:
-            self.fast_path_calls: list[tuple[str, str]] = []
-            self.cat_calls: list[tuple[str, bool]] = []
-            self.written: bytes | None = None
-
-        def stat(self, path: str, *, ctx: dict[str, str] | None = None) -> dict[str, Any]:
-            del ctx
-            return {"isDir": path.endswith("/data")}
-
-        def copy_within_mount(
-            self, source: str, target: str, *, ctx: dict[str, str] | None = None
-        ) -> dict[str, bool]:
-            del ctx
-            self.fast_path_calls.append((source, target))
-            return {"performed": True}
-
-        def cat(
-            self,
-            path: str,
-            *,
-            stream: bool = False,
-            ctx: dict[str, str] | None = None,
-        ) -> bytes:
-            del ctx
-            self.cat_calls.append((path, stream))
+        def cat(self, path, *, stream=False, ctx=None):
+            assert ctx == fs_ctx
             if stream:
-                raise RuntimeError("Streaming not supported in binding mode")
-            return b"complete payload"
+                operations.append("read chunks")
+                if not supports_streaming:
+                    raise RuntimeError("Streaming not supported in binding mode")
+                return iter((files[path][:5], files[path][5:]))
+            operations.append("read buffer")
+            return files[path]
 
-        def write(self, path: str, data: bytes, *, ctx: dict[str, str] | None = None) -> str:
-            del path, ctx
-            self.written = data
-            return "written"
+        def write(self, path, data, *, ctx=None):
+            assert ctx == fs_ctx
+            if isinstance(data, bytes):
+                operations.append("write buffer")
+                files[path] = data
+            else:
+                operations.append("write chunks")
+                files[path] = b"".join(data)
+            return path
 
-    client = _BindingClient()
-    agfs = AsyncAGFSClient(client)
+    agfs = AsyncAGFSClient(Client())
+    await agfs.cp(source, target, fs_ctx=fs_ctx, **options)
 
-    await agfs.cp(
-        "/local/acct/data/source.bin",
-        "/local/acct/data/target.bin",
-    )
+    assert files[target] == payload
+    assert operations == expected_io
 
-    assert client.fast_path_calls == []
-    assert client.cat_calls == [
-        ("/local/acct/data/source.bin", True),
-        ("/local/acct/data/source.bin", False),
-    ]
-    assert client.written == b"complete payload"
+    if not options:
+        del files[target]
+        operations.clear()
+        metadata_reads.clear()
+        await agfs._copy_file(source, target, fs_ctx=fs_ctx)
+        assert files[target] == payload
+        assert operations == expected_io
+        assert not metadata_reads

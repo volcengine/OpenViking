@@ -347,13 +347,13 @@ class ShardRunner:
                 item_type=item_type or "",
                 outcome=role.value,
             )
-            logger.warning(
-                "expiry shard execution left orphaned tasks role=%s item_type=%s "
-                "shard_id=%d count=%d",
+            logger.info(
+                "expiry shard cleanup deferred role=%s item_type=%s shard_id=%d count=%d",
                 role.value,
                 item_type or "",
                 shard_id,
                 orphaned,
+                extra={"degraded": True, "total": orphaned},
             )
         if orphaned and not allow_orphans:
             raise self._not_stopped(scope)

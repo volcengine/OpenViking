@@ -41,5 +41,5 @@ export function useBotService({
     signal,
     scopeKey,
   ]);
-  return { service, signal };
+  return { service, signal, hasProvider: Boolean(inherited) };
 }

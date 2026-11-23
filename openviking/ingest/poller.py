@@ -87,7 +87,12 @@ class IngestPoller:
                 logger.exception("[ingest:%s] discovery failed", name)
                 continue
             for ref in refs:
-                await self._poll_session(name, cfg, source, ref)
+                try:
+                    await self._poll_session(name, cfg, source, ref)
+                except Exception:  # noqa: BLE001 - one bad session must not stop the loop
+                    # The cursor is durable and appends are idempotent, so the
+                    # next tick resumes this session where this one stopped.
+                    logger.exception("[ingest:%s] poll failed for %s", name, ref.native_session_id)
 
     async def _poll_session(self, name, cfg, source, ref) -> None:
         if not await self.replayer.reconcile(name, ref):

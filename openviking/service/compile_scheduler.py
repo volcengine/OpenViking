@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from openviking.core.identifiers import validate_user_id
 from openviking.crypto.encryptor import build_credential_encryptor as build_credential_encryptor
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import CompileStore, validate_compile_name
 from openviking_cli.exceptions import (
@@ -145,7 +146,9 @@ class CompileScheduler:
             try:
                 await self.scan_once()
             except Exception:
-                logger.exception("Compile scheduler scan failed")
+                logger.info(
+                    "compile scheduler scan failed; retrying next scan", extra={"degraded": True}
+                )
             try:
                 await asyncio.wait_for(self._stop.wait(), COMPENSATION_SCAN_SECONDS)
             except asyncio.TimeoutError:
@@ -164,7 +167,9 @@ class CompileScheduler:
                     elif record["auto_update"]:
                         await self.reschedule(account_id, owner_user_id, compile_name, record)
                 except Exception:
-                    logger.exception("Compile schedule check failed for %s", compile_name)
+                    logger.debug(
+                        "compile schedule check failed name_hash=%s", short_hash(str(compile_name))
+                    )
 
     async def reschedule(
         self,
@@ -199,7 +204,12 @@ class CompileScheduler:
             else:
                 await self._expiry.unregister(identity)
         except Exception as exc:
-            logger.warning("Compile reschedule failed for %s", compile_name, exc_info=True)
+            (logger.debug if raise_on_error else logger.info)(
+                "compile reschedule failed name_hash=%s error_type=%s",
+                short_hash(str(compile_name)),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
+            )
             if raise_on_error:
                 raise UnavailableError(
                     "compile scheduler", "Cannot register scheduled Compile"
@@ -323,6 +333,6 @@ class _ExpiryHandler:
                 identity.account_id, identity.user_id, compile_name
             )
         except Exception:
-            logger.warning("Compile schedule callback failed", exc_info=True)
+            logger.info("compile schedule callback failed; retrying", extra={"degraded": True})
             return CallbackResult(CallbackStatus.RETRY, "trigger_failed")
         return CallbackResult(CallbackStatus.COMPLETED, outcome)

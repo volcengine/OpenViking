@@ -5,6 +5,7 @@ use ragfs::core::{
     build_configured_stack, CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig,
     RagfsConfig,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -80,11 +81,13 @@ async fn cachefs_rejects_dynamic_provider_without_query_cache_operations() {
     let result = build_configured_stack(
         RagfsConfig::default(),
         Some(CacheStackConfig {
-            provider: Some(CacheRuntimeProviderConfig::Dynamic(config(
-                no_unlink_fixture_library(),
-            ))),
+            instances: HashMap::from([(
+                "default".to_string(),
+                CacheRuntimeProviderConfig::Dynamic(config(no_unlink_fixture_library())),
+            )]),
             cachefs: CacheFsConfig {
                 enabled: true,
+                instance: "default".to_string(),
                 service_name: "query-cache-test".to_string(),
                 shared_redis_ttl: None,
             },
@@ -104,11 +107,13 @@ async fn cachefs_rejects_dynamic_provider_without_zrangebyscore() {
     let result = build_configured_stack(
         RagfsConfig::default(),
         Some(CacheStackConfig {
-            provider: Some(CacheRuntimeProviderConfig::Dynamic(config(
-                no_zrangebyscore_fixture_library(),
-            ))),
+            instances: HashMap::from([(
+                "default".to_string(),
+                CacheRuntimeProviderConfig::Dynamic(config(no_zrangebyscore_fixture_library())),
+            )]),
             cachefs: CacheFsConfig {
                 enabled: true,
+                instance: "default".to_string(),
                 service_name: "query-cache-test".to_string(),
                 shared_redis_ttl: None,
             },

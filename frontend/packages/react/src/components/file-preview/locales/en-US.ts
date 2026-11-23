@@ -3,6 +3,7 @@ import type { FilePreviewLabels } from '../types.js';
 const messages = {
   previewImage: 'Enlarge image',
   closePreview: 'Close preview',
+  expandVideo: 'Expand video',
   videoTranscript: 'Transcript',
   videoFrames: (count: number) =>
     count ? `Extracted frames (${count})` : 'Extracted frames',
@@ -13,7 +14,7 @@ const messages = {
   moreActions: 'More actions',
   actionFailed: 'The action failed',
   copyPath: 'Copy path',
-  copied: 'Copied',
+  copied: 'Node path copied',
   copyFailed: 'Could not copy',
   previewMode: 'Preview',
   sourceMode: 'Source',
@@ -47,4 +48,9 @@ export const renderErrors = {
   preview: 'File preview failed.',
   content: 'Tab content could not be displayed.',
   editor: 'File editor could not be displayed.',
+};
+
+export const jsonPreviewLabels = {
+  collapseLine: (lineNumber: number) => `Collapse line ${lineNumber}`,
+  expandLine: (lineNumber: number) => `Expand line ${lineNumber}`,
 };

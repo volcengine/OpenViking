@@ -116,6 +116,7 @@ export function CommandConsoleResourceTree({
                         <CommandConsoleUriText
                           text={value}
                           mode="literal"
+                          wholeUri={/(?:^|_)uri$/i.test(column)}
                           onOpenUri={onOpenUri}
                         />
                       </td>

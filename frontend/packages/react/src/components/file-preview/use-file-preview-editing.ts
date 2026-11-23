@@ -41,10 +41,11 @@ export function useFilePreviewEditing(activeTabKey: string) {
     resolve: (note: string | undefined) => void;
   }>(undefined);
   const [draft, setDraft] = useState('');
-  const [editorDetails, setEditorDetails] =
-    useState<
-      Pick<FilePreviewEditorDocument, 'annotations' | 'readOnlySuffix'>
-    >();
+  const [editorDetails, setEditorDetails] = useState<
+    Pick<FilePreviewEditorDocument, 'annotations' | 'readOnlySuffix'> & {
+      initialAnnotation?: string;
+    }
+  >();
   const requestId = useRef(0);
   const loading = useRef(false);
   const pendingSave = useRef(false);
@@ -99,7 +100,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (wasEditing && tab.kind === 'file') tab.editing?.onCancel?.(discarded);
   }
 
-  async function start(tab: FilePreviewFileTab) {
+  async function start(tab: FilePreviewFileTab, initialAnnotation?: string) {
     if (loading.current || pendingSave.current) return;
     const id = ++requestId.current;
     loading.current = true;
@@ -128,6 +129,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
       setEditorDetails({
         annotations: document.annotations,
         readOnlySuffix: document.readOnlySuffix,
+        initialAnnotation,
       });
       setEditing(true);
       analytics.current?.emit('file_preview_edit_start', () => ({}));
@@ -211,6 +213,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     versionNoteOpen: versionNoteKey === activeTabKey && editing,
     finishVersionNote,
     draft,
+    initialAnnotation: editorDetails?.initialAnnotation,
     annotations: editorDetails?.annotations,
     readOnlySuffix: editorDetails?.readOnlySuffix,
     discard,

@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .capture import DELIVERY_SECONDS, CaptureWorker
+from .capture import SWEEP_SECONDS
 from .client import CALL, CallContext, VikingClient, VikingError
 from .config import PUBLIC_OPENVIKING_URLS, GatewayConfig, normalize_url
 from .kernel import MemoryKernel
@@ -36,7 +36,6 @@ from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
 from .sinks import FileSink, Stats, snapshot_loop
 from .storage import (
-    STORE_ERRORS,
     AsyncCodec,
     CachedManagement,
     SQLiteKernelStore,
@@ -46,7 +45,6 @@ from .storage import (
 )
 
 logger = logging.getLogger(__name__)
-CAPTURE_DRAIN_SECONDS = DELIVERY_SECONDS
 
 
 async def stdout_log(account, value, user_id=None):
@@ -82,30 +80,19 @@ async def health_loop(app, interval, sleep=asyncio.sleep):
                 retry, reached = 1, True
             await sleep(delay)
         except Exception:
-            logger.exception("OpenViking Gateway health check failed")
+            logger.info("gateway health probe failed; retrying", extra={"degraded": True})
             await sleep(1)
 
 
-async def capture_loop(app, stopped):
-    # While the store keeps failing the wait doubles up to 30 s, so the workers neither
-    # flood the log nor hold the store's connection path that requests need.
-    backoff = 1
-    while not stopped.is_set():
-        wait = 1
+async def commit_loop(app):
+    while True:
         try:
-            busy = await app.state.worker.once()
-            backoff = 1
-            if busy:
-                continue
-        except STORE_ERRORS as error:
-            logger.warning("OpenViking Gateway capture store failed: %s", type(error).__name__)
-            wait, backoff = backoff, min(backoff * 2, 30)
+            await app.state.kernel.capture.sweep()
         except Exception:
-            logger.exception("OpenViking Gateway capture failed")
-        try:
-            await asyncio.wait_for(stopped.wait(), timeout=wait)
-        except asyncio.TimeoutError:
-            pass
+            logger.info(
+                "gateway overdue commit scan failed; retrying next sweep", extra={"degraded": True}
+            )
+        await asyncio.sleep(SWEEP_SECONDS)
 
 
 def open_stores(config: GatewayConfig, encryptor, stats=None):
@@ -150,9 +137,10 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     """
     if unknown := configure_rules(config.client_rules):
         # An upgrade may rename a packaged rule; a stale removal must not stop the host.
-        logger.warning(
-            "gateway.client_rules removes entries the packaged rules do not have: %s",
-            "; ".join(unknown),
+        logger.info(
+            "unknown gateway client rules ignored skipped=%d",
+            len(unknown),
+            extra={"skipped": len(unknown)},
         )
     stats = Stats()
     store, management, close, file_sink = open_stores(config, encryptor, stats)
@@ -175,43 +163,29 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     config.openviking_breaker_failures,
                     config.openviking_breaker_seconds,
                 )
-                app.state.kernel = MemoryKernel(store, app.state.viking)
-                app.state.worker = CaptureWorker(
-                    store,
-                    management,
-                    app.state.viking,
-                    config.session_ttl_seconds,
-                    config.capture_delivery_records,
-                    stats=stats,
+                app.state.kernel = MemoryKernel(
+                    store, app.state.viking, config.openviking_auto_commit, management
                 )
-                # Bookkeeping retries that outlive their request.
-                app.state.background = background = set()
                 # The first probe runs in the background: an embedded server is not listening yet.
                 app.state.health = {"status": "starting"}
-                stopped = asyncio.Event()
                 maintenance = [
                     asyncio.create_task(health_loop(app, config.health_interval_seconds)),
                     asyncio.create_task(cleanup_loop()),
+                    # With openviking_auto_commit too: OpenViking does not commit a session
+                    # set up before the switch until its conversation saves another turn.
+                    asyncio.create_task(commit_loop(app)),
                 ]
                 if config.snapshot_interval_seconds:
                     maintenance.append(
                         asyncio.create_task(snapshot_loop(app, config.snapshot_interval_seconds))
                     )
-                app.state.captures = captures = [
-                    asyncio.create_task(capture_loop(app, stopped))
-                    for _ in range(config.capture_concurrency)
-                ]
                 try:
                     yield
                 finally:
-                    stopped.set()
                     for task in maintenance:
                         task.cancel()
-                    draining = [*captures, *background]
-                    _, pending = await asyncio.wait(draining, timeout=CAPTURE_DRAIN_SECONDS)
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*maintenance, *draining, return_exceptions=True)
+                    await app.state.kernel.capture.close()
+                    await asyncio.gather(*maintenance, return_exceptions=True)
         finally:
             await close()
 
@@ -241,7 +215,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 await management.expire_logs(time.time() - config.log_retention_days * 86400)
                 await asyncio.sleep(3600)
             except Exception:
-                logger.exception("OpenViking Gateway cleanup failed")
+                logger.info("gateway cleanup failed; retrying", extra={"degraded": True})
                 await asyncio.sleep(1)
 
     @app.exception_handler(RequestValidationError)
@@ -335,7 +309,9 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 await management.delete(credential["account"], "keys", credential["id"])
             except Exception:
                 # The refusal stands; the stale key is deleted on its next use.
-                logger.exception("OpenViking Gateway could not delete a revoked key")
+                logger.info(
+                    "revoked gateway key cleanup failed; rejecting access", extra={"degraded": True}
+                )
             raise invalid
         return credential, None
 

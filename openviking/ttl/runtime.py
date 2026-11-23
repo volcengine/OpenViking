@@ -28,6 +28,7 @@ from openviking.config.ttl import (
     validate_ttl_root,
 )
 from openviking.core.namespace import uri_parts
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.scheduling.expiry.api import (
     TTL_ITEM_TYPE,
     CallbackRequest,
@@ -274,7 +275,11 @@ class DirectoryTTL:
                 )
         finally:
             self._stop_scan.discard(account)
-        logger.info("TTL account state removed resource=%s account=%s", self.resource_id, account)
+        logger.info(
+            "ttl account state removed resource_hash=%s account_id=%s",
+            short_hash(self.resource_id),
+            account,
+        )
 
     async def handle(self, request: CallbackRequest) -> CallbackResult:
         if self._closed:
@@ -311,8 +316,18 @@ class DirectoryTTL:
             self._registration_wake.clear()
             try:
                 await self._retry_writes()
-            except Exception:
-                logger.exception("TTL registration retry delay=%s", delay)
+            except Exception as exc:
+                logger.info(
+                    "ttl registration retry pending=%d delay_max_seconds=%d error_type=%s",
+                    len(self._retry),
+                    delay,
+                    type(exc).__name__,
+                    extra={
+                        "degraded": True,
+                        "queue_depth": len(self._retry),
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 try:
                     await asyncio.wait_for(
                         self._registration_wake.wait(), uniform(delay / 2, delay)
@@ -561,11 +576,12 @@ class DirectoryTTL:
                 async with asyncio.timeout(2):
                     while self._retry:
                         await self._retry_writes(closing=True)
-            except Exception:
-                logger.warning(
-                    "TTL shutdown left volatile registrations pending=%s",
+            except Exception as exc:
+                logger.error(
+                    "ttl shutdown left volatile registrations pending=%d error_type=%s",
                     len(self._retry),
-                    exc_info=True,
+                    type(exc).__name__,
+                    extra={"queue_depth": len(self._retry), "error_type": type(exc).__name__},
                 )
         async with self._recycle_lock:
             if self.redis:
@@ -591,11 +607,12 @@ class DirectoryTTL:
         if old is None and len(self._retry) >= self.retry_limit:
             self.registration_dropped_total += 1
             logger.error(
-                "TTL event=registration_dropped scope=%s uri=%s pending=%s dropped_total=%s",
+                "ttl registration dropped account_id=%s target_id=%s pending=%d dropped_total=%d",
                 key[0],
-                key[2],
+                safe_uri_for_log(key[2]),
                 len(self._retry),
                 self.registration_dropped_total,
+                extra={"queue_depth": len(self._retry), "failed": self.registration_dropped_total},
             )
             return
         was_empty = not self._retry
@@ -652,7 +669,12 @@ class DirectoryTTL:
                     if key in self._retry:
                         current = self._retry.pop(key)
                         self._retry[key] = current
-                logger.exception("TTL batch registration failed scope=%s kind=%s", account, kind)
+                logger.debug(
+                    "ttl batch registration failed account_id=%s index_type=%s error_type=%s",
+                    account,
+                    kind,
+                    type(exc).__name__,
+                )
         if error is not None:
             raise error
 
@@ -749,8 +771,8 @@ class DirectoryTTL:
         finally:
             self._stop_scan.discard(account)
         logger.info(
-            "TTL initial registered scope=%s/%s event=%s",
-            self.resource_id,
+            "ttl initial registered resource_hash=%s account_id=%s mode=%s",
+            short_hash(self.resource_id),
             account,
             "reset" if reset else "resume",
         )
@@ -772,6 +794,7 @@ class DirectoryTTL:
         while not self._closed:
             self._wake.clear()
             failed = False
+            failed_accounts = 0
             # Only expiry callbacks admit Accounts to a maintenance round.
             for account in self._recycle.copy():
                 if self._closed:
@@ -786,16 +809,37 @@ class DirectoryTTL:
                             TTLRecycleRequest(self.resource_id, account)
                         )
                         logger.info(
-                            "TTL recycle resource=%s account=%s result=%s",
-                            self.resource_id,
+                            "ttl recycle completed resource_hash=%s account_id=%s scanned=%d deleted=%d skipped=%d failed=%d",
+                            short_hash(self.resource_id),
                             account,
-                            result,
+                            result.scanned,
+                            result.deleted,
+                            result.skipped,
+                            result.failed,
+                            extra={
+                                "total": result.scanned,
+                                "skipped": result.skipped,
+                                "failed": result.failed,
+                                "degraded": result.failed > 0,
+                            },
                         )
                     self._recycle.discard(account)
-                except Exception:
+                except Exception as exc:
                     failed = True
-                    logger.exception("TTL worker retry scope=%s delay=%s", account, delay)
+                    failed_accounts += 1
+                    logger.debug(
+                        "ttl maintenance failed account_id=%s error_type=%s",
+                        account,
+                        type(exc).__name__,
+                    )
             delay = min(delay * 2, 60) if failed else 1
+            if failed_accounts:
+                logger.info(
+                    "ttl maintenance retry failed_accounts=%d delay_max_seconds=%d",
+                    failed_accounts,
+                    delay,
+                    extra={"degraded": True, "failed": failed_accounts},
+                )
             if not self._recycle:
                 return
             try:
@@ -917,7 +961,7 @@ class DirectoryTTL:
         await redis.set(prefix + "initial:done", "1")
         await redis.srem(prefix + "pending", "initial")
         self._pending.discard(account)
-        logger.info("TTL initial scope=%s event=done", account)
+        logger.info("ttl initial completed account_id=%s", account)
 
     @staticmethod
     def modtime(stat):
@@ -957,11 +1001,12 @@ class DirectoryTTL:
                     if score is not None:
                         for uri, item, days in entries:
                             now[uri] = self.expiry(item, score, days)
-            except Exception:
-                logger.warning(
-                    "TTL expiry read unavailable scope=%s",
+            except Exception as exc:
+                logger.info(
+                    "ttl expiry read unavailable; omitting session expiry account_id=%s error_type=%s",
                     ctx.account_id,
-                    exc_info=True,
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
                 )
         for uri, ms in now.items():
             result[uri] = (
@@ -974,7 +1019,23 @@ class DirectoryTTL:
             raise FailedPreconditionError("TTL request must target this writer")
         if request.max_base_time_ms is None:
             await self._resume_initial(request.account_id, discover=False)
-        return await self._recycle_registered(request)
+        result = await self._recycle_registered(request)
+        if result.failed:
+            logger.info(
+                "ttl recycle degraded account_id=%s scanned=%d deleted=%d skipped=%d failed=%d",
+                request.account_id,
+                result.scanned,
+                result.deleted,
+                result.skipped,
+                result.failed,
+                extra={
+                    "degraded": True,
+                    "total": result.scanned,
+                    "skipped": result.skipped,
+                    "failed": result.failed,
+                },
+            )
+        return result
 
     async def _recycle_registered(self, request: TTLRecycleRequest) -> TTLRecycleResult:
         if self._recycle_lock.locked():
@@ -1019,9 +1080,14 @@ class DirectoryTTL:
                             did_delete, did_remove = await self._delete(account, uri, score, ctx)
                             counts["deleted" if did_delete else "skipped"] += 1
                             removed += did_remove
-                        except Exception:
+                        except Exception as exc:
                             counts["failed"] += 1
-                            logger.exception("TTL recycle failed scope=%s uri=%s", account, uri)
+                            logger.debug(
+                                "ttl recycle candidate failed account_id=%s target_id=%s error_type=%s",
+                                account,
+                                safe_uri_for_log(uri),
+                                type(exc).__name__,
+                            )
                     offset += len(candidates) - removed
         return TTLRecycleResult(**counts)
 

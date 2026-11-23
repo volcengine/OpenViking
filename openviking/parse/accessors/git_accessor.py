@@ -20,6 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.network import (
     ParserNetworkContext,
     ParserNetworkOperation,
@@ -139,7 +140,9 @@ class GitAccessor(DataAccessor):
                 prefix="ov_git_",
                 dir=get_parser_download_temp_dir(),
             )
-            logger.info(f"[GitAccessor] Created local temp dir for git: {temp_local_dir}")
+            logger.debug(
+                "Git temporary directory created path=%s", safe_path_for_log(str(temp_local_dir))
+            )
 
             # Fetch content (Clone or Extract)
             repo_name = "repository"
@@ -195,8 +198,9 @@ class GitAccessor(DataAccessor):
                     except PermissionDeniedError:
                         raise
                     except Exception as zip_exc:
-                        logger.warning(
-                            f"[GitAccessor] GitHub ZIP download failed, falling back to git clone: {zip_exc}"
+                        logger.info(
+                            "GitHub ZIP download failed; falling back to git clone error_type=%s",
+                            type(zip_exc).__name__,
                         )
 
                         # Clean up any partial content before cloning
@@ -229,8 +233,9 @@ class GitAccessor(DataAccessor):
                     except PermissionDeniedError:
                         raise
                     except Exception as zip_exc:
-                        logger.warning(
-                            f"[GitAccessor] GitLab ZIP download failed, falling back to git clone: {zip_exc}"
+                        logger.info(
+                            "GitLab ZIP download failed; falling back to git clone error_type=%s",
+                            type(zip_exc).__name__,
                         )
 
                         # Clean up any partial content before cloning
@@ -298,9 +303,10 @@ class GitAccessor(DataAccessor):
 
         except BaseException as e:
             if not isinstance(e, asyncio.CancelledError):
-                logger.error(
-                    f"[GitAccessor] Failed to access git repository {source}: {e}",
-                    exc_info=True,
+                logger.debug(
+                    "Git repository access failed source=%s error_type=%s",
+                    safe_uri_for_log(str(source)),
+                    type(e).__name__,
                 )
             # Clean up on error
             if temp_local_dir and os.path.exists(temp_local_dir):
@@ -458,12 +464,12 @@ class GitAccessor(DataAccessor):
                     "Git command failed: could not resolve hostname. Check the URL or your network."
                 )
             if env is None:
-                logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+                logger.debug("Git command failed exit_code=%s", proc.returncode)
             else:
                 # An authenticated remote controls parts of stderr and may echo
                 # the request's Authorization header. Keep credentialed failures
                 # out of logs as well as argv and raised exceptions.
-                logger.warning(f"[GitAccessor] {user_msg}")
+                logger.debug("Git command failed exit_code=%s", proc.returncode)
             raise RuntimeError(user_msg)
         return stdout.decode().strip()
 
@@ -550,7 +556,11 @@ class GitAccessor(DataAccessor):
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
-        logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
+        logger.debug(
+            "Cloning repository source=%s target=%s",
+            safe_uri_for_log(url),
+            safe_path_for_log(str(target_dir)),
+        )
         if commit:
             branch = None
         network_env = overlay_parser_subprocess_env(
@@ -631,9 +641,9 @@ class GitAccessor(DataAccessor):
                 env=env,
             )
         except Exception as exc:
-            logger.warning(
-                f"[GitAccessor] failed to resolve cloned repository HEAD: {exc}; "
-                "continuing without an exact-revision checkpoint"
+            logger.info(
+                "Repository HEAD resolution failed; continuing without revision checkpoint error_type=%s degraded=true",
+                type(exc).__name__,
             )
             return None
         return head_sha.strip() or None
@@ -687,7 +697,7 @@ class GitAccessor(DataAccessor):
         ref = quote(branch or "HEAD", safe="/")
         zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{ref}.zip"
 
-        logger.info(f"[GitAccessor] Downloading GitHub ZIP: {zip_url}")
+        logger.debug("Downloading GitHub archive source=%s", safe_uri_for_log(zip_url))
 
         zip_path = os.path.join(target_dir, "_archive.zip")
         extract_dir = os.path.join(target_dir, "_extracted")
@@ -727,8 +737,9 @@ class GitAccessor(DataAccessor):
                     if info.is_dir() or stat.S_ISDIR(mode):
                         continue
                     if stat.S_ISLNK(mode):
-                        logger.warning(
-                            f"[GitAccessor] Skipping symlink entry in GitHub ZIP: {info.filename}"
+                        logger.debug(
+                            "Skipping symlink archive entry path=%s",
+                            safe_path_for_log(info.filename),
                         )
                         continue
                     raw = info.filename.replace("\\", "/")
@@ -762,7 +773,7 @@ class GitAccessor(DataAccessor):
 
         await asyncio.to_thread(self._write_source_marker, content_dir, repo_url)
 
-        logger.info(f"[GitAccessor] GitHub ZIP extracted to {content_dir} ({repo_name})")
+        logger.debug("GitHub archive extracted target=%s", safe_path_for_log(str(content_dir)))
         return content_dir, repo_name
 
     async def _gitlab_zip_download(
@@ -789,7 +800,7 @@ class GitAccessor(DataAccessor):
         # GitLab uses the format: /{owner}/{repo}/-/archive/{ref}/{repo}-{ref}.zip
         zip_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo_slug}/-/archive/{ref}/{repo_slug}-{ref}.zip"
 
-        logger.info(f"[GitAccessor] Downloading GitLab ZIP: {zip_url}")
+        logger.debug("Downloading GitLab archive source=%s", safe_uri_for_log(zip_url))
 
         zip_path = os.path.join(target_dir, "_archive.zip")
         extract_dir = os.path.join(target_dir, "_extracted")
@@ -825,8 +836,9 @@ class GitAccessor(DataAccessor):
                     if info.is_dir() or stat.S_ISDIR(mode):
                         continue
                     if stat.S_ISLNK(mode):
-                        logger.warning(
-                            f"[GitAccessor] Skipping symlink entry in GitLab ZIP: {info.filename}"
+                        logger.debug(
+                            "Skipping symlink archive entry path=%s",
+                            safe_path_for_log(info.filename),
                         )
                         continue
                     raw = info.filename.replace("\\", "/")
@@ -860,7 +872,7 @@ class GitAccessor(DataAccessor):
 
         await asyncio.to_thread(self._write_source_marker, content_dir, repo_url)
 
-        logger.info(f"[GitAccessor] GitLab ZIP extracted to {content_dir} ({repo_name})")
+        logger.debug("GitLab archive extracted target=%s", safe_path_for_log(str(content_dir)))
         return content_dir, repo_name
 
     async def _extract_zip(self, zip_path: str, target_dir: str) -> str:
@@ -882,8 +894,9 @@ class GitAccessor(DataAccessor):
                         continue
                     # Skip symlink entries
                     if stat.S_ISLNK(mode):
-                        logger.warning(
-                            f"[GitAccessor] Skipping symlink entry in zip: {info.filename}"
+                        logger.debug(
+                            "Skipping symlink archive entry path=%s",
+                            safe_path_for_log(info.filename),
                         )
                         continue
                     # Reject entries with suspicious raw path components
@@ -919,8 +932,10 @@ class GitAccessor(DataAccessor):
                         try:
                             extracted.unlink(missing_ok=True)
                         except OSError as cleanup_err:
-                            logger.warning(
-                                f"[GitAccessor] Failed to clean up escaped file {extracted}: {cleanup_err}"
+                            logger.info(
+                                "Escaped archive entry cleanup failed path=%s error_type=%s",
+                                safe_path_for_log(str(extracted)),
+                                type(cleanup_err).__name__,
                             )
                         raise ValueError(
                             f"Zip Slip detected: entry {info.filename!r} escapes target directory"

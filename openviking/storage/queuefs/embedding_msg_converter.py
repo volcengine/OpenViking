@@ -45,9 +45,10 @@ class EmbeddingMsgConverter:
 
         # Account identity is required at the queue boundary. Do not silently
         # route a malformed or legacy message to the default Account.
-        if not isinstance(context_data.get("account_id"), str) or not context_data[
-            "account_id"
-        ].strip():
+        if (
+            not isinstance(context_data.get("account_id"), str)
+            or not context_data["account_id"].strip()
+        ):
             raise ValueError("Embedding context requires account_id")
         uri = context_data.get("uri", "")
         owner_fields = None
@@ -91,6 +92,8 @@ class EmbeddingMsgConverter:
         else:
             message = vectorization_text
 
+        from openviking.observability.reporting.token_sources import get_dashboard_token_source_type
+
         source_type = get_ingestion_source_type()
 
         embedding_msg = EmbeddingMsg.for_embed(
@@ -101,5 +104,6 @@ class EmbeddingMsgConverter:
             ),
             action=action,
             source_type=source_type or "",
+            dashboard_source_type=get_dashboard_token_source_type() or "",
         )
         return embedding_msg

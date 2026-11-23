@@ -362,7 +362,7 @@ tags:
 
 
 @pytest.mark.asyncio
-async def test_skill_operation_updater_sanitizes_existing_skill_updates(monkeypatch):
+async def test_skill_operation_updater_sanitizes_existing_skill_updates(monkeypatch, watch_vfs):
     existing_skill_md = """---
 name: code-review
 description: Review code carefully
@@ -375,10 +375,10 @@ tags:
 ## 核心规范
 - 先读文件
 """
-    viking_fs = MagicMock()
-    viking_fs.read_file = AsyncMock(return_value=existing_skill_md)
-    viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
-    viking_fs._async_agfs.pathlock_release = AsyncMock()
+    viking_fs = watch_vfs
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    uri = "viking://user/default/skills/code-review/SKILL.md"
+    await viking_fs.write_file(uri, existing_skill_md, ctx=ctx)
 
     from openviking.privacy.service import UserPrivacyConfigService
     from openviking.server.user_config import ResolvedPrivacyConfig
@@ -394,8 +394,8 @@ tags:
     vikingdb = MagicMock()
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
     processor = SkillProcessor(vikingdb=vikingdb, privacy_config_service=privacy_config_service)
-    processor._write_skill_content = AsyncMock()
-    processor._enqueue_skill_package = AsyncMock()
+    enqueue = AsyncMock()
+    monkeypatch.setattr(processor, "_enqueue_skill_package", enqueue)
     updater = SkillOperationUpdater(
         registry=_build_skill_registry(),
         skill_processor=processor,
@@ -432,12 +432,12 @@ tags:
     assert result.written_uris == []
     assert result.edited_uris == [uri]
     assert result.operation_results[0]["action"] == "update"
-    written = processor._write_skill_content.await_args.kwargs
-    assert written["skill_dir_uri"] == "viking://user/default/skills/code-review"
+    assert not result.errors
+    written = await viking_fs.read_file(uri, ctx=ctx)
     current = await privacy_config_service.get_current(ctx, "skill", "code-review")
     assert list(current.values.values()) == [secret]
-    assert secret not in written["skill_dict"]["content"]
-    assert "{{ov_privacy:skill:code-review:" in written["skill_dict"]["content"]
+    assert secret not in written
+    assert "{{ov_privacy:skill:code-review:" in written
 
 
 def test_skill_loader_to_skill_md_round_trip_with_lists():

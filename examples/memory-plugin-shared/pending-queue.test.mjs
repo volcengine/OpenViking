@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   claimForReplay,
+  deferCommitBehindPendingWrites,
   enqueue,
   listPending,
   replayPending,
@@ -126,3 +127,75 @@ for (const type of ["addMessage", "commitSession"]) {
     });
   });
 }
+
+async function queueWrites(sessionId, count, createdAt) {
+  for (let i = 0; i < count; i++) {
+    await enqueue("addMessage", sessionId, { role: "user", content: `parked ${i}` }, {
+      createdAt: createdAt + i,
+    });
+  }
+}
+
+async function queueOrder() {
+  return (await listPending()).map(({ entry }) => [entry.type, entry.sessionId]);
+}
+
+test("a commit goes out directly when its session has no queued writes", async () => {
+  await withPendingDir(async () => {
+    await queueWrites("other-session", 1, Date.now());
+    const calls = [];
+    const deferred = await deferCommitBehindPendingWrites(async (path) => {
+      calls.push(path);
+      return { ok: true };
+    }, "idle-session");
+
+    assert.equal(deferred, null);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(await queueOrder(), [["addMessage", "other-session"]]);
+  });
+});
+
+test("a commit waits for its session's queued writes to replay first", async () => {
+  await withPendingDir(async () => {
+    await queueWrites("parked-session", 2, Date.now());
+    const calls = [];
+    const deferred = await deferCommitBehindPendingWrites(async (path) => {
+      calls.push(path);
+      return { ok: true };
+    }, "parked-session");
+
+    assert.equal(deferred, null);
+    assert.deepEqual(calls, Array(2).fill("/api/v1/sessions/parked-session/messages"));
+    assert.deepEqual(await listPending(), []);
+  });
+});
+
+test("a commit that cannot follow its writes now is queued behind them, replacing an older one", async () => {
+  await withPendingDir(async () => {
+    // A commit left over from an earlier failure, and writes stamped ahead of
+    // the clock the way a failed batch remainder is.
+    await enqueue("commitSession", "down-session", {}, { createdAt: Date.now() - 1000 });
+    await queueWrites("down-session", 3, Date.now() + 60_000);
+
+    const deferred = await deferCommitBehindPendingWrites(
+      async () => ({ ok: false, status: 503 }),
+      "down-session",
+    );
+
+    assert.equal(deferred.ok, true);
+    assert.deepEqual(await queueOrder(), [
+      ...Array(3).fill(["addMessage", "down-session"]),
+      ["commitSession", "down-session"],
+    ]);
+
+    const calls = [];
+    await replayPending(async (path) => {
+      calls.push(path);
+      return { ok: true };
+    }, () => {});
+    assert.deepEqual(calls, [
+      ...Array(3).fill("/api/v1/sessions/down-session/messages"),
+      "/api/v1/sessions/down-session/commit",
+    ]);
+  });
+});

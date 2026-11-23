@@ -7,6 +7,10 @@ import type {
 } from '../../../client/types.js';
 import type { VikingBotSession } from '../../../components/viking-bot/capabilities.js';
 import { isOvClientError } from '../../../client/errors.js';
+import {
+  readSessionCommitTask,
+  submitSessionCommit,
+} from './native-memory-commit.js';
 import { nativeChatEvents } from './native-events.js';
 import { readNativeMessages, writeNativeParts } from './native-messages.js';
 import { nativeChatInput } from './native-input.js';
@@ -144,6 +148,8 @@ export function createNativeBotService(
               parts,
               turn_id: message.turnId,
               created_at: message.createdAt,
+              ...(message.role === 'assistant' &&
+                message.interrupted && { interrupted: true }),
               message_kind:
                 message.role === 'user' ? 'user_query' : 'assistant_step',
             },
@@ -151,6 +157,9 @@ export function createNativeBotService(
           signal,
         );
       },
+      getSessionCommitTask: (id, signal) =>
+        readSessionCommitTask(request, id, signal),
+      commitSession: (id, signal) => submitSessionCommit(request, id, signal),
       interrupt: (id, signal) =>
         request(
           {

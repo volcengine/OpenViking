@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -118,8 +119,7 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
                     if not entry.get("isDir", False):
                         continue
                     skill_root = (
-                        entry.get("uri")
-                        or f"{skill_root_uri.rstrip('/')}/{entry.get('name', '')}"
+                        entry.get("uri") or f"{skill_root_uri.rstrip('/')}/{entry.get('name', '')}"
                     )
                     skill_name = entry.get("name") or skill_root.rstrip("/").split("/")[-1]
                     if skill_name in seen_names:
@@ -168,10 +168,15 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
         try:
             raw_content = await self._viking_fs.read_file(uri, ctx=self._ctx)
         except NotFoundError as exc:
-            logger.info("Session skill read not found: %s", uri)
+            logger.debug("session skill read missing uri=%s", safe_uri_for_log(uri))
             return {"error": str(exc)}
         except Exception as exc:
-            logger.warning("Session skill read failed for %s: %s", uri, exc)
+            logger.debug(
+                "session skill read failed uri=%s error_type=%s",
+                safe_uri_for_log(uri),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
+            )
             return {"error": str(exc)}
 
         result, stored = build_skill_read_result(

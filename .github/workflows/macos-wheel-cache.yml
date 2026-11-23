@@ -1,0 +1,71 @@
+name: Warm macOS Intel wheel caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'third_party/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'MANIFEST.in'
+      - '.gitmodules'
+      - '.gitignore'
+      - 'scripts/build_support/**'
+      - '.github/actions/compiler-cache/**'
+      - '.github/scripts/cache_maintenance.py'
+      - '.github/workflows/_build.yml'
+      - '.github/workflows/macos-wheel-cache.yml'
+  # Refresh after hosted image / stable toolchain updates, even without code changes.
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-intel-wheel-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main'
+    # Reuse the actual wheel path, including Rust CLI, ragfs, C++ and smoke tests.
+    # The CLI release workflow uses an explicit Cargo target and different keys.
+    uses: ./.github/workflows/_build.yml
+    with:
+      os_json: '["macos-15-intel"]'
+      python_json: '["3.10"]'
+      build_sdist: false
+      build_wheels: true
+
+  cleanup:
+    needs: warm
+    if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Remove superseded Cargo and closed PR caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/cache_maintenance.py --repo "$GH_REPO" --apply \
+            | tee "$RUNNER_TEMP/cache-maintenance.json"
+          {
+            echo '### Cache maintenance'
+            echo '```json'
+            cat "$RUNNER_TEMP/cache-maintenance.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
