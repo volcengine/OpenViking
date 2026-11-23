@@ -66,6 +66,7 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
 
     agfs = None
     runtime = None
+    runtime_closed = False
     wait_task: asyncio.Task[None] | None = None
     stop_task: asyncio.Task[bool] | None = None
     try:
@@ -93,6 +94,7 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
         finally:
             stop.set()
             await runtime.close()
+            runtime_closed = True
     finally:
         if wait_task is not None:
             if not wait_task.done():
@@ -104,11 +106,13 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
             await asyncio.gather(stop_task, return_exceptions=True)
         if runtime is not None and wait_task is None:
             await runtime.close()
-        close = getattr(agfs, "close", None)
-        if callable(close):
-            result = close()
-            if inspect.isawaitable(result):
-                await result
+            runtime_closed = True
+        if runtime is None or runtime_closed:
+            close = getattr(agfs, "close", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
 
 
 def main(argv: list[str] | None = None) -> int:
