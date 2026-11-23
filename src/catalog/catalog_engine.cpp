@@ -1078,12 +1078,16 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       const auto suffix = uri.substr(from_uri.size());
       const auto moved_uri = to_uri + suffix;
       const auto moved_key = key(scope, moved_uri);
-      const auto source_node = parse(it->second);
-      source_nodes.PushBack(JsonValue(source_node, allocator), allocator);
+      auto node = parse(it->second);
+      source_nodes.PushBack(JsonValue(node, allocator), allocator);
       const auto existing = nodes_.find(moved_key);
       if (existing != nodes_.end()) {
         const auto target_node = parse(existing->second);
         target_nodes.PushBack(JsonValue(target_node, allocator), allocator);
+        // Merging an ordinary directory must not undeclare the target Item.
+        if (!node.HasMember("item_uuids") && target_node.HasMember("item_uuids")) {
+          node.CopyFrom(target_node, node.GetAllocator());
+        }
       } else {
         created_target_uris.PushBack(
             JsonValue(moved_uri.c_str(),
@@ -1091,7 +1095,6 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
                       allocator),
             allocator);
       }
-      auto node = parse(it->second);
       put_string(node, "uri", moved_uri, node.GetAllocator());
       source_keys.push_back(it->first);
       updates[moved_key] = encode(node);

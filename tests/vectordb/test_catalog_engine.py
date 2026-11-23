@@ -469,12 +469,19 @@ def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
     ]
 
 
-def test_move_subtree_merges_and_undo_restores_both_trees():
+@pytest.mark.parametrize("source_is_item", [False, True])
+@pytest.mark.parametrize("identity_mode", ["shadow", "union"])
+def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identity_mode):
     engine = CatalogEngine()
+    call(engine, "configure", item_identity_mode=identity_mode)
     nodes(engine, "/resources/source", "/resources/source/a")
     nodes(engine, "/resources/target", "/resources/target/kept")
-    declare(engine, "/resources/source", "uuid-source", ["asset_id=source"])
+    if source_is_item:
+        declare(engine, "/resources/source", "uuid-source", ["asset_id=source"])
     declare(engine, "/resources/target", "uuid-target", ["asset_id=target"])
+    moved_uuid = "uuid-source" if source_is_item else "uuid-target"
+    moved_attrs = ["asset_id=source"] if source_is_item else ["asset_id=target"]
+    before = call(engine, "resolve", uris=["/resources/source/a"])["data"][0]
 
     moved = call(
         engine,
@@ -491,16 +498,19 @@ def test_move_subtree_merges_and_undo_restores_both_trees():
         {"uri": "/resources/source/a", "item_uuids": []},
         {
             "uri": "/resources/target/a",
-            "item_uuid": "uuid-source",
-            "item_uuids": ["uuid-source"],
+            "item_uuid": moved_uuid,
+            "item_uuids": [moved_uuid],
             "item_root_uri": "/resources/target",
         },
         {
             "uri": "/resources/target/kept",
-            "item_uuid": "uuid-source",
-            "item_uuids": ["uuid-source"],
+            "item_uuid": moved_uuid,
+            "item_uuids": [moved_uuid],
             "item_root_uri": "/resources/target",
         },
+    ]
+    assert call(engine, "query_items", item_uuids=[moved_uuid])["data"] == [
+        {"item_uuid": moved_uuid, "uri": "/resources/target", "item_attrs": moved_attrs}
     ]
 
     call(engine, "restore_move", undo=moved["undo"])
@@ -509,12 +519,7 @@ def test_move_subtree_merges_and_undo_restores_both_trees():
         "resolve",
         uris=["/resources/source/a", "/resources/target/a", "/resources/target/kept"],
     )["data"] == [
-        {
-            "uri": "/resources/source/a",
-            "item_uuid": "uuid-source",
-            "item_uuids": ["uuid-source"],
-            "item_root_uri": "/resources/source",
-        },
+        before,
         {
             "uri": "/resources/target/a",
             "item_uuid": "uuid-target",

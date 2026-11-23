@@ -61,7 +61,7 @@ client.add_resource(
 
 MCP 的 `add_resource` 工具暴露相同的 `as_item` 和 `item_attrs` 参数。省略 `as_item` 等价于 `false`；为 false 时必须同时省略 `item_attrs`（空对象也会被拒绝）。`item_uuid` 由 OpenViking 生成和维护，调用方不能指定。属性只属于声明根，不继承、不合并。移动 Item 会保留 UUID 和属性，复制不会复制 Item 声明，删除会移除声明。
 
-重导入沿用现有资源更新流程并保留根 UUID；独立子 Item 和不可变属性冲突在正文提交前检查。
+普通目录合并移动到 Item 时，保留目标已有的 Item 声明。重导入沿用现有资源更新流程并保留根 UUID；独立子 Item 和不可变属性冲突在正文提交前检查。
 
 存量普通目录／资源根不支持补声明为 Item，需要用原输入导入新的 Item 根。已有 Item 可同根更新和幂等重试。新增 Skill 包自动声明 Item；旧普通 Skill 包更新时不补声明，已有 Item 包更新保留身份。
 

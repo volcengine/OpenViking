@@ -61,7 +61,7 @@ client.add_resource(
 
 The MCP `add_resource` tool exposes the same `as_item` and `item_attrs` arguments. Omitting `as_item` is equivalent to `false`; when it is false, `item_attrs` must also be omitted (even an empty object is rejected). `item_uuid` is generated and maintained by OpenViking and cannot be supplied by callers. Attributes belong only to the declared root and are not inherited or merged. Moving an Item preserves its UUID and attributes, copying it does not copy the declaration, and removing it deletes the declaration.
 
-Reimport uses the existing resource update flow and preserves the root UUID; independent child Items and immutable attribute conflicts are checked before committing content.
+Merging an ordinary directory into an Item preserves the destination's declaration. Reimport uses the existing resource update flow and preserves the root UUID; independent child Items and immutable attribute conflicts are checked before committing content.
 
 Existing ordinary directories and resource roots cannot be promoted to Items; import their original inputs into a new Item root. Existing Items support same-root updates and retries. New Skill packages declare Items automatically; updates preserve an existing declaration or its absence for legacy packages.
 

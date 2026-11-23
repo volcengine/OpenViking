@@ -216,13 +216,19 @@ def test_preserve_root_rejects_independent_children_before_deletion(collection):
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fail):
-    declare(collection, "/resources/A", "source", item_attrs=["kind=source"])
+@pytest.mark.parametrize("source_is_item", [False, True])
+def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fail, source_is_item):
+    if source_is_item:
+        declare(collection, "/resources/A", "source", item_attrs=["kind=source"])
+    else:
+        call(collection, "upsert_nodes", nodes=[{"uri": "/resources/A", "node_type": "dir"}])
     declare(collection, "/resources/A/child", "child")
     declare(collection, "/resources/B", "old-target", item_attrs=["kind=target"])
     declare(collection, "/resources/B/kept", "target-only", item_attrs=["kind=kept"])
     declare(collection, "/resources/A", "other-account", scope="b")
     before = deepcopy(collection.client.rows)
+    moved_uuid = "source" if source_is_item else "old-target"
+    moved_attrs = ["kind=source"] if source_is_item else ["kind=target"]
     before_move = len(collection.client.calls)
     collection.client.fail_delete_once = fail
     if fail:
@@ -240,13 +246,13 @@ def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fa
         assert len(reads[1][2]["ids"]) == 4
         assert call(collection, "resolve", uris=["/resources/B/child/hit"])["data"][0][
             "item_uuids"
-        ] == ["child", "source"]
+        ] == ["child", moved_uuid]
         assert call(collection, "resolve", uris=["/resources/B/kept/hit"])["data"][0][
             "item_uuids"
-        ] == ["target-only", "source"]
-        items = call(collection, "query_items", item_uuids=["source", "target-only"])["data"]
+        ] == ["target-only", moved_uuid]
+        items = call(collection, "query_items", item_uuids=[moved_uuid, "target-only"])["data"]
         assert {item["item_uuid"]: (item["uri"], item["item_attrs"]) for item in items} == {
-            "source": ("/resources/B", ["kind=source"]),
+            moved_uuid: ("/resources/B", moved_attrs),
             "target-only": ("/resources/B/kept", ["kind=kept"]),
         }
         with pytest.raises(ValueError, match="different account"):

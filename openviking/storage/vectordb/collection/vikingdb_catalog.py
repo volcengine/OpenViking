@@ -313,9 +313,14 @@ class VikingDBCatalog:
                     continue  # An index entry may outlive its Collection record.
                 source_ids.append(old_id)
                 previous[old_id] = snapshot[old_id]
+                node = snapshot[old_id]
                 if new_id in snapshot:
-                    previous[new_id] = snapshot[new_id]
-                moved[new_id] = {**snapshot[old_id], "id": new_id, "uri": new_uri}
+                    target_node = snapshot[new_id]
+                    previous[new_id] = target_node
+                    # Merging an ordinary directory must not undeclare the target Item.
+                    if not node.get("item_uuids") and target_node.get("item_uuids"):
+                        node = target_node
+                moved[new_id] = {**node, "id": new_id, "uri": new_uri}
 
         if not moved:
             return {"moved_nodes": 0}

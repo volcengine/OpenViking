@@ -185,6 +185,44 @@ async def test_rejected_attribute_change_preserves_existing_content(service, tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("item_suffix", ["", "/child"])
+async def test_ordinary_directory_merge_preserves_target_item(service, tmp_path, item_suffix):
+    owner = ctx()
+    fs = service.viking_fs
+    source = "viking://resources/plain-source"
+    target = "viking://resources/declared-target"
+    item_root = target + item_suffix
+    if item_suffix:
+        await service.fs.mkdir(target, owner)
+    declaration = await service.fs.mkdir(
+        item_root, owner, as_item=True, item_attrs={"asset": "keep"}
+    )
+    inputs = tmp_path / "inputs"
+    member_dir = inputs / item_suffix.lstrip("/")
+    member_dir.mkdir(parents=True)
+    (member_dir / "new.md").write_text("# New\nnew content")
+    imported = await service.resources.add_resource(str(inputs), to=source, ctx=owner, wait=True)
+    assert imported["status"] == "success", imported
+    await fs.write_file(item_root + "/kept.md", "keep content", ctx=owner)
+
+    await service.fs.mv(source, target, ctx=owner)
+
+    assert not await fs.exists(source, ctx=owner)
+    assert await fs.read_file(item_root + "/kept.md", ctx=owner) == "keep content"
+    result = await service.search.find(
+        "",
+        ctx=owner,
+        target_uri=target,
+        filter={"op": "must", "field": "item_attrs", "conds": ["asset=keep"]},
+        search_as_item={},
+    )
+    assert [(item.uri, item.item_uuid, item.item_attrs) for item in result.resources] == [
+        (item_root, declaration["item_uuid"], {"asset": "keep"})
+    ]
+    assert await service.fs.mkdir(item_root, owner, as_item=True) == declaration
+
+
+@pytest.mark.asyncio
 async def test_parent_reimport_does_not_delete_independent_child_item(service, tmp_path):
     source = tmp_path / "source"
     (source / "nested").mkdir(parents=True)
