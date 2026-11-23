@@ -82,9 +82,9 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 
 Antigravity 集成同时服务 Antigravity 桌面 app 与 `agy` CLI，两者从 `~/.gemini/config/plugins/` 加载同一批插件：
 
-- **SessionStart** 注入用户画像。
+- **SessionStart** 注入用户画像，并在后台进程中扫描补交空闲超过 30 分钟的其他会话。
 - **PreInvocation** 在每轮的第一次模型调用时召回相关记忆。Antigravity 在每次模型调用前都会运行这个 Hook，工具循环中的后续调用会跳过召回。
-- **Stop** 在后台进程中采集对话 transcript 里已完成的步骤，然后 commit OpenViking 会话。
+- **Stop** 在后台进程中采集用户对话 transcript 里已完成的步骤，并在累计达到 `OPENVIKING_COMMIT_TURN_THRESHOLD` 条已捕获消息时 commit（轮中 `fullyIdle: false` 让出时延后至最多两倍阈值）。不含 `USER_EXPLICIT` 用户轮的子代理 transcript 不会被捕获。
 
 Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 名，上下文以 `injectSteps` 系统消息返回，因此不能直接复用 Claude Code 的 `hooks.json`。
 
