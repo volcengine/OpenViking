@@ -602,6 +602,40 @@ async def test_complex_recovery_requires_read_evidence_for_unchanged_drafts(
     assert task.result.recovery_proof == (expected if read_all else None)
 
 
+async def test_rejected_sibling_makes_complex_delivery_partial(pipeline, monkeypatch):
+    await configure_pipeline(pipeline)
+    source = pipeline.request.from_[0] + "/one.md"
+    good_uri = pipeline.target + "/good.md"
+    pipeline.client.batch_write.return_value = {"created": [good_uri]}
+
+    async def worker(system, data, model, *, stage, runtime):
+        root = f"__compile_staging__/drafts/{stage}/output"
+        await model.files.sandbox.write_file(f"{root}/good.md", "# Good\n")
+        await model.files.sandbox.write_file(
+            f"{root}/bad.md", "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n"
+        )
+        return root
+
+    task = SimpleNamespace(status="running", meta={}, result=None)
+    service = compile_service_for_test(pipeline, task, monkeypatch)
+    await service._run_pipeline(
+        task_id="test",
+        request=pipeline.request,
+        client=pipeline.client,
+        sandbox=pipeline.files.sandbox,
+        skill_text=pipeline.skill,
+        source_files=[source],
+        usage={},
+        agent_runner=worker,
+    )
+
+    operations = pipeline.client.batch_write.await_args.kwargs["operations"]
+    assert [op["uri"] for op in operations] == [good_uri]
+    assert task.status == "completed"
+    assert task.result.created == [good_uri]
+    assert task.result.completion_status == "partial"
+
+
 @pytest.mark.parametrize(
     "path,content",
     [(None, None), ("topic.md", b"   \n"), ("topic.json", b"{}"), ("topic.md", b"\xff\x00")],
@@ -997,6 +1031,14 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert len(pipeline.warnings) == 1
     assert "selection-rules.md" in pipeline.warnings[0]
     assert "mapping values are not allowed here (line 4, column 13)" in pipeline.warnings[0]
+
+    await pipeline.write_coverage(bundle.created)
+    recorded = (await pipeline.files.get("coverage"))["inputs"]["viking://resources/source/a.md"]
+    assert recorded["status"] == "prepared"
+    assert recorded["outputs"] == [
+        {"uri": pipeline.target + "/valid.md", "delivered": True},
+        {"uri": pipeline.target + "/selection-rules.md", "delivered": False, "rejected": True},
+    ]
 
     pipeline.warnings.clear()
     empty_bundle = await finalize.run(
