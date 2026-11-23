@@ -275,6 +275,20 @@
   min-width: 0;
   gap: 8px;
 }
+.ov-viking-bot__compile-skill .ov-viking-bot__interaction-option {
+  padding: 8px 12px;
+}
+.ov-viking-bot__compile-skill .ov-viking-bot__interaction-option-content {
+  gap: 0;
+}
+.ov-viking-bot__compile-skill
+  .ov-viking-bot__interaction-option.ov-radio--checked
+  .ov-viking-bot__interaction-index {
+  background: transparent;
+}
+.ov-viking-bot__compile-skill .ov-viking-bot__interaction-index > svg {
+  display: block;
+}
 
 .ov-viking-bot__compile-skill-upload .ov-modal__panel {
   inline-size: min(480px, calc(100vw - 32px));
