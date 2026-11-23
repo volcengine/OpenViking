@@ -13,7 +13,9 @@ import { WorkerExecutor } from './worker-executor.mjs';
 import { WorkerSettings } from './worker-settings.mjs';
 import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
-import { executeCommand } from './commands.mjs';
+import { executeCommand, statusHeadline } from './commands.mjs';
+import { settingsModels } from './settings-models.mjs';
+import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statusCard, workerStatusLine } from './settings-card.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
 import { executeTasksCommand, taskStatusLine } from './task-commands.mjs';
 import { executeWorkersCommand } from './worker-commands.mjs';
@@ -379,6 +381,12 @@ export class PersonalAgentDaemon {
           : event.kind === 'message.action' ? resolveCardAction(this.store.db, event, this.config.profile)
             : LARK_MESSAGE_EVENT_KINDS.has(event.kind) ? resolveLarkMessageEvent(this.store.db, event) : event,
         eventHandler: (event) => {
+          // A choice on the Runtime and model card: the Core redraws or
+          // applies it (handleSettingsCard); it never reaches the model.
+          if (event.messageType === 'card_action' && event.data?.interaction?.value?.[SETTINGS_CARD]) {
+            return (accepted) => { void this.handleSettingsCard(accepted)
+              .catch((error) => this.logger.error('settings_card_failed', { error: safeError(error) })); };
+          }
           // The owner answered an approval card: the Core sends or drops the
           // draft itself, off the ingress queue (an SMTP send may be slow).
           // The model then hears what actually went out.
@@ -527,7 +535,13 @@ export class PersonalAgentDaemon {
         workers: (parsed) => executeWorkersCommand(parsed, {
           event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
         }),
-        statusExtra: () => taskStatusLine(this.tasks),
+        statusExtra: () => [workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n'),
+        // On Lark /runtime and /status answer with a card too (settings-card.mjs).
+        // The workers' settings are the owner's to change, as with /workers.
+        runtimeCard: async (snapshot) => settingsCard({ snapshot: await settingsModels(snapshot, [snapshot.runtime, this.workerSettings?.preferred()], this.config), settings: this.connectors.isOwner(event) ? this.workerSettings ?? null : null,
+          saved: (runtime) => this.routerSaved(runtime) }),
+        statusCard: (snapshot) => statusCard({ ...statusHeadline(snapshot), snapshot, settings: this.workerSettings ?? null,
+          tasksLine: taskStatusLine(this.tasks), slots: this.tasks?.overview({ recent: 0 }).slots ?? null }),
       });
     } catch (error) {
       const resumed = error?.resumedInputs > 0 ? `\n被打断的 ${error.resumedInputs} 条消息已交回当前 Runtime` : '';
@@ -550,6 +564,45 @@ export class PersonalAgentDaemon {
         inboundSeq: inbound?.seq,
       });
     }
+  }
+
+  // The model and effort the router last had on a runtime, which it takes
+  // again when switched back there (agent-runtime.mjs).
+  routerSaved(runtime) {
+    return { model: this.store.getSetting(`${runtime}_model`) || '', effort: this.store.getSetting(`${runtime}_effort`) || '' };
+  }
+
+  // A choice on the Runtime and model card, made in the direct chat it was
+  // sent to: a runtime chosen above the form redraws the card; the form
+  // submitted applies what changed, as the commands it stands for; cancel
+  // closes it. The card is updated in place.
+  async handleSettingsCard(event) {
+    if (event.chatType !== 'p2p') return;
+    const interaction = event.data.interaction;
+    const action = interaction.value[SETTINGS_CARD];
+    const settings = this.connectors.isOwner(event) ? this.workerSettings ?? null : null;
+    let snapshot = await this.agentRuntime.snapshot({ catalog: 'refresh' }).catch(() => this.agentRuntime.snapshot({ catalog: 'cached' }));
+    let card = null;
+    if (action === 'cancel') card = settledCard({ cancelled: true, snapshot, settings });
+    else if (action === 'runtime') {
+      const draft = { ...interaction.value.draft, [interaction.value.side]: interaction.option };
+      snapshot = await settingsModels(snapshot, [draft.router, draft.worker === 'router' ? draft.router : draft.worker], this.config);
+      card = redrawn({ interaction, snapshot, settings, saved: (runtime) => this.routerSaved(runtime) });
+    }
+    else if (action === 'apply') {
+      const run = (name, arg) => executeCommand({ name, arg }, this.agentRuntime).catch((error) => ({ ok: false, text: safeError(error) }));
+      const runWorkers = (arg) => executeWorkersCommand({ name: 'workers', arg }, {
+        event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
+      });
+      const result = await applySettings({ interaction, snapshot, settings, run, runWorkers });
+      snapshot = await this.agentRuntime.snapshot({ catalog: 'cached' });
+      card = settledCard({ ...result, snapshot, settings });
+      this.recordSystemActivity('command.executed', {
+        summary: `/runtime card → ${result.stale ? 'stale' : result.steps.map((step) => `${step.ok ? '✓' : '✗'} ${step.label}`).join(', ') || 'no change'}`,
+        status: result.stale || result.steps.some((step) => !step.ok) ? 'FAILED' : 'OK', conversationKey: event.conversationKey,
+      });
+    }
+    if (card) await this.connectors.updateCard(event.parentId, card);
   }
 
   runMaintenance() {
