@@ -512,6 +512,21 @@ async def test_scheduled_run_without_output_changes_preserves_manual_baseline(
 
 async def test_partial_delivery_retains_baseline_after_restart(setup, registered, monkeypatch):
     _, name, first = registered
+
+    async def finish_after_restart(lifecycle, task, result):
+        with monkeypatch.context() as patch:
+            patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
+            with pytest.raises(OSError, match="Interrupted"):
+                await lifecycle.on_finish(
+                    task, ExternalTaskSnapshot(status="completed", result=result)
+                )
+        restored = deepcopy(setup.tracker.tasks[task.task_id])
+        restarted = CompileLifecycle(setup.store, setup.fs)
+        terminal = ExternalTaskSnapshot(status="completed")
+        outcome = await restarted.on_finish(restored, terminal)
+        assert await restarted.on_finish(restored, terminal) == outcome
+        return restarted, outcome.result
+
     await setup.lifecycle.on_start(first)
     setup.fs.output_changes = [{"uri": TARGET + "/baseline.md", "change_type": "added"}]
     await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
@@ -520,21 +535,15 @@ async def test_partial_delivery_retains_baseline_after_restart(setup, registered
     setup.fs.source_changes = [{"uri": SOURCE + "/missed.md", "change_type": "modified"}]
     assert await setup.lifecycle.on_start(task) == "proceed"
     setup.fs.output_changes = [{"uri": TARGET + "/good.md", "change_type": "added"}]
-    terminal = ExternalTaskSnapshot(status="completed", result={"completion_status": "partial"})
-    with monkeypatch.context() as patch:
-        patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
-        with pytest.raises(OSError, match="Interrupted"):
-            await setup.lifecycle.on_finish(task, terminal)
-    restored = deepcopy(setup.tracker.tasks[task.task_id])
-    restarted = CompileLifecycle(setup.store, setup.fs)
-    outcome = await restarted.on_finish(restored, ExternalTaskSnapshot(status="completed"))
-    assert outcome.result == {
+    restarted, result = await finish_after_restart(
+        setup.lifecycle, task, {"completion_status": "partial"}
+    )
+    assert result == {
         "created": 1,
         "updated": 0,
         "deleted": 0,
         "completion_status": "partial",
     }
-    assert await restarted.on_finish(restored, ExternalTaskSnapshot(status="completed")) == outcome
     retained = await setup.store.get("acme", "alice", name)
     assert retained["progress"] == previous["progress"]
     setup.fs.restore.assert_not_awaited()
@@ -559,16 +568,10 @@ async def test_partial_delivery_retains_baseline_after_restart(setup, registered
     plan = await restarted.runtime_changes(
         verified.meta["request"], "acme", verified.task_id, "alice"
     )
-    terminal = ExternalTaskSnapshot(status="completed", result={"recovery_proof": expected})
-    with monkeypatch.context() as patch:
-        patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
-        with pytest.raises(OSError, match="Interrupted"):
-            await restarted.on_finish(verified, terminal)
-    restored = deepcopy(setup.tracker.tasks[verified.task_id])
-    restarted = CompileLifecycle(setup.store, setup.fs)
-    outcome = await restarted.on_finish(restored, ExternalTaskSnapshot(status="completed"))
-    assert outcome.result == {"created": 0, "updated": 0, "deleted": 0}
-    assert await restarted.on_finish(restored, ExternalTaskSnapshot(status="completed")) == outcome
+    restarted, result = await finish_after_restart(
+        restarted, verified, {"recovery_proof": expected}
+    )
+    assert result == {"created": 0, "updated": 0, "deleted": 0}
     committed = await setup.store.get("acme", "alice", name)
     assert committed["progress"]["source_commit"] == plan["head"]
     assert "partial_compile" not in committed["execution_context"]
