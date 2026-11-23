@@ -2298,7 +2298,7 @@ class MemoryUpdater:
         """Try to enqueue directory generation after the memory changes are saved."""
         from openviking.session.memory.memory_type_registry import get_default_registry
         from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 
         try:
             registry = self._registry if self._registry is not None else get_default_registry()
@@ -2315,11 +2315,18 @@ class MemoryUpdater:
                     group_ids=list(ctx.group_ids),
                     peer_id=ctx.user.user_id,
                     role=str(ctx.role),
+                    coalesce_key=build_semantic_coalesce_key(
+                        context_type="memory",
+                        uri=directory,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        peer_id=ctx.user.user_id,
+                        directory_only=True,
+                    ),
                     generation_trigger="memory_update",
                     overview_template=(schema.overview_template or "") if schema else "",
                     abstract_template=(schema.abstract_template or "") if schema else "",
-                ),
-                deduplicate_memory=False,
+                )
             )
         except Exception as exc:
             logger.info(

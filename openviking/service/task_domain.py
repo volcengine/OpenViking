@@ -487,7 +487,9 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         }
         if any(work.queue_name in projected for work in works):
             task.result["queue_status"] = projected
-        if memory_overview_requested and projected["Semantic"]["error_count"]:
+        if memory_overview_requested and (
+            projected["Semantic"]["error_count"] or not projected["Semantic"]["processed"]
+        ):
             task.result["overview_status"] = "skipped"
         for queue_name, field_name in (
             ("Semantic", "semantic_status"),

@@ -1690,6 +1690,8 @@ class SemanticTreeExecutor:
                 try:
                     directory_vector_kwargs: Dict[str, Any] = {}
                     include_abstract = self._context_type != "memory" or bool(abstract)
+                    if memory_update:
+                        include_abstract = include_abstract and write_result.abstract_body_changed
                     include_overview = True
                     if not include_abstract:
                         directory_vector_kwargs["include_abstract"] = False

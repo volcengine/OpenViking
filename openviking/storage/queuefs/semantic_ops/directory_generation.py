@@ -11,10 +11,15 @@ from typing import Awaitable, Callable, Mapping
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from openviking.concurrency import bounded_map
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.prompts import render_prompt
 from openviking.storage.abstract_overview import AbstractOverviewDocument, markdown_safe_viking_uri
 from openviking.system_assets import BUILTIN_SEMANTIC_TEMPLATES_DIR
 from openviking_cli.utils.config.parser_config import SemanticConfig
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _OVERVIEW_TEMPLATES = Environment(
     loader=FileSystemLoader(BUILTIN_SEMANTIC_TEMPLATES_DIR),
@@ -153,6 +158,7 @@ async def generate_directory_semantics(
     config: SemanticConfig,
     language: str,
     complete: Callable[[str], Awaitable[str]],
+    max_concurrent_llm: int,
     navigation_renderer: Callable[[list[str]], str] | None = None,
     preset_abstract: str | None = None,
 ) -> DirectoryGeneration:
@@ -179,24 +185,37 @@ async def generate_directory_semantics(
             },
         )
 
-    async def summarize(material: list[str]) -> str:
-        result = (await complete(prompt(material))).strip()
-        if not result:
-            raise ValueError("directory abstract generation returned empty content")
-        return result
+    async def summarize(material: list[str]) -> str | None:
+        try:
+            return (await complete(prompt(material))).strip() or None
+        except Exception as exc:
+            logger.info(
+                "Directory summary generation failed target=%s error_type=%s degraded=true",
+                safe_uri_for_log(dir_uri),
+                type(exc).__name__,
+            )
+            return None
 
     if generate_summary:
         items = [{"name": name, **entry} for name, entry in sorted(entries.items())]
         material = [json.dumps(item, ensure_ascii=False) for item in items]
         budget = config.max_overview_prompt_chars
         batch_size = config.overview_batch_size
-        if len("\n".join(material)) > budget:
-            if len(material) > batch_size:
-                material = [
-                    await summarize(material[start : start + batch_size])
-                    for start in range(0, len(material), batch_size)
-                ]
-            else:
+        over_budget = len("\n".join(material)) > budget
+        if over_budget and len(material) > batch_size:
+            batches = [
+                material[start : start + batch_size]
+                for start in range(0, len(material), batch_size)
+            ]
+            results = await bounded_map(
+                batches, summarize, concurrency=min(len(batches), max_concurrent_llm)
+            )
+            partials = [partial for partial in results if partial is not None]
+            summary = partials[0] if partials else ""
+            if len(partials) > 1:
+                summary = await summarize(partials) or summary
+        else:
+            if over_budget:
                 child_material = "\n".join(
                     line
                     for item, line in zip(items, material, strict=True)
@@ -210,7 +229,8 @@ async def generate_directory_semantics(
                     else line
                     for item, line in zip(items, material, strict=True)
                 ]
-        summary = await summarize(material)
+            summary = await summarize(material)
+        summary = summary or "[Directory overview is not generated]"
 
     overview, overview_summary = _render_directory_overview(
         dir_uri,

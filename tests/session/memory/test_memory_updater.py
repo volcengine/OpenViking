@@ -369,7 +369,7 @@ class TestMemoryUpdater:
         assert msg.account_id == "acme"
         assert msg.user_id == "alice"
         assert msg.recursive is False
-        assert queue.enqueue.await_args.kwargs["deduplicate_memory"] is False
+        assert msg.coalesce_key == f"directory|memory|acme|alice|alice|{directory}"
 
     @pytest.mark.asyncio
     async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):

@@ -237,6 +237,13 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 account_id=metadata.account_id,
                 user_id=metadata.user_id,
             )
+        elif isinstance(result.value, dict) and result.value.get("skipped"):
+            await self._tracker.discard_work(
+                metadata.task_id,
+                metadata.work_id,
+                account_id=metadata.account_id,
+                user_id=metadata.user_id,
+            )
         else:
             vector_written = bool(
                 isinstance(result.value, dict) and result.value.get("vector_written")

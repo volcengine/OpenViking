@@ -64,7 +64,7 @@ async def test_write_updates_memory_file_and_parent_overview(
         queue_storage_write = semantic_queue._async_agfs.write
 
         async def reject_overview_enqueue(path, *args, **kwargs):
-            if path == f"{semantic_queue.path}/enqueue":
+            if path == f"{semantic_queue.path}/enqueue_ext":
                 raise OSError("semantic queue storage unavailable")
             return await queue_storage_write(path, *args, **kwargs)
 
@@ -136,7 +136,7 @@ async def test_write_updates_memory_file_and_parent_overview(
         memory_uri, content="Another preference", ctx=ctx, mode="replace", wait=True
     )
     assert result["overview_status"] == "complete"
-    assert await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
+    assert not await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
     assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == raw_abstract
     assert await service.viking_fs.read_file(overview_uri, ctx=ctx) == overview
     load_model.assert_not_awaited()

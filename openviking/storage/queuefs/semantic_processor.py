@@ -485,15 +485,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 or ""
             ),
             # Directory refreshes must not supersede pending file indexing.
-            coalesce_key=(
-                "directory|"
-                + build_semantic_coalesce_key(
-                    context_type=msg.context_type,
-                    uri=parent_uri,
-                    account_id=msg.account_id,
-                    user_id=msg.user_id,
-                    peer_id=msg.peer_id,
-                )
+            coalesce_key=build_semantic_coalesce_key(
+                context_type=msg.context_type,
+                uri=parent_uri,
+                account_id=msg.account_id,
+                user_id=msg.user_id,
+                peer_id=msg.peer_id,
+                directory_only=True,
             ),
         )
         with detach_task_context():
@@ -568,7 +566,8 @@ class SemanticProcessor(DequeueHandlerBase):
         execute_status = "ok"
         breaker = None
         syncing_source = False
-        uses_model = msg.generation_trigger != "memory_update"
+        memory_update = msg.generation_trigger == "memory_update"
+        uses_model = not memory_update
         try:
             if uses_model:
                 breaker = self._account_breaker(msg.account_id)
@@ -612,6 +611,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     )
                     await work.skip()
                     await self._cleanup_local_artifact(msg)
+                    if memory_update:
+                        return ProcessResult.success({"skipped": True})
                     return ProcessResult.success()
             # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
@@ -834,6 +835,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 run_uri,
                                 dag_stats,
                             )
+                            if executor.stale and memory_update:
+                                processing_succeeded = True
+                                return ProcessResult.success({"skipped": True})
                             if not executor.stale and defer_directory_refresh:
                                 # The shared directory task reads committed file abstracts.
                                 await work._wait_for_embedding_work(
@@ -1487,6 +1491,7 @@ class SemanticProcessor(DequeueHandlerBase):
             config=config.semantic,
             language=language,
             complete=complete,
+            max_concurrent_llm=self.max_concurrent_llm,
             total_entries=total_entries,
             navigation_renderer=navigation_renderer,
             preset_abstract=preset_abstract,

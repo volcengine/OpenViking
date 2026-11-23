@@ -37,6 +37,7 @@ async def test_directory_generation_uses_the_same_summary_for_l0_and_l1():
         config=SemanticConfig(abstract_max_chars=17),
         language="en",
         complete=complete,
+        max_concurrent_llm=2,
     )
     assert result.abstract == first_sentence
     assert f"\n\n{full_abstract}\n\n" in result.overview
@@ -81,6 +82,7 @@ async def test_manual_l0_survives_generation_and_rejects_public_metadata_changes
         config=SemanticConfig(),
         language="en",
         complete=complete,
+        max_concurrent_llm=2,
     )
     complete.assert_not_awaited()
     assert result.abstract == "Curated description."
@@ -133,6 +135,7 @@ async def test_overview_truncates_an_overlong_summary_and_keeps_the_access_guide
         config=config,
         language="en",
         complete=AsyncMock(return_value=full_abstract),
+        max_concurrent_llm=2,
     )
     assert result.abstract == abstract
     assert len(result.overview) <= config.overview_max_chars
@@ -157,6 +160,7 @@ async def test_empty_directory_skips_model_and_renders_navigation():
         config=SemanticConfig(),
         language="zh-CN",
         complete=complete,
+        max_concurrent_llm=2,
     )
     complete.assert_not_awaited()
     assert result.abstract == ""
@@ -166,19 +170,22 @@ async def test_empty_directory_skips_model_and_renders_navigation():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response", ["", RuntimeError("model unavailable")])
-async def test_generation_failure_is_not_published_as_placeholder(response):
+async def test_generation_failure_uses_a_placeholder(response):
     complete = (
         AsyncMock(side_effect=response)
         if isinstance(response, Exception)
         else AsyncMock(return_value=response)
     )
-    with pytest.raises((ValueError, RuntimeError)):
-        await generate_directory_semantics(
-            "viking://resources/docs",
-            {"a.md": {"kind": "file", "summary": "Summary."}},
-            previous=None,
-            total_entries=1,
-            config=SemanticConfig(),
-            language="en",
-            complete=complete,
-        )
+    result = await generate_directory_semantics(
+        "viking://resources/docs",
+        {"a.md": {"kind": "file", "summary": "Summary."}},
+        previous=None,
+        total_entries=1,
+        config=SemanticConfig(),
+        language="en",
+        complete=complete,
+        max_concurrent_llm=2,
+    )
+    assert result.abstract == "[Directory overview is not generated]"
+    assert result.abstract in result.overview
+    assert "[a.md]" in result.overview

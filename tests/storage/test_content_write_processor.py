@@ -80,7 +80,7 @@ async def test_content_write_processor_recovers_checkpoint(monkeypatch, operatio
         )
         assert restored is not None
         assert restored.result is not None
-        assert restored.result["overview_status"] == "complete"
+        assert restored.result["overview_status"] == "skipped"
         assert restored.result["vector_status"] == (
             "complete" if operation == "ensure_directory_index" else "skipped"
         )

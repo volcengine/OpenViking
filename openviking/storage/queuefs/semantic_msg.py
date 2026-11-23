@@ -19,8 +19,10 @@ def build_semantic_coalesce_key(
     account_id: str = "default",
     user_id: str = "default",
     peer_id: str = "default",
+    directory_only: bool = False,
 ) -> str:
-    return "|".join([context_type, account_id, user_id, peer_id, uri.rstrip("/")])
+    key = "|".join([context_type, account_id, user_id, peer_id, uri.rstrip("/")])
+    return f"directory|{key}" if directory_only else key
 
 
 @dataclass

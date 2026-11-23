@@ -4,6 +4,7 @@
 
 import threading
 import time
+from hashlib import sha256
 from typing import Optional
 
 from openviking.observability.log_safety import safe_uri_for_log
@@ -86,7 +87,11 @@ class SemanticQueue(NamedQueue):
 
         msg.queue_enqueued_at = time.time()
 
-        return await super().enqueue(msg.to_dict())
+        serial_key = None
+        if msg.generation_trigger == "memory_update" and msg.coalesce_key:
+            # Let QueueFS wait for the active refresh to release its sidecar lease.
+            serial_key = sha256(msg.coalesce_key.encode()).hexdigest()
+        return await super().enqueue(msg.to_dict(), serial_key=serial_key)
 
     async def _enqueue(self, ctx: EnqueueContext) -> str:
         # Settle persistence and publication together on cancellation; middleware
