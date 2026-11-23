@@ -11,12 +11,13 @@ import hmac
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timezone
+from functools import lru_cache
 from typing import AsyncGenerator
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy import and_, bindparam, case, delete, func, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -149,6 +150,34 @@ def _utc_isoformat(value) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+@lru_cache(maxsize=2)
+def _deletion_statement(has_user: bool):
+    """Cache query structure; deletion fences remain live database reads."""
+    columns = [
+        Account.deletion_task_id,
+        Account.deletion_owner_account_id,
+        Account.deletion_owner_user_id,
+    ]
+    if has_user:
+        columns.extend(
+            [User.deletion_task_id, User.deletion_owner_account_id, User.deletion_owner_user_id]
+        )
+    statement = select(*columns).select_from(Account)
+    if has_user:
+        statement = statement.outerjoin(
+            User,
+            and_(
+                User.service_name == Account.service_name,
+                User.account_pk == Account.account_pk,
+                User.user_id == bindparam("deletion_user_id"),
+            ),
+        )
+    return statement.where(
+        Account.service_name == bindparam("deletion_service_name"),
+        Account.account_id == bindparam("deletion_account_id"),
+    )
 
 
 @sql_runtime_store
@@ -855,38 +884,28 @@ class SQLAccountStore(AccountStore):
     async def get_deletion(
         self, account_id: str, user_id: str | None = None
     ) -> DeletionRecord | None:
-        if user_id is None:
-            async with self._session_factory() as session:
-                account = await session.scalar(
-                    select(Account).where(
-                        Account.service_name == self._service_name,
-                        Account.account_id == account_id,
-                    )
-                )
-            return _deletion(account) if account else None
-
-        async with self._session_factory() as session:
-            row = (
-                await session.execute(
-                    select(Account, User)
-                    .outerjoin(
-                        User,
-                        and_(
-                            User.service_name == Account.service_name,
-                            User.account_pk == Account.account_pk,
-                            User.user_id == user_id,
-                        ),
-                    )
-                    .where(
-                        Account.service_name == self._service_name,
-                        Account.account_id == account_id,
-                    )
-                )
-            ).one_or_none()
+        statement = _deletion_statement(user_id is not None)
+        parameters = {
+            "deletion_service_name": self._service_name,
+            "deletion_account_id": account_id,
+        }
+        if user_id is not None:
+            parameters["deletion_user_id"] = user_id
+        assert self._engine is not None
+        connection = await self._engine.connect()
+        try:
+            if self._url.drivername == "postgresql+psycopg":
+                await connection.execution_options(isolation_level="AUTOCOMMIT")
+            row = (await connection.execute(statement, parameters)).one_or_none()
+        finally:
+            await wait_sql_cleanup(connection.close())
         if row is None:
             return None
-        account, user = row
-        return _deletion(account) or (_deletion(user) if user else None)
+        if row[0] is not None:
+            return DeletionRecord(task_id=row[0], owner_account_id=row[1], owner_user_id=row[2])
+        if user_id is not None and row[3] is not None:
+            return DeletionRecord(task_id=row[3], owner_account_id=row[4], owner_user_id=row[5])
+        return None
 
     async def iter_deletions(self) -> list[tuple[str, str | None, DeletionRecord]]:
         async with self._session_factory() as session:

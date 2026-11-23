@@ -425,3 +425,84 @@ async def test_pg_missing_schema_fails_without_ddl_or_runtime_lease(pg_database)
         await store.load()
     assert store._engine is None and not store._sql_lease
     await store.close()
+
+
+async def test_pg_deletion_live_parameters_isolation_and_account_precedence(pg_database):
+    params, _, _, _ = pg_database
+    service = "deletion-" + uuid4().hex
+    stores = [
+        PostgresAccountStore(service_name=name, params={**params, "maxsize": 1})
+        for name in (service, service, service + "-other")
+    ]
+    writer, peer, other = stores
+    await asyncio.gather(*(store.load() for store in stores))
+    try:
+        for store in (writer, other):
+            await store.create_account("acme", "admin")
+            await store.create_user("acme", "alice", "user")
+            await store.create_user("acme", "bob", "user")
+        await writer.create_account("second", "admin")
+        owner = {"owner_account_id": "acme", "owner_user_id": "admin"}
+        assert await peer.get_deletion("acme", "alice") is None
+        await writer.begin_deletion("acme", "alice", task_id="alice-task", **owner)
+        for _ in range(2):
+            assert (await peer.get_deletion("acme", "alice"))["task_id"] == "alice-task"
+            assert await peer.get_deletion("acme", "bob") is None
+            assert await peer.get_deletion("acme") is None
+            assert await peer.get_deletion("second", "alice") is None
+            assert await peer.get_deletion("missing", "alice") is None
+            assert await other.get_deletion("acme", "alice") is None
+        await writer.replace_deletion_task(
+            "acme", "alice", expected_task_id="alice-task", task_id="new-task", **owner
+        )
+        assert (await peer.get_deletion("acme", "alice"))["task_id"] == "new-task"
+        await writer.begin_deletion("acme", None, task_id="account-task", **owner)
+        for user in (None, "alice", "bob", "missing"):
+            assert await peer.get_deletion("acme", user) == {"task_id": "account-task", **owner}
+        assert await writer.finish_deletion("acme", None, "account-task")
+        assert await peer.get_deletion("acme", "alice") is None
+    finally:
+        await asyncio.gather(*(store.close() for store in stores))
+
+
+async def test_pg_deletion_autocommit_pool_restores_write_transactions(pg_database):
+    from sqlalchemy import event, insert
+
+    params, _, _, _ = pg_database
+    store = PostgresAccountStore(
+        service_name="deletion-pool-" + uuid4().hex, params={**params, "maxsize": 1}
+    )
+    await store.load()
+    observed = []
+
+    def inspect_read(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("SELECT") and "ov_accounts.deletion_task_id" in statement:
+            observed.append(conn.connection.dbapi_connection.autocommit)
+
+    event.listen(store._engine.sync_engine, "before_cursor_execute", inspect_read)
+    try:
+        assert await store.get_deletion("missing") is None
+        assert await store.get_deletion("missing", "alice") is None
+        assert observed == [True, True]
+
+        async def aborted_write():
+            async with store._session_factory() as session:
+                async with session.begin():
+                    connection = await session.connection()
+                    raw = await connection.get_raw_connection()
+                    assert raw.driver_connection.autocommit is False
+                    await session.execute(
+                        insert(Account).values(
+                            service_name=store._service_name, account_id="aborted"
+                        )
+                    )
+                    raise RuntimeError("abort after deletion query")
+
+        with pytest.raises(RuntimeError, match="abort after deletion query"):
+            await store._sql_runtime.run(aborted_write)
+        assert await store.get_account("aborted") is None
+        await store.create_account("committed", "admin")
+        assert await store.get_account("committed") is not None
+    finally:
+        event.remove(store._engine.sync_engine, "before_cursor_execute", inspect_read)
+        await store.close()
