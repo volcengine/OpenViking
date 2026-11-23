@@ -506,16 +506,6 @@ class _FakeWatchManager:
         return [SimpleNamespace(task_id="watch-1")]
 
 
-class _FakeResourceMemoryLinkService:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
-
-    async def before_resource_delete(self, *, ctx, resource_uri, recursive=False):
-        self.calls.append({"ctx": ctx, "resource_uri": resource_uri, "recursive": recursive})
-        return self.result
-
-
 class _FakeQueueManager:
     SEMANTIC = "semantic"
 
@@ -1865,18 +1855,11 @@ async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(request_context):
+async def test_resource_rm_does_not_refresh_parent_if_resource_delete_fails(request_context):
     delete_error = RuntimeError("delete failed")
     viking_fs = _FakeVikingFS(rm_error=delete_error)
-    cleanup = {
-        "status": "success",
-        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/越前龙马.md"],
-    }
-    link_service = _FakeResourceMemoryLinkService(cleanup)
-    service = FSService(
-        viking_fs=viking_fs,
-        resource_memory_link_service=link_service,
-    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_delete_refresh = AsyncMock()
 
     with pytest.raises(RuntimeError, match="delete failed"):
         await service.rm(
@@ -1885,7 +1868,7 @@ async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(requ
             recursive=True,
         )
 
-    assert link_service.calls == []
+    service._enqueue_delete_refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1897,19 +1880,8 @@ async def test_resource_rm_skips_memory_reference_cleanup(
     recursive,
     wait,
 ):
-    cleanup = {
-        "status": "success",
-        "memory_uris": ["viking://user/ryoma/memories/entities/动漫角色/不二周助-write-test.md"],
-        "deleted_memory_uris": [
-            "viking://user/ryoma/memories/entities/动漫角色/不二周助-link-test2.md"
-        ],
-    }
     viking_fs = _FakeVikingFS(is_dir=recursive)
-    link_service = _FakeResourceMemoryLinkService(cleanup)
-    service = FSService(
-        viking_fs=viking_fs,
-        resource_memory_link_service=link_service,
-    )
+    service = FSService(viking_fs=viking_fs)
     service._enqueue_delete_refresh = AsyncMock(return_value=fs_module.FreshnessAction.REFRESH_NOW)
     service._wait_for_refresh = AsyncMock(return_value={})
 
@@ -1926,7 +1898,6 @@ async def test_resource_rm_skips_memory_reference_cleanup(
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
     result = await service.rm(uri, ctx=request_context, recursive=recursive, wait=wait)
 
-    assert link_service.calls == []
     assert refreshed == []
     assert "memory_cleanup" not in result
     assert viking_fs.rm_calls[0]["uri"] == uri

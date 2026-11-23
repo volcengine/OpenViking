@@ -677,7 +677,6 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
-            resource_memory_link_service=self._resource_memory_link_service,
             watch_manager=self._watch_manager,
         )
         self._pack_service.set_dependencies(
