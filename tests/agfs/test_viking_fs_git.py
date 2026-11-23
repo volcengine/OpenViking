@@ -8,6 +8,7 @@ double-encryption invariant called out in the design doc.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -448,6 +449,8 @@ async def test_restore_resumes_only_safe_pending_paths(
 
         blocked.chmod(0o500)
         try:
+            if os.access(blocked, os.W_OK):
+                pytest.skip("The filesystem must enforce the read-only directory mode")
             with pytest.raises(GitRestoreWritebackPartialError) as error:
                 await vfs.restore(**params)
         finally:

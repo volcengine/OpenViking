@@ -111,6 +111,33 @@
     }
 
     #[tokio::test]
+    async fn test_restore_writeback_refs_are_not_snapshot_targets() {
+        let (_dir, _vfs, _object_store, ref_store, svc) = make_service("acct");
+        let key = "refs/ov-restore/completed";
+        let marker = ObjectId::null(gix_hash::Kind::Sha1);
+        ref_store.cas_update("acct", key, None, marker).await.unwrap();
+
+        for (target, abbreviated) in [(key, false), ("000000000000", true)] {
+            let err = svc
+                .show(ShowRequest {
+                    account: "acct".into(),
+                    target_ref: target.into(),
+                    path: None,
+                })
+                .await
+                .unwrap_err();
+            if abbreviated {
+                assert!(matches!(err, GitError::OidPrefixNotFound { .. }), "{err}");
+            } else {
+                assert!(
+                    matches!(err, GitError::RefStore(RefStoreError::NotFound(_))),
+                    "{err}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_short_oid_three_chars_falls_through_to_ref_lookup() {
         // 3 hex chars is below the 4-char floor for abbreviated OID; it
         // should be treated as a branch name (which doesn't exist), giving
