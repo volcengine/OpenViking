@@ -796,7 +796,7 @@ async def test_wm_creation_passes_configured_output_language_to_prompt(client, m
         [_text_message("zh-user", "user", "请总结当前部署状态")]
     )
 
-    assert result == "# Working Memory"
+    assert result.overview == "# Working Memory"
     assert len(prompts) == 1
     assert "zh-CN" in prompts[0]["prompt"]
 
@@ -831,7 +831,7 @@ async def test_wm_creation_detects_language_from_multiline_user_message(client, 
         ]
     )
 
-    assert result == "# Working Memory"
+    assert result.overview == "# Working Memory"
     assert len(prompts) == 1
     assert "zh-CN" in prompts[0]["prompt"]
 
@@ -874,11 +874,11 @@ async def test_wm_creation_retries_over_budget_summary_with_reasoning_effort(
     )
 
     if not retry_enabled:
-        assert result == outputs[0]
+        assert result.overview == outputs[0]
         assert len(calls) == 1
         assert calls[0]["reasoning_effort"] == "low"
         return
-    assert result == "final compact summary"
+    assert result.overview == "final compact summary"
     from openviking.utils.token_estimation import estimate_text_tokens
 
     assert calls[0]["max_tokens"] == 10000 - estimate_text_tokens(calls[0]["prompt"]) - 4

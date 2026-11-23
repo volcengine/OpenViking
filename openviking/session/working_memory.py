@@ -22,13 +22,12 @@ import re
 from functools import cache
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
-from jinja2 import TemplateError
 from yaml import YAMLError
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.observability.log_safety import short_hash
-from openviking.prompts.manager import PromptManager, get_manager
+from openviking.prompts.manager import PromptManager
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.retention import UserTurn, build_turns
 from openviking.utils.time_utils import parse_iso_datetime
@@ -87,7 +86,7 @@ def wm_debug(msg: str, *args: Any) -> None:
 
 WM_DOCUMENT_TITLE = "# Working Memory"
 WM_CREATE_PROMPT_ID = "compression.ov_wm_v2"
-WM_TEMPLATE_DESCRIPTIONS_KEY = "wm_template_descriptions"
+WM_TEMPLATE_DESCRIPTIONS_KEY = "wm_rendered_template_descriptions"
 
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
@@ -366,21 +365,61 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
 
 _WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
 _WM_BOLD_LABEL_RE = re.compile(r"^\*\*[^*]+\*\*:\s*")
+_WM_DESCRIPTION_DIRECTIVE_RE = re.compile(
+    r"^(?:please\s+(?:describe|record|summari[sz]e|write|list|include|provide)\b"
+    r"|(?:describe|summari[sz]e)\s+the\b"
+    r"|(?:describe|record|summari[sz]e|write|list|include|provide)\s+"
+    r"(?:the\s+)?(?:latest|current|session|conversation)\b"
+    r"|请(?:描述|记录|总结|概括|填写|列出|说明|简述))",
+    re.IGNORECASE,
+)
 
 
-def _wm_template_descriptions(template: str) -> dict[str, str]:
-    _, _, example = f"\n{template}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
+def _wm_section_first_lines(text: str) -> dict[str, str]:
     return {
         header: body.partition("\n")[0].strip()
-        for header, body in parse_wm_sections(example).items()
+        for header, body in parse_wm_sections(text).items()
         if body and header.removeprefix("## ") in WM_SEVEN_SECTIONS
     }
+
+
+def _wm_template_example(prompt: str) -> str:
+    _, _, example = f"\n{prompt}".rpartition(f"\n{WM_DOCUMENT_TITLE}\n")
+    return example
 
 
 @cache
 def _bundled_wm_template_descriptions() -> dict[str, str]:
     manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
-    return _wm_template_descriptions(manager.load_template(WM_CREATE_PROMPT_ID).template)
+    return _wm_section_first_lines(
+        _wm_template_example(manager.load_template(WM_CREATE_PROMPT_ID).template)
+    )
+
+
+def _wm_instruction_lines(text: str) -> dict[str, str]:
+    try:
+        bundled = _bundled_wm_template_descriptions()
+    except (OSError, ValueError, YAMLError):
+        bundled = {}
+    # Overrides may use plain text or emphasis for directions. Both styles
+    # can also contain real status, so formatting alone is insufficient.
+    return {
+        header: line
+        for header, line in _wm_section_first_lines(text).items()
+        if line == bundled.get(header) or _WM_DESCRIPTION_DIRECTIVE_RE.match(line.strip("*_"))
+    }
+
+
+def rendered_wm_template_descriptions(prompt: str) -> dict[str, str]:
+    """Identify directions in the actual rendered creation example."""
+    return _wm_instruction_lines(_wm_template_example(prompt))
+
+
+def recover_wm_template_descriptions(text: str) -> dict[str, str]:
+    """Recover recognizable directions from an archive without reliable metadata."""
+    if text.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
+        return {}
+    return _wm_instruction_lines(text)
 
 
 def wm_output_language(messages: list[Message], output_language_override: str | None = None) -> str:
@@ -397,33 +436,15 @@ def wm_output_language(messages: list[Message], output_language_override: str | 
     )
 
 
-def match_wm_template_descriptions(
-    text: str, previous: Mapping[str, str], *, output_language: str = "en"
-) -> dict[str, str]:
-    """Identify fixed descriptions that appear in the first line of their own section."""
+def match_wm_template_descriptions(text: str, *sources: Mapping[str, str]) -> dict[str, str]:
+    """Keep known directions still present in the first line of their own section."""
     if text.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
         return {}
-
-    try:
-        bundled = _bundled_wm_template_descriptions()
-    except (OSError, ValueError, YAMLError):
-        bundled = {}
-    try:
-        # Fixed descriptions may use the output language. Keep conversation and prior
-        # overview text out of the rendered example used for matching.
-        prompt = get_manager().render(
-            WM_CREATE_PROMPT_ID, {"messages": "", "output_language": output_language}
-        )
-        active = _wm_template_descriptions(prompt)
-    except (OSError, ValueError, YAMLError, TemplateError):
-        active = {}
-
-    matches = {}
-    for header, body in parse_wm_sections(text).items():
-        first_line = body.partition("\n")[0].strip()
-        if first_line in (previous.get(header), active.get(header), bundled.get(header)):
-            matches[header] = first_line
-    return matches
+    return {
+        header: line
+        for header, line in _wm_section_first_lines(text).items()
+        if any(line == source.get(header) for source in sources)
+    }
 
 
 def _first_wm_abstract_line(body: str) -> str:
@@ -447,7 +468,7 @@ def extract_wm_abstract(text: str, descriptions: Mapping[str, str] | None = None
     if not lines or lines[0].strip() != WM_DOCUMENT_TITLE:
         return None
     if descriptions is None:
-        descriptions = match_wm_template_descriptions(text, {})
+        descriptions = recover_wm_template_descriptions(text)
 
     body = "\n".join(lines[1:])
     sections = parse_wm_sections(body)
