@@ -237,7 +237,10 @@ def _t_hidden(items: int) -> str:
 
 
 def _t_budget(last_id: str, next_id: str) -> str:
-    return f"Scan budget used up: searched up to {last_id}; {next_id} and newer were not searched."
+    return (
+        f"Scan budget used up: searched up to {last_id}; {next_id} and newer were not "
+        f'searched. Continue with from_id="{next_id}".'
+    )
 
 
 def _t_zero_hits(

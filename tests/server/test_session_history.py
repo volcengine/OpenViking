@@ -715,7 +715,10 @@ async def test_budget_cut_search_keeps_the_phrase_and_continues(service, monkeyp
     assert "no exact phrase match" not in text
     assert 'No match for "alpha beta" in the searched range' in text
     assert "No item contains all of the words either" not in text
-    assert f"Scan budget used up: searched up to {h}#2; {h}#3 and newer were not searched." in text
+    assert (
+        f"Scan budget used up: searched up to {h}#2; {h}#3 and newer were not searched. "
+        f'Continue with from_id="{h}#3".'
+    ) in text
     hops = 0
     while not _ids(text):
         next_id = re.search(r"; (\S+) and newer were not searched\.", text).group(1)
