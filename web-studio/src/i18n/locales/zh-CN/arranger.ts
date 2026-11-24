@@ -42,7 +42,7 @@ const arranger = {
   fields: {
     arguments: '预置参数',
     description: '描述',
-    mountNamePlaceholder: 'status.md',
+    mountNamePlaceholder: 'status',
     name: '名称',
     optional: '选填',
     required: '必填',

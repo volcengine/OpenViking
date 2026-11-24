@@ -43,7 +43,7 @@ const arranger = {
   fields: {
     arguments: 'Preset arguments',
     description: 'Description',
-    mountNamePlaceholder: 'status.md',
+    mountNamePlaceholder: 'status',
     name: 'Name',
     optional: 'Optional',
     required: 'Required',

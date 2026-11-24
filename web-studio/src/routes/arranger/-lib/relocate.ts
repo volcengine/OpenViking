@@ -72,6 +72,7 @@ async function children(uri: string): Promise<VikingFsEntry[]> {
 
 /** Preflight the entire subtree before making any changes; never retry writes. */
 export async function relocateResource(options: {
+  mount?: MountInput
   rootUri: string
   source: VikingFsEntry
   target: string
@@ -127,11 +128,12 @@ export async function relocateResource(options: {
         mount: {
           arguments: config.arguments || {},
           description: config.description,
-          node_uri: nodeUri,
           tags: indexed?.tags,
           timeout_seconds: config.timeout_seconds ?? 60,
           title: config.title || nameFromVikingUri(uri),
           tool_uri: config.tool_uri,
+          ...(uri === source ? options.mount : undefined),
+          node_uri: nodeUri,
         },
       })
     } else {

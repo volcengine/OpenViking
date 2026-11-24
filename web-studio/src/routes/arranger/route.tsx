@@ -115,6 +115,7 @@ import type { SchemaFormObject } from './-lib/schema'
 import {
   isWithinRoot,
   joinVikingUri,
+  LIVE_CONTEXT_EXTENSION,
   nameFromVikingUri,
   normalizeVikingUri,
   parentVikingUri,
@@ -1410,7 +1411,19 @@ function ActionDialog({
         ) {
           throw new Error(t('validation.invalidTimeout'))
         }
-        await mountLiveContext(input)
+        if (
+          action.source &&
+          input.node_uri !== normalizeVikingUri(action.source.uri)
+        ) {
+          await relocateResource({
+            mount: input,
+            rootUri,
+            source: action.source,
+            target: input.node_uri,
+          })
+        } else {
+          await mountLiveContext(input)
+        }
         await onComplete(input.node_uri)
         return
       }
@@ -1488,16 +1501,36 @@ function ActionDialog({
             action.kind === 'rename' ||
             action.kind === 'mount') && (
             <Field label={t('fields.name')} required>
-              <Input
-                value={name}
-                readOnly={action.kind === 'mount' && Boolean(action.source)}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={
-                  action.kind === 'mount'
-                    ? t('fields.mountNamePlaceholder')
-                    : undefined
-                }
-              />
+              <div className="relative">
+                <Input
+                  value={
+                    action.kind === 'mount'
+                      ? name.replace(/\.md\s*$/i, '')
+                      : name
+                  }
+                  onChange={(event) =>
+                    setName(
+                      action.kind === 'mount'
+                        ? event.target.value.replace(/\.md\s*$/i, '')
+                        : event.target.value,
+                    )
+                  }
+                  placeholder={
+                    action.kind === 'mount'
+                      ? t('fields.mountNamePlaceholder')
+                      : undefined
+                  }
+                  className={cn(action.kind === 'mount' && 'pr-14')}
+                />
+                {action.kind === 'mount' && (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md border-l border-input bg-muted/50 px-3 text-sm text-muted-foreground"
+                  >
+                    {LIVE_CONTEXT_EXTENSION}
+                  </span>
+                )}
+              </div>
             </Field>
           )}
           {(action.kind === 'copy' || action.kind === 'move') && (

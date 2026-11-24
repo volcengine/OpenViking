@@ -2,6 +2,8 @@ import i18n from '#/i18n/core'
 
 const VIKING_URI = /^viking:\/\/([a-zA-Z0-9._-]+)(?:\/(.*))?$/
 
+export const LIVE_CONTEXT_EXTENSION = '.md'
+
 export function normalizeVikingUri(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, '')
   const match = VIKING_URI.exec(trimmed)
@@ -81,9 +83,13 @@ export function resolveMountNodeUri(
   name: string,
   existingUri?: string,
 ): string {
-  return existingUri
-    ? normalizeVikingUri(existingUri)
-    : joinVikingUri(parentUri, name)
+  const uri = joinVikingUri(
+    existingUri ? parentVikingUri(existingUri) : parentUri,
+    name,
+  )
+  return uri.toLowerCase().endsWith(LIVE_CONTEXT_EXTENSION)
+    ? uri
+    : `${uri}${LIVE_CONTEXT_EXTENSION}`
 }
 
 export function assertMutationBoundary(
