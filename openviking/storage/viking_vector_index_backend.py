@@ -2885,7 +2885,17 @@ class VikingVectorIndexBackend:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)
         root_backend = await self.get_account_backend(account_id)
-        return await root_backend.delete_by_filter(Eq("account_id", account_id))
+        deleted = await root_backend.delete_by_filter(Eq("account_id", account_id))
+        try:
+            # Catalog is separate from vectors locally and hidden from ordinary
+            # VikingDB queries. Clear its entire account scope before completion.
+            await root_backend._async_adapter.call(
+                "catalog_execute", {"op": "delete_subtree", "scope": account_id, "uri": "/"}
+            )
+        except NotImplementedError:
+            # Backends without Catalog cannot contain Item declarations.
+            pass
+        return deleted
 
     async def delete_user_data(
         self,

@@ -135,8 +135,6 @@ class VikingDBCatalog:
             "/api/vikingdb/data/search/scalar",
             self._body(
                 index_name=self.collection.catalog_index_name,
-                field="id",
-                order="asc",
                 filter=_and(_eq("account_id", [scope]), _eq("level", [CATALOG_LEVEL]), condition),
                 **kwargs,
             ),
@@ -192,18 +190,18 @@ class VikingDBCatalog:
         pending = dict(expected)
         delay = 0.1
         while pending:
-            keys = list(pending)
-            for start in range(0, len(keys), _BATCH_SIZE):
-                ids = keys[start : start + _BATCH_SIZE]
+            uris = list(pending)
+            for start in range(0, len(uris), _BATCH_SIZE):
+                batch = uris[start : start + _BATCH_SIZE]
                 page = self._search(
                     scope,
-                    _eq("id", ids),
+                    {**_eq("uri", batch), "para": "-d=0"},
                     limit=_BATCH_SIZE,
                     output_fields=["id", "uri", "item_uuids", "item_attrs"],
                 )
                 indexed = {str(item["id"]): item.get("fields", {}) for item in page}
-                for key in ids:
-                    row, visible = pending[key], indexed.get(key)
+                for uri in batch:
+                    row, visible = pending[uri], indexed.get(_id(scope, uri))
                     if row is None:
                         matches = visible is None
                     else:
@@ -218,7 +216,7 @@ class VikingDBCatalog:
                             and visible.get("item_attrs") == row.get("item_attrs")
                         )
                     if matches:
-                        pending.pop(key)
+                        pending.pop(uri)
             if pending:
                 if time.monotonic() >= deadline:
                     raise VikingDBException(
@@ -280,7 +278,9 @@ class VikingDBCatalog:
         added = [_id(scope, _uri(uri)) for uri in undo["added_uris"]]
         self._write(rows)
         self._delete(scope, added)
-        self._wait_visible(scope, {**dict.fromkeys(added), **{r["id"]: r for r in rows}})
+        self._wait_visible(
+            scope, {**dict.fromkeys(undo["added_uris"]), **{r["uri"]: r for r in rows}}
+        )
 
     def _move_subtree(self, scope: str, source: str, target: str) -> dict[str, Any]:
         if source == target:
@@ -332,7 +332,13 @@ class VikingDBCatalog:
         try:
             self._write(list(moved.values()))
             self._delete(scope, source_ids)
-            self._wait_visible(scope, {**dict.fromkeys(source_ids), **moved})
+            self._wait_visible(
+                scope,
+                {
+                    **{previous[key]["uri"]: None for key in source_ids},
+                    **{row["uri"]: row for row in moved.values()},
+                },
+            )
         except Exception:
             self._restore(scope, undo)
             raise
@@ -477,7 +483,7 @@ class VikingDBCatalog:
             else:
                 own = {**own, "item_uuids": ids, "item_attrs": attrs}
                 self._write([own])
-            self._wait_visible(scope, {own["id"]: own})
+            self._wait_visible(scope, {uri: own})
             return {
                 "uri": uri,
                 "item_uuid": own["item_uuids"][0],
@@ -504,6 +510,7 @@ class VikingDBCatalog:
                 r["id"] for r in rows if not (request.get("preserve_item_root") and r["uri"] == uri)
             ]
             self._delete(scope, ids)
-            self._wait_visible(scope, dict.fromkeys(ids))
+            deleted_ids = set(ids)
+            self._wait_visible(scope, {r["uri"]: None for r in rows if r["id"] in deleted_ids})
             return {}
         raise NotImplementedError(f"VikingDB Catalog operation is not supported: {op}")

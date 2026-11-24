@@ -143,7 +143,7 @@ Item 模式只支持 list 结果，不支持 `read_content`、`include_provenanc
 
 预建 collection 时使用 `ShardBy="account_id"`，并包含 OV 标准字段。其中 `uri` 类型为 `path`，`item_uuids` 为挂载到 `uri` 的 `list<string>`，`item_attrs` 为普通、不继承的 `list<string>`。字段模式不能通过 find／search 按请求切换，也不会由 OV 自动修改旧 collection。声明管理支持 shadow／union。当前平台 `group_by` 协议仅接受 union，shadow 分组及纯过滤 Item 查询返回 `501 UNIMPLEMENTED`。
 
-普通查询不增加 Item 探测或存储请求。对按账号分片的 collection，VikingDB 检索请求用 `partition` 传账号 ID 字符串，并保留账号和权限过滤。点操作使用 `partition_by`。无 `item_attrs` 条件时，Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。带属性条件时，仅查询该 account 的声明，将每个根属性条件转换为有效 UUID 条件，再交给平台过滤和计分。否定条件可能需要读取该 account 的全部声明。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。
+普通查询不增加 Item 探测或存储请求。对按账号分片的 collection，VikingDB 检索和聚合请求用 `partition` 传账号 ID 字符串，并保留账号和权限过滤。点操作使用 `partition_by`。无 `item_attrs` 条件时，Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。带属性条件时，仅查询该 account 的声明，将每个根属性条件转换为有效 UUID 条件，再交给平台过滤和计分。否定条件可能需要读取该 account 的全部声明。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。
 
 ## 检索流程
 

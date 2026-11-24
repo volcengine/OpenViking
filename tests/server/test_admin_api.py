@@ -2660,6 +2660,78 @@ async def test_identity_settings_refreshes_a_stale_registry_on_demand(
     await writer.close()
 
 
+@pytest.mark.parametrize("catalog_failure", [False, True])
+async def test_account_deletion_clears_persistent_item_catalog(
+    admin_client, admin_app, admin_service, monkeypatch, catalog_failure
+):
+    from openviking.storage.vectordb.engine import CatalogEngine
+
+    account, other = _uid(), _uid()
+    for account_id in (account, other):
+        response = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": account_id, "admin_user_id": "alice"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+    owner = RequestContext(user=UserIdentifier(account, "alice"), role=Role.ADMIN)
+    other_owner = RequestContext(user=UserIdentifier(other, "alice"), role=Role.ADMIN)
+    removed, retained = "viking://resources/removed-item", "viking://resources/retained-item"
+    for uri in (removed, retained):
+        await admin_service.fs.mkdir(uri, owner, as_item=True, item_attrs={"account": account})
+    keep = await admin_service.fs.mkdir(
+        retained, other_owner, as_item=True, item_attrs={"account": other}
+    )
+    await admin_service.fs.rm(removed, owner, recursive=True)
+    vectors = admin_service.viking_fs.vector_store
+    backend = await vectors.get_account_backend(account)
+    adapter = backend._adapter
+    local = adapter.get_collection()._Collection__collection
+    catalog_path = local._catalog_path
+    original = adapter.catalog_execute
+
+    def fail_cleanup(request):
+        if request["op"] == "delete_subtree" and request["scope"] == account:
+            raise RuntimeError("Catalog cleanup unavailable")
+        return original(request)
+
+    if catalog_failure:
+        monkeypatch.setattr(adapter, "catalog_execute", fail_cleanup)
+    response = await admin_client.delete(
+        f"/api/v1/admin/accounts/{account}", headers=root_headers()
+    )
+    assert response.status_code == 202, response.text
+    task = await _wait_for_task(admin_client, response.json()["result"]["task_id"])
+    if catalog_failure:
+        assert task["status"] == "failed", task
+        assert await admin_app.state.api_key_manager.get_account(account) is not None
+        assert (await vectors.catalog_execute({"op": "resolve", "uris": [retained]}, ctx=owner))[
+            "data"
+        ][0]["item_uuid"]
+        monkeypatch.setattr(adapter, "catalog_execute", original)
+        response = await admin_client.delete(
+            f"/api/v1/admin/accounts/{account}", headers=root_headers()
+        )
+        assert response.status_code == 202, response.text
+        task = await _wait_for_task(admin_client, response.json()["result"]["task_id"])
+    assert task["status"] == "completed", task
+    assert await admin_app.state.api_key_manager.get_account(account) is None
+    await admin_service.close()
+    reopened = CatalogEngine(catalog_path)
+    assert reopened.execute({"op": "resolve", "scope": account, "uris": [removed, retained]})[
+        "data"
+    ] == [
+        {"uri": "/resources/removed-item", "item_uuids": []},
+        {"uri": "/resources/retained-item", "item_uuids": []},
+    ]
+    assert (
+        reopened.execute({"op": "resolve", "scope": other, "uris": [retained]})["data"][0][
+            "item_uuid"
+        ]
+        == keep["item_uuid"]
+    )
+
+
 @pytest.mark.parametrize("index_updates_immediately", [True, False])
 async def test_delete_account(
     admin_client, admin_service, admin_app, monkeypatch, index_updates_immediately
@@ -2705,7 +2777,8 @@ async def test_delete_account(
         for record_id in ids:
             rows.pop(record_id, None)
 
-    adapter._collection = SimpleNamespace(delete_data=delete_data)
+    adapter._collection = SimpleNamespace(delete_data=delete_data, close=lambda: None)
+    adapter.catalog_execute = lambda request: {}
     scan_rows = rows if index_updates_immediately else indexed_rows
     adapter.query = lambda *, filter, limit, offset=0, **kwargs: list(
         islice(

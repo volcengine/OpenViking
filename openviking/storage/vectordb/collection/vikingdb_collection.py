@@ -136,7 +136,7 @@ class VikingDBCollection(ICollection):
 
                 scopes = _partition_values(data.get("filter"))
                 scope = scopes.pop() if len(scopes) == 1 else None
-                partition_key = "partition" if is_search else "partition_by"
+                partition_key = "partition"
                 if scope is None or data.get(partition_key, scope) != scope:
                     raise ValueError("VikingDB partitioned queries require one account_id scope")
                 data = {**data, partition_key: scope}

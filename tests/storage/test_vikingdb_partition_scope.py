@@ -21,7 +21,9 @@ class Client:
 
     def do_req(self, method, path, *, req_body):
         self.calls.append((path, req_body))
-        partition_key = "partition" if "/search/" in path else "partition_by"
+        partition_key = (
+            "partition" if "/search/" in path or path.endswith("/agg") else "partition_by"
+        )
         scope = req_body[partition_key]
         result = {"fetch": [{"id": scope, "fields": {"account_id": scope, "uri": "/resources/a"}}]}
         return SimpleNamespace(status_code=200, json=lambda: {"result": result})
@@ -73,15 +75,18 @@ def test_partitioned_point_operations_without_scope_fail_before_io():
 
 
 @pytest.mark.parametrize("shard_key", ["ShardBy", "PartitionBy"])
-def test_ordinary_partitioned_search_adds_routing_without_an_extra_request(shard_key):
+@pytest.mark.parametrize("operation", ["search", "aggregate"])
+def test_ordinary_partitioned_query_adds_routing_without_an_extra_request(shard_key, operation):
     collection = VikingDBCollection(
         "https://unused.invalid",
         meta_data={"CollectionName": "context", shard_key: "account_id"},
     )
     collection.client = Client()
-    collection.search_by_vector(
-        "index", dense_vector=[1, 0], filters={"op": "must", "field": "account_id", "conds": ["a"]}
-    )
+    filters = {"op": "must", "field": "account_id", "conds": ["a"]}
+    if operation == "search":
+        collection.search_by_vector("index", dense_vector=[1, 0], filters=filters)
+    else:
+        collection.aggregate_data("index", filters=filters)
     assert len(collection.client.calls) == 1
     request = collection.client.calls[0][1]
     assert request["partition"] == "a"

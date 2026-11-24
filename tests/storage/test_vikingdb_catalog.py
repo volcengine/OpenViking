@@ -165,7 +165,7 @@ def test_declarations_are_stable_and_separate_from_semantic_upserts(collection):
     )
     assert [r.id for r in result.data] == [record_id]
     assert collection.aggregate_data("catalog-index", filters=account_filter).agg == {"_total": 1}
-    assert collection.client.calls[-1][2]["partition_by"] == "a"
+    assert collection.client.calls[-1][2]["partition"] == "a"
 
 
 @pytest.mark.parametrize("mode,expected", [("union", ["child", "parent"]), ("shadow", ["child"])])
@@ -245,9 +245,9 @@ def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fa
         assert call(collection, "resolve", uris=["/resources/B/kept/hit"])["data"][0][
             "item_uuids"
         ] == ["target-only", moved_uuid]
-        moved_roots = call(
-            collection, "resolve", uris=["/resources/B", "/resources/B/kept"]
-        )["data"]
+        moved_roots = call(collection, "resolve", uris=["/resources/B", "/resources/B/kept"])[
+            "data"
+        ]
         assert [(r["item_uuid"], r["item_root_uri"]) for r in moved_roots] == [
             (moved_uuid, "/resources/B"),
             ("target-only", "/resources/B/kept"),
@@ -314,6 +314,44 @@ def test_other_account_rollback_makes_no_requests(collection):
     with pytest.raises(ValueError, match="different account"):
         call(collection, "restore_move", undo={"scope": "b", "rows": [], "added_uris": []})
     assert collection.client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_account_cleanup_deletes_hidden_catalog_only_in_target_partition(
+    collection, vector_backend_factory
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.vectordb.collection.collection import Collection
+    from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
+        VikingDBPrivateCollectionAdapter,
+    )
+    from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
+    from openviking_cli.session.user_id import UserIdentifier
+    from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+
+    declare(collection, "/resources/A", "a-root")
+    declare(collection, "/resources/A/child", "a-child")
+    declare(collection, "/resources/A", "b-root", scope="b")
+    adapter = VikingDBPrivateCollectionAdapter(
+        host="https://unused.invalid",
+        headers=None,
+        project_name="project",
+        collection_name="context",
+        index_name="catalog-index",
+    )
+    adapter._collection = Collection(collection)
+    config = VectorDBBackendConfig(
+        backend="vikingdb", dimension=2, vikingdb={"host": "https://unused.invalid"}
+    )
+    vectors = vector_backend_factory(config)
+    vectors._resolved_backends["a"] = _SingleAccountBackend(config, "a", shared_adapter=adapter)
+    ctx = RequestContext(user=UserIdentifier("operator", "root"), role=Role.ROOT)
+    await vectors.delete_account_data("a", ctx=ctx)
+    assert call(collection, "resolve", uris=["/resources/A/child"])["data"][0]["item_uuids"] == []
+    assert (
+        call(collection, "resolve", "b", uris=["/resources/A"])["data"][0]["item_uuid"] == "b-root"
+    )
+    assert {row["account_id"] for row in collection.client.rows.values()} == {"b"}
 
 
 @pytest.mark.parametrize(
