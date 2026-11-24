@@ -195,7 +195,7 @@ Select **DingTalk (group bot)** and an owner-capable IM in `ov-superagent setup`
 
 Setup prompts for the app's AppKey, AppSecret (hidden input) and optional RobotCode (defaults to AppKey). It validates the credentials and writes `<dataDir>/dingtalk.json` for the daemon's account. For manual provisioning, create that private file with `clientId`, `clientSecret` and an optional `robotCode`, then include `dingtalk` in `connectors`. To rotate credentials, run `ov-superagent login dingtalk [instance]` for the existing instance.
 
-Mention the bot in a group text message to test delivery. Group replies are Markdown, and native timers can send Markdown to the original group. See [DingTalk delivery and replay](connector-protocol.md#dingtalk) for persistence and age limits.
+Mention the bot in a group text message to test delivery. Group replies are Markdown, and native timers can send Markdown to the original group. See [DingTalk](connector-protocol.md#dingtalk) for message ids and persistence.
 
 ## Managing instances with setup
 

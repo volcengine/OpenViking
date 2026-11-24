@@ -9,11 +9,10 @@ import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { DWClient, TOPIC_ROBOT } from 'dingtalk-stream';
-import { DingTalkClient } from '../src/connectors/dingtalk.mjs';
-import { DingTalkState } from '../src/connectors/dingtalk-state.mjs';
-import { normalizeDingTalkEvent } from '../src/connectors/dingtalk-events.mjs';
+import { DingTalkClient } from '../src/dingtalk/client.mjs';
+import { DingTalkState } from '../src/dingtalk/state.mjs';
+import { normalizeMessage, parseChatId, parseMessageId } from '../src/dingtalk/events.mjs';
 import { invokeOperation } from '../src/connectors/operations.mjs';
-import { normalizeEvent } from '../src/event.mjs';
 import { ConnectorProcess } from '../src/connectors/process.mjs';
 import { ProcessRegistry } from '../src/process-utils.mjs';
 import { ActionService } from '../src/actions/service.mjs';
@@ -87,11 +86,11 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
   });
   beforeCleanup(() => { client.stop(); harness.stop(); store.close(); });
   let event;
-  await client.startSubscription((line) => {
+  client.startSubscription((line) => {
     event = JSON.parse(line);
     harness.handleConnectorEvent(event);
     order.push('EVENT');
-  });
+  }, () => {});
   assert.deepEqual(stream.getConfig().subscriptions, [{ type: 'CALLBACK', topic: TOPIC_ROBOT }]);
   stream.emit(TOPIC_ROBOT, callback());
   stream.emit(TOPIC_ROBOT, callback({ msgId: 'other', isInAtList: false }, 'ignored-delivery'));
@@ -120,20 +119,7 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
     schedule: { type: 'once', run_at: new Date(now + 60_000).toISOString() },
   });
   assert.deepEqual(timer.data.delivery, delivery);
-  await assert.rejects(call('reply_message', {
-    source: 'dingtalk', message_id: 'dtm_dW5rbm93bg', markdown: 'Do not send', decision_id: event.id,
-  }), /original message has no known chat/);
-  store.ingest(normalizeEvent({
-    ...event, connector: 'lark', instance: 'lark', id: 'message:om_foreign',
-    subject: { type: 'message', id: 'om_foreign' },
-    conversation: { ...event.conversation, id: 'oc_foreign' },
-    message: { ...event.message, id: 'om_foreign' },
-    reply_route: null,
-  }));
-  await assert.rejects(call('reply_message', {
-    source: 'dingtalk', message_id: 'om_foreign', markdown: 'Do not send', decision_id: event.id,
-  }), /original message has no known chat/);
-  assert.deepEqual(sends, []);
+  // The message id carries its group: the reply needs no lookup.
   await call('reply_message', { message_id: messageId, markdown: 'Timer created', decision_id: event.id });
 
   now += 60_000;
@@ -164,124 +150,52 @@ test('DingTalk passes group mentions into Harness and routes replies and due tim
   await harness.ingressBarrier;
 });
 
-test('DingTalk persists before ACK and replays interrupted and completed handoffs', async (t) => {
+test('DingTalk commits each message before ACK and hands it to the Core once, across restarts', async (t) => {
   const { client, directory } = setupClient(t);
+  const pending = () => {
+    const db = new DatabaseSync(path.join(directory, 'dingtalk/state.sqlite3'), { readOnly: true });
+    try { return db.prepare('SELECT COUNT(*) AS count FROM pending').get().count; } finally { db.close(); }
+  };
   let stream;
+  t.mock.method(DWClient.prototype, 'connect', function () { stream = this; this.connected = true; });
+  t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
   const acknowledged = [];
-  t.mock.method(DWClient.prototype, 'connect', function () {
-    stream = this;
-    this.connected = true;
-  });
-  t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
-  t.mock.method(DWClient.prototype, 'socketCallBackResponse', (id) => {
-    const db = new DatabaseSync(path.join(directory, 'dingtalk/receive.sqlite3'), { readOnly: true });
-    try {
-      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM received').get().count, 1);
-      assert.equal(db.prepare('SELECT forwarded_at FROM received').get().forwarded_at, null);
-    } finally { db.close(); }
-    acknowledged.push(id);
-  });
-  const restarted = new DingTalkClient({ dataDir: directory }, null, logger);
-  const handoff = [];
-  const replayed = [];
+  t.mock.method(DWClient.prototype, 'socketCallBackResponse', (id) => acknowledged.push([id, pending()]));
+  await client.preflight();
+  // Staged by a worker that stopped before handing it over.
+  const leftOver = normalizeMessage(callback({ msgId: 'left-over' }), { botId: robotCode });
+  const state = new DingTalkState(directory);
+  try { state.stage(leftOver); } finally { state.close(); }
+  const lines = [];
+  const start = () => client.startSubscription((line) => lines.push(JSON.parse(line).id), () => {});
   try {
-    await client.preflight();
-    await client.startSubscription((line) => {
-      handoff.push(JSON.parse(line));
-      return new Promise(() => {});
-    });
+    start();
+    assert.deepEqual(lines, [leftOver.id]);
     stream.emit(TOPIC_ROBOT, callback());
-    stream.emit(TOPIC_ROBOT, callback({}, 'redelivery'));
-    assert.deepEqual(acknowledged, ['stream-delivery', 'redelivery']);
-    assert.equal(handoff.length, 1);
+    stream.emit(TOPIC_ROBOT, { headers: { messageId: 'malformed' }, data: '{bad' });
+    // Committed when acknowledged; a malformed callback is acknowledged and dropped.
+    assert.deepEqual(acknowledged, [['stream-delivery', 1], ['malformed', 0]]);
+    assert.equal(lines.length, 2);
     client.stop();
-
-    await restarted.preflight();
-    await restarted.startSubscription((line) => replayed.push(JSON.parse(line)));
-    assert.deepEqual(replayed, handoff);
-    restarted.stop();
-
-    // Even a completed pipe handoff stays replayable within retention.
-    await restarted.startSubscription((line) => replayed.push(JSON.parse(line)));
-    assert.deepEqual(replayed, [...handoff, ...handoff]);
-  } finally {
-    client.stop();
-    restarted.stop();
-  }
-});
-
-test('DingTalk retries a failed handoff without new callbacks and cancels retry on stop', async (t) => {
-  const { client } = setupClient(t);
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  let stream;
-  t.mock.method(DWClient.prototype, 'connect', function () { stream = this; this.connected = true; });
-  t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
-  const ack = t.mock.method(DWClient.prototype, 'socketCallBackResponse', () => {});
-  const handoffs = [];
-  try {
-    await client.preflight();
-    await client.startSubscription((line) => {
-      handoffs.push(JSON.parse(line).id);
-      if (handoffs.length !== 3) throw new Error('fixture pipe failure');
-    });
-    stream.emit(TOPIC_ROBOT, callback());
-    assert.equal(ack.mock.callCount(), 1);
-    assert.equal(handoffs.length, 1);
-    t.mock.timers.tick(1_000);
-    assert.equal(handoffs.length, 2);
-    t.mock.timers.tick(1_999);
-    assert.equal(handoffs.length, 2);
-    t.mock.timers.tick(1);
-    assert.deepEqual(handoffs, Array(3).fill(handoffs[0]));
-    await Promise.resolve();
-    stream.emit(TOPIC_ROBOT, callback({ msgId: 'second-message' }, 'second-delivery'));
-    assert.equal(handoffs.length, 4);
-    client.stop();
-    t.mock.timers.tick(60_000);
-    assert.equal(handoffs.length, 4);
+    start();
+    assert.equal(lines.length, 2);
   } finally { client.stop(); }
 });
 
-test('DingTalk leaves a callback unacknowledged when SQLite staging fails', async (t) => {
+test('DingTalk reports a Stream that stays disconnected to the Core', async (t) => {
   const { client } = setupClient(t);
-  let stream;
-  t.mock.method(DWClient.prototype, 'connect', function () { stream = this; this.connected = true; });
-  t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
-  const ack = t.mock.method(DWClient.prototype, 'socketCallBackResponse', () => {});
-  const stage = t.mock.method(DingTalkState.prototype, 'stage', () => { throw new Error('fixture disk failure'); });
-  const handedOff = t.mock.fn();
+  t.mock.method(DWClient.prototype, 'connect', async () => {});
+  t.mock.method(DWClient.prototype, 'disconnect', () => {});
+  await client.preflight();
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const exits = [];
   try {
-    await client.preflight();
-    await client.startSubscription(handedOff);
-    stream.emit(TOPIC_ROBOT, callback());
-    assert.equal(stage.mock.callCount(), 1);
-    assert.equal(ack.mock.callCount(), 0);
-    assert.equal(handedOff.mock.callCount(), 0);
-  } finally { client.stop(); }
-});
-
-test('DingTalk acknowledges malformed callbacks and skips a corrupt journal row before forwarding valid events', async (t) => {
-  const { client, directory } = setupClient(t);
-  const account = JSON.stringify(['fixture-app', robotCode]);
-  const state = new DingTalkState(directory, account);
-  try { state.stage({ id: 'corrupt', type: 'REQUEST' }); } finally { state.close(); }
-  let stream;
-  t.mock.method(DWClient.prototype, 'connect', function () { stream = this; this.connected = true; });
-  t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
-  const ack = t.mock.method(DWClient.prototype, 'socketCallBackResponse', () => {});
-  const handedOff = t.mock.fn();
-  try {
-    await client.preflight();
-    await client.startSubscription(handedOff);
-    stream.emit(TOPIC_ROBOT, { ...callback(), data: '{bad' });
-    stream.emit(TOPIC_ROBOT, callback({ msgId: 'next-valid' }, 'next-delivery'));
-    assert.deepEqual(ack.mock.calls.map(({ arguments: [id] }) => id), ['stream-delivery', 'next-delivery']);
-    assert.equal(handedOff.mock.callCount(), 1);
-    assert.equal(JSON.parse(handedOff.mock.calls[0].arguments[0]).type, 'EVENT');
-    const inspect = new DingTalkState(directory, account);
-    try {
-      assert.equal(JSON.parse(inspect.next(0).envelope).type, 'EVENT');
-    } finally { inspect.close(); }
+    client.startSubscription(() => {}, (exit) => exits.push(exit));
+    t.mock.timers.tick(55_000);
+    assert.equal(exits.length, 0);
+    t.mock.timers.tick(5_000);
+    assert.equal(exits.length, 1);
+    assert.match(exits[0].stderr, /disconnected for 60 seconds/);
   } finally { client.stop(); }
 });
 
@@ -319,15 +233,13 @@ test('the deployment manifest and connector worker recognize DingTalk as a secon
   assert.equal(connector.manifest.name, 'dingtalk');
 });
 
-test('DingTalk rejects a failed Stream start and keeps provider transport ids out of event identity', async (t) => {
-  const { client } = setupClient(t);
-  t.mock.method(DWClient.prototype, 'connect', async () => {});
-  t.mock.method(DWClient.prototype, 'disconnect', () => {});
-  await client.preflight();
-  await assert.rejects(client.startSubscription(() => {}), /Could not start DingTalk Stream/);
-  const original = callback();
+test('DingTalk event ids are stable across redeliveries and message ids carry their group', () => {
+  const original = callback({ senderNick: 'Fixture Sender' });
+  const event = normalizeMessage(original, { botId: robotCode });
   const redelivery = { ...original, headers: { messageId: 'different-delivery' } };
-  assert.equal(normalizeDingTalkEvent(original, { botId: robotCode }).id,
-    normalizeDingTalkEvent(redelivery, { botId: robotCode }).id);
-  assert.equal(normalizeDingTalkEvent(callback({ conversationType: '1' }), { botId: robotCode }), null);
+  assert.equal(normalizeMessage(redelivery, { botId: robotCode }).id, event.id);
+  assert.equal(parseChatId(event.conversation.id), groupId);
+  assert.equal(parseMessageId(event.message.id), groupId);
+  assert.equal(event.actor.name, 'Fixture Sender');
+  assert.equal(normalizeMessage(callback({ conversationType: '1' }), { botId: robotCode }), null);
 });

@@ -1157,10 +1157,6 @@ export class ActionService {
     // The reply lands where its target is. A target outside any chat (a mail)
     // has no chat: it never borrows the decision's.
     const chatId = target ? target.chat_id : fence.chat_id;
-    const groupReply = spec.reply_target === 'chat';
-    if (groupReply && !target?.chat_id) {
-      throw blocked('unknown_message', `Delivery blocked: the original message has no known chat. ${NO_ACTION}`);
-    }
     const interim = this.interim(input, caller, fence, connector, target?.conv_key ?? null, spec);
     this.authorizeTimerDelivery(fence, { connector, action: 'message.reply', chatId });
     if (spec.approval) return this.proposeReply(input, caller, connector, fence);
@@ -1170,8 +1166,7 @@ export class ActionService {
     try {
       const result = await this.deliver({
         caller, connector, action: 'message.reply',
-        input: { message_id: input.message_id, content: content.payload, reply_in_thread: inThread,
-          ...(groupReply ? { chat_id: chatId } : {}) },
+        input: { message_id: input.message_id, content: content.payload, reply_in_thread: inThread },
         key: this.key(input.idempotency_key, 'reply', connector, deliveryRef(fence), deliveryRef(responseTo),
           input.message_id, inThread, content.canonical),
         summary: content.summary,

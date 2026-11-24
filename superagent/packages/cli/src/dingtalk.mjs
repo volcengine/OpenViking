@@ -7,7 +7,7 @@ import { GoBack, PromptAborted } from './prompt.mjs';
 import { t } from './i18n.mjs';
 
 export async function connectDingTalk({ plan, prompter, canGoBack = false }) {
-  const { DingTalkClient } = await import('../../daemon/src/connectors/dingtalk.mjs');
+  const { DingTalkClient } = await import('../../daemon/src/dingtalk/client.mjs');
   prompter.section(t('钉钉群机器人', 'DingTalk group bot'));
   prompter.info(t('请先发布开启 Stream 模式的企业内部机器人。钉钉用于收发群消息，主渠道负责联系 owner。',
     'Publish an internal Stream-mode bot first. DingTalk handles group messages; the primary IM reaches the owner.'));

@@ -97,13 +97,6 @@ read-only operations. The Core offers an agent tool only when some configured
 Connector declares the operation behind it, and checks every call against the
 target Connector's declaration.
 
-`reply_target: "chat"` on `message.reply` declares a group-level reply.
-Core resolves the group from the indexed message in the same Connector
-instance and includes the trusted `chat_id` alongside `message_id` in the
-action input. A missing indexed group returns `unknown_message` before
-an Outbox reservation. The Connector uses `chat_id` to send a new group
-message. Thread routing requires separately advertised support.
-
 Version 0.2 implements `events`, `actions` and `queries`. Future `search` results should
 reuse the team's normalized Document shape. Future `sync` implementations
 should reuse `spec/check/discover/read` and `RECORD/SCHEMA/STATE` semantics.
@@ -663,26 +656,14 @@ cursor, as context only; private history leaves out what classification drops
 there live (command prefixes, the account's lines the Connector did not send,
 a stranger's `/`). There is no catch-up read after downtime.
 
-
 ### DingTalk
 
-DingTalk Stream receives mentions in internal group text. Its `message.send`
-and `message.reply` operations accept Markdown. Replies use the
-`reply_target: "chat"` contract and the group API. Timer deliveries use the
-same group send endpoint. Use a separate owner-capable primary IM for
-owner notifications and email approvals.
+DingTalk Stream receives internal group text that mentions the bot.
+`message.send` and `message.reply` take Markdown; a reply is a new message in
+the group, since `msg=dtm_<group>.<message>` carries the group (base64url
+DingTalk ids). Owner notices and email approvals go to the primary IM.
 
-The Stream callback ID is used only to acknowledge that delivery. The
-provider message ID becomes a stable SuperAgent event ID. The receive
-journal at `<dataDir>/dingtalk/receive.sqlite3` commits accepted events
-before ACK. Invalid or out-of-scope callbacks are acknowledged and skipped;
-a storage failure leaves the callback unacknowledged. Local handoff
-failures retry with capped backoff. Malformed stored envelopes are
-discarded with a diagnostic and the queue advances.
-
-Startup replays retained records in order. Records successfully written to
-the Worker output are eligible for cleanup after 24 hours; records awaiting
-local handoff remain queued. A Worker output write has no Core persistence
-receipt. Core independently applies event-age policy and deduplication by
-Connector instance and event ID. Retention defines a local replay window,
-while Core policy determines whether a replay is accepted.
+A message is committed to `<dataDir>/dingtalk/state.sqlite3` before the Stream
+callback is acknowledged and removed once written to the Core, as Slack does.
+The SDK reconnects a dropped Stream; one down for 60 seconds is reported as a
+failed Connector and restarted by the Core.

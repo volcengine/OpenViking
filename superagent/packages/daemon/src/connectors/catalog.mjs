@@ -35,7 +35,7 @@ const MANIFESTS = Object.freeze({
     name: 'dingtalk', version: 'stream-openapi-v1', capabilities: ['events', 'actions'],
     actions: {
       'message.send': { content: ['markdown'] },
-      'message.reply': { content: ['markdown'], reply_target: 'chat' },
+      'message.reply': { content: ['markdown'] },
     },
     auth_schema: EMPTY_SCHEMA, config_schema: EMPTY_SCHEMA,
   }),
