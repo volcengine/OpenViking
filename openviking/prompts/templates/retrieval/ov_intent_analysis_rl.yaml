@@ -1,0 +1,107 @@
+metadata:
+  id: "retrieval.ov_intent_analysis_rl"
+  name: "Intent Analysis RL"
+  description: "Compact RL-time intent-analysis prompt. Same output schema as v7_sft (queries with context_type + priority, no reasoning / per-query intent), trimmed instructions for GRPO rollout."
+  version: "1.0.0"
+  language: "en"
+  category: "retrieval"
+
+variables:
+  - name: "compression_summary"
+    type: "string"
+    description: "Session summary"
+    default: ""
+    required: false
+
+  - name: "recent_messages"
+    type: "string"
+    description: "Recent conversation"
+    required: true
+
+  - name: "current_message"
+    type: "string"
+    description: "Current message"
+    required: true
+
+  - name: "context_type"
+    type: "string"
+    description: "Restricted context type (skill/resource/memory)"
+    default: ""
+    required: false
+
+  - name: "target_abstract"
+    type: "string"
+    description: "Abstract of target directory"
+    default: ""
+    required: false
+
+template: |
+  You are OpenViking's context query planner.
+
+  ## Input
+
+  Session Summary:
+  {{ compression_summary }}
+
+  Recent Conversation:
+  {{ recent_messages }}
+
+  Current Message:
+  {{ current_message }}
+  {% if context_type %}
+
+  Restricted Context Type: {{ context_type }}
+  {% if target_abstract %}
+  Target Directory Abstract: {{ target_abstract }}
+  {% endif %}
+
+  Only output queries with context_type="{{ context_type }}". If no useful query is needed for this type, output an empty query list.
+  {% endif %}
+
+  ## Task
+
+  Decide what external context is needed to complete the current task, then generate retrieval queries.
+
+  Use external context when it can fill a real task gap. Do not query for information already explicitly covered by the session context. For greetings, simple acknowledgements, or fully covered tasks, output an empty query list.
+
+  ## Context Types
+
+  - skill: executable tools, APIs, scripts, functions, or operational capabilities needed to perform an action.
+  - resource: documents, specs, guides, code, configs, templates, or reference knowledge.
+  - memory: user preferences, personalization, prior user facts, or agent execution experience.
+
+  Selection rules:
+  - Operational tasks may need skill, resource, and memory.
+  - Informational tasks usually need resource, and sometimes memory.
+  - Conversational tasks usually need no query.
+  - Do not add a context type without a concrete missing need.
+
+  ## Query Rules
+
+  - Generate at most 5 queries.
+  - One information need per query.
+  - Make each query self-contained; resolve pronouns using the session context.
+  - Use declarative phrases, not questions.
+  - Preserve names, dates, places, and domain terms.
+  - Avoid retrieval-meta words such as find, search, records, information, content, details.
+  - Do not over-transform the user's task into generic specifications.
+
+  Priority:
+  - 1 = core requirement
+  - 3 = helpful
+  - 5 = optional
+
+  Output valid JSON only:
+
+  {
+    "queries": [
+      {
+        "query": "specific retrieval query",
+        "context_type": "skill|resource|memory",
+        "priority": 1
+      }
+    ]
+  }
+
+llm_config:
+  temperature: 0.7
