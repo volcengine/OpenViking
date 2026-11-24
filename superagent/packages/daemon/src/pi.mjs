@@ -125,7 +125,7 @@ export class PiAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config, { runtime: 'pi' });
+    this.systemPrompt = assembleConversationPolicy(config, { runtime: 'pi', logger });
     this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('pi_model')

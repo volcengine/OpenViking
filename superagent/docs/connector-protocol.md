@@ -124,7 +124,8 @@ should reuse `spec/check/discover/read` and `RECORD/SCHEMA/STATE` semantics.
 
 `connector` identifies the provider; `instance` identifies a configured source
 instance/account and is unique within a Core. Built-in chat connectors currently
-use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, `instance=onebot`, or `instance=dingtalk`. The source process authenticates both
+use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, `instance=onebot`, or `instance=dingtalk`. An external connector uses the `id` from
+`externalConnectors` (see [External Connector](external-connector.md)). The source process authenticates both
 identities; input cannot select another Connector's identity.
 
 `id` is required and stable across retries. The Core deduplicates on

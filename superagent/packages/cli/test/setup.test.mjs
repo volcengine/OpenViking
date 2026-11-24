@@ -685,6 +685,34 @@ test('changing an instance lists every setting; only the ones opened change', as
   }
 });
 
+test('an external connector keeps its id in the wizard and can be the only IM', async (t) => {
+  const external = { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: [], prompt: null };
+  const shown = harness(t, ['2', '12']);
+  existing(shown, {
+    channel: 'mattermost', connectors: ['mattermost'], externalConnectors: [external], profile: undefined,
+  });
+  assert.equal(await setupCommand(shown.options), 0);
+  assert.match(shown.written(), /7\) 主渠道\s+mattermost/);
+  assert.doesNotMatch(shown.written(), /主渠道\s+undefined/);
+
+  //                    change  IMs  none  save
+  const h = harness(t, ['2',    '5', '0',  '11']);
+  const before = existing(h, {
+    connectors: ['lark', 'mattermost'], externalConnectors: [external],
+  });
+  assert.equal(await setupCommand(h.options), 0);
+  assert.match(h.written(), /0 为全不选/);
+  assert.match(h.written(), /主渠道原来是飞书，它不再接入，改成mattermost/);
+  assert.match(h.written(), /主渠道：飞书 → mattermost/);
+  assert.doesNotMatch(h.written(), /undefined/);
+  const [after] = h.manifest().agents;
+  assert.equal(after.channel, 'mattermost');
+  assert.deepEqual(after.connectors, ['mattermost']);
+  assert.deepEqual(after.externalConnectors, [external]);
+  assert.equal(after.profile, undefined);
+  assert.equal(before.profile, 'superagent-asd');
+});
+
 test('changing an instance runtime saves the setup selector before restarting it', async (t) => {
   //                    change runtime Pi save
   const h = harness(t, ['2',    '4',    '3', '11']);

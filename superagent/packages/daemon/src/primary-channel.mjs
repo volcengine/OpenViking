@@ -5,7 +5,7 @@ import { updateManifest } from './deployment-manifest.mjs';
 
 // Only channels that can address an owner in a direct chat are eligible.
 const IM_NAMES = { lark: '飞书', weixin: '微信', telegram: 'Telegram', slack: 'Slack', qq: 'QQ', onebot: 'QQ' };
-const label = (id) => IM_NAMES[id] ? `${IM_NAMES[id]}（${id}）` : '未设置';
+const label = (id) => (IM_NAMES[id] ? `${IM_NAMES[id]}（${id}）` : (id || '未设置'));
 const PRIMARY_NOTES = {
   weixin: '\n微信主动通知依赖会话上下文；长时间未互动后，可能需要再给机器人发一条消息才能恢复接收。',
   qq: '\nQQ 主动通知需要机器人已开通主动消息权限且有剩余配额；配额用尽时通知会发送失败，不会自动重试。',
@@ -26,7 +26,7 @@ export function executePrimaryCommand(command, { event, config, connectors }) {
   if (arg) return { ok: false, text: `用法：\n${USAGE}\n请在要设为主 IM 的平台私聊机器人。` };
 
   const manifest = new Map(connectors.manifests()).get(target);
-  if (!Object.hasOwn(IM_NAMES, target) || !config.connectors.includes(target)
+  if (!config.connectors.includes(target)
     || !manifest?.actions?.['message.send']?.content?.includes('markdown')) {
     return { ok: false, text: '当前渠道不支持作为主 IM；需要已接入且支持主动发送文本的 IM。' };
   }

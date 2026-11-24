@@ -91,6 +91,59 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /unsupported connector/);
   });
 
+  it('accepts an external connector program as a channel without treating it as a built-in', () => {
+    setEnv('OV_SUPERAGENT_CHANNEL', 'mattermost');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["mattermost","lark"]');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([
+      { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'] },
+    ]));
+    const config = getConfig();
+    assert.equal(config.channel, 'mattermost');
+    assert.deepEqual(config.connectors, ['mattermost', 'lark']);
+    assert.deepEqual(config.externalConnectors, [{
+      id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'], prompt: null,
+    }]);
+    setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'lark', command: '/bin/true' }]));
+    assert.throws(() => getConfig(), /built-in/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: 'ovsa-discord' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /absolute path/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
+    assert.throws(() => getConfig(), /not listed/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([
+      { id: 'discord', command: '/usr/local/bin/ovsa-discord' },
+      { id: 'discord', command: '/usr/local/bin/ovsa-other' },
+    ]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /two connectors called discord/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'timer', command: '/bin/true' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["timer"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'timer');
+    assert.throws(() => getConfig(), /reserved/);
+    const missing = path.join(os.tmpdir(), 'ovsa-missing-prompt.md');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord', prompt: missing }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /prompt does not exist/);
+    const promptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ovsa-prompt-'));
+    const prompt = path.join(promptDir, 'rules.md');
+    fs.writeFileSync(prompt, 'rules');
+    try {
+      setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord', prompt }]));
+      assert.equal(getConfig().externalConnectors[0].prompt, prompt);
+      setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord', prompt: promptDir }]));
+      assert.throws(() => getConfig(), /regular file/);
+    } finally {
+      fs.rmSync(promptDir, { recursive: true, force: true });
+    }
+  });
+
   it('moves temporary files independently of persistent data and ignores TMPDIR', () => {
     setEnv('OV_SUPERAGENT_DATA_DIR', '/root/.local/share/superagent-primary');
     setEnv('OV_SUPERAGENT_WORKSPACE', '/work/superagent-primary');
