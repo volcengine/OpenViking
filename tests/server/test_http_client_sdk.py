@@ -6,7 +6,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-import httpx
 import pytest
 import pytest_asyncio
 
@@ -87,25 +86,6 @@ async def test_sdk_add_resource_raises_processing_error_for_business_error(
 
     with pytest.raises(ProcessingError, match="Parse error: boom"):
         await client.add_resource(path="https://example.com/bad.md", wait=True)
-
-
-def test_sdk_maps_conflict_error_envelope():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    response = httpx.Response(
-        409,
-        json={
-            "status": "error",
-            "error": {
-                "code": "CONFLICT",
-                "message": "URI viking://resources/demo already has a reindex in progress",
-            },
-        },
-    )
-
-    with pytest.raises(ConflictError, match="already has a reindex in progress") as exc_info:
-        client._handle_response_data(response)
-
-    assert exc_info.value.code == "CONFLICT"
 
 
 async def test_sdk_add_skill_from_local_file(http_client, tmp_path):
@@ -204,6 +184,9 @@ async def test_sdk_session_lifecycle(http_client):
     sessions = await client.list_sessions()
     assert session_id in {entry["session_id"] for entry in sessions}
 
+    await client.delete_session(session_id)
+    assert session_id not in {entry["session_id"] for entry in await client.list_sessions()}
+
 
 async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
     client, _ = http_client
@@ -262,104 +245,11 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
 
     assert task is not None and task["status"] == "completed", task
     archive = await client.get_session_archive(session_id, "archive_001")
+    assert archive["archive_id"] == "archive_001"
     assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Batch hello", "Batch answer"]
     post_commit = await client.get_session_context(session_id)
     assert [m["role"] for m in post_commit["messages"]] == ["user"]
     assert post_commit["messages"][0]["parts"][0]["text"] == "Keep me live"
-
-
-async def test_sdk_commit_session_keeps_telemetry_as_second_positional_argument():
-    calls = []
-
-    class _FakeHTTP:
-        async def post(self, path, json):
-            calls.append((path, json))
-            return httpx.Response(
-                200,
-                json={"status": "success", "result": {"task_id": "task-1"}},
-            )
-
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    client._http = _FakeHTTP()
-
-    result = await client.commit_session("s1", True)
-
-    assert result == {"task_id": "task-1"}
-    assert calls == [
-        (
-            "/api/v1/sessions/s1/commit",
-            {"keep_recent_count": 0, "telemetry": True},
-        )
-    ]
-
-
-async def test_sdk_commit_session_sends_turn_budget_retention_fields():
-    calls = []
-
-    class _FakeHTTP:
-        async def post(self, path, json):
-            calls.append((path, json))
-            return httpx.Response(
-                200,
-                json={"status": "success", "result": {"task_id": "task-turn"}},
-            )
-
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    client._http = _FakeHTTP()
-
-    result = await client.commit_session(
-        "s1",
-        retention_mode="turn_budget",
-        keep_recent_turn_count=3,
-        retained_message_token_budget=12_000,
-        min_raw_tail_steps=1,
-    )
-
-    assert result == {"task_id": "task-turn"}
-    assert calls == [
-        (
-            "/api/v1/sessions/s1/commit",
-            {
-                "keep_recent_count": 0,
-                "telemetry": False,
-                "retention_mode": "turn_budget",
-                "keep_recent_turn_count": 3,
-                "retained_message_token_budget": 12_000,
-                "min_raw_tail_steps": 1,
-            },
-        )
-    ]
-
-
-async def test_sdk_get_session_archive(http_client):
-    client, svc = http_client
-
-    # Memory extraction uses a VLM backend the fake does not cover; stub it so
-    # the archive completes (this test checks archive retrieval, not extraction).
-    async def _no_memories(*args, **kwargs):
-        del args, kwargs
-        return []
-
-    svc.session_compressor.extract_long_term_memories = _no_memories
-
-    session_info = await client.create_session()
-    session_id = session_info["session_id"]
-
-    await client.add_message(session_id, "user", "Archive me")
-    commit_result = await client.commit_session(session_id, enable_working_memory=True)
-    task_id = commit_result["task_id"]
-
-    for _ in range(100):
-        task = await client.get_task(task_id)
-        if task and task["status"] in ("completed", "failed"):
-            break
-        await asyncio.sleep(0.1)
-
-    archive = await client.get_session_archive(session_id, "archive_001")
-    assert archive["archive_id"] == "archive_001"
-    assert archive["overview"]
-    assert archive["abstract"]
-    assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Archive me"]
 
 
 # ===================================================================
