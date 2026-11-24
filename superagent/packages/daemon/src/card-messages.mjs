@@ -4,21 +4,25 @@
 import { choiceCard } from './actions/content.mjs';
 import { normalizeEvent } from './event.mjs';
 
-// Lark locks a card while a click on it waits for its callback to be answered
-// (lark-cli answers within 3 s): an edit made then fails with this code.
-export const CARD_LOCKED = /ErrCode: 11310\b/;
+// For a few seconds after a click on a card, Lark refuses an edit of it:
+// 11310 "card action is lock" (the click awaits its callback answer) or 200800
+// "create universal card fail" (230099 sub-codes, neither documented). The
+// same edit lands a moment later.
+export const CARD_BUSY = /ErrCode: (11310|200800)\b/;
+// A card sent more than 14 days ago can no longer be edited.
+export const CARD_TOO_OLD = /\b230031\b/;
 
-// Edit a card the daemon sent. An edit Lark refuses for the lock is made
-// again a second later, up to four tries; any other refusal, or the lock
-// still there at the last try, is thrown. `superseded` says a newer edit of
-// the card is coming: the lock is then not waited out ({ superseded: true }).
+// Edit a card the daemon sent. An edit Lark refuses while the card is busy is
+// made again a second later, up to four tries; any other refusal, or the card
+// still busy at the last try, is thrown. `superseded` says a newer edit of the
+// card is coming: the card is then not waited for ({ superseded: true }).
 export async function editCard(connectors, messageId, card, { superseded = () => false, tries = 4, waitMs = 1000 } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await connectors.updateCard(messageId, card);
       return { tries: attempt, superseded: false };
     } catch (error) {
-      if (!CARD_LOCKED.test(String(error?.message ?? error)) || attempt >= tries) throw error;
+      if (!CARD_BUSY.test(String(error?.message ?? error)) || attempt >= tries) throw error;
     }
     if (superseded()) return { tries: attempt, superseded: true };
     await new Promise((resolve) => setTimeout(resolve, waitMs));

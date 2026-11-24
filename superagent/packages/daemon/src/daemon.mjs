@@ -31,7 +31,7 @@ import { InstanceLock } from './lock.mjs';
 import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 import { approvalNote } from './actions/approval.mjs';
-import { CARD_LOCKED, editCard, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
+import { CARD_BUSY, CARD_TOO_OLD, editCard, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { LARK_MESSAGE_EVENT_KINDS, resolveLarkMessageEvent } from './lark-message-events.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
@@ -598,10 +598,10 @@ export class PersonalAgentDaemon {
   }
 
   // The refresh button on a /tasks card redraws that card in place, off the
-  // ingress queue: waiting out Lark's lock on the card (editCard) never holds
-  // up a message. Only the newest press on a card is drawn. A press made while
-  // the card is being drawn takes the place of any still waiting, and the
-  // drawing stops waiting out the lock, since a newer press will draw the card.
+  // ingress queue: waiting for Lark to take an edit of the card (editCard)
+  // never holds up a message. Only the newest press on a card is drawn. A press
+  // made while the card is being drawn takes the place of any still waiting,
+  // and the drawing stops waiting for the card, since a newer press will draw it.
   refreshCard(press) {
     const cardId = press.event.parentId;
     const drawing = this.cardRefreshes.get(cardId);
@@ -624,9 +624,10 @@ export class PersonalAgentDaemon {
   }
 
   // One press: the command runs now, so the card shows the tasks as they are
-  // when it is drawn. A card still locked at the last try is being pressed
-  // again, and nothing is sent; refused for another reason (a message too old
-  // to edit), or answered without a card, the answer goes as a reply.
+  // when it is drawn. A press only ever edits its card: the answer goes as a
+  // reply only when it has no card, or when Lark says the card is too old to
+  // edit. A card still busy at the last try is being pressed again; any other
+  // refusal is logged, and nothing is sent.
   async drawRefresh(press, superseded) {
     const { command, event, inbound, label } = press;
     const outcome = await this.runCommand(command, event, inbound, label);
@@ -638,14 +639,16 @@ export class PersonalAgentDaemon {
       const edit = await editCard(this.connectors, event.parentId, outcome.card, { superseded, waitMs: this.cardEditWaitMs });
       this.logRefresh(press, edit.superseded ? 'superseded' : 'redrawn', { tries: edit.tries });
     } catch (error) {
-      const locked = CARD_LOCKED.test(safeError(error));
-      this.logRefresh(press, locked ? 'locked' : 'refused', { error: safeError(error) });
-      if (!locked) await this.replyCommand(outcome, event, inbound);
+      const reason = safeError(error);
+      const tooOld = CARD_TOO_OLD.test(reason);
+      this.logRefresh(press, CARD_BUSY.test(reason) ? 'busy' : tooOld ? 'too_old' : 'failed', { error: reason });
+      if (tooOld) await this.replyCommand(outcome, event, inbound);
     }
   }
 
   // What became of each press, and how long after it: redrawn, superseded or
-  // replaced by a newer press, still locked, refused (then replied), replied.
+  // replaced by a newer press, replied (no card), still busy at the last try,
+  // too old (sent as a new card), or failed (nothing sent).
   logRefresh(press, outcome, fields = {}) {
     const level = ['redrawn', 'superseded', 'replaced', 'replied'].includes(outcome) ? 'info' : 'warn';
     this.logger[level]('command_card_refresh', { command: press.label, outcome, ms: Date.now() - press.at, ...fields });

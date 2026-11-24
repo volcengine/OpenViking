@@ -296,8 +296,9 @@ it('validates card structure, size, mentions and choice keys without invoking th
   assert.equal(f.calls.length, 0);
 });
 
-// What the Lark connector throws when Lark refuses the edit of a card being clicked.
+// What the Lark connector throws when Lark refuses the edit of a card just clicked.
 const LOCKED = new Error('lark-cli update answered card failed: Failed to create card content, ext=ErrCode: 11310; ErrMsg: card action is lock; ');
+const UNIVERSAL = new Error('lark-cli update answered card failed: { "code": 230099, "message": "Failed to create card content, ext=ErrCode: 200800; ErrMsg: create universal card fail; " }');
 
 function cardEdits(outcomes) {
   const calls = [];
@@ -309,9 +310,9 @@ function cardEdits(outcomes) {
   } } };
 }
 
-it('edits a card again while a click on it holds it locked, up to four tries', async () => {
+it('edits a card again while a click on it keeps it busy, up to four tries', async () => {
   const card = { elements: [] };
-  const unlocked = cardEdits([LOCKED, LOCKED]);
+  const unlocked = cardEdits([LOCKED, UNIVERSAL]);
   assert.deepEqual(await editCard(unlocked.connectors, 'om_locked1234567', card, { waitMs: 0 }), { tries: 3, superseded: false });
   assert.equal(unlocked.calls.length, 3);
 

@@ -753,21 +753,27 @@ describe('/tasks card refresh', () => {
     assert.deepEqual(logs.map(({ outcome, tries }) => [outcome, tries]), [['superseded', 1], ['redrawn', 1]]);
   });
 
-  it('sends nothing while the card stays locked, a new card when Lark refuses the edit, and a task picked always does', async () => {
-    const locked = setup(() => { throw LOCKED(); });
-    await locked.press();
-    await locked.settled();
-    assert.equal(locked.updates.length, 4);
-    assert.deepEqual(locked.replies, []);
-    assert.deepEqual(locked.logs.map(({ level, outcome }) => [level, outcome]), [['warn', 'locked']]);
+  it('only ever edits its card, unless Lark says the card is too old to edit; a task picked always sends one', async () => {
+    const busy = setup(() => { throw LOCKED(); });
+    await busy.press();
+    await busy.settled();
+    assert.equal(busy.updates.length, 4);
+    assert.deepEqual(busy.replies, []);
+    assert.deepEqual(busy.logs.map(({ level, outcome }) => [level, outcome]), [['warn', 'busy']]);
 
-    const refused = setup(() => { throw new Error('message too old to edit'); });
+    const refused = setup(() => { throw new Error('lark-cli update answered card failed (230099): ext=ErrCode: 200621; ErrMsg: parse card json err; '); });
     await refused.press();
     await refused.settled();
     assert.equal(refused.updates.length, 1);
-    assert.equal(refused.replies.length, 1);
-    assert.equal(refused.replies[0].card.header.title.content, '后台任务');
-    assert.deepEqual(refused.logs.map(({ outcome }) => outcome), ['refused']);
+    assert.deepEqual(refused.replies, [], 'a refused edit sends no new card');
+    assert.deepEqual(refused.logs.map(({ outcome }) => outcome), ['failed']);
+
+    const old = setup(() => { throw new Error('lark-cli update answered card failed (230031): Message can only be modified within 14 days after sending.'); });
+    await old.press();
+    await old.settled();
+    assert.equal(old.replies.length, 1);
+    assert.equal(old.replies[0].card.header.title.content, '后台任务');
+    assert.deepEqual(old.logs.map(({ outcome }) => outcome), ['too_old']);
 
     const picked = setup();
     await picked.press({ superagent_command: '/tasks' });
