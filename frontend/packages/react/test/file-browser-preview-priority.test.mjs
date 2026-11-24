@@ -185,7 +185,12 @@ test('a listed Markdown file reads its body while Wiki attrs are pending', async
       ),
     );
     await settle();
-    assert.equal(fetch.countOf('/api/v1/content/read'), 1);
+    assert.deepEqual(
+      fetch.calls
+        .filter(({ path }) => path === '/api/v1/content/read')
+        .map(({ query }) => query.limit),
+      ['2000', '-1'],
+    );
     assert.equal(body(), 'Chapter text');
   } finally {
     await view.unmount();
