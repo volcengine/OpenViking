@@ -12,12 +12,14 @@ import { parseArguments, tokenize } from './command-parser.js';
 import {
   ConsoleCommandError,
   formatConsoleMessage,
+  type ConsoleResultNotice,
 } from './command-messages.js';
 import {
   isRemoteResourceSource,
   RESOURCE_COMMAND_SPEC,
 } from './resource-command-spec.js';
 import { consoleCommands, createCommandHelp } from './command-catalog.js';
+import { formatListResult } from './list-results.js';
 import { formatResult } from './results.js';
 import { browserCommandFiles, type CommandExecution } from './command-files.js';
 import type { ConsoleCommandOptions } from './types.js';
@@ -42,6 +44,7 @@ export async function executeCommand(
 ): Promise<{
   content: CommandConsoleRecordContent;
   telemetry?: Record<string, unknown>;
+  resultNotice?: ConsoleResultNotice;
 }> {
   const tokens = tokenize(input);
   const spec = resolveCommandSpec(tokens);
@@ -113,5 +116,9 @@ export async function executeCommand(
     }
   }
   onTasks?.(readTaskReferences(spec.name, data));
-  return { content: formatResult(spec.name, data, values), telemetry };
+  const listResult = formatListResult(spec.name, data);
+  return {
+    ...(listResult ?? { content: formatResult(spec.name, data, values) }),
+    telemetry,
+  };
 }

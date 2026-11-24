@@ -24,6 +24,8 @@ POST /api/v1/acl/revoke
 
 All ACL operations require `manage` and return 403 without it; account ADMIN has implicit manage.
 
+ACL principals are scoped to the resource's account; ACL does not share resources across accounts. In `api_key` mode, explicit users and groups must be registered in that account. Grant, revoke, replacement entries, and ingestion ACL entries return 400 for unknown or foreign principals. `user:*` refers only to users in the same account. Clear or replace obsolete entries to remove grants for deleted principals.
+
 GET returns the ACL report directly in `result`. The report contains `uri`, `acl_mode`, `direct_entries`, `inherited_entries`, and `effective_entries`. Mutation endpoints return the report directly.
 
 Example `set_acl` body:

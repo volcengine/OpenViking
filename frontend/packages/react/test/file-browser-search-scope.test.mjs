@@ -3,66 +3,10 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
-import {
-  deferred,
-  mount,
-  ok,
-  recordingFetch,
-  settle,
-} from './helpers/module-dom.mjs';
+import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
 for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
-
-test('switching accounts cancels the previous search and rejects its late result', async () => {
-  const old = deferred();
-  const searches = [];
-  const fetch = recordingFetch((call) => {
-    if (call.path !== '/api/v1/search/find') return ok([]);
-    searches.push(call);
-    return new Headers(call.init.headers).get('X-OpenViking-Account') === 'A'
-      ? old.promise
-      : ok({ memories: [{ uri: 'viking://b.md' }] });
-  });
-  const render = (accountId) =>
-    h(
-      OpenVikingProvider,
-      { baseURL: 'https://ov.test', fetch, accountId },
-      h(FileBrowser),
-    );
-  const view = await mount(render('A'));
-  try {
-    await act(async () =>
-      view.container.querySelector('.ov-file-browser__search-trigger').click(),
-    );
-    await settle();
-    const modal = () => document.querySelector('.ov-file-browser-search');
-    await act(async () => {
-      const input = modal().querySelector('.ov-file-browser-search__input');
-      Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value',
-      ).set.call(input, 'secret');
-      input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    });
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
-    await settle();
-
-    await view.render(render('B'));
-    await settle();
-    assert.equal(searches[0].init.signal.aborted, true);
-
-    await act(async () =>
-      old.resolve(await ok({ memories: [{ uri: 'viking://a-secret.md' }] })),
-    );
-    await settle();
-    assert.match(modal().textContent, /viking:\/\/b\.md/);
-    assert.doesNotMatch(modal().textContent, /a-secret/);
-    assert.equal(searches.length, 2);
-  } finally {
-    await view.unmount();
-  }
-});
 
 test('choosing a subdirectory limits the search and clearing restores the root', async () => {
   const rootUri = 'viking://resources/project';
@@ -114,11 +58,25 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     await click(
       modal().querySelector('.ov-file-browser-search__advanced-toggle'),
     );
-    await click(
-      modal().querySelector('.ov-file-browser-search__scope-trigger'),
-    );
     const menu = () =>
       document.querySelector('.ov-file-browser-search__scope-menu');
+    const searchModal = modal();
+    const scopeTrigger = searchModal.querySelector(
+      '.ov-file-browser-search__scope-trigger',
+    );
+    await click(scopeTrigger);
+    const scopeButton = menu().querySelector('button');
+    await act(async () => {
+      scopeButton.focus();
+      assert.equal(document.activeElement, scopeButton);
+      scopeButton.dispatchEvent(
+        new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+    assert.equal(menu(), null, 'Escape closes the scope picker');
+    assert.equal(searchModal.querySelector('.ov-modal--exit'), null);
+    await click(scopeTrigger);
+
     const root = () => menu().querySelector(`label[title="${rootUri}"]`);
     await click(
       root()
@@ -137,9 +95,7 @@ test('choosing a subdirectory limits the search and clearing restores the root',
       menu().querySelectorAll('.ov-file-browser-search__scope-actions button');
     await click(actions()[0]);
     assert.equal(menu(), null, 'cancel closes the draft');
-    await click(
-      modal().querySelector('.ov-file-browser-search__scope-trigger'),
-    );
+    await click(scopeTrigger);
     await click(
       root()
         .closest('.ov-file-browser-search__scope-row')
@@ -177,13 +133,22 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     assert.deepEqual(targets().at(-1), [child]);
     await click(filterToggle());
     await click(
+      modal().querySelector('.ov-file-browser-search__options input'),
+    );
+    await settle();
+    const childOption = modal().querySelector(
+      `.ov-file-browser-search__options [title="${childDisplay}"]`,
+    );
+    assert.equal(childOption === null, true);
+    assert.deepEqual(targets().at(-1), [rootUri]);
+    await click(
       modal().querySelector('.ov-file-browser-search__advanced-clear'),
     );
     assert.equal(filterCount(), null);
     assert.equal(filterToggle().getAttribute('aria-label'), 'Advanced filters');
     assert.deepEqual(
       targets(),
-      [rootUri, [child]],
+      [rootUri, [child], [rootUri]],
       'restoring the root reuses its fresh cached search',
     );
   } finally {

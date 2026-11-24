@@ -81,5 +81,38 @@ createRoot(document.getElementById('root')!).render(
         />
       </section>
     ))}
+    <section id="json-preview" style={{ height: 500 }}>
+      <FilePreview
+        locale="en-US"
+        tabs={[
+          {
+            kind: 'file',
+            key: 'json-preview',
+            source: {
+              content: '{"outer":{"child":{"value":1},"sibling":2}}',
+              fileName: 'data.json',
+              path: 'viking://resources/data.json',
+            },
+          },
+        ]}
+      />
+    </section>
+    <section id="json-explicit" style={{ height: 500 }}>
+      <FilePreview
+        locale="en-US"
+        tabs={[
+          {
+            kind: 'file',
+            key: 'json-explicit',
+            source: {
+              content: '{"outer":{"value":1}}',
+              fileName: 'payload',
+              fileType: 'json',
+              path: 'viking://resources/payload',
+            },
+          },
+        ]}
+      />
+    </section>
   </>,
 );

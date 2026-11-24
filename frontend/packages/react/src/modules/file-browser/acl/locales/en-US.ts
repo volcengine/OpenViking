@@ -30,6 +30,8 @@ export default {
   loading: 'Loading permissions…',
   saving: 'Saving…',
   saved: 'Permissions saved',
+  permissionChanged:
+    'Your permissions have changed. You can no longer manage this node.',
   loadFailed: 'Could not load permissions',
   saveFailed: 'Could not save permissions',
   principalsFailed: 'Could not load users or groups',

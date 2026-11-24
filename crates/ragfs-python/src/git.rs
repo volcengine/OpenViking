@@ -167,7 +167,9 @@ fn build_snapshot_log_store(
                 postgres.max_connections,
                 postgres.connect_timeout_ms,
             )) {
-                Ok(store) => Ok(Some(Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>)),
+                Ok(store) => Ok(Some(
+                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
+                )),
                 Err(err) => snapshot_log_init_fallback("postgres", err),
             }
         }
@@ -807,7 +809,9 @@ mod tests {
             Err(err) => err,
             Ok(_) => panic!("missing PostgreSQL section must fail"),
         };
-        assert!(err.to_string().contains("[git.snapshot.log.postgres] missing"));
+        assert!(err
+            .to_string()
+            .contains("[git.snapshot.log.postgres] missing"));
         cfg.snapshot.log.postgres = Some(ragfs::git::GitSnapshotLogPostgresConfig {
             dsn_env: format!("SNAPSHOT_MISSING_{}", uuid::Uuid::new_v4().simple()),
             max_connections: 1,

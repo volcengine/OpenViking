@@ -69,6 +69,9 @@ async function sessionStart(ctx) {
     const now = Date.now();
     if (now - Number(state.lastSessionStartAt || 0) < 2000) return "";
     await writeHookState(clientId, ctx.nativeSessionId, { ...state, lastSessionStartAt: now });
+    if (host.pendingReplayLimit && !process.env.OPENVIKING_PENDING_REPLAY_LIMIT) {
+      process.env.OPENVIKING_PENDING_REPLAY_LIMIT = String(host.pendingReplayLimit);
+    }
     await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
     if ((host.profileStage || "session-start") !== "session-start") return "";
     const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {

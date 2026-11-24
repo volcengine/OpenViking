@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
   FileTreeEntryRow,
@@ -8,7 +8,11 @@ import { within, type FileBrowserDashboard } from './dashboard-model.js';
 import { normalizeResourceUri } from '../../shared/resource-uri.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { readWikiConflictIndex } from './wiki-conflict-index.js';
-import { readDashboardHint } from './dashboard-resource.js';
+import {
+  readDashboardHint,
+  type ReadDashboardHint,
+} from './dashboard-resource.js';
+import { isMemoryUri } from './fs-memory-fields.js';
 
 export function useDashboardHint({
   uri,
@@ -57,28 +61,24 @@ export function useDashboardHint({
   return { hint, canonicalUri, knownRows, isFile };
 }
 
-export function previewDashboardOptions(
+export function usePreviewDashboardHint(
   uri: string | null,
-  resourceType: 'directory' | 'file' | 'unknown',
   kind: FileBrowserDashboard['kind'] | undefined,
   hint: ReturnType<typeof useDashboardHint>['hint'],
-) {
-  const markdown = resourceType === 'file' && /\.md$/i.test(uri ?? '');
-  const contentKind: 'pending' | 'wiki' | 'plain' =
-    markdown && kind === 'wiki'
-      ? 'wiki'
-      : markdown && !kind && hint.loading
-        ? 'pending'
-        : 'plain';
-  return {
-    readDashboardHint:
-      resourceType !== 'directory' &&
-      /\.md$/i.test(uri ?? '') &&
-      contentKind === 'plain'
-        ? hint.readPending
-        : undefined,
-    contentKind,
-  };
+): ReadDashboardHint | undefined {
+  const committedWiki = useRef<string | null>(null);
+  const { readPending } = hint;
+  // Publish committed ownership to the asynchronous read/edit handlers. A
+  // later attribute result can update ownership without restarting the body read.
+  useLayoutEffect(() => {
+    committedWiki.current = kind === 'wiki' ? uri : null;
+  }, [kind, uri]);
+  const read = useCallback(async () => {
+    if (uri && committedWiki.current === uri)
+      return { uri, tags: ['compile_target=true'] };
+    return readPending();
+  }, [uri, readPending]);
+  return uri && /\.md$/i.test(uri) && !isMemoryUri(uri) ? read : undefined;
 }
 
 export function useWikiConflictIndex({

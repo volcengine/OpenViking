@@ -187,6 +187,7 @@ def _copy_file(
     *,
     fs_ctx: dict[str, str] | None = None,
     allow_same_mount_fast_path: bool = False,
+    parent_prepared: bool = False,
 ) -> None:
     """Copy a single file within AGFS.
 
@@ -194,7 +195,9 @@ def _copy_file(
     transparent to the business layer.
     """
     # Ensure parent directory exists
-    _ensure_remote_parent_dir(client, dst, fs_ctx=fs_ctx)
+    ensure_same_encryption_account(src, dst)
+    if not parent_prepared:
+        _ensure_remote_parent_dir(client, dst, fs_ctx=fs_ctx)
 
     if allow_same_mount_fast_path and _try_copy_within_mount_fast_path(
         client, src, dst, fs_ctx=fs_ctx

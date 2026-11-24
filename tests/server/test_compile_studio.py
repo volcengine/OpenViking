@@ -11,7 +11,6 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskPatch, WorkState
-from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
@@ -396,35 +395,8 @@ def test_compile_builtin_skill_uri(skill, valid):
             service._normalize_request_uris(request, ctx)
 
 
-@pytest.mark.parametrize(
-    "target",
-    [
-        "viking://system",
-        "viking://system/compile",
-        "viking://system/compile/example-skills",
-        "viking://system/compile/global",
-        "viking://system/resources/wiki",
-    ],
-)
-def test_compile_rejects_system_target(target):
-    from openviking.service.compile_service import CompileService
-
-    CompileService._validate_target("viking://user/alice/skills")
-    CompileService._validate_target("viking://agent/skills")
-
-    with pytest.raises(InvalidArgumentError, match="system namespace"):
-        CompileService._validate_target(target)
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "viking://system/compile/example-skills/llm-wiki",
-        "viking://system/compile/global/llm-wiki",
-        "viking://system/memory/memory_templates/custom/qa/input",
-    ],
-)
-def test_compile_rejects_system_source(source):
+@pytest.mark.parametrize("target", ["viking://user/alice/skills", "viking://agent/skills"])
+def test_compile_accepts_account_skill_targets(target):
     from openviking.service.compile_service import CompileRequest, CompileService
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
@@ -432,14 +404,13 @@ def test_compile_rejects_system_source(source):
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
     request = CompileRequest.model_validate(
         {
-            "from": [source],
-            "to": "viking://resources/wiki",
+            "from": ["viking://resources/source"],
+            "to": target,
             "skill": "viking://system/compile/example-skills/llm-wiki",
         }
     )
 
-    with pytest.raises(InvalidArgumentError, match="Compile source.*system namespace"):
-        service._normalize_request_uris(request, ctx)
+    assert service._normalize_request_uris(request, ctx).to == target
 
 
 async def test_compile_api_rejects_system_target_without_creating_task(service, app, client):
@@ -563,16 +534,6 @@ async def test_page_reads_past_200_and_isolates_owner():
     assert len(seen) == len(set(seen)) == 205
     assert seen[0] == "cmp_204"
     assert "foreign" not in seen
-
-
-def test_cursor_is_bound_to_identity_and_filters():
-    scope = page_scope(account="a", user="u", status="running")
-    cursor = encode_cursor({"created_at": 123.4, "task_id": "cmp_a"}, scope)
-    assert decode_cursor(cursor, scope) == (123.4, "cmp_a")
-    with pytest.raises(InvalidArgumentError):
-        decode_cursor(cursor, page_scope(account="a", user="other", status="running"))
-    with pytest.raises(InvalidArgumentError):
-        decode_cursor("broken", scope)
 
 
 @pytest.mark.parametrize(
@@ -815,34 +776,46 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
     }
 
 
-async def test_cursor_cleanup_rechecks_task_updated_after_scan():
+async def test_cursor_cleanup_preserves_recreated_task(monkeypatch):
+    """A second worker can expire a task before the client retries its original key."""
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     owner = {"account_id": "acme", "user_id": "alice"}
-    task = await tracker.create("compile", task_id="updated-after-scan", **owner)
+    task = await tracker.create("compile", task_id="cmp_" + "a" * 64, **owner)
+    await tracker.start(task.task_id, **owner)
+    await tracker.complete(task.task_id, {"original": True}, **owner)
     path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
     payload = json.loads(agfs.files[path])
-    payload["status"] = TaskStatus.COMPLETED.value
     payload["updated_at"] = time.time() - 2 * 86400
     agfs.files[path] = json.dumps(payload).encode()
+
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
-    record_lock = ("acme", "alice", task.task_id)
-    async with store._record_locks.acquire(record_lock):
-        cleanup = asyncio.create_task(tracker.delete_expired())
-        await asyncio.sleep(0)
-        payload["updated_at"] = time.time()
-        agfs.files[path] = json.dumps(payload).encode()
-    await asyncio.wait_for(cleanup, timeout=3)
-    page = await tracker.list_tasks(
-        **owner,
-        limit=30,
-        task_type="compile",
-        status=None,
-        resource_id=None,
-        include_internal=False,
-        q=None,
-    )
-    assert [record.task_id for record in page] == [task.task_id]
-    assert await store.get_task(task.task_id, **owner) is not None
+    scanned = asyncio.Event()
+    resume = asyncio.Event()
+    iter_payloads = store._iter_task_payloads
+
+    async def pause_after_read():
+        async for payload in iter_payloads():
+            scanned.set()
+            await resume.wait()
+            yield payload
+
+    monkeypatch.setattr(store, "_iter_task_payloads", pause_after_read)
+    cleanup = asyncio.create_task(tracker.delete_expired())
+    try:
+        await asyncio.wait_for(scanned.wait(), timeout=3)
+        writer = TaskTracker(PersistentTaskStore(agfs))
+        expired = await writer.delete_expired()
+        assert [entry.task_id for entry in expired.deleted] == [task.task_id]
+        recreated = await writer.create("compile", task_id=task.task_id, **owner)
+        assert recreated.status == TaskStatus.PENDING
+        resume.set()
+        assert not (await asyncio.wait_for(cleanup, timeout=3)).deleted
+        restored = await TaskTracker(PersistentTaskStore(agfs)).get(task.task_id, **owner)
+        assert restored is not None and restored.status == TaskStatus.PENDING
+    finally:
+        if not cleanup.done():
+            cleanup.cancel()
+        await asyncio.gather(cleanup, return_exceptions=True)

@@ -53,6 +53,10 @@ class UsageAuditWorker:
             self.dropped_count += 1
             return
 
+        prepare_event = getattr(self._store, "prepare_event", None)
+        if prepare_event is not None:
+            event = prepare_event(event)
+
         try:
             running_loop = asyncio.get_running_loop()
         except RuntimeError:

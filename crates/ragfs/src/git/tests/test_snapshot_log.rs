@@ -120,7 +120,9 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
     let c4 = make_commit(&svc, "acct_snapshot_tail", "main", "fourth").await;
     svc.snapshot_log_store = Some(store);
     // Keep the indexed boundary at c2 while verifying each page.
-    svc.snapshot_log_backfills.lock().unwrap()
+    svc.snapshot_log_backfills
+        .lock()
+        .unwrap()
         .insert(("acct_snapshot_tail".into(), "main".into()));
 
     let request = LogRequest {
@@ -137,14 +139,25 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
         (3, vec![c1]),
         (4, vec![]),
     ] {
-        let log = svc.log(LogRequest { offset, ..request.clone() }).await.unwrap();
+        let log = svc
+            .log(LogRequest {
+                offset,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
         let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
         assert_eq!(oids, expected, "offset={offset}");
     }
     #[cfg(target_pointer_width = "64")]
     {
-        let err = svc.log(LogRequest { offset: i64::MAX as usize + 1, ..request })
-            .await.unwrap_err();
+        let err = svc
+            .log(LogRequest {
+                offset: i64::MAX as usize + 1,
+                ..request
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, GitError::InvalidLogOffset(_)));
     }
 }

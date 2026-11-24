@@ -310,6 +310,8 @@ export interface VikingBotLabels extends VikingBotDebugLabels {
   stop?: string;
   /** 添加附件按钮文案。Attach button label. */
   attach?: string;
+  /** 达到附件上限时的提示，参数为配置的上限。Hint receiving the configured attachment limit. */
+  attachmentLimit?: (limit: number) => string;
   /** 移除附件按钮文案。Remove-attachment button label. */
   removeAttachment?: string;
   uploadingAttachment?: string;

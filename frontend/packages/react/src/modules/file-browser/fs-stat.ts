@@ -10,7 +10,7 @@ interface StatResult {
   updateTime?: string | number;
 }
 
-function isoTimestamp(value: string | number | undefined) {
+export function isoTimestamp(value: string | number | undefined) {
   if (value == null || (typeof value === 'string' && !value.trim())) return;
   const numeric = Number(value);
   if (numeric === 0) return;
@@ -42,7 +42,7 @@ export async function readPreviewStat(
       options,
     });
     return {
-      isDirectory: result?.isDir === true || result?.is_dir === true,
+      isDirectory: result?.isDir ?? result?.is_dir,
       updatedAt:
         isoTimestamp(result?.modTime) ??
         isoTimestamp(result?.mtime) ??

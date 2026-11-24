@@ -11,7 +11,7 @@ pub use mysql::MySqlSnapshotLogStore;
 pub use postgres::PostgresSnapshotLogStore;
 pub use sqlite::SqliteSnapshotLogStore;
 pub use store::{
-    fanout_changed_paths, can_index_account_branch, can_index_paths, SnapshotLogError,
+    can_index_account_branch, can_index_paths, fanout_changed_paths, SnapshotLogError,
     SnapshotLogHit, SnapshotLogLimits, SnapshotLogRow, SnapshotLogStore,
 };
 

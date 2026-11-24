@@ -685,6 +685,12 @@
   white-space: nowrap;
 }
 
+.ov-command-console__search-tags {
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-command-console-muted);
+  font-size: 12px;
+}
+
 .ov-command-console__search-content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -889,7 +895,7 @@
 .ov-command-console__help {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .ov-command-console__help-lead {
@@ -907,19 +913,21 @@
 .ov-command-console__help-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .ov-command-console__help-section-label {
-  padding: 0 4px;
+  padding: 0 8px;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
 }
 
 .ov-command-console__help-items {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
 .ov-command-console__help-item {
@@ -927,7 +935,7 @@
   inline-size: 100%;
   min-inline-size: 0;
   min-block-size: 36px;
-  grid-template-columns: minmax(13ch, 23ch) minmax(0, 1fr);
+  grid-template-columns: min(42%, 23ch) minmax(0, 1fr);
   align-items: start;
   gap: 20px;
   border: 1px solid var(--ov-ui-command-console-card-border);
@@ -950,14 +958,21 @@
 }
 
 .ov-command-console__help-name {
+  min-inline-size: 0;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .ov-command-console__help-desc {
+  min-inline-size: 0;
   color: var(--ov-ui-command-console-muted);
   font-size: 12px;
+  line-height: 22px;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* 顶层候选面板保留主题继承，不占据命令记录区。 */
@@ -1080,7 +1095,7 @@
   display: flex;
   flex: none;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-inline: calc(-1 * var(--ov-ui-command-console-composer-inset));
   margin-block-end: 12px;
   border-block-end: 1px solid var(--ov-ui-command-console-composer-border);
@@ -1089,19 +1104,22 @@
 }
 
 .ov-command-console__quick-action {
+  display: inline-flex;
+  min-block-size: 28px;
+  align-items: center;
+  justify-content: center;
   max-inline-size: 100%;
-  border: 0;
-  border-radius: 4px;
+  border: 0.6px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 6px;
   background: var(--ov-ui-command-console-neutral-bg);
-  box-shadow: inset 0 0 0 1px
-    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
   padding: 2px 8px;
   color: inherit;
   font-family: var(--ov-ui-font-mono, 'Roboto Mono', monospace);
   font-size: 12px;
-  line-height: 20px;
+  line-height: 22px;
   overflow-wrap: anywhere;
   cursor: pointer;
+  transition: background-color 150ms ease;
 }
 
 .ov-command-console__quick-action:hover:not(:disabled) {
@@ -1115,17 +1133,25 @@
 
 .ov-command-console__quick-action:disabled {
   cursor: not-allowed;
-  opacity: 0.65;
+  opacity: 0.5;
+  transform: none;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .ov-command-console__quick-action {
+    transition:
+      background-color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .ov-command-console__quick-action:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
 }
 
 @container (max-width: 440px) {
-  .ov-command-console__quick-actions {
-    gap: 3px;
-  }
-
   .ov-command-console__quick-action {
-    padding-inline: 3px;
-    font-size: 11px;
+    padding-inline: 6px;
   }
 }
 

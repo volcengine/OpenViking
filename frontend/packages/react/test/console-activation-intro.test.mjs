@@ -86,7 +86,7 @@ test('introduction overrides restore defaults without new checks or losing the d
       await host.render({ ...props, ...extra });
       await tick();
       assert.deepEqual(calls, baseline);
-      assert.ok(host.button('Enable VikingBot'));
+      assert.ok(host.button('Start using VikingBot'));
       if (expected === 'text') {
         assert.equal(title().textContent, 'Host title');
         assert.equal(description().textContent, 'Host description');
@@ -109,7 +109,7 @@ test('introduction overrides restore defaults without new checks or losing the d
         !['custom', 'hidden'].includes(expected),
       );
     }
-    await host.press('Enable VikingBot');
+    await host.press('Start using VikingBot');
     await tick();
     await host.press('First draft');
     // Release quick-input ownership via the public takeover callback so the
@@ -175,7 +175,7 @@ test('custom or hidden introductions keep checking, Enable and Retry lifecycle c
     await act(() => eligible.resolve(true));
     await tick();
     assert.ok(host.container.querySelector('[data-intro]'));
-    await host.press('Enable VikingBot');
+    await host.press('Start using VikingBot');
     await tick();
     assert.ok(host.button('Retry'));
     assert.ok(host.container.querySelector('[data-intro]'));

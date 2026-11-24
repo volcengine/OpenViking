@@ -4,7 +4,11 @@ import type { VikingBotInteractionFieldContext } from '../../../components/vikin
 import type { VikingBotInteractionSingleRequest } from '../../../components/viking-bot/interaction/types.js';
 import { ChoiceInput } from '../../../components/viking-bot/interaction/choice-input.js';
 import { resolveInteractionLabels } from '../../../components/viking-bot/interaction/labels.js';
-import { ChevronRightIcon, FolderIcon } from '../../../icons/index.js';
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  FolderIcon,
+} from '../../../icons/index.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { nameFromUri } from '../../../shared/directory-tree/rows.js';
@@ -137,8 +141,9 @@ export function SkillField({
   const labels = hitlLabels(locale);
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const chosen =
-    field.value && !request.options.some((item) => item.value === field.value);
+  const showCandidates =
+    request.options.length > 1 ||
+    (request.options.length === 1 && field.value !== request.options[0]?.value);
   return (
     <div className="ov-viking-bot__compile-skill">
       <Button
@@ -152,14 +157,22 @@ export function SkillField({
         onClick={() => setOpen(true)}
       >
         <FolderIcon width={14} height={14} />
-        <span title={chosen ? field.value : undefined}>
-          {chosen ? field.value : labels.chooseSkill}
+        <span title={field.value || undefined}>
+          {field.value || labels.chooseSkill}
         </span>
         <ChevronRightIcon width={12} height={12} />
       </Button>
-      {request.options.length ? (
+      {showCandidates ? (
         <ChoiceInput
-          request={{ ...request, allowCustomInput: false }}
+          request={{
+            ...request,
+            options: request.options.map((option) => ({
+              ...option,
+              description: option.description ?? option.value,
+            })),
+            allowCustomInput: false,
+          }}
+          selectedIcon={<CheckIcon width={14} height={14} />}
           value={field.value}
           labels={resolveInteractionLabels(locale)}
           locale={locale}

@@ -36,15 +36,20 @@ async def test_running_summary_settles_checkpoint_and_connector_state(
     store, watch_vfs, watch_tracker, connector, mutation
 ):
     owner = {"account_id": OWNER.account_id, "user_id": OWNER.user_id}
-    record = await watch_tracker.create("add_resource", resource_id="scan", **owner)
+    record = await watch_tracker.create(
+        ConnectorDelegate.task_type if connector else "add_resource", resource_id="scan", **owner
+    )
     manager = WatchManager(store, viking_fs=watch_vfs, tracker=watch_tracker)
+    instruction = "scan instruction 中文"
     task = await create(
         store,
+        "viking://resources/scan",
+        path=REPO,
         initial_run_id=record.task_id,
-        auth_state=CONNECTOR_AUTH if connector else {"provider": "git", "token": "private"},
-        connector_states={"old": "state"},
-        source_checkpoint=CHECKPOINT,
-        instruction="scan instruction 中文",
+        auth_state=CONNECTOR_AUTH if connector else None,
+        connector_states={"old": "state"} if connector else None,
+        source_checkpoint=None if connector else {**CHECKPOINT, "instruction": instruction},
+        instruction=instruction,
     )
     state = (await store.running())[0]
     assert (state.account_id, state.user_id) == (OWNER.account_id, OWNER.user_id)
@@ -62,11 +67,20 @@ async def test_running_summary_settles_checkpoint_and_connector_state(
     assert (current.task_id, current.run_started_at) == (task.task_id, state.run_started_at)
     assert current.instruction == ("new" if mutation == "invalidate" else task.instruction)
     assert current.connector is connector
-    await watch_tracker.complete(
-        record.task_id,
-        {"connector_states": {"new": "state"}, "meta": {"resolved_head_sha": "b" * 40}},
-        **owner,
+    checkpoint = {"kind": "git", "head_sha": "b" * 40, "instruction": instruction}
+    result = (
+        {
+            "connector_status": "succeeded",
+            "connector_task_key": "external-import",
+            "connector_states": {"new": "state"},
+        }
+        if connector
+        else {
+            "meta": {"resolved_head_sha": checkpoint["head_sha"]},
+            "source_checkpoint": checkpoint,
+        }
     )
+    await watch_tracker.complete(record.task_id, result, **owner)
     record = await watch_tracker.get(record.task_id, **owner)
     assert await manager.settle_running(current, record)
     assert not await manager.settle_running(state, record)
@@ -78,11 +92,9 @@ async def test_running_summary_settles_checkpoint_and_connector_state(
         assert saved.last_status == "completed"
         assert saved.last_task_id == record.task_id
         assert saved.auth_state == task.auth_state
-        assert saved.connector_states == ({"new": "state"} if connector else {"old": "state"})
+        assert saved.connector_states == ({"new": "state"} if connector else None)
         assert saved.source_checkpoint == (
-            None
-            if mutation == "invalidate"
-            else {"kind": "git", "head_sha": "b" * 40, "instruction": task.instruction}
+            None if connector or mutation == "invalidate" else checkpoint
         )
         assert saved.is_active is (mutation != "pause")
 
@@ -164,7 +176,6 @@ async def test_stale_running_summary_cannot_settle_reused_run_id(store, watch_vf
         "error",
         "timeout",
         "non_git",
-        "sync",
         "failed",
     ],
 )
@@ -173,7 +184,7 @@ async def test_git_gate(store, watch_vfs, watch_tracker, monkeypatch, scenario):
     owner = {"account_id": OWNER.account_id, "user_id": OWNER.user_id}
     imported_sha = "c" * 40
     probe = AsyncMock(return_value=("", SHA))
-    if scenario == "changed":
+    if scenario in {"changed", "failed"}:
         probe.return_value = ("refs/heads/main", "b" * 40)
     elif scenario == "error":
         probe.side_effect = RuntimeError("probe failed")
@@ -183,13 +194,19 @@ async def test_git_gate(store, watch_vfs, watch_tracker, monkeypatch, scenario):
             await asyncio.Event().wait()
 
         probe.side_effect = blocked
-    monkeypatch.setattr(
-        "openviking.parse.accessors.git_accessor.GitAccessor.probe_git_remote_head", probe
-    )
+    if scenario == "commit":
+        # Exercise the real accessor: a pinned revision must not need a remote ref lookup.
+        remote_head = AsyncMock(side_effect=AssertionError("pinned commit queried the remote"))
+        monkeypatch.setattr(
+            "openviking.parse.accessors.git_accessor.GitAccessor._git_ls_remote_head",
+            remote_head,
+        )
+    else:
+        monkeypatch.setattr(
+            "openviking.parse.accessors.git_accessor.GitAccessor.probe_git_remote_head", probe
+        )
 
     async def refresh(**kwargs):
-        if scenario == "sync":
-            return {"status": "completed", "meta": {"resolved_head_sha": imported_sha}}
         record = await tracker.create(
             "add_resource", task_id="refresh-1", resource_id=kwargs["to"], **owner
         )
@@ -210,7 +227,7 @@ async def test_git_gate(store, watch_vfs, watch_tracker, monkeypatch, scenario):
         user_id=OWNER.user_id,
         to_uri=target,
         path=REPO if scenario != "non_git" else "https://example.org/doc",
-        source_checkpoint=None if scenario in {"sync", "failed"} else CHECKPOINT,
+        source_checkpoint=None if scenario == "non_git" else CHECKPOINT,
         last_task_id="previous-import",
         instruction="new" if scenario == "instruction" else "",
         processor_kwargs={"commit": SHA} if scenario == "commit" else {},
@@ -218,7 +235,7 @@ async def test_git_gate(store, watch_vfs, watch_tracker, monkeypatch, scenario):
     task.next_execution_time = task.calculate_next_execution_time()
     await watch_vfs.mkdir(target, ctx=manager.context(task), exist_ok=True)
     await store.create_task(task)
-    receipt = await manager.trigger(task.task_id)
+    receipt = await asyncio.wait_for(manager.trigger(task.task_id), 5)
     state = await store.get_state(task.task_id)
     if scenario in {"unchanged", "commit", "token"}:
         assert receipt is None
@@ -227,43 +244,47 @@ async def test_git_gate(store, watch_vfs, watch_tracker, monkeypatch, scenario):
         assert state.task.last_status == "completed"
         assert state.run_started_at is None
         assert state.task.next_execution_time is not None
-    elif scenario == "sync":
-        assert receipt is None
-        assert state.task.last_status == "completed"
-        assert state.task.source_checkpoint == {
-            "kind": "git",
-            "head_sha": imported_sha,
-            "instruction": "",
-        }
-        assert state.run_started_at is None
+        assert state.task.source_checkpoint == CHECKPOINT
     else:
+        assert receipt is not None
         assert receipt.task_id == "refresh-1"
+        if scenario in {"instruction", "changed", "failed"}:
+            assert resources.refresh_resource.await_args.kwargs["git_head_sha_hint"] == (
+                SHA if scenario == "instruction" else "b" * 40
+            )
+        else:
+            assert "git_head_sha_hint" not in resources.refresh_resource.await_args.kwargs
         assert state.task.source_checkpoint == task.source_checkpoint
         assert state.current_run_id == receipt.task_id
         if scenario == "failed":
             await tracker.fail(receipt.task_id, "import failed", **owner)
         else:
-            await tracker.complete(
-                receipt.task_id, {"meta": {"resolved_head_sha": imported_sha}}, **owner
-            )
+            result = {} if scenario == "non_git" else {"meta": {"resolved_head_sha": imported_sha}}
+            await tracker.complete(receipt.task_id, result, **owner)
         assert await manager.settle(task.task_id, receipt.task_id)
         assert not await manager.settle(task.task_id, receipt.task_id)
         state = await store.get_state(task.task_id)
-        assert state.task.source_checkpoint == (
-            None
-            if scenario == "failed"
-            else {
+        if scenario == "failed":
+            assert state.task.last_status == "failed"
+            assert state.task.source_checkpoint == CHECKPOINT
+        elif scenario == "non_git":
+            assert state.task.source_checkpoint is None
+        else:
+            assert state.task.source_checkpoint == {
                 "kind": "git",
                 "head_sha": imported_sha,
                 "instruction": task.instruction,
             }
-        )
     if scenario == "non_git":
         probe.assert_not_awaited()
     elif scenario == "token":
-        assert probe.await_args.args == (REPO,)
-        assert probe.await_args.kwargs["auth_config"] == {"token": "account-token"}
+        probe_call = probe.await_args
+        assert probe_call is not None
+        assert probe_call.args == (REPO,)
+        assert probe_call.kwargs["auth_config"] == {"token": "account-token"}
         assert "auth_config" not in state.task.processor_kwargs
+    elif scenario == "commit":
+        remote_head.assert_not_awaited()
     assert "source_checkpoint" not in state.task.to_dict()
 
 

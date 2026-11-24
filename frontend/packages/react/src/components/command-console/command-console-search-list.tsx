@@ -138,6 +138,11 @@ function SearchRow({
             )}
           </span>
         ) : null}
+        {item.tags?.length ? (
+          <span className="ov-command-console__search-tags">
+            {item.tags.join(', ')}
+          </span>
+        ) : null}
         {item.metaLabel ? (
           <span className="ov-command-console__search-meta">
             <CommandConsoleUriText

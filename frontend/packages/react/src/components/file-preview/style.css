@@ -5,6 +5,7 @@
 @import '../../shared/primitives/popover/popover.css';
 @import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
+@import '../../shared/path-copy-button/path-copy-button.css';
 @import '../../shared/primitives/tabs/tabs.css';
 @import './file-preview.css';
 @import './file-preview-editor.css';
@@ -17,3 +18,4 @@
 @import '../../shared/primitives/modal/modal.css';
 @import './file-preview-version-note.css';
 @import './session-messages.css';
+@import './json-preview.css';

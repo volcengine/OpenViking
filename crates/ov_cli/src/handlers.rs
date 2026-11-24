@@ -799,7 +799,7 @@ pub async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
 }
 
 pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
+    let client = std::sync::LazyLock::new(|| ctx.get_client());
     match cmd {
         PrivacyCommands::Categories => {
             commands::privacy::categories(&client, ctx.output_format, ctx.compact).await
@@ -863,6 +863,17 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
                 ctx.compact,
             )
             .await
+        }
+        PrivacyCommands::Run {
+            env,
+            env_file,
+            command,
+        } => {
+            let status = commands::privacy_run::run(client, &env, &env_file, &command).await?;
+            if status != 0 {
+                std::process::exit(status);
+            }
+            Ok(())
         }
         PrivacyCommands::Upsert {
             category,

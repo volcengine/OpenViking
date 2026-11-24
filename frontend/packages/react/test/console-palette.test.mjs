@@ -179,7 +179,7 @@ test('Console keeps quick commands above the input after execution', async () =>
     const buttons = [...bar().querySelectorAll('button')];
     assert.deepEqual(
       buttons.map((button) => button.textContent),
-      ['add-resource', 'add-skill', 'add-memory', 'find', 'compile'],
+      ['add-resource', 'add-skill', 'add-memory', 'find', 'compile create'],
     );
     assert.equal(
       bar().nextElementSibling,

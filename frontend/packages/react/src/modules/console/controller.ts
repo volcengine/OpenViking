@@ -121,7 +121,7 @@ export function createConsoleController(
         return;
       }
       let taskKeys: string[] = [];
-      const { content, telemetry } = await executeCommand(
+      const { content, telemetry, resultNotice } = await executeCommand(
         command,
         monitoring?.client ?? client,
         { ...options, signal },
@@ -135,7 +135,13 @@ export function createConsoleController(
       if (!current() || signal.aborted) return;
       monitoring?.finish(content);
       event?.success(taskKeys);
-      updateRecord({ status: 'success', content, taskKeys, telemetry });
+      updateRecord({
+        status: 'success',
+        content,
+        taskKeys,
+        telemetry,
+        resultNotice,
+      });
     } catch (error) {
       if (!current() || signal.aborted) return;
       monitoring?.finish();

@@ -52,12 +52,12 @@ pub use index_store::{CommitIndex, IndexStore, IndexStoreError};
 pub use object_store::ObjectStore;
 pub use ref_store::RefStore;
 pub use service::GitService;
+#[cfg(feature = "postgres")]
+pub use snapshot_log::PostgresSnapshotLogStore;
 pub use snapshot_log::{
     MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit, SnapshotLogRow, SnapshotLogStore,
     SqliteSnapshotLogStore,
 };
-#[cfg(feature = "postgres")]
-pub use snapshot_log::PostgresSnapshotLogStore;
 pub use tree_builder::{flatten, lookup, TreeEditor};
 pub use types::{
     Actor, CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreDiff,

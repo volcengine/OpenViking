@@ -1,4 +1,5 @@
 import type { renderErrors as EnglishRenderErrors } from './en-US.js';
+import type { jsonPreviewLabels as EnglishJsonPreviewLabels } from './en-US.js';
 import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
@@ -14,7 +15,7 @@ const messages = {
   moreActions: '更多操作',
   actionFailed: '操作失败',
   copyPath: '复制路径',
-  copied: '已复制',
+  copied: '节点路径已复制',
   copyFailed: '复制失败',
   previewMode: '预览',
   sourceMode: '源码',
@@ -49,3 +50,11 @@ export const renderErrors = {
   content: '页签内容显示失败',
   editor: '文件编辑器显示失败',
 } satisfies Record<keyof typeof EnglishRenderErrors, string>;
+
+export const jsonPreviewLabels = {
+  collapseLine: (lineNumber: number) => `折叠第 ${lineNumber} 行`,
+  expandLine: (lineNumber: number) => `展开第 ${lineNumber} 行`,
+} satisfies Record<
+  keyof typeof EnglishJsonPreviewLabels,
+  (lineNumber: number) => string
+>;

@@ -325,6 +325,7 @@ impl OwnerState {
 #[derive(Debug, Default)]
 struct LeaseIndex {
     by_lease: HashMap<String, Arc<OwnerState>>,
+    account_by_lease: HashMap<String, String>,
     by_owner: HashMap<String, Weak<OwnerState>>,
 }
 
@@ -385,6 +386,11 @@ impl LeaseRegistry {
         index
             .by_owner
             .insert(owner.owner_id.clone(), Arc::downgrade(&owner));
+        if let Some(account_id) = FsContextView::current().account_id() {
+            index
+                .account_by_lease
+                .insert(lease_ref.clone(), account_id.to_string());
+        }
         index.by_lease.insert(lease_ref, owner);
         Ok(())
     }
@@ -402,6 +408,7 @@ impl LeaseRegistry {
             ));
         }
         index.by_lease.remove(lease_ref);
+        index.account_by_lease.remove(lease_ref);
         Ok(())
     }
 
@@ -418,6 +425,14 @@ impl LeaseRegistry {
     /// Count currently published leases under the short index lock.
     pub(super) fn active_count(&self) -> usize {
         self.lock().by_lease.len()
+    }
+
+    pub(super) fn active_account_count(&self, account_id: &str) -> usize {
+        self.lock()
+            .account_by_lease
+            .values()
+            .filter(|id| id.as_str() == account_id)
+            .count()
     }
 
     /// Remove owner index entries whose weak state no longer has a live lease.
