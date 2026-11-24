@@ -536,7 +536,8 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
     const message = typeof res.error === "string" ? res.error : res.error?.message;
     const errors = res.error?.details?.validation_errors;
     const unsupportedMode = Array.isArray(errors)
-      ? errors.some((error) => error.type === "extra_forbidden" && error.loc?.at(-1) === "mode")
+      ? errors.some(({ type, loc }) => type === "extra_forbidden"
+        && loc?.length === 2 && loc[0] === "body" && loc[1] === "mode")
       : /\b(?:extra inputs?|unexpected (?:keyword )?argument)\b[^.\n]*\bmode\b/i.test(message || "");
     if (unsupportedMode) {
       await markContextFaceLegacy(options.legacyCachePath);
