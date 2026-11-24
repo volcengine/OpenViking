@@ -6,6 +6,7 @@ from openviking.core.namespace import relative_uri_path
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, bounded_jobs
 from vikingbot.compile.renderer import output_path_key
+from vikingbot.compile.results import IncompleteWorkerOutput
 
 
 async def run(runtime, node, groups):
@@ -71,26 +72,32 @@ async def resolve_files(runtime, documents):
         path, items = item
         refs = sorted({ref for doc in items for ref in doc.source_refs})
         try:
-            for _ in range(MAX_JOB_ATTEMPTS):
-                outputs = await runtime.generate(
-                    f"reduce_merge-{digest(path)[:24]}",
-                    "Resolve the assigned Markdown path collision following the Skill. "
-                    "Read every candidate; combine compatible contributions, deduplicate equivalent "
-                    "content, or rename independent pages. Preserve unique facts, source citations, "
-                    "conditions, applicability and conflicting claims. Write only the resolved "
-                    "candidate files; do not generate extra indexes or unrelated pages. "
-                    "reserved_paths belong to other outputs and must not be written. "
-                    "Output paths must be unique under Unicode NFC normalization and case folding.",
-                    {
-                        "path": items[0].path,
-                        "documents": [vars(doc) for doc in items],
-                        "reserved_paths": sorted(
-                            display_paths[p] for p, owner in reserved.items() if owner != path
-                        ),
-                        "inputs": [{"payload": {"source_ranges": refs}}],
-                    },
-                    refs,
-                )
+            for attempt in range(MAX_JOB_ATTEMPTS):
+                try:
+                    outputs = await runtime.generate_once(
+                        f"reduce_merge-{digest(path)[:24]}",
+                        "Resolve the assigned Markdown path collision following the Skill. "
+                        "Read every candidate; combine compatible contributions, deduplicate equivalent "
+                        "content, or rename independent pages. Preserve unique facts, source citations, "
+                        "conditions, applicability and conflicting claims. Write only the resolved "
+                        "candidate files; do not generate extra indexes or unrelated pages. "
+                        "reserved_paths belong to other outputs and must not be written. "
+                        "Output paths must be unique under Unicode NFC normalization and case folding.",
+                        {
+                            "path": items[0].path,
+                            "documents": [vars(doc) for doc in items],
+                            "reserved_paths": sorted(
+                                display_paths[p] for p, owner in reserved.items() if owner != path
+                            ),
+                            "inputs": [{"payload": {"source_ranges": refs}}],
+                        },
+                        refs,
+                    )
+                except IncompleteWorkerOutput:
+                    if attempt + 1 == MAX_JOB_ATTEMPTS:
+                        raise
+                    runtime.metrics["repairs"] += 1
+                    continue
                 if not outputs:
                     raise ValueError(f"No Markdown outputs resolve {path}")
                 keys = [output_path_key(doc.path) for doc in outputs]

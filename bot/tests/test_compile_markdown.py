@@ -19,7 +19,8 @@ from vikingbot.compile.ops import finalize
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
-from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
+from vikingbot.compile.pipeline_agent import agent_runner
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS
 from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
 from vikingbot.compile.results import Document, Group, RouteResponse
 from vikingbot.compile.service import BotCompileService
@@ -178,7 +179,7 @@ async def configure_pipeline(pipeline, merge=False, fail_second=False):
         )
         if fail_second and len(calls) == 2:
             raise ValueError("Worker stopped after a partial write")
-        return root
+        return await pipeline.collect_outputs(root, stage)
 
     pipeline.model.agent_runner = worker
     return calls
@@ -241,7 +242,9 @@ async def test_file_worker_uses_existing_tools_without_emit(pipeline, agent_loop
                 ],
             ),
         )
-    if ending != "budget":
+    if ending == "budget":
+        replies *= MAX_JOB_ATTEMPTS
+    else:
         replies.extend(
             [
                 LLMResponse(
@@ -435,21 +438,52 @@ async def test_failed_routes_keep_completed_drafts_through_finalization(
     assert (await pipeline.files.get("coverage"))["counts"] == {"delivered": 3}
 
 
-async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):
+async def test_finalization_requires_unique_paths(pipeline):
     doc = Document("topic.md", "draft.md")
     await pipeline.files.sandbox.write_file(doc.workspace_path, "# Topic\n\nNew facts.")
     with pytest.raises(ValueError, match="Multiple output writers"):
         await finalize.run(pipeline, [doc, doc])
-    pipeline.old.clear()
-    pipeline.client.stat = AsyncMock(return_value={"isDir": False})
-    pipeline.client.download_bytes.return_value = b"# Existing facts"
-    assert (await finalize.run(pipeline, [doc])).operations[0]["mode"] == "create"
-    pipeline.old.clear()
-    await TargetReader(pipeline).execute(path="topic.md")
-    assert (await finalize.run(pipeline, [doc])).operations[0]["mode"] == "replace"
-    pipeline.client.download_bytes.return_value = b"concurrent edit"
-    with pytest.raises(ValueError, match="changed after reading"):
-        await finalize.run(pipeline, [doc])
+
+
+@pytest.mark.parametrize("retry_reads_target", [False, True])
+async def test_finalization_requires_target_read_from_completed_attempt(
+    pipeline, agent_loop, retry_reads_target
+):
+    loop, key, _ = agent_loop
+    pipeline.changes = {"head": "test", "diff_dirs": [], "full_dirs": []}
+    pipeline.client.stat.return_value = {"isDir": False}
+    pipeline.client.stat.side_effect = None
+    pipeline.client.download_bytes.return_value = b"# Existing facts from unchanged sources"
+
+    def reply(tool_id, name, **arguments):
+        return LLMResponse(content="", tool_calls=[ToolCallRequest(tool_id, name, arguments, 0)])
+
+    read_target = reply("old", "read_target_file", path="topic.md")
+    first_attempt = [
+        read_target,
+        reply("draft", "write_file", path="topic.md", content="# Unfinished draft"),
+        reply("review", "read_file", path="topic.md"),
+    ]
+    retry = [
+        reply("write", "write_file", path="topic.md", content="# New facts from changed sources"),
+        LLMResponse(content="Done", finish_reason="stop"),
+    ]
+    if retry_reads_target:
+        retry.insert(0, read_target)
+    pipeline.model.provider.chat = AsyncMock(side_effect=first_attempt + retry)
+    pipeline.model.agent_runner = agent_runner(
+        loop, key, None, pipeline.limits.model_copy(update={"subagent_iterations": 3})
+    )
+
+    outputs = await pipeline.generate("map-0", "Preserve existing facts.", {"inputs": []}, [])
+    assert pipeline.metrics["repairs"] == 1
+    bundle = await finalize.run(pipeline, outputs)
+    assert len(bundle.operations) == 1
+    assert bundle.operations[0]["mode"] == ("replace" if retry_reads_target else "create")
+    if retry_reads_target:
+        pipeline.client.download_bytes.return_value = b"concurrent edit"
+        with pytest.raises(ValueError, match="changed after reading"):
+            await finalize.run(pipeline, outputs)
 
 
 @pytest.mark.parametrize("cancelled,conflict", [(False, False), (False, True), (True, False)])
@@ -531,7 +565,7 @@ async def test_file_collection_rejects_missing_empty_nonmarkdown_and_invalid_utf
     async def worker(*args, **kwargs):
         if path is not None:
             await pipeline.files.sandbox.write_file_bytes(root + "/" + path, content)
-        return root
+        return await pipeline.collect_outputs(root, "invalid")
 
     pipeline.model.agent_runner = worker
     with pytest.raises(ValueError):

@@ -555,12 +555,7 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
                         if route.user_terminates:
                             final_content = ""
                             break
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": "Reflect on the results and decide next steps.",
-                            }
-                        )
+                        messages.append({"role": "user", "content": route.next_prompt})
                         continue
                     if isinstance(route, _PlainTextFinal):
                         final_content = route.content if route.content is not None else text

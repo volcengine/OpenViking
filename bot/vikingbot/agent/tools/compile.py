@@ -322,9 +322,16 @@ class CompileChildTool(Tool):
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
         """Bind file access to the child and enforce private reads for isolated transforms."""
         field = "working_dir" if self.name == "exec" else "path"
-        if self.merge_only and str(kwargs.get(field, "")).startswith("viking://"):
+        path = kwargs.get(field) or "."
+        if self.merge_only and str(path).startswith("viking://"):
             raise ValueError("Merge children can only access their own output files")
-        relative = _normalize_workspace_path(kwargs.get(field) or ".")
+        relative = (
+            posixpath.normpath(sanitize_relative_viking_path(path))
+            if self.merge_only
+            else _normalize_workspace_path(path)
+        )
+        if self.merge_only and relative == ".":
+            raise ValueError("A file path is required")
         if self.name == "read_file" and relative.startswith(
             (COMPILE_DRAFT_ROOT + "/", TOOL_RESULT_DIRECTORY + "/")
         ):

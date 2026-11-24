@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from loguru import logger
@@ -17,10 +17,10 @@ from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops import map as map_op
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
-from vikingbot.compile.pipeline_io import JsonModel, TaskFiles, bounded_jobs
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, JsonModel, TaskFiles, bounded_jobs
 from vikingbot.compile.plan import PLANNING_RULES, PlanProposal, parse_plan
 from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
-from vikingbot.compile.results import Document, Source
+from vikingbot.compile.results import Document, IncompleteWorkerOutput, InvalidWorkerOutput, Source
 from vikingbot.compile.review import run as review_stage
 from vikingbot.compile.skill_resources import SkillResources
 
@@ -58,6 +58,7 @@ class Pipeline:
         self.tools, self.tool_context = {}, None
         self.sources: dict[str, Source] = {}
         self.evidence, self.status, self.old = {}, {}, {}
+        self.output_target_hashes: dict[tuple[str, str], str] = {}
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False
@@ -81,7 +82,17 @@ class Pipeline:
         return text
 
     async def generate(self, stage, instructions, data, source_refs):
-        """Run one file worker and collect only its completed Markdown output directory."""
+        """Recover unfinished workers within one bounded stage budget."""
+        for attempt in range(MAX_JOB_ATTEMPTS):
+            try:
+                return await self.generate_once(stage, instructions, data, source_refs)
+            except IncompleteWorkerOutput:
+                if attempt + 1 == MAX_JOB_ATTEMPTS:
+                    raise
+                self.metrics["repairs"] += 1
+
+    async def generate_once(self, stage, instructions, data, source_refs):
+        """Run one worker; its natural-completion callback validates the files once."""
         if self.model.agent_runner is None:
             raise ValueError("Compile requires a file-tool agent runner")
         system = (
@@ -92,13 +103,21 @@ class Pipeline:
             f"Skill:\n{self.skill}\nUser instruction:\n{self.request.instruction}\n"
             f"Stage task:\n{instructions}\n{self.output_instructions}"
         )
+        if data.get("documents"):
+            system += (
+                "\nThe assigned draft documents define this merge job's scope. "
+                "Use original source evidence to verify, correct and complete their topics. "
+                "Do not re-extract unrelated topics from the source ranges or regenerate pages "
+                "owned by other groups. Related-page links do not assign those pages to this job. "
+                "Splitting or combining the assigned content is allowed when the Skill requires it.\n"
+            )
         if self.changes:
             system += (
                 "\nSelected inputs may omit unchanged sources. Absence is not deletion. "
                 "Preserve unrelated target content and existing facts from unchanged sources. "
                 "Read existing target files before updating them.\n"
             )
-        root = await self.model.agent_runner(
+        outputs = await self.model.agent_runner(
             system,
             {
                 **data,
@@ -110,21 +129,34 @@ class Pipeline:
             stage=stage,
             runtime=self,
         )
+        return [replace(document, source_refs=list(source_refs)) for document in outputs]
+
+    async def collect_outputs(self, root: str, stage: str) -> list[Document]:
+        """Validate the worker's private directory before accepting its final reply."""
         root = sanitize_relative_viking_path(root)
         if not root.startswith(COMPILE_DRAFT_ROOT + "/") or not root.endswith("/output"):
             raise ValueError("Invalid private worker output directory")
         documents = []
+        prefix = root + "/"
         for entry in await self.files.sandbox.list_files(root, max_entries=None):
-            prefix = root + "/"
             if not entry.path.startswith(prefix):
                 raise ValueError("Worker output is outside its private output directory")
-            path = validate_relative_file_path(entry.path[len(prefix) :])
-            content = (await self.files.sandbox.read_file_bytes(entry.path)).decode("utf-8")
-            if not path.lower().endswith(".md") or not content.strip():
-                raise ValueError(f"Output must be nonempty Markdown: {path}")
-            documents.append(Document(path, entry.path, list(source_refs)))
+            try:
+                path = validate_relative_file_path(entry.path[len(prefix) :])
+            except ValueError as error:
+                raise IncompleteWorkerOutput(str(error)) from error
+            if not path.lower().endswith(".md"):
+                raise IncompleteWorkerOutput(f"Output must be Markdown: {path}")
+            payload = await self.files.sandbox.read_file_bytes(entry.path)
+            try:
+                content = payload.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise InvalidWorkerOutput(f"Output must be UTF-8 Markdown: {path}") from error
+            if not content.strip():
+                raise InvalidWorkerOutput(f"Output must be nonempty Markdown: {path}")
+            documents.append(Document(path, entry.path))
         if not documents and not (has_directory_plan(self.changes) and self.changes.get("head")):
-            raise ValueError(f"{stage}: worker completed without Markdown files")
+            raise InvalidWorkerOutput(f"{stage}: worker completed without Markdown files")
         return documents
 
     async def run(self, batches) -> RenderedBundle:

@@ -74,6 +74,7 @@ class _PlainTextDelivered:
     messages: list[dict]
     tools_used: list[dict]
     user_terminates: bool = False
+    next_prompt: str = "Reflect on the results and decide next steps."
 
 
 @dataclass(slots=True)
