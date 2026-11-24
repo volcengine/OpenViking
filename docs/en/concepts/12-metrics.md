@@ -84,11 +84,11 @@ Collectors turn inputs into metric semantics:
 
 ### MetricRegistry
 
-The MetricRegistry is the in-process metric store that keeps the current metric values and serves them to the exporter.
+MetricRegistry keeps OpenViking metric names, label contracts, and account-dimension rules. Event counts and durations are accumulated by the OpenTelemetry SDK. Cumulative values from RAGFS and state collectors enter as snapshots, without being replayed as new observations.
 
 ### Exporter
 
-The first exporter implementation is the Prometheus exporter, which renders registry contents into Prometheus exposition text.
+`/metrics` uses the official Prometheus Python client for text exposition. OTLP HTTP/gRPC uses the official OpenTelemetry exporters for encoding, delivery, and retries. Existing endpoint, headers, TLS, and export-interval settings remain unchanged.
 
 ## Usage
 
@@ -138,6 +138,36 @@ Notes:
 ## Key Metric Families
 
 The tables list representative metrics defined by the collectors. A series appears only when its feature is enabled, the relevant event occurs, and collection succeeds. An absent series does not necessarily mean zero.
+
+### Duration distributions and percentiles
+
+Instrumentation records actual durations and labels; Python and RAGFS delegate duration
+aggregation to their respective OpenTelemetry SDKs. The integration layer supplies the default
+collection policy, so business collectors do not maintain bucket boundaries. Python starts at
+0.01 seconds and RAGFS at 0.0001 seconds, using a 1/2/5 scale per decade through 5,000,000 seconds
+(about 58 days). Larger observations remain in `+Inf`. These boundaries are not timeouts;
+dashboards must not filter slow operations with `< 10` or a fixed axis maximum.
+
+Prometheus `_bucket`, `_count`, `_sum` series and OTLP histograms carry `bucket_schema`,
+derived from their actual boundaries; collectors cannot set it themselves.
+**Keep `bucket_schema` when aggregating percentiles**
+so rolling upgrades cannot mix incompatible bucket layouts. Older series without this label
+form a separate group; their lost overflow distribution cannot be reconstructed.
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, bucket_schema, operation) (
+    rate(openviking_operation_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Use `0.95` for P95. Compute the mean from `rate(_sum) / rate(_count)` with the same
+`operation, bucket_schema` grouping, showing it only when the count is positive.
+No completed observations must remain a gap, not zero latency. Percentiles are still
+bucket-interpolated estimates, particularly with low traffic or coarse buckets.
+Each default Python duration histogram label set exports 30 Prometheus series; RAGFS exports 36.
+Account for the extra buckets in scrape and storage capacity planning.
 
 ### Requests and Operations
 
@@ -255,6 +285,13 @@ Notes:
 | `openviking_lock_stale_leases_released_total` | Counter | none | stale leases released |
 | `openviking_lock_descendant_scans_total` | Counter | none | completed descendant scans |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | none | cumulative descendant scan duration |
+| `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | completed descendant scan duration distribution, supporting mean, P95, and P99 |
+| `openviking_lock_redis_acquire_duration_seconds` | Histogram | `kind, result, bucket_schema` | Redis acquisition round trip including response decoding; `kind` is `tree` if the batch includes Tree, otherwise `exact`; `result` is `ok`, `conflict`, `invalid_token`, `invalid_request`, `invalid_response`, or `error` |
+| `openviking_lock_redis_slow_acquisitions_total` | Counter | none | Redis acquisition round trips exceeding 10ms, including failed requests |
+
+Redis acquisition metrics cover returned script calls, excluding local validation,
+manager conflict waiting and calls cancelled before a response. Scope, owner and
+service name are retained in slow logs, not metric labels.
 
 The queue duration `outcome` label is one of `success`, `failed`, `requeued`, `cancelled`, or `exception`. `failed` means the handler returned a settled failure that can be acknowledged, while `exception` means processing raised and the current message is left unacknowledged.
 
@@ -283,15 +320,12 @@ seconds, for example `123 ns = 0.000000123 seconds`.
 |---------------|------|---------------|---------|
 | `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | successful and failed operations |
 | `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | operation duration distribution |
-| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | file/directory cache hits and misses |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | query cache hits and misses; `kind="query"` |
 | `openviking_ragfs_cache_backend_fallbacks_total` | Counter | none | backend loads after cache misses |
-| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache put/delete attempts |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache get/put/delete attempts |
 | `openviking_ragfs_cache_invalidations_total` | Counter | none | completed invalidations |
-| `openviking_ragfs_cache_errors_total` | Counter | none | cache errors hidden by bypass mode |
-| `openviking_ragfs_cache_policy_bypasses_total` | Counter | none | reads bypassing cache |
-| `openviking_ragfs_cache_bytes_total` | Counter | `source` | bytes from backend/cache |
+| `openviking_ragfs_cache_errors_total` | Counter | none | provider or cache-data errors |
 | `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | cumulative get/put/delete duration |
-| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved counts |
 | `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | active flush runtime, `0` or `1` per mount |
 | `openviking_ragfs_multiwrite_pending_events` | Gauge | none | submitted events that are queued, executing, or awaiting retry |
 | `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | final failures for `flush`, `checkpoint`, `catch_up`, or `gc` |
@@ -302,7 +336,10 @@ seconds, for example `123 ns = 0.000000123 seconds`.
 These metrics have no `mount` or `account_id` label. Cache and multi-backend
 families are absent when those capabilities are not enabled. `status` is
 `success` or `error`; `exists=false` is successful and `replace` uses `rename`.
-Histogram buckets cover all outcomes, with finite bounds from 0.0001 to 10 seconds.
+Histograms cover all outcomes and are accumulated by the Rust OpenTelemetry SDK;
+exported boundaries and counts come directly from SDK snapshots.
+Histograms are emitted only after an operation has observations, avoiding empty long-tail
+buckets for every plugin/operation pair; existing operation counters remain available.
 Python `get_stats()` retains its microsecond fields.
 
 The protocol family always contains both closed-label series. One unreadable

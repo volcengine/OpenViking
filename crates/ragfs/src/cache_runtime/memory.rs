@@ -3,7 +3,7 @@
 use super::provider::{CacheOperation, CacheProvider};
 use super::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, ScriptRequest, ScriptResult, SetCondition, SetOptions, SetResult,
+    ListMoveRequest, ScriptRequest, ScriptResult, ScriptValue, SetCondition, SetOptions, SetResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,11 +19,15 @@ type ScriptHandler = dyn Fn(ScriptRequest) -> CacheResult<ScriptResult> + Send +
 pub struct MemoryMockProvider {
     values: RwLock<HashMap<String, Bytes>>,
     expirations: RwLock<HashMap<String, Instant>>,
+    hashes: RwLock<HashMap<String, HashMap<String, Bytes>>>,
     sets: RwLock<HashMap<String, HashSet<Bytes>>>,
+    zsets: RwLock<HashMap<String, HashMap<String, f64>>>,
     lists: RwLock<HashMap<String, VecDeque<Bytes>>>,
     closed: AtomicBool,
     unavailable: AtomicBool,
     delete_failure: AtomicBool,
+    deletes: AtomicU64,
+    unlinks: AtomicU64,
     gets: AtomicU64,
     batch_gets: AtomicU64,
     active_gets: AtomicU64,
@@ -31,10 +35,12 @@ pub struct MemoryMockProvider {
     seen_get_keys: Mutex<Vec<String>>,
     seen_batch_get_keys: Mutex<Vec<Vec<String>>>,
     get_delay: Duration,
+    hget_delay: Duration,
     set_delay: Duration,
     active_sets: AtomicU64,
     max_active_sets: AtomicU64,
     next_set_failure: Mutex<Option<String>>,
+    unlink_delay: Duration,
     script_handler: Option<Arc<ScriptHandler>>,
 }
 
@@ -54,11 +60,15 @@ impl MemoryMockProvider {
         Self {
             values: RwLock::new(HashMap::new()),
             expirations: RwLock::new(HashMap::new()),
+            hashes: RwLock::new(HashMap::new()),
             sets: RwLock::new(HashMap::new()),
+            zsets: RwLock::new(HashMap::new()),
             lists: RwLock::new(HashMap::new()),
             closed: AtomicBool::new(false),
             unavailable: AtomicBool::new(false),
             delete_failure: AtomicBool::new(false),
+            deletes: AtomicU64::new(0),
+            unlinks: AtomicU64::new(0),
             gets: AtomicU64::new(0),
             batch_gets: AtomicU64::new(0),
             active_gets: AtomicU64::new(0),
@@ -66,10 +76,12 @@ impl MemoryMockProvider {
             seen_get_keys: Mutex::new(Vec::new()),
             seen_batch_get_keys: Mutex::new(Vec::new()),
             get_delay: Duration::ZERO,
+            hget_delay: Duration::ZERO,
             set_delay: Duration::ZERO,
             active_sets: AtomicU64::new(0),
             max_active_sets: AtomicU64::new(0),
             next_set_failure: Mutex::new(None),
+            unlink_delay: Duration::ZERO,
             script_handler: None,
         }
     }
@@ -89,9 +101,21 @@ impl MemoryMockProvider {
         self
     }
 
-    /// Delay individual set calls to exercise bounded write concurrency.
+    /// Delay individual hash get calls to exercise query-cache concurrency behavior.
+    pub fn with_hget_delay(mut self, delay: Duration) -> Self {
+        self.hget_delay = delay;
+        self
+    }
+
+    /// Delay individual string and hash set calls to exercise write races.
     pub fn with_set_delay(mut self, delay: Duration) -> Self {
         self.set_delay = delay;
+        self
+    }
+
+    /// Delay unlink calls to exercise asynchronous invalidation behavior.
+    pub fn with_unlink_delay(mut self, delay: Duration) -> Self {
+        self.unlink_delay = delay;
         self
     }
 
@@ -108,6 +132,16 @@ impl MemoryMockProvider {
     /// Make delete operations fail or recover them again.
     pub fn set_delete_failure(&self, fail: bool) {
         self.delete_failure.store(fail, Ordering::Release);
+    }
+
+    /// Return the number of delete calls observed by this provider.
+    pub fn delete_count(&self) -> u64 {
+        self.deletes.load(Ordering::Relaxed)
+    }
+
+    /// Return the number of unlink calls observed by this provider.
+    pub fn unlink_count(&self) -> u64 {
+        self.unlinks.load(Ordering::Relaxed)
     }
 
     /// Return the current number of stored objects.
@@ -168,9 +202,15 @@ impl MemoryMockProvider {
         self.max_active_gets.load(Ordering::Relaxed)
     }
 
-    /// Return the maximum number of concurrent set calls.
+    /// Return the maximum number of concurrent string and hash set calls.
     pub fn max_concurrent_sets(&self) -> u64 {
         self.max_active_sets.load(Ordering::Relaxed)
+    }
+
+    /// Return the remaining lifetime of one key when the provider tracks an expiration.
+    pub async fn expiration_remaining(&self, key: &str) -> Option<Duration> {
+        let deadline = *self.expirations.read().await.get(key)?;
+        Some(deadline.saturating_duration_since(Instant::now()))
     }
 
     fn ensure_open(&self) -> CacheResult<()> {
@@ -233,6 +273,73 @@ impl MemoryMockProvider {
         } else {
             false
         }
+    }
+
+    /// Remove one key from every data structure when its TTL has elapsed.
+    async fn purge_expired_key(&self, key: &str) {
+        let expired = self
+            .expirations
+            .read()
+            .await
+            .get(key)
+            .is_some_and(|deadline| *deadline <= Instant::now());
+        if !expired {
+            return;
+        }
+        self.expirations.write().await.remove(key);
+        self.values.write().await.remove(key);
+        self.hashes.write().await.remove(key);
+        self.sets.write().await.remove(key);
+        self.zsets.write().await.remove(key);
+        self.lists.write().await.remove(key);
+    }
+
+    /// Return whether any in-memory data type currently owns a key.
+    async fn key_exists(&self, key: &str) -> bool {
+        self.values.read().await.contains_key(key)
+            || self.hashes.read().await.contains_key(key)
+            || self.sets.read().await.contains_key(key)
+            || self.zsets.read().await.contains_key(key)
+            || self.lists.read().await.contains_key(key)
+    }
+
+    /// Remove keys from every in-memory data structure.
+    async fn remove_keys(&self, keys: &[String]) -> u64 {
+        let mut values = self.values.write().await;
+        let mut expirations = self.expirations.write().await;
+        let mut hashes = self.hashes.write().await;
+        let mut sets = self.sets.write().await;
+        let mut zsets = self.zsets.write().await;
+        let mut lists = self.lists.write().await;
+        let mut removed = 0;
+        for key in keys {
+            let existed = values.remove(key).is_some()
+                | hashes.remove(key).is_some()
+                | sets.remove(key).is_some()
+                | zsets.remove(key).is_some()
+                | lists.remove(key).is_some();
+            expirations.remove(key);
+            if existed {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    /// Remove non-hash data for a key before storing hash fields.
+    async fn remove_non_hash_values(&self, key: &str) {
+        self.values.write().await.remove(key);
+        self.sets.write().await.remove(key);
+        self.zsets.write().await.remove(key);
+        self.lists.write().await.remove(key);
+    }
+
+    /// Remove non-sorted-set data for a key before storing sorted-set members.
+    async fn remove_non_zset_values(&self, key: &str) {
+        self.values.write().await.remove(key);
+        self.hashes.write().await.remove(key);
+        self.sets.write().await.remove(key);
+        self.lists.write().await.remove(key);
     }
 }
 
@@ -304,7 +411,9 @@ impl CacheProvider for MemoryMockProvider {
         if !applies {
             return Ok(SetResult::ConditionNotMet);
         }
+        self.hashes.write().await.remove(key);
         self.sets.write().await.remove(key);
+        self.zsets.write().await.remove(key);
         self.lists.write().await.remove(key);
         values.insert(key.to_string(), value);
         if !options.keep_ttl {
@@ -319,26 +428,33 @@ impl CacheProvider for MemoryMockProvider {
 
     async fn del(&self, keys: &[String]) -> CacheResult<u64> {
         self.ensure_open()?;
+        if keys.is_empty() {
+            return Ok(0);
+        }
         if self.delete_failure.load(Ordering::Acquire) {
             return Err(CacheError::Unavailable(
                 "memory provider delete intentionally failed".to_string(),
             ));
         }
-        let mut values = self.values.write().await;
-        let mut expirations = self.expirations.write().await;
-        let mut sets = self.sets.write().await;
-        let mut lists = self.lists.write().await;
-        let mut removed = 0;
-        for key in keys {
-            let existed = values.remove(key).is_some()
-                | sets.remove(key).is_some()
-                | lists.remove(key).is_some();
-            expirations.remove(key);
-            if existed {
-                removed += 1;
-            }
+        self.deletes.fetch_add(1, Ordering::Relaxed);
+        Ok(self.remove_keys(keys).await)
+    }
+
+    async fn unlink(&self, keys: &[String]) -> CacheResult<u64> {
+        self.ensure_open()?;
+        if keys.is_empty() {
+            return Ok(0);
         }
-        Ok(removed)
+        if self.delete_failure.load(Ordering::Acquire) {
+            return Err(CacheError::Unavailable(
+                "memory provider delete intentionally failed".to_string(),
+            ));
+        }
+        if !self.unlink_delay.is_zero() {
+            tokio::time::sleep(self.unlink_delay).await;
+        }
+        self.unlinks.fetch_add(1, Ordering::Relaxed);
+        Ok(self.remove_keys(keys).await)
     }
 
     async fn mget(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
@@ -358,11 +474,15 @@ impl CacheProvider for MemoryMockProvider {
         let keys = entries.iter().map(|(key, _)| key).collect::<Vec<_>>();
         let mut values = self.values.write().await;
         let mut expirations = self.expirations.write().await;
+        let mut hashes = self.hashes.write().await;
         let mut sets = self.sets.write().await;
+        let mut zsets = self.zsets.write().await;
         let mut lists = self.lists.write().await;
         for key in keys {
             expirations.remove(key);
+            hashes.remove(key);
             sets.remove(key);
+            zsets.remove(key);
             lists.remove(key);
         }
         values.extend(entries);
@@ -386,6 +506,49 @@ impl CacheProvider for MemoryMockProvider {
         })?;
         values.insert(key.to_string(), Bytes::from(next.to_string()));
         Ok(next)
+    }
+
+    async fn expire(&self, key: &str, duration: Duration) -> CacheResult<bool> {
+        self.ensure_open()?;
+        let deadline = expiration_deadline(duration)?;
+        self.purge_expired_key(key).await;
+        if !self.key_exists(key).await {
+            return Ok(false);
+        }
+        self.expirations
+            .write()
+            .await
+            .insert(key.to_string(), deadline);
+        Ok(true)
+    }
+
+    async fn hget(&self, key: &str, field: &str) -> CacheResult<Option<Bytes>> {
+        self.ensure_open()?;
+        if !self.hget_delay.is_zero() {
+            tokio::time::sleep(self.hget_delay).await;
+        }
+        self.purge_expired_key(key).await;
+        Ok(self
+            .hashes
+            .read()
+            .await
+            .get(key)
+            .and_then(|hash| hash.get(field).cloned()))
+    }
+
+    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+        self.ensure_open()?;
+        let _guard = self.enter_set();
+        if !self.set_delay.is_zero() {
+            tokio::time::sleep(self.set_delay).await;
+        }
+        self.purge_expired_key(key).await;
+        self.remove_non_hash_values(key).await;
+        let mut hashes = self.hashes.write().await;
+        let hash = hashes.entry(key.to_string()).or_default();
+        let added = u64::from(!hash.contains_key(field));
+        hash.insert(field.to_string(), value);
+        Ok(added)
     }
 
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
@@ -417,6 +580,97 @@ impl CacheProvider for MemoryMockProvider {
             .await
             .get(key)
             .map_or(0, |members| members.len() as u64))
+    }
+
+    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+        self.ensure_open()?;
+        if score.is_nan() {
+            return Err(CacheError::InvalidArgument(
+                "sorted-set score cannot be NaN".into(),
+            ));
+        }
+        self.purge_expired_key(key).await;
+        self.remove_non_zset_values(key).await;
+        let mut zsets = self.zsets.write().await;
+        let zset = zsets.entry(key.to_string()).or_default();
+        let added = u64::from(!zset.contains_key(member));
+        zset.insert(member.to_string(), score);
+        Ok(added)
+    }
+
+    async fn zscan_match(&self, key: &str, pattern: &str, _count: u32) -> CacheResult<Vec<String>> {
+        self.ensure_open()?;
+        self.purge_expired_key(key).await;
+        Ok(self
+            .zsets
+            .read()
+            .await
+            .get(key)
+            .map(|zset| {
+                zset.keys()
+                    .filter(|member| redis_glob_match(member, pattern))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Return sorted-set members within one score range.
+    async fn zrangebyscore(
+        &self,
+        key: &str,
+        min: f64,
+        max: f64,
+        limit: u32,
+    ) -> CacheResult<Vec<String>> {
+        self.ensure_open()?;
+        if min.is_nan() || max.is_nan() {
+            return Err(CacheError::InvalidArgument(
+                "sorted-set score range cannot be NaN".into(),
+            ));
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.purge_expired_key(key).await;
+        let mut members = self
+            .zsets
+            .read()
+            .await
+            .get(key)
+            .map(|zset| {
+                zset.iter()
+                    .filter(|(_, score)| **score >= min && **score <= max)
+                    .map(|(member, score)| (member.clone(), *score))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        members.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        members.truncate(limit as usize);
+        Ok(members.into_iter().map(|(member, _)| member).collect())
+    }
+
+    async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.purge_expired_key(key).await;
+        let mut zsets = self.zsets.write().await;
+        let Some(zset) = zsets.get_mut(key) else {
+            return Ok(0);
+        };
+        let mut removed = 0;
+        for member in members {
+            if zset.remove(member).is_some() {
+                removed += 1;
+            }
+        }
+        if zset.is_empty() {
+            zsets.remove(key);
+        }
+        Ok(removed)
     }
 
     async fn lpush(&self, key: &str, values: Vec<Bytes>) -> CacheResult<u64> {
@@ -633,21 +887,283 @@ impl CacheProvider for MemoryMockProvider {
 
     async fn execute_script(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
         self.ensure_open()?;
-        let handler = self
-            .script_handler
-            .as_ref()
-            .ok_or_else(|| CacheError::UnsupportedScript(request.script_id.clone()))?;
-        handler(request)
+        if let Some(handler) = &self.script_handler {
+            return handler(request);
+        }
+        match request.script_id.as_str() {
+            "ragfs.cache.query.begin_fill.v1" => self.begin_query_fill(request).await,
+            "ragfs.cache.query.fill_if_epoch.v1" => self.fill_query_if_epoch(request).await,
+            "ragfs.cache.query.delete_bucket.v1" => self.delete_query_bucket(request).await,
+            _ => Err(CacheError::UnsupportedScript(request.script_id)),
+        }
     }
 
     async fn close(&self) -> CacheResult<()> {
         self.closed.store(true, Ordering::Release);
         self.values.write().await.clear();
         self.expirations.write().await.clear();
+        self.hashes.write().await.clear();
         self.sets.write().await.clear();
+        self.zsets.write().await.clear();
         self.lists.write().await.clear();
         Ok(())
     }
+}
+
+impl MemoryMockProvider {
+    /// Capture a CacheFS epoch, index its bucket, and recheck one query field atomically.
+    async fn begin_query_fill(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        let [key, index_key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "begin-fill requires two keys".into(),
+            ));
+        };
+        let [field, candidate, ttl, pending_ttl, now_ms, _permanent_score] =
+            request.args.as_slice()
+        else {
+            return Err(CacheError::InvalidArgument(
+                "begin-fill requires six arguments".into(),
+            ));
+        };
+        let field = std::str::from_utf8(field)
+            .map_err(|error| CacheError::InvalidArgument(error.to_string()))?;
+        let ttl = parse_u64_arg(ttl, "ttl")?;
+        let pending_ttl = parse_u64_arg(pending_ttl, "pending ttl")?;
+        let now_ms = parse_u64_arg(now_ms, "now")?;
+        self.purge_expired_key(key).await;
+        self.remove_non_hash_values(key).await;
+        let mut hashes = self.hashes.write().await;
+        let hash = hashes.entry(key.clone()).or_default();
+        let created = !hash.contains_key("__epoch");
+        let epoch = hash
+            .entry("__epoch".to_string())
+            .or_insert_with(|| candidate.clone())
+            .clone();
+        let value = hash.get(field).cloned();
+        drop(hashes);
+
+        let score = if ttl > 0 {
+            self.expirations.write().await.insert(
+                key.clone(),
+                expiration_deadline(Duration::from_millis(ttl))?,
+            );
+            now_ms.saturating_add(ttl) as f64
+        } else if created {
+            self.expirations.write().await.insert(
+                key.clone(),
+                expiration_deadline(Duration::from_millis(pending_ttl))?,
+            );
+            now_ms.saturating_add(pending_ttl) as f64
+        } else if let Some(deadline) = self.expirations.read().await.get(key).copied() {
+            now_ms.saturating_add(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as u64,
+            ) as f64
+        } else {
+            u64::MAX as f64
+        };
+        self.zsets
+            .write()
+            .await
+            .entry(index_key.clone())
+            .or_default()
+            .insert(key.clone(), score);
+        let mut values = vec![
+            ScriptValue::Bytes(epoch.to_vec()),
+            ScriptValue::Integer(value.is_some() as i64),
+        ];
+        if let Some(value) = value {
+            values.push(ScriptValue::Bytes(value.to_vec()));
+        }
+        ScriptResult::encode(&ScriptValue::Array(values))
+    }
+
+    /// Store a CacheFS query field and final index score while its epoch remains current.
+    async fn fill_query_if_epoch(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        let [key, index_key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument("fill requires two keys".into()));
+        };
+        let [epoch, field, value, ttl, now_ms, _permanent_score] = request.args.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "fill requires six arguments".into(),
+            ));
+        };
+        let field = std::str::from_utf8(field)
+            .map_err(|error| CacheError::InvalidArgument(error.to_string()))?;
+        let ttl = parse_u64_arg(ttl, "ttl")?;
+        let now_ms = parse_u64_arg(now_ms, "now")?;
+        let _guard = self.enter_set();
+        if !self.set_delay.is_zero() {
+            tokio::time::sleep(self.set_delay).await;
+        }
+        self.purge_expired_key(key).await;
+        let mut hashes = self.hashes.write().await;
+        let Some(hash) = hashes.get_mut(key) else {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        };
+        if hash.get("__epoch").map(Bytes::as_ref) != Some(epoch.as_ref()) {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        }
+        hash.insert(field.to_string(), value.clone());
+        drop(hashes);
+
+        let score = if ttl > 0 {
+            self.expirations.write().await.insert(
+                key.clone(),
+                expiration_deadline(Duration::from_millis(ttl))?,
+            );
+            now_ms.saturating_add(ttl) as f64
+        } else {
+            self.expirations.write().await.remove(key);
+            u64::MAX as f64
+        };
+        self.zsets
+            .write()
+            .await
+            .entry(index_key.clone())
+            .or_default()
+            .insert(key.clone(), score);
+        ScriptResult::encode(&ScriptValue::Integer(1))
+    }
+
+    /// Dispatch CacheFS delete script modes.
+    async fn delete_query_bucket(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        if !request.args.is_empty() {
+            return self.cleanup_expired_query_index_members(request).await;
+        }
+        self.delete_query_bucket_key(request).await
+    }
+
+    /// Delete a CacheFS query bucket and its index member as one script action.
+    async fn delete_query_bucket_key(&self, request: ScriptRequest) -> CacheResult<ScriptResult> {
+        let [key, index_key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "delete bucket requires two keys".into(),
+            ));
+        };
+        if self.delete_failure.load(Ordering::Acquire) {
+            return Err(CacheError::Unavailable(
+                "memory provider delete intentionally failed".to_string(),
+            ));
+        }
+        if !self.unlink_delay.is_zero() {
+            tokio::time::sleep(self.unlink_delay).await;
+        }
+        self.unlinks.fetch_add(1, Ordering::Relaxed);
+
+        let mut values = self.values.write().await;
+        let mut expirations = self.expirations.write().await;
+        let mut hashes = self.hashes.write().await;
+        let mut sets = self.sets.write().await;
+        let mut zsets = self.zsets.write().await;
+        let mut lists = self.lists.write().await;
+        values.remove(key);
+        expirations.remove(key);
+        hashes.remove(key);
+        sets.remove(key);
+        zsets.remove(key);
+        lists.remove(key);
+        if let Some(index) = zsets.get_mut(index_key) {
+            index.remove(key);
+            if index.is_empty() {
+                zsets.remove(index_key);
+            }
+        }
+
+        ScriptResult::encode(&ScriptValue::Integer(1))
+    }
+
+    /// Remove a bounded batch of expired CacheFS query index members atomically.
+    async fn cleanup_expired_query_index_members(
+        &self,
+        request: ScriptRequest,
+    ) -> CacheResult<ScriptResult> {
+        let [index_key] = request.keys.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "cleanup expired requires one key".into(),
+            ));
+        };
+        let [mode, min_score, max_score, limit] = request.args.as_slice() else {
+            return Err(CacheError::InvalidArgument(
+                "cleanup expired requires four arguments".into(),
+            ));
+        };
+        if mode.as_ref() != b"cleanup_expired" {
+            return Err(CacheError::InvalidArgument(
+                "unsupported delete bucket mode".into(),
+            ));
+        }
+        let min_score = parse_f64_arg(min_score, "min score")?;
+        let max_score = parse_f64_arg(max_score, "max score")?;
+        let limit = parse_u64_arg(limit, "limit")?.min(usize::MAX as u64) as usize;
+        if limit == 0 {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        }
+
+        let now = Instant::now();
+        let values = self.values.read().await;
+        let expirations = self.expirations.read().await;
+        let hashes = self.hashes.read().await;
+        let sets = self.sets.read().await;
+        let mut zsets = self.zsets.write().await;
+        let lists = self.lists.read().await;
+        let zset_keys = zsets.keys().cloned().collect::<HashSet<_>>();
+        let Some(index) = zsets.get_mut(index_key) else {
+            return ScriptResult::encode(&ScriptValue::Integer(0));
+        };
+        let mut members = index
+            .iter()
+            .filter(|(_, score)| **score >= min_score && **score <= max_score)
+            .map(|(member, score)| (member.clone(), *score))
+            .collect::<Vec<_>>();
+        members.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        members.truncate(limit);
+        let mut removed = 0_i64;
+        for (member, _) in members {
+            let exists = values.contains_key(&member)
+                || hashes.contains_key(&member)
+                || sets.contains_key(&member)
+                || zset_keys.contains(&member)
+                || lists.contains_key(&member);
+            let live = exists
+                && expirations
+                    .get(&member)
+                    .is_none_or(|deadline| *deadline > now);
+            if !live && index.remove(&member).is_some() {
+                removed += 1;
+            }
+        }
+        if index.is_empty() {
+            zsets.remove(index_key);
+        }
+
+        ScriptResult::encode(&ScriptValue::Integer(removed))
+    }
+}
+
+/// Parse one integer script argument.
+fn parse_u64_arg(value: &Bytes, name: &str) -> CacheResult<u64> {
+    std::str::from_utf8(value)
+        .map_err(|error| CacheError::InvalidArgument(error.to_string()))?
+        .parse()
+        .map_err(|error| CacheError::InvalidArgument(format!("invalid {name}: {error}")))
+}
+
+/// Parse one floating-point script argument.
+fn parse_f64_arg(value: &Bytes, name: &str) -> CacheResult<f64> {
+    let parsed = std::str::from_utf8(value)
+        .map_err(|error| CacheError::InvalidArgument(error.to_string()))?
+        .parse::<f64>()
+        .map_err(|error| CacheError::InvalidArgument(format!("invalid {name}: {error}")))?;
+    if parsed.is_nan() {
+        return Err(CacheError::InvalidArgument(format!("{name} cannot be NaN")));
+    }
+    Ok(parsed)
 }
 
 fn expiration_deadline(duration: Duration) -> CacheResult<Instant> {
@@ -675,6 +1191,40 @@ fn purge_expired_value(
     }
 }
 
+/// Match the Redis glob pieces needed by query-cache ZSCAN calls.
+fn redis_glob_match(value: &str, pattern: &str) -> bool {
+    // ponytail: supports '*' and '?' only; add a full Redis glob parser if
+    // bracket classes become part of generated patterns.
+    let value = value.as_bytes();
+    let pattern = pattern.as_bytes();
+    let mut value_index = 0;
+    let mut pattern_index = 0;
+    let mut star_index = None;
+    let mut star_value_index = 0;
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
+        {
+            value_index += 1;
+            pattern_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_value_index = value_index;
+        } else if let Some(star) = star_index {
+            pattern_index = star + 1;
+            star_value_index += 1;
+            value_index = star_value_index;
+        } else {
+            return false;
+        }
+    }
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
+}
+
 fn normalize_list_index(len: i64, index: i64) -> i64 {
     if index < 0 {
         len.saturating_add(index)
@@ -698,38 +1248,4 @@ fn list_range(list: &VecDeque<Bytes>, start: i64, stop: i64) -> Vec<Bytes> {
         .take((stop - start + 1) as usize)
         .cloned()
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[tokio::test]
-    async fn configured_script_handler_is_advertised_and_invoked() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let observed_calls = Arc::clone(&calls);
-        let provider = MemoryMockProvider::new().with_script_handler(move |request| {
-            assert_eq!(request.script_id, "test.script.v1");
-            observed_calls.fetch_add(1, Ordering::Relaxed);
-            Ok(ScriptResult {
-                payload: Bytes::from_static(b"handled"),
-            })
-        });
-
-        provider
-            .validate_operations(&[CacheOperation::ExecuteScript])
-            .unwrap();
-        let result = provider
-            .execute_script(ScriptRequest {
-                script_id: "test.script.v1".to_string(),
-                keys: Vec::new(),
-                args: Vec::new(),
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(result.payload, Bytes::from_static(b"handled"));
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-    }
 }

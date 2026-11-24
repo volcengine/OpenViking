@@ -6,6 +6,8 @@ import hashlib
 
 import orjson
 
+from .observe import degrade
+
 # Volcano Engine Ark and BytePlus ModelArk, its international edition, share
 # paths and caching behavior.
 ARK_VENDORS = {"ark", "byteplus"}
@@ -39,5 +41,5 @@ async def apply_vendor(body, upstream, prepared, store):
         cache = prepared.root["vendor"]
         body["prompt_cache_key"] = cache["prompt_cache_key"]
         if parameter_fingerprint(prepared.original) != cache["parameters"]:
-            prepared.metrics["degradation"] = "ark_cache_parameters_changed"
+            degrade(prepared.metrics, "ark_cache_parameters_changed")
     return body

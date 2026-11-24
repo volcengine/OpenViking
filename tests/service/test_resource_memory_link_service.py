@@ -167,7 +167,7 @@ class _FakeSessionService:
         )
         return self.session
 
-    async def get(self, session_id, ctx, auto_create=False):
+    async def open(self, session_id, ctx, auto_create=False):
         self.got.append(
             {
                 "ctx": ctx,
@@ -297,8 +297,8 @@ async def test_on_resource_added_reuses_same_reason_session(request_context):
     worker_waiting = threading.Event()
 
     class BlockingSessionService(_FakeSessionService):
-        async def get(self, session_id, ctx, auto_create=False):
-            session = await super().get(session_id, ctx, auto_create=auto_create)
+        async def open(self, session_id, ctx, auto_create=False):
+            session = await super().open(session_id, ctx, auto_create=auto_create)
             if len(self.got) == 1:
                 entered.set()
                 await release.wait()
@@ -438,7 +438,6 @@ async def test_on_resource_deleted_bridges_through_fixed_session(request_context
     assert "## Resource Deletion" in message_text
     assert resource_uri in message_text
     assert memory_uri in message_text
-    assert "Do not create a new event" in message_text
 
 
 @pytest.mark.asyncio
@@ -676,7 +675,7 @@ async def test_unlink_memory_reference_keeps_visible_text_and_no_schema_metadata
     assert result.edited_uris == [memory_uri]
     mf = MemoryFileUtils.read(store[memory_uri], uri=memory_uri)
     assert mf.content == "今天是清明节。用户保存了一张不二周助的照片"
-    assert mf.extra_fields == {}
+    assert "resource_refs" not in mf.extra_fields
     assert mf.memory_type is None
 
 

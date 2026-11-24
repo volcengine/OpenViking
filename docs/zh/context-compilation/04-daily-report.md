@@ -2,7 +2,7 @@
 
 把带时间戳的对话记录、Agent 会话、IM 消息、协作文档、会议纪要、任务记录等材料，编译成简洁、有出处的**日报**：每天一页。
 
-Skill 源码：[examples/compile/ov-compile-skills/daily-report](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/daily-report)
+Skill 源码：[openviking/system_assets/compile/example-skills/daily-report](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/daily-report)
 
 先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
@@ -18,7 +18,7 @@ ov ls -r viking://resources/work-logs
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/daily-report -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/daily-report -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/daily-report
 ```
@@ -28,21 +28,23 @@ ov skills list
 在 `--instruction` 里说清楚**日期、时区、报告对象和侧重点**，Skill 会据此定位和取舍：
 
 ```bash
-ov compile \
+ov compile create --compile-name daily-report \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "按 Asia/Shanghai 时区生成 2026-08-20 的日报，聚焦我的工作产出与决策"
+ov compile --compile-name daily-report
 ```
 
 一次生成多天，把日期范围写进 `--instruction` 即可（每天仍是独立一页）：
 
 ```bash
-ov compile \
+ov compile create --compile-name report-range \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "按 Asia/Shanghai 时区生成 2026-08-18 至 2026-08-20 每天一份日报"
+ov compile --compile-name report-range
 ```
 
 命令会立刻返回 `task_id`：

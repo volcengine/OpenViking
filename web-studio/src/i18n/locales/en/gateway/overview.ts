@@ -26,31 +26,31 @@ const overview = {
     confirm: 'Review',
 
     title: 'Get started',
-    description:
-      'Four steps to the first conversation with memory. This card goes away once a client sends its first request.',
     progress: '{{done}} of {{total}} done',
     done: 'Done',
     view: 'View',
     upstream: {
       title: 'Add an upstream',
       description:
-        'The model provider the gateway forwards requests to, such as Anthropic, OpenAI or Volcano Engine Ark.',
+        'The model service the gateway forwards to, such as OpenAI or Volcano Engine Ark.',
       done_one: '{{count}} upstream added',
       done_other: '{{count}} upstreams added',
       action: 'Add upstream',
+      manual: 'Add manually',
     },
     profile: {
       title: 'Create a context profile',
       description:
-        'Decides how memory is added to new messages and how conversations are saved. The recommended settings suit most clients.',
+        'How memory is added to new messages and how conversations are saved.',
       done_one: '{{count}} context profile ready',
       done_other: '{{count}} context profiles ready',
+      action: 'Use recommended',
     },
     key: {
       title: 'Issue a gateway key',
-      description:
-        'Clients use this key to call the gateway. It belongs to one OpenViking user, whose memory the gateway reads and writes.',
-      blocked: 'Add an upstream and a context profile first.',
+      description: 'Clients call the gateway with this key.',
+      blocked: 'Available once the first two steps are done.',
+      name: 'My key',
       waiting:
         'You can issue a key once your gateway admin adds an upstream and a profile.',
       done_one: '{{count}} key issued',
@@ -60,7 +60,7 @@ const overview = {
     connect: {
       title: 'Connect a client',
       description:
-        'Point Claude Code, Codex CLI or a chat app at the gateway address with the key, then send a message.',
+        'Point a client at the gateway address with the key, then send a message.',
       action: 'Open setup guides',
     },
   },
@@ -114,27 +114,46 @@ const overview = {
       none: 'No recalls yet',
     },
   },
+  cacheMiss: {
+    title_one: '{{count}} long conversation keeps missing the prompt cache',
+    title_other: '{{count}} long conversations keep missing the prompt cache',
+    description_one:
+      'Its last {{streak}} model calls each sent at least {{tokens}} input tokens and got a 0% cache hit rate. This usually means the start of the request (system prompt or tool definitions) changes every time, or the upstream spreads requests across different accounts or channels.',
+    description_other:
+      'Their last {{streak}} model calls each sent at least {{tokens}} input tokens and got a 0% cache hit rate. This usually means the start of the request (system prompt or tool definitions) changes every time, or the upstream spreads requests across different accounts or channels.',
+    action:
+      "Compare with your provider's cache records. If they show hits, the upstream isn't passing cache usage back to the gateway. If not, check the system prompt for timestamps or other content that changes on every request, and make sure your relay isn't rotating between channels.",
+    noWrites:
+      "The upstream didn't write the cache either, so the client most likely doesn't set cache_control. Compare with your provider's cache records: hits there mean the upstream isn't passing cache usage back to the gateway.",
+    streak_one: '{{count}} miss in a row',
+    streak_other: '{{count}} misses in a row',
+  },
+  cacheUnreported: {
+    title_one: "{{upstreams}} hasn't reported any cache hits lately",
+    title_other: "{{upstreams}} haven't reported any cache hits lately",
+    description_one:
+      'Long conversations through it keep showing a 0% cache hit rate, and they count as misses in the stats. The provider may not support prompt caching, the client may not enable it, or a relay may not pass cache usage back to the gateway.',
+    description_other:
+      'Long conversations through them keep showing a 0% cache hit rate, and they count as misses in the stats. The providers may not support prompt caching, the client may not enable it, or a relay may not pass cache usage back to the gateway.',
+    separator: ', ',
+  },
   openviking: {
     title: 'OpenViking',
     description:
       'Finds memory for new messages and stores saved conversations.',
     version: 'Version',
     unreachable:
-      "While OpenViking can't be reached, requests still go to the model without memory, and saving conversations is retried until it's back.",
+      "While OpenViking can't be reached, requests still go to the model without memory, and turns that end aren't saved. Once it's back, the next turn of each conversation saves what's missing.",
     starting:
       "The gateway hasn't finished its first check of OpenViking yet. Refresh in a minute.",
   },
   saving: {
     title: 'Saving conversations',
     ok: 'No saving problems in recent requests.',
-    retrying_one:
-      '{{count}} conversation is retrying saving to OpenViking after a failure.',
-    retrying_other:
-      '{{count}} conversations are retrying saving to OpenViking after a failure.',
-    paused_one:
-      '{{count}} conversation paused saving after repeated failures. The gateway tries again every 5 minutes.',
-    paused_other:
-      '{{count}} conversations paused saving after repeated failures. The gateway tries again every 5 minutes.',
+    failed_one:
+      "{{count}} conversation's latest turn wasn't saved to OpenViking. Its next turn saves what's missing.",
+    failed_other:
+      "{{count}} conversations' latest turns weren't saved to OpenViking. Their next turn saves what's missing.",
   },
   degraded: {
     title: 'Degraded requests',

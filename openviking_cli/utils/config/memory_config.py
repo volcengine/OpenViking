@@ -43,6 +43,10 @@ class SessionAutoCommitConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
 
+    summary_budget_retry_enabled: bool = Field(
+        default=True,
+        description="Regenerate over-budget session summaries with the second and third prompts.",
+    )
     version: str = Field(
         default="v3",
         description="Deprecated and ignored. Memory extraction always uses v3.",
@@ -61,9 +65,9 @@ class MemoryConfig(BaseModel):
     eager_prefetch: bool = Field(
         default=True,
         description=(
-            "When enabled, prefetch will execute search + read to preload all memory file contents "
+            "When enabled (default), prefetch will execute search + read to preload all memory file contents "
             "into the context, and no read/search tools will be provided to the LLM. "
-            "When disabled (default), LLM has read tool and reads files on-demand."
+            "When disabled, LLM has read tool and reads files on-demand."
         ),
     )
     prefetch_search_topn: int = Field(
@@ -128,15 +132,15 @@ class MemoryConfig(BaseModel):
             data = dict(data)
             if "agent_memory_enabled" in data:
                 data.pop("agent_memory_enabled", None)
-                logger.debug(
-                    "memory.agent_memory_enabled is deprecated and ignored; "
-                    "use session memory_policy.memory_types to control trajectory/experience extraction"
+                logger.info(
+                    "memory.agent_memory_enabled is deprecated and ignored; use session memory_policy.memory_types to control trajectory/experience extraction",
+                    extra={"degraded": True},
                 )
             if "working_memory_enabled" in data:
                 data.pop("working_memory_enabled", None)
-                logger.debug(
-                    "memory.working_memory_enabled is deprecated and ignored; "
-                    "use session memory_policy.working_memory.enabled to control archive summaries"
+                logger.info(
+                    "memory.working_memory_enabled is deprecated and ignored; use session memory_policy.working_memory.enabled to control archive summaries",
+                    extra={"degraded": True},
                 )
         return data
 
@@ -144,8 +148,9 @@ class MemoryConfig(BaseModel):
     @classmethod
     def accept_deprecated_version(cls, value: Any) -> str:
         if value not in (None, ""):
-            logger.debug(
-                "memory.version is deprecated and ignored; memory extraction always uses v3"
+            logger.info(
+                "memory.version is deprecated and ignored; memory extraction always uses v3",
+                extra={"degraded": True},
             )
         return "v3"
 

@@ -36,6 +36,14 @@ pub enum Error {
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    /// Storage or account quota exceeded.
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
+
+    /// Upstream service temporarily rejected the request due to rate limiting.
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+
     /// Invalid path
     #[error("invalid path: {0}")]
     InvalidPath(String),
@@ -146,6 +154,16 @@ impl Error {
         Self::PermissionDenied(path.into())
     }
 
+    /// Create a quota-exceeded error.
+    pub fn quota_exceeded(message: impl Into<String>) -> Self {
+        Self::QuotaExceeded(message.into())
+    }
+
+    /// Create a rate-limited error.
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::RateLimited(message.into())
+    }
+
     /// Create an InvalidPath error
     pub fn invalid_path(path: impl Into<String>) -> Self {
         Self::InvalidPath(path.into())
@@ -187,6 +205,8 @@ impl Error {
             Self::NotFound(_) => "not_found",
             Self::AlreadyExists(_) => "already_exists",
             Self::PermissionDenied(_) => "permission_denied",
+            Self::QuotaExceeded(_) => "quota_exceeded",
+            Self::RateLimited(_) => "rate_limited",
             Self::InvalidPath(_) => "invalid_path",
             Self::NotADirectory(_) => "not_a_directory",
             Self::IsADirectory(_) => "is_a_directory",
@@ -225,15 +245,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_creation() {
-        let err = Error::not_found("/test/path");
-        assert!(matches!(err, Error::NotFound(_)));
-        assert_eq!(err.to_string(), "not found: /test/path");
-    }
+    fn missing_and_permission_denied_have_distinct_error_kinds() {
+        let missing = Error::not_found("/test/path");
+        assert!(matches!(missing, Error::NotFound(_)));
+        assert_eq!(missing.kind_name(), "not_found");
+        assert_eq!(missing.to_string(), "not found: /test/path");
 
-    #[test]
-    fn test_error_display() {
-        let err = Error::permission_denied("/protected");
-        assert_eq!(err.to_string(), "permission denied: /protected");
+        let denied = Error::permission_denied("/protected");
+        assert!(matches!(denied, Error::PermissionDenied(_)));
+        assert_eq!(denied.kind_name(), "permission_denied");
+        assert_eq!(denied.to_string(), "permission denied: /protected");
     }
 }

@@ -1,4 +1,4 @@
-use crate::PrivacyCommands;
+use crate::cli::PrivacyCommands;
 use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
@@ -9,7 +9,8 @@ use crate::terminal_ui::{
 };
 use crate::theme;
 use crate::tui;
-use crate::{CliContext, SkillAddArgs, UploadCliOptions};
+use crate::CliContext;
+use crate::cli::{SkillAddArgs, UploadCliOptions};
 use colored::Colorize;
 use serde_json::{Map, Value};
 
@@ -408,7 +409,7 @@ pub async fn handle_restore(
     .await
 }
 
-use crate::SystemCommands;
+use crate::cli::SystemCommands;
 
 pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -436,7 +437,7 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     }
 }
 
-use crate::ObserverCommands;
+use crate::cli::ObserverCommands;
 
 pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -462,7 +463,7 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
     }
 }
 
-use crate::SessionCommands;
+use crate::cli::SessionCommands;
 
 pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -552,7 +553,7 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             .await
         }
         SessionCommands::Config { action } => match action {
-            crate::SessionConfigCommands::Set {
+            crate::cli::SessionConfigCommands::Set {
                 session_id,
                 event_tags,
                 no_event_tags,
@@ -590,7 +591,7 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
     }
 }
 
-use crate::AdminCommands;
+use crate::cli::AdminCommands;
 
 pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -620,9 +621,6 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
                 .await
         }
-        AdminCommands::Migrate { cleanup } => {
-            commands::admin::migrate(&client, cleanup, ctx.output_format, ctx.compact).await
-        }
         AdminCommands::RegisterUser {
             account_id,
             user_id,
@@ -648,6 +646,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             name,
             role,
             page,
+            reveal_api_keys,
         } => {
             commands::admin::list_users(
                 &client,
@@ -656,6 +655,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 name,
                 role,
                 page,
+                reveal_api_keys,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -771,6 +771,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 seed.as_deref(),
+                if ctx.sudo { None } else { Some(&ctx.config) },
                 ctx.output_format,
                 ctx.compact,
             )
@@ -798,10 +799,23 @@ pub async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
 }
 
 pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
+    let client = std::sync::LazyLock::new(|| ctx.get_client());
     match cmd {
         PrivacyCommands::Categories => {
             commands::privacy::categories(&client, ctx.output_format, ctx.compact).await
+        }
+        PrivacyCommands::Tree {
+            category,
+            references,
+        } => {
+            commands::privacy::tree(
+                &client,
+                category.as_deref(),
+                references,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         PrivacyCommands::List { category } => {
             commands::privacy::list_targets(&client, &category, ctx.output_format, ctx.compact)
@@ -849,6 +863,17 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
                 ctx.compact,
             )
             .await
+        }
+        PrivacyCommands::Run {
+            env,
+            env_file,
+            command,
+        } => {
+            let status = commands::privacy_run::run(client, &env, &env_file, &command).await?;
+            if status != 0 {
+                std::process::exit(status);
+            }
+            Ok(())
         }
         PrivacyCommands::Upsert {
             category,
@@ -951,7 +976,7 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
     }
 }
 
-use crate::ConfigCommands;
+use crate::cli::ConfigCommands;
 use crate::config::Config;
 use crate::config_command_ui::{self, SwitchConfigRow};
 use crate::config_wizard::{self, ConfigStore};
@@ -1442,7 +1467,9 @@ pub async fn handle_write(
     from_file: Option<String>,
     mode: String,
     wait: bool,
+    use_snapshot: bool,
     processing_mode: String,
+    defer_processing: bool,
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
@@ -1465,7 +1492,9 @@ pub async fn handle_write(
         &payload,
         &mode,
         wait,
+        use_snapshot,
         &processing_mode,
+        defer_processing,
         tags,
         &tag_mode,
         acl,
@@ -1486,6 +1515,26 @@ pub async fn handle_set_tags(
     commands::content::set_tags(
         &client,
         &uri,
+        tags,
+        &mode,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+pub async fn handle_batch_set_tags(
+    uris: Vec<String>,
+    tags: Vec<String>,
+    mode: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::batch_set_tags(
+        &client,
+        &uris,
         tags,
         &mode,
         recursive,
@@ -1616,6 +1665,7 @@ pub async fn handle_search(
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    args: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1629,6 +1679,7 @@ pub async fn handle_search(
             "--image is not supported with --search-type keywords.".to_string(),
         ));
     }
+    let args = commands::compile::parse_args(args.as_deref())?;
     validate_search_mode_options(&mode, &uri, read_content)?;
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if search_type != "semantic" {
@@ -1668,6 +1719,12 @@ pub async fn handle_search(
     if let Some(ref protection) = events_time_decay_protection {
         params.push(format!("--events-time-decay-protection {}", protection));
     }
+    if let Some(ref args) = args {
+        params.push(format!(
+            "--args '{}'",
+            serde_json::Value::Object(args.clone())
+        ));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1689,6 +1746,7 @@ pub async fn handle_search(
         tags,
         read_content,
         events_time_decay_protection,
+        args,
         ctx.output_format,
         ctx.compact,
     )
@@ -2008,13 +2066,13 @@ pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> 
     .await
 }
 
-pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
+pub async fn handle_acl(action: crate::cli::AclCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match action {
-        crate::AclCommands::Get { uri } => {
+        crate::cli::AclCommands::Get { uri } => {
             commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Set {
+        crate::cli::AclCommands::Set {
             uri,
             entries,
             acl_mode,
@@ -2029,7 +2087,7 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
             )
             .await
         }
-        crate::AclCommands::Grant {
+        crate::cli::AclCommands::Grant {
             uri,
             principal,
             level,
@@ -2044,10 +2102,10 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
             )
             .await
         }
-        crate::AclCommands::Revoke { uri, principal } => {
+        crate::cli::AclCommands::Revoke { uri, principal } => {
             commands::acl::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Rm { uri } => {
+        crate::cli::AclCommands::Rm { uri } => {
             commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
         }
     }

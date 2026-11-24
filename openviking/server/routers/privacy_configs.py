@@ -7,6 +7,11 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from openviking.privacy.operations import (
+    build_privacy_tree,
+    require_privacy_owner,
+    resolve_privacy_field,
+)
 from openviking.privacy.reference import (
     build_privacy_field_reference,
     parse_privacy_field_selector,
@@ -19,7 +24,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/privacy-configs", tags=["privacy-configs"])
 
@@ -70,14 +75,6 @@ class PrivacySelectorRequest(BaseModel):
     selector: str = Field(..., min_length=1, max_length=2048)
 
 
-def _require_selector_owner(owner_user_id: str, ctx: RequestContext) -> None:
-    if owner_user_id != ctx.user.user_id:
-        raise PermissionDeniedError(
-            f"Privacy reference belongs to user {owner_user_id}",
-            resource=owner_user_id,
-        )
-
-
 @router.get("")
 async def list_privacy_categories(
     _ctx: RequestContext = Depends(get_request_context),
@@ -113,35 +110,9 @@ async def resolve_privacy_reference(
     request: PrivacySelectorRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    reference = parse_privacy_field_selector(
-        request.selector,
-        current_user_id=_ctx.user.user_id,
-    )
-    if reference is None:
-        raise InvalidArgumentError(
-            "selector must be an owner-bound Privacy reference or a field-level Privacy URI"
-        )
-    _require_selector_owner(reference.owner_user_id, _ctx)
-    validate_privacy_field_name(reference.field, location="field")
-    service = get_service()
-    privacy = service.privacy_configs
-    await _require_privacy_target(privacy, _ctx, reference.category, reference.target_key)
-    current = await privacy.get_current(_ctx, reference.category, reference.target_key)
-    if current is None or reference.field not in current.values:
-        raise NotFoundError(request.selector, "privacy config field")
-    value = current.values[reference.field]
     return Response(
         status="ok",
-        result={
-            "owner_user_id": reference.owner_user_id,
-            "category": reference.category,
-            "target_key": reference.target_key,
-            "field": reference.field,
-            "version": current.version,
-            "configured": value is not None and str(value) != "",
-            "reference": reference.render(),
-            "value": value,
-        },
+        result=await resolve_privacy_field(get_service().privacy_configs, _ctx, request.selector),
     )
 
 
@@ -157,13 +128,14 @@ async def delete_privacy_selector(
         current_user_id=_ctx.user.user_id,
     )
     if field_reference is not None:
-        _require_selector_owner(field_reference.owner_user_id, _ctx)
+        require_privacy_owner(field_reference.owner_user_id, _ctx)
         outcome = await privacy.delete_field(
             _ctx,
             field_reference.category,
             field_reference.target_key,
             field_reference.field,
             updated_by=_ctx.user.user_id,
+            wait_for_lock=False,
         )
         if outcome is None:
             raise NotFoundError(request.selector, "privacy config field")
@@ -189,11 +161,12 @@ async def delete_privacy_selector(
         raise InvalidArgumentError(
             "selector must be a Privacy target URI, field URI, or owner-bound reference"
         )
-    _require_selector_owner(target_reference.owner_user_id, _ctx)
+    require_privacy_owner(target_reference.owner_user_id, _ctx)
     deleted = await privacy.delete(
         _ctx,
         target_reference.category,
         target_reference.target_key,
+        wait_for_lock=False,
     )
     return Response(
         status="ok",
@@ -204,6 +177,18 @@ async def delete_privacy_selector(
             "deleted": deleted,
             "scope": "target",
         },
+    )
+
+
+@router.get("/tree")
+async def list_privacy_tree(
+    category: Optional[str] = Query(None, description="Limit the tree to one category"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """List the caller's active Privacy targets and field metadata without values."""
+    return Response(
+        status="ok",
+        result=await build_privacy_tree(get_service().privacy_configs, _ctx, category),
     )
 
 
@@ -340,6 +325,7 @@ async def delete_privacy_field(
         target_key,
         field,
         updated_by=_ctx.user.user_id,
+        wait_for_lock=False,
     )
     if outcome is None:
         raise NotFoundError(f"{category}/{target_key}/fields/{field}", "privacy config field")
@@ -397,6 +383,11 @@ async def upsert_privacy_config(
     service = get_service()
     privacy = service.privacy_configs
     result = None
+    warnings = (
+        await privacy.credential_warnings(_ctx, request.values)
+        if privacy is not None and category == "credential"
+        else []
+    )
     if privacy is not None:
         result = await privacy.upsert(
             ctx=_ctx,
@@ -406,8 +397,12 @@ async def upsert_privacy_config(
             updated_by=_ctx.user.user_id,
             change_reason=request.change_reason,
             labels=request.labels,
+            wait_for_lock=False,
         )
-    return Response(status="ok", result=None if result is None else result.to_dict())
+    payload = None if result is None else result.to_dict()
+    if payload is not None and warnings:
+        payload["warnings"] = warnings
+    return Response(status="ok", result=payload)
 
 
 @router.patch("/{category}/{target_key}")
@@ -421,6 +416,11 @@ async def patch_privacy_config(
     service = get_service()
     privacy = service.privacy_configs
     result = None
+    warnings = (
+        await privacy.credential_warnings(_ctx, request.values)
+        if privacy is not None and category == "credential"
+        else []
+    )
     if privacy is not None:
         result = await privacy.patch_values(
             ctx=_ctx,
@@ -430,8 +430,12 @@ async def patch_privacy_config(
             updated_by=_ctx.user.user_id,
             change_reason=request.change_reason,
             labels=request.labels,
+            wait_for_lock=False,
         )
-    return Response(status="ok", result=None if result is None else result.to_dict())
+    payload = None if result is None else result.to_dict()
+    if payload is not None and warnings:
+        payload["warnings"] = warnings
+    return Response(status="ok", result=payload)
 
 
 @router.delete("/{category}/{target_key}")
@@ -445,7 +449,7 @@ async def delete_privacy_config(
     privacy = service.privacy_configs
     deleted = False
     if privacy is not None:
-        deleted = await privacy.delete(_ctx, category, target_key)
+        deleted = await privacy.delete(_ctx, category, target_key, wait_for_lock=False)
     return Response(
         status="ok",
         result={
@@ -472,5 +476,6 @@ async def activate_privacy_version(
         target_key=target_key,
         version=request.version,
         updated_by=_ctx.user.user_id,
+        wait_for_lock=False,
     )
     return Response(status="ok", result=result.to_dict())

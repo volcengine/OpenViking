@@ -60,6 +60,7 @@ class FakeDenseEmbedder(DenseEmbedderBase):
     async def embed_async(self, content, is_query=False, **kwargs):
         return await self._run_once_async(
             self._next_async,
+            is_query=is_query,
             operation_name="fake embedding",
         )
 
@@ -156,7 +157,8 @@ def test_retry_embedder_sparse_dimension_remains_unsupported():
 
 
 @pytest.mark.asyncio
-async def test_scoped_failure_restores_retries_and_releases_semaphore(monkeypatch):
+@pytest.mark.parametrize("is_query", [False, True])
+async def test_scoped_failure_restores_retries_and_releases_semaphore(monkeypatch, is_query):
     error = ProviderError(503)
     inner = FakeDenseEmbedder([error, ProviderError(503), [0.1, 0.2]], max_retries=1)
     embedder = RetryEmbedder(inner)
@@ -171,13 +173,13 @@ async def test_scoped_failure_restores_retries_and_releases_semaphore(monkeypatc
 
     async with model_retry_scope(0):
         with pytest.raises(ProviderError) as raised:
-            await embedder.embed_async("query")
+            await embedder.embed_async("content", is_query=is_query)
     assert raised.value is error
     assert inner.calls == 1
     assert observed_values == []
     assert semaphore._value == 1
 
-    result = await embedder.embed_async("query")
+    result = await embedder.embed_async("content", is_query=is_query)
 
     assert result.dense_vector == [0.1, 0.2]
     assert inner.calls == 3
@@ -186,7 +188,8 @@ async def test_scoped_failure_restores_retries_and_releases_semaphore(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_cancelled_attempt_releases_semaphore():
+@pytest.mark.parametrize("is_query", [False, True])
+async def test_cancelled_attempt_releases_only_acquired_permits(is_query):
     started = asyncio.Event()
 
     class BlockingDenseEmbedder(FakeDenseEmbedder):
@@ -198,7 +201,7 @@ async def test_cancelled_attempt_releases_semaphore():
     inner = BlockingDenseEmbedder([], max_retries=2)
     semaphore = AsyncSemaphore(1)
     inner._account_semaphore = semaphore
-    task = asyncio.create_task(RetryEmbedder(inner).embed_async("query"))
+    task = asyncio.create_task(RetryEmbedder(inner).embed_async("content", is_query=is_query))
     await started.wait()
     task.cancel()
 

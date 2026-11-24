@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -60,6 +62,7 @@ class Summarizer:
         *,
         file_uri: str,
         ctx: "RequestContext",
+        lock_handoff: Dict[str, Any] | None = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         created: bool = False,
@@ -94,6 +97,7 @@ class Summarizer:
                 ),
             ),
             ctx=ctx,
+            lock_handoff=lock_handoff,
             skip_vectorization=skip_vectorization,
             ingest_options=ingest_options,
             generation_trigger=generation_trigger,
@@ -110,6 +114,7 @@ class Summarizer:
         *,
         changes: Sequence[FileRefreshRequest],
         ctx: "RequestContext",
+        lock_handoff: Dict[str, Any] | None = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         generation_trigger: str = "semantic_refresh",
@@ -135,6 +140,8 @@ class Summarizer:
 
         if not grouped:
             return {"status": "success", "enqueued_count": 0, "parent_actions": {}}
+        if lock_handoff is not None and len(grouped) != 1:
+            raise ValueError("one semantic lock handoff requires exactly one parent refresh")
 
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -165,7 +172,11 @@ class Summarizer:
                     semantic_action = decision.action
                 except LockAcquisitionError:
                     # Parent aggregation is best-effort; changed-file work still runs.
-                    logger.info("Skipping busy parent semantic refresh: %s", parent_uri)
+                    logger.info(
+                        "parent semantic refresh busy; keeping changed-file work uri=%s",
+                        safe_uri_for_log(parent_uri),
+                        extra={"degraded": True},
+                    )
                     semantic_action = FreshnessAction.NOOP
             parent_actions[parent_uri] = semantic_action.value
             aggregate_directory = semantic_action is FreshnessAction.REFRESH_NOW
@@ -178,6 +189,7 @@ class Summarizer:
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
                 role=str(ctx.role),
+                lock_handoff=lock_handoff,
                 skip_vectorization=skip_vectorization,
                 telemetry_id=telemetry_id,
                 changes={
@@ -194,6 +206,8 @@ class Summarizer:
                         peer_id=ctx.user.user_id,
                     )
                     if aggregate_directory
+                    and lock_handoff is None
+                    and not (generation_trigger == "content_write" and context_type == "resource")
                     else ""
                 ),
                 generation_trigger=generation_trigger,
@@ -232,7 +246,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        lock: Optional[Dict[str, Any]] = None,
+        lock: Optional[Dict[str, Any] | PathLockGuard] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -260,19 +274,31 @@ class Summarizer:
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
-            logger.error(
-                f"temp_uris length ({len(temp_uris)}) must match resource_uris length ({len(resource_uris)})"
+            logger.info(
+                "semantic generation rejected; mismatched URI counts source_count=%d target_count=%d",
+                len(temp_uris),
+                len(resource_uris),
             )
             return {
                 "status": "error",
                 "message": "temp_uris length must match resource_uris length",
             }
+        if lock is not None and len(resource_uris) != 1:
+            raise ValueError("one semantic lock handoff requires exactly one resource")
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
+        agfs = get_viking_fs()._async_agfs
+        lock_guard = (
+            lock
+            if isinstance(lock, PathLockGuard)
+            else PathLockGuard(agfs, lock)
+            if lock is not None
+            else None
+        )
         lock_handoff: Optional[Dict[str, Any]] = None
-        if lock is not None:
-            lock_handoff = await get_viking_fs()._async_agfs.pathlock_to_handoff(lock)
+        if lock_guard is not None:
+            lock_handoff = await lock_guard.to_handoff()
 
         def is_resources_root(uri: str) -> bool:
             return (uri or "").rstrip("/") == "viking://resources"
@@ -333,13 +359,39 @@ class Summarizer:
                     file_abstracts=file_abstracts,
                     plan=semantic_plan,
                 )
-                enqueue_id = await semantic_queue.enqueue(msg)
+                try:
+                    if lock_guard is None:
+                        enqueue_id = await semantic_queue.enqueue(msg)
+                    else:
+                        enqueue_id = await lock_guard.handoff_and_dispatch(
+                            lock_handoff,
+                            lambda msg=msg: semantic_queue.enqueue(msg),
+                            accepted=lambda result: result != "deduplicated",
+                        )
+                except BaseException:
+                    if (
+                        isinstance(lock, dict)
+                        and lock_guard is not None
+                        and lock_guard.lease is not None
+                        and lock_guard.lease is not lock
+                    ):
+                        lock.clear()
+                        lock.update(lock_guard.lease)
+                    raise
                 if enqueue_id == "deduplicated":
-                    logger.info("Semantic generation already queued for: %s", target_uri)
+                    logger.debug(
+                        "semantic generation already queued uri=%s", safe_uri_for_log(target_uri)
+                    )
                     continue
                 enqueued_count += 1
-                logger.info(
-                    f"Enqueued semantic generation for: {target_uri} (skip_vectorization={skip_vectorization})"
+                logger.debug(
+                    "semantic generation enqueued uri=%s skip_vectorization=%s",
+                    safe_uri_for_log(target_uri),
+                    skip_vectorization,
                 )
 
-        return {"status": "success", "enqueued_count": enqueued_count}
+        return {
+            "status": "success",
+            "enqueued_count": enqueued_count,
+            "lock_handed_off": lock_guard is not None and lock_guard.transferred,
+        }

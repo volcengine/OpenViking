@@ -1,10 +1,35 @@
 import posixpath
 import re
+from collections import deque
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable, Dict, Iterator, List, Optional
 from urllib.parse import quote, unquote
 
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import backtick, html_inline
+from markdown_it.rules_inline import image as image_rule
+
 from openviking.core.namespace import uri_parts
+
+_PROTECTED_INLINE_TYPES = {"code_inline", "html_inline", "image"}
+
+
+def _inline_with_source_span(rule, state, silent):
+    """Keep source offsets consumed by protected CommonMark inline rules."""
+    start, count = state.pos, len(state.tokens)
+    matched = rule(state, silent)
+    if matched and not silent and len(state.tokens) > count:
+        token = state.tokens[-1]
+        if token.type in _PROTECTED_INLINE_TYPES:
+            token.meta["source_span"] = (start, state.pos)
+    return matched
+
+
+def _inline_protected_spans(tokens):
+    for token in tokens:
+        if token.type in _PROTECTED_INLINE_TYPES:
+            yield token.meta["source_span"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,12 +129,19 @@ class LinkRenderer:
         """Yield parsed inline Markdown links with their source spans."""
         position = 0
         while opener := LinkRenderer._LINK_START_RE.search(content, position):
+            start = opener.start()
+            escape_start = start
+            while escape_start > 0 and content[escape_start - 1] == "\\":
+                escape_start -= 1
+            if (start - escape_start) % 2:
+                position = start + 1
+                continue
             parsed = LinkRenderer._parse_inline_markdown_link(content, opener.end())
             if parsed is None:
-                position = opener.start() + 1
+                position = start + 1
                 continue
             target, end = parsed
-            yield MarkdownLink(opener.start(), end, opener.group("text"), target)
+            yield MarkdownLink(start, end, opener.group("text"), target)
             position = end
 
     @staticmethod
@@ -127,11 +159,55 @@ class LinkRenderer:
     def protected_markdown_spans(content: str) -> List[tuple[int, int]]:
         """Return spans where Compile must never insert a generated WikiLink."""
         spans = [(link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)]
-        spans.extend(
-            (m.start(), m.end())
-            for m in re.finditer(r"(?ms)^(?:```|~~~).*?^(?:```|~~~)[ \t]*$", content)
-        )
-        spans.extend((m.start(), m.end()) for m in re.finditer(r"`+[^\n`]*?`+", content))
+        # CommonMark resolves container boundaries (quotes/lists) and unclosed
+        # fences. Line maps let us preserve original bytes instead of rerendering.
+        offsets = [0, *(m.end() for m in re.finditer(r"\r\n|\r|\n", content)), len(content)]
+        parser = MarkdownIt("commonmark")
+        parser.inline.ruler.at("backticks", partial(_inline_with_source_span, backtick))
+        parser.inline.ruler.at("html_inline", partial(_inline_with_source_span, html_inline))
+        parser.inline.ruler.at("image", partial(_inline_with_source_span, image_rule))
+        environment = {}
+        for token in parser.parse(content, environment):
+            if token.map is None:
+                continue
+            first_line, last_line = token.map
+            start, end = offsets[first_line], offsets[last_line]
+            if token.type in {"fence", "code_block", "html_block"}:
+                spans.append((start, end))
+            elif token.type == "inline":
+                protected = list(_inline_protected_spans(token.children or []))
+                if not protected:
+                    continue
+                # Map parser offsets through stripped container prefixes and newline normalization.
+                positions = {}
+                needed = deque(sorted({point for a, b in protected for point in (a, b - 1)}))
+                inline_offset = 0
+                for line, text in zip(
+                    range(first_line, last_line), token.content.split("\n"), strict=False
+                ):
+                    source_offset = offsets[line]
+                    # The parser replaces NUL with U+FFFD without changing offsets.
+                    source_line = content[source_offset : offsets[line + 1]].replace(
+                        "\x00", "\ufffd"
+                    )
+                    # CommonMark can emit spaces for a partially consumed list tab.
+                    body = text.lstrip(" \t")
+                    body_start = inline_offset + len(text) - len(body)
+                    at = source_line.find(body)
+                    while needed and needed[0] < inline_offset + len(text):
+                        point = needed.popleft()
+                        if at >= 0 and point >= body_start:
+                            positions[point] = source_offset + at + point - body_start
+                    inline_offset += len(text) + 1
+                if any(a not in positions or b - 1 not in positions for a, b in protected):
+                    # Keep the block protected when an inline span cannot be mapped.
+                    spans.append((start, end))
+                else:
+                    spans.extend((positions[a], positions[b - 1] + 1) for a, b in protected)
+
+        references = environment.get("references", {}).values()
+        for reference in [*references, *environment.get("duplicate_refs", [])]:
+            spans.append(tuple(offsets[line] for line in reference["map"]))
 
         for match in re.finditer(r"(?m)^# Citations[ \t]*$", content):
             if not any(start <= match.start() < end for start, end in spans):
@@ -149,14 +225,15 @@ class LinkRenderer:
         # Character spans already covered by an existing [text](target) link. A match
         # inside one is already linked, so wrapping it again would produce a broken
         # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
-        linked_spans = protected_spans or [
-            (link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)
-        ]
+        if protected_spans is None:
+            protected_spans = [
+                (link.start, link.end) for link in LinkRenderer.iter_markdown_links(content)
+            ]
 
         def _overlaps_protected_span(start: int, end: int) -> bool:
             return any(
                 not (end <= span_start or start >= span_end)
-                for span_start, span_end in linked_spans
+                for span_start, span_end in protected_spans
             )
 
         if LinkRenderer._contains_cjk(match_text):
@@ -202,9 +279,12 @@ class LinkRenderer:
         match_text: str,
         source_uri: str,
         target_uri: str,
+        *,
+        protected_spans: Optional[List[tuple[int, int]]] = None,
     ) -> bool:
-        """Return whether rendering can insert or preserve the requested link."""
-        protected_spans = LinkRenderer.protected_markdown_spans(content)
+        """Return whether the link is insertable or present, reusing spans for this content."""
+        if protected_spans is None:
+            protected_spans = LinkRenderer.protected_markdown_spans(content)
         if LinkRenderer._find_match_span(content, match_text, protected_spans) is not None:
             return True
 
@@ -217,8 +297,6 @@ class LinkRenderer:
             expected_targets.add(posixpath.normpath(relative_target))
 
         for link in markdown_links:
-            if link.start > 0 and content[link.start - 1] == "!":
-                continue
             if any(
                 not (link.end <= start or link.start >= end) for start, end in non_link_protected
             ):
@@ -243,9 +321,13 @@ class LinkRenderer:
 
     @staticmethod
     def render_links_with_count(
-        content: str, source_uri: str, links: List[Dict]
+        content: str,
+        source_uri: str,
+        links: List[Dict],
+        *,
+        protected_spans: Optional[List[tuple[int, int]]] = None,
     ) -> tuple[str, int]:
-        """Render links outside protected Markdown spans and return the inserted count."""
+        """Render links and count insertions, optionally reusing spans for this content."""
         eligible = [l for l in links if l.get("match_text")]
         if not eligible:
             return content, 0
@@ -253,7 +335,8 @@ class LinkRenderer:
         eligible.sort(key=lambda l: l.get("weight", 0), reverse=True)
 
         replacements: List[tuple] = []  # (start, end, replacement_text)
-        protected_spans = LinkRenderer.protected_markdown_spans(content)
+        if protected_spans is None:
+            protected_spans = LinkRenderer.protected_markdown_spans(content)
         for link in eligible:
             match_text = link["match_text"]
             to_uri = link["to_uri"]

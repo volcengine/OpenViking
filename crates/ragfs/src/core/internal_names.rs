@@ -15,9 +15,10 @@ pub fn is_hidden_runtime_lock_name(name: &str) -> bool {
     name == PATH_LOCK_FILE || name.starts_with(EXACT_LOCK_FILE_PREFIX)
 }
 
-/// Returns `true` when `name` is a hidden runtime lock name.
+/// Returns `true` for runtime locks and metadata left by V1 multi-write storage.
 pub fn is_hidden_internal_name(name: &str) -> bool {
-    is_hidden_runtime_lock_name(name)
+    // V1 metadata can remain during and after migration; never expose it as user data.
+    is_hidden_runtime_lock_name(name) || matches!(name, ".redirect.json" | ".sync_log.json")
 }
 
 /// Returns `true` when a logical path belongs to V2 multi-write internals.

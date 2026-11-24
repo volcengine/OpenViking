@@ -56,6 +56,9 @@ const LOADERS = {
   trae_cn: { harness: "trae-cn", load: (cwd) => loadAgentHookConfig("trae-cn", cwd), options: { logFile: "trae-cn-hooks.log" }, owns: [] },
   zcode: { harness: "zcode", load: (cwd) => loadAgentHookConfig("zcode", cwd), options: { logFile: "zcode-hooks.log" }, owns: [] },
   kimicode: { harness: "kimicode", load: (cwd) => loadAgentHookConfig("kimicode", cwd), options: { logFile: "kimicode-hooks.log" }, owns: [] },
+  codebuddy: { harness: "codebuddy", load: (cwd) => loadAgentHookConfig("codebuddy", cwd), options: { logFile: "codebuddy-hooks.log" }, owns: [] },
+  qoder: { harness: "qoder", load: (cwd) => loadAgentHookConfig("qoder", cwd), options: { logFile: "qoder-hooks.log" }, owns: [] },
+  antigravity: { harness: "antigravity", load: (cwd) => loadAgentHookConfig("antigravity", cwd), options: { logFile: "antigravity-hooks.log" }, owns: [] },
 };
 
 // openclaw declares its own settings in TypeScript and still resolves them

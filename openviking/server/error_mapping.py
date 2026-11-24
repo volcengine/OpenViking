@@ -33,7 +33,6 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.exceptions import (
-    HTTP_STATUS_TO_ERROR_CODE,
     AllCredentialsFailedError,
     error_code_from_http_status,
 )
@@ -51,7 +50,6 @@ from openviking_cli.exceptions import (
     UnimplementedError,
 )
 
-_KNOWN_HTTP_STATUS_CODES = frozenset(HTTP_STATUS_TO_ERROR_CODE)
 _UPSTREAM_ERROR_MARKERS = (
     "api error",
     "apierror",
@@ -101,7 +99,7 @@ _API_KEY_CONFIG_MARKERS = (
 _HTTP_STATUS_PATTERNS = (
     re.compile(r"\bHTTP\s*(\d{3})\b", re.IGNORECASE),
     re.compile(r"\bstatus(?:\s+code)?\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
-    re.compile(r"\berror\s+code\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\berror(?:\s+code)?\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
 )
 
 
@@ -278,9 +276,6 @@ def _extract_text_http_status(exc: Exception) -> int | None:
             status = _coerce_http_status(match.group(1))
             if status is not None:
                 return status
-    for status in _KNOWN_HTTP_STATUS_CODES:
-        if re.search(rf"\b{status}\b", text):
-            return status
     return None
 
 
@@ -356,12 +351,6 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
                 vlm_context=exc,
             )
 
-    if _is_model_api_key_configuration_error(exc):
-        return FailedPreconditionError(
-            "Model provider API key is not configured",
-            details={"reason": _trim_message(_exception_chain_text(exc))},
-        )
-
     status, source = _extract_structured_http_status(exc)
     if status is None:
         for item in _iter_exception_chain(exc):
@@ -388,6 +377,12 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             source=source,
             message=_upstream_detail_message(exc),
             vlm_context=exc,
+        )
+
+    if _is_model_api_key_configuration_error(exc):
+        return FailedPreconditionError(
+            "Model provider API key is not configured",
+            details={"reason": _trim_message(_exception_chain_text(exc))},
         )
 
     if not _looks_like_upstream_model_error(exc):

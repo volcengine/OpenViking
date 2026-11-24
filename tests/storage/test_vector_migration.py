@@ -6,7 +6,6 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import vector_migration
 from openviking.storage.abstract_overview import parse_abstract_overview
-from openviking.storage.vector_migration import delete_vector_records
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -127,51 +126,3 @@ directory: viking://resources/业务域/
     content_doc = parse_abstract_overview(result["content"])
     assert content_doc.metadata["directory"] == "viking://resources/归档域/"
     assert content_doc.body.strip() == "[chapter](viking://resources/归档域/章节.md)"
-
-
-class FakeVectorStore:
-    def __init__(self, records):
-        self.records = [dict(record) for record in records]
-        self.deleted_ids = []
-
-    async def filter(self, **_kwargs):
-        return [dict(record) for record in self.records]
-
-    async def delete(self, ids, *, ctx):
-        self.deleted_ids.extend(ids)
-        return len(ids)
-
-
-@pytest.mark.asyncio
-async def test_delete_vector_records_deletes_records_in_scope_only():
-    store = FakeVectorStore(
-        [
-            {
-                "id": "old-dir",
-                "uri": "viking://session",
-                "account_id": "acct",
-                "vector": [0.1, 0.2],
-            },
-            {
-                "id": "old-file",
-                "uri": "viking://session/s1/messages.jsonl",
-                "account_id": "acct",
-                "vector": [0.3, 0.4],
-            },
-            {
-                "id": "new-file",
-                "uri": "viking://user/alice/sessions/s1/messages.jsonl",
-                "account_id": "acct",
-                "vector": [0.5, 0.6],
-            },
-        ]
-    )
-
-    result = await delete_vector_records(
-        store,
-        account_id="acct",
-        uri="viking://session",
-    )
-
-    assert result.deleted == 2
-    assert store.deleted_ids == ["old-dir", "old-file"]

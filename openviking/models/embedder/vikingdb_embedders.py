@@ -18,7 +18,9 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
 )
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class VikingDBClientMixin:
@@ -77,7 +79,6 @@ class VikingDBClientMixin:
             return result.get("result", {}).get("data", [])
 
         except Exception as e:
-            logger.error(f"Failed to get embeddings: {e}")
             raise e
 
     async def _call_api_async(
@@ -230,6 +231,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
         result = await self._run_once_async(
             _call,
+            is_query=is_query,
             logger=logger,
             operation_name="VikingDB async embedding",
         )
@@ -314,6 +316,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
 
         result = await self._run_once_async(
             _call,
+            is_query=is_query,
             logger=logger,
             operation_name="VikingDB async sparse embedding",
         )
@@ -429,6 +432,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
 
         result = await self._run_once_async(
             _call,
+            is_query=is_query,
             logger=logger,
             operation_name="VikingDB async hybrid embedding",
         )

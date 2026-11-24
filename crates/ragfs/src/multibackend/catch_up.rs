@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use rand::Rng;
@@ -20,11 +20,13 @@ use crate::core::internal_names::is_multiwrite_internal_path;
 use crate::core::types::{FileInfo, ListSortBy, SortOrder, WriteFlag};
 use crate::lock::OwnedPathLockLease;
 use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, SYSTEM_DIR};
-use crate::multibackend::meta::{MetadataStore, MultiWriteWorker};
+use crate::multibackend::meta::{MetadataStore, MultiWriteMetricsSnapshot, MultiWriteWorker};
 use crate::multibackend::model::{
     FileState, PartitionState, PartitionsManifest, ScopeKey, SegmentEventType, SegmentRecord,
 };
 use crate::multibackend::provider::MultiWriteProvider;
+
+const CATCH_UP_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[cfg(test)]
 #[path = "tests/test_catch_up.rs"]
@@ -93,6 +95,7 @@ pub struct CatchUpWorker {
     backup: Arc<dyn FileSystem>,
     store: Arc<MetadataStore>,
     provider: Arc<dyn MultiWriteProvider>,
+    metrics: Arc<MultiWriteMetricsSnapshot>,
     checkpoint_consumer: Arc<dyn CheckpointConsumer>,
     cancellation: Option<watch::Receiver<bool>>,
 }
@@ -102,6 +105,7 @@ pub struct CatchUpLease {
     store: Arc<MetadataStore>,
     lease: OwnedPathLockLease,
     valid: AtomicBool,
+    last_refresh_at: StdMutex<Instant>,
 }
 
 enum CatchUpFailure {
@@ -135,6 +139,7 @@ impl CatchUpLease {
             store,
             lease,
             valid: AtomicBool::new(true),
+            last_refresh_at: StdMutex::new(Instant::now()),
         })
     }
 
@@ -144,8 +149,31 @@ impl CatchUpLease {
         let refreshed = matches!(result.as_deref(), Ok("refreshed"));
         if !refreshed {
             self.valid.store(false, Ordering::SeqCst);
+        } else {
+            *self
+                .last_refresh_at
+                .lock()
+                .map_err(|_| Error::internal("catch-up lease refresh lock poisoned"))? =
+                Instant::now();
         }
         result.map(|_| refreshed).map_err(Error::from)
+    }
+
+    /// Refresh the lease only when the last confirmed refresh is stale.
+    async fn refresh_if_stale(&self) -> Result<bool> {
+        if !self.is_valid() {
+            return Ok(false);
+        }
+        let stale = self
+            .last_refresh_at
+            .lock()
+            .map_err(|_| Error::internal("catch-up lease refresh lock poisoned"))?
+            .elapsed()
+            >= CATCH_UP_LEASE_REFRESH_INTERVAL;
+        if !stale {
+            return Ok(true);
+        }
+        self.refresh().await
     }
 
     /// Return whether every explicit refresh has retained the lease.
@@ -165,12 +193,13 @@ impl CatchUpLease {
 
 impl CatchUpWorker {
     /// Create one worker for an encrypted primary and backup handle.
-    pub fn new(
+    pub(crate) fn new(
         backend_id: String,
         primary: Arc<dyn FileSystem>,
         backup: Arc<dyn FileSystem>,
         store: Arc<MetadataStore>,
         provider: Arc<dyn MultiWriteProvider>,
+        metrics: Arc<MultiWriteMetricsSnapshot>,
     ) -> Self {
         Self {
             backend_id,
@@ -178,6 +207,7 @@ impl CatchUpWorker {
             backup,
             store,
             provider,
+            metrics,
             checkpoint_consumer: Arc::new(EmptyCheckpointConsumer),
             cancellation: None,
         }
@@ -200,11 +230,27 @@ impl CatchUpWorker {
 
     /// Acquire the backup lease, execute one bounded round, and release it.
     pub async fn run_once(&self) -> Result<()> {
+        self.run_leased(None).await
+    }
+
+    /// Acquire the backup lease and reconcile only known dirty scopes.
+    pub async fn run_scopes(&self, scopes: Vec<ScopeKey>) -> Result<()> {
+        if scopes.is_empty() {
+            return Ok(());
+        }
+        self.run_leased(Some(scopes)).await
+    }
+
+    /// Execute one catch-up operation under the backup lease.
+    async fn run_leased(&self, scopes: Option<Vec<ScopeKey>>) -> Result<()> {
         let outcome: CatchUpResult<()> = async {
             let lease =
                 Arc::new(CatchUpLease::acquire(self.store.clone(), &self.backend_id).await?);
             debug!(backend = %self.backend_id, "multi-write catch-up lease acquired");
-            let operation = self.run_round(&lease).await;
+            let operation = match scopes {
+                Some(scopes) => self.run_scope_set(&lease, scopes).await,
+                None => self.run_round(&lease).await,
+            };
             let release = lease.release().await;
             match (operation, release) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -299,6 +345,39 @@ impl CatchUpWorker {
         Ok(())
     }
 
+    /// Reconcile already-known dirty scopes without reading every account manifest.
+    async fn run_scope_set(
+        &self,
+        lease: &Arc<CatchUpLease>,
+        scopes: Vec<ScopeKey>,
+    ) -> CatchUpResult<()> {
+        let guarded = LeaseGuardedFileSystem {
+            inner: self.backup.clone(),
+            lease: lease.clone(),
+        };
+        for scope in scopes {
+            if let Err(failure) = self.reconcile_scope(&guarded, lease, &scope).await {
+                let error = match failure {
+                    CatchUpFailure::Cancelled => return Err(CatchUpFailure::Cancelled),
+                    CatchUpFailure::Failed(Error::NotFound(_)) => continue,
+                    CatchUpFailure::Failed(error) => error,
+                };
+                if !lease.is_valid() {
+                    return Err(error.into());
+                }
+                self.store.record_worker_error(MultiWriteWorker::CatchUp);
+                warn!(
+                    backend = %self.backend_id,
+                    account = %scope.account_id,
+                    partition = scope.partition_id,
+                    error = %error,
+                    "multi-write dirty catch-up partition failed"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Read sorted account ids from the encrypted mount-level registry.
     async fn read_accounts(&self) -> Result<Vec<String>> {
         let bytes = self
@@ -345,6 +424,7 @@ impl CatchUpWorker {
         scope: &ScopeKey,
     ) -> CatchUpResult<()> {
         let manifest = self.provider.read_manifest(scope).await?;
+        self.metrics.replace_scope(scope, &manifest);
         let state = manifest
             .backend_states
             .get(&self.backend_id)
@@ -597,7 +677,10 @@ impl CatchUpWorker {
         }
         self.provider
             .advance_backend_state(scope, &self.backend_id, progress)
-            .await
+            .await?;
+        self.metrics
+            .record_progress(scope, &self.backend_id, previous, progress);
+        Ok(())
     }
 
     /// Reconcile one path with fixed exponential delays and bounded jitter.
@@ -793,9 +876,9 @@ struct LeaseGuardedFileSystem {
 }
 
 impl LeaseGuardedFileSystem {
-    /// Reject the next backup mutation unless the lease refreshes literally.
+    /// Reject the next backup mutation unless the lease is still fresh.
     async fn before_write(&self) -> Result<()> {
-        if self.lease.refresh().await? {
+        if self.lease.refresh_if_stale().await? {
             Ok(())
         } else {
             Err(Error::internal("catch-up lease was not refreshed"))
@@ -805,25 +888,25 @@ impl LeaseGuardedFileSystem {
 
 #[async_trait]
 impl FileSystem for LeaseGuardedFileSystem {
-    /// Refresh the catch-up lease before creating a backup file.
+    /// Refresh a stale catch-up lease before creating a backup file.
     async fn create(&self, path: &str) -> Result<()> {
         self.before_write().await?;
         self.inner.create(path).await
     }
 
-    /// Refresh the catch-up lease before creating a backup directory.
+    /// Refresh a stale catch-up lease before creating a backup directory.
     async fn mkdir(&self, path: &str, mode: u32) -> Result<()> {
         self.before_write().await?;
         self.inner.mkdir(path, mode).await
     }
 
-    /// Refresh the catch-up lease before removing a backup file.
+    /// Refresh a stale catch-up lease before removing a backup file.
     async fn remove(&self, path: &str) -> Result<()> {
         self.before_write().await?;
         self.inner.remove(path).await
     }
 
-    /// Refresh the catch-up lease before removing a backup subtree.
+    /// Refresh a stale catch-up lease before removing a backup subtree.
     async fn remove_all(&self, path: &str) -> Result<()> {
         self.before_write().await?;
         self.inner.remove_all(path).await
@@ -834,7 +917,7 @@ impl FileSystem for LeaseGuardedFileSystem {
         self.inner.read(path, offset, size).await
     }
 
-    /// Refresh the catch-up lease before writing backup bytes.
+    /// Refresh a stale catch-up lease before writing backup bytes.
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
         self.before_write().await?;
         self.inner.write(path, data, offset, flags).await
@@ -859,13 +942,13 @@ impl FileSystem for LeaseGuardedFileSystem {
         self.inner.stat(path).await
     }
 
-    /// Refresh the catch-up lease before renaming a backup path.
+    /// Refresh a stale catch-up lease before renaming a backup path.
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
         self.before_write().await?;
         self.inner.rename(old_path, new_path).await
     }
 
-    /// Refresh the catch-up lease before changing a backup mode.
+    /// Refresh a stale catch-up lease before changing a backup mode.
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         self.before_write().await?;
         self.inner.chmod(path, mode).await

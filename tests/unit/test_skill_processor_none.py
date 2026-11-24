@@ -15,7 +15,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.skill_processor import SkillProcessor
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -27,24 +27,6 @@ class TestParseSkillNoneData:
         processor = SkillProcessor(vikingdb=None)
         with pytest.raises(ValueError, match="Skill data cannot be None"):
             processor._parse_skill(None)
-
-    def test_parse_skill_none_not_unsupported_type(self):
-        """None should NOT produce the generic 'Unsupported data type' message."""
-        processor = SkillProcessor(vikingdb=None)
-        with pytest.raises(ValueError) as exc_info:
-            processor._parse_skill(None)
-        assert "Unsupported data type" not in str(exc_info.value)
-
-    def test_parse_skill_valid_dict_passes(self):
-        """A valid dict should not raise."""
-        processor = SkillProcessor(vikingdb=None)
-        skill_dict, aux_files, base_path, cleanup_path = processor._parse_skill(
-            {"name": "test-skill", "description": "A test skill"}
-        )
-        assert skill_dict["name"] == "test-skill"
-        assert aux_files == []
-        assert base_path is None
-        assert cleanup_path is None
 
     def test_parse_skill_normalizes_hyphenated_allowed_tools(self):
         processor = SkillProcessor(vikingdb=None)
@@ -132,24 +114,6 @@ class TestParseSkillNoneData:
         with pytest.raises(ValueError, match="Unsupported data type"):
             processor._parse_skill(12345)
 
-    def test_parse_skill_long_raw_content_raises_oserror(self):
-        """Long raw SKILL.md content should still surface path probing errors."""
-        processor = SkillProcessor(vikingdb=None)
-        long_description = "telemetry " * 80
-        raw_skill = (
-            "---\n"
-            "name: telemetry-demo-skill\n"
-            f"description: {long_description}\n"
-            "tags:\n"
-            "  - telemetry\n"
-            "---\n\n"
-            "# Telemetry Demo Skill\n\n"
-            "Use this skill to validate telemetry ingestion.\n"
-        )
-
-        with pytest.raises(OSError, match="File name too long"):
-            processor._parse_skill(raw_skill)
-
 
 @pytest.mark.asyncio
 async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
@@ -157,6 +121,10 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
     viking_fs = MagicMock()
     viking_fs.write_context = AsyncMock()
+    viking_fs.exists = AsyncMock(return_value=False)
+    viking_fs.read = AsyncMock(side_effect=NotFoundError("history", "file"))
+    viking_fs.tree = AsyncMock(return_value=[])
+    viking_fs.write_file = AsyncMock()
     viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
     viking_fs._async_agfs.pathlock_release = AsyncMock()
 

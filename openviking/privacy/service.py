@@ -3,10 +3,13 @@
 """User privacy config storage service."""
 
 import json
+import re
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any, AsyncIterator, Optional
 
 from openviking.core.namespace import canonical_user_root
+from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.privacy.helpers import (
     canonicalize_values,
     config_root_uri,
@@ -28,9 +31,14 @@ from openviking.privacy.validation import (
     validate_privacy_values,
 )
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import (
+    ResolvedPrivacyConfig,
+    read_user_privacy,
+    resolve_user_privacy,
+)
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
 
 
 class UserPrivacyConfigService:
@@ -38,15 +46,31 @@ class UserPrivacyConfigService:
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
-        self._catalog_revisions: dict[tuple[str, str], int] = {}
+        self._global_policies = UserGlobalPolicyService(viking_fs)
+        self._credential_revisions: dict[tuple[str, str], int] = {}
 
-    def catalog_revision(self, ctx: RequestContext) -> int:
-        """Return the process-local revision of the caller's active value catalog."""
-        return self._catalog_revisions.get((ctx.account_id, ctx.user.user_id), 0)
+    @property
+    def global_policies(self) -> UserGlobalPolicyService:
+        """Owner-scoped GLOBAL access policy cache with TTL and FIFO eviction."""
+        return self._global_policies
 
-    def _bump_catalog_revision(self, ctx: RequestContext) -> None:
-        key = (ctx.account_id, ctx.user.user_id)
-        self._catalog_revisions[key] = self._catalog_revisions.get(key, 0) + 1
+    def credential_revision(self, ctx: RequestContext) -> int:
+        """Return the process-local revision of the caller's Credential catalog."""
+        return self._credential_revisions.get((ctx.account_id, ctx.user.user_id), 0)
+
+    async def get_settings(self, ctx: RequestContext) -> ResolvedPrivacyConfig:
+        """Return the current user's effective privacy settings."""
+        from openviking.server.dependencies import get_server_config
+
+        override = await read_user_privacy(self._viking_fs, ctx)
+        server_config = get_server_config()
+        defaults = server_config.user_config_defaults.privacy if server_config is not None else None
+        return resolve_user_privacy(override, defaults)
+
+    def _bump_credential_revision(self, ctx: RequestContext, category: str) -> None:
+        if category == "credential":
+            key = (ctx.account_id, ctx.user.user_id)
+            self._credential_revisions[key] = self._credential_revisions.get(key, 0) + 1
 
     def _user_root(self, ctx: RequestContext) -> str:
         return canonical_user_root(ctx)
@@ -77,10 +101,11 @@ class UserPrivacyConfigService:
         target_key: str,
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
     ) -> bool:
         root_uri = self.get_config_root(ctx, category, target_key)
         async with self._config_lock(
-            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
             # Acquiring a path lock may materialize the target directory. Treat
             # only a persisted current snapshot as an existing privacy target,
@@ -94,7 +119,7 @@ class UserPrivacyConfigService:
                 await self._clear_contents(ctx, category, target_key, lease)
             else:
                 await self._viking_fs.rm(root_uri, recursive=True, ctx=ctx, lease_ref=lease)
-            self._bump_catalog_revision(ctx)
+            self._bump_credential_revision(ctx, category)
             return True
 
     async def _clear_contents(
@@ -137,7 +162,9 @@ class UserPrivacyConfigService:
         target_key: str,
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
     ) -> AsyncIterator[Optional[dict[str, Any]]]:
+        """Keep internal mutations waiting while explicit API calls can fail on contention."""
         uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
         agfs = getattr(self._viking_fs, "_async_agfs", None)
         acquire = getattr(agfs, "pathlock_acquire_tree", None)
@@ -147,7 +174,7 @@ class UserPrivacyConfigService:
             return
         lease = await acquire(
             uri_to_path(self.get_config_root(ctx, category, target_key), ctx=ctx),
-            timeout_secs=30.0,
+            timeout_secs=30.0 if wait_for_lock else 0.0,
             **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
         )
         try:
@@ -247,14 +274,15 @@ class UserPrivacyConfigService:
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
         preserve_fields: Optional[set[str]] = None,
+        wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
         async with self._config_lock(
-            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
+            current = await self.get_current(ctx, category, target_key)
             if preserve_fields:
                 # Resolve retained references under the write lock so a Skill
                 # prepared before a credential rotation keeps the latest value.
-                current = await self.get_current(ctx, category, target_key)
                 retained = (
                     {key: value for key, value in current.values.items() if key in preserve_fields}
                     if current is not None
@@ -270,6 +298,7 @@ class UserPrivacyConfigService:
                 change_reason=change_reason,
                 labels=labels,
                 lease_ref=lease,
+                current=current,
             )
 
     async def patch_values(
@@ -281,9 +310,13 @@ class UserPrivacyConfigService:
         updated_by: str = "",
         change_reason: str = "",
         labels: Optional[dict[str, Any]] = None,
+        *,
+        wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
-        """Atomically merge fields into current values, creating the target if absent."""
-        async with self._config_lock(ctx, category, target_key) as lease:
+        """Atomically update named fields, preserving independent fields with equal values."""
+        async with self._config_lock(
+            ctx, category, target_key, wait_for_lock=wait_for_lock
+        ) as lease:
             current = await self.get_current(ctx, category, target_key)
             values = dict(current.values) if current is not None else {}
             values.update(updates)
@@ -296,6 +329,69 @@ class UserPrivacyConfigService:
                 change_reason=change_reason,
                 labels=labels,
                 lease_ref=lease,
+                current=current,
+            )
+
+    async def credential_warnings(
+        self, ctx: RequestContext, values: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        """Warn about weak credentials without exposing values."""
+        from openviking.privacy.rules import prepare_privacy_extractor
+
+        settings = await self.get_settings(ctx)
+        discover = prepare_privacy_extractor(settings=replace(settings, never_mask=[]))
+        warnings = []
+        for field, value in values.items():
+            if not isinstance(value, str):
+                continue
+            if len(value) >= 6 and re.search(r"[A-Za-z]", value) and re.search(r"[0-9]", value):
+                continue
+            try:
+                matches = discover(value)
+            except InvalidArgumentError:
+                matches = []
+            if len(matches) == 1 and matches[0].start == 0 and matches[0].end == len(value):
+                continue
+            warnings.append(
+                {
+                    "code": "weak_credential",
+                    "field": field,
+                    "reason": "Unrecognized credential format; automatic matching may mask ordinary text",
+                }
+            )
+        return warnings
+
+    async def insert_values(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        updates: dict[str, Any],
+        updated_by: str = "",
+        change_reason: str = "",
+        labels: Optional[dict[str, Any]] = None,
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
+    ) -> UserPrivacyConfigVersion:
+        """Atomically add new fields; labels apply only when creating the target."""
+        async with self._config_lock(
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+        ) as lease:
+            current = await self.get_current(ctx, category, target_key)
+            values = dict(current.values) if current is not None else {}
+            if not values.keys().isdisjoint(updates):
+                raise AlreadyExistsError(f"{category}/{target_key}", "privacy field")
+            values.update(updates)
+            return await self._upsert_locked(
+                ctx=ctx,
+                category=category,
+                target_key=target_key,
+                values=values,
+                updated_by=updated_by,
+                change_reason=change_reason,
+                labels=labels if current is None else None,
+                lease_ref=lease,
+                current=current,
             )
 
     async def _upsert_locked(
@@ -309,14 +405,14 @@ class UserPrivacyConfigService:
         change_reason: str,
         labels: Optional[dict[str, Any]],
         lease_ref: Optional[dict[str, Any]],
+        current: Optional[UserPrivacyConfigVersion],
     ) -> UserPrivacyConfigVersion:
         """Persist a complete snapshot while the caller holds the target lock."""
-        validate_privacy_values(values)
+        validate_privacy_values(values, category=category)
         validate_privacy_metadata(change_reason=change_reason, labels=labels)
         await self._ensure_root(ctx, category, target_key, lease_ref)
         now = get_current_timestamp()
         meta = await self.get_meta(ctx, category, target_key)
-        current = await self.get_current(ctx, category, target_key)
 
         if current and canonicalize_values(current.values) == canonicalize_values(values):
             if meta is None:
@@ -371,7 +467,7 @@ class UserPrivacyConfigService:
         if labels is not None:
             meta.labels = dict(labels)
         await self._save_meta(ctx, category, target_key, meta, lease_ref)
-        self._bump_catalog_revision(ctx)
+        self._bump_credential_revision(ctx, category)
         return version
 
     async def activate_version(
@@ -383,9 +479,10 @@ class UserPrivacyConfigService:
         updated_by: str = "",
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
         async with self._config_lock(
-            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
             meta = await self.get_meta(ctx, category, target_key)
             snapshot = await self.get_version(ctx, category, target_key, version)
@@ -402,7 +499,7 @@ class UserPrivacyConfigService:
             meta.updated_by = updated_by
             meta.last_accessed_at = get_current_timestamp()
             await self._save_meta(ctx, category, target_key, meta, lease)
-            self._bump_catalog_revision(ctx)
+            self._bump_credential_revision(ctx, category)
             return snapshot
 
     async def delete_field(
@@ -412,6 +509,8 @@ class UserPrivacyConfigService:
         target_key: str,
         field: str,
         updated_by: str = "",
+        *,
+        wait_for_lock: bool = True,
     ) -> Optional[UserPrivacyFieldDeleteResult]:
         """Remove one field from the active values by publishing a new snapshot.
 
@@ -419,7 +518,9 @@ class UserPrivacyConfigService:
         Deleting the final field removes the complete target and its history.
         """
         validate_privacy_field_name(field, location="field")
-        async with self._config_lock(ctx, category, target_key) as lease:
+        async with self._config_lock(
+            ctx, category, target_key, wait_for_lock=wait_for_lock
+        ) as lease:
             meta = await self.get_meta(ctx, category, target_key)
             current = await self.get_current(ctx, category, target_key)
             if meta is None or current is None or field not in current.values:
@@ -434,7 +535,7 @@ class UserPrivacyConfigService:
                     ctx=ctx,
                     lease_ref=lease,
                 )
-                self._bump_catalog_revision(ctx)
+                self._bump_credential_revision(ctx, category)
                 return UserPrivacyFieldDeleteResult(
                     category=category,
                     target_key=target_key,
@@ -471,7 +572,7 @@ class UserPrivacyConfigService:
             meta.updated_by = updated_by
             meta.last_accessed_at = now
             await self._save_meta(ctx, category, target_key, meta, lease)
-            self._bump_catalog_revision(ctx)
+            self._bump_credential_revision(ctx, category)
             return UserPrivacyFieldDeleteResult(
                 category=category,
                 target_key=target_key,

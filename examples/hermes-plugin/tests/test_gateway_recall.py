@@ -38,6 +38,7 @@ class GatewayBackend:
         self.reject_session_search = False
         self.unconfirmed_context = False
         self.reject_identity = False
+        self.profile = None
         self.upload_started = None
         self.release_upload = None
 
@@ -89,6 +90,8 @@ class GatewayBackend:
                     ]
                 )
             docs = [("common", "viking://user/tenant/memories/preferences/common.md")]
+            if self.profile:
+                docs += [("profile", "viking://user/tenant/memories/profile.md")]
             docs += [
                 (name, f"viking://user/tenant/peers/telegram.{name}/memories/preferences/fact.md")
                 for name in ("alice", "bob", "assistant")
@@ -119,7 +122,9 @@ class GatewayBackend:
         elif path == "/api/v1/fs/ls":
             result = []
         elif path.startswith("/api/v1/content/"):
-            return httpx.Response(404)
+            if not (self.profile and request.url.params.get("uri", "").endswith("/memories/profile.md")):
+                return httpx.Response(404)
+            result = self.profile
         return httpx.Response(200, json={"status": "ok", "result": result})
 
 
@@ -153,9 +158,7 @@ def initialize(
         manager.initialize_all(
             session_id="shared-group",
             hermes_home=str(home),
-            platform="telegram",
-            user_id="alice",
-            **identity,
+            **{"platform": "telegram", "user_id": "alice", **identity},
         )
     return home, provider, module, manager, backend
 
@@ -226,6 +229,23 @@ def test_gateway_capture_commit_and_sender_scoped_recall(
         with profile_scope(home):
             provider.handle_tool_call("viking_search", {"query": "preference"})
         assert backend.searches[-1][0].headers["X-OpenViking-Actor-Peer"] == "telegram.assistant"
+    finally:
+        manager.shutdown_all()
+
+
+def test_first_turn_list_recall_does_not_repeat_profile(external_provider, monkeypatch):
+    home, provider, _, manager, backend = initialize(external_provider, monkeypatch, scope=None)
+    monkeypatch.setenv("OPENVIKING_RECALL_PREFER_ABSTRACT", "false")  # default: full L2 reads
+    backend.profile = "PROFILE_BODY Alice drinks oolong."
+    profile_uri = "viking://user/tenant/memories/profile.md"
+    try:
+        with profile_scope(home):
+            first = provider.prefetch("Remember my drink preference", session_id="shared-group")
+            later = provider.prefetch("Remember my drink preference", session_id="shared-group")
+        assert f'<user-profile uri="{profile_uri}">' in first
+        assert first.count("PROFILE_BODY") == first.count(profile_uri) == 1
+        assert "common" in first and "common" in later
+        assert profile_uri not in later
     finally:
         manager.shutdown_all()
 
@@ -355,6 +375,30 @@ def test_older_hooks_and_no_gateway_sender(external_provider, monkeypatch, platf
             provider.on_turn_start(2, "Remember another fact", author_id=None)
             provider.sync_turn(
                 "Remember another fact", "OK", session_id="shared-group", turn_author={"id": None}
+            )
+            assert provider._drain_writers("shared-group", timeout=10)
+            assert "peer_id" not in backend.pending[0]
+    finally:
+        manager.shutdown_all()
+
+
+def test_cli_owner_is_not_a_gateway_sender(external_provider, monkeypatch):
+    home, provider, _, manager, backend = initialize(
+        external_provider, monkeypatch, platform="cli", user_id="uid:999"
+    )
+    try:
+        with profile_scope(home):
+            provider.on_turn_start(1, "Remember this")
+            provider.sync_turn("Remember this", "OK", session_id="shared-group")
+            assert provider._drain_writers("shared-group", timeout=10)
+            user, assistant = backend.pending
+            assert user["role"] == "user" and "peer_id" not in user
+            assert assistant["peer_id"] == "telegram.assistant"
+            backend.pending.clear()
+            # Newer hosts repeat the owner as the per-turn author.
+            provider.on_turn_start(2, "Remember more", author_id="uid:999")
+            provider.sync_turn(
+                "Remember more", "OK", session_id="shared-group", turn_author={"id": "uid:999"}
             )
             assert provider._drain_writers("shared-group", timeout=10)
             assert "peer_id" not in backend.pending[0]

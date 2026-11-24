@@ -7,12 +7,21 @@ import inspect
 import json
 import logging
 import os
+import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from loguru import logger
+from openviking.observability.log_safety import safe_log_fields, short_hash
+
+
+def _get_logger():
+    # The common logger imports span models through this package during startup.
+    from openviking_cli.utils.logger import get_logger
+
+    return get_logger(__name__)
+
 
 # Try to import opentelemetry - will be None if not installed
 try:
@@ -67,10 +76,19 @@ except ImportError:
 _otel_tracer: Any = None
 _propagator: Any = None
 _trace_id_filter_added: bool = False
+_trace_failure_reported: bool = False
 
 
 def _log_trace_internal_failure(message: str) -> None:
-    logger.debug(message, exc_info=True)
+    global _trace_failure_reported
+    level = logging.INFO if _trace_failure_reported else logging.ERROR
+    _trace_failure_reported = True
+    _get_logger().log(
+        level,
+        "tracing side channel unavailable error_type=%s degraded=true",
+        type(sys.exc_info()[1]).__name__,
+        extra={"degraded": True},
+    )
 
 
 _SpanExporterBase = SpanExporter if SpanExporter is not None else object
@@ -184,38 +202,14 @@ class TraceIdLoggingFilter(logging.Filter):
         trace_id = get_trace_id()
         record.trace_id = trace_id
         if trace_id:
-            record.msg = f"[{trace_id}] {record.msg}"
+            record.trace_id = trace_id
         return True
 
 
 def _setup_logging():
-    """Setup logging with trace_id injection."""
+    """Correlation fields are injected by the common logger adapter."""
     global _trace_id_filter_added
-
-    if _trace_id_filter_added:
-        return
-
-    try:
-        # Configure logger to patch records with trace_id
-        def _patch_trace_id(record):
-            trace_id = get_trace_id()
-            record["extra"]["trace_id"] = trace_id
-            if trace_id:
-                record["message"] = f"[{trace_id}] {record['message']}"
-
-        logger.configure(patcher=_patch_trace_id)
-        _trace_id_filter_added = True
-    except Exception:
-        _log_trace_internal_failure("[TRACER] failed to configure loguru trace_id patcher")
-
-    # Also setup standard logging filter
-    try:
-        standard_logger = logging.getLogger()
-        for handler in standard_logger.handlers:
-            if not any(isinstance(f, TraceIdLoggingFilter) for f in handler.filters):
-                handler.addFilter(TraceIdLoggingFilter())
-    except Exception:
-        _log_trace_internal_failure("[TRACER] failed to attach standard logging trace_id filter")
+    _trace_id_filter_added = True
 
 
 def init_tracer_from_server_config(server_config: Any) -> Any:
@@ -230,11 +224,11 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
     try:
         trace_cfg = server_config.observability.traces
         if not trace_cfg.enabled:
-            logger.info("[TRACER] disabled in server.observability.traces")
+            _get_logger().info("[TRACER] disabled in server.observability.traces")
             return None
 
         if trace_cfg.protocol.lower() != "local" and not trace_cfg.endpoint:
-            logger.warning("[TRACER] server.observability.traces.endpoint not configured")
+            _get_logger().info("[TRACER] server.observability.traces.endpoint not configured")
             return None
 
         return init_tracer(
@@ -249,7 +243,11 @@ def init_tracer_from_server_config(server_config: Any) -> Any:
             local_backup_count=trace_cfg.local_backup_count,
         )
     except Exception as e:
-        logger.warning(f"[TRACER] init from server config failed: {e}")
+        _get_logger().info(
+            "tracer initialization failed; continuing without traces error_type=%s degraded=true",
+            type(e).__name__,
+            extra={"degraded": True},
+        )
         return None
 
 
@@ -259,11 +257,15 @@ def _init_asyncio_instrumentation() -> None:
         from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
 
         AsyncioInstrumentor().instrument()
-        logger.debug("[TRACER] initialized AsyncioInstrumentor")
+        _get_logger().debug("[TRACER] initialized AsyncioInstrumentor")
     except ImportError:
-        logger.warning("[TRACER] opentelemetry-instrumentation-asyncio not installed")
+        _get_logger().info("[TRACER] opentelemetry-instrumentation-asyncio not installed")
     except Exception as e:
-        logger.warning(f"[TRACER] failed to init AsyncioInstrumentor: {e}")
+        _get_logger().info(
+            "asyncio instrumentation unavailable error_type=%s degraded=true",
+            type(e).__name__,
+            extra={"degraded": True},
+        )
 
 
 def init_tracer(
@@ -296,11 +298,11 @@ def init_tracer(
     global _otel_tracer, _propagator
 
     if not enabled:
-        logger.info("[TRACER] disabled by config")
+        _get_logger().info("[TRACER] disabled by config")
         return None
 
     if otel_trace is None or TracerProvider is None or Resource is None:
-        logger.warning(
+        _get_logger().info(
             "OpenTelemetry not installed. Install with: uv pip install opentelemetry-api "
             "opentelemetry-sdk opentelemetry-exporter-otlpprotogrpc"
         )
@@ -368,16 +370,15 @@ def init_tracer(
         # Initialize asyncio instrumentation to create child spans for create_task
         _init_asyncio_instrumentation()
 
-        logger.debug(
-            "[TRACER] initialized with service_name=%s, protocol=%s, endpoint=%s",
-            service_name,
-            protocol,
-            endpoint,
-        )
+        _get_logger().info("tracer initialized")
         return _otel_tracer
 
     except Exception as e:
-        logger.warning(f"[TRACER] initialized failed: {type(e).__name__}: {e}")
+        _get_logger().info(
+            "tracer initialization failed error_type=%s degraded=true",
+            type(e).__name__,
+            extra={"degraded": True},
+        )
         return None
 
 
@@ -441,7 +442,7 @@ def from_trace_info(trace_info: str) -> Optional[Any]:
         context = extract(carrier)
         return context
     except Exception as e:
-        logger.debug(f"[TRACER] failed to extract trace context: {e}")
+        _get_logger().info("trace context unavailable error_type=%s", type(e).__name__)
         return None
 
 
@@ -547,20 +548,19 @@ class tracer:
                     try:
                         # 记录输入参数
                         if not self.ignore_args and args:
-                            self.set("func_args", str(args))
+                            self.set("total", len(args))
                         func_kwargs = {k: v for k, v in kwargs.items() if self.arg_trace_checker(k)}
                         if len(func_kwargs) > 0:
-                            self.set("func_kwargs", str(func_kwargs))
+                            self.set("total", len(func_kwargs))
 
                         result = await func(*args, **kwargs)
 
                         if result is not None and not self.ignore_result:
-                            self.info(f"result: {result}")
+                            self.info("function result available")
 
                         return result
                     except Exception as e:
-                        self.error("e", e=e)
-                        span.record_exception(exception=e)
+                        span.add_event("exception", attributes={"exception.type": type(e).__name__})
                         span.set_status(Status(StatusCode.ERROR))
                         raise
 
@@ -577,20 +577,19 @@ class tracer:
                     try:
                         # 记录输入参数
                         if not self.ignore_args and args:
-                            self.set("func_args", str(args))
+                            self.set("total", len(args))
                         func_kwargs = {k: v for k, v in kwargs.items() if self.arg_trace_checker(k)}
                         if len(func_kwargs) > 0:
-                            self.set("func_kwargs", str(func_kwargs))
+                            self.set("total", len(func_kwargs))
 
                         result = func(*args, **kwargs)
 
                         if result is not None and not self.ignore_result:
-                            self.info(f"result: {result}")
+                            self.info("function result available")
 
                         return result
                     except Exception as e:
-                        self.error("e", e=e)
-                        span.record_exception(exception=e)
+                        span.add_event("exception", attributes={"exception.type": type(e).__name__})
                         span.set_status(Status(StatusCode.ERROR))
                         raise
 
@@ -611,9 +610,14 @@ class tracer:
             else:
                 input_context = None
 
-            return _otel_tracer.start_as_current_span(name=name, context=input_context)
+            return _otel_tracer.start_as_current_span(
+                name=name,
+                context=input_context,
+                record_exception=False,
+                set_status_on_exception=False,
+            )
         except Exception as e:
-            logger.debug(f"[TRACER] failed to start span: {e}")
+            _get_logger().info("trace span unavailable error_type=%s", type(e).__name__)
             return _DummySpanContext()
 
     @staticmethod
@@ -638,15 +642,17 @@ class tracer:
                 # 检查 span 是否已结束
                 if hasattr(current_span, "end_time") and current_span.end_time:
                     return  # span 已结束，不设置 attribute
-                current_span.set_attribute(key, str(value))
+                for field, safe_value in safe_log_fields({key: value}).items():
+                    if safe_value is not None:
+                        current_span.set_attribute(field, safe_value)
         except Exception:
-            _log_trace_internal_failure(f"[TRACER] failed to set span attribute key={key}")
+            _log_trace_internal_failure("trace attribute unavailable")
 
     @staticmethod
     def info(line: str, console: bool = False) -> None:
         """Add an event to the current span."""
         if console:
-            logger.opt(depth=1).info(line)
+            _get_logger().debug("trace event target_id=%s", short_hash(line))
         if _otel_tracer is None:
             return
 
@@ -656,20 +662,18 @@ class tracer:
                 # 检查 span 是否已结束
                 if hasattr(current_span, "end_time") and current_span.end_time:
                     return  # span 已结束，不添加 event
-                current_span.add_event(line)
+                current_span.add_event("tracer.info", attributes={"target_id": short_hash(line)})
         except Exception:
-            import traceback
-
-            traceback.print_stack()
+            _log_trace_internal_failure("trace event unavailable")
 
     @staticmethod
     def info_span(line: str, console: bool = False) -> None:
         """Create a new span with the given name."""
         if console:
-            logger.opt(depth=1).info(line)
+            _get_logger().debug("trace event target_id=%s", short_hash(line))
         if _otel_tracer is None:
             return
-        with tracer.start_as_current_span(name=line):
+        with tracer.start_as_current_span(name="tracer.info_span"):
             pass
 
     @staticmethod
@@ -677,9 +681,13 @@ class tracer:
         """Record an error on the current span."""
         if console:
             if e is not None:
-                logger.opt(depth=1).exception(f"{line}", exc_info=e)
+                _get_logger().error(
+                    "traced operation failed error_type=%s",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
             else:
-                logger.opt(depth=1).error(line)
+                _get_logger().error("traced operation failed")
         if _otel_tracer is None:
             return
 
@@ -691,10 +699,14 @@ class tracer:
                     return  # span 已结束，不记录 error
                 if e is not None:
                     current_span.set_status(Status(StatusCode.ERROR))
-                    current_span.record_exception(exception=e, attributes={"error": line})
+                    current_span.add_event(
+                        "exception", attributes={"exception.type": type(e).__name__}
+                    )
                 else:
                     current_span.set_status(Status(StatusCode.ERROR))
-                    current_span.add_event(line)
+                    current_span.add_event(
+                        "tracer.info", attributes={"target_id": short_hash(line)}
+                    )
         except Exception:
             _log_trace_internal_failure("[TRACER] failed to record span error")
 

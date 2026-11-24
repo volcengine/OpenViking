@@ -40,6 +40,7 @@ from .exceptions import (
     GitRestoreWritebackPartialError,
 )
 from .helpers import cp, download, upload
+from .leader import LeaderCandidate, Leadership
 from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
@@ -158,6 +159,36 @@ def get_privacy_matcher_class():
         ) from exc
 
 
+def compile_grep_pattern(pattern: str, case_insensitive: bool):
+    """Compile a pattern with the native RAGFS grep matcher."""
+    return _load_rust_module().GrepPattern(pattern, case_insensitive)
+
+
+def get_privacy_extractor_class():
+    """Return the native fixed-rule credential extractor."""
+    try:
+        return _load_rust_module().PrivacyExtractor
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python PrivacyExtractor is not available; rebuild the native extension"
+        ) from exc
+
+
+def get_user_global_policy_types():
+    """Return the native UserGlobalPolicy class and its exception types."""
+    try:
+        module = _load_rust_module()
+        return (
+            module.UserGlobalPolicy,
+            module.GlobalPolicyError,
+            module.UnsupportedGlobalPolicySchemaError,
+        )
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python UserGlobalPolicy is not available; rebuild the native extension"
+        ) from exc
+
+
 def reopen_rust_tracing_file() -> None:
     """Reopen the Rust tracing log file after Python rotates the active file."""
     try:
@@ -183,10 +214,10 @@ try:
     RAGFSBindingClient, BindingFileHandle = get_binding_client()
     # Backward compatibility alias
     AGFSBindingClient = RAGFSBindingClient
-except Exception:
-    _logger.warning(
-        "Failed to initialize RAGFSBindingClient during module import; "
-        "RAGFSBindingClient will be None. Use get_binding_client() for explicit handling."
+except Exception as _log_error:
+    _logger.info(
+        "Failed to initialize RAGFSBindingClient during module import; RAGFSBindingClient will be None. Use get_binding_client() for explicit handling. error_type=%s",
+        type(_log_error).__name__,
     )
     RAGFSBindingClient = None
     AGFSBindingClient = None
@@ -194,6 +225,8 @@ except Exception:
 
 __all__ = [
     "AsyncAGFSClient",
+    "LeaderCandidate",
+    "Leadership",
     "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",
