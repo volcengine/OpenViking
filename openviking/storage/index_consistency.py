@@ -12,6 +12,7 @@ from openviking.core.namespace import is_session_uri
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
+from openviking.storage.internal_names import is_hidden_entry_name
 from openviking.utils.embedding_utils import get_resource_content_type
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -144,7 +145,7 @@ def _file_candidates(
             continue
         rel_path = str(entry.get("rel_path") or "")
         name = str(entry.get("name") or _leaf_name(rel_path))
-        if name.startswith("."):
+        if is_hidden_entry_name(name, uri):
             continue
         candidates.append((uri, rel_path, name))
     return candidates

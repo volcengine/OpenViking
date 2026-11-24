@@ -34,7 +34,7 @@ from openviking.storage.acl import AclAction, AclSpec, AclUpdate
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
-from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.internal_names import is_hidden_entry_name, is_storage_internal_name
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.resource_rnfv import RequestIntent
@@ -1831,7 +1831,7 @@ class ResourceProcessor:
                 if not entry_uri or entry.get("isDir"):
                     continue
                 name = entry.get("name") or entry_uri.rsplit("/", 1)[-1]
-                if str(name).startswith("."):
+                if is_hidden_entry_name(str(name), entry_uri):
                     continue
                 parent = VikingURI(entry_uri).parent
                 if parent is None:
