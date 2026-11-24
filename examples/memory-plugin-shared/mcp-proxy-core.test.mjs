@@ -493,3 +493,93 @@ test("a genuine connection failure still maps to -32001", async () => {
   assert.equal(res.error.code, -32001);
   assert.match(res.error.message, /reachable/);
 });
+
+// HTTP header names are case-insensitive, so an extra header spelled in a
+// different case than a proxy-set header (e.g. `x-openviking-account` vs the
+// proxy's `X-OpenViking-Account`) must not survive the merge: Node fetch
+// would send both and the upstream joins the duplicates with a comma
+// ("obsolete, default"), defeating the proxy's precedence. Issue #6158.
+const CASE_COLLISION_EXTRAS = [
+  ["x-openviking-account", "X-OpenViking-Account", "x-openviking-account", "default"],
+  ["X-OPENVIKING-USER", "X-OpenViking-User", "x-openviking-user", "zeus"],
+  ["x-openviking-actor-peer", "X-OpenViking-Actor-Peer", "x-openviking-actor-peer", "peer-a"],
+  ["USER-AGENT", "User-Agent", "user-agent", "openviking-memory-test/9.9.9"],
+];
+
+test("an extra header colliding with a proxy header only in case cannot reach the upstream", async () => {
+  await withServer((_req, res, entry) => {
+    // The joined value the bug produced: "obsolete, default".
+    assert.equal(entry.headers["x-openviking-account"], "default");
+    if (entry.body.method === "initialize") {
+      res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "sid-case" });
+      res.end(sseMessage(jsonRpc(entry.body.id, { protocolVersion: "2025-06-18" })));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, { tools: [] })));
+  }, async ({ url, requests }) => {
+    const { proxy } = makeProxy({
+      url,
+      configOverrides: { extraHeaders: { "x-openviking-account": "obsolete" } },
+    });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18" },
+    });
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].body.method, "initialize");
+    assert.equal(requests[1].body.method, "tools/list");
+    for (const entry of requests) {
+      assert.equal(entry.headers["x-openviking-account"], "default");
+    }
+  });
+});
+
+for (const [extraName, , wireName, proxyValue] of CASE_COLLISION_EXTRAS) {
+  test(`a case-variant ${extraName} extra does not duplicate the proxy's header`, async () => {
+    await withServer((_req, res, entry) => {
+      assert.equal(entry.headers[wireName], proxyValue);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(sseMessage(jsonRpc(entry.body.id, {})));
+    }, async ({ url }) => {
+      const { proxy } = makeProxy({
+        url,
+        configOverrides: { extraHeaders: { [extraName]: "stale" } },
+      });
+      await proxy.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18" },
+      });
+    });
+  });
+}
+
+test("extras keep passing through: unrelated names, and the proxy still wins the exact-case spelling", async () => {
+  await withServer((_req, res, entry) => {
+    assert.equal(entry.headers["x-tenant"], "acme");
+    assert.equal(entry.headers["x-openviking-account"], "default");
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(sseMessage(jsonRpc(entry.body.id, {})));
+  }, async ({ url }) => {
+    const { proxy } = makeProxy({
+      url,
+      configOverrides: {
+        extraHeaders: {
+          "X-Tenant": "acme",
+          "X-OpenViking-Account": "obsolete",
+        },
+      },
+    });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18" },
+    });
+  });
+});
