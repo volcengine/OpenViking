@@ -226,5 +226,7 @@ async def test_windowed_skill_read_keeps_requested_lines(tmp_path):
 
     assert selected in result
     assert "Use the first line." not in result
-    client.read_content.assert_awaited_once_with(_URI, level="read", offset=5, limit=1)
+    client.read_content.assert_awaited_once_with(
+        _URI, level="read", offset=5, limit=1, raise_on_error=True
+    )
     assert not runtime.active_skills

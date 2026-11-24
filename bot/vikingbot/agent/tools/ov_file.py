@@ -1110,6 +1110,17 @@ class VikingMemoryCommitTool(OVFileTool):
             await self._release_client(tool_context, client)
 
 
+class VikingMultiReadResult(str):
+    """Model-facing text carrying per-URI errors for callers that track successful reads."""
+
+    errors: dict[str, str]
+
+    def __new__(cls, text: str, errors: dict[str, str] | None = None):
+        result = super().__new__(cls, text)
+        result.errors = errors if errors is not None else {}
+        return result
+
+
 class VikingMultiReadTool(OVFileTool):
     """Tool to read content from multiple Viking resources concurrently."""
 
@@ -1146,7 +1157,8 @@ class VikingMultiReadTool(OVFileTool):
     @property
     def description(self) -> str:
         return (
-            "Read content from multiple OpenViking resources concurrently. By default returns "
+            "Read content from multiple OpenViking resources concurrently. Each URI returns "
+            "its content or its own error. Correct or retry only failed URIs. By default returns "
             "complete content. Large files (over 512 KB) are not returned in full: first use "
             "openviking_grep to locate relevant lines, then read a bounded window with offset "
             "and limit (line numbers, 0-indexed)."
@@ -1312,7 +1324,9 @@ class VikingMultiReadTool(OVFileTool):
                             return await self._read_image(client, uri)
 
                         if media_kind in {"audio", "video"}:
-                            content = await client.read_content(uri, level="overview")
+                            content = await client.read_content(
+                                uri, level="overview", raise_on_error=True
+                            )
                             if not content:
                                 return {
                                     "uri": uri,
@@ -1366,7 +1380,7 @@ class VikingMultiReadTool(OVFileTool):
                             level=level,
                             offset=offset,
                             limit=limit,
-                            **({"raise_on_error": True} if kwargs.get("require_all") else {}),
+                            raise_on_error=True,
                         )
                         skill_runtime = getattr(tool_context, "skill_runtime", None)
                         if skill_runtime is not None:
@@ -1415,12 +1429,9 @@ class VikingMultiReadTool(OVFileTool):
                     continue
                 inline_media_bytes += media_bytes
 
-            if kwargs.get("require_all"):
-                for item in results:
-                    if not item["success"]:
-                        return f"Error: {item['uri']}: {item['content']}"
+            errors = {item["uri"]: item["content"] for item in results if not item["success"]}
             if with_revision:
-                return json.dumps(results, ensure_ascii=False)
+                return VikingMultiReadResult(json.dumps(results, ensure_ascii=False), errors)
 
             # 构建结果
             range_note = (
@@ -1429,6 +1440,8 @@ class VikingMultiReadTool(OVFileTool):
                 else f" (lines {offset}..{offset + limit - 1 if limit > 0 else 'end'})"
             )
             result_lines = [f"Multi-read results for {len(uris)} resources (level: {level}):"]
+            if not any(item["success"] for item in results):
+                result_lines[0] = "Error: No requested resource could be read."
             has_images = any(result.get("image") is not None for result in results)
             content_parts: list[dict[str, Any]] = (
                 [{"type": "text", "text": result_lines[0]}] if has_images else []
@@ -1461,7 +1474,7 @@ class VikingMultiReadTool(OVFileTool):
                         content_parts.append(image)
                     content_parts.append({"type": "text", "text": end_marker})
 
-            text_result = "\n".join(result_lines)
+            text_result = VikingMultiReadResult("\n".join(result_lines), errors)
             if has_images:
                 return MultimodalToolResult(
                     text=text_result,

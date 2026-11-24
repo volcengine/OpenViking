@@ -49,15 +49,6 @@ class ChildProvider(LLMProvider):
             messages = [*messages, {"role": "user", "content": error}]
 
 
-async def complete_tool_result(result, session_key, *, preserve_complete: bool = False):
-    """Keep scoped tool evidence complete for subsequent model requests.
-
-    Child file tools cannot read shared preview spill files, so head/tail previews
-    are not a lossless delivery mechanism for these isolated assignments.
-    """
-    return result
-
-
 class TargetReader(Tool):
     """Read a known target path and remember its revision before allowing replacement."""
 
@@ -136,7 +127,6 @@ def agent_runner(loop, session_key, connection, limits):
             registry.register(scoped)
         child = copy(loop)
         child.provider = ChildProvider(model, stage)
-        child._preview_tool_result = complete_tool_result
         final, _, _, _, _ = await child._run_agent_loop(
             messages=[
                 {

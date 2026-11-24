@@ -1,7 +1,10 @@
 """Markdown compile stage selection, isolated file workers and publication boundaries."""
 
 import asyncio
+import hashlib
 import json
+import shlex
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -17,6 +20,7 @@ from vikingbot.compile.file_ops import DocumentReader
 from vikingbot.compile.models import (
     CompileFailure,
     CompileLimits,
+    CompileRequest,
     CompileTask,
     SanitizedCompileRequest,
 )
@@ -729,46 +733,19 @@ async def test_compile_write_tool_allows_valid_okf_frontmatter():
 async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
     pipeline, agent_loop
 ):
-    loop, session_key, _ = agent_loop
     pipeline.client.write = AsyncMock()
-    pipeline.model.provider.chat = AsyncMock(
-        side_effect=[
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        "write",
-                        "openviking_write",
-                        {
-                            "path": "selection-rules.md",
-                            "content": "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n",
-                        },
-                        0,
-                    )
-                ],
-            ),
-            LLMResponse(content="Done"),
-        ]
-    )
+    calls = [("openviking_write", {"path": "selection-rules.md", "content": INVALID_FRONTMATTER})]
 
     with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
-        await simple.run(
-            loop,
-            pipeline.client,
-            pipeline.request,
-            pipeline.request.from_,
-            pipeline.skill,
-            session_key,
-            None,
-            AsyncMock(),
-            {},
+        await run_simple_compile(
+            pipeline, agent_loop, pipeline.request, calls, LLMResponse(content="Done")
         )
 
     assert caught.value.code == "COMPILE_INCOMPLETE"
     pipeline.client.write.assert_not_awaited()
 
 
-async def run_simple_incremental(pipeline, agent_loop, request, calls, *replies):
+async def run_simple_compile(pipeline, agent_loop, request, calls, *replies):
     loop, session_key, _ = agent_loop
     pipeline.model.provider.chat = AsyncMock(
         side_effect=[
@@ -803,7 +780,7 @@ async def test_simple_incremental_delivery_preserves_rejections(pipeline, agent_
     ]
     if recovered:
         calls.append(("openviking_write", {"path": "bad.md", "content": "# Rules"}))
-    result = await run_simple_incremental(
+    result = await run_simple_compile(
         pipeline,
         agent_loop,
         incremental_request(pipeline.request),
@@ -816,6 +793,30 @@ async def test_simple_incremental_delivery_preserves_rejections(pipeline, agent_
         assert "completion_status" not in public
     else:
         assert public["completion_status"] == "partial"
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+async def test_simple_incremental_tracks_failed_uris_in_mixed_reads(
+    pipeline, agent_loop, recovered
+):
+    good, missing = (pipeline.request.from_[0] + "/" + name for name in ("good.md", "missing.md"))
+    pipeline.client.read_content = AsyncMock(side_effect=["Facts", FileNotFoundError(), "Retry"])
+    pipeline.client.write = AsyncMock(
+        side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
+    )
+    calls = [("openviking_multi_read", {"uris": [good, missing + "/"]})]
+    if recovered:
+        calls.append(("openviking_multi_read", {"uris": [missing]}))
+    calls.append(("openviking_write", {"path": "good.md", "content": "# Good"}))
+    result = await run_simple_compile(
+        pipeline,
+        agent_loop,
+        incremental_request(pipeline.request),
+        calls,
+        LLMResponse(content="Done"),
+    )
+    assert result.updated == [pipeline.target + "/good.md"]
+    assert result.completion_status == (None if recovered else "partial")
 
 
 @pytest.mark.parametrize(
@@ -845,7 +846,7 @@ async def test_simple_incremental_diff_failure_tracks_page(
         ("openviking_diff_paths", retry_args),
         ("openviking_write", {"path": "good.md", "content": "# Good"}),
     ]
-    result = await run_simple_incremental(
+    result = await run_simple_compile(
         pipeline,
         agent_loop,
         incremental_request(pipeline.request),
@@ -894,7 +895,7 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
     first_reply = (
         LLMResponse(content="Done without changes.") if case == "reminded" else confirmation
     )
-    result = await run_simple_incremental(
+    result = await run_simple_compile(
         pipeline, agent_loop, request, calls, first_reply, confirmation
     )
     assert result.recovery_proof == (expected if case == "reminded" else None)
@@ -903,6 +904,93 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
     assert task.public_dict(include_recovery_proof=True)["result"].get("recovery_proof") == (
         result.recovery_proof
     )
+
+
+@pytest.mark.parametrize("exec_enabled", [True, False])
+async def test_simple_task_with_packaged_script(
+    exec_enabled, pipeline, agent_loop, tmp_path, monkeypatch
+):
+    loop, _, _ = agent_loop
+    loop.config.storage_workspace = str(tmp_path)
+    loop.config.sandbox.backends.direct.allow_compile_exec = exec_enabled
+    loop.config.ov_server.set_effective_auth_mode("dev")
+    service = BotCompileService(agent_loop=loop)
+    request = CompileRequest.model_validate(pipeline.request.model_dump(exclude={"changes"}))
+    skill = "---\nname: wiki\ndescription: Compile fixture\n---\nUse scripts/write.py."
+    script = (
+        "import sys\nfrom pathlib import Path\n"
+        "assert sys.argv[3] == '开源项目/openviking'\n"
+        "Path(sys.argv[2]).write_bytes(Path(sys.argv[1]).read_bytes())\n"
+    ).encode()
+    package = {"SKILL.md": skill.encode(), "scripts/write.py": script}
+    client = pipeline.client
+    client.attrs = AsyncMock(side_effect=lambda uri: {"uri": uri})
+    client.stat = AsyncMock(side_effect=lambda uri: {"uri": uri, "isDir": True})
+    client.read_raw = AsyncMock(return_value=skill)
+    client.close = AsyncMock()
+    client.download_bytes = AsyncMock(return_value=script)
+    client.get_skill = AsyncMock(
+        return_value={
+            "root_uri": request.skill,
+            "content": skill,
+            "revision": "test",
+            "content_sha256": hashlib.sha256(skill.encode()).hexdigest(),
+            "files": [
+                {
+                    "path": path,
+                    "uri": f"{request.skill}/{path}",
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+                for path, data in package.items()
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        "vikingbot.compile.service.VikingClient.create", AsyncMock(return_value=client)
+    )
+    output = tmp_path / "target output.md"
+    outside = tmp_path / "outside.md"
+    markdown = "# Workspace draft\n\n- 保留完整正文\n"
+    script_uri = f"{request.skill}/scripts/write.py"
+    calls = []
+    if exec_enabled:
+        command = shlex.join(
+            [sys.executable, script_uri, "workspace:changes.md", str(output), "开源项目/openviking"]
+        )
+        calls = [
+            ("write_file", {"path": "changes.md", "content": markdown}),
+            ("write_file", {"path": str(outside), "content": "outside"}),
+            ("exec", {"command": command}),
+        ]
+    loop.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(content="", tool_calls=[ToolCallRequest(str(index), name, args, 0)])
+            for index, (name, args) in enumerate(calls)
+        ]
+        + [LLMResponse(content="Done")]
+    )
+    accepted = await service.create_task(request, principal_scope="local")
+    try:
+        await asyncio.wait_for(asyncio.gather(*service._tasks), timeout=30)
+        task = await service.store.get(accepted.task_id)
+    finally:
+        await service.close()
+
+    tools = loop.provider.chat.await_args_list[0].kwargs["tools"]
+    names = {tool["function"]["name"] for tool in tools}
+    assert ("exec" in names) == exec_enabled
+    assert "write_file" in names
+    if exec_enabled:
+        assert task.status == "completed", task.error
+        assert output.read_text(encoding="utf-8") == markdown
+        assert not outside.exists()
+        client.download_bytes.assert_awaited_once_with(script_uri)
+        assert task.result.page_count == 0
+    else:
+        assert task.status == "failed"
+        assert task.error.code == "COMPILE_INCOMPLETE"
+        client.get_skill.assert_not_awaited()
 
 
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):

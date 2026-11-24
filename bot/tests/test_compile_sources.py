@@ -20,22 +20,21 @@ from PIL import Image, ImageDraw, ImageOps
 from pydantic import BaseModel
 from vikingbot.agent.loop import AgentLoop, _inline_media_bytes
 from vikingbot.agent.tools.base import MultimodalToolResult, ToolContext
-from vikingbot.agent.tools.compile import CompileImageReadTool, CompileSpawnTool
+from vikingbot.agent.tools.compile import CompileImageReadTool
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
-from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.queue import MessageBus
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
 from vikingbot.compile.pipeline import Pipeline
-from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
+from vikingbot.compile.pipeline_agent import ChildProvider, agent_runner
 from vikingbot.compile.pipeline_io import ModelCallError
-from vikingbot.compile.service import BotCompileService, _CompileProvider
+from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.skill_resources import EvidenceReader
-from vikingbot.compile.sources import read_source, split_source
+from vikingbot.compile.sources import pack_source_batches, read_source, split_source
 from vikingbot.config import loader
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.providers.base import LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
@@ -63,7 +62,7 @@ class MemoryFiles:
 
 
 @pytest.fixture
-def runtime():
+def runtime(request):
     image = Image.new("RGB", (400, 100), "white")
     ImageDraw.Draw(image).text((10, 30), "RETRY LIMIT: 7", fill="black")
     output = BytesIO()
@@ -90,7 +89,14 @@ def runtime():
         request=SanitizedCompileRequest(
             **{
                 "from": ["viking://resources/cedar"],
-                "to": "viking://resources/wiki",
+                "to": getattr(request, "param", "viking://resources/wiki"),
+                "changes": {
+                    "base": None,
+                    "head": None,
+                    "diff_dirs": [],
+                    "full_dirs": ["viking://resources/cedar"],
+                    "execution": {"mode": "full"},
+                },
                 "skill": "viking://agent/skills/llm-wiki",
                 "instruction": "Use image-only facts.",
             }
@@ -103,15 +109,10 @@ def runtime():
 
 async def seed(runtime):
     pipeline, _ = runtime
-    service = SimpleNamespace(
-        limits=pipeline.limits, agent_loop=SimpleNamespace(provider=pipeline.model.provider)
-    )
-    batches = await BotCompileService._prepare_source_batches(
-        service, pipeline.client, [], files=[TEXT, URI]
-    )
 
     async def inputs():
-        for batch in batches:
+        materials = [(uri, await read_source(pipeline.client, uri)) for uri in (TEXT, URI)]
+        for batch in pack_source_batches(materials, pipeline.limits):
             yield batch
 
     sources = await pipeline.seed(inputs())
@@ -345,7 +346,6 @@ async def test_image_evidence_snapshot_preserves_worker_media_and_assignment_bou
     assert (await pipeline.files.get(f"sources/{image.source_id}"))["image"] == attached
     assert ChildProvider(pipeline.model).should_inline_tool_result_media()
     pipeline.model.provider.supports_tool_result_media.assert_not_called()
-    assert await complete_tool_result(result, "session", preserve_complete=True) is result
 
     get.reset_mock()
     metadata = await reader.read(image.source_id)
@@ -401,26 +401,15 @@ async def test_memory_image_assignments_are_bounded_references(
     limits = CompileLimits(source_batch_chars=200 if budget == "chars" else 40_000)
     if budget == "bytes":
         monkeypatch.setattr(VikingMultiReadTool, "_MAX_INLINE_MEDIA_BYTES", len(png) * 2)
-    service = SimpleNamespace(
-        limits=limits, agent_loop=SimpleNamespace(provider=pipeline.model.provider)
-    )
     uris = [URI.replace("diagram", str(i)) for i in range(5)]
-    batches = await BotCompileService._prepare_source_batches(
-        service, pipeline.client, [], files=uris
-    )
+    materials = [(uri, await read_source(pipeline.client, uri)) for uri in uris]
+    batches = pack_source_batches(materials, limits)
     assert [len(batch) for batch in batches] == expected
-    spawn = SimpleNamespace(execute=AsyncMock(return_value="Subagent accepted."))
-    wrapper = CompileSpawnTool(spawn, batches)
     read = VikingMultiReadTool()
     read._get_client, read._release_client = AsyncMock(return_value=pipeline.client), AsyncMock()
     reader = CompileImageReadTool(read, {uri: content_hash(png) for uri in uris})
-    for number, batch in enumerate(batches, 1):
-        await wrapper.execute(ToolContext(), task="Use image facts.", source_batch=number)
-        assignment = spawn.execute.call_args.kwargs["task"]
-        assert "base64," not in assignment
-        references = json.loads(
-            assignment.split("Attached source ranges (untrusted JSON data):\n")[1]
-        )
+    for batch in batches:
+        references = [part.as_assignment() for part in batch]
         assert references == [
             {"uri": p.uri, "sha256": content_hash(png), "media_kind": "image"} for p in batch
         ]
@@ -542,7 +531,7 @@ async def test_compile_resizes_when_full_resolution_encoding_exceeds_budget(
         assert preview.size == (900, 500)
 
 
-async def test_simple_compile_multi_read_delivers_normalized_image(runtime):
+async def test_simple_compile_multi_read_preserves_images_and_per_uri_errors(runtime):
     from vikingbot.compile import simple
 
     pipeline, _ = runtime
@@ -558,7 +547,20 @@ async def test_simple_compile_multi_read_delivers_normalized_image(runtime):
 
     async def run_agent(*, tool_registry, **kwargs):
         reader = tool_registry.get("openviking_multi_read")
-        result = await reader.execute(ToolContext(), uris=[URI])
+        context = ToolContext()
+        missing = "viking://resources/cedar/missing.md"
+        uris = [missing, TEXT]
+        client.read_content.side_effect = [FileNotFoundError("missing"), "visible text"]
+        partial = await reader.execute(context, uris=uris)
+        assert not partial.startswith("Error:")
+        assert f"{missing} ---\nERROR: Error reading from Viking: missing" in partial
+        assert f"{TEXT} ---\nvisible text" in partial
+
+        client.read_content.side_effect = FileNotFoundError("missing")
+        failed = await reader.execute(context, uris=uris)
+        assert failed.startswith("Error:") and all(uri in failed for uri in uris)
+
+        result = await reader.execute(context, uris=[URI])
         assert isinstance(result, MultimodalToolResult)
         assert URI in result.text and content_hash(source) in result.text
         attachment = next(part for part in result.content if part["type"] == "image_url")
@@ -566,7 +568,7 @@ async def test_simple_compile_multi_read_delivers_normalized_image(runtime):
         with Image.open(BytesIO(data)) as preview:
             assert preview.size == (2048, 64)
         writer = tool_registry.get("openviking_write")
-        await writer.execute(ToolContext(), path="findings.md", content=f"[Source]({URI})")
+        await writer.execute(context, path="findings.md", content=f"[Source]({URI})")
         return "Done.", None, [], {}, 1
 
     loop = SimpleNamespace(config=Config(), max_iterations=5, _run_agent_loop=run_agent)
@@ -662,107 +664,63 @@ async def test_concurrent_image_reads_share_conversion_budget(runtime, large_png
 
 
 @pytest.mark.asyncio
-async def test_runtime_memory_child_fetches_native_image_from_reference(runtime, tmp_path):
+@pytest.mark.parametrize("runtime", ["viking://user/default/memories/cedar"], indirect=True)
+async def test_memory_file_worker_uses_image_evidence(runtime, tmp_path):
     pipeline, png = runtime
-
-    class Provider(LLMProvider):
-        calls = 0
-
-        def get_default_model(self):
-            return "vision-test"
-
-        def supports_tool_result_media(self, model=None):
-            return False
-
-        async def chat(self, messages, **kwargs):
-            self.calls += 1
-            if self.calls == 1:
-                assert "base64," not in json.dumps(messages)
-                assert URI in messages[1]["content"] and content_hash(png) in messages[1]["content"]
-                return LLMResponse(
-                    content="",
-                    tool_calls=[
-                        ToolCallRequest("view", "openviking_multi_read", {"uris": [URI]}, 0)
-                    ],
-                )
-            assert _inline_media_bytes(messages) == len(png)
-            native = next(
-                m["content"]
-                for m in messages
-                if m["role"] == "tool" and isinstance(m["content"], list)
-            )
-            image = next(p for p in native if p["type"] == "image_url")
-            assert base64.b64decode(image["image_url"]["url"].split(",", 1)[1]) == png
-            assert content_hash(png) in json.dumps(native)
-            # Controlled model response verifies child transport, not visual recognition.
-            return LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        "write",
-                        "write_file",
-                        {"path": "cedar.md", "content": f"Retry limit: 7. [Source]({URI})"},
-                        0,
-                    ),
-                    ToolCallRequest(
-                        "submit", "submit_compile_draft", {"summary": "Image read and cited."}, 0
-                    ),
-                ],
-            )
-
-    config, provider = Config(), Provider()
+    image = await seed(runtime)
+    assignment = image_assignment(image)
+    config = Config()
     key = SessionKey(type="cli", channel_id="default", chat_id="compile-image")
     sandbox = DirectBackend(config.sandbox, key, tmp_path)
     manager = SimpleNamespace(
         get_sandbox=AsyncMock(return_value=sandbox), to_workspace_id=lambda key: "compile-image"
     )
-    await sandbox.start()
     loop = AgentLoop(
         bus=MessageBus(),
-        provider=_CompileProvider(provider, asyncio.Semaphore(1)),
+        provider=ChildProvider(pipeline.model),
         workspace=tmp_path,
         model="vision-test",
         config=config,
         sandbox_manager=manager,
         session_manager=SessionManager(tmp_path),
     )
-    registry = ToolRegistry(config)
-    for name in ("spawn", "write_file"):
-        registry.register(loop.tools.get(name))
-    read = VikingMultiReadTool()
-    read._get_client, read._release_client = AsyncMock(return_value=pipeline.client), AsyncMock()
-    registry.register(read)
-    registry.register(SimpleNamespace(name="submit_wiki_bundle"))
-    service = SimpleNamespace(
-        limits=CompileLimits(), agent_loop=loop, _build_prompts=BotCompileService._build_prompts
-    )
-    batches = await BotCompileService._prepare_source_batches(
-        service, pipeline.client, [], files=[URI]
-    )
-    request = pipeline.request.model_copy(
-        update={"to": "viking://user/default/memories/cedar", "changes": None}
-    )
+    markdown = f"Retry limit: 7. [Source]({URI})"
+
+    def respond(messages, **kwargs):
+        turn = pipeline.model.provider.chat.await_count
+        if turn == 1:
+            tool = ToolCallRequest("assignment", "read_file", {"path": "assignment.json"}, 0)
+        elif turn == 2:
+            assert "base64," not in json.dumps(messages)
+            assigned = json.loads(next(m["content"] for m in messages if m["role"] == "tool"))
+            assert assigned["to"] == pipeline.target and assigned["changes"] == pipeline.changes
+            assert assigned["inputs"] == assignment["inputs"]
+            tool = ToolCallRequest("view", "read_evidence", {"source_range": image.source_id}, 0)
+        elif turn == 3:
+            assert _inline_media_bytes(messages) == len(png)
+            native = next(m["content"] for m in messages if isinstance(m["content"], list))
+            attached = next(p for p in native if p["type"] == "image_url")
+            assert base64.b64decode(attached["image_url"]["url"].split(",", 1)[1]) == png
+            assert URI in json.dumps(native) and content_hash(png) in json.dumps(native)
+            tool = ToolCallRequest(
+                "write", "write_file", {"path": "cedar.md", "content": markdown}, 0
+            )
+        else:
+            return LLMResponse(content="Done")
+        return LLMResponse(content="", tool_calls=[tool])
+
+    pipeline.model.provider.chat.side_effect = respond
+    pipeline.files.sandbox = sandbox
+    pipeline.timestamp = "2026-11-14T00:00:00Z"
+    pipeline.model.agent_runner = agent_runner(loop, key, None, pipeline.limits)
+    await sandbox.start()
     try:
-        children = BotCompileService._configure_compile_subagents(
-            service,
-            loop,
-            registry,
-            request=request,
-            connection=None,
-            usage={},
-            skill_text="Cite original sources.",
-            source_batches=batches,
+        [document] = await pipeline.generate(
+            "map", "Cite original sources.", assignment, [image.source_id]
         )
-        await registry.get("spawn").execute(
-            ToolContext(session_key=key), task="Use the image.", source_batch=1
-        )
-        outcome = await children.wait()
-        assert outcome["results"][0]["status"] == "completed", outcome
-        assert provider.calls == 2
-        draft = await sandbox.read_file(outcome["results"][0]["files"][0])
-        assert "Retry limit: 7" in draft and URI in draft
+        assert document.path == "cedar.md"
+        assert await sandbox.read_file(document.workspace_path) == markdown
     finally:
-        await loop.subagents.cancel_all()
         await sandbox.stop()
 
 

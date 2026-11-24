@@ -66,19 +66,16 @@ async def test_rule_search_tool_falls_back_for_older_server(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rule_search_result_bypasses_generic_tool_preview_truncation():
+async def test_rule_search_result_fits_delivery_budget():
     loop = object.__new__(AgentLoop)
-    tool = VikingRuleSearchTool()
     complete_rules = "complete-rule\n" * 1_000
 
-    result = await loop._preview_tool_result(
+    result = await loop._bound_rule_tool_result(
         complete_rules,
         SessionKey(type="test", channel_id="channel", chat_id="chat"),
-        preserve_complete=tool.preserve_complete_result,
     )
 
     assert result == complete_rules
-    assert "[Output truncated." not in result
 
 
 @pytest.mark.asyncio
@@ -92,8 +89,8 @@ async def test_rule_preview_bounds_complete_blocks_and_saves_full_source():
         for i in range(3)
     ]
     text = "# Applicable OpenViking Rules\n\nMatched 3 active Rule(s).\n\n" + "\n\n".join(blocks)
-    result = await loop._preview_tool_result(
-        text, SessionKey(type="test", channel_id="channel", chat_id="chat"), preserve_complete=True
+    result = await loop._bound_rule_tool_result(
+        text, SessionKey(type="test", channel_id="channel", chat_id="chat")
     )
     assert len(result) <= 50_000
     assert blocks[0] in result
@@ -114,8 +111,8 @@ async def test_rule_preview_save_failure_is_explicit_and_does_not_cut_a_rule():
         + "x" * 90_000
         + "\n\nApplies when: Always.\n\nCompiled Rule URI: viking://rules/large.md"
     )
-    result = await loop._preview_tool_result(
-        text, SessionKey(type="test", channel_id="channel", chat_id="chat"), preserve_complete=True
+    result = await loop._bound_rule_tool_result(
+        text, SessionKey(type="test", channel_id="channel", chat_id="chat")
     )
     assert len(result) <= 50_000
     assert "delivery.complete=false" in result

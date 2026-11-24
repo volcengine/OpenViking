@@ -14,12 +14,15 @@ from openviking.utils.path_safety import (
 )
 from openviking_cli.exceptions import OpenVikingError
 from vikingbot.agent.loop import _PlainTextDelivered
+from vikingbot.agent.remote_skills import SkillRuntimeContext
 from vikingbot.agent.tools.base import Tool
-from vikingbot.agent.tools.compile import CompileImageReadTool
+from vikingbot.agent.tools.compile import CompileChildTool, CompileImageReadTool
+from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingGrepTool,
     VikingListTool,
+    VikingMultiReadResult,
     VikingMultiReadTool,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
@@ -32,7 +35,8 @@ from vikingbot.compile.sources import verify_recovery_sources
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
-For full compilation, enumerate each source directory one page at a time and read its files.
+For full compilation, follow the Skill's workflow for discovering and reading sources when it
+specifies one. Otherwise, enumerate each source directory one page at a time and read its files.
 Read individual source URIs directly. For incremental compilation, fully scan full_dirs and
 page through the snapshot diff for diff_dirs. Read added/modified sources and update affected
 target content for deleted sources.
@@ -40,6 +44,7 @@ Use small pages and bounded reads so you can inspect complete results.
 For an image source, call openviking_multi_read with its URI and inspect the returned image
 before writing findings or marking its contents unreadable. Listing shows only metadata.
 When a tool fails, use its error to correct the arguments, retry or choose another tool.
+Use write_file to write files in the task workspace.
 Write completed text files as you go, using paths relative to to. Read relevant existing files
 before changing them and preserve unrelated content. Separate dependent writes into different
 turns. Finish with a brief final reply once the work is done. If no changes are required, explain
@@ -194,7 +199,7 @@ class CompileReadTool(Tool):
                 raise ValueError(f"URI outside the compile request: {uri}")
             canonical.append(uri)
         if multi:
-            args.update(uris=canonical, require_all=True)
+            args["uris"] = canonical
             if (
                 self.recovery_roots
                 and args.get("offset", 0) == 0
@@ -259,8 +264,23 @@ def _confirmed_read_hashes(target, final, messages):
     return {uri: read_hashes[uri] for uri in confirmed}, target_hashes
 
 
-async def run(loop, client, request, sources, skill, session_key, connection, save_progress, usage):
-    """Compile sources in one loop; confirmed writes survive errors as partial results."""
+async def run(
+    loop,
+    client,
+    request,
+    sources,
+    skill,
+    session_key,
+    connection,
+    save_progress,
+    usage,
+    *,
+    exec_enabled=False,
+):
+    """Compile with task-scoped tools and retain confirmed writes as partial results on failure.
+
+    When exec is enabled, the task resolves script paths against the selected remote Skill.
+    """
     changes = request.changes or {}
     incremental = (changes.get("execution") or {}).get("mode") == "incremental"
     recovery = incremental and changes.get("recovery_sources")
@@ -273,6 +293,8 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         "skill": skill,
     }
     registry = ToolRegistry(config=loop.config)
+    # Bind file paths to the same task workspace that exec uses.
+    registry.register(CompileChildTool(WriteFileTool(), ".", merge_only=True))
     roots = [*sources, request.skill, request.to]
     for reader in (VikingListTool, VikingMultiReadTool, VikingGlobTool, VikingGrepTool):
         tool = reader(config=loop.config, client=client)
@@ -316,11 +338,55 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         )
         return _PlainTextDelivered(messages=messages, tools_used=[])
 
-    async def remind_write(iteration):
-        if iteration == loop.max_iterations - 30:
-            return "30 rounds remain after this one. Write ready outputs now, then continue the remaining work."
+    async def remind_write(iteration: int) -> str | None:
+        """Return a progress note at a scheduled one-based iteration."""
+        max_iterations = loop.max_iterations
+        one_third = max_iterations // 3
+        two_thirds = 2 * max_iterations // 3
+        wrap_up = max_iterations - 30
+        if wrap_up <= two_thirds:
+            wrap_up = (two_thirds + max_iterations) // 2
 
+        if iteration == one_third:
+            return (
+                "You are about one-third through the iteration budget. Complete any part of the "
+                "task that is ready. Reuse results from earlier steps and focus further work on "
+                "what is still needed."
+            )
+        if iteration == two_thirds:
+            return (
+                "You are about two-thirds through the iteration budget. Deliver the work that is "
+                "ready and verify the result. Prioritize the remaining steps that matter most to "
+                "the requested outcome."
+            )
+        if iteration == wrap_up and wrap_up > two_thirds:
+            return (
+                f"{max_iterations - iteration} rounds remain after this one. Finish the "
+                "highest-priority work in progress, verify what you delivered, and report any "
+                "outstanding work accurately."
+            )
+        return None
+
+    runtime = None
+    exec_tool = loop.tools.get("exec") if exec_enabled else None
     try:
+        if exec_tool is not None:
+            runtime = SkillRuntimeContext(
+                config=loop.config,
+                sandbox_manager=loop.sandbox_manager,
+                session_key=session_key,
+                workspace_id=loop.sandbox_manager.to_workspace_id(session_key),
+                openviking_connection=connection,
+                actor_peer_id=(connection or {}).get("actor_peer_id"),
+                reject_unlisted_exec_paths=False,
+            )
+            active = await runtime.activate_from_read(f"{request.skill}/SKILL.md", skill)
+            if active is None:
+                raise CompileFailure(
+                    "SKILL_INVALID", "Expected a remote Skill definition", stage="agent"
+                )
+            assignment["skill"] = runtime.render_skill_content(active)
+            registry.register(exec_tool)
         final, _, calls, tokens, _ = await loop._run_agent_loop(
             messages=[
                 {"role": "system", "content": _PROMPT + (_RECOVERY_PROMPT if recovery else "")},
@@ -328,6 +394,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             ],
             session_key=session_key,
             tool_registry=registry,
+            skill_runtime=runtime,
             openviking_connection=connection,
             publish_events=False,
             inject_write_experience=False,
@@ -339,6 +406,9 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         if not any(outcome in {"created", "updated"} for outcome in writer.outcomes.values()):
             raise
         final, calls, tokens = f"INCOMPLETE: {str(exc) or type(exc).__name__}", [], {}
+    finally:
+        if runtime is not None:
+            await runtime.close()
     usage.update(tokens)
     result = CompileResult(from_=request.from_, to=request.to, skill=request.skill)
     for uri, outcome in writer.outcomes.items():
@@ -351,7 +421,10 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     for call in calls:
         name = call["tool_name"]
         args = call["resolved_args"]
+        output = call["result"]
         resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
+        if isinstance(output, VikingMultiReadResult):
+            resources = [validate_safe_viking_uri_path(uri) for uri in resources]
         if name == CompileDiffTool.name:
             # Only retrying the same diff page can clear its failure.
             resources = [(args.get("offset", 0), args.get("limit", 20))]
@@ -363,8 +436,15 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         ]
         for key in tracked:
             unresolved.pop(key, None)
-        if not call["execute_success"]:
-            warning = str(call["result"])[:300]
+        if isinstance(output, VikingMultiReadResult):
+            for key in tracked:
+                if key[1] in output.errors:
+                    warning = f"{key[1]}: {output.errors[key[1]]}"[:300]
+                    result.warnings.append(warning)
+                    unresolved[key] = warning
+            resources = [uri for uri in resources if uri not in output.errors]
+        elif not call["execute_success"]:
+            warning = str(output)[:300]
             result.warnings.append(warning)
             unresolved.update(dict.fromkeys(tracked, warning))
             if name == writer.name:
@@ -387,19 +467,12 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
         message = next(reversed(unresolved.values()), result.warnings[0])
         raise CompileFailure("COMPILE_INCOMPLETE", message, stage="agent")
     if final is None:
-        if not count:
-            message = "Iteration limit reached without confirmed output."
-            if write_error:
-                message += f" Last write error: {write_error}"
-            raise CompileFailure(
-                "COMPILE_INCOMPLETE",
-                message,
-                stage="agent",
-            )
-        result.warnings.append(
-            f"Partial compilation: iteration limit reached after writing {count} target file(s)."
-        )
-    elif not writer.outcomes and not (incremental and inspected_source):
+        result.warnings.append("Partial compilation: iteration limit reached.")
+    elif (
+        not writer.outcomes
+        and not (incremental and inspected_source)
+        and (write_error or runtime is None or not runtime.allows_tool("exec"))
+    ):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
             write_error or "No output or verified incremental no-change result.",

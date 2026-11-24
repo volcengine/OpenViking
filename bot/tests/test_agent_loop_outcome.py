@@ -548,8 +548,8 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, monkeyp
 async def test_agent_loop_honors_tool_result_preservation_policy(make_loop, monkeypatch):
     provider = _MediaProvider([[_image_call("call-1")]])
     loop = make_loop(provider=provider, max_iterations=2)
-    preview = AsyncMock(side_effect=lambda result, *_args, **_kwargs: result)
-    monkeypatch.setattr(loop, "_preview_tool_result", preview)
+    bound_rule_result = AsyncMock(wraps=loop._bound_rule_tool_result)
+    monkeypatch.setattr(loop, "_bound_rule_tool_result", bound_rule_result)
 
     final, *_ = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "read it"}],
@@ -559,15 +559,13 @@ async def test_agent_loop_honors_tool_result_preservation_policy(make_loop, monk
     )
 
     assert final == "done"
-    assert preview.await_args.kwargs["preserve_complete"] is True
+    bound_rule_result.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch):
+async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop):
     provider = _MediaProvider([[_image_call("call-1")]])
     loop = make_loop(provider=provider, max_iterations=2)
-    preview = AsyncMock(side_effect=lambda result, *_args, **_kwargs: result)
-    monkeypatch.setattr(loop, "_preview_tool_result", preview)
 
     final, *_ = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "read it"}],
@@ -577,7 +575,6 @@ async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch
     )
 
     assert final == "done"
-    assert preview.await_args.kwargs["preserve_complete"] is False
 
 
 @pytest.mark.asyncio
@@ -2237,6 +2234,10 @@ async def test_loop_request_context_preserves_tool_scope_and_metadata_isolation(
     make_loop, connection_tools
 ):
     contexts = {}
+    results = {
+        "first": "a" * 5_000 + "\nMiddle file contents\n" + "z" * 5_000,
+        "second": "recorded",
+    }
 
     class RecordingTool(Tool):
         name = "record"
@@ -2246,7 +2247,7 @@ async def test_loop_request_context_preserves_tool_scope_and_metadata_isolation(
         async def execute(self, tool_context, **kwargs):
             contexts[self.name] = tool_context
             tool_context.channel_metadata["tool"] = self.name
-            return "recorded"
+            return results[self.name]
 
     calls = [
         ToolCallRequest(id=name, name=name, arguments={}, tokens=1) for name in ("first", "second")
@@ -2275,6 +2276,10 @@ async def test_loop_request_context_preserves_tool_scope_and_metadata_isolation(
     )
 
     assert final == "done"
+    tool_messages = [message for message in provider.calls[1] if message["role"] == "tool"]
+    assert [(message["tool_call_id"], message["content"]) for message in tool_messages] == list(
+        results.items()
+    )
     assert metadata == {"message_id": "message"}
     assert set(contexts) == {"first", "second"}
     for name, context in contexts.items():

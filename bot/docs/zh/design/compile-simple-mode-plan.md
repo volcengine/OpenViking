@@ -8,7 +8,7 @@
 |---|---|
 | 配置入口 | `bot.compile.mode`，取值为 `simple`、`complex`，默认 `simple` |
 | simple | 一个 AgentLoop，任务提示词、OV 读取工具、单文件写工具和普通最终回复 |
-| complex | 显式配置后执行现有分支，包括 direct、planner/pipeline 和现有 memory 路径 |
+| complex | 按目录计划执行 pipeline，处理资源、Memory 和 Skill 目标 |
 | 全量与增量 | 使用请求中的 `args.changes.execution.mode`，兼容已有 `last_compile_time` 输入 |
 | 轮次耗尽 | 至少一个目标文件已确认创建或更新时，返回 `completed` 并在 `result.warnings` 标明部分完成。零产出时返回 `failed` |
 | 修改范围 | 实现、测试、说明文档均位于 `bot/` |
@@ -25,7 +25,6 @@
 | `CompileConfig` 已集中保存 Map、Shuffle、Reduce 参数 | [config/schema.py](../../../vikingbot/config/schema.py) | 在该模型增加 mode 默认值与枚举校验 |
 | service 已负责身份、幂等、目标锁、任务状态、沙箱和模型并发 | [compile/service.py](../../../vikingbot/compile/service.py) | simple 复用该生命周期 |
 | 底层 `_run_agent_loop` 支持独立提示词、工具集和终止工具 | [agent/loop/loop.py](../../../vikingbot/agent/loop/loop.py) | simple 可直接调用现有循环 |
-| `run_structured_task` 的提交检查绑定 `submit_wiki_bundle` | [agent/loop/loop_tools.py](../../../vikingbot/agent/loop/loop_tools.py) | simple 使用底层 loop，按最终回复或预算耗尽的退出分支判定结果 |
 | Bot 的 `write_file` 写入任务工作区 | [agent/tools/filesystem.py](../../../vikingbot/agent/tools/filesystem.py) | simple 需要把 SDK 的 OV write 暴露为任务工具 |
 | OV SDK 已提供单文件 `write(uri, content, mode)` | [SDK client.py](../../../../sdk/python/openviking_sdk/client.py) | Bot 增加薄适配，继续调用已有 HTTP 单文件接口 |
 | OV diff 工具已有分页；list 的模型参数没有 offset | [agent/tools/ov_file.py](../../../vikingbot/agent/tools/ov_file.py) | 复用 diff；补充目录分页并保留已有调用的默认行为 |

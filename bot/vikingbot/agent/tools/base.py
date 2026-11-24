@@ -167,7 +167,7 @@ class Tool(ABC):
 
     @property
     def preserve_complete_result(self) -> bool:
-        """Whether the model must receive this tool's result without preview truncation."""
+        """Whether the Rule delivery budget applies to this tool's result."""
         return False
 
     @abstractmethod

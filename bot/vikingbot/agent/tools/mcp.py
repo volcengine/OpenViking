@@ -104,8 +104,6 @@ class MCPToolWrapper(Tool):
 
     @property
     def preserve_complete_result(self) -> bool:
-        # Rule conditions and exceptions must survive the AgentLoop's ordinary
-        # head/tail preview, including dynamically discovered MCP Rules.
         return self._original_name == "rule_search"
 
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:

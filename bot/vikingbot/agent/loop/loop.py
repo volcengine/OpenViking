@@ -32,9 +32,6 @@ from vikingbot.agent.loop.loop_session import (
     _PreparedSteer,
 )
 from vikingbot.agent.loop.loop_tools import (
-    AgentIterationLimitExceeded as AgentIterationLimitExceeded,
-)
-from vikingbot.agent.loop.loop_tools import (
     LoopToolMixin,
     _is_tool_result_success,
     _LoopRequestContext,
@@ -42,7 +39,6 @@ from vikingbot.agent.loop.loop_tools import (
     _PlainTextDelivered,
     _PlainTextFinal,
 )
-from vikingbot.agent.loop.loop_tools import render_budget_reminder as render_budget_reminder
 from vikingbot.agent.remote_skills import SkillRuntimeContext
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools.registry import ToolRegistry

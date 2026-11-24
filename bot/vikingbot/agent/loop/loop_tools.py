@@ -83,41 +83,6 @@ class _PlainTextFinal:
     content: str | None = None
 
 
-class AgentIterationLimitExceeded(RuntimeError):
-    """A structured task used every available AgentLoop iteration without submitting."""
-
-    def __init__(self, max_iterations: int, *, usage: dict[str, Any] | None = None):
-        self.max_iterations = max_iterations
-        self.usage = usage or {}
-        super().__init__(
-            f"Agent reached its {max_iterations}-iteration limit without submitting a valid bundle"
-        )
-
-
-def render_budget_reminder(
-    remaining: int,
-    thresholds: tuple[int, int, int] = (15, 8, 3),
-) -> str | None:
-    """Return a submission reminder within descending heads-up, warning and critical thresholds."""
-    heads_up, warn, critical = thresholds
-    remaining = max(0, remaining)
-    if remaining <= critical:
-        return (
-            f"还剩 {remaining} 轮。收集子任务结果，检查并调用 submit_wiki_bundle；不再开启新任务。"
-        )
-    elif remaining <= warn:
-        return (
-            f"还剩 {remaining} 轮。必须开始提交：把当前最好结果通过 submit_wiki_bundle "
-            "提交，不要追求完美。"
-        )
-    elif remaining <= heads_up:
-        return (
-            f"还剩 {remaining} 轮。请停止对已读文件的全量重扫，开始把已有发现收敛成最终产物，"
-            "并准备调用 submit_wiki_bundle。"
-        )
-    return None
-
-
 class LoopToolMixin:
     """Tool setup and ordered execution of one model tool turn. State is owned by AgentLoop."""
 
@@ -376,11 +341,9 @@ class LoopToolMixin:
         for _idx, tool_call, outcome, tool_execute_duration in results:
             result = outcome.result
             result_text = str(result)
-            model_result = await self._preview_tool_result(
-                result,
-                session_key,
-                preserve_complete=getattr(outcome, "preserve_complete_result", False),
-            )
+            model_result = result
+            if getattr(outcome, "preserve_complete_result", False):
+                model_result = await self._bound_rule_tool_result(result, session_key)
             recorded_result = (
                 result_text if isinstance(result, MultimodalToolResult) else model_result
             )
@@ -458,73 +421,3 @@ class LoopToolMixin:
             )
 
         return messages, results
-
-    async def run_structured_task(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        session_key: SessionKey,
-        tool_registry: ToolRegistry,
-        openviking_tool_names: list[str] | set[str],
-        stop_tool_names: list[str],
-        openviking_connection: dict[str, Any] | None,
-        context_compact_budget: int | None = None,
-        pre_compact_prompt: str | None = None,
-        budget_reminder_thresholds: tuple[int, int, int] | None = None,
-    ) -> tuple[Any, list[dict], dict[str, int], int]:
-        """Run a tool-terminated structured task through the existing agent loop.
-
-        ``budget_reminder_thresholds`` optionally adds an iteration countdown before
-        model calls near the execution limit. ``pre_compact_prompt`` enables a bounded
-        save turn before context compaction, using the task's existing file tools.
-        """
-
-        max_iterations = getattr(self, "max_iterations", 0)
-
-        async def status_note_provider(iteration: int) -> str | None:
-            remaining = max(0, max_iterations - iteration)
-            if budget_reminder_thresholds and remaining in budget_reminder_thresholds:
-                return render_budget_reminder(remaining, budget_reminder_thresholds)
-            return None
-
-        async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
-            messages = self.context.add_assistant_message(context.messages, context.text, [])
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Your response was not submitted. Continue the task and call "
-                        "submit_wiki_bundle once the complete final output is ready."
-                    ),
-                }
-            )
-            return _PlainTextDelivered(messages=messages, tools_used=[])
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        _content, _reasoning, tools_used, token_usage, iteration = await self._run_agent_loop(
-            messages=messages,
-            session_key=session_key,
-            publish_events=False,
-            ov_tools_enable=True,
-            openviking_connection=openviking_connection,
-            stop_tool_names=stop_tool_names,
-            on_plain_text=require_submission,
-            tool_registry=tool_registry,
-            openviking_tool_names=openviking_tool_names,
-            allow_final_fallback=False,
-            inject_write_experience=False,
-            context_compact_budget=context_compact_budget,
-            pre_compact_prompt=pre_compact_prompt,
-            status_note_provider=status_note_provider,
-        )
-        submit_tool = tool_registry.get("submit_wiki_bundle")
-        bundle = getattr(submit_tool, "bundle", None)
-        if bundle is None:
-            if iteration >= self.max_iterations:
-                raise AgentIterationLimitExceeded(self.max_iterations, usage=token_usage)
-            raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
-        return bundle, tools_used, token_usage, iteration

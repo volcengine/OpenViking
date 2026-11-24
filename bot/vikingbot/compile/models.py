@@ -5,9 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from openviking.session.memory.dataclass import WikiLink
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
 DEFAULT_COMPILE_INSTRUCTION = (
@@ -15,11 +14,9 @@ DEFAULT_COMPILE_INSTRUCTION = (
     "into the outputs required by the Skill."
 )
 COMPILE_STAGING_ROOT = "__compile_staging__"
-COMPILE_OUTPUT_ROOT = f"{COMPILE_STAGING_ROOT}/output"
 COMPILE_DRAFT_ROOT = f"{COMPILE_STAGING_ROOT}/drafts"
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
-WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
@@ -33,8 +30,7 @@ class CompileLimits(BaseModel):
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
     simple_agent_iterations: int = Field(default=150, ge=1, description="Simple compile rounds.")
-    agent_iterations: int = 120
-    # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
+    # Maximum model/tool rounds for one complex pipeline file worker.
     subagent_iterations: int = Field(default=70, ge=1)
     # Per-task Map workers, also used for Resource source subagents.
     source_concurrency: int = Field(default=6, ge=1)
@@ -81,111 +77,6 @@ class SanitizedCompileRequest(BaseModel):
 def has_directory_plan(changes: dict[str, Any] | None) -> bool:
     """Identify directory-based task inputs; request normalization validates their contents."""
     return isinstance(changes, dict) and "diff_dirs" in changes and "full_dirs" in changes
-
-
-class WikiPageDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    page_id: int
-    title: str
-    page_type: str
-    summary: str
-    body_markdown: str | None = Field(
-        default=None,
-        description=(
-            "Inline Markdown body for an actual Wiki page. Link relevant known source "
-            "URIs with ordinary Markdown links; never invent link targets. For very large "
-            "bodies, write the Markdown to the workspace with write_file and submit "
-            "body_workspace_path instead."
-        ),
-    )
-    body_workspace_path: str | None = Field(
-        default=None,
-        description=(
-            f"Relative path under {COMPILE_OUTPUT_ROOT}/ for an editable "
-            "UTF-8 Markdown Wiki page in the output directory."
-        ),
-    )
-    source_ids: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Identifiers of supplied source roots that support this Wiki page. Omit to "
-            "cite every supplied source root."
-        ),
-    )
-    tags: list[str] = Field(default_factory=list)
-    path_hint: str | None = Field(
-        default=None,
-        description=(
-            "Optional relative path for a new Wiki page. Omit by default so its filename "
-            "derives from title; use only for Skill-required paths and avoid generic basenames."
-        ),
-    )
-    update_uri: str | None = None
-
-    @model_validator(mode="after")
-    def validate_body(self) -> "WikiPageDraft":
-        if (self.body_markdown is None) == (self.body_workspace_path is None):
-            raise ValueError("exactly one of body_markdown or body_workspace_path is required")
-        return self
-
-
-class CompileFileDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str | None = Field(
-        default=None,
-        description="Relative target path for a new file under the Compile target.",
-    )
-    update_uri: str | None = Field(
-        default=None,
-        description="Catalog URI of an existing target file to replace.",
-    )
-    content: str | None = Field(
-        default=None,
-        description=(
-            "Exact UTF-8 text file content, including any required frontmatter. For very "
-            "large files, write the file to the workspace with write_file and submit "
-            "workspace_path instead."
-        ),
-    )
-    workspace_path: str | None = Field(
-        default=None,
-        description=(
-            "Explicit relative path of a file already generated in the task workspace; "
-            "its bytes are preserved exactly."
-        ),
-    )
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> "CompileFileDraft":
-        if (self.path is None) == (self.update_uri is None):
-            raise ValueError("exactly one of path or update_uri is required")
-        if (self.content is None) == (self.workspace_path is None):
-            raise ValueError("exactly one of content or workspace_path is required")
-        return self
-
-
-class WikiBundleDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    pages: list[WikiPageDraft] = Field(
-        description=("Actual Wiki pages only; do not place Skill-prescribed artifact files here.")
-    )
-    files: list[CompileFileDraft] = Field(
-        default_factory=list,
-        description=(
-            "Skill-prescribed exact-path artifacts, including Markdown, YAML, JSON, "
-            "and binary files; preserve every required path and format."
-        ),
-    )
-    links: list[WikiLink] = Field(
-        default_factory=list,
-        description=(
-            "Useful non-self relationships between generated Wiki pages only; omit "
-            "them when no valid related page exists."
-        ),
-    )
 
 
 class CompileErrorInfo(BaseModel):
@@ -282,7 +173,6 @@ def utc_now() -> str:
 __all__ = [
     "CompileAccepted",
     "CompileErrorInfo",
-    "CompileFileDraft",
     "CompileFailure",
     "CompileLimits",
     "CompileRequest",
@@ -293,8 +183,5 @@ __all__ = [
     "OKF_VERSION",
     "SanitizedCompileRequest",
     "TERMINAL_STATUSES",
-    "WikiBundleDraft",
-    "WikiLanguage",
-    "WikiPageDraft",
     "utc_now",
 ]

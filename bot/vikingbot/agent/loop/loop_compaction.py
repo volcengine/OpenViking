@@ -1,4 +1,4 @@
-"""Tool-result previews, media budgets, and context compaction."""
+"""Rule delivery, media budgets, and context compaction."""
 
 from __future__ import annotations
 
@@ -219,7 +219,7 @@ def _compact_build_note(previous_summary: str, new_summary: str) -> str:
 
 
 class LoopCompactionMixin:
-    """Tool-result previews, media budgets, and context compaction. State is owned by AgentLoop."""
+    """Rule delivery, media budgets, and context compaction for AgentLoop."""
 
     async def _compact_tool_loop(
         self,
@@ -302,10 +302,9 @@ class LoopCompactionMixin:
             blocks[latest_rules] = [
                 {
                     **message,
-                    "content": await self._preview_tool_result(
+                    "content": await self._bound_rule_tool_result(
                         message["content"],
                         session_key,
-                        preserve_complete=True,
                         rule_budget=rule_budget,
                     ),
                 }
@@ -506,21 +505,19 @@ class LoopCompactionMixin:
                 logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
         return ""
 
-    async def _preview_tool_result(
+    async def _bound_rule_tool_result(
         self,
         result: Any,
         session_key: SessionKey,
         *,
-        preserve_complete: bool = False,
         rule_budget: int = MAX_RULE_RESULT_CHARS,
     ) -> Any:
-        """Save large text and return a bounded preview or complete Rule blocks.
+        """Return Rule text within the character budget without splitting Rule blocks.
 
-        Non-text results pass through. Saving failures are explicit in the preview;
-        original tool outcomes still determine success and stop conditions.
+        Oversized text is saved to the session sandbox when possible. The returned
+        delivery notice reports the path or the save failure. Non-text results pass through.
         """
-        limit = rule_budget if preserve_complete else 8_000
-        if not isinstance(result, str) or len(result) <= limit:
+        if not isinstance(result, str) or len(result) <= rule_budget:
             return result
         path = f"{TOOL_RESULT_DIRECTORY}/{uuid.uuid4().hex}.txt"
         try:
@@ -537,6 +534,4 @@ class LoopCompactionMixin:
                 f"{type(exc).__name__}. Only this preview is available; "
                 "retrieve smaller sections from the original source if needed."
             )
-        if preserve_complete:
-            return bound_rule_text(result, rule_budget, notice)
-        return f"{result[:4_000]}\n\n[Output truncated. {notice}]\n\n{result[-2_000:]}"
+        return bound_rule_text(result, rule_budget, notice)

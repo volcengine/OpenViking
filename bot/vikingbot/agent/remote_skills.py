@@ -320,6 +320,7 @@ class SkillRuntimeContext:
         actor_peer_id: str | None,
         local_skill_names: Iterable[str] = (),
         request_id: str | None = None,
+        reject_unlisted_exec_paths: bool = True,
     ):
         self.config = config
         self.settings: RemoteSkillsConfig = config.remote_skills
@@ -330,6 +331,7 @@ class SkillRuntimeContext:
         self.actor_peer_id = actor_peer_id
         self.local_skill_names = {str(name) for name in local_skill_names}
         self.request_id = request_id or uuid.uuid4().hex
+        self._reject_unlisted_exec_paths = reject_unlisted_exec_paths
         self.candidates: list[RemoteSkillCandidate] = []
         self.active_skills: dict[str, ActiveRemoteSkill] = {}
         self.materializations: dict[str, str] = {}
@@ -1059,7 +1061,8 @@ class SkillRuntimeContext:
                 continue
             suffix = Path(relative).suffix.lower()
             file_consumer_arg = command_name in _EXEC_FILE_CONSUMERS and index == 1
-            if (
+            # Shell arguments such as grep patterns can resemble attachment paths.
+            if self._reject_unlisted_exec_paths and (
                 explicit_relative
                 or "/" in relative
                 or suffix in _RESOURCE_LIKE_SUFFIXES
