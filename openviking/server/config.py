@@ -20,10 +20,10 @@ from pydantic import (
     model_validator,
 )
 
+from openviking.scheduling.expiry.config import ExpiryCacheConfig
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.identity import AuthMode
-from openviking.scheduling.expiry.config import ExpiryCacheConfig
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
