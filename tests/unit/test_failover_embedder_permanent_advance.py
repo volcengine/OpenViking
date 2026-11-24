@@ -220,8 +220,9 @@ def test_content_safety_does_not_cycle_the_ring():
 
     fe = FailoverEmbedder(embedders=[cs, backup], credential_ids=["cs", "backup"])
 
-    with pytest.raises(ModelError, match="content_filter"):
+    with pytest.raises(ModelError) as raised:
         fe.embed("hello")
+    assert raised.value.kind is ModelErrorKind.CONTENT_SAFETY
 
     assert cs.calls == 1
     assert backup.calls == 0
