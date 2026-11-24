@@ -78,7 +78,8 @@ async def test_update_lock_blocks_same_package_until_failed_update_finishes(
                 method(endpoint, json={"data": _skill_md(name, "Concurrent"), "wait": True}),
                 5,
             )
-        assert competing.status_code != 200, competing.text
+        assert competing.status_code == 409, competing.text
+        assert competing.json()["error"]["code"] == "CONFLICT"
         # Holding this package must not lock the entire skills namespace.
         await _add_skill(client, f"unrelated-{competing_operation}", "Independent")
         resume.set()

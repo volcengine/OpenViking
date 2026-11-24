@@ -141,21 +141,9 @@ results = client.find(
 5. **符号链接处理**：检测并跳过符号链接，记录目标路径但不解析内容
 6. **文件大小限制**：跳过大于 10MB 的文件和零字节文件
 
-### 文件类型检测
-
-解析器包含辅助方法 `_detect_file_type()` 用于检测文件类型，可返回：
-- `"code"`：编程语言文件（.py, .java, .js, .cpp 等）
-- `"documentation"`：文档文件（.md, .txt, .rst 等）
-- `"other"`：其他文本文件
-- `"binary"`：二进制文件（已通过 `IGNORE_EXTENSIONS` 过滤）
-
 ### 测试验证
 
-包含完整的测试文件 `tests/misc/test_code_parser.py` 验证：
-- `IGNORE_DIRS` 包含所有必需的目录
-- `IGNORE_EXTENSIONS` 包含所有必需的格式
-- 符号链接处理正确实现
-- 文件类型检测逻辑准确
+`tests/parse/test_code_local_artifact.py` 验证仓库导入产物、文件过滤和写入失败后的清理。
 
 ### 优化 TODO
 - 支持采用更轻量的模型进行文件摘要，加快处理速度

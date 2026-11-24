@@ -872,7 +872,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to search in |
-| pattern | str | Yes | - | Search pattern (regex) |
+| pattern | str | Yes | - | Search pattern in Rust `regex` syntax, matched against individual lines |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
@@ -881,6 +881,8 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
 | before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |
 | after_context | int | No | 0 | Number of context lines returned after each match; supported by the HTTP API and CLI |
+
+Patterns that use unsupported syntax, such as lookaround or backreferences, are invalid.
 
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 

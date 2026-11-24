@@ -168,57 +168,33 @@ async def test_metadata_endpoint(client):
 
 
 @pytest.mark.asyncio
-async def test_protected_resource_metadata(client):
+async def test_protected_resource_metadata(client, monkeypatch):
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
     resp = await client.get("/.well-known/oauth-protected-resource")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["resource"].endswith("/mcp")
-    assert body["authorization_servers"]
-    assert "header" in body["bearer_methods_supported"]
-    # Must be cacheable.
-    assert "max-age" in resp.headers.get("cache-control", "")
+    assert body["resource"] == "http://127.0.0.1/mcp"
+    assert [issuer.rstrip("/") for issuer in body["authorization_servers"]] == ["http://127.0.0.1"]
+    assert body["bearer_methods_supported"] == ["header"]
+    assert body["scopes_supported"] == [MCP_SCOPE]
+    assert resp.headers["cache-control"] == "public, max-age=3600"
 
-
-@pytest.mark.asyncio
-async def test_protected_resource_metadata_honors_x_forwarded(client):
+    forwarded = {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "public.example"}
     resp = await client.get(
         "/.well-known/oauth-protected-resource",
-        headers={"X-Forwarded-Proto": "https", "X-Forwarded-Host": "public.example"},
+        headers=forwarded,
     )
+    assert resp.status_code == 200
     body = resp.json()
     assert body["resource"] == "https://public.example/mcp"
+    assert body["authorization_servers"][0].rstrip("/") == "https://public.example"
 
-
-@pytest.mark.asyncio
-async def test_protected_resource_metadata_honors_public_base_url_env(client, monkeypatch):
-    """OPENVIKING_PUBLIC_BASE_URL must override X-Forwarded-* and Host header."""
     monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://override.example")
-    resp = await client.get(
-        "/.well-known/oauth-protected-resource",
-        headers={"X-Forwarded-Proto": "http", "X-Forwarded-Host": "ignored.example"},
-    )
+    resp = await client.get("/.well-known/oauth-protected-resource", headers=forwarded)
+    assert resp.status_code == 200
     body = resp.json()
     assert body["resource"] == "https://override.example/mcp"
     assert body["authorization_servers"][0].rstrip("/") == "https://override.example"
-
-
-@pytest.mark.asyncio
-async def test_dcr_registers_client(client):
-    # OpenViking only accepts public clients (PKCE). Real MCP clients
-    # always send "none" — the SDK's OAuth 2.0 default is client_secret_post,
-    # which we deliberately reject (see test_dcr_rejects_confidential_auth_methods).
-    resp = await client.post(
-        "/register",
-        json={
-            "redirect_uris": ["https://claude.ai/cb"],
-            "client_name": "Claude",
-            "token_endpoint_auth_method": "none",
-        },
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["client_id"]
-    assert body["redirect_uris"] == ["https://claude.ai/cb"]
 
 
 async def _authorize_with_mcp_scope(client, client_id: str, redirect_uri: str) -> str:
@@ -259,6 +235,7 @@ async def test_authorize_scope_mcp_after_scopeless_dcr(client):
     )
     assert reg.status_code == 201, reg.text
     assert reg.json().get("scope") == MCP_SCOPE
+    assert reg.json()["redirect_uris"] == [redirect_uri]
 
     location = await _authorize_with_mcp_scope(client, reg.json()["client_id"], redirect_uri)
     assert FALLBACK_AUTHORIZE_PAGE in location and "pending=" in location
@@ -350,6 +327,8 @@ async def test_full_device_flow(app_with_oauth, client):
     assert body["status"] == "approved"
     assert body["client_id"] == client_id
     assert body["client_name"] == "Claude"
+    pending = await store.load_pending_authorization(pending_id)
+    assert pending["verified_key_fp"] == "f" * 64
 
     # Status after verify: approved + redirect_url with code/state.
     post = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
@@ -388,6 +367,8 @@ async def test_full_device_flow(app_with_oauth, client):
     assert record.account_id == "acct1"
     assert record.user_id == "alice"
     assert record.role == "user"
+    refresh_record = await store.peek_refresh(tokens["refresh_token"])
+    assert record.authorizing_key_fp == refresh_record["authorizing_key_fp"] == "f" * 64
 
 
 @pytest.mark.asyncio
@@ -416,6 +397,9 @@ async def test_oauth_pending_info_endpoint(app_with_oauth, client):
 async def test_oauth_pending_info_404_when_missing(client):
     resp = await client.get("/api/v1/auth/oauth/pending/doesnotexist")
     assert resp.status_code == 404
+    status = await client.get("/oauth/authorize/page/status", params={"pending": "doesnotexist"})
+    assert status.status_code == 410
+    assert status.json() == {"status": "expired"}
 
 
 @pytest.mark.asyncio
@@ -444,6 +428,7 @@ async def test_oauth_verify_by_pending_id(app_with_oauth, client):
 async def test_oauth_verify_requires_pending_or_code(client):
     resp = await client.post("/api/v1/auth/oauth-verify", json={"decision": "approve"})
     assert resp.status_code == 400
+    assert resp.json()["error_description"] == "Must provide either 'pending_id' or 'code'"
 
 
 @pytest.mark.asyncio
@@ -477,12 +462,6 @@ async def test_oauth_verify_deny_destroys_pending(app_with_oauth, client):
 
 
 @pytest.mark.asyncio
-async def test_status_unknown_pending_returns_410(client):
-    resp = await client.get("/oauth/authorize/page/status", params={"pending": "doesnotexist"})
-    assert resp.status_code == 410
-
-
-@pytest.mark.asyncio
 async def test_oauth_verify_idempotency(app_with_oauth, client):
     """A second verify with the same code must fail — pending is one-shot."""
     _, store, _ = app_with_oauth
@@ -499,6 +478,7 @@ async def test_oauth_verify_idempotency(app_with_oauth, client):
     )
     # The pending row's verified flag now blocks find_pending_by_display_code.
     assert second.status_code == 400
+    assert second.json()["error_description"] == "Invalid or expired verification code"
 
 
 @pytest.mark.asyncio
@@ -522,6 +502,7 @@ async def test_refresh_token_rotation(app_with_oauth, client):
             "code_verifier": verifier,
         },
     )
+    assert token_resp.status_code == 200, token_resp.text
     rt1 = token_resp.json()["refresh_token"]
     at1 = token_resp.json()["access_token"]
 
@@ -540,6 +521,7 @@ async def test_refresh_token_rotation(app_with_oauth, client):
         data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id},
     )
     assert replay.status_code == 400
+    assert replay.json()["error"] == "invalid_grant"
 
 
 # ---------------------------------------------------------------------------
@@ -628,42 +610,3 @@ async def test_oauth_verify_rejects_oauth_issued_caller(app_with_oauth, client):
             )
 
         app.dependency_overrides[get_request_context] = _fixed_ctx
-
-
-@pytest.mark.asyncio
-async def test_oauth_token_carries_authorizing_key_fp(app_with_oauth, client):
-    """Happy path: every minted token records the verifier's fp; rotation of
-    that fingerprint at the manager level invalidates the token at bearer
-    auth time. Here we just verify the fp is correctly recorded — auth-time
-    rejection has its own coverage in test_auth_integration."""
-    app, store, provider = app_with_oauth
-    expected_fp = "f" * 64
-
-    client_id, pending_id, _, verifier = await _start_authorize(
-        client, redirect_uri="https://x.test/cb"
-    )
-    code = (await store.load_pending_authorization(pending_id))["display_code"]
-
-    await client.post("/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"})
-    pending = await store.load_pending_authorization(pending_id)
-    # After verify, the pending row carries the verifier's fp.
-    assert pending["verified_key_fp"] == expected_fp
-
-    status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
-    auth_code = status.json()["redirect_url"].split("code=")[1].split("&")[0]
-    token_resp = await client.post(
-        "/token",
-        data={
-            "grant_type": "authorization_code",
-            "code": auth_code,
-            "redirect_uri": "https://x.test/cb",
-            "client_id": client_id,
-            "code_verifier": verifier,
-        },
-    )
-    access_token = token_resp.json()["access_token"]
-    record = await provider.load_access_token(access_token)
-    assert record is not None
-    assert record.authorizing_key_fp == expected_fp
-    refresh_record = await store.peek_refresh(token_resp.json()["refresh_token"])
-    assert refresh_record["authorizing_key_fp"] == expected_fp

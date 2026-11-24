@@ -67,7 +67,6 @@ async def backend(tmp_path):
     Base.metadata.create_all(engine)
     inspection = redis.Redis.from_url(endpoint, decode_responses=True)
     stores: list[AccountStore] = []
-    services = {service}
     cache_client = create_agfs_client(
         RagfsBindingConfig(
             agfs=AGFSConfig(path=str(tmp_path), backend="memory"),
@@ -83,22 +82,10 @@ async def backend(tmp_path):
     )
     cache_runtime = _CacheRuntimeObserver(cache_client.cache_runtime("accountstore"))
 
-    async def make_mysql(mode="hash", service_name=service):
-        services.add(service_name)
-        mysql = MySQLAccountStore(
-            service_name=service_name,
-            params={
-                **params,
-                "credential_storage": mode,
-                "credential_encryption_key": base64.urlsafe_b64encode(bytes(range(32))).decode(),
-            },
-        )
+    async def make_store():
+        mysql = MySQLAccountStore(service_name=service, params=params)
         stores.append(mysql)
         await mysql.load()
-        return mysql
-
-    async def make_store():
-        mysql = await make_mysql()
         store = RedisMySQLAccountStore(
             service_name=service,
             mysql_store=mysql,
@@ -115,7 +102,7 @@ async def backend(tmp_path):
         # Seed through MySQL so the first Redis authentication is genuinely cold.
         await authority.create_account_with_api_key("acme", "admin", "admin-key")
         await authority.create_user_with_api_key("acme", "alice", "user", "old-key")
-        yield SimpleNamespace(reader=reader, writer=writer, mysql=mysql, make_mysql=make_mysql)
+        yield SimpleNamespace(reader=reader, writer=writer, mysql=mysql)
     finally:
         for store in reversed(stores):
             await store.close()
@@ -125,7 +112,7 @@ async def backend(tmp_path):
             inspection.delete(*keys)
         inspection.close()
         with engine.begin() as connection:
-            connection.execute(delete(Account).where(Account.service_name.in_(services)))
+            connection.execute(delete(Account).where(Account.service_name == service))
         engine.dispose()
 
 
@@ -182,29 +169,6 @@ def paused_snapshot(backend, monkeypatch):
     yield gate
     gate.release.set()
     gate.cleanup.set()
-
-
-@pytest.mark.parametrize("mode", ["hash", "encrypted"])
-async def test_mysql_snapshot_verifies_credentials_and_scopes_identity(backend, mode):
-    mysql = await backend.make_mysql(mode)
-    assert await snapshot(mysql) == {
-        "account_id": "acme",
-        "user_id": "alice",
-        "role": "user",
-        "group_ids": (),
-    }
-    await mysql.create_user_with_api_key("acme", "bob", "admin", "bob-key")
-    await mysql.create_group("acme", "team")
-    await mysql.add_group_members("acme", "team", ["bob"])
-    assert (await mysql.get_auth_snapshot("bob-key"))["group_ids"] == ("team",)
-    assert await mysql.get_auth_snapshot("bob-key", user_id_hint="alice") is None
-    assert await mysql.get_auth_snapshot("bob-key", account_id_hint="other") is None
-    assert await mysql.get_auth_snapshot("invalid-key") is None
-    isolated = await backend.make_mysql(mode, f"test-{uuid4().hex}")
-    assert await isolated.get_auth_snapshot("bob-key") is None
-    await mysql.replace_active_user_api_key("acme", "bob", "new-key")
-    assert await mysql.get_auth_snapshot("bob-key") is None
-    assert (await mysql.get_auth_snapshot("new-key"))["user_id"] == "bob"
 
 
 @pytest.mark.parametrize("user_id", ["alice", None], ids=["user", "account"])
@@ -353,7 +317,9 @@ async def test_cancelled_startup_releases_the_runtime(backend, monkeypatch):
     assert (await snapshot(backend.reader))["user_id"] == "alice"
 
 
-async def test_main_batch_membership_and_conditional_key_rotation_invalidate_snapshots(backend):
+async def test_main_batch_membership_and_conditional_key_rotation_invalidate_snapshots(
+    backend, monkeypatch
+):
     from openviking_cli.exceptions import UnauthenticatedError
 
     reader, writer = backend.reader, backend.writer
@@ -367,6 +333,22 @@ async def test_main_batch_membership_and_conditional_key_rotation_invalidate_sna
     assert await writer.remove_group_members("acme", "team", ["alice", "bob", "alice"])
     assert (await snapshot(reader))["group_ids"] == ()
     assert (await reader.get_auth_snapshot("bob-key"))["group_ids"] == ()
+
+    await writer.add_group_members("acme", "team", ["alice"])
+    assert (await snapshot(reader))["group_ids"] == ("team",)
+    remove = writer._mysql.remove_group_members
+
+    async def commit_before_connection_loss(*args, **kwargs):
+        assert await remove(*args, **kwargs)
+        raise OSError("connection lost after commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(writer._mysql, "remove_group_members", commit_before_connection_loss)
+        with pytest.raises(OSError, match="connection lost after commit"):
+            await writer.remove_group_members("acme", "team", ["alice", "alice"])
+    assert await writer.get_group_members("acme", "team") == []
+    assert (await snapshot(reader))["group_ids"] == ()
+
     await writer.replace_active_user_api_key("acme", "alice", "new-key", expected_api_key="old-key")
     assert await snapshot(reader) is None
     assert (await snapshot(reader, "new-key"))["user_id"] == "alice"

@@ -56,7 +56,7 @@ def _install_fake_embedder(monkeypatch):
     """Use an in-process fake embedder so server tests never hit external APIs."""
 
     class FakeEmbedder(DenseEmbedderBase):
-        def __init__(self, dimension: int = 2048):
+        def __init__(self, dimension: int):
             super().__init__(model_name="test-fake-embedder")
             self._dimension = dimension
 
@@ -67,7 +67,6 @@ def _install_fake_embedder(monkeypatch):
             return self._dimension
 
     monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder(self.dimension))
-    return FakeEmbedder
 
 
 def _install_fake_vlm(monkeypatch):
@@ -191,13 +190,13 @@ def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path, monkeypatch):
     """Create and initialize an OpenVikingService for in-process API tests."""
-    fake_embedder_cls = _install_fake_embedder(monkeypatch)
+    _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
     svc = OpenVikingService(
         path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
     )
     await svc.initialize()
-    svc.viking_fs.query_embedder = fake_embedder_cls()
+    svc.viking_fs.query_embedder = svc._config.embedding.get_embedder()
     _install_session_commit_queue_fallback(svc, monkeypatch)
     yield svc
     await svc.close()
@@ -253,7 +252,7 @@ async def client_with_resource(client, service, sample_markdown_file):
 @pytest_asyncio.fixture(scope="function")
 async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
-    fake_embedder_cls = _install_fake_embedder(monkeypatch)
+    _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
 
     @asynccontextmanager
@@ -266,7 +265,7 @@ async def running_server(temp_dir: Path, monkeypatch):
         path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")
     )
     await svc.initialize()
-    svc.viking_fs.query_embedder = fake_embedder_cls()
+    svc.viking_fs.query_embedder = svc._config.embedding.get_embedder()
     _install_session_commit_queue_fallback(svc, monkeypatch)
 
     config = ServerConfig(root_api_key=SDK_ROOT_API_KEY)

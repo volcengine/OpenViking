@@ -38,15 +38,10 @@ class _UpstreamHTTPError(Exception):
         self.status_code = status_code
 
 
-class _Response:
-    def __init__(self, status_code: int):
-        self.status_code = status_code
-
-
-class _HTTPStatusError(Exception):
-    def __init__(self, status_code: int, message: str):
-        super().__init__(message)
-        self.response = _Response(status_code)
+def _httpx_status_error(status_code: int, message: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://provider.example/v1/embeddings")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(message, request=request, response=response)
 
 
 def test_agfs_client_does_not_exist_maps_to_not_found():
@@ -74,7 +69,7 @@ def test_agfs_client_invalid_uri_maps_to_invalid_uri():
 
 def test_agfs_http_status_keeps_storage_mapping():
     mapped = map_exception(
-        AGFSHTTPError("No such file or directory", 404),
+        AGFSHTTPError("Backend returned an error", 404),
         resource="viking://missing",
         resource_type="file",
     )
@@ -183,7 +178,7 @@ def test_upstream_provider_payload_message_is_not_duplicated():
     ],
 )
 def test_upstream_status_survives_circuit_breaker(status, message, expected_code, monkeypatch):
-    error = _HTTPStatusError(status, message)
+    error = _httpx_status_error(status, message)
     breaker = CircuitBreaker(failure_threshold=1, reset_timeout=10)
     monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: 1000)
     breaker.record_failure(error)
@@ -201,7 +196,7 @@ def test_upstream_status_survives_circuit_breaker(status, message, expected_code
     # A failed recovery probe replaces the previous reason; recovery releases it.
     monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: 1011)
     breaker.check()
-    breaker.record_failure(_HTTPStatusError(502, "Embedding API error: Bad Gateway"))
+    breaker.record_failure(_httpx_status_error(502, "Embedding API error: Bad Gateway"))
     with pytest.raises(CircuitBreakerOpen) as blocked:
         breaker.check()
     assert map_exception(blocked.value).details["upstream_status_code"] == 502
@@ -384,6 +379,7 @@ def test_git_concurrent_commit_maps_to_conflict():
     assert mapped is not None
     assert mapped.code == "CONFLICT"
     assert ERROR_CODE_TO_HTTP_STATUS.get(mapped.code) == 409
+    assert mapped.details == {"conflict_type": "git_ref_cas", "retryable": True}
 
 
 def test_git_auth_failure_remains_a_client_error():
@@ -397,6 +393,9 @@ def test_git_auth_failure_remains_a_client_error():
     assert error.code == GIT_AUTH_FAILED
     assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
     assert error_response(error.code, error.message).status_code == 400
-    assert response_from_result(
-        {"status": "error", "code": error.code, "errors": [error.message]}
-    ).status_code == 400
+    assert (
+        response_from_result(
+            {"status": "error", "code": error.code, "errors": [error.message]}
+        ).status_code
+        == 400
+    )

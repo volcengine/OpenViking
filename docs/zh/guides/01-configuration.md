@@ -15,7 +15,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-`openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+OpenViking 启动时需要 Embedding 和 VLM。未指定 Embedding 模型时使用内置的本地默认模型。`openviking-server init` 会引导你配置这两种模型。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
 
 ## 快速开始
 
@@ -1850,11 +1850,13 @@ Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `mode` | str | QueueFS 命名空间模式：`"shared"` 使用 `/queue`；`"worker"` 为每个 worker 隔离到 `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"cache"` | `"sqlite"` |
+| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"`、`"cache"` 或 `"postgres"` | `"sqlite"` |
 | `instance` | str | `backend="cache"` 时选择的 Runtime | `"default"` |
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
 | `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
+| `postgres_dsn_env` | str / null | `postgres` 必填：保存 PostgreSQL DSN 的环境变量名 | `null` |
+| `postgres_lease_seconds` | int | PostgreSQL 消费者租约时长，范围 `10..=86400` 秒 | `60` |
 
 说明：
 
@@ -1863,6 +1865,7 @@ Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 - `db_path` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `recover_stale_sec` 和 `busy_timeout_ms` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `queuefs.backend=cache` 从 `cache.instances` 选择 `queuefs.instance`，并使用顶层 `service_name` 作为 key 前缀。
+- `queuefs.backend=postgres` 直连 PostgreSQL，使用顶层 `service_name` 作为命名空间，不需要 Redis。启动前必须初始化表，见 [PostgreSQL QueueFS](15-postgres-queuefs.md)。
 - Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK`、拓扑更新和重连由 Fred RedisProvider 处理。
 - Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 Fred RedisProvider 处理。
 - `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。

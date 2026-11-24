@@ -84,7 +84,14 @@ async def test_user_cut_replaces_the_history_before_the_latest_user_message(
     reply = {"role": "assistant", "content": "Use the blue cluster."}
     await answered(kernel, first, credential, reply)
     messages += [reply, {"role": "user", "content": "What next?"}]
-    summarize = Summarizer(protocol)
+    summary = summary_response(protocol)
+    if protocol == "anthropic":
+        summary["content"].insert(0, {"type": "thinking", "thinking": "private reasoning"})
+    elif protocol == "responses":
+        summary["output"].insert(
+            0, {"type": "reasoning", "summary": [{"text": "private reasoning"}]}
+        )
+    summarize = Summarizer(protocol, summary)
     second = await prepare(kernel, protocol, messages, credential, policy, summarize=summarize)
     # The summary request holds exactly the replaced span and the instruction.
     [request] = summarize.requests
@@ -457,8 +464,11 @@ def test_estimate_counts_inline_media_like_an_image():
         ),
         ("anthropic", {"thinking": {"type": "adaptive"}}, {"max_tokens": 24000}),
         ("anthropic", {"max_tokens": 100}, {"max_tokens": 24000}),
-        ("responses", {"max_output_tokens": 50}, {"max_output_tokens": 24000}),
-        ("responses", {"reasoning": {"effort": "low"}}, {"max_output_tokens": 24000}),
+        (
+            "responses",
+            {"max_output_tokens": 50, "reasoning": {"effort": "low"}},
+            {"max_output_tokens": 24000},
+        ),
     ],
 )
 def test_summary_requests_keep_client_settings_and_set_the_cap(protocol, body, cap):
@@ -547,16 +557,6 @@ def test_summary_text_rejects_tool_calls_and_cut_off_replies(protocol, response,
     with pytest.raises(SummaryError) as error:
         tool_protocol(protocol).summary_text(response)
     assert error.value.reason == reason
-
-
-@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-def test_summary_text_returns_text_only(protocol):
-    response = summary_response(protocol, "Summary text")
-    if protocol == "anthropic":
-        response["content"].insert(0, {"type": "thinking", "thinking": "private"})
-    if protocol == "responses":
-        response["output"].insert(0, {"type": "reasoning", "summary": []})
-    assert tool_protocol(protocol).summary_text(response) == "Summary text"
 
 
 @pytest.mark.parametrize("version", ["0.4.23", "0.5.0", "0.5.4"])

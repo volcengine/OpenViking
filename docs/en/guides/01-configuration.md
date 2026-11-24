@@ -15,7 +15,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-`openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
+OpenViking requires both an Embedding model and a VLM to start. The default local Embedding model is available when no Embedding model is specified. `openviking-server init` prompts for both models. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
 
 ## Configuration File
 
@@ -1886,11 +1886,13 @@ Move Provider settings to `cache.instances.<name>`, set top-level `service_name`
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `mode` | str | QueueFS namespace mode: `"shared"` uses `/queue`; `"worker"` isolates each worker under `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, or `"cache"` | `"sqlite"` |
+| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, `"cache"`, or `"postgres"` | `"sqlite"` |
 | `instance` | str | Runtime selected when `backend="cache"` | `"default"` |
 | `db_path` | str (optional) | SQLite database path for QueueFS when backend is `"sqlite"` or `"sqlite3"` | `null` |
 | `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on startup. `0` means recover all stale processing messages | `0` |
 | `busy_timeout_ms` | int | SQLite busy timeout for QueueFS in milliseconds | `5000` |
+| `postgres_dsn_env` | str / null | Required for `postgres`: environment variable holding the DSN | `null` |
+| `postgres_lease_seconds` | int | PostgreSQL consumer lease duration, `10..=86400` seconds | `60` |
 
 Notes:
 
@@ -1898,6 +1900,7 @@ Notes:
 - `mode=shared` keeps the historical global queue namespace at `/queue`; `mode=worker` isolates each worker under `/queue/worker-<index|pid>`.
 - `db_path` is only used when QueueFS backend is `sqlite` or `sqlite3`.
 - `backend=cache` selects `queuefs.instance` from `cache.instances` and uses top-level `service_name` as the key prefix.
+- `backend=postgres` connects directly to PostgreSQL and uses top-level `service_name` as its namespace. Provision the schema before startup; see [PostgreSQL QueueFS](15-postgres-queuefs.md). It does not require Redis.
 - `recover_stale_sec` and `busy_timeout_ms` apply only to SQLite backends.
 - Redis Cluster endpoints are seed nodes, and `db` must be `0`. Slot routing, `MOVED`/`ASK`, topology refresh, and reconnects are handled by Fred RedisProvider.
 - Redis Sentinel endpoints are Sentinel nodes and require a non-empty `master_name`; the provider handles master discovery and reconnects.

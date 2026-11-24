@@ -3,13 +3,13 @@
 """Grep and search-backend mixin for VikingFS."""
 
 import asyncio
-import re
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from openviking.core.namespace import is_session_uri
 from openviking.observability.log_safety import safe_uri_for_log
+from openviking.pyagfs import compile_grep_pattern
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import FilterExpr, PathScope, RawDSL
@@ -25,6 +25,13 @@ _FULLTEXT_UNSUPPORTED_CACHE_TTL = 60.0
 
 def _pkg():
     return sys.modules[__package__]
+
+
+async def _compile_grep_pattern(pattern: str, case_insensitive: bool):
+    try:
+        return await asyncio.to_thread(compile_grep_pattern, pattern, case_insensitive)
+    except ValueError as exc:
+        raise InvalidArgumentError(f"Invalid grep pattern: {exc}") from exc
 
 
 def _build_grep_scope_filter(
@@ -149,42 +156,39 @@ class _GrepMixin:
                 if record.get("uri")
             }
 
-        try:
-            if resolved_engine in {"fs", "opengauss_fs"}:
-                result = await self._grep_fs(
-                    uri=uri,
-                    pattern=pattern,
-                    exclude_uri=exclude_uri,
-                    case_insensitive=case_insensitive,
-                    node_limit=node_limit,
-                    level_limit=level_limit,
-                    ctx=ctx,
-                    content_transform=content_transform,
-                    allowed_uris=allowed_uris,
-                    before_context=before_context,
-                    after_context=after_context,
-                )
-            else:  # BM25 candidates followed by precise filesystem matching.
-                route_kwargs = (
-                    {"engine": resolved_engine} if resolved_engine == "opengauss_then_fs" else {}
-                )
-                result = await self._grep_vikingdb_then_fs(
-                    uri=uri,
-                    pattern=pattern,
-                    exclude_uri=exclude_uri,
-                    case_insensitive=case_insensitive,
-                    node_limit=node_limit,
-                    level_limit=level_limit,
-                    ctx=ctx,
-                    allowed_uris=allowed_uris,
-                    tag_filter=tag_filter,
-                    include_tags=include_tags,
-                    before_context=before_context,
-                    after_context=after_context,
-                    **route_kwargs,
-                )
-        except re.error as exc:
-            raise InvalidArgumentError(f"Invalid grep pattern: {exc}") from exc
+        if resolved_engine in {"fs", "opengauss_fs"}:
+            result = await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                content_transform=content_transform,
+                allowed_uris=allowed_uris,
+                before_context=before_context,
+                after_context=after_context,
+            )
+        else:  # BM25 candidates followed by precise filesystem matching.
+            route_kwargs = (
+                {"engine": resolved_engine} if resolved_engine == "opengauss_then_fs" else {}
+            )
+            result = await self._grep_vikingdb_then_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+                allowed_uris=allowed_uris,
+                tag_filter=tag_filter,
+                include_tags=include_tags,
+                before_context=before_context,
+                after_context=after_context,
+                **route_kwargs,
+            )
         return self._attach_grep_tags(result, tags_by_uri)
 
     async def _resolve_grep_engine(
@@ -569,8 +573,7 @@ class _GrepMixin:
         after_context: int = 0,
     ) -> Dict:
         """Execute regex matching in specified file list (vikingdb_then_fs Step 2)."""
-        flags = re.IGNORECASE if case_insensitive else 0
-        compiled = re.compile(pattern, flags)
+        compiled_pattern = await _compile_grep_pattern(pattern, case_insensitive)
 
         results = []
         files_scanned = 0
@@ -583,25 +586,19 @@ class _GrepMixin:
             except Exception:
                 continue
 
-            lines = content.splitlines()
-            for line_index, line in enumerate(lines):
-                if compiled.search(line):
-                    results.append(
-                        self._build_grep_match(
-                            file_uri,
-                            lines,
-                            line_index,
-                            before_context,
-                            after_context,
-                        )
-                    )
-                    if node_limit and len(results) >= node_limit:
-                        return {
-                            "matches": results,
-                            "count": len(results),
-                            "match_count": len(results),
-                            "files_scanned": files_scanned,
-                        }
+            remaining_limit = node_limit - len(results) if node_limit else None
+            results.extend(
+                await self._grep_matching_lines(
+                    file_uri,
+                    content.splitlines(),
+                    compiled_pattern,
+                    remaining_limit,
+                    before_context,
+                    after_context,
+                )
+            )
+            if results and node_limit and len(results) >= node_limit:
+                break
 
         return {
             "matches": results,
@@ -776,8 +773,7 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        flags = re.IGNORECASE if case_insensitive else 0
-        compiled_pattern = re.compile(pattern, flags)
+        compiled_pattern = await _compile_grep_pattern(pattern, case_insensitive)
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
@@ -901,7 +897,7 @@ class _GrepMixin:
     async def _grep_files_parallel(
         self,
         file_uris: List[str],
-        compiled_pattern: re.Pattern,
+        compiled_pattern,
         node_limit: Optional[int],
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
@@ -939,7 +935,7 @@ class _GrepMixin:
     async def _grep_single_file(
         self,
         entry_uri: str,
-        compiled_pattern: re.Pattern,
+        compiled_pattern,
         ctx: Optional[RequestContext] = None,
         node_limit: Optional[int] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
@@ -953,27 +949,36 @@ class _GrepMixin:
             if content_transform is not None:
                 content = content_transform(content, entry_uri)
 
-            matches: List[Dict[str, Any]] = []
-            lines = content.split("\n")
-            for line_index, line in enumerate(lines):
-                if compiled_pattern.search(line):
-                    matches.append(
-                        self._build_grep_match(
-                            entry_uri,
-                            lines,
-                            line_index,
-                            before_context,
-                            after_context,
-                        )
-                    )
-                    if node_limit and len(matches) >= node_limit:
-                        break
+            matches = await self._grep_matching_lines(
+                entry_uri,
+                content.split("\n"),
+                compiled_pattern,
+                node_limit,
+                before_context,
+                after_context,
+            )
             return matches, 1
         except Exception as e:
             logger.debug(
                 "Failed to grep %s: %s", safe_uri_for_log(str(entry_uri)), type(e).__name__
             )
             return [], 1
+
+    async def _grep_matching_lines(
+        self,
+        uri: str,
+        lines: List[str],
+        compiled_pattern,
+        node_limit: Optional[int],
+        before_context: int,
+        after_context: int,
+    ) -> List[Dict[str, Any]]:
+        limit = min(len(lines), max(1, node_limit)) if node_limit else len(lines)
+        indices = await asyncio.to_thread(compiled_pattern.matching_lines, lines, limit)
+        return [
+            self._build_grep_match(uri, lines, index, before_context, after_context)
+            for index in indices
+        ]
 
     @staticmethod
     def _build_grep_match(

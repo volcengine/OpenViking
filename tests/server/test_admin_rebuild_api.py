@@ -20,11 +20,6 @@ admin_service = _admin_service_fixture
 admin_app = _admin_app_fixture
 admin_client = _admin_client_fixture
 
-ROOT_ACCOUNT_HEADERS = {
-    "X-API-Key": ROOT_KEY,
-    "X-OpenViking-Account": "default",
-}
-
 
 def _make_reindex_run(ctx, counters):
     from openviking.service.reindex_executor import _ReindexRunContext
@@ -32,12 +27,13 @@ def _make_reindex_run(ctx, counters):
     return _ReindexRunContext(ctx=ctx, counters=counters)
 
 
-async def test_reindex_requires_admin_role(admin_client: httpx.AsyncClient):
+async def test_reindex_requires_authentication(admin_client: httpx.AsyncClient):
     resp = await admin_client.post(
         "/api/v1/content/reindex",
         json={"uri": "viking://resources/demo", "mode": "vectors_only"},
     )
     assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
 async def test_reindex_user_can_only_target_own_user_scope(monkeypatch):
@@ -109,44 +105,52 @@ async def test_reindex_user_can_only_target_own_user_scope(monkeypatch):
         await reindex(body=ReindexRequest(uri="viking://user/bob"), ctx=admin_peer_ctx)
 
 
-async def test_reindex_rejects_unsupported_uri(admin_client: httpx.AsyncClient):
-    resp = await admin_client.post(
+async def test_reindex_rejects_unsupported_uri(client: httpx.AsyncClient):
+    resp = await client.post(
         "/api/v1/content/reindex",
         json={"uri": "viking://unknown/demo", "mode": "vectors_only"},
-        headers=ROOT_ACCOUNT_HEADERS,
     )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["status"] == "error"
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "INVALID_URI"
+    assert error["details"]["uri"] == "viking://unknown/demo"
 
 
 @pytest.mark.parametrize(
-    "uri",
+    ("uri", "code", "reason"),
     [
-        "viking://session/test/demo",
-        "viking://user/default/sessions/test/demo",
+        ("viking://session/test/demo", "INVALID_URI", "Invalid scope 'session'"),
+        (
+            "viking://user/default/sessions/test/demo",
+            "UNSUPPORTED_URI",
+            "Unsupported reindex URI:",
+        ),
     ],
+    ids=["legacy-session-scope", "canonical-session-uri"],
 )
-async def test_reindex_rejects_session_uri(admin_client: httpx.AsyncClient, uri: str):
-    resp = await admin_client.post(
+async def test_reindex_rejects_session_uri(client: httpx.AsyncClient, uri, code, reason):
+    resp = await client.post(
         "/api/v1/content/reindex",
         json={"uri": uri, "mode": "vectors_only"},
-        headers=ROOT_ACCOUNT_HEADERS,
     )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["status"] == "error"
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == code
+    assert reason in error["message"]
 
 
-async def test_reindex_root_requires_explicit_account(admin_client: httpx.AsyncClient):
+async def test_reindex_root_key_cannot_be_elevated_by_account_header(
+    admin_client: httpx.AsyncClient,
+):
     resp = await admin_client.post(
         "/api/v1/content/reindex",
         json={"uri": "viking://resources/demo", "mode": "vectors_only"},
-        headers={"X-API-Key": ROOT_KEY},
+        headers={"X-API-Key": ROOT_KEY, "X-OpenViking-Account": "default"},
     )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["status"] == "error"
+    assert resp.status_code == 403, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "PERMISSION_DENIED"
+    assert "ROOT API keys cannot access tenant-scoped data APIs" in error["message"]
 
 
 @pytest.mark.asyncio
