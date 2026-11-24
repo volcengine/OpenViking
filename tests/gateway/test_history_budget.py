@@ -10,7 +10,7 @@ from test_windows import FIELDS, PATHS, client_body, model_reply, reply, visible
 
 from openviking_gateway.blocks import token_estimate
 from openviking_gateway.records import RecordKind as K
-from openviking_gateway.tool_executor import ToolExecutor, history_tokens
+from openviking_gateway.tool_executor import USED_UP, ToolExecutor, history_tokens
 from openviking_gateway.tool_protocols import tool_protocol
 from openviking_gateway.windows import NEW_CONTEXT
 
@@ -73,6 +73,7 @@ def test_history_tokens_count_raw_history_results_only(protocol):
         *hidden_round(protocol, NAME, "h-1", "a" * 400),
         *hidden_round(protocol, "openviking_find", "f-1", "b" * 4000),
         *hidden_round(protocol, NAME, "h-2", quoted),
+        *hidden_round(protocol, NAME, "h-3", USED_UP + ": earlier results " + "r" * 400),
     ]
     assert history_tokens(messages) == 100 + token_estimate(quoted)
     assert token_estimate(quoted) > 100
@@ -90,11 +91,14 @@ async def test_budget_counts_the_window_replayed_and_this_request(setup_kernel, 
     run = ToolExecutor(viking, store, prepared, credential, "", 1024)
     assert (await run.execute(gateway_call("session_history", SEARCH)))["content"] == "x" * 40000
     refused = await run.execute(gateway_call("session_history", SEARCH, "g-2"))
-    assert len(calls) == 1 and not refused["failed"]
+    assert len(calls) == 1 and not refused["failed"] and refused["skipped"]
     assert refused["content"] == (
         "The session history budget for this context window is used up: earlier results (about "
         "20000 tokens) are still in context above. Work from them and note the ids you need."
     )
+    # A refusal adds nothing to what the window holds.
+    again = await run.execute(gateway_call("session_history", SEARCH, "g-2b"))
+    assert again["content"] == refused["content"]
     # Other tools are not limited.
     await run.execute(gateway_call("find", {"query": "blue"}, "g-3"))
     assert len(calls) == 2
@@ -179,3 +183,5 @@ async def test_budget_reads_replayed_rounds_of_each_protocol(running_gateway, pr
     assert len(mcp) == 1 and len(upstream) == 4
     assert "z" * 40000 in orjson.dumps(upstream[2]).decode()
     assert "budget for this context window is used up" in orjson.dumps(upstream[3]).decode()
+    # The user sees that the gateway did not run the lookup.
+    assert 'session_history: \\"blue\\" — skipped' in orjson.dumps(second.json()).decode()

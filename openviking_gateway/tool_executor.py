@@ -154,6 +154,7 @@ def attachment_bytes(part, limit):
 # full-size results, so a small window still allows a search and a read.
 HISTORY_SHARE = 0.2
 HISTORY_FLOOR = 8000
+USED_UP = "The session history budget for this context window is used up"
 
 
 def history_tokens(messages):
@@ -178,7 +179,11 @@ def history_tokens(messages):
             }:
                 identifier = item.get("tool_call_id", item.get("tool_use_id", item.get("call_id")))
                 results.append((identifier, item.get("content", item.get("output"))))
-    return sum(token_estimate(text) for identifier, text in results if identifier in calls and text)
+    return sum(
+        token_estimate(text)
+        for identifier, text in results
+        if identifier in calls and text and not str(text).startswith(USED_UP)
+    )
 
 
 def unsaved(request, capture):
@@ -245,7 +250,8 @@ class ToolExecutor:
 
     async def execute(self, call):
         result = await self._execute(call)
-        self.spend(call.get("function", {}).get("name", ""), result["content"])
+        if not result.get("skipped"):
+            self.spend(call.get("function", {}).get("name", ""), result["content"])
         return result
 
     async def _execute(self, call):
@@ -263,7 +269,7 @@ class ToolExecutor:
                 return {**result, "content": "Invalid tool arguments", "failed": True}
             return {**result, **await native.handler(self.request, self.credential, args)}
         if name == "openviking_session_history" and (refusal := self.history_over_budget()):
-            return {**result, "content": refusal, "failed": False}
+            return {**result, "content": refusal, "failed": False, "skipped": True}
         # Retries sharing a history and call ID share the claim. A process crash
         # never causes automatic repetition of a potentially committed write.
         anchor = digest(
@@ -377,7 +383,7 @@ class ToolExecutor:
         ]
         more = " More lookups are possible after " + " or after ".join(later) + "." if later else ""
         return (
-            "The session history budget for this context window is used up: earlier results "
+            USED_UP + ": earlier results "
             f"(about {used} tokens) are still in context above. Work from them and note the "
             "ids you need." + more
         )
