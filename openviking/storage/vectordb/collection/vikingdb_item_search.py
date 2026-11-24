@@ -70,24 +70,24 @@ def build_item_group_request(
         "index_name": index_name,
         "partition": partitions.pop(),
         "filter": filters,
-        "group_by": {
-            "item_ids_field": "item_uuids",
-            "item_attrs_field": "item_attrs",
-            "op": aggregation,
-            "group_limit": max_groups,
-            # OV uses only group metadata. One is the smallest supported member limit.
-            "record_per_group_limit": 1,
-            "found_records_output_fields": [],
-        },
     }
     if filter_only:
-        request.pop("group_by")
-    elif keywords_query is not None:
+        return request
+    request["group_by"] = {
+        "item_ids_field": "item_uuids",
+        "item_attrs_field": "item_attrs",
+        "op": aggregation,
+        "group_limit": max_groups,
+        # OV uses only group metadata. One is the smallest supported member limit.
+        "record_per_group_limit": 1,
+        "found_records_output_fields": [],
+    }
+    if keywords_query is not None:
         request["query"] = keywords_query
     else:
         request["dense_vector"] = dense_vector
-    if sparse_vector and not filter_only and keywords_query is None:
-        request["sparse_vector"] = sparse_vector
+        if sparse_vector:
+            request["sparse_vector"] = sparse_vector
     return request
 
 

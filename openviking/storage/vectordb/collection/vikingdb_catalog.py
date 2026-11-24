@@ -320,7 +320,7 @@ class VikingDBCatalog:
                 if len(page) < _BATCH_SIZE:
                     break
                 offset += len(page)
-        ordered = sorted(groups.values(), key=lambda g: (g["entity_uri"], g["entity_id"]))
+        ordered = sorted(groups.values(), key=lambda g: g["entity_id"])
         if score_threshold is not None and score_threshold > 0:
             ordered = []
         return {"groups": ordered[:max_groups]}

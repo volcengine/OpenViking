@@ -317,8 +317,8 @@ def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection, 
         "index", filters=filters, filter_only=True, max_groups=2, aggregation=aggregation
     )
     assert [(g["entity_id"], g["entity_score"], g["entity_attrs"]) for g in result["groups"]] == [
-        ("p", 0.0, ["kind=parent"]),
         ("c", 0.0, ["kind=child"]),
+        ("p", 0.0, ["kind=parent"]),
     ]
     assert len([c for c in calls if c[0].endswith("search/scalar")]) == 2
 
