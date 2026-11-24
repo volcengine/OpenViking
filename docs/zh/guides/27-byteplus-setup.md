@@ -15,7 +15,7 @@
 
 ## 连接 Agent
 
-如果使用 [Hermes](../agent-integrations/05-hermes.md#开始使用) 或 [OpenClaw](../agent-integrations/03-openclaw.md)，请按各自的集成指南配置。通用安装器适用于菜单中列出的 Agent，包括 Claude Code、Codex 和 Cursor。安装器需要 macOS 或 Linux、Node.js 18 或更高版本，以及 `curl`。
+如果使用 [Hermes](../agent-integrations/05-hermes.md#开始使用)，请按 Hermes 集成指南配置。通用安装器适用于菜单中列出的 Agent，包括 Claude Code、Codex 和 Cursor。安装器需要 macOS 或 Linux、Node.js 18 或更高版本，以及 `curl`。
 
 在运行 Agent 的机器上执行：
 

@@ -15,7 +15,7 @@
 
 ## Connect an agent
 
-If you use [Hermes](../agent-integrations/05-hermes.md#get-started) or [OpenClaw](../agent-integrations/03-openclaw.md), follow its integration guide. The shared installer is for the agents listed in its menu, including Claude Code, Codex, and Cursor. It requires macOS or Linux, Node.js 18 or later, and `curl`.
+If you use [Hermes](../agent-integrations/05-hermes.md#get-started), follow its integration guide. The shared installer is for the agents listed in its menu, including Claude Code, Codex, and Cursor. It requires macOS or Linux, Node.js 18 or later, and `curl`.
 
 Run the installer on the machine that runs your agent:
 

@@ -167,7 +167,7 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>OpenViking Service を使う（BytePlus がホスト）</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus) はアジア太平洋（ジョホール）で OpenViking をホストしています。接続には BytePlus OpenViking のサービス URL と API キーを使います。CLI とエージェントの設定は [BytePlus セットアップガイド](https://docs.openviking.ai/en/guides/27-byteplus-setup)を参照してください。
+[BytePlus](https://openviking.ai/byteplus) はアジア太平洋（ジョホール）で OpenViking をホストしています。接続には BytePlus OpenViking のサービス URL と API キーを使います。CLI とエージェントの設定は [BytePlus セットアップガイド（英語）](https://docs.openviking.ai/en/guides/27-byteplus-setup)を参照してください。
 
 </details>
 
