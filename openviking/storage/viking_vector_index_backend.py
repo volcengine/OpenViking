@@ -1019,6 +1019,7 @@ class _SingleAccountBackend:
         aggregation: str = "max",
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
+        keywords_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._validate_vector_dimension(query_vector)
         return await self._async_adapter.call(
@@ -1030,6 +1031,7 @@ class _SingleAccountBackend:
             aggregation=aggregation,
             score_threshold=score_threshold,
             filter_only=filter_only,
+            keywords_query=keywords_query,
         )
 
     @_backend_operation
@@ -2100,6 +2102,7 @@ class VikingVectorIndexBackend:
         aggregation: str = "max",
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
+        keywords_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2120,6 +2123,7 @@ class VikingVectorIndexBackend:
                 aggregation=aggregation,
                 score_threshold=score_threshold,
                 filter_only=filter_only,
+                keywords_query=keywords_query,
             )
         except NotImplementedError as exc:
             raise UnimplementedError(str(exc)) from exc

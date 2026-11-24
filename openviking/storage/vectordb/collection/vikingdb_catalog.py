@@ -243,7 +243,9 @@ class VikingDBCatalog:
                 row[field["FieldName"]] = ""
         return row
 
-    def _resolve(self, scope: str, uris: list[str], mode: str) -> dict[str, Any]:
+    def _resolve(
+        self, scope: str, uris: list[str], mode: str, *, include_items: bool = False
+    ) -> dict[str, Any]:
         chains = {}
         for uri in uris:
             chain = []
@@ -262,12 +264,66 @@ class VikingDBCatalog:
             if mode == "shadow":
                 declarations = declarations[:1]
             row = {"uri": uri, "item_uuids": [d["item_uuids"][0] for d in declarations]}
+            if include_items:
+                row["items"] = [
+                    {
+                        "entity_id": d["item_uuids"][0],
+                        "entity_uri": d["uri"],
+                        "entity_attrs": d.get("item_attrs"),
+                        "entity_score": 0.0,
+                    }
+                    for d in declarations
+                ]
             if declarations:
                 row.update(
                     item_uuid=declarations[0]["item_uuids"][0], item_root_uri=declarations[0]["uri"]
                 )
             result.append(row)
         return {"data": result}
+
+    def filter_item_groups(
+        self, request: dict[str, Any], *, max_groups: int, score_threshold: float | None
+    ) -> dict[str, Any]:
+        """Enumerate scalar matches without an ANN recall window or similarity scores."""
+        scope = request["partition"]
+        groups: dict[str, dict[str, Any]] = {}
+        offset = 0
+        with self._scope_lock(scope):
+            while True:
+                result = self.collection._data_post(
+                    "/api/vikingdb/data/search/scalar",
+                    {
+                        **request,
+                        "limit": _BATCH_SIZE,
+                        "offset": offset,
+                        "output_fields": ["uri", "item_uuids"],
+                    },
+                )
+                page = result.get("data")
+                if not isinstance(page, list):
+                    raise VikingDBException("Invalid VikingDB Item scalar response")
+                if not page:
+                    break
+                uris = list(dict.fromkeys(_uri(item["fields"]["uri"]) for item in page))
+                roots = {
+                    r["uri"]: r["items"]
+                    for r in self._resolve(scope, uris, self._schema_mode(), include_items=True)[
+                        "data"
+                    ]
+                }
+                for member in page:
+                    # Use identities selected by the engine's original member filter.
+                    ids = member["fields"].get("item_uuids") or []
+                    for root in roots[_uri(member["fields"]["uri"])]:
+                        if root["entity_id"] in ids:
+                            groups[root["entity_id"]] = root
+                if len(page) < _BATCH_SIZE:
+                    break
+                offset += len(page)
+        ordered = sorted(groups.values(), key=lambda g: (g["entity_uri"], g["entity_id"]))
+        if score_threshold is not None and score_threshold > 0:
+            ordered = []
+        return {"groups": ordered[:max_groups]}
 
     def _restore(self, scope: str, undo: dict[str, Any]) -> None:
         if undo.get("scope") != scope:

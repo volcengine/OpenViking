@@ -524,6 +524,7 @@ class CollectionAdapter(ABC):
         aggregation: str = "max",
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
+        keywords_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         result = self.get_collection().search_item_groups(
             self._index_name,
@@ -534,6 +535,7 @@ class CollectionAdapter(ABC):
             aggregation=aggregation,
             score_threshold=score_threshold,
             filter_only=filter_only,
+            keywords_query=keywords_query,
         )
         for group in result.get("groups", []):
             if isinstance(group.get("entity_uri"), str):

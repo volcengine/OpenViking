@@ -66,6 +66,7 @@ class VikingDBItemCollectionMixin:
         aggregation: str = "max",
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
+        keywords_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         from .vikingdb_item_search import (
             build_item_group_request,
@@ -83,6 +84,16 @@ class VikingDBItemCollectionMixin:
             max_groups=max_groups,
             aggregation=aggregation,
             filter_only=filter_only,
+            keywords_query=keywords_query,
         )
-        result = self._data_post("/api/vikingdb/data/search/vector", request)
-        return parse_item_group_result(result, score_threshold=score_threshold)
+        if filter_only:
+            return self._catalog.filter_item_groups(
+                request, max_groups=max_groups, score_threshold=score_threshold
+            )
+        path = (
+            "/api/vikingdb/data/search/keywords"
+            if keywords_query is not None
+            else "/api/vikingdb/data/search/vector"
+        )
+        result = self._data_post(path, request)
+        return parse_item_group_result(result, score_threshold=score_threshold, action=path)

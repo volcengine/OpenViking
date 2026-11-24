@@ -121,6 +121,20 @@ async def test_mkdir_and_search_as_item_end_to_end(client, service, monkeypatch)
     assert filter_only["resources"][0]["uri"] == f"{root}/A"
     assert filter_only["resources"][0]["score"] == 0.0
 
+    # Like ordinary filter-only find, a similarity threshold has no effect.
+    response = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "",
+            "target_uri": root,
+            "search_as_item": {},
+            "score_threshold": 100,
+            "filter": {"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["total"] == 1
+
     response = await client.post(
         "/api/v1/search/search",
         json={"query": "beach", "target_uri": root},
@@ -543,12 +557,16 @@ async def test_search_route_only_loads_a_session_for_ordinary_search(
         assert search.await_args.kwargs["session"] is session
 
 
-async def test_item_keywords_do_not_probe_fulltext(client, service, monkeypatch):
-    fulltext = AsyncMock(side_effect=AssertionError("Item grouping does not use BM25"))
-    monkeypatch.setattr(service.viking_fs, "_collection_has_fulltext", fulltext)
+async def test_item_keywords_reach_the_backend_without_embedding(client, service, monkeypatch):
+    grouping = AsyncMock(return_value={"groups": []})
+    monkeypatch.setattr(VikingDBManagerProxy, "search_items_in_tenant", grouping)
+    embedding = AsyncMock(side_effect=AssertionError("Keyword search must not embed"))
+    monkeypatch.setattr("openviking.models.embedder.base.embed_compat", embedding)
     response = await client.post(
         "/api/v1/search/search",
         json={"query": "a Skill", "search_type": "keywords", "search_as_item": {}},
     )
-    assert response.status_code == 501, response.text
-    fulltext.assert_not_awaited()
+    assert response.status_code == 200, response.text
+    assert grouping.await_args.kwargs["keywords_query"] == "a Skill"
+    assert grouping.await_args.kwargs["query_vector"] is None
+    embedding.assert_not_awaited()

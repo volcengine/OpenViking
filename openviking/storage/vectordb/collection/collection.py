@@ -40,6 +40,7 @@ class ICollection(ABC):
         aggregation: str = "max",
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
+        keywords_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         raise NotImplementedError("Item grouping is not supported by this collection")
 

@@ -846,8 +846,12 @@ class LocalCollection(ICollection):
         aggregation: str = "max",
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
+        keywords_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search and group Item members under the appropriate collection snapshot."""
+        if keywords_query is not None and not filter_only:
+            # Keep the same keyword capability boundary as ordinary search.
+            return self.search_by_keywords(index_name, query=keywords_query, filters=filters)
         scope = self._catalog_scope(filters)
         if scope is None:
             raise ValueError("Item grouping requires a mandatory account scope")

@@ -162,7 +162,7 @@ def test_threshold_applies_to_aggregate_score_and_empty_groups_are_valid(collect
     assert len(collection.client.calls) == 2
 
 
-@pytest.mark.parametrize("case", ["shadow", "partition", "inherited_attrs", "filter_only"])
+@pytest.mark.parametrize("case", ["shadow", "partition", "inherited_attrs"])
 def test_unsupported_platform_combinations_fail_before_http(collection, case):
     kwargs = {}
     if case == "shadow":
@@ -171,8 +171,6 @@ def test_unsupported_platform_combinations_fail_before_http(collection, case):
         collection.meta_data.pop("ShardBy")
     elif case == "inherited_attrs":
         collection.meta_data["Fields"][2]["MountPathField"] = "uri"
-    elif case == "filter_only":
-        kwargs["filter_only"] = True
     with pytest.raises(NotImplementedError):
         search(collection, **kwargs)
     assert collection.client.calls == []
@@ -250,3 +248,83 @@ def test_unused_member_details_are_not_read_back_or_exposed(collection):
     assert "candidate_members_count" not in result["groups"][0]
     assert "candidate_members_truncated" not in result["groups"][0]
     assert len(collection.client.calls) == 1
+
+
+@pytest.mark.parametrize("aggregation", ["max", "sum"])
+def test_keywords_use_native_groups_and_preserve_filters(collection, aggregation):
+    collection.client.result = {"groups": [group("a", 2.5, ["kind=root"])]}
+    filters = {"op": "must", "field": "account_id", "conds": ["a"]}
+    result = collection.search_item_groups(
+        "index", keywords_query="fresh", filters=filters, aggregation=aggregation
+    )
+    assert result["groups"][0]["entity_score"] == 2.5
+    assert len(collection.client.calls) == 1
+    _, path, request = collection.client.calls[0]
+    assert path == "/api/vikingdb/data/search/keywords"
+    assert request["query"] == "fresh"
+    assert request["filter"] == filters
+    assert request["group_by"]["op"] == aggregation
+    assert "dense_vector" not in request
+
+
+@pytest.mark.parametrize("aggregation", ["max", "sum"])
+def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection, aggregation):
+    from openviking.storage.vectordb.collection.vikingdb_catalog import _id
+
+    collection.meta_data["Fields"].extend(
+        {"FieldName": name, "FieldType": kind}
+        for name, kind in (
+            ("id", "string"),
+            ("account_id", "string"),
+            ("level", "int64"),
+            ("type", "string"),
+        )
+    )
+    filters = {"op": "must", "field": "account_id", "conds": ["a"]}
+    parent = {
+        "id": _id("a", "/resources/p"),
+        "account_id": "a",
+        "level": -1,
+        "uri": "/resources/p",
+        "item_uuids": ["p"],
+        "item_attrs": ["kind=parent"],
+    }
+    child = {
+        "id": _id("a", "/resources/p/c"),
+        "account_id": "a",
+        "level": -1,
+        "uri": "/resources/p/c",
+        "item_uuids": ["c"],
+        "item_attrs": ["kind=child"],
+    }
+    calls = []
+
+    def post(path, request):
+        calls.append((path, deepcopy(request)))
+        if path.endswith("fetch_in_collection"):
+            rows = [r for r in (parent, child) if r["id"] in request["ids"]]
+            return {"fetch": [{"id": r["id"], "fields": r} for r in rows]}
+        assert path.endswith("search/scalar")
+        assert request["filter"] == filters
+        assert "group_by" not in request and "dense_vector" not in request
+        if request["offset"] == 0:
+            return {"data": [{"fields": {"uri": "/resources/p/hit.md", "item_uuids": ["p"]}}] * 100}
+        assert request["offset"] == 100
+        return {"data": [{"fields": {"uri": "/resources/p/c/hit.md", "item_uuids": ["p", "c"]}}]}
+
+    collection._data_post = post
+    result = collection.search_item_groups(
+        "index", filters=filters, filter_only=True, max_groups=2, aggregation=aggregation
+    )
+    assert [(g["entity_id"], g["entity_score"], g["entity_attrs"]) for g in result["groups"]] == [
+        ("p", 0.0, ["kind=parent"]),
+        ("c", 0.0, ["kind=child"]),
+    ]
+    assert len([c for c in calls if c[0].endswith("search/scalar")]) == 2
+
+
+def test_scalar_empty_results_and_threshold(collection):
+    collection.client.result = {"data": []}
+    assert search(collection, filter_only=True) == {"groups": []}
+    request = collection.client.calls[0][2]
+    assert "group_by" not in request and "dense_vector" not in request

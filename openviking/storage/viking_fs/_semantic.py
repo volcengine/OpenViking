@@ -36,7 +36,6 @@ from openviking.utils.time_decay import parse_duration_ms
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
-    UnimplementedError,
 )
 from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
@@ -177,13 +176,7 @@ class _SemanticMixin:
 
         query_vector = None
         sparse_query_vector = None
-        if not filter_only:
-            if search_type == "keywords":
-                # The commercial platform adapter will implement this through
-                # GroupByEntity; raw BM25 candidates must not be grouped in OV.
-                raise UnimplementedError(
-                    "Item keyword grouping is not supported by the configured backend"
-                )
+        if not filter_only and search_type != "keywords":
             embedder = self._get_embedder(ctx)
             if embedder is None:
                 raise FailedPreconditionError("Item semantic search requires an embedder")
@@ -208,8 +201,9 @@ class _SemanticMixin:
             level=level,
             limit=limit,
             aggregation=options.aggregation,
-            score_threshold=score_threshold,
+            score_threshold=None if filter_only else score_threshold,
             filter_only=filter_only,
+            keywords_query=query if not filter_only and search_type == "keywords" else None,
         )
         groups = grouped.get("groups", [])
         if not isinstance(groups, list) or not groups:
@@ -273,6 +267,7 @@ class _SemanticMixin:
                     context_type=context_type,
                     level=ContextLevel.ABSTRACT,
                     score=float(group["entity_score"]),
+                    match_reason="filter" if filter_only else "",
                     item_uuid=item_uuid,
                     item_attrs=decode_item_attrs(attrs),
                     item_extra_info=extra_info,

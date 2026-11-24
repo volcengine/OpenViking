@@ -42,10 +42,9 @@ def build_item_group_request(
     max_groups: int,
     aggregation: str,
     filter_only: bool,
+    keywords_query: str | None = None,
 ) -> dict[str, Any]:
-    if filter_only:
-        raise NotImplementedError("VikingDB has not specified filter-only Item grouping")
-    if not dense_vector:
+    if not filter_only and keywords_query is None and not dense_vector:
         raise ValueError("VikingDB Item search requires a dense query vector")
     if aggregation not in ("max", "sum"):
         raise ValueError("Item aggregation must be max or sum")
@@ -58,7 +57,7 @@ def build_item_group_request(
             "VikingDB Item search requires a pre-created account-partitioned collection "
             "with inherited item_uuids and non-inherited item_attrs"
         )
-    if mode != "union":
+    if mode != "union" and not filter_only:
         raise NotImplementedError(
             "The VikingDB group_by protocol currently requires union inheritance"
         )
@@ -70,7 +69,6 @@ def build_item_group_request(
         "collection_name": collection_name,
         "index_name": index_name,
         "partition": partitions.pop(),
-        "dense_vector": dense_vector,
         "filter": filters,
         "group_by": {
             "item_ids_field": "item_uuids",
@@ -82,18 +80,29 @@ def build_item_group_request(
             "found_records_output_fields": [],
         },
     }
-    if sparse_vector:
+    if filter_only:
+        request.pop("group_by")
+    elif keywords_query is not None:
+        request["query"] = keywords_query
+    else:
+        request["dense_vector"] = dense_vector
+    if sparse_vector and not filter_only and keywords_query is None:
         request["sparse_vector"] = sparse_vector
     return request
 
 
-def parse_item_group_result(result: Any, *, score_threshold: float | None) -> dict[str, Any]:
+def parse_item_group_result(
+    result: Any,
+    *,
+    score_threshold: float | None,
+    action: str = "/api/vikingdb/data/search/vector",
+) -> dict[str, Any]:
     def invalid() -> None:
         raise VikingDBException(
             "Invalid VikingDB Item group response",
             error_type="invalid_response",
             retryable=False,
-            action="/api/vikingdb/data/search/vector",
+            action=action,
         )
 
     if not isinstance(result, dict) or not isinstance(result.get("groups"), list):
