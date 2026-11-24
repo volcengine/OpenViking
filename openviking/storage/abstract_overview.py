@@ -680,9 +680,8 @@ async def plan_abstract_overview_refresh(
 ) -> FreshnessDecision:
     """Atomically record direct-child changes and choose refresh scheduling.
 
-    Both sidecars receive the same counter snapshot under one exact-path lease.
-    A missing or legacy baseline is refreshed immediately and migrated by the
-    ensuing semantic task.
+    Large directories record the same counter on both sidecars under one lease.
+    Small directories and directories without a current baseline refresh directly.
     """
     # Lazy import keeps this low-level sidecar module importable by VikingFS
     # while queuefs itself imports VikingFS during package initialization.
@@ -723,7 +722,10 @@ async def plan_abstract_overview_refresh(
         lock_paths, timeout_secs=lock_timeout_secs
     )
     try:
-        documents = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
+        raw_sidecars = [await read_sidecar_if_exists(viking_fs, uri, ctx) for uri in uris]
+        documents = [
+            _parse_existing_document(raw, uri) for uri, raw in zip(uris, raw_sidecars, strict=True)
+        ]
         baselines = [
             document.metadata["freshness"]
             for document in documents
@@ -756,8 +758,16 @@ async def plan_abstract_overview_refresh(
             refresh_ratio=refresh_ratio,
             force_refresh=force_refresh,
         )
-        for level, uri, document in zip(
-            (ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, documents, strict=True
+        # Small directories refresh on every change and need no persisted increment.
+        if decision.total_entries <= overview_sample_limit:
+            return decision
+
+        for level, uri, raw, document in zip(
+            (ContextLevel.OVERVIEW, ContextLevel.ABSTRACT),
+            uris,
+            raw_sidecars,
+            documents,
+            strict=True,
         ):
             if document is None or document.legacy:
                 continue
@@ -769,7 +779,6 @@ async def plan_abstract_overview_refresh(
             updated_freshness["pending_child_changes"] = decision.pending_after
             metadata["freshness"] = updated_freshness
             rendered = render_abstract_overview(level, dir_uri, document.body, metadata)
-            raw = await read_sidecar_if_exists(viking_fs, uri, ctx)
             if rendered != raw:
                 await viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease)
         return decision
