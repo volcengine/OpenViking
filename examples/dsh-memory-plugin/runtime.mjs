@@ -172,16 +172,24 @@ export class OpenVikingRuntime {
    * skill is a change and silence would leave the deleted name in front of the
    * model. The digest rides in the message source, which the session log
    * keeps, so a restart re-derives the same answer instead of re-injecting.
+   *
+   * Only the newest catalog that is visible counts. An older one with the same
+   * entries can still be in the history (A, then A+B, then back to A), and
+   * "a catalog with this digest exists somewhere" would read as delivered
+   * while the newest message still lists the deleted skill.
    */
   async catalogMessage(agent, batch = []) {
     const state = await this.initialize(agent);
     if (!state.ready || !isSkillCatalogEnabled(state.config)) return null;
-    const shown = latestCatalogMessage(agent, batch);
+    const queued = queuedCatalogMessage(agent, batch);
+    const shown = queued ?? lastVisiblePluginMessage(agent.session, isCatalogMessage);
     // With a catalog already in front of the model, a due refresh runs behind
     // it: the step may use the list it has instead of waiting on the skills
     // endpoint, and a change lands on a later step.
     const catalog = await this.ensureCatalog(state, { wait: shown === undefined });
     if (!catalog) return null;
+    // This step already carries a catalog; a newer one waits for the next.
+    if (queued) return null;
     if (catalog.count === 0 && shown === undefined) return null;
     if (shown?.source?.digest === catalog.digest) return null;
     return pluginMessage(catalog.content, {
@@ -576,19 +584,13 @@ function hasDeliveredProfile(agent, batch) {
 }
 
 /**
- * The catalog the model is looking at, newest first: this step's batch, then
- * whatever is queued for it, then the visible history.
- *
- * Comparing against the newest one is what makes removals work. An earlier
- * catalog with the same entries can still be in the history (A, then A+B, then
- * back to A again), so "a catalog with this digest exists somewhere" would read
- * as delivered while the newest message still lists the deleted skill.
+ * A catalog already headed into this step: in the batch being assembled, or
+ * queued for it. Nothing is added beside it, so one step never carries two.
  */
-function latestCatalogMessage(agent, batch) {
+function queuedCatalogMessage(agent, batch) {
   return (batch || []).findLast(isCatalogMessage)
     ?? [...(agent.inbox?.nextStep || [])].findLast(isCatalogMessage)
-    ?? [...(agent.inbox?.nextTurn || [])].findLast(isCatalogMessage)
-    ?? lastVisiblePluginMessage(agent.session, isCatalogMessage);
+    ?? [...(agent.inbox?.nextTurn || [])].findLast(isCatalogMessage);
 }
 
 /**
