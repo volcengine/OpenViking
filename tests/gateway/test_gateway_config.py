@@ -32,6 +32,7 @@ def clean_environment(monkeypatch, tmp_path):
 
 
 def test_removed_fields_are_ignored_with_one_warning(caplog):
+    caplog.set_level("INFO", logger="openviking_gateway.config")
     legacy = {
         "enabled": True,
         "url": "http://127.0.0.1:1935",
@@ -41,10 +42,10 @@ def test_removed_fields_are_ignored_with_one_warning(caplog):
     }
     config = EmbeddedGatewayConfig.model_validate(legacy)
     assert config.enabled
-    assert "Ignoring removed gateway settings encryption_key_env, port, url, workers" in caplog.text
+    assert len(caplog.records) == 1 and caplog.records[0].skipped == 4
     caplog.clear()
     StandaloneGatewayConfig(openviking_url="http://localhost:1933", encryption_key_env="MY_KEY")
-    assert "Ignoring removed gateway settings encryption_key_env" in caplog.text
+    assert len(caplog.records) == 1 and caplog.records[0].skipped == 1
     with pytest.raises(ValidationError):
         EmbeddedGatewayConfig.model_validate({"enabled": True, "urll": "typo"})
     with pytest.raises(ValidationError):
@@ -52,7 +53,7 @@ def test_removed_fields_are_ignored_with_one_warning(caplog):
 
 
 def test_session_ttl_ignores_legacy_days_and_rejects_under_an_hour():
-    assert GatewayConfig(session_ttl_days=7).session_ttl_seconds == 30 * 86400
+    assert GatewayConfig(session_ttl_days=7).session_ttl_seconds == 86400
     assert GatewayConfig(session_ttl_seconds=7200).session_ttl_seconds == 7200
     with pytest.raises(ValidationError):
         GatewayConfig(session_ttl_seconds=600)
@@ -128,6 +129,7 @@ def test_client_rules_validation_and_environment(monkeypatch):
 
 
 def test_app_applies_client_rules_and_warns_about_stale_removals(tmp_path, caplog):
+    caplog.set_level("INFO", logger="openviking_gateway.app")
     config = GatewayConfig(
         storage_path=str(tmp_path),
         client_rules={
@@ -137,7 +139,8 @@ def test_app_applies_client_rules_and_warns_about_stale_removals(tmp_path, caplo
     try:
         create_app(config, openviking_url="http://ov.test")
         assert "Acme title writer" in protocols.AUXILIARY_PATTERNS
-        assert "auxiliary_patterns: Old packaged rule" in caplog.text
+        assert len(caplog.records) == 1 and caplog.records[0].skipped == 1
+        assert "Old packaged rule" not in caplog.text
     finally:
         protocols.configure_rules()
 

@@ -15,7 +15,7 @@ class GlobConfig(BaseModel):
     engine: GlobEngine = Field(
         default="fs",
         description=(
-            "Glob engine mode: 'auto' uses remote VikingDB path_glob when available, "
+            "Glob engine mode: 'auto' uses the configured vector backend when it supports path_glob, "
             "'fs' forces local filesystem glob."
         ),
     )

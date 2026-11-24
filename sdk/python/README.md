@@ -270,6 +270,11 @@ client.initialize()
 client.mkdir(uri="viking://resources/demo-dir")
 print(client.ls(uri="viking://resources"))
 print(client.read(uri="viking://resources/demo-dir/example.md"))
+print(client.batch_set_tags(
+    ["viking://resources/demo-dir/a.md", "viking://resources/demo-dir/b.md"],
+    ["used_count+=1"],
+    mode="append",
+))
 ```
 
 ### Retrieval

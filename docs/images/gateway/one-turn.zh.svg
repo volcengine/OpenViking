@@ -43,15 +43,15 @@
 <circle cx="870" cy="202" r="13" fill="#7F3BF5"/>
 <text x="870" y="207.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
 <rect x="1250" y="200" width="196" height="84" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
-<text x="1348" y="238.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">放进保存队列</text>
-<text x="1348" y="257.765" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">晚一轮再保存</text>
+<text x="1348" y="238.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">保存这一轮</text>
+<text x="1348" y="257.765" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">回复结束后写入</text>
 <circle cx="1252" cy="202" r="13" fill="#7F3BF5"/>
 <text x="1252" y="207.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
 <rect x="642" y="318" width="200" height="74" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8"/>
 <text x="742" y="351.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">搜索 OpenViking</text>
 <text x="742" y="370.765" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">用该用户自己的密钥</text>
 <rect x="1250" y="318" width="196" height="74" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8"/>
-<text x="1348" y="351.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">下一条消息到达后保存</text>
+<text x="1348" y="351.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">写入 OpenViking 会话</text>
 <text x="1348" y="370.765" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="middle">提交后提取记忆</text>
 <rect x="868" y="430" width="200" height="70" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
 <text x="968" y="461.495" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">模型生成回复</text>
@@ -150,16 +150,16 @@
 <rect x="40" y="856" width="760" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="62" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">跨轮：保存对话，提取记忆</text>
 <rect x="62" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
-<text x="141.75" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">下一条消息到达</text>
+<text x="141.75" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">一轮结束</text>
 <polyline points="224.5,940 236.5,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
 <polygon points="245.5,940 235.5,945.5 235.5,934.5" fill="#7F3BF5"/>
 <rect x="247.5" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
-<text x="327.25" y="935" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">上一轮保存到</text>
+<text x="327.25" y="935" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">这一轮写入</text>
 <text x="327.25" y="954" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">OpenViking 会话</text>
 <polyline points="410,940 422,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
 <polygon points="431,940 421.0,945.5 421.0,934.5" fill="#7F3BF5"/>
 <rect x="433" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
-<text x="512.75" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">待提交内容满</text>
+<text x="512.75" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">待提交内容超过</text>
 <text x="512.75" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">20,000 token，</text>
 <text x="512.75" y="963.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">或停顿 10 分钟</text>
 <polyline points="595.5,940 607.5,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
@@ -168,7 +168,7 @@
 <text x="698.25" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">提交会话，</text>
 <text x="698.25" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">OpenViking</text>
 <text x="698.25" y="963.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">提取记忆</text>
-<text x="62" y="1000" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">重新生成或被放弃的回答不会保存；最后一轮在停顿 10 分钟后保存。</text>
+<text x="62" y="1000" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">重新生成的回答，新旧版本都会保存；剩下的消息在停顿 10 分钟后提交。</text>
 <rect x="830" y="856" width="630" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="852" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">跨轮：压缩长对话</text>
 <rect x="852" y="904" width="178" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>

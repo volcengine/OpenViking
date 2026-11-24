@@ -9,6 +9,7 @@ pub mod mcps;
 pub mod observer;
 pub mod pack;
 pub mod privacy;
+pub mod privacy_run;
 pub(crate) mod render_utils;
 pub mod resources;
 pub mod search;

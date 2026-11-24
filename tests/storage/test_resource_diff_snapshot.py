@@ -92,9 +92,11 @@ class _FakeVikingDB:
         output_fields=None,
         recursive=True,
         include_direct_children=False,
+        expected_levels=None,
     ):
         del ctx, include_direct_children
         self.inventory_output_fields = list(output_fields or [])
+        self.expected_levels = expected_levels
         self.inventory_depth = -1 if recursive else 0
         base = target_uri.rstrip("/")
         prefix = base + "/"
@@ -387,7 +389,7 @@ async def test_build_rnfv_snapshot_projects_tags_only_for_effective_request_inte
 
 
 @pytest.mark.asyncio
-async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrently(
+async def test_build_rnfv_snapshot_supplies_old_and_new_paths_for_index_recovery(
     tmp_path, monkeypatch
 ):
     from openviking.parse.output import LocalParseOutputStore
@@ -407,9 +409,20 @@ async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrent
     async def read_formal(*args, **kwargs):
         started.add("formal")
         await release.wait()
-        return {"a.py": FormalEntry()}, True
+        return {
+            "a.py": FormalEntry(),
+            "deleted.py": FormalEntry(),
+            "sub": FormalEntry(is_dir=True),
+        }, True
 
     async def read_vectors(*args, **kwargs):
+        assert started == {"new", "formal"}
+        assert kwargs["expected_levels"] == {
+            root: {0, 1},
+            f"{root}/a.py": {2},
+            f"{root}/deleted.py": {2},
+            f"{root}/sub": {0, 1},
+        }
         started.add("vectors")
         await release.wait()
         return {"record": {"id": "record", "uri": f"{root}/a.py", "level": 2, "md5": "old"}}
@@ -431,10 +444,10 @@ async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrent
         )
     )
     for _ in range(10):
-        if started == {"new", "formal", "vectors"}:
+        if started == {"new", "formal"}:
             break
         await asyncio.sleep(0)
-    assert started == {"new", "formal", "vectors"}
+    assert started == {"new", "formal"}
     release.set()
     snapshot = await task
 
@@ -473,7 +486,7 @@ async def test_build_rnfv_snapshot_cancels_sibling_reads_after_failure(tmp_path,
     )
     monkeypatch.setattr(
         "openviking.storage.resource_diff._read_incremental_vector_inventory",
-        lambda *args, **kwargs: wait_for_cancel("vectors"),
+        lambda *args, **kwargs: pytest.fail("must not query vectors after inventory failure"),
     )
 
     task = asyncio.create_task(
@@ -487,14 +500,14 @@ async def test_build_rnfv_snapshot_cancels_sibling_reads_after_failure(tmp_path,
         )
     )
     for _ in range(10):
-        if started == {"new", "formal", "vectors"}:
+        if started == {"new", "formal"}:
             break
         await asyncio.sleep(0)
     fail.set()
 
     with pytest.raises(RuntimeError, match="inventory failed"):
         await task
-    assert cancelled == {"formal", "vectors"}
+    assert cancelled == {"formal"}
 
 
 def test_make_inline_file_inventory_uses_final_byte_md5():

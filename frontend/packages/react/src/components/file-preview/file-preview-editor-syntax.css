@@ -1,0 +1,101 @@
+/* Monaco's light syntax palette for Markdown and YAML in the file editor. */
+.ov-file-preview__code-editor:is(
+  [data-language='markdown'],
+  [data-language='yaml']
+) {
+  --ov-ui-file-preview-syntax-text: var(
+    --ov-ui-color-editor-code-text,
+    var(--ov-ui-editor-code-text-default)
+  );
+  --ov-ui-file-preview-syntax-keyword: var(
+    --ov-ui-color-editor-code-keyword,
+    var(--ov-ui-editor-code-keyword-default)
+  );
+  --ov-ui-file-preview-syntax-comment: var(
+    --ov-ui-color-editor-code-comment,
+    var(--ov-ui-editor-code-comment-default)
+  );
+}
+
+.ov-file-preview__code-editor[data-language='markdown'] .cm-content,
+.ov-file-preview__code-editor[data-language='markdown']
+  .ov-file-preview__token--front-matter,
+.ov-file-preview__code-editor[data-language='yaml']
+  :is(
+    .ov-file-preview__token--punctuation,
+    .ov-file-preview__token--directive,
+    .ov-file-preview__token--anchor,
+    .ov-file-preview__token--alias
+  ) {
+  color: var(--ov-ui-file-preview-syntax-text);
+}
+
+.ov-file-preview__code-editor[data-language='markdown']
+  :is(
+    .ov-file-preview__token--title,
+    .ov-file-preview__token--list,
+    .ov-file-preview__token--hr,
+    .ov-file-preview__token--front-matter-block.ov-file-preview__token--punctuation:not(
+        .ov-file-preview__token--front-matter
+      )
+  ),
+.ov-file-preview__code-editor[data-language='yaml']
+  :is(.ov-file-preview__token--boolean, .ov-file-preview__token--null) {
+  color: var(--ov-ui-file-preview-syntax-keyword);
+}
+
+.ov-file-preview__code-editor[data-language='markdown']
+  .ov-file-preview__token--code-snippet {
+  color: var(
+    --ov-ui-color-editor-markdown-code,
+    var(--ov-ui-editor-markdown-code-default)
+  );
+}
+
+.ov-file-preview__code-editor[data-language='yaml']
+  :is(.cm-content, .ov-file-preview__token--string) {
+  color: var(
+    --ov-ui-color-editor-yaml-string,
+    var(--ov-ui-editor-yaml-string-default)
+  );
+}
+
+.ov-file-preview__code-editor[data-language='yaml']
+  .ov-file-preview__token--key {
+  color: var(
+    --ov-ui-color-editor-yaml-key,
+    var(--ov-ui-editor-yaml-key-default)
+  );
+}
+
+.ov-file-preview__code-editor[data-language='yaml']
+  .ov-file-preview__token--number {
+  color: var(
+    --ov-ui-color-editor-yaml-number,
+    var(--ov-ui-editor-yaml-number-default)
+  );
+}
+
+.ov-file-preview__code-editor[data-language='yaml']
+  .ov-file-preview__token--tag {
+  color: var(
+    --ov-ui-color-editor-yaml-tag,
+    var(--ov-ui-editor-yaml-tag-default)
+  );
+}
+
+.ov-file-preview__code-editor:is(
+    [data-language='markdown'],
+    [data-language='yaml']
+  )
+  .ov-file-preview__token--comment {
+  color: var(--ov-ui-file-preview-syntax-comment);
+}
+
+.ov-file-preview__code-editor[data-language='markdown']
+  :is(.ov-file-preview__token--url, .ov-file-preview__token--flow-sequence) {
+  color: var(
+    --ov-ui-color-editor-markdown-link,
+    var(--ov-ui-editor-markdown-link-default)
+  );
+}

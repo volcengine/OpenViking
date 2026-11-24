@@ -2375,12 +2375,20 @@ async function configureOpenClawPlugin({
     await writeFile(tmp, out, "utf8");
     await rename(tmp, configPath);
   };
+  // Auto-recall uses before_prompt_build, which OpenClaw only dispatches to a
+  // non-bundled plugin with conversation access. An explicit false is kept.
+  const grantPromptRecallHook = (entry) => {
+    if (!entry.hooks || typeof entry.hooks !== "object" || Array.isArray(entry.hooks)) entry.hooks = {};
+    if (entry.hooks.allowConversationAccess !== false) entry.hooks.allowConversationAccess = true;
+  };
+
   const ensurePluginRegistered = async (cfg) => {
     if (!cfg.plugins) cfg.plugins = {};
     const p = cfg.plugins;
     if (!p.entries) p.entries = {};
     if (!p.entries[pluginId]) p.entries[pluginId] = {};
     p.entries[pluginId].enabled = true;
+    grantPromptRecallHook(p.entries[pluginId]);
     if (!p.entries[pluginId].config) p.entries[pluginId].config = {};
     if (!Array.isArray(p.allow)) p.allow = [];
     if (!p.allow.includes(pluginId)) p.allow.push(pluginId);
@@ -2399,6 +2407,11 @@ async function configureOpenClawPlugin({
   if (!needWorkdirFlag) {
     try {
       await oc(["plugins", "enable", pluginId]);
+      const cfg = await readCfg();
+      if (cfg.plugins?.entries?.[pluginId]) {
+        grantPromptRecallHook(cfg.plugins.entries[pluginId]);
+        await writeCfg(cfg);
+      }
     } catch (_e) {
       info(tr("plugins enable via CLI failed, registering directly", "CLI plugins enable 失败，直接注册"));
       const cfg = await readCfg();

@@ -2,6 +2,8 @@
 
 除了用 Skill 把来源材料编译成 Wiki、知识图谱、日报等产物，`ov compile` 还有一种特殊模式：**记忆整理**。它不生成新的知识形态，而是把 OpenViking 里**已有的记忆**就地整理干净——去重、合并、拆分、精简，同时严格遵守每种记忆类型原本的 schema。
 
+记忆整理仅支持一次性执行；`compile create` 拒绝 `skill="memory"`，该模式不保存 Compile 配置、不配置定时计划。
+
 与普通 compile 不同，记忆整理**不经过 VikingBot**，而是直接在 OpenViking 内部用记忆框架完成。
 
 ## 什么时候用
@@ -40,7 +42,7 @@ ov compile memory \
   --instruction "整理已有记忆，保留独立事实，不要合并不同对象"
 ```
 
-根目录下已存在的 `profile.md`、`identity.md`、`soul.md` 也会纳入；禁用或未注册的类型会跳过。用户 memories 根目录不包含 `peers/*/memories`，整理 peer 记忆需要明确指定该 peer 的 memories 根目录。
+根目录下已存在的 `profile.md` 也会纳入；静态指令文件 `soul.md` 不参与整理；禁用或未注册的类型会跳过。用户 memories 根目录不包含 `peers/*/memories`，整理 peer 记忆需要明确指定该 peer 的 memories 根目录。
 
 命令同样立即返回一个任务 ID，用 `ov task status <id>` 查看结果、用 `ov task cancel <id>` 取消。
 

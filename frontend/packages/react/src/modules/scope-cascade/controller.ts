@@ -1,9 +1,16 @@
+import type { MonitoringBinding } from '../../shared/monitoring/binding.js';
+import {
+  workflowForBinding,
+  type Workflow,
+} from '../../shared/monitoring/workflow.js';
+import { scopeMonitoring } from './monitoring.js';
 import type { ScopeSwitcherOption } from '../../components/scope-switcher/index.js';
 import type {
   ScopeCascadeApi,
   ScopeCascadeController,
   ScopeCascadeIndex,
   ScopeCascadeSnapshot,
+  ScopeCascadeSelection,
 } from './types.js';
 
 const indices = [0, 1, 2] as const;
@@ -20,14 +27,42 @@ const empty = (
 });
 
 /** Instance-owned channels. Creating a controller does not start requests. */
-export function createScopeController() {
+export function createScopeController(
+  onChange?: (selection: ScopeCascadeSelection | null) => void,
+  onUserSelection?: () => void,
+  monitoring?: MonitoringBinding,
+) {
+  const operations: (
+    | Workflow<
+        | 'scope_cascade_libraries_load'
+        | 'scope_cascade_spaces_load'
+        | 'scope_cascade_users_load'
+      >
+    | undefined
+  )[] = [];
   const snapshots = [empty(true), empty(false), empty(false)];
   const listeners = indices.map(() => new Set<() => void>());
   const requests: (AbortController | undefined)[] = [];
   let api: ScopeCascadeApi | undefined;
   let active = false;
-  const notify = (index: number) =>
+  let selectionKey = '';
+  const notify = (index: number) => {
     listeners[index]!.forEach((listener) => listener());
+    const [library, space, user] = snapshots;
+    const selection =
+      library!.selected && space!.selected && user!.selected
+        ? {
+            libraryId: library!.selected.id,
+            spaceId: space!.selected.id,
+            userId: user!.selected.id,
+          }
+        : null;
+    const key = JSON.stringify(selection);
+    if (key !== selectionKey) {
+      selectionKey = key;
+      onChange?.(selection);
+    }
+  };
   const update = (index: number, patch: Partial<ScopeCascadeSnapshot>) => {
     snapshots[index] = { ...snapshots[index]!, ...patch };
   };
@@ -52,6 +87,21 @@ export function createScopeController() {
     abort(index);
     const request = new AbortController();
     requests[index] = request;
+    const retryError = snapshots[index]!.error;
+    const operation = workflowForBinding(
+      monitoring,
+      (
+        [
+          'scope_cascade_libraries_load',
+          'scope_cascade_spaces_load',
+          'scope_cascade_users_load',
+        ] as const
+      )[index],
+      request.signal,
+      { retryError },
+    );
+    operations[index] = operation;
+    operation?.span.gap('opaque-host-service');
     update(index, { loading: true, error: null });
     notify(index);
     try {
@@ -65,19 +115,38 @@ export function createScopeController() {
       if (!active || request.signal.aborted || requests[index] !== request)
         return;
       const previous = snapshots[index]!.selected;
-      const selected = options.find(
-        (option) => option.id === previous?.id && !option.disabled,
-      );
+      /**
+       * 作用域始终有一个确定的值。此前的选中值不在新列表里、被禁用，或本来就没
+       * 有时，改由第一个可选项承担——这一步必须在这里做：它决定后续请求的参数，
+       * 组件只负责按给定值渲染，不做业务归一化。
+       *
+       * A scope always has a definite value. When the previous selection is gone
+       * from the new list, is disabled, or was never set, the first selectable
+       * option takes over. This has to happen here: it decides the parameters of
+       * subsequent requests, and the component only renders the value it is given
+       * rather than normalising business state.
+       */
+      const selected =
+        options.find(
+          (option) => option.id === previous?.id && !option.disabled,
+        ) ?? options.find((option) => !option.disabled);
+      const changed = selected !== undefined && selected.id !== previous?.id;
       update(index, { options, selected, loading: false, error: null });
       // A refreshed list may revoke the current selection. Clear all descendants
       // before notification so nobody sees a mixed library/space/user identity.
+      // Picking a different option counts too: the descendants belong to the old
+      // identity and must not survive the switch.
       const revoked = previous !== undefined && selected === undefined;
-      if (revoked) resetDescendants(index);
+      if (revoked || changed) resetDescendants(index);
       notify(index);
-      if (revoked) for (let next = index + 1; next < 3; next++) notify(next);
+      if (revoked || changed)
+        for (let next = index + 1; next < 3; next++) notify(next);
+      operation?.ready({ optionCount: options.length });
+      if (changed && index < 2) void load((index + 1) as ScopeCascadeIndex);
     } catch (error) {
       if (!active || request.signal.aborted || requests[index] !== request)
         return;
+      operation?.fail(error, 'host-service', request.signal);
       update(index, {
         loading: false,
         error: error instanceof Error ? error : new Error(String(error)),
@@ -92,12 +161,14 @@ export function createScopeController() {
       (item) => item.id === candidate.id && !item.disabled,
     );
     if (!option || option.id === state.selected?.id) return;
+    onUserSelection?.();
     update(index, { selected: option });
     resetDescendants(index);
     for (let next = index; next < 3; next++) notify(next);
     if (index < 2) void load((index + 1) as ScopeCascadeIndex);
   };
   const channel = (index: ScopeCascadeIndex) => ({
+    [scopeMonitoring]: () => operations[index],
     getSnapshot: () => snapshots[index]!,
     subscribe: (listener: () => void) => {
       listeners[index]!.add(listener);

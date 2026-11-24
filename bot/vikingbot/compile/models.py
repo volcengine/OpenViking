@@ -23,15 +23,16 @@ WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
-    """Bound task execution and source loading; output size is checked per submission."""
+    """Bound task execution, source loading and Markdown routing concurrency."""
 
     model_config = ConfigDict(frozen=True)
 
-    # Soft request budget for prompt, input JSON, emit schema and estimated output space.
-    # Larger indivisible records may exceed it; this is not the model's token limit.
+    # Soft request budget for prompt, input JSON, control schema and estimated output space.
+    # Larger indivisible inputs may exceed it; this is not the model's token limit.
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
+    simple_agent_iterations: int = Field(default=150, ge=1, description="Simple compile rounds.")
     agent_iterations: int = 120
     # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
@@ -39,7 +40,7 @@ class CompileLimits(BaseModel):
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
     shuffle_concurrency: int = Field(default=6, ge=1)
-    # Maximum primary records per routing request, including retried records.
+    # Maximum primary Markdown drafts per routing request.
     shuffle_batch_size: int = Field(default=4, ge=1, strict=True)
     # Per-task Reduce workers, also used for consolidating same-path candidate files.
     merge_concurrency: int = Field(default=10, ge=1)
@@ -63,14 +64,6 @@ class CompileRequest(BaseModel):
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_reason(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "reason" in data:
-            data = dict(data)
-            data.setdefault("instruction", data.pop("reason"))
-        return data
-
 
 class SanitizedCompileRequest(BaseModel):
     """Stored normalized inputs ignore unknown fields; the service validates public arguments."""
@@ -80,11 +73,8 @@ class SanitizedCompileRequest(BaseModel):
     from_: list[str] = Field(alias="from")
     to: str
     instruction: str
-    instruction_provided: bool = False
     skill: str
-    # Inclusive source modification cutoff in UTC; None compiles all source files.
-    last_compile_time: datetime | None = None
-    # Kernel change plan for incremental Compile; supersedes last_compile_time.
+    # The OV service freezes the directory plan before submitting this execution.
     changes: dict[str, Any] | None = None
 
 
@@ -217,11 +207,13 @@ class CompileResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
-    # Skipped target-state conflicts, each containing uri, code and message; never delivered.
+    # Skipped target-state conflicts, each containing uri, code and message; never published.
     conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
+    completion_status: Literal["partial"] | None = None
+    recovery_proof: str | None = None
 
 
 class CompileTask(BaseModel):
@@ -246,10 +238,14 @@ class CompileTask(BaseModel):
     result: CompileResult | None = None
     error: CompileErrorInfo | None = None
 
-    def public_dict(self) -> dict[str, Any]:
+    def public_dict(self, *, include_recovery_proof: bool = False) -> dict[str, Any]:
         data = self.model_dump(exclude={"principal_scope", "sanitized_request"}, exclude_none=True)
         if self.result is not None:
-            data["result"] = self.result.model_dump(by_alias=True)
+            data["result"] = self.result.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude=None if include_recovery_proof else {"recovery_proof"},
+            )
         return data
 
 
@@ -263,7 +259,7 @@ class CompileAccepted(BaseModel):
 
 
 class CompileSessionRequest(BaseModel):
-    """Status or cancellation request scoped by the authenticated caller and session ID."""
+    """Status, cancellation, or archive request scoped by authenticated caller and session ID."""
 
     model_config = ConfigDict(extra="forbid")
 

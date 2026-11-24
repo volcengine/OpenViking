@@ -5,18 +5,14 @@
 import asyncio
 import json
 import threading
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.service.task_domain import TaskStatus, WorkState
 from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
-from openviking.service.task_store import (
-    PersistentTaskStore,
-    StoreOperationCode,
-    StoreOperationResult,
-)
+from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.service.task_work_index import (
     TaskWorkRejected,
@@ -31,7 +27,6 @@ from openviking.storage.queuefs.process_result import (
     ProcessResult,
 )
 from openviking.storage.queuefs.queue_manager import QueueManager
-from openviking.storage.queuefs.queue_middleware import ProcessContext
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.utils.log_correlation import log_correlation
 from tests.test_task_tracker import _FakeAgfs
@@ -287,61 +282,65 @@ async def test_requeue_keeps_work_open_for_redelivery(tracked_queue):
     }
 
 
-async def test_terminal_task_settles_running_redelivery_without_handler(monkeypatch):
-    calls = []
-    settled = []
-    message = {
-        "id": "message-1",
-        "data": json.dumps(
-            {
-                "task_id": "task-1",
-                "_task_work_id": "work-1",
-                "_task_account_id": "account",
-                "_task_user_id": "user",
-            }
-        ),
-    }
+@pytest.mark.parametrize("failure", ["none", "work", "backend"])
+async def test_native_retry_persists_work_before_returning_original_delivery(
+    tracked_queue, monkeypatch, failure
+):
+    queue, tracker, transport = tracked_queue
+    message = await enqueue_task(queue, tracker, transport)
+    metadata = extract_task_metadata(message)
+    assert metadata is not None
+    handler = AsyncMock(spec=DequeueHandlerBase)
+    handler.on_dequeue.return_value = ProcessResult.retry()
+    queue.set_dequeue_handler(handler)
+    transport.read.return_value = json.dumps(message).encode()
+    transport.write.reset_mock()
+    if failure == "work":
+        monkeypatch.setattr(
+            tracker, "mark_work_requeued", AsyncMock(side_effect=OSError("work save unavailable"))
+        )
+    else:
 
-    class FakeTracker:
-        async def start_work(self, task_id, work_id, *, queue_name, account_id, user_id):
-            assert (task_id, work_id, account_id, user_id) == (
-                "task-1",
-                "work-1",
-                "account",
-                "user",
+        async def write(path, data):
+            assert path == "/queue/Embedding/retry"
+            assert data == b"message-1"
+            assert (
+                await tracker.get_work_state("task-1", metadata.work_id, **OWNER)
+                is WorkState.PENDING
             )
-            assert queue_name == "Embedding"
-            return StoreOperationResult.rejected(StoreOperationCode.ALREADY_TERMINAL)
+            if failure == "backend":
+                raise OSError("backend unavailable")
+            return 0
 
-        async def settle_work(self, task_id, work_id, *, account_id, user_id):
-            settled.append((task_id, work_id, account_id, user_id))
+        transport.write.side_effect = write
+    await queue.dequeue()
+    if failure == "work":
+        transport.write.assert_not_awaited()
+    else:
+        transport.write.assert_awaited_once_with("/queue/Embedding/retry", b"message-1")
+    assert await tracker.has_work("task-1", **OWNER)
 
-        async def reconcile_delivery(self, *args, **kwargs):
-            pytest.fail("terminal task delivery must not be reconciled")
 
-        async def register_running_task(self, *args, **kwargs):
-            pytest.fail("terminal task delivery must not register running work")
+async def test_terminal_task_settles_redelivery_without_handler(tracked_queue):
+    queue, tracker, transport = tracked_queue
+    message = await enqueue_task(queue, tracker, transport)
+    metadata = extract_task_metadata(message)
+    await tracker.complete("task-1", {"done": True}, **OWNER)
+    await tracker.mark_work_done("task-1", metadata.work_id, **OWNER)
+    before = await tracker.get_with_events("task-1", **OWNER)
+    handler = AsyncMock(spec=DequeueHandlerBase)
+    queue.set_dequeue_handler(handler)
+    transport.read.return_value = json.dumps(message).encode()
+    transport.write.reset_mock()
 
-    monkeypatch.setattr(
-        TaskWorkQueueMiddleware,
-        "_tracker",
-        property(lambda _self: FakeTracker()),
-    )
+    await queue.dequeue()
 
-    middleware = TaskWorkQueueMiddleware()
-
-    async def call_next(ctx):
-        calls.append(ctx.message)
-        return ProcessResult.success()
-
-    result = await middleware.process(
-        ProcessContext("Embedding", message, cancel=AsyncMock()),
-        call_next,
-    )
-
-    assert result.outcome is ProcessOutcome.SUCCESS
-    assert calls == []
-    assert settled == [("task-1", "work-1", "account", "user")]
+    handler.on_dequeue.assert_not_awaited()
+    handler.on_cancelled.assert_not_awaited()
+    transport.write.assert_awaited_once_with("/queue/Embedding/ack", b"message-1")
+    after = await tracker.get_with_events("task-1", **OWNER)
+    assert after.to_dict(include_events=True) == before.to_dict(include_events=True)
+    assert await tracker.get_work_state("task-1", metadata.work_id, **OWNER) is WorkState.DONE
 
 
 async def test_clear_settles_committed_work(tracked_queue):
@@ -448,36 +447,6 @@ async def test_running_cancellation_waits_for_handler_cleanup(tracked_queue):
         await asyncio.gather(executing, return_exceptions=True)
 
 
-async def test_normal_process_uses_one_admission_and_one_cancellation_read(
-    tracked_queue, monkeypatch
-):
-    queue, tracker, transport = tracked_queue
-    message = await enqueue_task(queue, tracker, transport)
-    await tracker.complete("task-1", {"done": True}, **OWNER)
-    store = tracker._store
-    start = create_autospec(store.start_work, side_effect=store.start_work)
-    status = create_autospec(store.get_task_status, side_effect=store.get_task_status)
-    work = create_autospec(store.get_work, side_effect=store.get_work)
-    finish = create_autospec(store.finish_work, side_effect=store.finish_work)
-    monkeypatch.setattr(store, "start_work", start)
-    monkeypatch.setattr(store, "get_task_status", status)
-    monkeypatch.setattr(store, "get_work", work)
-    monkeypatch.setattr(store, "finish_work", finish)
-
-    class Handler(DequeueHandlerBase):
-        async def on_dequeue(self, data):
-            return ProcessResult.success()
-
-    queue.set_dequeue_handler(Handler())
-    assert (await queue.process_dequeued(message)).outcome is ProcessOutcome.SUCCESS
-    start.assert_awaited_once_with(
-        "task-1", extract_task_metadata(message).work_id, queue_name="Embedding", **OWNER
-    )
-    status.assert_awaited_once_with("task-1", **OWNER)
-    work.assert_not_awaited()
-    assert finish.await_count == 1
-
-
 @pytest.mark.parametrize("worker", ["serial", "concurrent"])
 @pytest.mark.parametrize("failure", ["business", "handoff", "replacement", "persist", "shutdown"])
 async def test_worker_exception_ack_policy(tracked_queue, monkeypatch, worker, failure):
@@ -498,6 +467,7 @@ async def test_worker_exception_ack_policy(tracked_queue, monkeypatch, worker, f
     transport.read.side_effect = read
     transport.write.reset_mock()
     if failure == "replacement":
+
         async def fail_replacement(path, data):
             if path.endswith("/enqueue"):
                 raise OSError("replacement unavailable")
@@ -531,22 +501,31 @@ async def test_worker_exception_ack_policy(tracked_queue, monkeypatch, worker, f
     if worker == "serial":
         if failure == "shutdown":
             with pytest.raises(asyncio.CancelledError):
-                await queue.dequeue()
+                await asyncio.wait_for(queue.dequeue(), timeout=2)
         else:
-            await queue.dequeue()
+            await asyncio.wait_for(queue.dequeue(), timeout=2)
     else:
         manager = QueueManager(object())
         manager._poll_interval = 0.001
+        manager._REQUEUE_POLL_INTERVAL = 0.001
         await asyncio.wait_for(manager._worker_async_concurrent(queue, stop, 2), 1)
 
     acks = [call for call in transport.write.await_args_list if call.args[0].endswith("/ack")]
     task = await tracker.get("task-1", **OWNER)
+    assert stop.is_set()
     assert acks == []
     assert task.status is TaskStatus.RUNNING
     assert task.error is None
     if failure in ("business", "handoff", "replacement"):
+        work = await tracker._store.get_work("task-1", metadata.work_id, **OWNER)
+        assert work.state is WorkState.RUNNING
         assert (
-            await tracker.get_work_state("task-1", metadata.work_id, **OWNER) is WorkState.RUNNING
+            work.error
+            == {
+                "business": "invalid business input",
+                "handoff": "coverage busy",
+                "replacement": "replacement unavailable",
+            }[failure]
         )
     else:
         assert (

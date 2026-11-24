@@ -168,11 +168,14 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
+  resolveConflicts?: boolean;
+  deferProcessing?: boolean;
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -181,22 +184,46 @@ export interface BatchWriteOperation {
   content?: string;
   contentBase64?: string;
   mode?: "replace" | "append" | "create" | "upsert";
+  expectedSha256?: string;
+  ifAbsent?: boolean;
+  resolveConflicts?: boolean;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
   acl?: AclSpec;
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   deferProcessing?: boolean;
   processingMode?: ProcessingMode;
+  skipConflicts?: boolean;
   extra?: JsonObject;
 }
-/** Compile request options. */
-export interface CompileOptions {
+/** Full compilation inputs; creation accepts scheduling controls in args. */
+export interface CompileInput {
+  from: string[];
+  to: string;
+  skill: string;
   instruction?: string;
   args?: JsonObject;
-  extra?: JsonObject;
 }
+/** Select saved inputs or supply full inputs; in-place memory mode needs no sources. */
+export type CompileRequest =
+  | (CompileInput & { compile_name?: never })
+  | (Omit<CompileInput, "from" | "skill"> & {
+      skill: "memory";
+      from?: [];
+      compile_name?: never;
+    })
+  | {
+      compile_name: string;
+      from?: never;
+      to?: never;
+      skill?: never;
+      instruction?: never;
+      /** Only owner_user_id is used; other keys are ignored. */
+      args?: JsonObject & { owner_user_id?: string };
+    };
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
   mode?: "replace" | "append" | "clear";
@@ -238,6 +265,8 @@ export interface FindOptions {
 export interface SearchOptions extends FindOptions {
   sessionId?: string;
   searchType?: "semantic" | "keywords";
+  /** Advanced keyword-search engine options; only with searchType="keywords". */
+  args?: JsonObject;
 }
 /** Server-side context assembly options. */
 export interface SearchContextOptions {

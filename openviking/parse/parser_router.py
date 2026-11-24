@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 from urllib.parse import urlparse
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.base import ParseResult
@@ -149,23 +150,30 @@ class ParserRouter:
                     or source.meta.get("resolved_extension")
                     or Path(source_path).suffix
                 )
-            display = source_path
-            if isinstance(source_path, str) and source_path.startswith(("http://", "https://")):
-                display = "<url>"
-            else:
-                try:
-                    display = Path(source_path).name
-                except Exception:
-                    display = "<path>"
-            logger.info(f"[ParserRouter] Using UnderstandingAPI for {display}")
+            logger.debug(
+                "Parser selected parser=UnderstandingAPI source=%s",
+                safe_uri_for_log(str(source_path)),
+            )
             api = self._get_understanding_api(kwargs.pop("parser_api_config", None))
             return await api.parse(str(source_path), **kwargs)
         else:
-            try:
-                display = Path(source_path).name
-            except Exception:
-                display = "<path>"
-            logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
+            if (
+                isinstance(source, LocalResource)
+                and source.source_type == SourceType.FEISHU
+                and source.meta.get("feishu_content_kind") == "file"
+                and self._parser_registry.get_parser_for_file(source_path) is None
+            ):
+                from openviking.parse.parsers.upload_utils import is_text_file
+
+                if not is_text_file(source_path):
+                    raise InvalidArgumentError(
+                        "Unsupported Drive file format for the selected internal parser: "
+                        f"{Path(source_path).suffix.lower() or '(no extension)'}"
+                    )
+            logger.debug(
+                "Parser selected parser=ParserRegistry source=%s",
+                safe_uri_for_log(str(source_path)),
+            )
             return await self._parser_registry.parse(source_path, **kwargs)
 
     async def submit(self, source: Union[str, Path, LocalResource], **kwargs) -> str:

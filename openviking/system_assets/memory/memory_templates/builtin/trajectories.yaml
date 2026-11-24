@@ -1,6 +1,6 @@
 memory_type: trajectories
 description: |
-  A compact, reusable operation contract distilled from an agent task trajectory.
+  A factual execution record of one complete task.
 
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
@@ -21,18 +21,19 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Name the task directly and stably.
+      Name the complete task directly and stably, not an individual tool effect or a generalized rule.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
       Do not create near-duplicate names for the same task.
       Good: "duplicate_request_resolution", "async_task_hang_fix", "重复请求处理".
-      Prefer the reusable operation or decision boundary over raw instance wording from the opening request.
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
       Use exactly one of: success, failure, partial, unfinished, unknown.
+      Use explicit post-task evaluation when available; otherwise use the observed result.
+      Do not claim success merely because a tool was called or the assistant said it succeeded.
     merge_op: immutable
 
   - name: related_case_ids
@@ -42,7 +43,7 @@ fields:
       Use only IDs from Candidate Cases; multiple IDs are allowed. Return [] when none match.
       Use the candidate task descriptions only for association. Derive the trajectory from the archived conversation, never invent actions to match a case.
       Do not link every case merely because they share an archive.
-      When Candidate Cases are absent, return [] without choosing cases; the system handles single-case association.
+      When Candidate Cases are absent, return [].
     merge_op: immutable
 
   - name: task_query
@@ -55,75 +56,86 @@ fields:
       - Preserve the user's objective, target, constraints, requested output, and acceptance criteria that are necessary to execute the task independently.
       - Preserve non-secret concrete inputs such as the requested topic, time range, and target object when they are required to rerun the task. Never include credentials, tokens, or authentication secrets.
       - Remove conversational references such as "above", "continue", or "why did it stop" by resolving them into explicit task context.
-      - Do not include the assistant's solution, tool results, execution outcome, trajectory analysis, or any experience-memory content.
-      - Write in the user's voice and in {{ language }}. Use concise sentences, but include all information required to rerun the task.
+      - Do not include the assistant's solution, tool results, execution outcome, or trajectory analysis.
+      - Write concisely in the user's voice and in {{ language }}.
     merge_op: immutable
 
   - name: retrieval_anchor
     type: string
     description: |
-      Positive semantic retrieval text for this record, written for embedding rather than display.
-      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response>; Boundary: <verified reusable condition>; Capability: <operation, check, handoff, or response this record can guide>; Target: <primary object or sub-object>."
+      Positive semantic retrieval text for this record.
+      Summarize the task situation, important conditions, target kind, and demonstrated execution capability.
 
       Rules:
       - Keep it shorter and more retrieval-focused than content.
       - Describe when the record should be retrieved using positive applies-when language only.
-      - Do not write negative examples, nearby intents, unrelated alternative requests, or broad exclusions here; keep those in Negative Applicability inside content.
-      - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
-      - Generalize identifiers, names, numbers, dates, places, amounts, and raw tool payloads as strictly as content.
+      - Do not write negative examples, unrelated alternative requests, or broad exclusions here.
+      - Include conditions established during execution when they distinguish this task from similar tasks; do not imply that these conditions were known at the start.
+      - Generalize instance-local identifiers, names, dates, places, amounts, and raw tool payloads.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Procedure-like operation contract in EXACTLY this format:
+      A factual Markdown execution record, written in {{ language }}.
+
+      Global rules:
+      - Keep one complete dependent task chain in one record, including prerequisite reads, clarifications, confirmations, writes, verification, and final response. Split only independent tasks; do not add a duplicate whole-session summary.
+      - Preserve the key non-secret concrete identifiers, names, dates, amounts, quantities, attributes, tool names, parameters, and returned values. Keep full lists when unchanged items matter. Remove credentials, authentication secrets, and unrelated personal details.
+      - Record actual execution; do not add reusable procedures or generalized advice. Omit chitchat, repetition, unrelated large outputs, routine memory retrieval/loading logs, and source/message locator sections.
+
+      Use the structure below in order. Fill placeholders; do not copy extraction instructions into the output.
 
       # <trajectory_name>
-      - Domain: <task domain, execution area, or system area>
-      - Trigger: <the reusable user intent or task situation — one sentence>
-      - Operation Intent:
-        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, close_or_deactivate_object, replace_existing_object, attribute_append_remove, corrective_adjustment, handoff_after_verification, final_response_only>
-        - Primary object: <the narrowest object or sub-object whose state, membership, or lifecycle this record changes, verifies, creates, closes/deactivates, replaces, hands off, or reports>
-        - Target object/lifecycle: <the single intended final state, lifecycle transition, handoff target, or read result for that primary object>
-      - Preconditions:
-        1. <state, identity, policy, tool-observation, or confirmation prerequisite>
-        2. <...>
-      - Immutable Object Boundary:
-        - <object fields, lifecycle state, policy facts, permissions, or ownership facts that must be read/verified and not inferred or overwritten>
-      - Procedure:
-        1. <future-agent instruction for the first decision/action step; include key tool names when useful>
-        2. <future-agent instruction for the next decision/action step>
-        3. <continue until the write/confirmation/final-response boundary is clear>
-      - Write Field Provenance:
-        - <write-relevant field family>: <allowed source such as latest user request, explicit confirmation, fresh tool observation, computed policy result, stable policy, or current object state>
-      - Anti-patterns:
-        - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
-      - Applicability Boundary:
-        - <when this memory applies>
-        - <when this memory should not be used>
-      - Negative Applicability:
-        - <nearby intent, object lifecycle, policy state, permission state, or target object where this memory must not be applied>
-      - Result: <final outcome and important side effects — one sentence>
-      - Evidence: <brief generalized source note from this session, including success/failure/partial status, without digits, raw identifiers, personal names, contact values, exact amounts, exact counts, exact dates, locations, paths, or other instance-local values>
-
-      Rules:
-      - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
-      - Extract one record per reusable operation boundary: one primary user intent, one primary tool-effect target, and one lifecycle or reporting boundary. The boundary is narrower than the Family enum: two actions with the same Family still need separate records when they affect different sub-objects, collections, lifecycle states, write-field provenance, or continuation policies.
-      - Split separable intents, pivots, follow-ups, prerequisite-only reads, state-changing actions, and final user-visible responses when they are independently reusable; omit low-value side work. The split rule is structural: separate by target, effect, provenance, lifecycle, and continuation boundary, not by any domain-specific workflow name.
-      - Do not create an additional umbrella record that summarizes multiple separately reusable operations from the same session. If a session contains several independent tool-effect targets, output the separate target-level records and omit the broad whole-session summary.
-      - Do not combine multiple state-changing tool effects in one record when they affect different primary targets, sub-objects, collections, lifecycle transitions, write-field provenance scopes, or continuation policies. Mention cross-boundary ordering only as prerequisite, boundary, or negative applicability.
-      - A coordinated multi-target request is not one reusable procedure record. Output target-level records and put shared confirmation, dependency, or ordering constraints only in Preconditions, Applicability Boundary, Anti-patterns, or Negative Applicability.
-      - Use replace_existing_object only for an atomic replacement operation on one primary object boundary. If the session implements replacement through separate tool effects that close/deactivate one object and create another object, emit separate close/deactivate and create records; do not set Primary object to a joined source-and-target phrase.
-      - Family must be exactly one listed enum value. Do not invent compound labels. Use handoff_after_verification when the reusable path ends in handoff after verification.
-      - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
-      - Stop each record at its family boundary: update_existing_object stops after update verification, close_or_deactivate_object after closure/deactivation verification, create_new_object after creation verification, replace_existing_object after replacement verification, handoff_after_verification after handoff verification.
-      - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
-      - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
-      - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
-      - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
-      - Keep retrieval-specific wording out of content. Use retrieval_anchor for positive indexed text, and keep nearby non-applicable intents only in Negative Applicability.
-      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads. Use semantic placeholders such as requested quantity, selected object, calculated amount, source object, target object, or applicable policy instead of copying concrete values. Keep tool names only when they are part of the reusable path. Evidence must also stay generalized and should not contain digits; do not use it to preserve instance-local ids, names, counts, amounts, locations, or dates.
-      - Use exactly the title, Domain line, and 11 labels above in this exact order.
-      - Trigger, Result, and Evidence are ONE sentence each.
-      - No extra headings, free paragraphs, or closing remarks.
+      ## Task and Constraints
+      - Complete task: <user goal, reconstructed from subsequent clarification when needed>
+      - User constraints: <requested scope, limits, and later additions or confirmations>
+      ## Initial State and Policy
+      <Keep the three subsections below separate; nest all numbered policy entries under Current policy.>
+      ### Current policy
+      <Use only explicitly supplied policy text (system policies or policy documents); do not summarize or add interpretations.
+      Agent explanations, retrieved guidance, and evaluator reference answers are not policy sources.
+      Preserve conditions, rules, permitted alternatives, and exceptions. Translate when needed without changing meaning.
+      Keep each excerpt under the operation and target it originally governs; do not transfer restrictions between operations. Write each excerpt as a blockquote.
+      Omit unsupported fields; absence of a rule implies neither permission nor prohibition.
+      Repeat numbered entries for relevant operations and record shared clauses once. If no policy was supplied, write "Not provided" under Current policy.>
+      #### Policy 1
+      - Operation and target: <the operation and object named in the original policy>
+      - Applies when:
+        > <policy excerpt stating the applicable status, prerequisites, or trigger>
+      - Rules:
+        > <policy excerpt stating required, allowed, or prohibited behavior, including permitted alternatives>
+      - Exceptions and limits:
+        > <policy excerpt stating exceptions or limits>
+      ### Initially known
+      - <facts available when the task began; later discoveries must not be backfilled into the initial state>
+      ### Initially unknown
+      - <information missing at the start and needed for execution, or none>
+      ## Execution Chain
+      <Repeat numbered steps in actual execution order, preserving failed attempts, tool errors, retries, and recovery that changed the route.
+      Do not rewrite a failed route as a successful procedure or invent a correction.
+      Use only information available at each step; refer to earlier steps in plain language, not source-message IDs.
+      Include an Agent-stated judgment only when explicitly expressed and relevant to the action. Never infer hidden reasoning or reproduce private chain-of-thought.>
+      For each step, include both Basis and Assistant information.
+      Write "Not provided" when either has no relevant information.
+      Classify by source, not by wording such as "per policy".
+      ### Step 1: <actual action or interaction>
+      - Before: <relevant state immediately before this step>
+      - Basis: <explicitly supplied policy and user requirements or confirmations only. Do not include retrieved Memory or assistant claims.>
+      - Assistant information: <relevant tool results, retrieved Memory with its URI, and assistant claims. Include information referenced in this step even if recorded earlier.>
+      - Deviation: <compare the two under the same operation and conditions. State contradictions or restrictions unsupported by Basis. Omit if none.>
+      - Action: <actual user interaction or tool name with the key parameters>
+      - Observation: <actual user reply or relevant tool result, including errors or missing receipts>
+      - State change: <what became known, changed, completed, or blocked>
+      ## Actual Result
+      <Distinguish attempted calls, observed changes, and completion reported to the user. State unknowns when evidence is missing.>
+      - Completed: <what the observations establish, not merely what was attempted>
+      - Preserved state: <important fields, objects, or constraints that stayed unchanged, when verified>
+      - Outstanding: <unfinished or blocked work, or none>
+      <!-- POST_TASK_EVALUATION -->
+      ## Post-task Evaluation
+      <Record each distinct evaluation fact once; never use it as execution-time knowledge.
+      Keep the evaluator's verdict separate from the observed actual result when they disagree.
+      Preserve the preceding marker. Omit both the marker and this section when no evaluation was supplied.>
+      - <supplied score, verdict, and relevant checks or feedback>
     merge_op: patch

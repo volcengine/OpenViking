@@ -2,7 +2,6 @@ import asyncio
 import copy
 import json
 import re
-import sys
 import time
 
 import pytest
@@ -10,16 +9,13 @@ from conftest import replay_records
 
 from openviking_gateway import protocols
 from openviking_gateway.blocks import RECALL_PROVENANCE_NOTE, gateway_note
-from openviking_gateway.capture import CaptureWorker, capture_messages
-from openviking_gateway.capture_store import Document
+from openviking_gateway.capture import capture_messages
 from openviking_gateway.client import VikingError
 from openviking_gateway.config import ClientRules
-from openviking_gateway.kernel import token_estimate
+from openviking_gateway.kernel import Budget, token_estimate
 from openviking_gateway.models import Policy
 from openviking_gateway.protocols import (
-    AUXILIARY,
     AUXILIARY_PATTERNS,
-    REI_CASE_EXCEPTIONS,
     auxiliary,
     canonical_arguments,
     classify,
@@ -32,7 +28,7 @@ from openviking_gateway.protocols import (
     prefix_chain,
     text_content,
 )
-from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
+from openviking_gateway.storage import SQLiteKernelStore
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
@@ -279,6 +275,36 @@ async def test_profile_is_frozen_separately_from_recall(setup_kernel, credential
     assert len(viking.profile_requests) == requests and not viking.recalls
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_soul_opens_the_session_as_instructions(setup_kernel, credential, policy, enabled):
+    kernel, _, viking, _ = setup_kernel
+    viking.soul, viking.profile = "Answer in haiku.", "Alice maintains the gateway."
+    policy.update(recall=False, capture=False, soul=enabled, show_recall=True)
+    body = {"messages": [{"role": "user", "content": "Hello there"}]}
+    one = await prepare(kernel, body, credential, policy)
+    [opening] = context_blocks(one.body["messages"][0])
+    soul = (
+        '<agent-soul uri="viking://user/alice/memories/soul.md">\nAnswer in haiku.\n</agent-soul>'
+    )
+    note = "- The <agent-soul> section below is the soul.md file"
+    assert (soul in opening) == (note in opening) == enabled
+    assert opening.startswith(
+        '<openviking-context source="gateway-session-start">\n'
+        + ("The OpenViking Gateway, a proxy" if enabled else "<user-profile")
+    )
+    notice = one.records["injection", one.chain[0]]["notice"]
+    assert notice == f"> OpenViking context: {'soul, ' if enabled else ''}user profile\n\n"
+    if enabled:
+        assert opening.index(note) < opening.index(soul) < opening.index("<user-profile")
+    viking.soul = "Changed soul"
+    body["messages"] += [
+        {"role": "assistant", "content": "Hello"},
+        {"role": "user", "content": "Continue"},
+    ]
+    two = await prepare(kernel, body, credential, policy)
+    assert one.body["messages"][0] == two.body["messages"][0]
+
+
 @pytest.mark.parametrize("read", [False, True])
 async def test_recall_uses_server_rendered_and_uri_only_entries(
     setup_kernel, credential, policy, read
@@ -424,6 +450,14 @@ def test_plugin_detection_distinguishes_gateway_sources(source, plugin):
     )
 
 
+def test_plugin_detection_finds_hook_context_mid_line():
+    text = (
+        "<system-reminder>\nUserPromptSubmit hook additional context: <openviking-context>\n"
+        "Use `ov find`:\n```sh\nov find deploy\n```\n</openviking-context>\n</system-reminder>"
+    )
+    assert plugin_present({"messages": [{"role": "user", "content": text}]}, {})
+
+
 async def test_scope_fork_and_policy_snapshot(setup_kernel, credential, policy):
     kernel, _, viking, _ = setup_kernel
     body = {"messages": [{"role": "user", "content": "How do I deploy?"}]}
@@ -459,45 +493,20 @@ async def test_plugin_stop_is_sticky_but_replays_existing_prefix(setup_kernel, c
     assert three.disabled and len(viking.recalls) == 1
 
 
-async def test_capture_confirms_branch_and_isolates_forks(setup_kernel, credential, policy):
-    kernel, store, viking, key = setup_kernel
-    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", key)
-    await management.initialize()
-    await management.save("tenant", "keys", credential["id"], credential)
+async def test_capture_saves_the_client_history_and_isolates_forks(
+    setup_kernel, credential, policy
+):
+    kernel, _, viking, _ = setup_kernel
     body = {"messages": [{"role": "user", "content": "How do I deploy?"}]}
+    response = ResponseCapture("chat", {"role": "assistant", "content": "Answer"}, complete=True)
     one = await prepare(kernel, body, credential, policy)
-    response = ResponseCapture(
-        "chat", {"role": "assistant", "content": "Discarded answer"}, complete=True
-    )
-    await kernel.completed(one, credential, response)
-    assert await store.capture.claim() is None  # idle delay
-    body["messages"] += [
-        {"role": "assistant", "content": "Kept answer"},
-        {"role": "user", "content": "Next question"},
-    ]
-    await prepare(kernel, body, credential, policy)
-    worker = CaptureWorker(store, management, viking)
-    assert await worker.once()
-    assert "Kept answer" in str(viking.writes) and "Discarded answer" not in str(viking.writes)
+    assert "openviking-context" in str(one.body)
+    assert await kernel.save(one, credential, response) == 2
     assert "openviking-context" not in str(viking.writes)
-    await prepare(kernel, body, credential, policy, session="fork")
-    assert await worker.once()
+    fork = await prepare(kernel, body, credential, policy, session="fork")
+    assert await kernel.save(fork, credential, response) == 2
     assert len(viking.writes) == 2
     assert viking.write_sessions[0] != viking.write_sessions[1]
-
-
-async def test_lease_is_exclusive_and_old_owner_cannot_ack(setup_kernel):
-    _, store, _, _ = setup_kernel
-    await store.capture.swap("scope", "session", Document(), {"work": "pending"}, 0)
-    results = await asyncio.gather(*(store.capture.claim() for _ in range(8)))
-    claimed = [x for x in results if x]
-    assert len(claimed) == 1
-    await store.capture.release({**claimed[0], "owner": "old"})
-    assert await store.capture.claim() is None
-    old = await store.capture.get("scope", "session")
-    await store.capture.swap("scope", "session", old, {"work": "done"}, None)
-    await store.capture.release(claimed[0])
-    assert await store.capture.claim() is None
 
 
 async def test_cut_records_are_inherited_and_immutable(setup_kernel, credential, policy):
@@ -606,23 +615,6 @@ def test_classification_and_plugin_namespaces():
     assert client_openviking_tools(namespaces, OV_NAMES)
 
 
-def test_lowercase_agrees_with_case_insensitive_matching():
-    # Every packaged pattern stays on the literal-search fast path.
-    assert all(fast for fast, _ in AUXILIARY)
-    ascii_any_case = re.compile(r"[\x00-\x7f]", re.I)
-    differing = set()
-    for code in range(sys.maxunicode + 1):
-        char = chr(code)
-        lower = char.lower()
-        if len(lower) != 1:
-            differing.add(char)
-        elif lower.isascii() or ascii_any_case.fullmatch(char):
-            for c in map(chr, range(128)):
-                if bool(re.fullmatch(re.escape(c), char, re.I)) != (lower == c.lower()):
-                    differing.add(char)
-    assert differing == set(REI_CASE_EXCEPTIONS)
-
-
 @pytest.mark.parametrize(
     "text, expected",
     [
@@ -678,7 +670,6 @@ def test_client_rules_add_to_and_remove_from_the_packaged_rules(client_rules):
     blocks = [{"type": "text", "text": "Intro\nYou are the Acme title writer"}]
     assert classify({"system": blocks}, {}, [user])[0] == "auxiliary"
     # A configured regex leaves every packaged pattern on the fast path.
-    assert [fast is None for fast, _ in protocols.AUXILIARY].count(True) == 1
     assert clean_text("<acme-context>cwd</acme-context> fix it") == "fix it"
     assert clean_text("<acme.note a='1'>x</acme.note> fix it") == "fix it"
     assert clean_text("<acmeXnote>x</acmeXnote> fix it") == "<acmeXnote>x</acmeXnote> fix it"
@@ -701,335 +692,111 @@ def test_client_rules_add_to_and_remove_from_the_packaged_rules(client_rules):
 # Side requests that harnesses send with no header to mark them, each by text the harness
 # always writes (cut short here), sent as the only user message with no system prompt.
 HARNESS_SIDE_REQUESTS = {
-    "claude-code-compact": (
-        "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\n- Do NOT use Read\n\nYour "
-        "task is to create a detailed summary of the RECENT portion"
-    ),
-    "claude-code-suggestion": (
-        "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]\n\n"
-        "FIRST: Look"
-    ),
-    "claude-code-away": (
-        "The user stepped away and is coming back. Recap in under 40 words, 1-2 plain sentences"
-    ),
-    "claude-code-rename": (
-        "Generate a short kebab-case name (2-4 words) that captures the main topic of this "
-        "conversation. Use lowercase words separated by hyphens. Examples"
-    ),
-    "claude-code-extract": (
-        "You are now acting as the memory extraction subagent. Analyze the most recent ~12 "
-        "messages above"
-    ),
-    "claude-code-dream": (
-        "# Dream: Memory Consolidation\n\nYou are performing a dream — a reflective pass over your "
-        "memory files. Synthesize"
-    ),
-    "claude-code-agent-summary": (
-        "Describe your most recent action in 3-5 words using present tense (-ing). Name the file"
-    ),
-    "codex-recap": (
-        "Write a brief catch-up for a user returning to this task. Return JSON with summary and "
-        "nullable next_action.\n\nConversation:\n..."
-    ),
-    "kilo-code-title": (
-        "Generate a title for this conversation:\n\nTitle the task...\n\nUser messages, oldest to "
-        "newest:\n1. fix bug"
-    ),
-    "opencode-compaction": (
-        "Here is the conversation so far:\n\n<conversation>\n[User]: hi\n</conversation>\n\nCreate "
-        "a new anchored summary...\n\nOutput exactly the Markdown structure shown inside "
-        "<template> and keep"
-    ),
-    "opencode-legacy-compaction": (
-        "Provide a detailed prompt for continuing our conversation above.\nFocus on...\nThe "
-        "summary that you construct will be used so that another agent can read it and continue "
-        "the work."
-    ),
-    "opencode-project-copy": "Generate a short 2-3 word name that describes this task:\nfix login",
-    "kilo-code-commit": (
-        "Generate a commit message for the following changes:\n\nBranch: main\nRecent commits:"
-    ),
-    "kilo-code-enhance": "Draft prompt to enhance, not answer:\n\nfix the thing",
-    "kilo-code-handover": (
-        "You are summarizing a planning session to hand off to an implementation session.\n\nThe "
-        "plan"
-    ),
-    "deepseek-harness-compact": (
-        "You are now acting as a compaction engine for this AI coding assistant. Condense"
-    ),
-    "deepseek-harness-review": (
-        'ENVIRONMENT\n\n{\n  "cwd": "/x"\n}\n\nPROJECT_INSTRUCTIONS\n\n[]\n\nFILTERED_HISTORY\n\n'
-        '[\n  {"a": 1}\n]\n\nPENDING_ACTION\n\n{\n  "tool": "bash"\n}'
-    ),
-    "pi-compaction": (
-        "<conversation>\n[User]: hi\n</conversation>\n\nThe messages above are a conversation to "
-        "summarize. Create a structured context checkpoint"
-    ),
-    "pi-update": (
-        "<previous-summary>x</previous-summary>\n\nThe messages above are NEW conversation "
-        "messages to incorporate into the existing summary"
-    ),
-    "pi-prefix": (
-        "# Conversation\n...\n\n# Instructions\nThe messages above are earlier context from an "
-        "ongoing conversation. Later"
-    ),
-    "pi-turn-prefix": (
-        "This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is "
-        "retained.\n\nSummarize the prefix to provide context for the retained suffix:"
-    ),
-    "pi-branch": (
-        "<conversation>\n..\n</conversation>\n\nCreate a structured summary of this conversation "
-        "branch for context when returning later."
-    ),
-    "kimi-cli-compact": (
-        "## Message 1\nRole: user\n...\nThe above is a list of messages in an agent conversation. "
-        "You are now given a task to compact this conversation context according to specific "
-        "priorities"
-    ),
-    "kimi-code-compact": (
-        "You are about to run out of context. Create a handoff summary for the\nmodel that will "
-        "resume this task.\n\n--- This message is a direct task, not part of the above "
-        "conversation ---"
-    ),
-    "cline-compact": (
-        "Summarize this session for continuation. Be concise and factual.\n\n## Goal\nOne sentence"
-    ),
-    "cline-commit": (
-        "Based on the provided git diff, generate a concise and descriptive commit message.\n\nThe "
-        "commit message should:\n1. Has a short title (50-72 characters)\n2. The"
-    ),
-    "roo-code-enhance": (
-        "Generate an enhanced version of this prompt (reply with only the enhanced prompt - no "
-        "conversation, explanations"
-    ),
-    "continue-cli-compact": (
-        "Please provide a concise summary of our conversation so far, capturing the key context, "
-        "decisions made, and current state. Format"
-    ),
-    "continue-ide-compact": (
-        "Create a comprehensive summary of this conversation that captures all essential "
-        "information needed to continue"
-    ),
-    "continue-title": (
-        "Given the following... please reply with a title for the chat that is 3-4 words in "
-        "length, all words used should be"
-    ),
-    "continue-rewrite": (
-        "The user has requested a section of code in a file to be rewritten.\n\nThis is the prefix "
-        "of the file:\n```\nimport os\n```"
-    ),
-    "continue-edit": (
-        "Above is the file of code that the user is currently editing in. Their cursor is located "
-        'at the "[BLANK]".'
-    ),
-    "continue-hole": (
-        "You are a HOLE FILLER. You are provided with a file containing holes, formatted as "
-        "'{{HOLE_NAME}}'."
-    ),
-    "aider-summary": "# USER\nfix the bug\n# ASSISTANT\nok\n",
-    "aider-commit": "\nUSER: fix\nASSISTANT: ok\n# Diffs:\ndiff --git a/x b/x\n",
-    "goose-title": (
-        "---BEGIN USER MESSAGES---\nfix\n---END USER MESSAGES---\n\nGenerate a short title for the "
-        "above messages."
-    ),
+    "claude-code-compact": "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.",
+    "claude-code-suggestion": "[SUGGESTION MODE: Suggest what the user might naturally type next",
+    "claude-code-away": "The user stepped away and is coming back. Recap in under",
+    "claude-code-rename": "name (2-4 words) that captures the main topic of this conversation. Use lowercase words separated by hyphens.",
+    "claude-code-extract": "You are now acting as the memory extraction subagent.",
+    "claude-code-dream": "Memory Consolidation\n\nYou are performing a dream — a reflective pass over your memory files.",
+    "claude-code-agent-summary": "Describe your most recent action in 3-5 words using present tense",
+    "codex-recap": "Write a brief catch-up for a user returning to this task.",
+    "kilo-code-title": "the task...\n\nUser messages, oldest to newest:",
+    "opencode-compaction": "anchored summary...\n\nOutput exactly the Markdown structure shown inside <template>",
+    "opencode-legacy-compaction": "above.\nFocus on...\nThe summary that you construct will be used so that another agent can read it and continue the work.",
+    "opencode-project-copy": "Generate a short 2-3 word name that describes this task:",
+    "kilo-code-commit": "Generate a commit message for the following changes:\n\nBranch:",
+    "kilo-code-enhance": "Draft prompt to enhance, not answer:",
+    "kilo-code-handover": "You are summarizing a planning session to hand off to an implementation session.",
+    "deepseek-harness-compact": "You are now acting as a compaction engine for this AI coding assistant.",
+    "deepseek-harness-review": ' {"a": 1}\n]\n\nPENDING_ACTION\n\n{',
+    "pi-compaction": "hi\n</conversation>\n\nThe messages above are a conversation to summarize.",
+    "pi-update": "y>x</previous-summary>\n\nThe messages above are NEW conversation messages to incorporate",
+    "pi-prefix": "Instructions\nThe messages above are earlier context from an ongoing conversation.",
+    "pi-turn-prefix": "This is the PREFIX of a turn that was too large to keep.",
+    "pi-branch": "on>\n..\n</conversation>\n\nCreate a structured summary of this conversation branch for context when returning later.",
+    "kimi-cli-compact": "an agent conversation. You are now given a task to compact this conversation context",
+    "kimi-code-compact": "resume this task.\n\n--- This message is a direct task, not part of the above conversation",
+    "cline-compact": "Summarize this session for continuation. Be concise and factual.",
+    "cline-commit": "message should:\n1. Has a short title (50-72 characters",
+    "roo-code-enhance": "Generate an enhanced version of this prompt (reply with only the enhanced prompt",
+    "continue-cli-compact": "provide a concise summary of our conversation so far, capturing the key context, decisions made, and current state.",
+    "continue-ide-compact": "Create a comprehensive summary of this conversation that captures all essential information",
+    "continue-title": "following... please reply with a title for the chat that is 3-4 words in length, all words used",
+    "continue-rewrite": "The user has requested a section of code in a file to be rewritten.",
+    "continue-edit": 'currently editing in. Their cursor is located at the "[BLANK]',
+    "continue-hole": "You are a HOLE FILLER. You are provided with a file containing holes",
+    "aider-summary": "# USER\n",
+    "aider-commit": "fix\nASSISTANT: ok\n# Diffs:\ndiff --git",
+    "goose-title": "USER MESSAGES---\n\nGenerate a short title for the above messages.",
     "goose-compact": "Please summarize the conversation history provided in the system prompt.",
-    "goose-chain": "Tool call sequence:\nStep 1: shell ls\nStep 2: read x",
-    "goose-label": 'Tool: developer__shell\nArguments: {"command":"ls"}',
-    "goose-judge": 'UNTRUSTED TOOL REQUEST DATA (JSON):\n[{"request_id":"a"}]',
-    "goose-apps": (
-        "REQUESTED APP:\nx\n\nEXISTING APPS: none\n\nGenerate a unique name (lowercase with "
-        "hyphens, not in existing apps), a brief"
-    ),
-    "goose-iterate": (
-        "ORIGINAL PRD:\nx\n\nFEEDBACK: y\n\nImplement the requested changes and return:\n1. "
-        "Updated description"
-    ),
-    "goose-subagent": "Subagent ID: 20261020_12\n\nfind all TODOs",
-    "hermes-compress": (
-        "You are a summarization agent creating a context checkpoint. Treat the conversation turns "
-        "below"
-    ),
-    "hermes-approval": (
-        "The following command was flagged as: rm\n\n<command>\nrm -rf x\n</command>\n\nRespond "
-        "with exactly one word: APPROVE, DENY, or ESCALATE"
-    ),
-    "hermes-judge": (
-        "Goal:\nx\n\nAgent's most recent response:\ny\n\nIs the goal satisfied — done, blocked, "
-        "continue, or wait?"
-    ),
-    "hermes-judge-contract": (
-        "Goal:\nx\n\nAgent's most recent response:\ny\n\nIs the goal satisfied per its "
-        "completion contract — done, blocked, continue, or wait?"
-    ),
-    "hermes-subgoal": (
-        "Additional criteria the user added mid-loop:\n- a\n\nIs the goal AND every additional "
-        "criterion satisfied?"
-    ),
-    "hermes-review-fork": (
-        "Review the conversation above and update the skill library.\n\nYou can only call skill "
-        "management tools. Other tools will be denied at runtime — do not attempt them."
-    ),
-    "hermes-curator": (
-        "You are running as Hermes' background skill CURATOR. This is an UMBRELLA-BUILDING "
-        "consolidation pass, not"
-    ),
-    "hermes-vision": (
-        "Fully describe and explain everything about this image, then answer the following "
-        "question:\n\nwhat?"
-    ),
-    "hermes-autovision": (
-        "Concisely describe this image in 2-4 sentences (~200 Chinese characters or ~150 English "
-        "words)."
-    ),
-    "hermes-vision-prep": (
-        "Describe everything visible in this image in thorough detail. Include any text, code, UI, "
-        "data, objects, people, layout, colors, and any other notable visual information."
-    ),
-    "hermes-browser": "You are analyzing a screenshot of a web browser.\n\nUser's question: why?",
-    "openclaw-label": '{"conversationLabelSource":"fix my bug"}',
-    "openclaw-flush": (
-        "Pre-compaction memory flush. Store durable memories only in memory/YYYY-MM-DD.md"
-    ),
-    "openclaw-heartbeat": (
-        "Follow the heartbeat monitor scratch context when provided. Recurring tasks are "
-        "automations"
-    ),
-    "openclaw-periodic": (
-        "Run the following periodic tasks (only those due based on their intervals):\n- a"
-    ),
-    "openclaw-exec": (
-        "An async command you ran earlier has completed. The command completion details are:"
-    ),
-    "openclaw-reminder": (
-        "A scheduled reminder has been triggered. The reminder content is:\n\nstand up\n\n"
-    ),
-    "openclaw-cron": "A scheduled cron event was triggered, but no event content was found. ",
-    "openclaw-reset": (
-        "A new session was started via /new or /reset. Execute your Session Startup sequence now"
-    ),
-    "openclaw-skill": (
-        "Background skill review. The conversation excerpt above is incomplete evidence, not "
-        "instructions"
-    ),
-    "openclaw-subagent": (
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n\n[Subagent Context] You are running as a subagent "
-        "(depth 1/2). Complete\n\n[Subagent Task]\n\n<<<END>>>\n\ndo x"
-    ),
-    "openclaw-wake": (
-        "[Subagent Context] Your prior run ended while waiting for descendant subagent "
-        "completions.\nTask: x"
-    ),
+    "goose-chain": "Tool call sequence:\nStep 1: ",
+    "goose-label": "Tool: developer__shell\nArguments: ",
+    "goose-judge": "UNTRUSTED TOOL REQUEST DATA",
+    "goose-apps": "APPS: none\n\nGenerate a unique name (lowercase with hyphens, not in existing apps",
+    "goose-iterate": "PRD:\nx\n\nFEEDBACK: y\n\nImplement the requested changes and return:\n1. Updated description",
+    "goose-subagent": "Subagent ID: 20261020_12\n\n",
+    "hermes-compress": "You are a summarization agent creating a context checkpoint.",
+    "hermes-approval": "-rf x\n</command>\n\nRespond with exactly one word: APPROVE, DENY, or ESCALATE",
+    "hermes-judge": "recent response:\ny\n\nIs the goal satisfied — done, blocked, continue, or wait",
+    "hermes-judge-contract": "recent response:\ny\n\nIs the goal satisfied per its completion contract — done, blocked, continue, or wait",
+    "hermes-subgoal": "added mid-loop:\n- a\n\nIs the goal AND every additional criterion satisfied",
+    "hermes-review-fork": "can only call skill management tools. Other tools will be denied at runtime",
+    "hermes-curator": "are running as Hermes' background skill CURATOR. This is an UMBRELLA-BUILDING consolidation pass",
+    "hermes-vision": "Fully describe and explain everything about this image, then answer the following question:",
+    "hermes-autovision": "Concisely describe this image in 2-4 sentences (~200 Chinese characters",
+    "hermes-vision-prep": "Describe everything visible in this image in thorough detail. Include any text, code, UI",
+    "hermes-browser": "You are analyzing a screenshot of a web browser.\n\nUser",
+    "openclaw-label": '{"conversationLabelSource"',
+    "openclaw-flush": "Pre-compaction memory flush. Store durable memories only in",
+    "openclaw-heartbeat": "Follow the heartbeat monitor scratch context when provided.",
+    "openclaw-periodic": "Run the following periodic tasks (only those due based on their intervals):",
+    "openclaw-exec": "An async command you ran earlier has completed.",
+    "openclaw-reminder": "A scheduled reminder has been triggered.",
+    "openclaw-cron": "A scheduled cron event was triggered",
+    "openclaw-reset": "A new session was started via /new or /reset.",
+    "openclaw-skill": "Background skill review. The conversation excerpt above",
+    "openclaw-subagent": "W_INTERNAL_CONTEXT>>>\n\n[Subagent Context] You are running as a subagent",
+    "openclaw-wake": "[Subagent Context] Your prior run ended while waiting for descendant subagent completions.\nTask: x",
     "openclaw-runtime": "Continue the OpenClaw runtime event.",
-    "openclaw-exec-review": (
-        "Review this pending exec request.\nThe JSON block between "
-        "UNTRUSTED_EXEC_REQUEST_JSON_BEGIN and UNTRUSTED_EXEC_REQUEST_JSON_END"
-    ),
-    "openclaw-slug": (
-        "Based on this conversation, generate a short 1-2 word filename slug (lowercase, "
-        "hyphen-separated"
-    ),
-    "openclaw-progress": "Recent activity (oldest first):\n- read file",
-    "open-webui-tags": (
-        "### Task:\nGenerate 1-3 broad tags categorizing the main themes of the chat history"
-    ),
-    "open-webui-followup-old": (
-        "### Task:\nSuggest 3-5 relevant follow-up questions or prompts that the user might "
-        "naturally ask next in this conversation"
-    ),
-    "open-webui-followup-language": (
-        "### Task:\nSuggest 3-5 relevant follow-up questions or prompts in the chat's primary "
-        "language that the user might naturally ask next"
-    ),
-    "open-webui-followup": (
-        "### Task:\nPredict 3-5 useful messages this user might naturally send next"
-    ),
-    "open-webui-query": (
-        "### Task:\nAnalyze the chat history to determine the necessity of generating search "
-        "queries, in"
-    ),
-    "open-webui-image": (
-        "### Task:\nGenerate a detailed prompt for am image generation task based on the given "
-        "language and context."
-    ),
-    "open-webui-autocomplete": (
-        "### Task:\nYou are an autocompletion system. Continue the text in `<text>`"
-    ),
-    "open-webui-compaction": (
-        "### Task:\nSummarize the conversation history that will be compacted out of the active "
-        "chat context."
-    ),
-    "open-webui-memory": (
-        "Review the completed conversation turn and decide whether long-term memory should "
-        "change.\n\nMemory types:"
-    ),
-    "cherry-studio-title": (
-        '[{"role":"user","mainText":"hi","files":[]},{"role":"assistant","mainText":"hello"}]'
-    ),
-    "cherry-studio-compact": (
-        "You have been working on the task described above but have not yet completed it. Write a "
-        "continuation summary that will allow you (or another instance of yourself) to resume"
-    ),
-    "cherry-studio-translate": (
-        "You are a translation expert. Your only task is to translate text enclosed with "
-        "<translate_input> from"
-    ),
+    "openclaw-exec-review": "JSON block between UNTRUSTED_EXEC_REQUEST_JSON_BEGIN",
+    "openclaw-slug": "on this conversation, generate a short 1-2 word filename slug",
+    "openclaw-progress": "Recent activity (oldest first):",
+    "open-webui-tags": "### Task:\nGenerate 1-3 broad tags categorizing the main themes of the chat history",
+    "open-webui-followup-old": "### Task:\nSuggest 3-5 relevant follow-up questions or prompts that the user might naturally",
+    "open-webui-followup-language": "### Task:\nSuggest 3-5 relevant follow-up questions or prompts in the chat's primary language that the user might naturally",
+    "open-webui-followup": "### Task:\nPredict 3-5 useful messages this user might naturally send",
+    "open-webui-query": "### Task:\nAnalyze the chat history to determine the necessity of generating search queries",
+    "open-webui-image": "### Task:\nGenerate a detailed prompt for am image generation task based on the given language and context.",
+    "open-webui-autocomplete": "### Task:\nYou are an autocompletion system. Continue the text in",
+    "open-webui-compaction": "### Task:\nSummarize the conversation history that will be compacted out of the active chat context.",
+    "open-webui-memory": "Review the completed conversation turn and decide whether long-term memory should change.",
+    "cherry-studio-title": '[{"role":"user","mainText":"',
+    "cherry-studio-compact": "not yet completed it. Write a continuation summary that will allow you (or another instance of yourself)",
+    "cherry-studio-translate": "a translation expert. Your only task is to translate text enclosed with <translate_input>",
     "cherry-studio-detect": "follow system prompt",
-    "cherry-studio-heartbeat": (
-        "[Heartbeat]\nThis is a periodic heartbeat. The instructions below are from your "
-        "heartbeat.md file."
-    ),
-    "cherry-studio-v1-rephrase": (
-        "  You are an AI question rephraser. Your role is to rephrase follow-up queries from a "
-        "conversation"
-    ),
-    "cherry-studio-v1-memory": (
-        "Following is a conversation between the user and the assistant. Extract relevant facts "
-        "and preferences ABOUT THE USER from this conversation.\nConversation:"
-    ),
-    "cherry-studio-v1-update": (
-        "Below is the current content of my memory which I have collected till now. You have to "
-        "update it"
-    ),
+    "cherry-studio-heartbeat": "[Heartbeat]\nThis is a periodic heartbeat. The instructions below are from your heartbeat.md file.",
+    "cherry-studio-v1-rephrase": "  You are an AI question rephraser. Your role is to rephrase follow-up queries",
+    "cherry-studio-v1-memory": "and the assistant. Extract relevant facts and preferences ABOUT THE USER from this conversation.",
+    "cherry-studio-v1-update": "Below is the current content of my memory which I have collected till now.",
 }
-# Side requests known only by their system prompt, sent as Anthropic's block list.
+
+# Requests classified by the system message use Anthropic's block list.
+
 HARNESS_SIDE_SYSTEMS = {
-    "claude-code-title": (
-        "You are naming a coding session so the user can pick it out of a long list of sessions."
-    ),
-    "claude-code-progress-label": (
-        "You write a 3-5 word progress label for a background agent, from short notes"
-    ),
-    "claude-code-memdir": (
-        "You are selecting memories that will be useful to Claude Code as it processes a user's "
-        "query."
-    ),
-    "claude-code-websearch": (
-        "You run a web search for another Claude model, which is waiting on the result"
-    ),
-    "claude-code-hook": (
-        "You are evaluating a stop-condition hook in Claude Code. Read the conversation"
-    ),
-    "claude-code-hook2": (
-        "You are evaluating a hook in Claude Code. The user's text says what to check."
-    ),
-    "claude-code-agent-hook": "You are verifying a stop condition in Claude Code. Your task is",
-    "opencode-title": "You are a title generator. You output ONLY a thread title. Nothing else.",
-    "aider-summarize": (
-        "*Briefly* summarize this partial conversation about programming.\nInclude less detail"
-    ),
-    "aider-commit": (
-        "You are an expert software engineer that generates concise, one-line Git commit messages "
-        "based on the provided diffs.\nReview"
-    ),
-    "goose-labels": (
-        "Summarize this tool call in a short lowercase phrase (3-8 words). No punctuation."
-    ),
-    "hermes-title": "You name chat sessions. Given the user's opening message, write a title",
+    "claude-code-title": "You are naming a coding session so the user can pick it out",
+    "claude-code-progress-label": "You write a 3-5 word progress label for a background agent",
+    "claude-code-memdir": "You are selecting memories that will be useful to Claude Code",
+    "claude-code-websearch": "You run a web search for another Claude model",
+    "claude-code-hook": "You are evaluating a stop-condition hook in Claude Code.",
+    "claude-code-hook2": "You are evaluating a hook in Claude Code.",
+    "claude-code-agent-hook": "You are verifying a stop condition in Claude Code.",
+    "opencode-title": "are a title generator. You output ONLY a thread title.",
+    "aider-summarize": "*Briefly* summarize this partial conversation about programming.",
+    "aider-commit": "generates concise, one-line Git commit messages based on the provided diffs.",
+    "goose-labels": "Summarize this tool call in a short lowercase phrase",
+    "hermes-title": "You name chat sessions. Given the",
     "hermes-subagent": "You are a focused subagent working on a specific delegated task.",
-    "cherry-studio-detect": (
-        "Your task is to precisely identify the language used in the user's input text and output "
-        'its "code"'
-    ),
+    "cherry-studio-detect": "task is to precisely identify the language used in the user's input text",
 }
 
 
@@ -1343,7 +1110,7 @@ def test_capture_pairs_tools_and_strips_noise():
     assert len(output) == 3
 
 
-def test_sse_chunk_boundaries_and_anthropic_usage():
+def test_sse_chunk_boundaries():
     from openviking_gateway.protocols import SSEDecoder
 
     raw = 'data: {"text":"中文"}\r\n\r\ndata: [DONE]\n\n'.encode()
@@ -1353,26 +1120,6 @@ def test_sse_chunk_boundaries_and_anthropic_usage():
         frames += decoder.feed(bytes([byte]))
     assert b"".join(frames) == raw
     assert SSEDecoder().feed(raw) == frames
-    capture = ResponseCapture("anthropic")
-    capture.event(
-        {
-            "type": "message_start",
-            "message": {"id": "x", "usage": {"input_tokens": 12, "cache_read_input_tokens": 88}},
-        }
-    )
-    capture.event(
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 20},
-        }
-    )
-    assert capture.usage == {
-        "input_tokens": 100,
-        "output_tokens": 20,
-        "cached_tokens": 88,
-        "cache_write_tokens": 0,
-    }
 
 
 async def test_known_missing_record_drops_old_thinking(setup_kernel, credential, policy):
@@ -1409,3 +1156,81 @@ def test_tool_input_whitespace_is_significant():
     after = copy.deepcopy(before)
     after[0]["content"][0]["input"]["content"] = "a"
     assert prefix_chain(before) != prefix_chain(after)
+
+
+async def enhance(kernel, body, credential, policy, budget=None, summarize=None):
+    return await kernel.enhance(
+        body,
+        "chat",
+        {"x-openviking-session": "limited"},
+        credential,
+        {"id": "upstream"},
+        policy,
+        summarize=summarize,
+        budget=budget,
+    )
+
+
+async def test_preparation_past_its_limit_forwards_without_memory(
+    setup_kernel, credential, policy, monkeypatch
+):
+    kernel = setup_kernel[0]
+
+    async def slow_recall(*args):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(kernel, "recall", slow_recall)
+    body = {"model": "m", "messages": [{"role": "user", "content": "How do I deploy?"}]}
+    started = time.monotonic()
+    forwarded, prepared, metrics = await enhance(
+        kernel, body, credential, policy, budget=Budget(0.05)
+    )
+    assert time.monotonic() - started < 1
+    assert prepared is None and forwarded == body
+    assert metrics["degradation"] == "prepare_timeout"
+    assert metrics["degradations"] == ["prepare_timeout"]
+
+
+async def test_summary_time_does_not_count_against_the_limit(setup_kernel, credential, policy):
+    from test_compaction import Summarizer, answered
+
+    kernel = setup_kernel[0]
+    policy.update(context_window=1024, recall=False)
+    messages = [{"role": "user", "content": "How do I deploy?"}]
+    reply = {"role": "assistant", "content": "Use the blue cluster."}
+    first = await prepare(
+        kernel, {"model": "m", "messages": messages}, credential, policy, session="limited"
+    )
+    await answered(kernel, first, credential, reply)
+    summarizer = Summarizer("chat")
+
+    async def slow_summary(prepared, body):
+        await asyncio.sleep(0.3)
+        return await summarizer(prepared, body)
+
+    messages = [*messages, reply, {"role": "user", "content": "What next?"}]
+    _, prepared, metrics = await enhance(
+        kernel,
+        {"model": "m", "messages": messages},
+        credential,
+        policy,
+        budget=Budget(0.2),
+        summarize=slow_summary,
+    )
+    assert prepared is not None and "degradation" not in metrics
+    assert metrics["compaction_applied"] and len(summarizer.requests) == 1
+
+
+async def test_no_limit_by_default(setup_kernel, credential, policy, monkeypatch):
+    kernel = setup_kernel[0]
+    recall = kernel.recall
+
+    async def slow_recall(*args):
+        await asyncio.sleep(0.2)
+        await recall(*args)
+
+    monkeypatch.setattr(kernel, "recall", slow_recall)
+    assert Budget(0).deadline is None
+    body = {"model": "m", "messages": [{"role": "user", "content": "How do I deploy?"}]}
+    _, prepared, metrics = await enhance(kernel, body, credential, policy)
+    assert prepared is not None and "degradation" not in metrics

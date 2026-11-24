@@ -1,6 +1,6 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.5.33",
+  "version": "0.5.40",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
   "icon": "./icon.svg",
   "type": "module",
@@ -20,9 +20,11 @@
     "mcp.mjs",
     "mcp-env.mjs",
     "runtime.mjs",
+    "compressor.mjs",
     "session-id.mjs",
     "skills.mjs",
     "uri-guard.mjs",
+    "scripts/",
     "servers/",
     "shared/",
     "skills/",
@@ -38,7 +40,7 @@
   },
   "scripts": {
     "prepack": "node ../memory-plugin-shared/sync.mjs",
-    "check": "for f in *.mjs shared/*.mjs; do node --check \"$f\" || exit 1; done && npm run check:version",
+    "check": "for f in *.mjs scripts/*.mjs shared/*.mjs; do node --check \"$f\" || exit 1; done && npm run check:version",
     "check:version": "node --input-type=module -e \"import {readFileSync} from 'node:fs'; const {PLUGIN_VERSION} = await import('./config.mjs'); const v = JSON.parse(readFileSync('package.json','utf8')).version; if (PLUGIN_VERSION !== v) throw new Error('PLUGIN_VERSION ' + PLUGIN_VERSION + ' does not match package.json version ' + v);\"",
     "test": "node --test *.test.mjs",
     "prepublishOnly": "npm run prepack && npm run check && npm test"

@@ -3,19 +3,26 @@
 //! A filesystem-based message queue with multi-queue support where operations are performed
 //! through control files within each queue directory:
 //! - `/queue_name/enqueue` - Write to this file to add a message to the queue
-//! - `/queue_name/dequeue` - Read from this file to remove and return the first message
+//! - `/queue_name/enqueue_ext` - Write a versioned frame with message ID and scheduling key
+//! - `/queue_name/dequeue` - Read from this file to claim an eligible message
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
 //! - `/queue_name/status` - Read pending and processing message counts
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
+//! - `/queue_name/retry` - Return a processing message to pending without changing its identity
 
 mod backend;
+#[cfg(feature = "postgres")]
+mod postgres_backend;
+#[cfg(feature = "postgres")]
+pub use postgres_backend::PostgresQueueStorage;
 #[cfg(feature = "cache")]
 mod cache_backend;
 #[cfg(feature = "cache")]
 mod cache_protocol;
+mod enqueue_protocol;
 
 use crate::core::{
     errors::{Error, Result},
@@ -24,10 +31,13 @@ use crate::core::{
     types::{ConfigParameter, FileInfo, PluginConfig, WriteFlag},
 };
 use async_trait::async_trait;
-use backend::{MemoryBackend, Message, QueueBackend, SQLiteQueueBackend, SQLiteQueueOptions};
+use backend::{MemoryBackend, QueueBackend, SQLiteQueueBackend, SQLiteQueueOptions};
+pub use backend::{Message, QueueState};
 #[cfg(feature = "cache")]
 use cache_backend::CacheQueueStorage;
 use serde::Serialize;
+#[cfg(feature = "cache")]
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
@@ -42,6 +52,10 @@ struct ControlFileSpec {
 const CONTROL_FILES: &[ControlFileSpec] = &[
     ControlFileSpec {
         name: "enqueue",
+        mode: 0o222,
+    },
+    ControlFileSpec {
+        name: "enqueue_ext",
         mode: 0o222,
     },
     ControlFileSpec {
@@ -72,6 +86,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
         name: "ack",
         mode: 0o222,
     },
+    ControlFileSpec {
+        name: "retry",
+        mode: 0o222,
+    },
 ];
 
 /// Dequeue response format (matches Go libagfsbinding format)
@@ -96,6 +114,8 @@ fn queue_message_timestamp(msg: &Message) -> Option<f64> {
 enum BackendKind {
     Memory,
     Sqlite,
+    #[cfg(feature = "postgres")]
+    Postgres,
     #[cfg(feature = "cache")]
     Cache,
 }
@@ -105,8 +125,14 @@ struct ParsedBackendConfig {
     kind: BackendKind,
     sqlite_db_path: Option<String>,
     sqlite_options: SQLiteQueueOptions,
-    #[cfg(feature = "cache")]
+    #[cfg(any(feature = "cache", feature = "postgres"))]
     service_name: Option<String>,
+    #[cfg(feature = "cache")]
+    instance: Option<String>,
+    #[cfg(feature = "postgres")]
+    postgres_dsn_env: Option<String>,
+    #[cfg(feature = "postgres")]
+    postgres_lease_seconds: u64,
 }
 
 /// Parsed path information
@@ -118,6 +144,8 @@ struct ParsedPath {
 
 enum QueueStorage {
     Local(Arc<Mutex<Box<dyn QueueBackend>>>),
+    #[cfg(feature = "postgres")]
+    Postgres(Arc<PostgresQueueStorage>),
     #[cfg(feature = "cache")]
     Cache(Arc<CacheQueueStorage>),
 }
@@ -126,6 +154,8 @@ impl QueueStorage {
     async fn shutdown(&self) -> Result<()> {
         match self {
             Self::Local(_) => Ok(()),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.shutdown().await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.shutdown().await,
         }
@@ -134,6 +164,8 @@ impl QueueStorage {
     async fn create_queue(&self, name: &str) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.create_queue(name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.create_queue(name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.create_queue(name).await,
         }
@@ -142,6 +174,8 @@ impl QueueStorage {
     async fn remove_queue(&self, name: &str) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.remove_queue(name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.remove_queue(name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.remove_queue(name).await,
         }
@@ -150,6 +184,8 @@ impl QueueStorage {
     async fn queue_exists(&self, name: &str) -> Result<bool> {
         match self {
             Self::Local(backend) => Ok(backend.lock().await.queue_exists(name)),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.queue_exists(name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.queue_exists(name).await,
         }
@@ -158,6 +194,8 @@ impl QueueStorage {
     async fn list_queues(&self, prefix: &str) -> Result<Vec<String>> {
         match self {
             Self::Local(backend) => Ok(backend.lock().await.list_queues(prefix)),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.list_queues(prefix).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.list_queues(prefix).await,
         }
@@ -166,6 +204,8 @@ impl QueueStorage {
     async fn enqueue(&self, queue_name: &str, message: Message) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.enqueue(queue_name, message),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.enqueue(queue_name, message).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.enqueue(queue_name, message).await,
         }
@@ -174,6 +214,8 @@ impl QueueStorage {
     async fn dequeue(&self, queue_name: &str) -> Result<Option<Message>> {
         match self {
             Self::Local(backend) => backend.lock().await.dequeue(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.dequeue(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.dequeue(queue_name).await,
         }
@@ -182,6 +224,8 @@ impl QueueStorage {
     async fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
         match self {
             Self::Local(backend) => backend.lock().await.peek(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.peek(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.peek(queue_name).await,
         }
@@ -190,6 +234,8 @@ impl QueueStorage {
     async fn size(&self, queue_name: &str) -> Result<usize> {
         match self {
             Self::Local(backend) => backend.lock().await.size(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.size(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.size(queue_name).await,
         }
@@ -198,6 +244,8 @@ impl QueueStorage {
     async fn status(&self, queue_name: &str) -> Result<backend::QueueState> {
         match self {
             Self::Local(backend) => backend.lock().await.status(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.status(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.status(queue_name).await,
         }
@@ -206,6 +254,8 @@ impl QueueStorage {
     async fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         match self {
             Self::Local(backend) => backend.lock().await.list_unacked(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.list_unacked(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.list_unacked(queue_name).await,
         }
@@ -214,6 +264,8 @@ impl QueueStorage {
     async fn clear(&self, queue_name: &str) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.clear(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.clear(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.clear(queue_name).await,
         }
@@ -222,8 +274,20 @@ impl QueueStorage {
     async fn ack(&self, queue_name: &str, message_id: &str) -> Result<bool> {
         match self {
             Self::Local(backend) => backend.lock().await.ack(queue_name, message_id),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.ack(queue_name, message_id).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.ack(queue_name, message_id).await,
+        }
+    }
+
+    async fn retry(&self, queue_name: &str, message_id: &str) -> Result<bool> {
+        match self {
+            Self::Local(backend) => backend.lock().await.retry(queue_name, message_id),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.retry(queue_name, message_id).await,
+            #[cfg(feature = "cache")]
+            Self::Cache(storage) => storage.retry(queue_name, message_id).await,
         }
     }
 }
@@ -244,6 +308,16 @@ impl QueueFileSystem {
         Self {
             storage: QueueStorage::Local(Arc::new(Mutex::new(backend))),
         }
+    }
+
+    /// Open a shared durable queue namespace using an environment-held DSN.
+    #[cfg(feature = "postgres")]
+    pub async fn with_postgres(env: &str, namespace: &str, lease_seconds: u64) -> Result<Self> {
+        Ok(Self {
+            storage: QueueStorage::Postgres(Arc::new(
+                PostgresQueueStorage::from_env(env, namespace, lease_seconds).await?,
+            )),
+        })
     }
 
     #[cfg(feature = "cache")]
@@ -420,13 +494,13 @@ impl FileSystem for QueueFileSystem {
                     .list_unacked(&queue_name)
                     .await?
                     .into_iter()
-                .map(|msg| {
-                    let timestamp = queue_message_timestamp(&msg);
-                    QueueMessage {
-                        id: msg.id,
-                        data: String::from_utf8_lossy(&msg.data).to_string(),
-                        timestamp,
-                    }
+                    .map(|msg| {
+                        let timestamp = queue_message_timestamp(&msg);
+                        QueueMessage {
+                            id: msg.id,
+                            data: String::from_utf8_lossy(&msg.data).to_string(),
+                            timestamp,
+                        }
                     })
                     .collect::<Vec<_>>();
                 Ok(serde_json::to_vec(&messages)?)
@@ -449,6 +523,11 @@ impl FileSystem for QueueFileSystem {
             .ok_or_else(|| Error::InvalidOperation("no operation specified".to_string()))?;
 
         match operation.as_str() {
+            "enqueue_ext" => {
+                let message = enqueue_protocol::decode(data)?;
+                self.storage.enqueue(&queue_name, message).await?;
+                Ok(data.len() as u64)
+            }
             "enqueue" => {
                 let msg = Message::new(data.to_vec());
                 let len = data.len() as u64;
@@ -464,8 +543,13 @@ impl FileSystem for QueueFileSystem {
                 self.storage.ack(&queue_name, &msg_id).await?;
                 Ok(0)
             }
+            "retry" => {
+                let msg_id = String::from_utf8_lossy(data).trim().to_string();
+                self.storage.retry(&queue_name, &msg_id).await?;
+                Ok(0)
+            }
             _ => Err(Error::InvalidOperation(format!(
-                "Cannot write to '{}'. Use enqueue, clear, or ack",
+                "Cannot write to '{}'. Use enqueue, enqueue_ext, clear, ack, or retry",
                 operation
             ))),
         }
@@ -656,7 +740,7 @@ impl FileSystem for QueueFileSystem {
 pub struct QueueFSPlugin {
     config_params: Vec<ConfigParameter>,
     #[cfg(feature = "cache")]
-    cache_runtime: Option<Arc<crate::cache_runtime::CacheRuntime>>,
+    cache_runtimes: HashMap<String, Arc<crate::cache_runtime::CacheRuntime>>,
 }
 
 impl QueueFSPlugin {
@@ -668,7 +752,7 @@ impl QueueFSPlugin {
                     "backend",
                     "string",
                     "memory",
-                    "Queue backend (memory, sqlite, sqlite3, cache)",
+                    "Queue backend (memory, sqlite, sqlite3, cache, postgres)",
                 ),
                 ConfigParameter::optional(
                     "db_path",
@@ -688,21 +772,48 @@ impl QueueFSPlugin {
                     "5000",
                     "SQLite busy timeout in milliseconds",
                 ),
-                #[cfg(feature = "cache")]
-                ConfigParameter::required_string(
+                #[cfg(any(feature = "cache", feature = "postgres"))]
+                ConfigParameter::optional(
                     "service_name",
-                    "OpenViking service name when backend=cache",
+                    "string",
+                    "",
+                    "OpenViking service name when backend=cache or postgres",
+                ),
+                #[cfg(feature = "postgres")]
+                ConfigParameter::optional(
+                    "postgres_dsn_env", "string", "",
+                    "Environment variable holding the PostgreSQL DSN",
+                ),
+                #[cfg(feature = "postgres")]
+                ConfigParameter::optional(
+                    "postgres_lease_seconds", "int", "60",
+                    "Consumer lease duration (10..=86400 seconds)",
+                ),
+                #[cfg(feature = "cache")]
+                ConfigParameter::optional(
+                    "instance",
+                    "string",
+                    "default",
+                    "Named cache runtime selected when backend=cache",
                 ),
             ],
             #[cfg(feature = "cache")]
-            cache_runtime: None,
+            cache_runtimes: HashMap::new(),
         }
     }
 
     #[cfg(feature = "cache")]
     pub(crate) fn with_cache_runtime(runtime: Arc<crate::cache_runtime::CacheRuntime>) -> Self {
+        Self::with_cache_runtimes(HashMap::from([("default".to_string(), runtime)]))
+    }
+
+    /// Create a QueueFS plugin that selects from named cache runtimes.
+    #[cfg(feature = "cache")]
+    pub(crate) fn with_cache_runtimes(
+        cache_runtimes: HashMap<String, Arc<crate::cache_runtime::CacheRuntime>>,
+    ) -> Self {
         let mut plugin = Self::new();
-        plugin.cache_runtime = Some(runtime);
+        plugin.cache_runtimes = cache_runtimes;
         plugin
     }
 
@@ -716,10 +827,15 @@ impl QueueFSPlugin {
 
     fn parse_backend_config(config: &PluginConfig) -> Result<ParsedBackendConfig> {
         let backend_name = Self::get_string_param(config, "backend").unwrap_or("memory");
-        #[cfg(feature = "cache")]
-        let valid_backends = ["memory", "sqlite", "sqlite3", "cache"];
-        #[cfg(not(feature = "cache"))]
-        let valid_backends = ["memory", "sqlite", "sqlite3"];
+        let valid_backends = [
+            "memory",
+            "sqlite",
+            "sqlite3",
+            #[cfg(feature = "cache")]
+            "cache",
+            #[cfg(feature = "postgres")]
+            "postgres",
+        ];
         if !valid_backends.contains(&backend_name) {
             return Err(Error::config(format!(
                 "unsupported queue backend: {} (valid: {})",
@@ -731,6 +847,8 @@ impl QueueFSPlugin {
         let kind = match backend_name {
             "memory" => BackendKind::Memory,
             "sqlite" | "sqlite3" => BackendKind::Sqlite,
+            #[cfg(feature = "postgres")]
+            "postgres" => BackendKind::Postgres,
             #[cfg(feature = "cache")]
             "cache" => BackendKind::Cache,
             _ => {
@@ -760,6 +878,8 @@ impl QueueFSPlugin {
 
         let sqlite_db_path = match kind {
             BackendKind::Memory => None,
+            #[cfg(feature = "postgres")]
+            BackendKind::Postgres => None,
             #[cfg(feature = "cache")]
             BackendKind::Cache => None,
             BackendKind::Sqlite => {
@@ -773,8 +893,19 @@ impl QueueFSPlugin {
                 Some(db_path.to_string())
             }
         };
-        #[cfg(feature = "cache")]
+        #[cfg(any(feature = "cache", feature = "postgres"))]
         let service_name = match kind {
+            #[cfg(feature = "postgres")]
+            BackendKind::Postgres => {
+                let name = Self::get_string_param(config, "service_name").unwrap_or("");
+                if name.trim().is_empty() || name.len() > 256 || name.contains('\0') {
+                    return Err(Error::config(
+                        "queuefs postgres service_name requires 1..=256 UTF-8 bytes without NUL",
+                    ));
+                }
+                Some(name.to_owned())
+            }
+            #[cfg(feature = "cache")]
             BackendKind::Cache => {
                 let service_name = Self::get_string_param(config, "service_name")
                     .ok_or_else(|| {
@@ -793,6 +924,48 @@ impl QueueFSPlugin {
             }
             _ => None,
         };
+        #[cfg(feature = "cache")]
+        let instance = match kind {
+            BackendKind::Cache => {
+                let instance = Self::get_string_param(config, "instance")
+                    .unwrap_or("default")
+                    .to_string();
+                if instance.trim().is_empty() {
+                    return Err(Error::config(
+                        "queuefs instance must not be empty when backend=cache".to_string(),
+                    ));
+                }
+                Some(instance)
+            }
+            _ => None,
+        };
+        #[cfg(feature = "postgres")]
+        let (postgres_dsn_env, postgres_lease_seconds) = if matches!(kind, BackendKind::Postgres) {
+            let env = Self::get_string_param(config, "postgres_dsn_env").unwrap_or("");
+            if env.is_empty()
+                || !env.bytes().enumerate().all(|(i, b)| {
+                    b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
+                })
+            {
+                return Err(Error::config(
+                    "queuefs postgres_dsn_env must be an environment variable name",
+                ));
+            }
+            let seconds = match config.params.get("postgres_lease_seconds") {
+                Some(value) => value.as_int().ok_or_else(|| {
+                    Error::config("queuefs postgres_lease_seconds must be an integer")
+                })?,
+                None => 60,
+            };
+            if !(10..=86_400).contains(&seconds) {
+                return Err(Error::config(
+                    "queuefs postgres_lease_seconds must be 10..=86400",
+                ));
+            }
+            (Some(env.to_owned()), seconds as u64)
+        } else {
+            (None, 60)
+        };
 
         Ok(ParsedBackendConfig {
             kind,
@@ -801,8 +974,14 @@ impl QueueFSPlugin {
                 recover_stale_sec,
                 busy_timeout_ms,
             },
-            #[cfg(feature = "cache")]
+            #[cfg(any(feature = "cache", feature = "postgres"))]
             service_name,
+            #[cfg(feature = "cache")]
+            instance,
+            #[cfg(feature = "postgres")]
+            postgres_dsn_env,
+            #[cfg(feature = "postgres")]
+            postgres_lease_seconds,
         })
     }
 }
@@ -846,12 +1025,14 @@ impl ServicePlugin for QueueFSPlugin {
          \n\
          Control files per queue:\n\
          - enqueue: Write to add a message to the queue\n\
-         - dequeue: Read to remove and return the first message\n\
+         - enqueue_ext: Write a QFSE v1 envelope with UUID, optional group_key or serial_key TLV, and raw payload\n\
+         - dequeue: Read to claim an eligible message; group metadata stays in the backend\n\
          - peek: Read to view the first message without removing it\n\
          - size: Read to get the current queue size\n\
          - status: Read pending and processing message counts\n\
          - clear: Write to clear all messages from the queue\n\
          - ack: Write message id to acknowledge and delete it\n\
+         - retry: Write processing message id to return it to pending, retaining serial priority\n\
          \n\
          Supports nested queues:\n\
             mkdir /queuefs/logs/errors\n\
@@ -861,10 +1042,16 @@ impl ServicePlugin for QueueFSPlugin {
     async fn validate(&self, config: &PluginConfig) -> Result<()> {
         let parsed = Self::parse_backend_config(config)?;
         #[cfg(feature = "cache")]
-        if matches!(parsed.kind, BackendKind::Cache) && self.cache_runtime.is_none() {
-            return Err(Error::config(
-                "queuefs backend=cache requires a configured CacheRuntime provider".to_string(),
-            ));
+        if matches!(parsed.kind, BackendKind::Cache) {
+            let instance = parsed
+                .instance
+                .as_deref()
+                .expect("cache instance is parsed");
+            if !self.cache_runtimes.contains_key(instance) {
+                return Err(Error::config(format!(
+                    "QueueFS references unknown cache instance '{instance}'"
+                )));
+            }
         }
         #[cfg(not(feature = "cache"))]
         let _ = parsed;
@@ -883,12 +1070,34 @@ impl ServicePlugin for QueueFSPlugin {
                     .expect("sqlite db_path is validated"),
                 parsed.sqlite_options,
             )?),
+            #[cfg(feature = "postgres")]
+            BackendKind::Postgres => {
+                return Ok(Box::new(
+                    QueueFileSystem::with_postgres(
+                        parsed
+                            .postgres_dsn_env
+                            .as_deref()
+                            .expect("DSN env is validated"),
+                        parsed
+                            .service_name
+                            .as_deref()
+                            .expect("service name is validated"),
+                        parsed.postgres_lease_seconds,
+                    )
+                    .await?,
+                ));
+            }
             #[cfg(feature = "cache")]
             BackendKind::Cache => {
                 return Ok(Box::new(
                     QueueFileSystem::with_cache_runtime(
-                        self.cache_runtime
-                            .as_ref()
+                        self.cache_runtimes
+                            .get(
+                                parsed
+                                    .instance
+                                    .as_deref()
+                                    .expect("cache instance is parsed"),
+                            )
                             .expect("cache runtime is validated")
                             .clone(),
                         parsed
@@ -933,6 +1142,114 @@ mod tests {
     }
 
     /// Create a queue filesystem with one initialized queue.
+    async fn retry_contract(fs: &QueueFileSystem) {
+        fs.mkdir("/retry-jobs", 0o755).await.unwrap();
+        let first = enqueue_serial(fs, "retry-jobs", "A", b"original").await;
+        let original = dequeue_msg(fs, "retry-jobs").await;
+        let later = enqueue_serial(fs, "retry-jobs", "A", b"follower").await;
+        let cold = enqueue_serial(fs, "retry-jobs", "B", b"cold").await;
+        for _ in 0..2 {
+            fs.write("/retry-jobs/retry", first.as_bytes(), 0, WriteFlag::None)
+                .await
+                .unwrap();
+        }
+        ack_message(fs, "retry-jobs", &first).await; // Pending ACK must be a no-op.
+        assert_eq!(queue_size(fs, "retry-jobs").await, 3);
+        let one = dequeue_msg(fs, "retry-jobs").await;
+        let two = dequeue_msg(fs, "retry-jobs").await;
+        assert!(one.id == first || two.id == first);
+        assert!(one.id == cold || two.id == cold);
+        let replay = if one.id == first { &one } else { &two };
+        assert_eq!(replay.data, original.data);
+        assert_eq!(replay.timestamp, original.timestamp);
+        assert_eq!(fs.read("/retry-jobs/dequeue", 0, 0).await.unwrap(), b"{}");
+        ack_message(fs, "retry-jobs", &cold).await;
+        fs.write("/retry-jobs/retry", first.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(fs, "retry-jobs").await.id, first);
+        assert_eq!(fs.read("/retry-jobs/dequeue", 0, 0).await.unwrap(), b"{}");
+        ack_message(fs, "retry-jobs", &first).await;
+        assert_eq!(dequeue_msg(fs, "retry-jobs").await.id, later);
+        ack_message(fs, "retry-jobs", &later).await;
+        assert_eq!(
+            fs.read("/retry-jobs/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":0}"#
+        );
+        fs.remove_all("/retry-jobs").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_delivery_and_serial_priority_on_local_backends() {
+        retry_contract(&QueueFileSystem::new()).await;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.db");
+        let fs = QueueFileSystem::with_backend(Box::new(
+            SQLiteQueueBackend::open(path.to_str().unwrap(), SQLiteQueueOptions::default())
+                .unwrap(),
+        ));
+        retry_contract(&fs).await;
+        fs.mkdir("/restart", 0o755).await.unwrap();
+        let first = enqueue_serial(&fs, "restart", "A", b"first").await;
+        dequeue_msg(&fs, "restart").await;
+        let later = enqueue_serial(&fs, "restart", "A", b"later").await;
+        fs.write("/restart/retry", first.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        drop(fs);
+        let fs = QueueFileSystem::with_backend(Box::new(
+            SQLiteQueueBackend::open(path.to_str().unwrap(), SQLiteQueueOptions::default())
+                .unwrap(),
+        ));
+        assert_eq!(dequeue_msg(&fs, "restart").await.id, first);
+        assert_eq!(fs.read("/restart/dequeue", 0, 0).await.unwrap(), b"{}");
+        ack_message(&fs, "restart", &first).await;
+        assert_eq!(dequeue_msg(&fs, "restart").await.id, later);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn redis_retry_preserves_serial_priority_and_releases_node_at_zero_inflight() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime =
+            crate::cache_runtime::CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+                endpoints: vec![endpoint],
+                ..crate::cache_runtime::RedisProviderConfig::default()
+            })
+            .await
+            .unwrap();
+        let prefix = format!("queuefs-retry-contract:{}", uuid::Uuid::new_v4());
+        let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let peer = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix)
+            .await
+            .unwrap();
+        retry_contract(&first).await;
+        first.mkdir("/node-retry", 0o755).await.unwrap();
+        let n1 = enqueue_group(&first, "node-retry", "N", b"one").await;
+        let n2 = enqueue_group(&first, "node-retry", "N", b"two").await;
+        assert_eq!(dequeue_msg(&first, "node-retry").await.id, n1);
+        assert_eq!(dequeue_msg(&first, "node-retry").await.id, n2);
+        first
+            .write("/node-retry/retry", n1.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(peer.read("/node-retry/dequeue", 0, 0).await.unwrap(), b"{}");
+        first
+            .write("/node-retry/retry", n2.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(&peer, "node-retry").await.id, n1);
+        assert_eq!(dequeue_msg(&peer, "node-retry").await.id, n2);
+        first.remove_all("/node-retry").await.unwrap();
+        first.shutdown().await.unwrap();
+        peer.shutdown().await.unwrap();
+        runtime.close().await.unwrap();
+    }
+
     async fn queuefs_with(queue: &str) -> QueueFileSystem {
         let fs = QueueFileSystem::new();
         fs.mkdir(&format!("/{queue}"), 0o755).await.unwrap();
@@ -956,6 +1273,458 @@ mod tests {
     async fn queue_size(fs: &dyn FileSystem, queue: &str) -> usize {
         let size = fs.read(&format!("/{queue}/size"), 0, 0).await.unwrap();
         String::from_utf8(size).unwrap().parse().unwrap()
+    }
+
+    fn enqueue_frame(id: uuid::Uuid, key: Option<&str>, payload: &[u8]) -> Vec<u8> {
+        enqueue_key_frame(id, key.map(|key| (2, key)), payload)
+    }
+
+    fn enqueue_key_frame(id: uuid::Uuid, key: Option<(u16, &str)>, payload: &[u8]) -> Vec<u8> {
+        let mut metadata = Vec::new();
+        if let Some((kind, key)) = key {
+            metadata.extend_from_slice(&kind.to_be_bytes());
+            metadata.extend_from_slice(&1u16.to_be_bytes());
+            metadata.extend_from_slice(&(key.len() as u32).to_be_bytes());
+            metadata.extend_from_slice(key.as_bytes());
+        }
+        let mut frame = b"QFSE".to_vec();
+        frame.extend_from_slice(&1u16.to_be_bytes());
+        frame.extend_from_slice(&0u16.to_be_bytes());
+        frame.extend_from_slice(&((28 + metadata.len()) as u32).to_be_bytes());
+        frame.extend_from_slice(id.as_bytes());
+        frame.extend_from_slice(&metadata);
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    async fn enqueue_group(fs: &QueueFileSystem, queue: &str, key: &str, payload: &[u8]) -> String {
+        enqueue_key(fs, queue, 2, key, payload).await
+    }
+
+    async fn enqueue_serial(
+        fs: &QueueFileSystem,
+        queue: &str,
+        key: &str,
+        payload: &[u8],
+    ) -> String {
+        enqueue_key(fs, queue, 3, key, payload).await
+    }
+
+    async fn enqueue_key(
+        fs: &QueueFileSystem,
+        queue: &str,
+        kind: u16,
+        key: &str,
+        payload: &[u8],
+    ) -> String {
+        let id = uuid::Uuid::new_v4();
+        fs.write(
+            &format!("/{queue}/enqueue_ext"),
+            &enqueue_key_frame(id, Some((kind, key)), payload),
+            0,
+            WriteFlag::None,
+        )
+        .await
+        .unwrap();
+        id.to_string()
+    }
+
+    async fn ack_message(fs: &QueueFileSystem, queue: &str, id: &str) {
+        fs.write(&format!("/{queue}/ack"), id.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+    }
+
+    async fn maybe_dequeue(fs: &QueueFileSystem, queue: &str) -> Option<TestQueueMessage> {
+        let raw = fs.read(&format!("/{queue}/dequeue"), 0, 0).await.unwrap();
+        if raw == b"{}" {
+            None
+        } else {
+            Some(serde_json::from_slice(&raw).unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn grouped_queue_contract_preserves_payload_and_ack_boundary() {
+        let fs = queuefs_with("serial").await;
+        fs.mkdir("/node", 0o755).await.unwrap();
+        let a1 = enqueue_serial(&fs, "serial", "用户:A", b"first").await;
+        let a2 = enqueue_serial(&fs, "serial", "用户:A", b"second").await;
+        let b1 = enqueue_serial(&fs, "serial", "B", b"other").await;
+        assert_eq!(dequeue_msg(&fs, "serial").await.id, a1);
+        assert_eq!(dequeue_msg(&fs, "serial").await.id, b1);
+        assert!(maybe_dequeue(&fs, "serial").await.is_none());
+        assert!(fs
+            .write(
+                "/serial/config",
+                br#"{"group_policy":"node"}"#,
+                0,
+                WriteFlag::None
+            )
+            .await
+            .is_err());
+        let status: serde_json::Value =
+            serde_json::from_slice(&fs.read("/serial/status", 0, 0).await.unwrap()).unwrap();
+        assert_eq!(status, serde_json::json!({"pending": 1, "processing": 2}));
+        let snapshot: Vec<TestQueueMessage> =
+            serde_json::from_slice(&fs.read("/serial/messages", 0, 0).await.unwrap()).unwrap();
+        assert_eq!(snapshot.len(), 3);
+        ack_message(&fs, "serial", &a1).await;
+        let second = dequeue_msg(&fs, "serial").await;
+        assert_eq!((second.id, second.data), (a2, "second".to_string()));
+        let a3 = enqueue_serial(&fs, "serial", "用户:A", b"third").await;
+        ack_message(&fs, "serial", &a1).await;
+        assert!(maybe_dequeue(&fs, "serial").await.is_none());
+        // Clear removes both deliveries and scheduling state.
+        fs.write("/serial/clear", b"", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        ack_message(&fs, "serial", &a3).await;
+        let fresh = enqueue_serial(&fs, "serial", "用户:A", b"fresh").await;
+        assert_eq!(dequeue_msg(&fs, "serial").await.id, fresh);
+        for payload in [b"one", b"two"] {
+            enqueue_group(&fs, "node", "A", payload).await;
+        }
+        assert!(maybe_dequeue(&fs, "node").await.is_some());
+        assert!(maybe_dequeue(&fs, "node").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn enqueue_ext_rejects_invalid_frames_before_queue_mutation() {
+        let fs = queuefs_with("test").await;
+        let id = uuid::Uuid::new_v4();
+        let valid = enqueue_frame(id, Some("A"), b"payload");
+        for end in 0..valid.len() - b"payload".len() {
+            assert!(fs
+                .write("/test/enqueue_ext", &valid[..end], 0, WriteFlag::None)
+                .await
+                .is_err());
+        }
+        let mut invalid_frames = vec![
+            enqueue_frame(id, Some(""), b"payload"),
+            enqueue_frame(uuid::Uuid::nil(), Some("A"), b"payload"),
+            enqueue_frame(id, Some(&"a".repeat(4097)), b"payload"),
+        ];
+        for (offset, value) in [(4, 2), (6, 1), (29, 99), (31, 0), (36, 255)] {
+            let mut invalid = valid.clone();
+            invalid[offset] = value;
+            invalid_frames.push(invalid);
+        }
+        let mut duplicate = valid[..37].to_vec();
+        duplicate.extend_from_slice(&valid[28..37]);
+        duplicate[8..12].copy_from_slice(&46u32.to_be_bytes());
+        invalid_frames.push(duplicate);
+        for key in ["", &"a".repeat(4097)] {
+            invalid_frames.push(enqueue_key_frame(id, Some((3, key)), b"payload"));
+        }
+        let mut both = enqueue_frame(id, Some("A"), b"");
+        both.extend_from_slice(&enqueue_key_frame(id, Some((3, "A")), b"")[28..]);
+        both[8..12].copy_from_slice(&46u32.to_be_bytes());
+        invalid_frames.push(both);
+        let mut duplicate_serial = enqueue_key_frame(id, Some((3, "A")), b"");
+        duplicate_serial.extend_from_slice(&duplicate_serial.clone()[28..]);
+        duplicate_serial[8..12].copy_from_slice(&46u32.to_be_bytes());
+        invalid_frames.push(duplicate_serial);
+        for invalid in invalid_frames {
+            assert!(fs
+                .write("/test/enqueue_ext", &invalid, 0, WriteFlag::None)
+                .await
+                .is_err());
+        }
+        assert_eq!(queue_size(&fs, "test").await, 0);
+        fs.write("/test/enqueue_ext", &valid, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            fs.write("/test/enqueue_ext", &valid, 0, WriteFlag::None)
+                .await,
+            Err(Error::AlreadyExists(_))
+        ));
+        assert_eq!(queue_size(&fs, "test").await, 1);
+        let message = dequeue_msg(&fs, "test").await;
+        assert_eq!(
+            (message.id, message.data),
+            (id.to_string(), "payload".to_string())
+        );
+        // Optional extensions remain forward-compatible; payload starts at header_len.
+        let optional_id = uuid::Uuid::new_v4();
+        let mut optional = enqueue_frame(optional_id, Some("B"), b"");
+        optional.extend_from_slice(&99u16.to_be_bytes());
+        optional.extend_from_slice(&0u16.to_be_bytes());
+        optional.extend_from_slice(&1u32.to_be_bytes());
+        optional.push(b'x');
+        let header_len = optional.len() as u32;
+        optional[8..12].copy_from_slice(&header_len.to_be_bytes());
+        optional.extend_from_slice(b"optional");
+        fs.write("/test/enqueue_ext", &optional, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(&fs, "test").await.data, "optional");
+        // The old path treats even a protocol-shaped frame as opaque payload.
+        let legacy = queuefs_with("legacy").await;
+        enqueue(&legacy, "legacy", &valid).await;
+        let stored = dequeue_msg(&legacy, "legacy").await;
+        assert_eq!(stored.data, String::from_utf8_lossy(&valid));
+        assert_ne!(stored.id, id.to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let sqlite = QueueFileSystem::with_backend(Box::new(
+            SQLiteQueueBackend::open(
+                directory.path().join("queue.db").to_str().unwrap(),
+                SQLiteQueueOptions::default(),
+            )
+            .unwrap(),
+        ));
+        sqlite.mkdir("/test", 0o755).await.unwrap();
+        sqlite
+            .write("/test/enqueue_ext", &valid, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(&sqlite, "test").await.id, id.to_string());
+        ack_message(&sqlite, "test", &id.to_string()).await;
+        let plain = enqueue_frame(id, None, b"plain");
+        sqlite
+            .write("/test/enqueue_ext", &plain, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            sqlite
+                .write("/test/enqueue_ext", &plain, 0, WriteFlag::None)
+                .await,
+            Err(Error::AlreadyExists(_))
+        ));
+        assert_eq!(dequeue_msg(&sqlite, "test").await.id, id.to_string());
+        enqueue(&sqlite, "test", b"legacy").await;
+        assert_eq!(dequeue_msg(&sqlite, "test").await.data, "legacy");
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn redis_mixed_message_keys_keep_namespaces_and_owners_independent() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime =
+            crate::cache_runtime::CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+                endpoints: vec![endpoint],
+                ..crate::cache_runtime::RedisProviderConfig::default()
+            })
+            .await
+            .unwrap();
+        let prefix = format!("queuefs-mixed-contract:{}", uuid::Uuid::new_v4());
+        let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let peer = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        first.mkdir("/mixed", 0o755).await.unwrap();
+        let serial = enqueue_serial(&first, "mixed", "用户:A", b"s1").await;
+        let later = enqueue_serial(&first, "mixed", "用户:A", b"s2").await;
+        let group = enqueue_group(&first, "mixed", "用户:A", b"g1").await;
+        let group_two = enqueue_group(&first, "mixed", "用户:A", b"g2").await;
+        enqueue(&first, "mixed", b"plain").await;
+        let mut ids = Vec::new();
+        for _ in 0..4 {
+            ids.push(dequeue_msg(&first, "mixed").await.id);
+        }
+        assert!(ids.contains(&serial) && ids.contains(&group) && ids.contains(&group_two));
+        assert!(!ids.contains(&later));
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        let group_three = enqueue_group(&peer, "mixed", "用户:A", b"g3").await;
+        enqueue(&peer, "mixed", b"another plain").await;
+        assert_eq!(dequeue_msg(&peer, "mixed").await.data, "another plain");
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        assert_eq!(dequeue_msg(&first, "mixed").await.id, group_three);
+        ack_message(&first, "mixed", &serial).await;
+        assert_eq!(dequeue_msg(&peer, "mixed").await.id, later);
+        let last_serial = enqueue_serial(&first, "mixed", "用户:A", b"s3").await;
+        ack_message(&first, "mixed", &serial).await;
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        for id in [&group, &group_two] {
+            ack_message(&first, "mixed", id).await;
+        }
+        let last_group = enqueue_group(&peer, "mixed", "用户:A", b"g4").await;
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        ack_message(&first, "mixed", &group_three).await;
+        assert_eq!(dequeue_msg(&peer, "mixed").await.id, last_group);
+        assert!(maybe_dequeue(&first, "mixed").await.is_none());
+        ack_message(&peer, "mixed", &later).await;
+        assert_eq!(dequeue_msg(&first, "mixed").await.id, last_serial);
+        first
+            .write("/mixed/clear", b"", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(queue_size(&peer, "mixed").await, 0);
+        first.remove_all("/mixed").await.unwrap();
+        first.shutdown().await.unwrap();
+        peer.shutdown().await.unwrap();
+        runtime
+            .del(&[cache_protocol::queue_names_key(&prefix)])
+            .await
+            .unwrap();
+        runtime.close().await.unwrap();
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn redis_grouped_delivery_and_owner_recovery_contract() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime =
+            crate::cache_runtime::CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+                endpoints: vec![endpoint],
+                command_timeout_ms: 1_000,
+                ..crate::cache_runtime::RedisProviderConfig::default()
+            })
+            .await
+            .unwrap();
+        let prefix = format!("queuefs-group-contract:{}", uuid::Uuid::new_v4());
+        let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let second = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let third = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        first.mkdir("/serial", 0o755).await.unwrap();
+        first.mkdir("/node", 0o755).await.unwrap();
+        assert!(second.read("/node/config", 0, 0).await.is_err());
+        let s1 = enqueue_serial(&first, "serial", "A", b"serial active").await;
+        let s2 = enqueue_serial(&first, "serial", "A", b"serial later").await;
+        assert!(first
+            .write(
+                "/serial/config",
+                br#"{"group_policy":"node"}"#,
+                0,
+                WriteFlag::None
+            )
+            .await
+            .is_err());
+        assert!(matches!(
+            first
+                .write(
+                    "/serial/enqueue_ext",
+                    &enqueue_key_frame(
+                        uuid::Uuid::parse_str(&s1).unwrap(),
+                        Some((3, "A")),
+                        b"overwrite"
+                    ),
+                    0,
+                    WriteFlag::None
+                )
+                .await,
+            Err(Error::AlreadyExists(_))
+        ));
+        assert_eq!(queue_size(&second, "serial").await, 2);
+        let (one, two) = tokio::join!(
+            maybe_dequeue(&first, "serial"),
+            maybe_dequeue(&second, "serial")
+        );
+        assert_ne!(one.is_some(), two.is_some());
+        let (owner, peer) = if one.is_some() {
+            (&first, &second)
+        } else {
+            (&second, &first)
+        };
+        assert_eq!(one.or(two).unwrap().id, s1);
+        let independent = enqueue_serial(owner, "serial", "B", b"other key").await;
+        assert_eq!(dequeue_msg(peer, "serial").await.id, independent);
+        assert!(maybe_dequeue(owner, "serial").await.is_none());
+        let n1 = enqueue_group(owner, "node", "A", b"node one").await;
+        let n2 = enqueue_group(owner, "node", "A", b"node two").await;
+        let n3 = enqueue_group(owner, "node", "A", b"node three").await;
+        assert_eq!(dequeue_msg(owner, "node").await.id, n1);
+        assert_eq!(dequeue_msg(owner, "node").await.id, n2);
+        assert!(maybe_dequeue(peer, "node").await.is_none());
+        ack_message(owner, "node", &n1).await;
+        ack_message(owner, "node", &n1).await;
+        assert!(maybe_dequeue(peer, "node").await.is_none());
+        ack_message(owner, "node", &n2).await;
+        // All in-flight messages ACKed: pending messages may choose a new owner.
+        assert_eq!(dequeue_msg(peer, "node").await.id, n3);
+        ack_message(peer, "node", &n3).await;
+        let r1 = enqueue_group(owner, "node", "R", b"recover one").await;
+        let r2 = enqueue_group(owner, "node", "R", b"recover two").await;
+        let r3 = enqueue_group(owner, "node", "R", b"pending").await;
+        assert_eq!(dequeue_msg(owner, "node").await.id, r1);
+        assert_eq!(dequeue_msg(owner, "node").await.id, r2);
+        assert!(maybe_dequeue(peer, "node").await.is_none());
+        owner.shutdown().await.unwrap();
+        assert!(owner.read("/serial/dequeue", 0, 0).await.is_err());
+        let recovered = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+            loop {
+                if let Some(message) = maybe_dequeue(peer, "serial").await {
+                    break message;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(recovered.id, s1);
+        assert!(maybe_dequeue(&third, "serial").await.is_none());
+        ack_message(peer, "serial", &s1).await;
+        assert_eq!(dequeue_msg(&third, "serial").await.id, s2);
+        ack_message(peer, "serial", &s1).await;
+        let s3 = enqueue_serial(peer, "serial", "A", b"still blocked").await;
+        assert!(maybe_dequeue(peer, "serial").await.is_none());
+        ack_message(&third, "serial", &s2).await;
+        assert_eq!(dequeue_msg(peer, "serial").await.id, s3);
+        // Each queue recovers atomically, but the background sweep visits them separately.
+        tokio::time::timeout(std::time::Duration::from_secs(12), async {
+            loop {
+                let status: serde_json::Value =
+                    serde_json::from_slice(&peer.read("/node/status", 0, 0).await.unwrap())
+                        .unwrap();
+                if status["processing"] == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (one, two) = tokio::join!(maybe_dequeue(peer, "node"), maybe_dequeue(&third, "node"));
+        assert_ne!(one.is_some(), two.is_some());
+        let (new_owner, other) = if one.is_some() {
+            (peer, &third)
+        } else {
+            (&third, peer)
+        };
+        let mut recovered_ids = vec![one.or(two).unwrap().id];
+        recovered_ids.push(dequeue_msg(new_owner, "node").await.id);
+        recovered_ids.push(dequeue_msg(new_owner, "node").await.id);
+        recovered_ids.sort();
+        let mut expected = vec![r1, r2, r3];
+        expected.sort();
+        assert_eq!(recovered_ids, expected);
+        for id in &recovered_ids[..2] {
+            ack_message(new_owner, "node", id).await;
+        }
+        let next = enqueue_group(peer, "node", "R", b"next").await;
+        assert!(maybe_dequeue(other, "node").await.is_none());
+        ack_message(new_owner, "node", &recovered_ids[2]).await;
+        assert_eq!(dequeue_msg(other, "node").await.id, next);
+        peer.write("/node/clear", b"", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        let fresh = enqueue_group(peer, "node", "R", b"fresh").await;
+        assert_eq!(dequeue_msg(peer, "node").await.id, fresh);
+        peer.remove_all("/node").await.unwrap();
+        peer.mkdir("/node", 0o755).await.unwrap();
+        assert!(peer.read("/node/config", 0, 0).await.is_err());
+        peer.remove_all("/node").await.unwrap();
+        peer.remove_all("/serial").await.unwrap();
+        peer.shutdown().await.unwrap();
+        third.shutdown().await.unwrap();
+        runtime
+            .del(&[cache_protocol::queue_names_key(&prefix)])
+            .await
+            .unwrap();
+        runtime.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -1056,14 +1825,13 @@ mod tests {
         assert!(entries[0].is_dir);
 
         // Queue directory should list control files
-        let entries = fs
-            .read_dir("/test", None, None, None, None)
-            .await
-            .unwrap();
-        assert_eq!(entries.len(), 8);
+        let entries = fs.read_dir("/test", None, None, None, None).await.unwrap();
+        assert_eq!(entries.len(), 10);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));
+        assert!(names.contains(&"enqueue_ext".to_string()));
+        assert!(!names.contains(&"config".to_string()));
         assert!(names.contains(&"dequeue".to_string()));
         assert!(names.contains(&"peek".to_string()));
         assert!(names.contains(&"size".to_string()));
@@ -1163,7 +1931,9 @@ mod tests {
         let config_params = plugin.config_params();
         assert_eq!(
             config_params.len(),
-            4 + usize::from(cfg!(feature = "cache"))
+            4 + usize::from(cfg!(any(feature = "cache", feature = "postgres")))
+                + 2 * usize::from(cfg!(feature = "postgres"))
+                + usize::from(cfg!(feature = "cache"))
         );
         #[cfg(feature = "cache")]
         assert!(config_params
@@ -1183,6 +1953,47 @@ mod tests {
         enqueue(fs.as_ref(), "test", b"test").await;
         let msg = dequeue_msg(fs.as_ref(), "test").await;
         assert_eq!(msg.data, "test");
+    }
+
+    #[cfg(feature = "postgres")]
+    #[tokio::test]
+    async fn test_postgres_queuefs_config_validation() {
+        use crate::core::types::ConfigValue;
+        let plugin = QueueFSPlugin::new();
+        let mut config = PluginConfig::single_backend(
+            "queuefs",
+            "/queue",
+            std::collections::HashMap::from([
+                ("backend".into(), ConfigValue::String("postgres".into())),
+                (
+                    "service_name".into(),
+                    ConfigValue::String("pg-queue-test".into()),
+                ),
+                (
+                    "postgres_dsn_env".into(),
+                    ConfigValue::String("OV_QUEUE_PG_DSN".into()),
+                ),
+            ]),
+        );
+        // Validation does not connect or demand Redis; initialization reads the DSN.
+        plugin.validate(&config).await.unwrap();
+        config
+            .params
+            .insert("postgres_lease_seconds".into(), ConfigValue::Int(9));
+        assert!(plugin.validate(&config).await.is_err());
+        config.params.insert(
+            "postgres_lease_seconds".into(),
+            ConfigValue::String("60".into()),
+        );
+        assert!(plugin.validate(&config).await.is_err());
+        config.params.remove("postgres_lease_seconds");
+        config.params.insert(
+            "postgres_dsn_env".into(),
+            ConfigValue::String("password=secret".into()),
+        );
+        assert!(plugin.validate(&config).await.is_err());
+        config.params.remove("postgres_dsn_env");
+        assert!(plugin.validate(&config).await.is_err());
     }
 
     #[tokio::test]
@@ -1219,10 +2030,7 @@ mod tests {
         fs.mkdir("/logs/warnings", 0o755).await.unwrap();
 
         // List /logs should show subdirectories
-        let entries = fs
-            .read_dir("/logs", None, None, None, None)
-            .await
-            .unwrap();
+        let entries = fs.read_dir("/logs", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 2);
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"errors"));

@@ -1,5 +1,6 @@
 """Context builder for assembling agent prompts."""
 
+import asyncio
 import base64
 import mimetypes
 import platform
@@ -14,6 +15,7 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.config.schema import SessionKey
+from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
@@ -145,7 +147,8 @@ class ContextBuilder:
             )
 
         # Bootstrap files
-        bootstrap = self._load_bootstrap_files()
+        agent_instructions = await self._load_viking_agent(workspace_id)
+        bootstrap = self._load_bootstrap_files(agent_instructions)
         if bootstrap:
             parts.append(bootstrap)
 
@@ -385,11 +388,41 @@ IMPORTANT:
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit"""
 
-    def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
+    async def _load_viking_agent(self, workspace_id: str) -> str:
+        """Prefer the current OpenViking user's static instructions when readable."""
+        if self._config is None or not self._config.ov_server.is_available():
+            return ""
+        client = None
+        try:
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=self._openviking_connection,
+                actor_peer_id=self._actor_peer_id,
+                config=self._config,
+            )
+            # Bootstrap reads must not hold up a turn when the upstream is unavailable.
+            content = await asyncio.wait_for(
+                client.read_raw("viking://~/memories/soul.md"), timeout=5.0
+            )
+            return content if content.strip() else ""
+        except Exception as exc:
+            logger.debug("OpenViking soul.md unavailable; using local SOUL.md: {}", exc)
+            return ""
+        finally:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception as exc:
+                    logger.warning("Error closing VikingClient: {}", exc)
+
+    def _load_bootstrap_files(self, agent_instructions: str = "") -> str:
+        """Load workspace bootstrap files, replacing Soul with remote Agent instructions."""
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
+            if filename == "SOUL.md" and agent_instructions:
+                parts.append(f"## viking://~/memories/soul.md\n\n{agent_instructions}")
+                continue
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")

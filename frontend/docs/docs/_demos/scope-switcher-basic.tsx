@@ -1,3 +1,4 @@
+import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import {
   createScopeSource,
@@ -5,7 +6,7 @@ import {
   type ScopeSource,
   type ScopeIndex,
 } from '#scope-switcher-source';
-import { LibraryIcon, SpaceIcon, UserIcon } from '#scope-switcher-icons';
+import { LibraryIcon, SpaceIcon, UserIcon } from '@openviking/react/icons';
 import {
   ScopeSwitcher,
   ScopeSelector,
@@ -14,8 +15,16 @@ import {
 import '@openviking/react/components/scope-switcher/style.css';
 
 const libraries = [
-  { id: 'research', label: '星河电商研发库', icon: <LibraryIcon /> },
-  { id: 'support', label: 'Support library', icon: <LibraryIcon /> },
+  {
+    id: 'research',
+    label: '星河电商研发库',
+    icon: <LibraryIcon name="research" />,
+  },
+  {
+    id: 'support',
+    label: 'Support library',
+    icon: <LibraryIcon name="support" />,
+  },
 ];
 const spaces: Record<string, ScopeSwitcherOption[]> = {
   research: [
@@ -40,6 +49,7 @@ function StaticSelector({
   source: ScopeSource;
   index: ScopeIndex;
 }) {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const scope = useScope(source, index);
   const name = ['Library', 'Space', 'User'][index]!;
   const options =
@@ -50,29 +60,29 @@ function StaticSelector({
         : (users[scope.ancestors[1]?.id ?? ''] ?? []);
   return (
     <ScopeSelector
+      locale={componentLocale}
       key={JSON.stringify(scope.ancestors.map((item) => item.id))}
-      level={{
-        kind: 'selectable',
-        key: name,
-        ariaLabel: `Switch ${name.toLowerCase()}`,
-        selectedId: scope.selected?.id ?? '',
-        selectedLabel: scope.selected?.label ?? `Select ${name.toLowerCase()}`,
+      kind="selectable"
+      identity={{ key: name, ariaLabel: `Switch ${name.toLowerCase()}` }}
+      trigger={{
+        label: scope.selected?.label ?? `Select ${name.toLowerCase()}`,
         icon: scope.selected?.icon,
-        options,
-        disabled: scope.ancestors.length < index,
-        onSelect: (option) => source.select(index, option),
       }}
+      data={{ selectedId: scope.selected?.id ?? '', options }}
+      state={{ disabled: scope.ancestors.length < index }}
+      actions={{ onSelect: (option) => source.select(index, option) }}
     />
   );
 }
 
 export default function ScopeSwitcherBasic() {
+  const componentLocale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const [source] = useState(() =>
     createScopeSource([libraries[0]!, spaces.research![0]!, users.papers![0]!]),
   );
   return (
     <div style={{ minHeight: 320 }}>
-      <ScopeSwitcher>
+      <ScopeSwitcher locale={componentLocale}>
         <StaticSelector source={source} index={0} />
         <StaticSelector source={source} index={1} />
         <StaticSelector source={source} index={2} />

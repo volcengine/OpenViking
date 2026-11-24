@@ -11,7 +11,7 @@ from openviking.ingest.sources.hermes import HermesSource
 from openviking.ingest.sources.mimo import MiMoSource
 from openviking.ingest.sources.openclaw import OpenClawSource
 from openviking.ingest.sources.opencode import OpenCodeSource
-from openviking.ingest.sources.workbuddy import WorkBuddySource, user_turn_text
+from openviking.ingest.sources.workbuddy import WorkBuddySource
 from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
 
 
@@ -251,15 +251,6 @@ def test_workbuddy_drops_host_generated_turns(tmp_path):
     assert [(m.role, m.text) for m in msgs] == [("user", "the real ask")]
 
 
-def test_workbuddy_quoted_user_query_does_not_win():
-    """A quoted <user_query> inside <previous_user_message> is history, not the ask."""
-    quoted = "<previous_user_message><user_query>the first thing I ever asked</user_query></previous_user_message>"
-    assert user_turn_text(f"{quoted}<user_query>the current ask</user_query>") == "the current ask"
-    # nothing but injected blocks -> no human text at all
-    assert user_turn_text("<system-reminder>ctx</system-reminder>") == ""
-    assert user_turn_text("") == ""
-
-
 def test_workbuddy_unknown_records_are_ignored(tmp_path):
     root = tmp_path / "projects"
     _write_jsonl(
@@ -281,39 +272,27 @@ def test_workbuddy_unknown_records_are_ignored(tmp_path):
     assert [(m.role, m.text) for m in msgs] == [("user", "ship it")]
 
 
-def test_workbuddy_finds_title_beyond_the_head(tmp_path):
-    """``ai-title`` can be written far into the file, not just in the first record."""
+def test_workbuddy_latest_ai_title_wins(tmp_path):
+    """Discovery picks up a new title when WorkBuddy appends it to a long log."""
     root = tmp_path / "projects"
+    log_path = root / "proj" / "wb-session.jsonl"
+    # Leave the original title outside the tail window, where only the head scan can find it.
     filler = [
-        _workbuddy_turn("assistant", f"filler {i}", 1757000000000 + i, model="hy3")
-        for i in range(600)
+        _workbuddy_turn("assistant", "explanation " * 1000, 1757000001000 + i, model="hy3")
+        for i in range(400)
     ]
     _write_jsonl(
-        root / "proj" / "wb-session.jsonl",
-        filler + [{"timestamp": 1757009999999, "type": "ai-title", "aiTitle": "Late title"}],
+        log_path,
+        [{"timestamp": 1757000000000, "type": "ai-title", "aiTitle": "First guess"}] + filler,
     )
     src = WorkBuddySource(_cfg(root), fallback_user="tester")
-    refs = list(src.discover_sessions())
-    assert [r.title for r in refs] == ["Late title"]
+    assert [ref.title for ref in src.discover_sessions()] == ["First guess"]
 
+    latest_title = {"timestamp": 1757009999999, "type": "ai-title", "aiTitle": "Settled name"}
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(latest_title) + "\n")
 
-def test_workbuddy_latest_ai_title_wins(tmp_path):
-    """The host re-emits ``ai-title`` when it re-titles a session; the last one is the name."""
-    root = tmp_path / "projects"
-    _write_jsonl(
-        root / "proj" / "wb-session.jsonl",
-        [
-            {"timestamp": 1757000000000, "type": "ai-title", "aiTitle": "First guess"},
-            _workbuddy_turn(
-                "user", "<user_query>look at the installer</user_query>", 1757000001000
-            ),
-            _workbuddy_turn("assistant", "on it", 1757000002000, model="hy3"),
-            {"timestamp": 1757000003000, "type": "ai-title", "aiTitle": "Settled name"},
-        ],
-    )
-    src = WorkBuddySource(_cfg(root), fallback_user="tester")
-    refs = list(src.discover_sessions())
-    assert [r.title for r in refs] == ["Settled name"]
+    assert [ref.title for ref in src.discover_sessions()] == ["Settled name"]
 
 
 def test_hermes_group_username(tmp_path):

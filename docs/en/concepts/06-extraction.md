@@ -92,7 +92,7 @@ L0/L1 are directory sidecars, not per-file sidecars. Parent-summary generation c
 
 ### Freshness, Sampling, and Parent Refresh
 
-Each generation collects all direct-child summaries without a 32-entry sample cap. The existing `semantic.max_overview_prompt_chars` budget (60000 characters by default) and batching/truncation behavior are unchanged. Resource/skill parent refreshes depend on child L0 body changes and freshness thresholds; unchanged L0 bodies do not propagate. `pending_child_changes` counts change events awaiting refresh, including repeated changes to the same child. See [Context Layers](03-context-layers.md#freshness-and-stable-sampling) for thresholds, manual refresh behavior, and deferred updates.
+Each generation records direct-child coverage and uses stable sampling above `semantic.overview_sample_limit` (default 32). Resource/skill parent refreshes depend on child L0 body changes and freshness thresholds; unchanged L0 bodies do not propagate. `pending_child_changes` counts change events awaiting refresh, including repeated changes to the same child. See [Context Layers](03-context-layers.md#freshness-and-stable-sampling) for thresholds, manual refresh behavior, and deferred updates.
 
 ### Processing Limits
 
@@ -101,7 +101,7 @@ Each generation collects all direct-child summaries without a 32-entry sample ca
 | `vlm.max_concurrent` | 32 | Semantic-processing concurrency, passed to `SemanticProcessor.max_concurrent_llm` |
 | `max_images_per_call` | 10 | `VLMProcessor` constructor parameter: images per call; not an `ov.conf` field |
 | `max_sections_per_call` | 20 | `VLMProcessor` constructor parameter: sections per call; not an `ov.conf` field |
-| `semantic.overview_sample_limit` | 32 | Small-directory threshold for freshness scheduling, not a summary input count cap |
+| `semantic.overview_sample_limit` | 32 | Maximum direct-child sample used for one directory summary |
 
 ## Code Skeleton Extraction
 

@@ -8,7 +8,6 @@ configurations are working before the server starts accepting traffic.
 
 from __future__ import annotations
 
-import logging
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -16,8 +15,9 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from openviking.server.config import ServerConfig
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class HealthStatus(str, Enum):
@@ -450,7 +450,7 @@ async def run_health_check(config: ServerConfig, fail_on_warn: bool = False) -> 
     checker = get_checker(auth_mode)
 
     if not checker:
-        logger.warning("No health checker registered for auth mode: %s", auth_mode)
+        logger.info("No health checker registered for configured auth mode; skipping checks")
         return HealthCheckReport(
             overall_status=HealthStatus.PASS,
             checks=[HealthCheckResult(
@@ -491,35 +491,28 @@ async def run_health_check(config: ServerConfig, fail_on_warn: bool = False) -> 
         summary=summary,
     )
 
-    # Log results
-    logger.info("=" * 60)
-    logger.info("AUTHENTICATION HEALTH CHECK")
-    logger.info("=" * 60)
-    logger.info("Auth mode: %s", auth_mode)
-    logger.info("Overall: %s", overall_status.value.upper())
-    logger.info("-" * 60)
-
+    # Check messages may contain provider URLs, directory DNs or exception text.
+    log_result = logger.error if overall_status == HealthStatus.FAIL else logger.info
+    log_result(
+        "Authentication health check completed mode=%s status=%s passed=%d warnings=%d",
+        auth_mode,
+        overall_status.value,
+        pass_count,
+        warn_count,
+        extra={"total": len(checks), "failed": fail_count},
+    )
     for check in checks:
-        icon = {
-            HealthStatus.PASS: "✅",
-            HealthStatus.WARN: "⚠️",
-            HealthStatus.FAIL: "❌",
-        }.get(check.status, "?")
-        log_func = {
-            HealthStatus.PASS: logger.info,
-            HealthStatus.WARN: logger.warning,
-            HealthStatus.FAIL: logger.error,
-        }.get(check.status, logger.info)
-
-        duration_str = f" ({check.duration_seconds:.2f}s)" if check.duration_seconds else ""
-        log_func("%s %s: %s%s", icon, check.name, check.message, duration_str)
-
-        if check.error:
-            logger.debug("Error detail: %r", check.error)
-
-    logger.info("-" * 60)
-    logger.info(summary)
-    logger.info("=" * 60)
+        logger.debug(
+            "Authentication health check result check=%s status=%s",
+            check.name,
+            check.status.value,
+            extra={
+                "error_type": type(check.error).__name__ if check.error is not None else None,
+                "duration_ms": (
+                    check.duration_seconds * 1000 if check.duration_seconds is not None else None
+                ),
+            },
+        )
 
     return report
 
@@ -531,28 +524,27 @@ async def run_startup_health_check_or_exit(config: ServerConfig) -> None:
     configuration is valid before starting the server.
     """
     auth_mode = config.get_effective_auth_mode()
-    logger.info(f"[AUTH] Running authentication health check for auth_mode={auth_mode}")
+    print(f"[AUTH] Running authentication health check for auth_mode={auth_mode}", flush=True)
     report = await run_health_check(config, fail_on_warn=False)
 
     for check in report.checks:
-        if check.status == HealthStatus.PASS:
-            logger.info(f"[AUTH] {check.name}: PASS - {check.message}")
-        elif check.status == HealthStatus.WARN:
-            logger.warning(f"[AUTH] {check.name}: WARN - {check.message}")
-        else:
-            logger.error(f"[AUTH] {check.name}: FAIL - {check.message}")
+        destination = sys.stderr if check.status == HealthStatus.FAIL else sys.stdout
+        error_type = f" error_type={type(check.error).__name__}" if check.error is not None else ""
+        print(
+            f"[AUTH] {check.name}: {check.status.value.upper()}{error_type}",
+            file=destination,
+            flush=True,
+        )
 
     if report.overall_status == HealthStatus.FAIL:
-        logger.error("[AUTH] Authentication health check failed, aborting startup")
-        print("\n" + "=" * 60, file=sys.stderr)
-        print("FATAL: AUTHENTICATION HEALTH CHECK FAILED", file=sys.stderr)
-        print("=" * 60, file=sys.stderr)
-        for check in report.checks:
-            if check.status == HealthStatus.FAIL:
-                print(f"  ❌ {check.name}: {check.message}", file=sys.stderr)
-        print("\nPlease fix the configuration issues above and try again.", file=sys.stderr)
+        print("FATAL: AUTHENTICATION HEALTH CHECK FAILED", file=sys.stderr, flush=True)
+        print(
+            "Please check the authentication configuration in ov.conf and try again.",
+            file=sys.stderr,
+            flush=True,
+        )
         sys.exit(1)
     elif report.overall_status == HealthStatus.WARN:
-        logger.warning("[AUTH] Authentication health check passed with warnings")
+        print("[AUTH] Authentication health check passed with warnings", flush=True)
     else:
-        logger.info("[AUTH] Authentication health check passed")
+        print("[AUTH] Authentication health check passed", flush=True)
