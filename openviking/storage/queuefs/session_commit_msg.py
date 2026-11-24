@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Persistent Session Phase 2 queue message."""
 
+import json
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List
 
@@ -21,10 +22,28 @@ class SessionCommitMsg:
     # Resolved custom scalar tags to attach to event memories extracted in this
     # commit. Already normalized by the producer; empty means "no tags".
     event_search_tags: List[str] = field(default_factory=list)
+    # Present only for an explicitly audited archive recovery.  Keeping the
+    # marker in the durable QueueFS payload lets the consumer prove that the
+    # retry still owns the archive before it removes a historical failure
+    # marker or resumes Phase 2.  Older producers/consumers remain compatible
+    # because this field has a default and ``from_dict`` ignores unknown keys.
+    recovery: Dict[str, Any] = field(default_factory=dict)
     auto_commit_policy: Dict[str, Any] = field(default_factory=dict)
+    session_window_context: int = 128_000
+    summary_token_ratio: float = 0.25
+    reasoning_effort: str | None = None
     # Version 1 snapshots explicitly encode WM. Version 0 (before default-off)
     # omitted true; only queued work, never saved user intent, inherits that value.
     memory_policy_version: int = 1
+
+    @property
+    def queue_group_key(self) -> str:
+        """All sessions of one account/user share a streaming-memory consumer."""
+        return json.dumps(
+            [self.user["account_id"], self.user["user_id"]],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

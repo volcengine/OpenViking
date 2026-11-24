@@ -123,17 +123,17 @@ class SessionReplayer:
             [_sanitize_id(self.prefix), _sanitize_id(harness), _sanitize_id(native_session_id)]
         )
 
-    async def reconcile(self, harness: str, ref: SessionRef) -> None:
-        """Resolve a pending batch intent left by a crash before the next read happens."""
+    async def reconcile(self, harness: str, ref: SessionRef) -> bool:
+        """Resolve a pending batch; return False if replay must wait for a count read."""
         rec = self.store.get(harness, ref.native_session_id)
         if not rec or not rec.pending_count or rec.pending_cursor is None:
-            return
+            return True
         sid = self.ov_session_id(harness, ref.native_session_id)
         try:
             count = await self.client.message_count(sid)
         except Exception:  # noqa: BLE001 - leave the intent; retry next time
             logger.warning("[ingest:%s] reconcile read failed for %s", harness, sid)
-            return
+            return False
         if count >= rec.pending_baseline + rec.pending_count:
             # The batch landed before the crash: confirm it without re-appending.
             self.store.confirm_append(
@@ -143,6 +143,7 @@ class SessionReplayer:
         else:
             # It did not land: drop the intent and re-read from the confirmed cursor.
             self.store.clear_pending(harness, ref.native_session_id)
+        return True
 
     async def append_batch(
         self,

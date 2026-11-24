@@ -191,17 +191,6 @@ def _image_query():
 
 
 @pytest.mark.asyncio
-async def test_image_query_through_account_bound_multimodal_embedder(account_embedding_provider):
-    _manager, provider, clients = account_embedding_provider
-    retriever = HierarchicalRetriever(storage=object(), embedder=provider.bind("acc"))
-    retriever._rerank_client = object()
-
-    await retriever.retrieve(_image_query(), ctx=_ctx(), limit=1)
-
-    assert clients[-1].seen == _image_query().embedding_input
-
-
-@pytest.mark.asyncio
 async def test_image_query_capability_follows_account_embedding_config(
     account_embedding_provider,
 ):
@@ -209,7 +198,10 @@ async def test_image_query_capability_follows_account_embedding_config(
     embedder = provider.bind("acc")
     retriever = HierarchicalRetriever(storage=object(), embedder=embedder)
     retriever._rerank_client = object()
-    await retriever.retrieve(_image_query(), ctx=_ctx(), limit=1)
+    query = _image_query()
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=1)
+    assert clients[-1].seen == query.embedding_input
+    assert [hit.uri for hit in result.matched_contexts] == ["viking://resources/photos/cat.png"]
 
     await manager.patch_account(
         "acc",

@@ -42,6 +42,12 @@ export type SearchContextResult = {
   stats?: Record<string, unknown>;
 };
 
+export type RuleSearchResult = {
+  rendered?: string;
+  rules?: unknown[];
+  [key: string]: unknown;
+};
+
 export type SearchContextOptions = {
   sessionId?: string;
   limit?: number;
@@ -484,6 +490,20 @@ export class OpenVikingClient {
     return this.request<FindResult>("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify(body),
+    }, undefined, actorPeerId);
+  }
+
+  async ruleSearch(
+    taskContext: string,
+    ruleProbabilityThreshold: number = 0.65,
+    actorPeerId?: string,
+  ): Promise<RuleSearchResult> {
+    return this.request<RuleSearchResult>("/api/v1/rules/search", {
+      method: "POST",
+      body: JSON.stringify({
+        task_context: taskContext,
+        rule_probability_threshold: ruleProbabilityThreshold,
+      }),
     }, undefined, actorPeerId);
   }
 

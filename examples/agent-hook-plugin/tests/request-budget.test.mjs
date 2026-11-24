@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,12 +51,15 @@ function config(port, env = {}) {
 }
 
 test("every hook.mjs event has a request budget inside the timeout its hooks.json gives it", () => {
-  for (const [client, hostDir] of [["cursor", "cursor"], ["trae", "trae"], ["trae-cn", "trae"], ["zcode", "zcode"]]) {
+  for (const [client, hostDir] of [
+    ["cursor", "cursor"], ["trae", "trae"], ["trae-cn", "trae"], ["zcode", "zcode"],
+    ["codebuddy", "codebuddy"], ["qoder", "qoder"],
+  ]) {
     const { hooks } = JSON.parse(readFileSync(join(ROOT, "hosts", hostDir, "hooks.json"), "utf8"));
     const events = [];
     for (const entry of Object.values(hooks).flat()) {
       for (const leaf of entry.hooks || [entry]) {
-        const event = /scripts\/hook\.mjs (\S+) /u.exec(leaf.command)?.[1];
+        const event = /scripts\/hook\.mjs"? (\S+) /u.exec(leaf.command)?.[1];
         if (!event) continue;
         events.push(event);
         const budget = HOSTS[client].requestBudgets?.[event];
@@ -83,7 +86,7 @@ test("recall stops falling back once the prompt budget is spent", async (t) => {
   assert.deepEqual(server.requests, ["POST /api/v1/search/search", "POST /api/v1/search/recall"]);
 });
 
-test("a capture keeps each request to the request timeout and queues what the stop budget cannot fit", async (t) => {
+test("a capture timeout retains its cursor and does not commit incomplete capture", async (t) => {
   const server = await silentServer(t);
   const cfg = config(server.port);
   const transcript = join(dir, "transcript.jsonl");
@@ -96,17 +99,17 @@ test("a capture keeps each request to the request timeout and queues what the st
     cfg,
     input: { transcript_path: transcript },
     sessionId: "cu-budget",
+    stateFile: join(dir, "budget.json"),
     fetchJSON: withRequestBudget(fetchJSON, 1500, cfg.timeoutMs),
     peerId: "",
     log: () => {},
   };
   const started = Date.now();
-  await HOSTS.cursor.capture(ctx, {}, "preCompact");
+  const state = await HOSTS.cursor.capture(ctx, {}, "preCompact");
   const elapsed = Date.now() - started;
   assert.ok(elapsed < 1500, `capture took ${elapsed}ms`);
   assert.deepEqual(server.requests, ["POST /api/v1/sessions/cu-budget/messages/batch"]);
-  const queued = readdirSync(process.env.OPENVIKING_PENDING_DIR)
-    .map((name) => JSON.parse(readFileSync(join(process.env.OPENVIKING_PENDING_DIR, name), "utf8")).type)
-    .sort();
-  assert.deepEqual(queued, ["addMessage", "addMessage", "commitSession"]);
+  assert.deepEqual(state.capturedHashes, []);
+  assert.equal(state.capturedSinceCommit, 0);
+  assert.equal(existsSync(process.env.OPENVIKING_PENDING_DIR), false);
 });

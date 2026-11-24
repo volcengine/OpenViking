@@ -19,6 +19,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
 
+Once installed, start a new OpenCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
 ### Manual npm install
 
 The published npm package is `@openviking/opencode-plugin`. For a first-time OpenCode config:
@@ -38,7 +40,7 @@ If `~/.config/opencode/opencode.json` already exists, do not overwrite it; only 
 
 OpenCode 2 uses the same package. It calls `setup()`, while OpenCode 1 calls `server()`. OpenCode 2 normalizes `"plugin"` to `"plugins"`, so the installer continues to write the v1/v2-compatible `"plugin"` key; do not rewrite an existing config just for v2.
 
-The plugin also brings its own skills, so there is nothing extra to install: `openviking-memory`, `openviking-skills`, and `ov-experience-memory`, which tell the model when to use which OpenViking tool. OpenCode 1 gets them through the plugin's `config` hook, which adds the plugin's `skills/` directory to `skills.paths`; OpenCode 2 registers that directory with `skill.transform`. The skills come only with the plugin's OpenViking MCP server: they are left out in hook-only mode and when you disable `mcp.openviking`.
+The plugin also brings its own skills, so there is nothing extra to install: `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search`, which tell the model when to use which OpenViking tool, and `ov-memory-doctor`, which diagnoses the plugin install, the client configuration, and the server connection. OpenCode 1 gets them through the plugin's `config` hook, which adds the plugin's `skills/` directory to `skills.paths`; OpenCode 2 registers that directory with `skill.transform`. The skills come only with the plugin's OpenViking MCP server: they are left out in hook-only mode and when you disable `mcp.openviking`.
 
 On OpenCode 2, the plugin sets its MCP server to `codemode: false`, so tools remain directly available as `openviking_*` instead of being folded into Code Mode. OpenCode 2 has no plugin toast API, so service availability notices are written to the plugin log only.
 
@@ -146,6 +148,8 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 ```
 
 ## Troubleshooting
+
+Run the doctor first: `node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs` checks the plugin install, the client configuration, and the server connection, and lists a fix for every problem it finds (`--json`, `--offline`, `--timeout <ms>`, `--no-color`). The npm package ships the same script under `scripts/`, and the `ov-memory-doctor` skill runs it from inside a session.
 
 | Issue | What to check |
 |-------|---------------|

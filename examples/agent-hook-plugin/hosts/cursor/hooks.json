@@ -19,6 +19,12 @@
         "timeout": 5
       }
     ],
+    "afterMCPExecution": [
+      {
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs afterMCPExecution __OPENVIKING_CLIENT_ID__",
+        "timeout": 10
+      }
+    ],
     "stop": [
       {
         "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs stop __OPENVIKING_CLIENT_ID__",

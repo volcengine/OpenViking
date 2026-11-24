@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -40,6 +40,55 @@ test("URI guard emits Kimi's permission decision at the process boundary", async
     "permissionDecisionReason",
   ]);
   assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+});
+
+// Kimi parses each hook entry with a strict schema and drops one that fails it.
+test("every manifest hook entry carries only the keys Kimi accepts", () => {
+  const manifest = JSON.parse(readFileSync(join(ROOT, "hosts", "kimicode", "kimi.plugin.json"), "utf8"));
+  for (const hook of manifest.hooks) {
+    assert.deepEqual(
+      Object.keys(hook).filter((key) => !["event", "matcher", "command", "timeout"].includes(key)),
+      [],
+      hook.event,
+    );
+  }
+});
+
+test("SessionStart replays a bounded batch of queued writes", async (t) => {
+  const replayed = [];
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url.endsWith("/messages")) replayed.push(request.url);
+    request.resume();
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ status: "ok", result: {} }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const home = mkdtempSync(join(tmpdir(), "ov-kimi-replay-"));
+  const pendingDir = join(home, "pending");
+  const env = {
+    HOME: home,
+    KIMI_CODE_HOME: home,
+    OPENVIKING_HOOK_STATE_DIR: join(home, "state"),
+    OPENVIKING_PENDING_DIR: pendingDir,
+    OPENVIKING_PENDING_REPLAY_LIMIT: "",
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+  };
+  const previous = process.env.OPENVIKING_PENDING_DIR;
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
+    else process.env.OPENVIKING_PENDING_DIR = previous;
+  });
+  const { enqueue, listPending } = await import("../../memory-plugin-shared/lib/pending-queue.mjs");
+  for (const text of ["one", "two", "three"]) {
+    await enqueue("addMessage", "kc-queued", { role: "user", content: text });
+  }
+
+  const result = await runHook(["session-start", "kimicode"], { session_id: "session-replay", cwd: home }, env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(replayed.length, 2);
+  assert.equal((await listPending()).length, 1);
 });
 
 test("profile retries until success, emits raw text, then injects only once", async (t) => {
@@ -127,4 +176,45 @@ test("Interrupt shares one two-second request budget across capture and commit",
   assert.equal(result.status, 0, result.stderr);
   assert.ok(elapsed < 2100, `Interrupt took ${elapsed}ms`);
   assert.equal(requests, 1, "commit started after the remaining budget was below one request quantum");
+});
+
+test("SessionEnd commits turns a Stop already sent below the commit threshold", async (t) => {
+  const paths = [];
+  const server = createServer((request, response) => {
+    paths.push(new URL(request.url, "http://localhost").pathname);
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end('{"result":{}}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const home = mkdtempSync(join(tmpdir(), "ov-kimi-session-end-"));
+  const sessionId = "session-end";
+  const sessionDir = join(home, "sessions", "wd", sessionId);
+  mkdirSync(join(sessionDir, "agents", "main"), { recursive: true });
+  writeFileSync(join(home, "session_index.jsonl"), `${JSON.stringify({ sessionId, sessionDir })}\n`);
+  writeFileSync(join(sessionDir, "agents", "main", "wire.jsonl"), [
+    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: "question" }] }),
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: "1", part: { type: "text", text: "answer" } } }),
+  ].join("\n") + "\n");
+  const env = {
+    HOME: home,
+    KIMI_CODE_HOME: home,
+    OPENVIKING_HOOK_STATE_DIR: join(home, "state"),
+    OPENVIKING_PENDING_DIR: join(home, "pending"),
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+    OPENVIKING_WRITE_PATH_ASYNC: "0",
+  };
+  const run = async (event) => {
+    paths.length = 0;
+    const result = await runHook([event, "kimicode"], { session_id: sessionId, cwd: home }, env);
+    assert.equal(result.status, 0, result.stderr);
+    return paths.filter((path) => path.includes("/sessions/"));
+  };
+
+  const stop = await run("stop");
+  assert.ok(stop.some((path) => path.endsWith("/messages/batch")), stop.join(", "));
+  assert.ok(!stop.some((path) => path.endsWith("/commit")), stop.join(", "));
+  assert.deepEqual(await run("session-end"), [`/api/v1/sessions/kc-${sessionId}/commit`]);
+  assert.deepEqual(await run("session-end"), []);
 });

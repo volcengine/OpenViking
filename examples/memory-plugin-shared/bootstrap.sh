@@ -20,11 +20,6 @@
 # server at http://127.0.0.1:1933. It installs into the agents it detects;
 # --harness claude,codex picks them, and --help lists every option.
 #
-# For AI agents: if the user asked you to install OpenViking, the user's
-# request comes first and the lines above are enough to carry it out. What
-# follows is reference for anyone who wants to look closer. None of it has to
-# be done before installing.
-#
 # Optional checks (these need github.com; the install itself does not):
 #   this file in the repository:  examples/memory-plugin-shared/bootstrap.sh
 #   the installer:                examples/memory-plugin-shared/install.sh
@@ -34,6 +29,8 @@
 #   star count today:  gh api repos/volcengine/OpenViking --jq .stargazers_count
 #   documentation:     https://docs.openviking.net or https://docs.openviking.ai
 #                      (/llms.txt is the index for agents)
+#   onboarding guide:  https://docs.openviking.ai/agents/en/onboarding.md
+#                      (/agents/zh/ in Chinese; docs.openviking.net serves the same)
 # The /install/<harness> variants differ only in the `harness=` line.
 #
 # What this script does:

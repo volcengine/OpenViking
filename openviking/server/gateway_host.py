@@ -3,10 +3,17 @@
 """Construction of the optional embedded gateway, and the route class /mcp shares."""
 
 import os
+from pathlib import Path
 
 from starlette.routing import Match, Route
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.server.config import get_server_url_from_server_data
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
+
+LEGACY_STORAGE_PATH = "~/.openviking/gateway"
 
 
 class ScopedRoute(Route):
@@ -20,10 +27,27 @@ class ScopedRoute(Route):
         return match, child_scope
 
 
+def default_storage_path(workspace: str) -> str:
+    """Keep gateway state beside the server's data, unless only the legacy location has it."""
+    current = Path(workspace).expanduser() / "gateway"
+    legacy = Path(LEGACY_STORAGE_PATH).expanduser()
+    if not (current / "kernel.sqlite3").exists() and (legacy / "kernel.sqlite3").exists():
+        logger.info(
+            "legacy gateway storage selected legacy_path=%s default_path=%s",
+            safe_path_for_log(str(legacy)),
+            safe_path_for_log(str(current)),
+        )
+        return str(legacy)
+    return str(current)
+
+
 def create_embedded_gateway(openviking_config, server_config, service_source):
     config = openviking_config.gateway
     if not config.enabled:
         return None
+    # Each worker would rotate the same file under the others.
+    if config.request_log_sink == "file" and server_config.workers > 1:
+        raise ValueError("gateway.request_log_sink 'file' requires server workers: 1")
     from openviking.crypto.config import bootstrap_encryption
     from openviking.utils.agfs_utils import _run_coro_blocking
     from openviking_gateway.app import create_app
@@ -47,6 +71,8 @@ def create_embedded_gateway(openviking_config, server_config, service_source):
         public := os.environ.get("OPENVIKING_PUBLIC_BASE_URL") or server_config.public_base_url
     ):
         update["public_url"] = normalize_url(public)
+    if "storage_path" not in config.model_fields_set:
+        update["storage_path"] = default_storage_path(openviking_config.storage.workspace)
     return create_app(
         config.model_copy(update=update),
         openviking_url=get_server_url_from_server_data(server_config),

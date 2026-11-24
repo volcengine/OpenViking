@@ -3,6 +3,7 @@
 """Gateway management: OV identity and independent object-write authorization."""
 
 import asyncio
+import contextlib
 import copy
 import hmac
 import json
@@ -19,9 +20,17 @@ from pydantic import ValidationError
 from .capture import reset_capture
 from .client import VikingError
 from .config import MOUNT_PATH
-from .models import CaptureReset, KeyRequest, Policy, Upstream, UpstreamTestRequest
+from .models import (
+    CaptureReset,
+    KeyRequest,
+    Policy,
+    Upstream,
+    UpstreamTestRequest,
+    validation_detail,
+)
+from .overview import overview_summary
 from .protocols import text_content
-from .proxy import fill_key, upstream_headers, upstream_key, upstream_url
+from .proxy import default_policy, fill_key, upstream_headers, upstream_key, upstream_url
 from .records import RecordKind as K
 from .storage import delete_account_data, delete_user_data, digest
 from .tool_catalog import select_tools
@@ -112,13 +121,7 @@ async def read_body(request, model, prepare=None):
         payload = await request.json()
         return model.model_validate(prepare(payload) if prepare else payload)
     except ValidationError as error:
-        fail(
-            422,
-            "invalid_configuration",
-            "; ".join(
-                item["msg"] for item in error.errors(include_input=False, include_context=False)
-            ),
-        )
+        fail(422, "invalid_configuration", validation_detail(error))
     except ValueError:
         fail(422, "invalid_configuration")
 
@@ -192,6 +195,56 @@ async def caller(request, *, require_identity=True, write=False):
     return Caller(account, credential, identity, manager, can_write)
 
 
+async def register_user(app, account_id, user_id, ttl=None):
+    """Record a new key's user and lift an earlier deletion of their gateway data."""
+    for protocol in ("anthropic", "chat", "responses"):
+        await app.state.store.allow_scope(digest(account_id + "\0" + user_id + "\0" + protocol))
+    await app.state.management.save(account_id, "users", user_id, {"user_id": user_id}, ttl=ttl)
+
+
+async def refresh_key_record(app, identifier, credential):
+    """Keep the record of an OpenViking key in use, so saving its conversations goes on."""
+    ttl = app.state.config.session_ttl_seconds
+    if credential.get("expires_at", float("inf")) - time.time() >= ttl / 2:
+        return
+    stored = {
+        k: v for k, v in credential.items() if k not in {"account", "id", "expires_at", "revision"}
+    }
+    # The record still holds when this fails; the next request tries again.
+    with contextlib.suppress(Exception):
+        await app.state.management.save(credential["account"], "keys", identifier, stored, ttl=ttl)
+        await register_user(app, credential["account"], credential["user_id"], ttl=ttl)
+
+
+async def openviking_credential(app, key):
+    """Confirm and cache an OpenViking key with its deployment's tenant partition."""
+    identifier = digest("openviking\0" + key)
+    partitioned = app.state.config.tenancy == "key"
+    if credential := await app.state.management.credential(identifier):
+        # A tenancy change moves the key to another partition: confirm it again.
+        if (credential["account"] == "k_" + identifier) == partitioned:
+            await refresh_key_record(app, identifier, credential)
+            return credential
+        await app.state.management.delete(credential["account"], "keys", identifier)
+    identity = await app.state.viking.health(key)
+    account, user_id = identity["account_id"], identity["user_id"]
+    if partitioned:
+        account = "k_" + identifier
+    ttl = app.state.config.session_ttl_seconds
+    stored = {
+        "source": "openviking",
+        "openviking_account": identity["account_id"],
+        "openviking_key": key,
+        "user_id": user_id,
+        # Current keys are "<account>.<user>.<secret>": only the secret tells them apart.
+        "prefix": key.rsplit(".", 1)[-1][:8],
+        "created_at": time.time(),
+    }
+    await app.state.management.save(account, "keys", identifier, stored, ttl=ttl)
+    await register_user(app, account, user_id, ttl=ttl)
+    return await app.state.management.credential(identifier)
+
+
 async def import_vlm_objects(app, account_id):
     """Save the host's VLM candidates as upstreams; a re-import keeps gateway-side edits."""
     management = app.state.management
@@ -248,7 +301,7 @@ def register_management(app):
         who = await caller(request)
         logs = await management.logs(who.account_id, 10000, user_id=who.log_user)
         return {
-            **overview_summary(logs),
+            **overview_summary(logs, time.time()),
             "openviking": app.state.health,
             "log_retention_days": app.state.config.log_retention_days,
         }
@@ -339,9 +392,9 @@ def register_management(app):
         async def delete_object(identifier: str, request: Request):
             who = await caller(request, require_identity=False, write=True)
             count = sum(
-                key["policy_id"] == identifier
+                key.get("policy_id") == identifier
                 if kind == "policies"
-                else identifier in key["upstream_ids"]
+                else identifier in key.get("upstream_ids", [])
                 for key in await management.list(who.account_id, "keys")
             )
             if count:
@@ -436,13 +489,7 @@ def register_management(app):
             "created_at": time.time(),
         }
         result = await management.save(who.account_id, "keys", digest(secret), stored)
-        for protocol in ("anthropic", "chat", "responses"):
-            await store.allow_scope(
-                digest(who.account_id + "\0" + identity["user_id"] + "\0" + protocol)
-            )
-        await management.save(
-            who.account_id, "users", identity["user_id"], {"user_id": identity["user_id"]}
-        )
+        await register_user(app, who.account_id, identity["user_id"])
         return {**public_object("keys", result), "key": secret}
 
     @router.post("/keys/{identifier}/capture/reset")
@@ -493,11 +540,11 @@ def register_management(app):
                 headers.setdefault("anthropic-version", "2023-06-01")
             tools = []
             if upstream.get("allow_gateway_tools", True):
-                policy = await management.get(who.account_id, "policies", "default")
+                policy = await default_policy(management, app.state.config, who.account_id)
                 try:
                     tools = select_tools(
                         await caller_tool_catalog(app, management, who),
-                        policy or Policy().model_dump(),
+                        policy,
                     )
                 except VikingError:
                     pass
@@ -595,6 +642,10 @@ def public_object(kind, value, *, read_only=False):
             value["header_names"] = list(headers)
     if kind == "keys":
         value.pop("openviking_key", None)
+        if value.get("source") == "openviking":
+            # Listed in the shape of an issued key, but it stores no binding: resolve_binding
+            # gives it the account's defaults per request.
+            value.update(name="", policy_id="", upstream_ids=[], models=[])
     return value
 
 
@@ -623,55 +674,3 @@ def keep_upstream_secrets(payload, previous):
             if value or name in stored
         }
     return payload
-
-
-def overview_summary(logs):
-    """Aggregate newest-first request-log records into the management overview."""
-    requests = [log for log in logs if log.get("kind") != "capture"]
-    groups = {}
-    for label, kinds in (("first_call", {"user"}), ("continuation", {"continuation"})):
-        subset = [log for log in requests if log.get("kind") in kinds]
-        total = sum(
-            log.get("first_upstream_input_tokens", log.get("input_tokens", 0)) for log in subset
-        )
-        cached = sum(
-            log.get("first_upstream_cached_tokens", log.get("cached_tokens", 0)) for log in subset
-        )
-        hidden_calls = 0
-        if label == "continuation":
-            total += sum(log.get("hidden_upstream_input_tokens", 0) for log in requests)
-            cached += sum(log.get("hidden_upstream_cached_tokens", 0) for log in requests)
-            hidden_calls = sum(log.get("hidden_upstream_calls", 0) for log in requests)
-        groups[label] = {
-            "requests": len(subset) + hidden_calls,
-            "input_tokens": total,
-            "cached_tokens": cached,
-            "cache_hit_ratio": cached / total if total else 0,
-        }
-    degradations = {}
-    for log in logs:
-        if reason := log.get("degradation"):
-            degradations[reason] = degradations.get(reason, 0) + 1
-    # "disabled" means recall was skipped (off, budget spent or query too short).
-    recalls = [log for log in requests if log.get("recall_reason", "disabled") != "disabled"]
-    capture = {}
-    for log in logs:
-        if log.get("session") and log.get("capture_status"):
-            capture.setdefault((log["session"], log.get("protocol")), log["capture_status"])
-    return {
-        "requests": len(requests),
-        "last_request_at": requests[0].get("time") if requests else None,
-        "output_tokens": sum(log.get("output_tokens", 0) for log in requests),
-        "cache": groups,
-        "degradations": degradations,
-        "recall_count": sum(log.get("recall_count", 0) for log in requests),
-        "recall_requests": len(recalls),
-        "recall_ms": sum(log.get("recall_ms", 0) for log in recalls) / len(recalls)
-        if recalls
-        else 0,
-        "capture_issues": {
-            status: sum(1 for value in capture.values() if value == status)
-            for status in ("retrying", "paused")
-        },
-        "sample_limit": 10000,
-    }

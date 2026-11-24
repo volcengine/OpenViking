@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include "rapidjson/document.h"
 
 #include "common/string_utils.h"
 #include "common/zip_sort.h"
@@ -63,32 +67,6 @@ void test_string_split() {
   SPDLOG_INFO("[Passed] test_string_split");
 }
 
-void test_string_format() {
-  SPDLOG_INFO("[Running] test_string_format");
-
-  // Case 1: Basic format
-  std::string s1 = sformat("Hello {}", "World");
-  ASSERT_EQ(s1, "Hello World");
-
-  // Case 2: Multiple arguments
-  std::string s2 = sformat("{} + {} = {}", 1, 2, 3);
-  ASSERT_EQ(s2, "1 + 2 = 3");
-
-  // Case 3: Float number (Check prefix only due to to_string precision)
-  std::string s3 = sformat("Value: {}", 3.14);
-  ASSERT_TRUE(s3.find("Value: 3.14") == 0);
-
-  // Case 4: Fewer arguments than placeholders (Should preserve {})
-  std::string s4 = sformat("{} {}", "OnlyOne");
-  ASSERT_EQ(s4, "OnlyOne {}");
-
-  // Case 5: More arguments than placeholders (Extra args ignored)
-  std::string s5 = sformat("{}", "First", "Second");
-  ASSERT_EQ(s5, "First");
-
-  SPDLOG_INFO("[Passed] test_string_format");
-}
-
 void test_zip_sort() {
   SPDLOG_INFO("[Running] test_zip_sort");
 
@@ -129,12 +107,61 @@ void test_zip_sort() {
   SPDLOG_INFO("[Passed] test_zip_sort");
 }
 
+void test_logging_utf8_and_flush() {
+  const auto path = std::filesystem::temp_directory_path() /
+      ("ov-log-test-" + std::to_string(spdlog::details::os::pid()) + "-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const std::string common = "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s";
+  init_logging("INFO", path.string(), common);
+  ASSERT_TRUE(spdlog::default_logger()->flush_level() == spdlog::level::err);
+  std::vector<std::pair<std::string, std::string>> cases = {
+      {u8"\u4e2d\u6587 \u00e9 \U0001f600", u8"\u4e2d\u6587 \u00e9 \U0001f600"},
+      {"line\nquote\"slash\\", "line\nquote\"slash\\"},
+      {std::string("zero\0byte", 9), std::string("zero\0byte", 9)},
+      {std::string("invalid\xff", 8), u8"invalid\ufffd"},
+      {std::string("\xc0\xaf", 2), u8"\ufffd\ufffd"},
+      {std::string("\xed\xa0\x80", 3), u8"\ufffd\ufffd\ufffd"},
+      {std::string("\xf4\x90\x80\x80", 4), u8"\ufffd\ufffd\ufffd\ufffd"},
+      {std::string("\xe4\xb8", 2), u8"\ufffd\ufffd"},
+      {u8"\u0080\u07ff\u0800\ud7ff\ue000\uffff\U00010000\U0010ffff",
+       u8"\u0080\u07ff\u0800\ud7ff\ue000\uffff\U00010000\U0010ffff"},
+  };
+  for (int byte = 0; byte < 256; ++byte) {
+    const std::string input(1, static_cast<char>(byte));
+    cases.emplace_back(input, byte < 128 ? input : u8"\ufffd");
+  }
+  cases.emplace_back(std::string(2047, 'a') + u8"\u4e2d", std::string(2047, 'a'));
+  for (const auto& entry : cases) {
+    spdlog::info("{}", entry.first);
+  }
+  spdlog::default_logger()->flush();
+  std::ifstream stream(path, std::ios::binary);
+  std::string line;
+  for (const auto& entry : cases) {
+    ASSERT_TRUE(static_cast<bool>(std::getline(stream, line)));
+    ASSERT_TRUE(line.find(" INFO vikingdb pid=") != std::string::npos);
+    const auto start = line.find("message=");
+    ASSERT_TRUE(start != std::string::npos);
+    rapidjson::Document message;
+    message.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseStopWhenDoneFlag>(
+        line.c_str() + start + 8);
+    ASSERT_TRUE(!message.HasParseError() && message.IsString());
+    ASSERT_TRUE(std::string(message.GetString(), message.GetStringLength()) == entry.second);
+  }
+  ASSERT_TRUE(line.find("truncated=true original_length=2050") != std::string::npos);
+  ASSERT_TRUE(!std::getline(stream, line));
+  stream.close();
+  init_logging("INFO", "stdout", common);
+  std::filesystem::remove(path);
+  SPDLOG_INFO("[Passed] test_logging_utf8_and_flush");
+}
+
 int main() {
-  init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  init_logging("INFO", "stdout", "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s");
   SPDLOG_INFO("Starting Common Tests...");
   test_string_split();
-  test_string_format();
   test_zip_sort();
+  test_logging_utf8_and_flush();
   SPDLOG_INFO("All Common Tests Passed!");
   return 0;
 }

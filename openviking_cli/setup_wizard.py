@@ -43,9 +43,6 @@ _DEFAULT_GLM_MODEL = "glm-4.6v"
 # distinguishes "handled elsewhere" from "cancelled" (None).
 _CUSTOM_SETUP = object()
 
-# Sentinel for "user chose to skip the VLM" (embedding-only setup).
-_SKIP_VLM = object()
-
 # Sentinel for "user navigated back to the previous step" (← key / [0] Back).
 _GO_BACK = object()
 
@@ -622,9 +619,7 @@ def _ensure_codex_auth() -> bool:
             print(f"  {_green('OK')} Codex OAuth stored in {path}")
             return True
 
-    print(
-        f"  {_dim('You can finish setup now and re-run `openviking-server init` later to complete Codex sign-in.')}"
-    )
+    print(f"  {_dim('Complete Codex sign-in before starting OpenViking.')}")
     return False
 
 
@@ -744,7 +739,7 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         "https://ark.cn-beijing.volces.com/api/v3",
         "doubao-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-code-preview-260215",
+        "doubao-seed-2-1-lite-260915",
     ),
     CloudProvider(
         "BytePlus",
@@ -752,7 +747,7 @@ CLOUD_PROVIDERS: list[CloudProvider] = [
         "https://ark.ap-southeast.bytepluses.com/api/v3",
         "skylark-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-code-preview-260215",
+        "seed-2-0-lite-260428",
     ),
     CloudProvider(
         "OpenAI",
@@ -776,14 +771,14 @@ class AccessPlan:
 
 
 # VolcEngine Ark access tiers. The two subscription plans share the same
-# default models; pay-as-you-go keeps the versioned preview models.
+# default models; pay-as-you-go uses the versioned model IDs.
 VOLCENGINE_PLANS: list[AccessPlan] = [
     AccessPlan(
         "Agent Plan",
         "https://ark.cn-beijing.volces.com/api/plan/v3",
         "doubao-embedding-vision",
         1024,
-        "doubao-seed-2.0-lite",
+        "doubao-seed-2.1-lite",
         "(subscription — agent workloads)",
     ),
     AccessPlan(
@@ -791,7 +786,7 @@ VOLCENGINE_PLANS: list[AccessPlan] = [
         "https://ark.cn-beijing.volces.com/api/coding/v3",
         "doubao-embedding-vision",
         1024,
-        "doubao-seed-2.0-lite",
+        "doubao-seed-2.1-lite",
         "(subscription — coding assistants)",
     ),
     AccessPlan(
@@ -799,7 +794,7 @@ VOLCENGINE_PLANS: list[AccessPlan] = [
         "https://ark.cn-beijing.volces.com/api/v3",
         "doubao-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-code-preview-260215",
+        "doubao-seed-2-1-lite-260915",
         "(billed by API usage)",
     ),
 ]
@@ -819,7 +814,7 @@ BYTEPLUS_PLANS: list[AccessPlan] = [
         "https://ark.ap-southeast.bytepluses.com/api/v3",
         "skylark-embedding-vision-251215",
         1024,
-        "doubao-seed-2-0-code-preview-260215",
+        "seed-2-0-lite-260428",
         "(billed by API usage)",
     ),
 ]
@@ -1285,7 +1280,6 @@ def _prompt_custom_vlm(
 
 
 def _prompt_cloud_vlm(
-    allow_skip: bool = False,
     reuse_key: tuple[str, str] | None = None,
     allow_back: bool = False,
     current: dict[str, Any] | None = None,
@@ -1293,8 +1287,7 @@ def _prompt_cloud_vlm(
 ) -> tuple[dict[str, Any] | None | object, bool | None]:
     """VLM provider selection (cloud APIs, subscriptions, or local Ollama).
 
-    Returns ``(vlm_config, ollama_running)``; ``vlm_config`` is None on cancel,
-    the ``_SKIP_VLM`` sentinel when *allow_skip* is set and taken, or
+    Returns ``(vlm_config, ollama_running)``; ``vlm_config`` is None on cancel or
     ``_GO_BACK`` when *allow_back* is set and the user navigated back.
     ``ollama_running`` is only set when the local Ollama option was taken.
     *reuse_key* is an optional ``(provider, api_key)`` from the embedding step,
@@ -1305,8 +1298,6 @@ def _prompt_cloud_vlm(
     """
     current = current or {}
     options = list(_WIZARD_VLM_OPTIONS)
-    if allow_skip:
-        options.append(("Skip for now", "(embedding only — add a VLM later)"))
     default_idx = _vlm_option_index_for(current) if current else 1
 
     # An existing same-provider key takes priority as the reuse candidate.
@@ -1329,9 +1320,6 @@ def _prompt_cloud_vlm(
 
         if vlm_mode == 0:
             return _GO_BACK, None
-
-        if allow_skip and vlm_mode == len(options):
-            return _SKIP_VLM, None
 
         if vlm_mode == _WIZARD_VLM_OLLAMA_CHOICE:
             current_ollama_model = (
@@ -1804,7 +1792,7 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
         if dense.get("provider") == "volcengine" and dense.get("api_base"):
             plan_seed = str(dense["api_base"])
         vlm_config, vlm_ollama = _prompt_cloud_vlm(
-            allow_skip=True, reuse_key=reuse_key, allow_back=True, plan_seed=plan_seed
+            reuse_key=reuse_key, allow_back=True, plan_seed=plan_seed
         )
         if vlm_config is _GO_BACK:
             continue  # back to Step 1
@@ -1813,18 +1801,242 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
         if vlm_ollama is not None:
             ollama_running = vlm_ollama
 
-        if vlm_config is _SKIP_VLM:
-            print(f"\n  {_green('✓')} VLM: {_dim('skipped — add one later with init')}")
-        else:
-            print(f"\n  {_green('✓')} VLM: {_summarize_model(vlm_config)}")
+        print(f"\n  {_green('✓')} VLM: {_summarize_model(vlm_config)}")
 
         config: dict[str, Any] = {
             "storage": {"workspace": _workspace_path()},
             "embedding": {"dense": dense},
+            "vlm": vlm_config,
         }
-        if vlm_config is not _SKIP_VLM:
-            config["vlm"] = vlm_config
         return config, ollama_running
+
+
+def _open_setup_browser(url: str) -> None:
+    """Keep setup usable when the browser must be opened manually."""
+    import webbrowser
+
+    try:
+        opened = webbrowser.open(url)
+    except webbrowser.Error:
+        opened = False
+    if not opened:
+        print(f"  Open this link in your browser: {url}")
+
+
+def _wizard_volcengine() -> dict[str, Any] | object:
+    """Authorize directly in the browser and configure both models."""
+    from openviking_cli.volcengine_setup import (
+        ArkSetupError,
+        VolcengineSetup,
+        activated_models,
+        fetch_models,
+        probe_models,
+    )
+
+    _rule("VolcEngine account setup · 火山账号授权配置")
+    print("  Sign in to VolcEngine in your browser to configure VLM and embedding.")
+    print("  Model activation, real-name verification and billing remain with VolcEngine.")
+    try:
+        if not _stdin_stdout_tty():
+            print(f"  {_yellow('Run this setup in an interactive terminal for browser login.')}")
+            return _GO_BACK
+        plan = _select_access_plan("VolcEngine", VOLCENGINE_PLANS, allow_back=True)
+        if plan is _GO_BACK:
+            return _GO_BACK
+        print(f"  Selected: {plan.label} · {plan.api_base}")
+        scene = "RealAgentPlanPersonal" if "/api/plan/" in plan.api_base else None
+        with VolcengineSetup() as account:
+            authorization = account.start_authorization()
+            browser_url = (
+                authorization.get("verification_uri_complete") or authorization["verification_uri"]
+            )
+            print(f"\n  Authorize OpenViking: {browser_url}")
+            print(f"  Device code: {authorization['user_code']}")
+            print("  Waiting for browser authorization... (Ctrl-C to cancel)", flush=True)
+            _open_setup_browser(browser_url)
+            account.wait_for_authorization(authorization)
+            print(f"  {_green('Authorized. Fetching ' + plan.label + ' API keys...')}")
+            project = "default"
+            while True:
+                try:
+                    keys = account.list_keys(project, scene=scene)
+                    if not keys:
+                        print(f"  No active {plan.label} API key in project {project}.")
+                        console_url = (
+                            "https://ark.volcengine.com/region:cn-beijing/openManagement?advancedActiveKey=agentPlan"
+                            if scene
+                            else "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"
+                        )
+                        print(f"  Create a key in the Ark console: {console_url}")
+                        action = _prompt_choice(
+                            "No API keys found. What next?",
+                            [
+                                ("Create a key in the console", ""),
+                                ("Use another project", ""),
+                                ("Return to setup menu", ""),
+                            ],
+                        )
+                        if action == 3:
+                            return _GO_BACK
+                        if action == 2:
+                            project = _prompt_required_input("Project name", default=project)
+                            if not project:
+                                return _GO_BACK
+                            continue
+                        _open_setup_browser(console_url)
+                        if not _prompt_confirm("Created the key? Fetch it automatically now?"):
+                            return _GO_BACK
+                        continue
+                    if len(keys) == 1:
+                        selected = keys[0]
+                        print(f"  Using API key: {selected.get('Name') or selected['Id']}")
+                    else:
+                        choice = _prompt_choice(
+                            "Choose a model API key:",
+                            [
+                                (str(row.get("Name") or row["Id"]), f"project: {project}")
+                                for row in keys
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        selected = keys[choice - 1]
+                    key = account.api_key(selected)
+                    break
+                except ArkSetupError as exc:
+                    print(f"  {_yellow(str(exc))}")
+                    retry = _prompt_choice(
+                        "Browser authorization is complete. What next?",
+                        [
+                            ("Retry fetching API keys", "(keeps this authorization session)"),
+                            ("Use another project", ""),
+                            ("Return to setup menu", ""),
+                        ],
+                        default=1,
+                    )
+                    if retry == 3:
+                        return _GO_BACK
+                    if retry == 2:
+                        project = _prompt_required_input("Project name", default=project)
+                        if not project:
+                            return _GO_BACK
+            preset = plan
+            while True:
+                try:
+                    models = (
+                        account.agent_plan_models()
+                        if scene == "RealAgentPlanPersonal"
+                        else fetch_models(plan.api_base, key)
+                    )
+                    if "/api/v3" in plan.api_base:
+                        models = activated_models(models, account.model_activations())
+                        print("  Showing only models confirmed activated for this account.")
+                except ArkSetupError as exc:
+                    print(f"  {_yellow(str(exc))}")
+                    if _prompt_confirm("Retry fetching models?", default=False):
+                        continue
+                    return _GO_BACK
+                if not all(
+                    any(m.get("domain") in domains for m in models)
+                    for domains in ({"VLM"}, {"Embedding"})
+                ):
+                    print("  No confirmed usable VLM and Embedding pair in this catalog.")
+                    print("  Models with unknown capabilities or activation are excluded.")
+                    console_url = "https://console.volcengine.com/ark/region:ark+cn-beijing/model"
+                    print(f"  Check model activation in the Ark console: {console_url}")
+                    if _prompt_confirm(
+                        "Open the console to review model activation?", default=False
+                    ):
+                        _open_setup_browser(console_url)
+                        if _prompt_confirm(
+                            "Refresh models after reviewing activation?", default=False
+                        ):
+                            continue
+                    return _GO_BACK
+                selected_models = []
+                for label, domains, recommended in (
+                    ("VLM", {"VLM"}, preset.default_vlm_model),
+                    ("Embedding", {"Embedding"}, preset.default_embedding_model),
+                ):
+                    candidates = [m for m in models if m.get("domain") in domains]
+                    if not candidates:
+                        print(f"  {_yellow('No ' + label + ' models in the selected catalog.')}")
+                        return _GO_BACK
+                    choice = _prompt_choice(
+                        label + " model:",
+                        [
+                            (m["id"], str(m.get("domain") or "capabilities not reported"))
+                            for m in candidates
+                        ],
+                        default=next(
+                            (i for i, m in enumerate(candidates, 1) if m["id"] == recommended), 1
+                        ),
+                        allow_back=True,
+                    )
+                    if choice == 0:
+                        return _GO_BACK
+                    selected_models.append(candidates[choice - 1])
+                vlm_model, embedding_model = (m["id"] for m in selected_models)
+                embedding_input = selected_models[1].get("input")
+                if embedding_input not in ("text", "multimodal"):
+                    if embedding_model == preset.default_embedding_model:
+                        embedding_input = "multimodal"
+                    else:
+                        choice = _prompt_choice(
+                            "Embedding API protocol (check the model documentation):",
+                            [
+                                ("Multimodal", "embeddings/multimodal"),
+                                ("Text", "embeddings"),
+                            ],
+                            allow_back=True,
+                        )
+                        if choice == 0:
+                            return _GO_BACK
+                        embedding_input = "multimodal" if choice == 1 else "text"
+                if embedding_model == preset.default_embedding_model:
+                    dimension = preset.default_embedding_dim
+                    print(f"  Dimension: {dimension} (auto-filled)")
+                else:
+                    while True:
+                        dimension = _prompt_required_int(
+                            "Embedding dimension", default=preset.default_embedding_dim
+                        )
+                        if dimension is None:
+                            return _GO_BACK
+                        if dimension > 0:
+                            break
+                        print(f"  {_red('Embedding dimension must be positive')}")
+                common = {"provider": "volcengine", "api_base": plan.api_base, "api_key": key}
+                config = {
+                    "storage": {"workspace": _workspace_path()},
+                    "embedding": {
+                        "dense": {
+                            **common,
+                            "model": embedding_model,
+                            "dimension": dimension,
+                            "input": embedding_input,
+                        }
+                    },
+                    "vlm": {**common, "model": vlm_model, "max_retries": 2},
+                }
+                if not _prompt_confirm("Test both models now? (two small requests, billed by Ark)"):
+                    print("  Model access has not been verified. You can run doctor after saving.")
+                    return config
+                results = probe_models(config)
+                for label, ok, detail in results:
+                    print(f"  {label}: {detail}" if ok else f"  {_yellow(label + ': ' + detail)}")
+                if all(ok for _, ok, _ in results):
+                    return config
+                print(
+                    "  Check the selected project's key permissions, model activation and balance:"
+                )
+                print("  https://console.volcengine.com/ark/region:ark+cn-beijing/model")
+                if not _prompt_confirm("Retry model selection and verification?", default=False):
+                    return _GO_BACK
+    except ArkSetupError as exc:
+        print(f"  {_yellow(str(exc))}")
+        return _GO_BACK
 
 
 def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -2329,6 +2541,10 @@ def run_init() -> int:
                 ),
                 ("Recommended local setup", "(all-Ollama, sized to your RAM, one confirm)"),
                 ("Manual", "(edit ov.conf directly)"),
+                (
+                    "VolcEngine account setup (火山账号授权配置)",
+                    "(sign in once for VLM & embedding)",
+                ),
             ],
             default=1,
         )
@@ -2342,6 +2558,11 @@ def run_init() -> int:
             config_dict = result  # type: ignore[assignment]
         elif mode == 2:
             config_dict, ollama_running = _wizard_ollama()
+        elif mode == 4:
+            result = _wizard_volcengine()
+            if result is _GO_BACK:
+                continue
+            config_dict = result  # type: ignore[assignment]
         else:
             _wizard_custom()
             return 0

@@ -68,13 +68,6 @@ class SessionCommitProcessor(DequeueHandlerBase):
             if not await session.exists():
                 error = f"Session '{msg.session_id}' no longer exists"
                 tracker = get_task_tracker()
-                await tracker.create(
-                    "session_commit",
-                    resource_id=msg.session_id,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    task_id=msg.task_id,
-                )
                 await tracker.fail(
                     msg.task_id,
                     error,
@@ -82,16 +75,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 return True
-            await session.load()
-            processed = await session.resume_queued_commit(msg)
-            if not processed:
-                from openviking.storage.queuefs import QueueManager, get_queue_manager
-
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    msg.to_dict(),
-                )
-            return processed
+            return await session.resume_queued_commit(msg)
         finally:
             reset_root_observability_context(root_context_token)
 
@@ -124,9 +108,17 @@ class SessionCommitProcessor(DequeueHandlerBase):
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
+        # Failed registration must retain queue work; processing errors remain terminal.
+        await get_task_tracker().create(
+            "session_commit",
+            resource_id=msg.session_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            task_id=msg.task_id,
+        )
         with bind_task_context_from_message(data):
             try:
                 processed = await self._process(msg, ctx)
             except Exception as exc:
                 return ProcessResult.failed(str(exc))
-        return ProcessResult.success() if processed else ProcessResult.requeued()
+        return ProcessResult.success() if processed else ProcessResult.retry()

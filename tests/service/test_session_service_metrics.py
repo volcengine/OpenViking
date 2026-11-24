@@ -25,8 +25,7 @@ async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pyt
     service = SessionService()
     ctx = _make_ctx()
     session = Mock()
-    session.exists = AsyncMock(return_value=False)
-    session.ensure_exists = AsyncMock()
+    session.ensure_exists = AsyncMock(return_value=True)
     debug = Mock()
 
     def _boom(*_args, **_kwargs):
@@ -39,7 +38,6 @@ async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pyt
     result = await service.create(ctx, "sess-1")
 
     assert result is session
-    session.exists.assert_awaited_once()
     session.ensure_exists.assert_awaited_once()
     assert debug.call_count == 2
 
@@ -57,7 +55,7 @@ async def test_commit_async_keeps_working_when_session_metrics_fail(
     def _boom(*_args, **_kwargs):
         raise RuntimeError("metrics failed")
 
-    monkeypatch.setattr(service, "get", AsyncMock(return_value=session))
+    monkeypatch.setattr(service, "open", AsyncMock(return_value=session))
     monkeypatch.setattr(SessionLifecycleDataSource, "record_lifecycle", staticmethod(_boom))
     monkeypatch.setattr(SessionLifecycleDataSource, "record_archive", staticmethod(_boom))
     monkeypatch.setattr(session_service_module.logger, "debug", debug)
@@ -87,7 +85,7 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
 
 
 @pytest.mark.asyncio
-async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility():
+async def test_sessions_uses_canonical_scope():
     service = SessionService(viking_fs=Mock())
     ctx = _make_ctx()
 
@@ -97,11 +95,6 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
         return [
             {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
             {"name": "new-session", "isDir": True, "modTime": "2026-07-13T02:00:00Z"},
-            {
-                "name": "legacy-session",
-                "isDir": True,
-                "modTime": "2026-07-12T01:00:00Z",
-            },
         ]
 
     service._viking_fs.ls = AsyncMock(side_effect=_ls)
@@ -121,12 +114,6 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
             "is_dir": True,
             "mod_time": "2026-07-13T02:00:00Z",
         },
-        {
-            "session_id": "legacy-session",
-            "uri": "viking://user/alice/sessions/legacy-session",
-            "is_dir": True,
-            "mod_time": "2026-07-12T01:00:00Z",
-        },
     ]
     service._viking_fs.ls.assert_awaited_once()
 
@@ -143,13 +130,10 @@ async def test_user_memory_policy_prefers_user_setting_and_falls_back_to_server_
         "self": {"enabled": True},
         "peer": {"enabled": True},
         "memory_types": ["profile"],
+        "working_memory": {"enabled": False},
     }
 
     viking_fs.read_file = AsyncMock(
         return_value=json.dumps({"memory_policy": {"memory_types": ["events"]}})
     )
-    assert await service._get_user_memory_policy(ctx) == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "memory_types": ["events"],
-    }
+    assert await service._get_user_memory_policy(ctx) == {"memory_types": ["events"]}

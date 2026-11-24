@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.http_collection import (
     HttpCollection,
@@ -9,7 +10,9 @@ from openviking.storage.vectordb.collection.http_collection import (
     list_vikingdb_collections,
 )
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_or_create_http_project(
@@ -65,13 +68,15 @@ class HttpProject:
             )
 
             if not collections_data:
-                logger.info(f"No collections found in remote project: {self.project_name}")
+                logger.debug(
+                    "No collections found in remote project: %s", short_hash(str(self.project_name))
+                )
                 return
 
             # Create proxy objects for each collection
             for collection_name in collections_data:
                 try:
-                    logger.info(f"Loading remote collection: {collection_name}")
+                    logger.debug("Loading remote collection: %s", short_hash(str(collection_name)))
 
                     # Create HTTP collection directly
                     meta_data = {
@@ -86,13 +91,20 @@ class HttpProject:
                     # Wrap in Collection interface
                     collection = Collection(http_collection)
                     self.collections.set(collection_name, collection)
-                    logger.info(f"Successfully loaded remote collection: {collection_name}")
+                    logger.debug(
+                        "Successfully loaded remote collection: %s",
+                        short_hash(str(collection_name)),
+                    )
                 except Exception as e:
-                    logger.error(f"Failed to load remote collection {collection_name}: {e}")
+                    logger.debug(
+                        "Failed to load remote collection %s: %s",
+                        short_hash(str(collection_name)),
+                        type(e).__name__,
+                    )
                     continue
 
         except Exception as e:
-            logger.error(f"Failed to load collections from remote server: {e}")
+            logger.error("Failed to load collections from remote server: %s", type(e).__name__)
 
     def close(self):
         """Close project and release all collection resources"""
@@ -160,8 +172,9 @@ class HttpProject:
             ValueError: If collection already exists
         """
         if self.has_collection(collection_name):
-            logger.warning(
-                f"Collection {collection_name} already exists, returning existing collection"
+            logger.info(
+                "Collection %s already exists, returning existing collection",
+                short_hash(str(collection_name)),
             )
             return self.get_collection(collection_name)
 
@@ -172,7 +185,7 @@ class HttpProject:
             "ProjectName": self.project_name,
         }
 
-        logger.info(f"Creating remote collection: {collection_name}")
+        logger.debug("Creating remote collection: %s", short_hash(str(collection_name)))
         collection = get_or_create_http_collection(
             host=self.host, port=self.port, meta_data=updated_meta
         )
@@ -204,4 +217,4 @@ class HttpProject:
         collection = self.collections.remove(collection_name)
         if collection:
             collection.drop()
-            logger.info(f"Dropped remote collection: {collection_name}")
+            logger.debug("Dropped remote collection: %s", short_hash(str(collection_name)))

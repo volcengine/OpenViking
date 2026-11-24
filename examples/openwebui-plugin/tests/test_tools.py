@@ -9,6 +9,8 @@ headers, and returns a payload matching its Pydantic model.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -202,7 +204,38 @@ async def test_error_pass_through(client: httpx.AsyncClient) -> None:
     assert body["detail"]["error"]["code"] == "NOT_FOUND"
 
 
-async def test_openapi_lists_seven_tools(client: httpx.AsyncClient) -> None:
+@respx.mock
+async def test_rule_search_preserves_rules_and_identity(client: httpx.AsyncClient) -> None:
+    rendered = "完整规则\n" * 17000 + "LAST RULE"
+    route = respx.post("http://ov.test/api/v1/rules/search").mock(
+        return_value=httpx.Response(200, json={"status": "ok", "result": {"rendered": rendered}})
+    )
+    body = {"task_context": "deploy", "rule_probability_threshold": 0}
+    response = await client.post("/tools/ov_rule_search", json=body)
+    assert response.status_code == 200
+    assert response.json() == rendered
+    _assert_headers(route.calls.last.request)
+    assert json.loads(route.calls.last.request.content) == body
+
+
+@respx.mock
+async def test_rule_search_errors_are_not_empty_rules(client: httpx.AsyncClient) -> None:
+    route = respx.post("http://ov.test/api/v1/rules/search").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "judge unavailable"}})
+    )
+    response = await client.post("/tools/ov_rule_search", json={"task_context": "deploy"})
+    assert response.status_code == 503
+    route.mock(return_value=httpx.Response(200, json={"status": "ok", "result": {}}))
+    response = await client.post("/tools/ov_rule_search", json={"task_context": "deploy"})
+    assert response.status_code == 502
+    response = await client.post(
+        "/tools/ov_rule_search", json={"task_context": "deploy", "rule_probability_threshold": 2}
+    )
+    assert response.status_code == 422
+    assert route.call_count == 2
+
+
+async def test_openapi_lists_eight_tools(client: httpx.AsyncClient) -> None:
     resp = await client.get("/openapi.json")
     assert resp.status_code == 200
     spec = resp.json()
@@ -214,6 +247,7 @@ async def test_openapi_lists_seven_tools(client: httpx.AsyncClient) -> None:
     }
     expected = {
         "ov_search",
+        "ov_rule_search",
         "ov_recall_memories",
         "ov_add_memory",
         "ov_list_memories",

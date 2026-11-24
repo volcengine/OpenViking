@@ -4,15 +4,15 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from openviking.server.identity import Role
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Mapping source types
 SourceType = Literal["claim", "attribute", "dn_attribute", "fixed", "composite"]
@@ -140,18 +140,18 @@ class IdentityMapper:
                         v = claims.get(claim)
                         if v is not None:
                             value = str(v)
-                            logger.debug("Found value from claim '%s': %s", claim, value[:50] if len(value) > 50 else value)
+                            logger.debug("Identity value extracted from claim")
                             break
             elif hasattr(source, "claim") and source.claim:
                 v = claims.get(source.claim)
                 if v is not None:
                     value = str(v)
-                    logger.debug("Found value from claim '%s': %s", source.claim, value[:50] if len(value) > 50 else value)
+                    logger.debug("Identity value extracted from claim")
         elif source.source == "attribute" and attributes is not None:
             if hasattr(source, "attribute") and source.attribute:
                 value = attributes.get(source.attribute)
                 if value:
-                    logger.debug("Found value from attribute '%s': %s", source.attribute, value[:50] if len(value) > 50 else value)
+                    logger.debug("Identity value extracted from LDAP attribute")
         elif source.source == "dn_attribute" and dn is not None:
             # Extract attribute from DN (e.g., "ou=engineering,dc=example,dc=com" -> "engineering")
             if hasattr(source, "attribute") and source.attribute:
@@ -160,7 +160,7 @@ class IdentityMapper:
                 match = re.search(pattern, dn, re.IGNORECASE)
                 if match:
                     value = match.group(1)
-                    logger.debug("Found value from DN attribute '%s': %s", source.attribute, value)
+                    logger.debug("Identity value extracted from DN attribute")
         elif source.source == "composite" and hasattr(source, "parts") and source.parts:
             # Build composite value from parts
             parts: List[str] = []
@@ -174,13 +174,13 @@ class IdentityMapper:
                         parts.append(part_value)
             value = "".join(parts) if parts else None
             if value:
-                logger.debug("Composite value: %s", value[:50] if len(value) > 50 else value)
+                logger.debug("Composite identity value assembled")
 
         # Apply fallback if needed
         if value is None and hasattr(source, "fallback"):
             value = source.fallback
             if value:
-                logger.debug("Using fallback value: %s", value)
+                logger.debug("Using configured identity fallback")
 
         if value is None:
             logger.debug("No value extracted from source: %s", source.source)
@@ -194,15 +194,17 @@ class IdentityMapper:
                     group_idx = source.regex_group if hasattr(source, "regex_group") else 1
                     if len(match.groups()) >= group_idx:
                         value = match.group(group_idx)
-                        logger.debug("Applied regex, extracted: %s", value)
+                        logger.debug("Identity regex extraction matched")
             except re.error as e:
-                logger.warning("Invalid regex pattern '%s': %s", source.regex, e)
+                logger.info(
+                    "Invalid identity regex; continuing without extraction",
+                    extra={"error_type": type(e).__name__},
+                )
 
         # Apply value mapping
         if hasattr(source, "mapping") and source.mapping and value in source.mapping:
-            old_value = value
             value = source.mapping[value]
-            logger.debug("Mapped value '%s' to '%s'", old_value, value)
+            logger.debug("Configured identity value mapping matched")
 
         # Apply prefix
         if hasattr(source, "prefix") and source.prefix:
@@ -229,12 +231,14 @@ class IdentityMapper:
         """Map account ID from external identity."""
         # Log available data for debugging
         if claims:
-            logger.debug("Available claims for account_id mapping: %s", list(claims.keys()))
+            logger.debug("Claims available for account mapping", extra={"total": len(claims)})
         if attributes:
-            logger.debug("Available attributes for account_id mapping: %s", list(attributes.keys()))
+            logger.debug(
+                "LDAP attributes available for account mapping", extra={"total": len(attributes)}
+            )
         if dn:
-            logger.debug("DN available for account_id mapping: %s", dn)
-        
+            logger.debug("DN available for account mapping")
+
         value = self._extract_value(
             self.config.account_id, claims, attributes, dn, groups
         )
@@ -244,7 +248,7 @@ class IdentityMapper:
                 f"Available claims: {list(claims.keys()) if claims else []}, "
                 f"Available attributes: {list(attributes.keys()) if attributes else []}"
             )
-        logger.debug("Mapped account_id: %s", value)
+        logger.debug("External account identity mapped")
         return value
 
     def map_user_id(
@@ -257,10 +261,12 @@ class IdentityMapper:
         """Map user ID from external identity."""
         # Log available data for debugging
         if claims:
-            logger.debug("Available claims for user_id mapping: %s", list(claims.keys()))
+            logger.debug("Claims available for user mapping", extra={"total": len(claims)})
         if attributes:
-            logger.debug("Available attributes for user_id mapping: %s", list(attributes.keys()))
-        
+            logger.debug(
+                "LDAP attributes available for user mapping", extra={"total": len(attributes)}
+            )
+
         value = self._extract_value(
             self.config.user_id, claims, attributes, dn, groups
         )
@@ -270,7 +276,7 @@ class IdentityMapper:
                 f"Available claims: {list(claims.keys()) if claims else []}, "
                 f"Available attributes: {list(attributes.keys()) if attributes else []}"
             )
-        logger.debug("Mapped user_id: %s", value)
+        logger.debug("External user identity mapped")
         return value
 
     def map_role(
@@ -284,11 +290,11 @@ class IdentityMapper:
         role_config = self.config.role
 
         if role_config.source == "fixed" and role_config.value:
-            logger.debug("Using fixed role: %s", role_config.value)
+            logger.debug("Using fixed role mapping")
             return Role(role_config.value)
 
         if groups:
-            logger.debug("Available groups for role mapping: %s", groups[:5])  # Log first 5 groups
+            logger.debug("Groups available for role mapping", extra={"total": len(groups)})
 
         value: Optional[str] = None
         if role_config.source in ("claim", "attribute"):
@@ -302,14 +308,14 @@ class IdentityMapper:
             if value is not None:
                 if role_config.mapping and value in role_config.mapping:
                     role_str = role_config.mapping[value]
-                    logger.debug("Mapped role from value '%s': %s", value, role_str)
+                    logger.debug("Configured role value mapping matched")
                     return Role(role_str)
                 # Try direct role name
                 try:
-                    logger.debug("Trying direct role name: %s", value.lower())
+                    logger.debug("Trying direct role mapping")
                     return Role(value.lower())
                 except (ValueError, AttributeError):
-                    logger.debug("Direct role mapping failed for value '%s'", value)
+                    logger.debug("External value did not match a role")
                     pass
 
         if role_config.source == "group_membership" and groups and role_config.group_mapping:
@@ -317,8 +323,8 @@ class IdentityMapper:
             logger.debug("Checking group membership for role mapping")
             for group, role_str in role_config.group_mapping.items():
                 if group in groups:
-                    logger.debug("Found role '%s' from group membership: %s", role_str, group)
+                    logger.debug("Configured group membership role mapping matched")
                     return Role(role_str)
 
-        logger.debug("Using default role: %s", role_config.default)
+        logger.debug("Using configured default role mapping")
         return Role(role_config.default)

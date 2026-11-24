@@ -210,15 +210,19 @@ def test_retry_vlm_delegates_token_tracker_and_close():
     assert inner.closed is True
 
 
-def test_vlm_config_switches_model_after_primary_not_found():
+@pytest.mark.parametrize(
+    ("status_code", "code"),
+    [(404, "model_not_found"), (429, "credit_balance_exhausted")],
+)
+def test_vlm_config_switches_model_after_primary_failure(status_code, code):
     calls = []
 
     def handler(request):
         calls.append(request.url.host)
         if request.url.host == "primary.example.test":
             return httpx.Response(
-                404,
-                json={"error": {"code": "model_not_found", "message": "Model does not exist"}},
+                status_code,
+                json={"error": {"code": code, "message": "Primary model unavailable"}},
             )
         assert request.url.host == "backup.example.test"
         return httpx.Response(

@@ -1,0 +1,285 @@
+name: Vika Release
+
+# Tests, builds and publishes Vika (vika/) to the TOS release bucket, laid out
+# the way its installer and updater read it:
+#   <prefix>/releases/<version>/  vika-<version>-<platform>.tar.gz (+ .sha256),
+#                                 install.sh, and release.json, uploaded last
+#   <prefix>/install.sh, <prefix>/latest  written last, only for an
+#                                         openviking-vika@X.Y.Z tag newer than
+#                                         latest and without a "-"
+# A pull request that touches vika/ tests and builds linux-x64 and publishes
+# nothing. A manual run publishes the chosen branch as <version>-<commit>, a
+# preview that `latest` never points to.
+#
+# The tag must not start with v: v*.*.* pushes and releases of v* tags run the
+# main package workflows (docker image, PyPI, TOS release assets).
+
+on:
+  push:
+    tags: ["openviking-vika@*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to build"
+        type: choice
+        options: [all, linux-x64]
+        default: all
+  pull_request:
+    paths:
+      - "vika/**"
+
+permissions:
+  contents: read
+
+# Only pull request runs replace each other; a publishing run is never cancelled.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('vika-release-{0}', github.ref) || format('vika-release-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Public address of the published tree: release.json and the installer carry
+  # it, and the updater reads <base>/latest from it.
+  VIKA_DOWNLOAD_BASE: ${{ vars.VIKA_DOWNLOAD_BASE || 'https://ovrelease.tos-cn-beijing.volces.com/vika' }}
+  # Key prefix of the same tree in the bucket.
+  VIKA_TOS_PREFIX: ${{ vars.VIKA_TOS_PREFIX || 'vika' }}
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: vika
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: vika/package-lock.json
+
+      - name: Validate release tag
+        if: github.event_name == 'push'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "openviking-vika@$PACKAGE_VERSION"
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+
+      - name: Build release archives
+        env:
+          PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux-x64' || inputs.platforms || 'all' }}
+          DIST: ${{ runner.temp }}/vika-dist
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          if [ "$PLATFORMS" = all ]; then set -- --all; else set -- --platform "$PLATFORMS"; fi
+          # A tag names the version; any other run builds <package version>-<commit>.
+          if [ -n "$RELEASE_TAG" ]; then set -- "$@" --version "${RELEASE_TAG#openviking-vika@}"; fi
+          node scripts/build-release.mjs "$@" --download-base "$VIKA_DOWNLOAD_BASE" --out "$DIST"
+          sed "s|__VIKA_DOWNLOAD_BASE__|$VIKA_DOWNLOAD_BASE|" scripts/install.sh > "$DIST/install.sh"
+
+      # What the updater checks before it switches a machine to a release: the
+      # bundled Node starts here and the bundled Pi is the pinned version.
+      - name: Smoke-test the linux-x64 archive
+        env:
+          DIST: ${{ runner.temp }}/vika-dist
+        run: |
+          VERSION="$(jq -r .version "$DIST/release.json")"
+          NAME="vika-$VERSION-linux-x64"
+          (cd "$DIST" && sha256sum -c "$NAME.tar.gz.sha256")
+          mkdir -p "$RUNNER_TEMP/smoke"
+          tar -xzf "$DIST/$NAME.tar.gz" -C "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke/$NAME"
+          node/bin/node packages/daemon/scripts/check-pi.mjs
+          node/bin/node packages/cli/bin/vika.mjs --version
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vika-dist
+          path: ${{ runner.temp }}/vika-dist
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Publish to TOS
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: vika-release
+    permissions:
+      contents: write
+    # Publishing runs one at a time, in order, and none is dropped: two runs of
+    # one version would otherwise both find it unpublished and mix their files.
+    concurrency:
+      group: vika-publish
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vika-dist
+          path: dist
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install AWS CLI
+        run: |
+          python -m pip install --upgrade awscli
+          aws configure set default.s3.addressing_style virtual
+
+      - name: Upload to TOS
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TOS_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_RELEASE_BUCKET }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+          IS_RELEASE: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION TOS_BUCKET TOS_ENDPOINT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::TOS is not configured: ${name} is empty"
+              exit 1
+            fi
+          done
+          TOS_ENDPOINT="${TOS_ENDPOINT#https://}"
+          TOS_ENDPOINT="${TOS_ENDPOINT#http://}"
+          case "${TOS_ENDPOINT}" in
+            tos-s3-*) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+            tos-*) TOS_S3_ENDPOINT="tos-s3-${TOS_ENDPOINT#tos-}" ;;
+            *) TOS_S3_ENDPOINT="${TOS_ENDPOINT}" ;;
+          esac
+          IMMUTABLE="public, max-age=31536000, immutable"
+          NO_CACHE="no-store, no-cache, must-revalidate, max-age=0"
+          TEXT="text/plain; charset=utf-8"
+
+          upload() {
+            disposition=()
+            case "$3" in text/*) disposition=(--content-disposition inline) ;; esac
+            aws s3 cp "$1" "s3://${TOS_BUCKET}/$2" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+              --content-type "$3" \
+              --cache-control "$4" \
+              ${disposition[@]+"${disposition[@]}"} \
+              --only-show-errors
+            echo "Uploaded $2"
+          }
+
+          # fetch <key> <file> succeeds when it downloads the key and fails when
+          # the key does not exist. Any other error stops the run, so a failed
+          # read never passes for a missing object.
+          fetch() {
+            local output
+            if output="$(aws s3 cp "s3://${TOS_BUCKET}/$1" "$2" \
+              --endpoint-url "https://${TOS_S3_ENDPOINT}" --only-show-errors 2>&1)"; then
+              return 0
+            fi
+            if grep -q '(404)' <<<"${output}"; then
+              return 1
+            fi
+            echo "::error::Cannot read $1: ${output}"
+            exit 1
+          }
+
+          VERSION="$(jq -r .version dist/release.json)"
+          DIR="${VIKA_TOS_PREFIX}/releases/${VERSION}"
+          # A version is published once, and its release.json goes up last.
+          # Finding this run's own release.json means the job is re-run after a
+          # later step failed: the files are in place and the rest goes on. Any
+          # other release.json belongs to a different build of the version.
+          UPLOADED=false
+          if fetch "${DIR}/release.json" published-release.json; then
+            if ! cmp -s published-release.json dist/release.json; then
+              echo "::error::Vika ${VERSION} is published already"
+              exit 1
+            fi
+            UPLOADED=true
+            echo "Vika ${VERSION} is uploaded already; finishing its release"
+          fi
+
+          # `latest` only moves forward and never to a pre-release (a version
+          # with a "-"): a hotfix on an older line or a release candidate gets
+          # its own directory and leaves every installed Vika where it is.
+          # Writing the version `latest` holds already is a re-run's no-op.
+          MOVE_LATEST=false
+          CURRENT=""
+          if [ "${IS_RELEASE}" = true ]; then
+            if fetch "${VIKA_TOS_PREFIX}/latest" current-latest; then
+              CURRENT="$(tr -d ' \r\n' < current-latest)"
+            fi
+            case "${VERSION}" in
+              *-*) ;;
+              *)
+                NEWEST="$(printf '%s\n%s\n' "${CURRENT}" "${VERSION}" | sort -V | tail -n 1)"
+                if [ "${NEWEST}" = "${VERSION}" ]; then
+                  MOVE_LATEST=true
+                fi
+                ;;
+            esac
+          fi
+
+          if [ "${UPLOADED}" = false ]; then
+            for archive in dist/*.tar.gz; do
+              upload "${archive}" "${DIR}/$(basename "${archive}")" application/gzip "${IMMUTABLE}"
+              upload "${archive}.sha256" "${DIR}/$(basename "${archive}").sha256" "${TEXT}" "${IMMUTABLE}"
+            done
+            upload dist/install.sh "${DIR}/install.sh" "${TEXT}" "${IMMUTABLE}"
+            upload dist/release.json "${DIR}/release.json" application/json "${IMMUTABLE}"
+          fi
+          if [ "${MOVE_LATEST}" = true ]; then
+            printf '%s\n' "${VERSION}" > latest
+            upload dist/install.sh "${VIKA_TOS_PREFIX}/install.sh" "${TEXT}" "${NO_CACHE}"
+            upload latest "${VIKA_TOS_PREFIX}/latest" "${TEXT}" "${NO_CACHE}"
+          fi
+
+          {
+            echo "## Vika ${VERSION}"
+            if [ "${MOVE_LATEST}" = true ]; then
+              echo '```sh'
+              echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/install.sh | sh"
+              echo '```'
+            else
+              if [ "${IS_RELEASE}" = true ]; then
+                echo "\`latest\` stays at ${CURRENT}: ${VERSION} is a pre-release or older. Install it with"
+              else
+                echo "Preview: \`latest\` is unchanged. Install it with"
+              fi
+              echo '```sh'
+              echo "curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}"
+              echo '```'
+              echo "then \`vika restart\` on a machine that already runs Vika; \`vika upgrade all\` returns it to the latest release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Not marked as the repository's latest release, which stays OpenViking's.
+      # A re-run completes the assets of a release an earlier attempt created.
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+            exit 0
+          fi
+          VERSION="$(jq -r .version dist/release.json)"
+          PRERELEASE=()
+          case "${VERSION}" in *-*) PRERELEASE=(--prerelease) ;; esac
+          gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 dist/release.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --latest=false \
+            ${PRERELEASE[@]+"${PRERELEASE[@]}"} \
+            --title "Vika ${VERSION}" \
+            --notes "Install this version: \`curl -fsSL ${VIKA_DOWNLOAD_BASE}/releases/${VERSION}/install.sh | sh -s -- --version ${VERSION}\`"

@@ -1041,7 +1041,7 @@ async def test_index_resource_skips_session_namespace(monkeypatch):
         ),
     )
     await embedding_utils.index_resource(
-        uri="viking://session/default/sess_001/history/archive_001",
+        uri="viking://user/default/sessions/sess_001/history/archive_001",
         ctx=DummyReq(),
     )
 

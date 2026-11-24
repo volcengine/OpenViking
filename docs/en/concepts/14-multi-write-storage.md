@@ -27,12 +27,17 @@ created. Existing accounts keep their persisted partition count and routes when
 the configuration changes. Partition expansion and shrinking are not supported
 in this release.
 
-## First Enable Import
+## First Enable
 
-When `.multiwrite.json` is absent, startup creates it as `V2/migrating`,
-starts foreground V2 event submission, and imports the current primary files
-in the background. Successful import changes the status to `stable`. Extra
-old files on backups are not removed.
+When `.multiwrite.json` is absent, startup creates it as `V2/migrating` and
+starts foreground V2 event submission. If `reconcile_existing_data=true`,
+startup scans current primary files and records them in V2 metadata. After
+initialization and optional reconciliation succeed, the status changes to
+`stable`. Extra old files on backups are not removed.
+
+With the default `reconcile_existing_data=false`, pre-existing primary files are
+not recorded as V2 write events. Use it only when backups are already aligned or
+historical backfill is intentionally skipped.
 
 Old multi-write protocols and old migration fields are rejected. They are not
 converted or interpreted.

@@ -2,6 +2,8 @@
 
 The Agent Evolution API reports trajectories linked to a successful read of a specific Experience and their outcome distribution. These operations are currently available through HTTP only. A read establishes the link; it does not prove that the Agent followed the Experience or that the Experience caused an outcome.
 
+The plugin must use `add message` to record a successful OpenViking `read` in the Session, and the `session commit` containing that record must produce a trajectory. `viking://~/memories/experiences/...` resolves to the Session owner's space. Automatic recall and hook injection do not count as explicit reads. A commit that produces no trajectories does not increase the application trajectory count. Accordingly, `total` counts linked trajectories, not `read` calls.
+
 ## API Reference
 
 ### List Experience application trajectories

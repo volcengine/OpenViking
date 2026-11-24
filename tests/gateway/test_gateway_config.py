@@ -7,7 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from openviking.crypto import FileEncryptor
-from openviking_gateway import cli
+from openviking_gateway import cli, protocols
+from openviking_gateway.app import create_app
 from openviking_gateway.cli import load_config
 from openviking_gateway.client import VikingError
 from openviking_gateway.config import (
@@ -31,6 +32,7 @@ def clean_environment(monkeypatch, tmp_path):
 
 
 def test_removed_fields_are_ignored_with_one_warning(caplog):
+    caplog.set_level("INFO", logger="openviking_gateway.config")
     legacy = {
         "enabled": True,
         "url": "http://127.0.0.1:1935",
@@ -40,14 +42,21 @@ def test_removed_fields_are_ignored_with_one_warning(caplog):
     }
     config = EmbeddedGatewayConfig.model_validate(legacy)
     assert config.enabled
-    assert "Ignoring removed gateway settings encryption_key_env, port, url, workers" in caplog.text
+    assert len(caplog.records) == 1 and caplog.records[0].skipped == 4
     caplog.clear()
     StandaloneGatewayConfig(openviking_url="http://localhost:1933", encryption_key_env="MY_KEY")
-    assert "Ignoring removed gateway settings encryption_key_env" in caplog.text
+    assert len(caplog.records) == 1 and caplog.records[0].skipped == 1
     with pytest.raises(ValidationError):
         EmbeddedGatewayConfig.model_validate({"enabled": True, "urll": "typo"})
     with pytest.raises(ValidationError):
         StandaloneGatewayConfig(openviking_url="http://localhost:1933", url="http://other")
+
+
+def test_session_ttl_ignores_legacy_days_and_rejects_under_an_hour():
+    assert GatewayConfig(session_ttl_days=7).session_ttl_seconds == 86400
+    assert GatewayConfig(session_ttl_seconds=7200).session_ttl_seconds == 7200
+    with pytest.raises(ValidationError):
+        GatewayConfig(session_ttl_seconds=600)
 
 
 def test_standalone_requires_own_url_and_rejects_server_config():
@@ -104,6 +113,36 @@ def test_embedded_environment_overrides_ov_conf(monkeypatch):
     assert config.storage_path == "/data/gateway"
     # A server whose ov.conf has no gateway section builds the default the same way.
     assert EmbeddedGatewayConfig().management_key == "e" * 32
+
+
+def test_client_rules_validation_and_environment(monkeypatch):
+    with pytest.raises(ValidationError, match="invalid regex"):
+        GatewayConfig(client_rules={"auxiliary_patterns": {"add": ["Summarize (this"]}})
+    with pytest.raises(ValidationError, match="tag names"):
+        GatewayConfig(client_rules={"noise_tags": {"add": ["a>b"]}})
+    with pytest.raises(ValidationError):
+        GatewayConfig(client_rules={"auxiliary_patterns": ["replaces the list"]})
+    rules = {"auxiliary_patterns": {"add": ["You are the Acme title writer"]}}
+    monkeypatch.setenv("OPENVIKING_GATEWAY_CLIENT_RULES", json.dumps(rules))
+    config = EmbeddedGatewayConfig.model_validate({"enabled": True})
+    assert config.client_rules.auxiliary_patterns.add == ["You are the Acme title writer"]
+
+
+def test_app_applies_client_rules_and_warns_about_stale_removals(tmp_path, caplog):
+    caplog.set_level("INFO", logger="openviking_gateway.app")
+    config = GatewayConfig(
+        storage_path=str(tmp_path),
+        client_rules={
+            "auxiliary_patterns": {"add": ["Acme title writer"], "remove": ["Old packaged rule"]}
+        },
+    )
+    try:
+        create_app(config, openviking_url="http://ov.test")
+        assert "Acme title writer" in protocols.AUXILIARY_PATTERNS
+        assert len(caplog.records) == 1 and caplog.records[0].skipped == 1
+        assert "Old packaged rule" not in caplog.text
+    finally:
+        protocols.configure_rules()
 
 
 def test_standalone_config_file_and_env_precedence(tmp_path, monkeypatch):

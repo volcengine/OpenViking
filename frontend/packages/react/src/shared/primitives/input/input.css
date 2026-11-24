@@ -1,0 +1,151 @@
+/* Visual rules adapted from theme-ve-o-aml-design@0.0.36 (MIT), not Arco's default skin. */
+.ov-input,
+.ov-textarea {
+  --ov-ui-input-height: 32px;
+  --ov-ui-input-bg: var(--ov-ui-color-bg-white, var(--ov-ui-bg-white-default));
+  --ov-ui-input-text: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  --ov-ui-input-muted: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  --ov-ui-input-border: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default)
+  );
+  --ov-ui-input-focus: var(
+    --ov-ui-color-focus,
+    var(--ov-ui-color-link, var(--ov-ui-link-default))
+  );
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--ov-ui-input-border);
+  border-radius: 6px;
+  background: var(--ov-ui-input-bg);
+  color: var(--ov-ui-input-text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.53846154;
+  transition:
+    color 100ms cubic-bezier(0, 0, 1, 1),
+    border-color 100ms cubic-bezier(0, 0, 1, 1),
+    background-color 100ms cubic-bezier(0, 0, 1, 1);
+}
+.ov-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--ov-ui-input-height);
+  vertical-align: middle;
+}
+.ov-input--mini {
+  --ov-ui-input-height: 24px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.667;
+}
+.ov-input--small {
+  --ov-ui-input-height: 28px;
+}
+.ov-input--large {
+  /* The theme's large input uses its 14px line box plus 6px padding and 1px borders. */
+  --ov-ui-input-height: calc(1.53846154em + 14px);
+  padding-inline: 16px;
+  font-size: 14px;
+}
+.ov-input__element {
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  caret-color: var(--ov-ui-input-focus);
+  font: inherit;
+}
+.ov-input__element::placeholder,
+.ov-textarea::placeholder {
+  color: var(--ov-ui-input-muted);
+  opacity: 1;
+}
+.ov-input__affix {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-input:not(.ov-input--disabled):not(:focus-within):hover,
+.ov-textarea:not(:disabled):not(:focus):hover {
+  border-color: var(--ov-ui-color-border-4, var(--ov-ui-border-4-default));
+}
+.ov-input:focus-within,
+.ov-textarea:focus {
+  border-color: var(--ov-ui-input-focus);
+  box-shadow: 0 0 0 2px
+    var(--ov-ui-color-focus-ring, var(--ov-ui-input-focus-ring-default));
+  outline: none;
+}
+.ov-input:has(.ov-input__affix):focus-within {
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-primary, var(--ov-ui-primary-default)) 30%,
+      transparent
+    );
+}
+.ov-input:has([aria-invalid='true']),
+.ov-textarea[aria-invalid='true'] {
+  border-color: var(
+    --ov-ui-color-error-border,
+    var(--ov-ui-error-border-default)
+  );
+  background: var(--ov-ui-color-error-bg, var(--ov-ui-error-bg-default));
+}
+.ov-input:has([aria-invalid='true']):is(:hover, :focus-within),
+.ov-textarea[aria-invalid='true']:is(:hover, :focus) {
+  border-color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+.ov-input:has([aria-invalid='true']):focus-within,
+.ov-textarea[aria-invalid='true']:focus {
+  background: var(--ov-ui-input-bg);
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-error, var(--ov-ui-error-default)) 30%,
+      transparent
+    );
+}
+.ov-input--disabled,
+.ov-textarea:disabled {
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+  border-color: var(--ov-ui-input-border);
+}
+.ov-input--disabled,
+.ov-input__element:disabled,
+.ov-textarea:disabled {
+  cursor: not-allowed;
+  color: var(--ov-ui-input-muted);
+  opacity: 1;
+}
+.ov-input--disabled .ov-input__element::placeholder,
+.ov-textarea:disabled::placeholder {
+  color: var(--ov-ui-color-text-5, var(--ov-ui-text-5-default));
+}
+.ov-textarea {
+  display: block;
+  min-height: 32px;
+  padding-block: 4px;
+  line-height: 1.6923;
+  resize: vertical;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-input,
+  .ov-textarea {
+    transition: none;
+  }
+}

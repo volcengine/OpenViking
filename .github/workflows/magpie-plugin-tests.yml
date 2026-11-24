@@ -1,0 +1,29 @@
+name: OpenViking Magpie plugin
+
+on:
+  pull_request:
+    paths:
+      - "examples/magpie-memory-plugin/**"
+      - "examples/memory-plugin-shared/lib/**"
+      - ".github/workflows/magpie-plugin-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "examples/magpie-memory-plugin/**"
+      - "examples/memory-plugin-shared/lib/**"
+      - ".github/workflows/magpie-plugin-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - run: node examples/memory-plugin-shared/sync.mjs
+      - run: npm run check && npm test && npm pack --dry-run
+        working-directory: examples/magpie-memory-plugin

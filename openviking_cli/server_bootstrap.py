@@ -98,10 +98,21 @@ def main():
     if not any(arg in ("-h", "--help", "--version") for arg in sys.argv[1:]):
         _maybe_offer_init()
 
-    from openviking.server.bootstrap import main as _real_main
+    from openviking_cli.utils.logger import configure_server_logging
 
-    with bind_log_execution_trace():
-        _real_main()
+    configure_server_logging(bootstrap=True)
+    try:
+        from openviking.server.bootstrap import main as _real_main
+
+        with bind_log_execution_trace():
+            _real_main()
+    except Exception as exc:
+        print(
+            f"OpenViking server startup failed ({type(exc).__name__}).",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

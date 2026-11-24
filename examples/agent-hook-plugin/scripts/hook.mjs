@@ -69,6 +69,9 @@ async function sessionStart(ctx) {
     const now = Date.now();
     if (now - Number(state.lastSessionStartAt || 0) < 2000) return "";
     await writeHookState(clientId, ctx.nativeSessionId, { ...state, lastSessionStartAt: now });
+    if (host.pendingReplayLimit && !process.env.OPENVIKING_PENDING_REPLAY_LIMIT) {
+      process.env.OPENVIKING_PENDING_REPLAY_LIMIT = String(host.pendingReplayLimit);
+    }
     await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
     if ((host.profileStage || "session-start") !== "session-start") return "";
     const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
@@ -125,11 +128,20 @@ async function promptSubmit(ctx) {
 
 async function capture(ctx) {
   if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) return "";
-  await withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
-    const state = await readHookState(clientId, ctx.nativeSessionId);
-    const next = await host.capture(ctx, state, event);
-    if (next) await writeHookState(clientId, ctx.nativeSessionId, next);
-  });
+  // A terminal event that loses the lock to a slow Stop would drop the final
+  // commit, so a detached one keeps waiting up to the stale-lock age.
+  const terminal = host.detachesCapture && (event === "session-end" || event === "pre-compact");
+  for (let attempt = 0; attempt < (terminal ? 12 : 1); attempt += 1) {
+    const done = await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
+      const state = await readHookState(clientId, ctx.nativeSessionId);
+      ctx.stateFile = stateFile;
+      const next = await host.capture(ctx, state, event);
+      if (next) await writeHookState(clientId, ctx.nativeSessionId, next);
+      return true;
+    });
+    if (done) return "";
+  }
+  log("capture_lock_timeout");
   return "";
 }
 

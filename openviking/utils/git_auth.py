@@ -107,7 +107,7 @@ def git_http_basic_auth_header(config: GitHttpAuthConfig) -> str:
     return f"Authorization: Basic {encoded}"
 
 
-def _append_git_process_config(env: dict[str, str], key: str, value: str) -> None:
+def append_git_process_config(env: dict[str, str], key: str, value: str) -> None:
     """Append a process-local Git config entry without putting it in argv."""
 
     try:
@@ -130,21 +130,21 @@ def build_git_http_auth_env(
     env = dict(os.environ if base_env is None else base_env)
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GCM_INTERACTIVE"] = "Never"
-    _append_git_process_config(env, "credential.helper", "")
-    _append_git_process_config(env, f"credential.{normalized_repo_url}.helper", "")
+    append_git_process_config(env, "credential.helper", "")
+    append_git_process_config(env, f"credential.{normalized_repo_url}.helper", "")
     # Clear inherited extraHeader values before adding the one request-local
     # Authorization value. Git treats extraHeader as multi-valued otherwise.
-    _append_git_process_config(env, "http.extraHeader", "")
+    append_git_process_config(env, "http.extraHeader", "")
     scoped_extra_header = f"http.{normalized_repo_url}.extraHeader"
-    _append_git_process_config(env, scoped_extra_header, "")
-    _append_git_process_config(
+    append_git_process_config(env, scoped_extra_header, "")
+    append_git_process_config(
         env,
         scoped_extra_header,
         git_http_basic_auth_header(config),
     )
     # Refuse redirects at the same URL-specific precedence as the header, so
     # inherited per-repository config cannot move it to another host or HTTP.
-    _append_git_process_config(
+    append_git_process_config(
         env,
         f"http.{normalized_repo_url}.followRedirects",
         "false",
