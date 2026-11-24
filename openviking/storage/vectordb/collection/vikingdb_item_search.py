@@ -30,15 +30,6 @@ def _partition_values(condition: Any) -> set[str]:
     return set()
 
 
-def _has_item_attrs(condition: Any) -> bool:
-    if isinstance(condition, list):
-        return any(_has_item_attrs(c) for c in condition)
-    return isinstance(condition, dict) and (
-        condition.get("field") == "item_attrs"
-        or any(_has_item_attrs(c) for c in condition.values())
-    )
-
-
 def build_item_group_request(
     meta: dict[str, Any],
     *,

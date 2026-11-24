@@ -336,7 +336,6 @@ class VikingDBCollection(ICollection):
         filter_only: bool = False,
     ) -> Dict[str, Any]:
         from .vikingdb_item_search import (
-            _has_item_attrs,
             build_item_group_request,
             parse_item_group_result,
         )
@@ -353,11 +352,6 @@ class VikingDBCollection(ICollection):
             aggregation=aggregation,
             filter_only=filter_only,
         )
-        if _has_item_attrs(filters):
-            compiled = self._catalog.compile_item_filter(request["partition"], filters)
-            if compiled is False:
-                return {"groups": []}
-            request["filter"] = compiled
         result = self._data_post("/api/vikingdb/data/search/vector", request)
         return parse_item_group_result(result, score_threshold=score_threshold)
 

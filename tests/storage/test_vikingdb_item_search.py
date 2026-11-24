@@ -121,6 +121,37 @@ def search(collection, *, filters=None, **kwargs):
     )
 
 
+@pytest.mark.parametrize("aggregation", ["max", "sum"])
+@pytest.mark.parametrize("op", ["must", "must_not"])
+def test_item_attribute_filter_preserves_platform_groups_and_uses_one_request(
+    collection, aggregation, op
+):
+    # Member filtering and root group metadata are separate platform concerns.
+    collection.client.result = {"groups": [group("a", 0.9, ["kind=root"])]}
+    filters = {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "account_id", "conds": ["a"]},
+            {"op": op, "field": "item_attrs", "conds": ["color=red", "lang=en"]},
+        ],
+    }
+    original = deepcopy(filters)
+    result = search(collection, filters=filters, aggregation=aggregation)
+    assert len(collection.client.calls) == 1
+    _, path, request = collection.client.calls[0]
+    assert path == "/api/vikingdb/data/search/vector"
+    assert request["filter"] == original
+    assert filters == original
+    assert result["groups"] == [
+        {
+            "entity_id": "a",
+            "entity_score": 0.9,
+            "entity_uri": "/resources/a",
+            "entity_attrs": ["kind=root"],
+        }
+    ]
+
+
 def test_threshold_applies_to_aggregate_score_and_empty_groups_are_valid(collection):
     collection.client.result = {"groups": [group("a", 1.7), group("b", 0.8)]}
     result = search(collection, score_threshold=1.5)

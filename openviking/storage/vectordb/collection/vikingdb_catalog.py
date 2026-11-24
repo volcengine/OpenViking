@@ -344,69 +344,6 @@ class VikingDBCatalog:
             raise
         return {"moved_nodes": len(moved), "undo": undo}
 
-    def compile_item_filter(self, scope: str, condition: dict[str, Any]) -> dict[str, Any] | bool:
-        """Translate root-attribute predicates into effective identity predicates.
-
-        This only selects declaration IDs. The platform still computes every
-        candidate's inherited IDs and all Item scores.
-        """
-        self._schema_mode()
-        predicates = []
-
-        def collect(node):
-            if not isinstance(node, dict):
-                return
-            if node.get("field") == "item_attrs":
-                values = node.get("conds")
-                if (
-                    node.get("op") not in ("must", "must_not")
-                    or not isinstance(values, list)
-                    or any(not isinstance(v, str) for v in values)
-                ):
-                    raise ValueError("item_attrs filters require must/must_not and string conds")
-                predicates.append(node)
-            else:
-                for child in node.get("conds", []):
-                    collect(child)
-                if "filter" in node:
-                    collect(node["filter"])
-
-        collect(condition)
-        if any(p["op"] == "must_not" for p in predicates):
-            selector = _eq("account_id", [scope])
-        else:
-            values = sorted({v for p in predicates for v in p["conds"]})
-            branches = [_eq("item_attrs", [v]) for v in values]
-            selector = branches[0] if len(branches) == 1 else {"op": "or", "conds": branches}
-        with self._scope_lock(scope):
-            rows = self._scan(scope, selector) if selector.get("conds") else []
-        declarations = [r for r in rows if r.get("item_uuids")]
-
-        def rewrite(node):
-            if node.get("field") == "item_attrs":
-                ids = sorted(
-                    {
-                        r["item_uuids"][0]
-                        for r in declarations
-                        if (any(v in (r.get("item_attrs") or []) for v in node["conds"]))
-                        == (node["op"] == "must")
-                    }
-                )
-                return _eq("item_uuids", ids) if ids else False
-            if node.get("op") in ("and", "or"):
-                children = [rewrite(c) for c in node["conds"]]
-                conjunction = node["op"] == "and"
-                if any(c is (False if conjunction else True) for c in children):
-                    return not conjunction
-                children = [c for c in children if isinstance(c, dict)]
-                return {**node, "conds": children} if children else conjunction
-            if "filter" in node:
-                child = rewrite(node["filter"])
-                return {**node, "filter": child} if isinstance(child, dict) else child
-            return node
-
-        return rewrite(condition)
-
     def _schema_mode(self) -> str:
         mode = catalog_mode(self.collection.meta_data)
         fields = {f["FieldName"]: f for f in self.collection.meta_data.get("Fields", [])}
