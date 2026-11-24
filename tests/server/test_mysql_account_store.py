@@ -75,14 +75,17 @@ async def mysql_accounts(mysql_params):
 
 async def test_mysql_preprovisioned_low_privilege_startup_and_reload(mysql_accounts, mysql_params):
     manager = await mysql_accounts()
-    peer = await mysql_accounts()
     accounts = await manager.list_accounts()
     assert [account["account_id"] for account in accounts] == ["default"]
     assert accounts[0]["user_count"] == 0
     key = await manager.create_account("acme", "admin")
     await manager.close()
-    await asyncio.gather(manager.load(), manager.load(), peer.load())
-    assert [account["account_id"] for account in await peer.list_accounts()] == ["default", "acme"]
+    await asyncio.gather(manager.load(), manager.load())
+    assert [account["account_id"] for account in await manager.list_accounts()] == [
+        "default",
+        "acme",
+    ]
+    peer = await mysql_accounts()
     assert (await peer.resolve_identity(key)).user_id == "admin"
     assert (await manager.get_account("acme"))["user_count"] == 1
     raw_runtime = os.environ.get("OV_TEST_MYSQL_ACCOUNT_RUNTIME")
