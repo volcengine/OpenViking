@@ -92,9 +92,17 @@ class GitSnapshotLogConfig(BaseModel):
     mysql: GitSnapshotLogMySqlConfig = Field(default_factory=GitSnapshotLogMySqlConfig)
 
 
+class GitSnapshotGcConfig(BaseModel):
+    """Background snapshot object reclamation."""
+
+    enabled: bool = True
+    grace_seconds: int = Field(default=3600, ge=600)
+
+
 class GitSnapshotConfig(BaseModel):
     """Snapshot feature configuration."""
 
+    gc: GitSnapshotGcConfig = Field(default_factory=GitSnapshotGcConfig)
     log: GitSnapshotLogConfig = Field(default_factory=GitSnapshotLogConfig)
 
 

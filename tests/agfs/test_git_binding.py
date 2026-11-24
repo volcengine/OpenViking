@@ -401,3 +401,34 @@ def test_restore_does_not_apply_current_ovgitignore(client):
         target_ref="main",
         path="resources/proj/a.log",
     )["bytes"] == b"v1"
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_git_delete_and_gc_binding(client, preview):
+    from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotFoundError
+
+    ids = []
+    for version in ["first", "middle", "tip"]:
+        _write(client, "acct", "resources/a.md", version.encode())
+        ids.append(
+            client.git_commit(
+                account="acct",
+                branch="main",
+                message=version,
+                author_name="test",
+                author_email="test@example.com",
+            )["commit_oid"]
+        )
+    result = client.git_delete(account="acct", commit_ids=[ids[1]], dry_run=preview)
+    assert result["plan"][0]["changed_paths"] == ["resources/a.md"]
+    assert result["reparented"] == [{"commit": ids[2], "parents": [ids[0]]}]
+    if preview:
+        assert result["result"] == "dry_run" and result["overlay_root"] is None
+        assert client.git_show(account="acct", target_ref=ids[1])
+    else:
+        assert result["result"] == "deleted"
+        with pytest.raises(AGFSNotFoundError):
+            client.git_show(account="acct", target_ref=ids[1])
+    with pytest.raises(AGFSInvalidOperationError):
+        client.git_delete(account="acct", commit_ids=[ids[2]])
+    assert {"scanned", "deleted", "bytes_freed"} <= client.git_gc(account="acct").keys()

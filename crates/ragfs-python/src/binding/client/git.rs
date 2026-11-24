@@ -18,6 +18,34 @@ impl RAGFSBindingClient {
         git::commit_response_to_pydict(py, resp)
     }
 
+    /// Plan or apply an atomic deletion of historical snapshot commits.
+    #[pyo3(signature = (**kwargs))]
+    fn git_delete(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let req = git::parse_delete_request(kwargs.unwrap_or(&empty))?;
+        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.delete_commits(req)))
+            .map_err(|e| git::map_git_error(py, e))?;
+        git::delete_response_to_pydict(py, resp)
+    }
+
+    /// Run the account's grace-period garbage collection.
+    #[pyo3(signature = (*, account))]
+    fn git_gc(&self, py: Python<'_>, account: &str) -> PyResult<Py<PyAny>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let report = py_detach_blocking(py, move || self.rt.block_on(svc.gc(account)))
+            .map_err(|e| git::map_git_error(py, e))?;
+        git::gc_report_to_pydict(py, report)
+    }
+
     /// Restore a project_dir subtree to the state at source_commit.
     #[pyo3(signature = (*, ctx=None, **kwargs))]
     fn git_restore(
@@ -174,5 +202,4 @@ impl RAGFSBindingClient {
             Ok(m)
         })
     }
-
 }

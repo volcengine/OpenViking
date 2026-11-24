@@ -10,12 +10,15 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
+    AGFSNotADirectoryError,
     AGFSNotFoundError,
     AGFSPathNotFoundError,
     AGFSResourceExhaustedError,
+    GitConcurrentCommitError,
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.server.skill_history import reject_generic_skill_mutation
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_work_index import detach_task_context
 from openviking.storage.acl import AclAction
@@ -316,6 +319,78 @@ class _SnapshotMixin:
         if mode == "lock_path":
             return None
         raise ValueError(f"Unknown PathLock handle mode: {mode!r}")
+
+    async def _ensure_delete_plan_access(self, plan: List[dict], ctx: RequestContext) -> None:
+        paths = {path for entry in plan for path in entry["changed_paths"]}
+        if ctx.role == Role.USER:
+            for path in paths:
+                parts = path.split("/", 2)
+                if len(parts) >= 2 and parts[0] == "user" and parts[1] != ctx.user.user_id:
+                    raise PermissionDeniedError(
+                        "Snapshot contains changes the current user cannot delete",
+                        resource="viking://",
+                    )
+
+        for path in paths:
+            reject_generic_skill_mutation(self._tree_path_to_uri(path), "snapshot delete")
+        if ctx.role != Role.USER:
+            return
+
+        write_targets = set()
+        for path in paths:
+            candidate = path
+            while candidate:
+                uri = self._tree_path_to_uri(candidate)
+                try:
+                    stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
+                except (AGFSNotADirectoryError, NotADirectoryError):
+                    pass  # A directory in the historical path has become a file.
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        raise
+                else:
+                    if candidate == path or stat.get("isDir"):
+                        write_targets.add(uri)
+                        break
+                candidate = candidate.rpartition("/")[0]
+            else:
+                write_targets.add("viking://")
+        await self._ensure_access_many(sorted(write_targets), ctx, action=AclAction.WRITE)
+
+    async def delete_snapshots(
+        self, *, commit_ids: List[str], dry_run: bool = False, ctx: Optional[RequestContext] = None
+    ) -> Dict[str, Any]:
+        real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role not in {Role.ROOT, Role.ADMIN, Role.USER}:
+            raise PermissionDeniedError("This role cannot delete snapshots", resource="viking://")
+        kwargs = {"account": real_ctx.account_id, "commit_ids": commit_ids}
+        for attempt in range(3):
+            result = await self._async_agfs.run("git_delete", **kwargs, dry_run=True)
+            await self._ensure_delete_plan_access(result["plan"], real_ctx)
+            if dry_run:
+                break
+            try:
+                result = await self._async_agfs.run(
+                    "git_delete",
+                    **kwargs,
+                    dry_run=False,
+                    expected_overlay_root=result["overlay_root"],
+                )
+                break
+            except GitConcurrentCommitError:
+                if attempt == 2:
+                    raise
+        response = {
+            "result": result["result"],
+            "deleted": result["deleted"],
+            "reparented": result["reparented"],
+            "reclaim_after": result["reclaim_after"],
+        }
+        if dry_run:
+            response["changed_paths"] = {
+                entry["commit"]: len(entry["changed_paths"]) for entry in result["plan"]
+            }
+        return response
 
     async def restore(
         self,

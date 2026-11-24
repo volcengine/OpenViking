@@ -986,3 +986,72 @@ async def test_restore_rejects_unknown_field_per_pydantic_forbid(client_with_res
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     # The offending field name must surface in the error so the user can fix it.
     assert "dryRun" in body["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"commit_ids": []},
+        {"commit_ids": ["abc"]},
+        {"commit_ids": [f"{n:040x}" for n in range(101)]},
+        {"commit_ids": ["a" * 40], "branch": "main"},
+    ],
+)
+async def test_delete_route_validation(snapshot_router_client, payload):
+    response = await snapshot_router_client.post("/api/v1/snapshot/delete", json=payload)
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+async def test_delete_route_normalizes_ids_and_preserves_head(
+    client_with_resource_and_blob, service
+):
+    client, first, uri, _ = client_with_resource_and_blob
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    await service.viking_fs.write_file(uri, b"new tip", ctx=ctx)
+    tip = (await service.viking_fs.commit(message="new tip", paths=[uri], ctx=ctx))["commit_oid"]
+    url = "/api/v1/snapshot/delete"
+    assert (await client.post(url, json={"commit_ids": [tip]})).status_code == 400
+    assert (await client.post(url, json={"commit_ids": ["f" * 40]})).status_code == 404
+    result = await client.post(url, json={"commit_ids": [first.upper(), first]})
+    assert result.status_code == 200, result.text
+    assert result.json()["result"]["result"] == "deleted"
+    assert result.json()["result"]["deleted"] == [first]
+    assert (
+        await client.get("/api/v1/snapshot/show", params={"target_ref": first, "path": uri})
+    ).status_code == 404
+
+
+async def test_delete_snapshots_checks_write_permission_on_committed_file(
+    client_with_resource_and_blob, service, monkeypatch
+):
+    from openviking.storage.acl import DirectAcl, EffectiveAcl
+
+    _, _, uri, _ = client_with_resource_and_blob
+    admin = RequestContext(user=service.user, role=Role.ADMIN)
+    account = admin.account_id
+    await service.runtime_config_manager.patch_account(account, {"acl": {"enabled": True}})
+    writer = RequestContext(user=UserIdentifier(account, "writer"), role=Role.USER)
+    reader = RequestContext(user=UserIdentifier(account, "reader"), role=Role.USER)
+    permissions = DirectAcl.from_entries(
+        [
+            {"principal": "user:writer", "level": "write"},
+            {"principal": "user:reader", "level": "read"},
+        ]
+    )
+    acl = EffectiveAcl(AclMode.RESTRICTED, permissions, DirectAcl())
+    monkeypatch.setattr(
+        service.viking_fs.acl_manager, "resolve_many", AsyncMock(return_value={uri: acl})
+    )
+    snapshots = []
+    for version in ("middle", "tip"):
+        await service.viking_fs.write_file(uri, version.encode(), ctx=admin)
+        snapshot = await service.fs.commit(message=version, paths=[uri], ctx=admin)
+        snapshots.append(snapshot["commit_oid"])
+    ids = snapshots[:1]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.delete_snapshots(commit_ids=ids, ctx=reader)
+    preview = await service.fs.delete_snapshots(commit_ids=ids, dry_run=True, ctx=writer)
+    assert preview["changed_paths"] == {ids[0]: 1}
+    assert "plan" not in preview
+    assert (await service.fs.delete_snapshots(commit_ids=ids, ctx=writer))["deleted"] == ids

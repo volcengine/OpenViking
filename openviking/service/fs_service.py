@@ -2652,6 +2652,13 @@ class FSService:
             ctx=ctx,
         )
 
+    async def delete_snapshots(
+        self, *, commit_ids: List[str], ctx: RequestContext, dry_run: bool = False
+    ) -> Dict[str, Any]:
+        return await self._ensure_initialized().delete_snapshots(
+            commit_ids=commit_ids, dry_run=dry_run, ctx=ctx
+        )
+
     async def restore(
         self,
         *,

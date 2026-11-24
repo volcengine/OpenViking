@@ -6,6 +6,7 @@ Mirrors VikingFS.commit / VikingFS.restore / VikingFS.show / VikingFS.diff / Vik
 which already implement the underlying semantics.
 """
 
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -110,6 +111,41 @@ async def log(
         mapped = map_exception(e)
         if mapped is not None:
             raise mapped from e
+        raise
+    return Response(status="ok", result=result)
+
+
+class DeleteSnapshotsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    commit_ids: List[str]
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def _normalize_ids(self) -> "DeleteSnapshotsRequest":
+        ids = list(dict.fromkeys(value.strip().lower() for value in self.commit_ids))
+        if not 1 <= len(ids) <= 100:
+            raise InvalidArgumentError("Specify between 1 and 100 distinct commit IDs")
+        if any(not re.fullmatch(r"[0-9a-f]{40}", value) for value in ids):
+            raise InvalidArgumentError("Each commit ID must contain 40 hexadecimal characters")
+        self.commit_ids = ids
+        return self
+
+
+@router.post("/delete")
+async def delete_snapshots(
+    request: DeleteSnapshotsRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Delete historical snapshots from the account's effective history."""
+    try:
+        result = await get_service().fs.delete_snapshots(
+            commit_ids=request.commit_ids, dry_run=request.dry_run, ctx=_ctx
+        )
+    except (AGFSClientError, ValueError) as exc:
+        mapped = map_exception(exc)
+        if mapped is not None:
+            raise mapped from exc
         raise
     return Response(status="ok", result=result)
 
