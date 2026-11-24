@@ -117,6 +117,16 @@ class UpstreamBilling:
         if started is None:
             return
         envelope = envelope if isinstance(envelope, dict) else {}
+        provider_status = envelope.get("status")
+        if isinstance(provider_status, str):
+            call["provider_status"] = provider_status
+            complete = complete and provider_status == "completed"
+        incomplete = envelope.get("incomplete_details")
+        if isinstance(incomplete, dict) and isinstance(incomplete.get("reason"), str):
+            call["incomplete_reason"] = incomplete["reason"]
+        stop_reason = envelope.get("stop_reason")
+        if isinstance(stop_reason, str):
+            call["stop_reason"] = stop_reason
         call.update(
             status=status,
             complete=complete,

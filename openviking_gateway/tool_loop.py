@@ -3,6 +3,7 @@
 """One hidden-tool lifecycle shared by native model protocol adapters."""
 
 import asyncio
+import sys
 import time
 
 import async_timeout
@@ -72,6 +73,7 @@ class HiddenToolLoop:
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
         self.observe_upstream = None
+        self.failed_response = None
 
     async def read(self, response):
         error = None
@@ -80,10 +82,11 @@ class HiddenToolLoop:
                 yield event
         except BaseException as failure:
             error = failure
+            self.failed_response = response
             raise
         finally:
-            if self.observe_upstream:
-                self.observe_upstream(self.adapter, response, error)
+            if self.observe_upstream and error is None:
+                self.observe_upstream(self.adapter, response, None)
 
     async def read_round(self, response):
         adapter = self.adapter
@@ -351,4 +354,7 @@ class HiddenToolLoop:
                 "Hidden tool request timed out", 504, code="tool_loop_timeout"
             ) from error
         finally:
+            if self.observe_upstream and self.failed_response is not None:
+                self.observe_upstream(self.adapter, self.failed_response, sys.exc_info()[1])
+                self.failed_response = None
             response.close()

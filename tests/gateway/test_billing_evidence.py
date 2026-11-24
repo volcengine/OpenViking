@@ -376,3 +376,84 @@ async def test_stream_error_event_is_recorded(running_gateway, tools):
     assert call["status"] == 200
     assert call["complete"] is False
     assert call["error"] == ("tool_upstream_stream_error" if tools else "upstream_error")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("tools", [False, True])
+async def test_truncation_has_consistent_accounting(running_gateway, stream, tools):
+    from test_app import enable_tools
+    from test_native_tools import native_response, request_body, wire_response
+
+    app, client, admin, issued, _, _ = running_gateway
+    if tools:
+        await enable_tools(client, admin)
+    value = native_response("responses", 1)
+    value.update(status="incomplete", incomplete_details={"reason": "max_output_tokens"})
+
+    async def backend(request):
+        if request.path == "/v1/responses":
+            return await wire_response(request, "responses", value, stream)
+        return None
+
+    app.state.test_backend["handler"] = backend
+    await client.post(
+        "/v1/responses",
+        headers={"Authorization": "Bearer " + issued["key"]},
+        json=request_body("responses", stream),
+    )
+    [row] = (await client.get("/admin/logs", headers=admin)).json()
+    [call] = row["upstream_calls"]
+    assert call["complete"] is False
+    assert call["provider_status"] == "incomplete"
+    assert call["incomplete_reason"] == "max_output_tokens"
+    assert call["usage"] == reported_usage(value["usage"])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_tool_deadline_keeps_upstream_status_and_timeout_reason(running_gateway, stream):
+    import asyncio
+
+    from aiohttp import web
+    from test_app import enable_tools
+    from test_native_tools import native_response, request_body, wire_response
+
+    app, client, admin, issued, _, _ = running_gateway
+    await enable_tools(client, admin, tool_total_seconds=0.5)
+    number = 0
+
+    async def backend(request):
+        nonlocal number
+        if request.path == "/mcp":
+            return web.json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {"content": [{"type": "text", "text": "blue"}]},
+                }
+            )
+        if request.path != "/v1/responses":
+            return None
+        number += 1
+        if number == 1:
+            return await wire_response(
+                request, "responses", native_response("responses", 1, owned=True), stream
+            )
+        response = web.StreamResponse(
+            headers={"Content-Type": "text/event-stream" if stream else "application/json"}
+        )
+        await response.prepare(request)
+        await asyncio.sleep(0.8)
+        return response
+
+    app.state.test_backend["handler"] = backend
+    await client.post(
+        "/v1/responses",
+        headers={"Authorization": "Bearer " + issued["key"]},
+        json=request_body("responses", stream),
+    )
+    [row] = (await client.get("/admin/logs", headers=admin)).json()
+    assert row["error_reason"] == "tool_loop_timeout"
+    _, call = row["upstream_calls"]
+    assert call["status"] == 200
+    assert call["error"] == "tool_loop_timeout"
+    assert call["complete"] is False
