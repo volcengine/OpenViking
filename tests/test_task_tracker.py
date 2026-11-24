@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
@@ -563,6 +564,54 @@ async def test_list_can_hide_internal_tasks_before_limit(tracker: TaskTracker):
     assert [task.task_id for task in await tracker.list_tasks(limit=1, include_internal=False)] == [
         visible.task_id
     ]
+
+
+async def test_list_reads_owner_task_files_in_bounded_groups(monkeypatch):
+    agfs = _FakeAgfs()
+    writer = TaskTracker(PersistentTaskStore(agfs))
+    created = [
+        await writer.create("session_commit", task_id=f"task-{index:02d}", **_owner_kwargs())
+        for index in range(2 * FILE_TASK_CONCURRENCY - 2)
+    ]
+    expected = [
+        task.task_id
+        for task in sorted(created, key=lambda task: (task.created_at, task.task_id), reverse=True)
+    ]
+    directory = "/local/acme/_system/tasks/alice"
+    agfs.files[f"{directory}/corrupt.json"] = b"{"
+    read, ls = agfs.read, agfs.ls
+    group = threading.Barrier(FILE_TASK_CONCURRENCY)
+    lock = threading.Lock()
+    active = peak = 0
+
+    def read_in_group(path, offset=0, size=-1, stream=False):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            # A full group must be reading at once; a sequential reader times out here.
+            group.wait(timeout=5)
+            return read(path, offset, size, stream)
+        finally:
+            with lock:
+                active -= 1
+
+    def ls_with_removed_file(path="/"):
+        entries = ls(path)
+        if path == directory:
+            entries.append({"name": "removed.json", "path": f"{directory}/removed.json"})
+        return entries
+
+    monkeypatch.setattr(agfs, "read", read_in_group)
+    monkeypatch.setattr(agfs, "ls", ls_with_removed_file)
+
+    page = await TaskTracker(PersistentTaskStore(agfs)).list_tasks(limit=5, **_owner_kwargs())
+    full = await TaskTracker(PersistentTaskStore(agfs)).list_tasks(limit=None, **_owner_kwargs())
+
+    assert [task.task_id for task in page] == expected[:5]
+    assert [task.task_id for task in full] == expected
+    assert peak == FILE_TASK_CONCURRENCY
 
 
 # ── Duplicate detection ──
