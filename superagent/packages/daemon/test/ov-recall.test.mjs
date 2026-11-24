@@ -170,6 +170,13 @@ test('every non-empty line receives up to eight sorted OpenViking Skill summarie
 
   await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-short', content: '查' }), { owner: true });
   assert.deepEqual(ov.calls.at(-1).body, { query: '查', limit: 8 });
+
+  const disabledOV = fakeOV({ skills });
+  const disabled = new OVRecall({
+    configPath: configFile(t), fetchImpl: disabledOV.fetchImpl, logger, skillRecall: false,
+  });
+  assert.equal(await disabled.forEvent(chatEvent({ content: '处理 PDF' })), '');
+  assert.equal(disabledOV.calls.some(({ url }) => url.includes('/skills/find')), false);
 });
 
 test('Skill summaries are description-truncated and bounded without blocking the line', async (t) => {
@@ -183,6 +190,7 @@ test('Skill summaries are description-truncated and bounded without blocking the
   const block = await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-many', content: '执行任务' }), { owner: true });
   const available = block.slice(block.indexOf('<available_skills>'), block.indexOf('</available_skills>') + '</available_skills>'.length);
   assert.ok(available.length <= 1_600, `Skill block is ${available.length} characters`);
+  assert.ok(Buffer.byteLength(available, 'utf8') <= 1_600, `Skill block is ${Buffer.byteLength(available, 'utf8')} bytes`);
   assert.match(available, /more Skill\(s\) not shown/);
 
   const broken = fakeOV({ fail: true });

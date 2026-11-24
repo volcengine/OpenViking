@@ -375,6 +375,7 @@ export class PersonalAgentDaemon {
         // Preferences are always shown; the per-line search only with ovAutoRecall.
         recall: this.config.openVikingConfigPath
           ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
+            skillRecall: this.config.ovSkillRecall,
             store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
           : null,
         prepareEvent: (event) => event.source !== 'lark' ? event

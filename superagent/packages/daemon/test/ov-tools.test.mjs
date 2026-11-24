@@ -6,7 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { OVRecall } from '../src/ov-recall.mjs';
 import { OV_DEFAULT_PARENT, OVToolClient, reservedTarget } from '../src/ov-tools.mjs';
+import { chatEvent } from './event-fixture.mjs';
 import { fakeOV } from './ov-server-fixture.mjs';
 
 // The instance's ovConfig files, one per client.
@@ -259,6 +261,18 @@ describe('OpenViking tool client', () => {
     assert.match(installed.text, /2 Skills accepted/);
   });
 
+  it('shows an installed Skill on the next line and in a new recall session', async (t) => {
+    const ov = await fakeOV(t, { apiKeys: { 'test-key': 'owner' } });
+    const configPath = configFile({ url: ov.url, api_key: 'test-key' });
+    await new OVToolClient({ configPath, timeoutMs: 2_000 }).addSkill({
+      git_url: 'https://github.com/example/skills.git', skills: ['report'],
+    });
+    const event = chatEvent({ content: '生成报告', messageId: 'om-skill-visible' });
+    const recall = () => new OVRecall({ configPath, logger: { debug() {} }, timeoutMs: 2_000 });
+    assert.match(await recall().forEvent(event), /report: Installed report .*\/report\/SKILL\.md/);
+    assert.match(await recall().forEvent(event), /report: Installed report .*\/report\/SKILL\.md/);
+  });
+
   it('uploads a workspace Skill package before installing it', async (t) => {
     const ov = await fakeOV(t);
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-'));
@@ -273,6 +287,70 @@ describe('OpenViking tool client', () => {
     assert.equal(ov.state.uploads.get(requests(ov, 'POST /api/v1/skills').at(-1).body.temp_file_id).name, 'report.skill');
     assert.deepEqual(requests(ov, 'POST /api/v1/skills').at(-1).body.wait, false);
     assert.equal(added.data.root_uri, 'viking://user/owner/skills/report');
+  });
+
+  it('downloads one Skill file and reuses its digest-addressed workspace cache', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-download-'));
+    t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const uri = 'viking://user/owner/skills/report/scripts/run.py';
+    ov.state.files.set(uri, Buffer.from('print("ok")\n'));
+    const tools = client(ov);
+    const first = await tools.download({ uri, workspace });
+    const second = await tools.download({ uri, workspace });
+    assert.equal(requests(ov, /^GET \/api\/v1\/skills\//).at(-1).query.target_uri, 'viking://user/owner/skills');
+    assert.equal(first.data.path, second.data.path);
+    assert.equal(fs.readFileSync(first.data.path, 'utf8'), 'print("ok")\n');
+    assert.equal(requests(ov, 'GET /api/v1/content/download').length, 1);
+  });
+
+  it('syncs a whole Skill from its integrity manifest and refuses non-Skill paths', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-sync-'));
+    t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const root = 'viking://user/owner/skills/report';
+    ov.state.files.set(`${root}/SKILL.md`, Buffer.from('---\nname: report\ndescription: Report\n---\n'));
+    ov.state.files.set(`${root}/scripts/run.py`, Buffer.from('print("ok")\n'));
+    const synced = await client(ov).download({ skill: 'report', workspace });
+    assert.equal(synced.data.files.length, 2);
+    assert.equal(fs.readFileSync(path.join(synced.data.path, 'scripts/run.py'), 'utf8'), 'print("ok")\n');
+    await assert.rejects(() => client(ov).download({
+      uri: 'viking://user/owner/resources/secret.bin', workspace,
+    }), /Skill directory/);
+    await assert.rejects(() => client(ov).download({ skill: '../report', workspace }), /skill/);
+  });
+
+  it('refuses a symlink inside the workspace Skill cache', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-link-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-outside-'));
+    t.after(() => {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    });
+    const root = 'viking://user/owner/skills/report';
+    ov.state.files.set(`${root}/scripts/run.py`, Buffer.from('print("ok")\n'));
+    fs.mkdirSync(path.join(workspace, '.openviking-skills'));
+    fs.symlinkSync(outside, path.join(workspace, '.openviking-skills', 'report'));
+    await assert.rejects(() => client(ov).download({ skill: 'report', workspace }), /unsafe directory/);
+    assert.deepEqual(fs.readdirSync(outside), []);
+  });
+
+  it('validates inline and package Skill inputs before contacting OpenViking', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-invalid-'));
+    t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(workspace, 'not-a-package.md'), '# nope');
+    const tools = client(ov);
+    await assert.rejects(() => tools.addSkill({ data: '# no frontmatter' }), /frontmatter/);
+    await assert.rejects(() => tools.addSkill({
+      data: '---\nname: bad name\ndescription: Test\n---\n',
+    }), /name/);
+    await assert.rejects(() => tools.addSkill({
+      data: '---\nname: valid\n---\n',
+    }), /description/);
+    await assert.rejects(() => tools.addSkill({ file_path: 'not-a-package.md', workspace }), /\.zip or \.skill/);
+    assert.equal(requests(ov, 'POST /api/v1/skills').length, 0);
   });
 
   it('rejects ambiguous or invalid add_skill sources before calling OpenViking', async (t) => {

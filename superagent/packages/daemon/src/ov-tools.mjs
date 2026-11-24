@@ -13,6 +13,9 @@
 // retries a write and maps every failure to one model-readable code without
 // echoing URLs, keys or response bodies.
 
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, OWNER_DIRECTORY, directoryPerson, findPersonDirectory, topicFile } from './ov-person.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
@@ -35,6 +38,8 @@ const FIND_TEXT_MAX_CHARS = 20_000;
 const READ_TEXT_MAX_CHARS = 16_000;
 const URL_MAX_CHARS = 4_096;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const SKILL_CACHE = '.openviking-skills';
+const SKILL_NAME = /^[A-Za-z0-9_-]+$/;
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -102,6 +107,62 @@ function hitTypeUri(type, uri) {
 function truncate(text, max) {
   const value = String(text ?? '');
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function inlineSkill(data) {
+  const value = String(data);
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(value);
+  if (!match) throw ovError('invalid_input', 'SKILL.md must start with YAML frontmatter');
+  const field = (name) => new RegExp(`^${name}:\\s*(.+?)\\s*$`, 'm').exec(match[1])?.[1]?.replace(/^['"]|['"]$/g, '') ?? '';
+  const name = field('name');
+  if (!SKILL_NAME.test(name)) throw ovError('invalid_input', 'SKILL.md name must use only letters, numbers, underscore or hyphen');
+  if (!field('description')) throw ovError('invalid_input', 'SKILL.md description is required');
+}
+
+function skillAddress(uri) {
+  const value = normalizeOVUri(uri);
+  const match = /^viking:\/\/(?:~|user\/[^/]+)\/skills\/([A-Za-z0-9_-]+)(?:\/(.+))?$/.exec(value);
+  if (!match) throw ovError('invalid_input', 'Download is limited to files under your OpenViking Skill directory');
+  return { uri: value, name: match[1], relative: match[2] ?? null };
+}
+
+function cacheRoot(workspace) {
+  const root = fs.realpathSync(workspace);
+  const cache = path.join(root, SKILL_CACHE);
+  if (!fs.existsSync(cache)) fs.mkdirSync(cache, { mode: 0o700 });
+  const stat = fs.lstatSync(cache);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw ovError('invalid_input', 'Skill cache must be a private directory');
+  return cache;
+}
+
+function privateDirectory(root, relative) {
+  let current = root;
+  for (const segment of relative.split('/').filter(Boolean)) {
+    current = path.join(current, segment);
+    if (!fs.existsSync(current)) fs.mkdirSync(current, { mode: 0o700 });
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw ovError('invalid_input', 'Skill cache contains an unsafe directory');
+    }
+  }
+  return current;
+}
+
+function cacheFile(root, skill, relative, bytes, digest) {
+  const target = path.resolve(root, skill, ...relative.split('/'));
+  const skillRoot = path.resolve(root, skill);
+  if (!target.startsWith(`${skillRoot}${path.sep}`)) throw ovError('invalid_input', 'Skill file path is invalid');
+  privateDirectory(root, [skill, ...relative.split('/').slice(0, -1)].join('/'));
+  if (fs.existsSync(target)) {
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw ovError('invalid_input', 'Skill cache target is not a regular file');
+    const current = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+    if (current === digest) return { path: target, cached: true };
+  }
+  const temporary = `${target}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+  fs.writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporary, target);
+  return { path: target, cached: false };
 }
 
 // find and search share one answer: the ranked hits as short lines plus the
@@ -248,6 +309,64 @@ export class OVToolClient {
     };
   }
 
+  async download({ uri, skill, workspace } = {}) {
+    if (Boolean(uri) === Boolean(skill)) throw ovError('invalid_input', 'Pass exactly one of uri or skill');
+    if (!trimmed(workspace)) throw ovError('invalid_input', 'A workspace is required');
+    let requested;
+    if (skill) {
+      const name = trimmed(skill);
+      if (!SKILL_NAME.test(name)) throw ovError('invalid_input', 'skill must use only letters, numbers, underscore or hyphen');
+      requested = { name, relative: null, uri: `viking://~/skills/${name}` };
+    } else {
+      requested = skillAddress(uri);
+    }
+    const targetRoot = requested.uri.slice(0, requested.uri.indexOf(`/skills/${requested.name}`) + '/skills'.length);
+    const detail = (await this.call(`/api/v1/skills/${encodeURIComponent(requested.name)}`
+      + `?target_uri=${encodeURIComponent(targetRoot)}&include_content=false&include_files=true&include_integrity=true`)).result;
+    const returnedRoot = String(detail?.root_uri ?? '');
+    const privateRoot = requested.uri.startsWith('viking://~/')
+      ? new RegExp(`^viking://user/[^/]+/skills/${requested.name}$`).test(returnedRoot)
+      : returnedRoot === `${targetRoot}/${requested.name}`;
+    if (!privateRoot) throw ovError('openviking_forbidden', 'OpenViking did not return the requested private Skill');
+    const files = (Array.isArray(detail?.files) ? detail.files : [])
+      .filter((entry) => !entry?.is_dir && entry?.path && entry?.uri && entry?.sha256)
+      .filter((entry) => !requested.relative || entry.path === requested.relative);
+    if (!files.length) throw ovError('openviking_not_found', 'No matching Skill file was found');
+    const root = cacheRoot(workspace);
+    const landed = [];
+    for (const file of files) {
+      const relative = String(file.path);
+      if (path.posix.isAbsolute(relative) || relative.split('/').some((part) => !part || part === '.' || part === '..')) {
+        throw ovError('invalid_input', 'OpenViking returned an invalid Skill file path');
+      }
+      const target = path.resolve(root, requested.name, ...relative.split('/'));
+      let result;
+      if (fs.existsSync(target) && fs.lstatSync(target).isFile() && !fs.lstatSync(target).isSymbolicLink()) {
+        const digest = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+        if (digest === file.sha256) result = { path: target, cached: true };
+      }
+      if (!result) {
+        let bytes;
+        try {
+          bytes = await this.conn().bytes(`/api/v1/content/download?uri=${encodeURIComponent(file.uri)}`, {
+            timeoutMs: this.timeoutMs, maxBytes: this.uploadMaxBytes,
+          });
+        } catch (error) {
+          throw toolError(error);
+        }
+        const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+        if (digest !== file.sha256) throw ovError('openviking_failed', 'Downloaded Skill file failed its integrity check');
+        result = cacheFile(root, requested.name, relative, bytes, digest);
+      }
+      landed.push({ uri: file.uri, path: result.path, sha256: file.sha256, cached: result.cached });
+    }
+    const output = requested.relative ? landed[0].path : path.join(root, requested.name);
+    return {
+      text: `${landed.length === 1 ? 'Downloaded 1 Skill file' : `Synced ${landed.length} Skill files`} to ${output}.`,
+      data: { path: output, files: landed, revision: detail?.revision ?? null, downloaded: true },
+    };
+  }
+
   // Add one resource the user asked to keep: a remote URL the server fetches
   // itself, or one workspace file uploaded first. Asynchronous: the task lands
   // in the background and the caller gets its ids, never a wait.
@@ -302,6 +421,9 @@ export class OVToolClient {
     const selected = Array.isArray(skills) && skills.length ? { skills: skills.map(String) } : {};
     let source;
     if (file_path) {
+      if (!/\.(?:zip|skill)$/i.test(String(file_path))) {
+        throw ovError('invalid_input', 'file_path must name a .zip or .skill package');
+      }
       const file = readWorkspaceFile(String(file_path), workspace, this.uploadMaxBytes);
       let upload;
       try {
@@ -320,6 +442,7 @@ export class OVToolClient {
       }
       source = { data: value };
     } else {
+      inlineSkill(data);
       source = { data: String(data) };
     }
     const result = (await this.call('/api/v1/skills', {

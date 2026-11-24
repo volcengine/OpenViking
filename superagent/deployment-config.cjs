@@ -111,6 +111,7 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'ovSkillRecall',
   'soulUri',
   'explicitSilence',
   'stagedReplies',
@@ -430,6 +431,9 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
+  if (value.ovSkillRecall !== undefined && typeof value.ovSkillRecall !== 'boolean') {
+    throw new Error(`${label}.ovSkillRecall must be a boolean`);
+  }
   if (value.soulUri != null && (typeof value.soulUri !== 'string'
     || !(SOUL_URI.test(value.soulUri) || path.isAbsolute(value.soulUri)))) {
     throw new Error(`${label}.soulUri must be a viking:// address or an absolute file path`);
@@ -490,6 +494,7 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
+    ovSkillRecall: value.ovSkillRecall ?? true,
     soulUri: value.soulUri ?? null,
     // On by default, except on Ark (no Core tools, so no stay_silent); an
     // explicit false opts out.
@@ -717,6 +722,7 @@ function openVikingAgentEnv(agent) {
     OPENVIKING_CODEX_STATE_DIR: path.join(state, 'codex-plugin-state'),
     OPENVIKING_PENDING_DIR: path.join(state, 'pending'),
     OPENVIKING_RECALL_LEDGER_DIR: path.join(state, 'recall-ledger'),
+    OV_SUPERAGENT_OV_SKILL_RECALL: agent.ovSkillRecall ? 'true' : 'false',
   };
 }
 
@@ -755,6 +761,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
+  env.OV_SUPERAGENT_OV_SKILL_RECALL = agent.ovSkillRecall ? 'true' : 'false';
   env.OV_SUPERAGENT_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.OV_SUPERAGENT_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.OV_SUPERAGENT_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';

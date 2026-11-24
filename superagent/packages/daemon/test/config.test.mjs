@@ -239,6 +239,15 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal('ovRemember' in getConfig(), false);
     setEnv('OV_SUPERAGENT_OV_AUTO_RECALL', undefined);
   });
+  it('discovers OpenViking Skills per line unless the instance turns it off', () => {
+    setEnv('OV_SUPERAGENT_OV_SKILL_RECALL', undefined);
+    assert.equal(getConfig().ovSkillRecall, true);
+    setEnv('OV_SUPERAGENT_OV_SKILL_RECALL', 'false');
+    assert.equal(getConfig().ovSkillRecall, false);
+    setEnv('OV_SUPERAGENT_OV_SKILL_RECALL', 'sometimes');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_OV_SKILL_RECALL must be a boolean/);
+    setEnv('OV_SUPERAGENT_OV_SKILL_RECALL', undefined);
+  });
   it('reads Lark messages with the owner\'s visibility unless the instance keeps to the bot\'s chats', () => {
     setEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', undefined);
     assert.equal(getConfig().larkMessageAccess, 'owner');

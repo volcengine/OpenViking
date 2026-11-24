@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 // A scripted OpenViking HTTP server with the content, upload, resource,
@@ -124,8 +125,32 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
         root_uri: `viking://user/${user}/skills/${name}`,
         task_id: `task-${next += 1}`,
       }));
-      state.skills.push(...installed.map((item) => ({ ...body, ...item })));
+      state.skills.push(...installed.map((item) => ({
+        ...body, ...item, name: item.root_uri.split('/').pop(), description: `Installed ${item.root_uri.split('/').pop()}`,
+      })));
       return reply(200, installed.length === 1 ? installed[0] : { installed, total: installed.length });
+    }
+    if (route === 'POST /api/v1/skills/find') {
+      const limit = Math.max(1, Number(body.limit) || 8);
+      return reply(200, { skills: state.skills.slice(0, limit), total: state.skills.length });
+    }
+    const skillDetail = url.pathname.match(/^\/api\/v1\/skills\/([^/]+)$/);
+    if (request.method === 'GET' && skillDetail) {
+      const name = decodeURIComponent(skillDetail[1]);
+      const root = `viking://user/${user}/skills/${name}`;
+      const files = [...state.files.entries()]
+        .filter(([key]) => key.startsWith(`${root}/`))
+        .map(([key, value]) => {
+          const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          return {
+            name: path.basename(key), uri: key, path: key.slice(root.length + 1), is_dir: false,
+            kind: 'file', size: data.length, sha256: crypto.createHash('sha256').update(data).digest('hex'),
+          };
+        });
+      return reply(200, {
+        name, root_uri: root, files,
+        revision: crypto.createHash('sha256').update(JSON.stringify(files.map(({ path: file, sha256 }) => [file, sha256]))).digest('hex'),
+      });
     }
     if (request.method === 'GET' && url.pathname.startsWith('/api/v1/tasks/')) {
       const task = state.tasks.get(decodeURIComponent(url.pathname.slice('/api/v1/tasks/'.length)));
@@ -159,6 +184,13 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
       if (limit === '-1' || limit === null) return reply(200, text);
       const size = Number(limit);
       return reply(200, text.split('\n').slice(offset, offset + size).join('\n'));
+    }
+    if (route === 'GET /api/v1/content/download') {
+      if (!state.files.has(uri)) return reply(404, 'not found');
+      const data = state.files.get(uri);
+      const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytes.length });
+      return response.end(bytes);
     }
     if (route === 'POST /api/v1/sessions') {
       const id = body?.session_id ?? `session-${next += 1}`;

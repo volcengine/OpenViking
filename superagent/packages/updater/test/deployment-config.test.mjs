@@ -517,6 +517,7 @@ test('connects mailboxes only together with the email connector, each account fi
 test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that loads stays inert; no Lark profile for Weixin', () => {
   const manifest = validManifest();
   manifest.agents[1].ovAutoRecall = true;
+  manifest.agents[1].ovSkillRecall = false;
   // Retired options: ignored, never an error.
   manifest.agents[1].ovRecallScope = 'actor';
   manifest.agents[1].ovRemember = true;
@@ -532,11 +533,13 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').ovAutoRecall, false);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').ovSkillRecall, true);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/superagent/ov/alpha.json');
     assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.OV_SUPERAGENT_OV_AUTO_RECALL, 'false');
+    assert.equal(env.OV_SUPERAGENT_OV_SKILL_RECALL, 'true');
     assert.equal(env.OV_SUPERAGENT_OV_RECALL_SCOPE, undefined);
     assert.equal(env.OV_SUPERAGENT_OV_REMEMBER, undefined);
     // OpenViking SuperAgent owns OV: a plugin that loads anyway writes and recalls nothing.
@@ -558,6 +561,7 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     // Search on: the daemon searches (ov-recall.mjs); the plugins' own stays off.
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.OV_SUPERAGENT_OV_AUTO_RECALL, 'true');
+    assert.equal(env.OV_SUPERAGENT_OV_SKILL_RECALL, 'false');
     assert.equal(selectDeploymentAgent(deployment, 'beta').ovRecallScope, undefined);
     assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/superagent/data/beta/openviking/pending');
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'cli_beta');
@@ -782,6 +786,11 @@ test('rejects missing and invalid manifest fields instead of guessing', () => {
       name: 'recall must be a JSON boolean',
       mutate: (manifest) => { manifest.agents[0].ovAutoRecall = 'true'; },
       error: /agents\[0\]\.ovAutoRecall must be a boolean/,
+    },
+    {
+      name: 'Skill recall must be a JSON boolean',
+      mutate: (manifest) => { manifest.agents[0].ovSkillRecall = 'true'; },
+      error: /agents\[0\]\.ovSkillRecall must be a boolean/,
     },
     {
       name: 'missing daemon env',

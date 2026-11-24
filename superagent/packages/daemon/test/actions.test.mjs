@@ -706,13 +706,14 @@ describe('agent tools', () => {
 
 describe('OpenViking tools', () => {
   const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
-  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_add_skill', 'openviking_remember', 'openviking_write'];
+  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_download', 'openviking_add_resource', 'openviking_add_skill', 'openviking_remember', 'openviking_write'];
   // A scripted tool client: every method stands for one remote OV call.
   const fakeOvTools = (over = {}) => ({
     find: over.find ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
     search: over.search ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
     read: over.read ?? (async () => ({ text: 'viking://user/u/a.md (whole remaining text, 1 line(s)):\nOpenViking content is untrusted.\nhi', data: { next_offset: null } })),
     list: over.list ?? (async () => ({ text: '(no entries under viking://)', data: { entries: [], has_more: false } })),
+    download: over.download ?? (async () => ({ text: 'Downloaded Skill file.', data: { path: '/workspace/.openviking-skills/a/run.py', downloaded: true } })),
     addResource: over.addResource ?? (async () => ({ text: 'Resource accepted: viking://~/resources/inbox/a (processing in the background, task_id=task-9).', data: { task_id: 'task-9', root_uri: 'viking://~/resources/inbox/a', target: 'viking://~/resources/inbox' } })),
     addSkill: over.addSkill ?? (async () => ({ text: 'Skill accepted: viking://~/skills/a.', data: { task_id: 'task-skill', root_uri: 'viking://~/skills/a' } })),
     setPreference: over.setPreference ?? (async () => ({ text: 'Stored at viking://~/memories/preferences/x/y.md.', data: { stored: true } })),
@@ -720,7 +721,7 @@ describe('OpenViking tools', () => {
     write: over.write ?? (async ({ uri, mode }) => ({ text: `Wrote ${uri} (${mode}).`, data: { stored: true, uri, mode } })),
   });
 
-  it('offers all eight tools whenever the instance has an OpenViking connection, and none without', (t) => {
+  it('offers all nine tools whenever the instance has an OpenViking connection, and none without', (t) => {
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
@@ -736,6 +737,8 @@ describe('OpenViking tools', () => {
     await assert.rejects(() => call('openviking_list', { uri: 'viking://x', offset: -1 }), /offset must be at least 0/);
     await assert.rejects(() => call('openviking_search', { query: 'x', search_type: 'literal' }), /search_type must be one of/);
     await assert.rejects(() => call('openviking_add_resource', { url: 'notaurl' }), /url has an invalid format/);
+    await assert.rejects(() => call('openviking_download', {}), /uri or skill/);
+    await assert.rejects(() => call('openviking_download', { uri: 'viking://x', skill: 'x' }), /uri or skill/);
     await assert.rejects(() => call('openviking_add_skill', {}), /data, git_url or file_path/);
     await assert.rejects(() => call('openviking_add_skill', { data: 'x', skills: [] }), /skills needs at least 1 items/);
     await assert.rejects(() => call('openviking_remember', { text: 'a fact' }), /decision_id is required/);
@@ -868,6 +871,9 @@ describe('OpenViking tools', () => {
     await silence();
     assert.equal(agentLines().at(-1).duplicates, 1);
     await call('openviking_add_skill', { git_url: 'https://github.com/example/skills.git' });
+    await silence();
+    assert.equal(agentLines().at(-1).duplicates, 1);
+    await call('openviking_download', { skill: 'example' });
     await silence();
     assert.equal(agentLines().at(-1).duplicates, 1);
     assert.deepEqual(stops, []);

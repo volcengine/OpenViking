@@ -69,6 +69,7 @@ const HANDLERS = {
   openviking_search: 'openvikingSearch',
   openviking_read: 'openvikingRead',
   openviking_list: 'openvikingList',
+  openviking_download: 'openvikingDownload',
   openviking_add_resource: 'openvikingAddResource',
   openviking_add_skill: 'openvikingAddSkill',
   openviking_remember: 'openvikingRemember',
@@ -102,7 +103,8 @@ function blocked(code, message) {
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
-  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri || result?.data?.stored || result?.data?.removed);
+  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri
+    || result?.data?.stored || result?.data?.removed || result?.data?.downloaded);
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -1891,6 +1893,14 @@ export class ActionService {
     const result = await this.ovToolClient().list(input);
     this.assertAuthority(caller.authority);
     return result;
+  }
+
+  async openvikingDownload(input, caller) {
+    if (Boolean(input.uri) === Boolean(input.skill)) {
+      throw blocked('invalid_input', 'Pass exactly one of uri or skill');
+    }
+    caller.trace.invoked = true;
+    return await this.ovToolClient().download({ ...input, workspace: this.config.workspace });
   }
 
   // Writes check authority only before the request leaves, which call() did:

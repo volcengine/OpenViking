@@ -36,7 +36,7 @@ const CACHE_TTL_MS = 10 * 60_000;
 const MIN_QUERY_CHARS = 2;
 const SKILL_LIMIT = 8;
 const SKILL_DESCRIPTION_CHARS = 200;
-const SKILL_BLOCK_CHARS = 1_600;
+const SKILL_BLOCK_BYTES = 1_600;
 
 const escapeAttribute = (value) => String(value).replace(/[&"<>]/g, (char) => (
   { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]));
@@ -46,12 +46,13 @@ const leaf = (uri) => String(uri).replace(/\/+$/, '').split('/').pop() ?? '';
 const withoutFields = (text) => String(text).replace(/\n*<!-- MEMORY_FIELDS[\s\S]*?-->\s*$/, '').trim();
 
 export class OVRecall {
-  constructor({ configPath, autoRecall = false, store = null, logger, fetchImpl = globalThis.fetch,
+  constructor({ configPath, autoRecall = false, skillRecall = true, store = null, logger, fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS, clock = Date.now } = {}) {
     this.configPath = configPath;
     this.fetchImpl = fetchImpl;
     this.connectionValue = null;
     this.autoRecall = Boolean(autoRecall);
+    this.skillRecall = Boolean(skillRecall);
     this.store = store;
     this.logger = logger;
     this.timeoutMs = timeoutMs;
@@ -84,7 +85,7 @@ export class OVRecall {
         bounded(this.preferences({ owner: true })),
         sender ? bounded(this.preferences({ id: sender, directory: senderDirectory })) : null,
         this.autoRecall && query.length >= MIN_QUERY_CHARS ? bounded(this.search(query)) : null,
-        query.length > 0 ? bounded(this.findSkills(query)) : null,
+        this.skillRecall && query.length > 0 ? bounded(this.findSkills(query)) : null,
       ]);
       return this.render(event, {
         sender, ownerPreferences, senderPreferences, entries: entries ?? [], skills: skills ?? [],
@@ -220,6 +221,8 @@ export class OVRecall {
     const close = '</available_skills>';
     const lines = [];
     let omitted = 0;
+    const bytes = (value) => Buffer.byteLength(value, 'utf8');
+    const render = (items, note = null) => `${open}\n${[...items, ...(note ? [note] : [])].join('\n')}\n${close}`;
     for (const skill of candidates) {
       const root = String(skill.root_uri || skill.uri).replace(/\/SKILL\.md$/, '');
       const description = String(skill.description ?? '').trim();
@@ -227,10 +230,8 @@ export class OVRecall {
         ? `${description.slice(0, SKILL_DESCRIPTION_CHARS - 1)}…` : description;
       const line = `- ${escapeAttribute(skill.name)}: ${escapeAttribute(short)} ${escapeAttribute(`${root}/SKILL.md`)}`;
       const note = `- ${omitted + 1} more Skill(s) not shown`;
-      const room = SKILL_BLOCK_CHARS - open.length - close.length - 2;
-      const proposed = [...lines, line].join('\n');
-      if (proposed.length > room || (candidates.length > lines.length + 1
-        && `${proposed}\n${note}`.length > room)) {
+      if (bytes(render([...lines, line])) > SKILL_BLOCK_BYTES
+        || (candidates.length > lines.length + 1 && bytes(render([...lines, line], note)) > SKILL_BLOCK_BYTES)) {
         omitted += 1;
       } else {
         lines.push(line);
@@ -238,15 +239,15 @@ export class OVRecall {
     }
     omitted += candidates.length - lines.length - omitted;
     if (omitted) {
-      const note = `- ${omitted} more Skill(s) not shown`;
-      while (lines.length && `${lines.join('\n')}\n${note}`.length
-        > SKILL_BLOCK_CHARS - open.length - close.length - 2) {
+      let note = `- ${omitted} more Skill(s) not shown`;
+      while (lines.length && bytes(render(lines, note)) > SKILL_BLOCK_BYTES) {
         lines.pop();
         omitted += 1;
+        note = `- ${omitted} more Skill(s) not shown`;
       }
-      lines.push(note);
+      return render(lines, note);
     }
-    return `${open}\n${lines.join('\n')}\n${close}`;
+    return render(lines);
   }
 
   render(event, { sender, ownerPreferences, senderPreferences, entries, skills }) {

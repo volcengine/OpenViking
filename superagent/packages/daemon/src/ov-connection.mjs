@@ -60,6 +60,27 @@ export class OVConnection {
     return this.send(route, { method: 'POST', headers, body: form }, timeoutMs);
   }
 
+  async bytes(route, { timeoutMs = this.timeoutMs, maxBytes = 20 * 1024 * 1024 } = {}) {
+    let response;
+    try {
+      const { 'Content-Type': _json, ...headers } = this.headers;
+      response = await this.fetch(`${this.url}${route}`, {
+        method: 'GET', headers, signal: AbortSignal.timeout(timeoutMs), redirect: 'error',
+      });
+      if (!response.ok) throw new Error();
+      const declared = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > maxBytes) throw new Error();
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length < 1 || bytes.length > maxBytes) throw new Error();
+      return bytes;
+    } catch (error) {
+      throw Object.assign(new OVUnavailableError(
+        `OpenViking request failed${response ? ` (HTTP ${response.status})` : ' or timed out'}`,
+        response?.status,
+      ), { timedOut: error?.name === 'TimeoutError' });
+    }
+  }
+
   async send(route, init, timeoutMs) {
     let response;
     try {

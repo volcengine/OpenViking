@@ -544,6 +544,17 @@ export const TOOLS = [
     annotations: READ,
   },
   {
+    name: 'openviking_download',
+    openviking: true,
+    title: 'Download OpenViking Skill files',
+    description: 'Copy one file under your OpenViking Skill directory, or synchronize one whole Skill package, into the fixed workspace Skill cache. Use this before a script, template or binary must be consumed locally; execution still uses the normal shell and its permissions.',
+    inputSchema: schema({
+      uri: { type: 'string', ...VIKING_URI, description: 'One file URI under your private OpenViking Skills directory.' },
+      skill: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$', description: 'One private Skill name to synchronize with all of its package files.' },
+    }),
+    annotations: LOCAL_WRITE,
+  },
+  {
     name: 'openviking_add_resource',
     openviking: true,
     title: 'Add an OpenViking resource',
