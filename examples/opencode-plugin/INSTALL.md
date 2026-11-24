@@ -179,7 +179,13 @@ In a new OpenCode session, ask the agent to browse OpenViking memory or search f
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
-If anything looks wrong, check the runtime files:
+If anything looks wrong, run the doctor. It checks the plugin install, the client configuration, and the server connection, and lists a fix for every problem it finds; the npm package ships the same script under `scripts/`, and the `ov-memory-doctor` skill runs it from inside a session:
+
+```bash
+node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs
+```
+
+The runtime files hold the plugin's log and session state:
 
 ```bash
 ls ~/.config/opencode/openviking/

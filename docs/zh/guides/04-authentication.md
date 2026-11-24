@@ -68,7 +68,8 @@ uv pip install "openviking[auth]"
   "server": {
     "auth_mode": "oidc",
     "oidc": {
-      "issuer": "https://your-company.okta.com"
+      "issuer": "https://your-company.okta.com",
+      "audience": "openviking"
     }
   }
 }
@@ -78,6 +79,8 @@ uv pip install "openviking[auth]"
 - `account_id` → 所有用户在同一组织（"default"）
 - `user_id` → 使用 OIDC 标准字段 `sub`
 - `role` → 默认为 `user`
+
+默认映射要求 `sub` 符合 OpenViking 的 ID 规则。Auth0 等提供方的 `sub` 包含 `|` 时，需要显式配置专用身份字段，见下方 [身份校验与特殊字符](#身份校验与特殊字符)。
 
 启动后用有效的 OIDC token 请求数据接口，验证身份映射和访问权限；匿名 `/health` 成功只证明服务可访问。
 
@@ -186,8 +189,7 @@ OIDC Claims: {
         "user_id": {
           "source": "claim",
           "claim": "sub",
-          "prefix": "user-",
-          "normalize": "lowercase"
+          "prefix": "user-"
         },
         "role": {
           "source": "claim",
@@ -204,6 +206,42 @@ OIDC Claims: {
   }
 }
 ```
+
+### 身份校验与特殊字符
+
+OIDC 按管理员配置完成映射后，原样校验 `account_id` 和 `user_id`，不再自动替换字符。ID 不能为空，只能包含英文字母、数字、`_`、`.`、`@` 和 `-`，不能是 `.` 或 `..`，且最多包含一个 `@`；`account_id` 还不能以 `_` 开头。不符合规则时返回 HTTP 401（`UNAUTHENTICATED`），错误信息指出身份映射失败。
+
+例如默认映射下，`sub=alice_prod` 仍是用户 `alice_prod`；`sub=alice|prod` 会被拒绝，不会再改成 `alice_prod`。
+
+Auth0 的 `auth0|123` 等编号不能直接作为 OpenViking 用户 ID。部署管理员可以让公司登录系统提供另一个符合规则的用户编号，再告诉 OpenViking 读取哪个字段。下面以用户张三为例。
+
+**先配置登录系统。** 给张三分配稳定、唯一的编号 `u_1001`，并让登录系统在签发登录凭证（Token）时带上它。凭证中的相关内容如下：
+
+```json
+{
+  "sub": "auth0|123",
+  "openviking_user_id": "u_1001"
+}
+```
+
+这里的 `openviking_user_id` 是示例字段名，`u_1001` 是张三的用户编号；其他用户应有各自不同的编号。
+
+**再配置 OpenViking。** 在 `ov.conf` 中将 `server.oidc.identity.user_id` 配置为：
+
+```json
+{
+  "source": "claim",
+  "claim": "openviking_user_id"
+}
+```
+
+`source: claim` 表示从登录凭证中取值，`claim: openviking_user_id` 表示读取名为 `openviking_user_id` 的字段。实际字段名以登录系统签发的内容为准，两边必须一致；只改 `ov.conf` 不会生成该字段，字段缺失时认证失败。
+
+张三登录后，客户端把凭证原样交给 OpenViking。OpenViking 验证签名，再读出 `u_1001`，以用户 `u_1001` 的身份处理请求。客户端不能修改签名字段，也不能通过请求头另选身份。
+
+选用的用户字段不能由普通用户自行修改，管理员须保证它在对应 OpenViking 账户内稳定且唯一。服务端只校验 ID 格式，不检查自定义映射是否唯一；小写转换、正则截取或共用用户 fallback 都可能把不同用户合并。账户映射可以有意将多个用户分到同一账户，但不能合并本应隔离的租户。
+
+**升级影响：** 已移除将不支持的字符自动替换为 `_` 的行为。原本合法的 ID 和数据路径保持不变；依赖自动替换的用户，需要管理员核验数据归属后，再将专用字段映射到原本的本地 ID。改变映射后的 ID 会改变数据命名空间，OpenViking 不会自动重命名或迁移旧数据。
 
 ### LDAP 完整配置
 
@@ -276,11 +314,12 @@ OIDC Claims: {
 {
   "user_id": {
     "source": "claim",
-    "claims": ["username", "email", "sub"],
-    "fallback": "guest"
+    "claims": ["username", "email", "sub"]
   }
 }
 ```
+
+用户字段全部缺失时应拒绝认证，不要回退到共用的 `guest` 用户。管理员仍须保证不同来源的字段值不会把不同用户映射到同一身份。
 
 #### 3. 组合字段
 

@@ -562,6 +562,9 @@ impl ConfigValue {
 pub struct BackendsConfig {
     /// OpenViking instance name used by cache-backed metadata.
     pub service_name: String,
+    /// Named Runtime selected when the metadata provider is cache.
+    #[serde(default = "default_cache_instance")]
+    pub instance: String,
     /// Initial number of metadata partitions.
     #[serde(default = "default_initial_partitions")]
     pub initial_partitions: u32,
@@ -592,6 +595,11 @@ fn default_checkpoint_interval_secs() -> u64 {
 /// Return the default metadata provider.
 fn default_backups_provider() -> String {
     "filesystem".to_string()
+}
+
+/// Return the default named cache Runtime instance.
+fn default_cache_instance() -> String {
+    "default".to_string()
 }
 
 /// Single backup backend item configuration
@@ -673,14 +681,6 @@ mod tests {
         let val = ConfigValue::Int(42);
         assert_eq!(val.as_int(), Some(42));
         assert_eq!(val.as_string(), None);
-    }
-
-    #[test]
-    fn test_config_parameter() {
-        let param = ConfigParameter::required_string("host", "Database host");
-        assert_eq!(param.name, "host");
-        assert!(param.required);
-        assert_eq!(param.param_type, "string");
     }
 
     #[test]

@@ -1,4 +1,6 @@
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { useRef } from 'react';
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 
 import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
 
@@ -12,12 +14,15 @@ interface OperationPair<T> {
 async function copyText(
   value: string,
   notify?: (text: string) => void,
+  report?: (copied: boolean) => void,
 ): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value);
   } catch {
+    report?.(false);
     return false;
   }
+  report?.(true);
   notify?.(value);
   return true;
 }
@@ -34,6 +39,7 @@ async function copyText(
  * still in flight.
  */
 export function useFilePreviewActions() {
+  const analytics = useAnalyticsRef();
   const pending = useRef(new Set<string>());
 
   async function run<T>(
@@ -54,29 +60,33 @@ export function useFilePreviewActions() {
   }
 
   return {
+    // 目录页签也有路径行，面包屑同样可以沿祖先打开；内容页签没有路径，忽略。
+    // A directory tab has a path row too, so its breadcrumb opens ancestors the same
+    // way; a content tab has no path and is ignored.
     openParent: (tab: FilePreviewTab, uri: string) =>
-      tab.kind === 'file'
-        ? run(
+      tab.kind === 'content'
+        ? Promise.resolve()
+        : run(
             `openParent:${tab.key}`,
             { execute: tab.operations?.openParent, notify: tab.onOpenParent },
             uri,
-          )
-        : Promise.resolve(),
-    download: (tab: FilePreviewFileTab) =>
-      run(
-        `download:${tab.key}`,
-        { execute: tab.operations?.download, notify: tab.onDownload },
-        undefined,
-      ),
+          ),
     openUri: (tab: FilePreviewFileTab, uri: string) =>
       run(
         `openUri:${tab.key}`,
         { execute: tab.operations?.openUri, notify: tab.onOpenUri },
         uri,
       ),
-    copyPath: (tab: FilePreviewTab, path: string) =>
-      copyText(path, tab.onCopyPath),
-    copyContent: (tab: FilePreviewFileTab, text: string) =>
-      copyText(text, tab.onCopyContent),
+    copyPath: async (tab: FilePreviewTab, path: string) => {
+      analytics.current?.emit('file_preview_copy_path_click', () => ({}));
+      return copyText(formatVikingUriLabel(path), tab.onCopyPath, (copied) =>
+        analytics.current?.emit(
+          copied
+            ? 'file_preview_copy_path_success'
+            : 'file_preview_copy_path_fail',
+          () => ({}),
+        ),
+      );
+    },
   };
 }

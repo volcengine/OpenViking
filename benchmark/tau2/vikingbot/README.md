@@ -26,16 +26,18 @@ The pipeline is: **run tasks → evaluate reward → commit train trajectories t
 
 ## Install & Config
 
-> **Prerequisite — Python 3.12 or 3.13.** tau2-bench requires `>=3.12,<3.14`. `setup_env.sh`
+> **Prerequisites — PortAudio development headers and Python 3.12 or 3.13.** Tau Gym imports
+> audio support on startup, including for text tasks. Install `portaudio` with Homebrew on
+> macOS or `portaudio19-dev` on Debian/Ubuntu. tau2-bench requires `>=3.12,<3.14`. `setup_env.sh`
 > builds the venv with `python3 -m venv`, so `python3` must resolve to 3.12/3.13. If your
 > `python3` is older (e.g. 3.11), pre-create the venv with a matching interpreter *before*
 > sourcing — `python3.13 -m venv .venv` — otherwise the tau2-bench install step fails with
 > `ERROR: Package 'tau2' requires a different Python`.
 
 One step sets up everything. `setup_env.sh` creates a `.venv` at the OpenViking repo root
-(if one isn't already present), clones tau2-bench into `./tau2-bench` (external dependency,
-gitignored), installs openviking + vikingbot with the **`[bot]` extra**
-(`pip install -e .[bot]`, which also runs the Cargo build) plus tau2-bench (`[gym]` extra) and
+(if one isn't already present), clones the [Tau Gym revision that supports deferred user STOP](https://github.com/yeshion23333/tau2-bench/commit/548d5c51abfe3867d890e7f6cbd44e74b3a8409b)
+into `./.generated/tau2-bench`, installs openviking + vikingbot with the **`[bot]` extra**
+(`pip install -e .[bot]`, which also runs the Cargo build) plus Tau Gym and
 smolagents, then activates the venv and exports the runtime env vars:
 
 ```bash
@@ -48,7 +50,7 @@ later sources just activate and re-export. (`--reinstall` rebuilds with `python3
 the same 3.12/3.13 requirement applies.)
 
 It exports `PYTHONPATH` for `openviking` + `bot/vikingbot`, `TAU2_DATA_ROOT`
-(defaults to `./tau2-bench/data/tau2`), `OPENVIKING_CONFIG_FILE`, and the user-simulator LLM
+(defaults to `./.generated/tau2-bench/data/tau2`), `OPENVIKING_CONFIG_FILE`, and the user-simulator LLM
 env vars. Override any of these by exporting before sourcing:
 
 - `TAU2_BENCH_ROOT` — tau2-bench checkout location (if it lives elsewhere)
@@ -60,9 +62,9 @@ The tau2 **user simulator** talks to an OpenAI-compatible endpoint — set `ARK_
 Doubao through volcengine ARK) before sourcing, or the simulator will fail. The user-simulator
 model is configured in [`../common/tau2_env/tau2_environment.py`](../common/tau2_env/tau2_environment.py).
 
-> Note: the sibling `llm/` harness ([`../llm/README.md`](../llm/README.md)) pins a tau2-bench ref
-> with a confirmation-aware user-simulator prompt (sierra-research/tau2-bench#297). Set
-> `TAU2_BENCH_REF` to a comparable checkout if you want results aligned with that protocol.
+The training and single-task VikingBot runners use deferred STOP so that an agent can finish
+authorized tool calls after the user closes the dialogue. A custom Tau checkout must support
+`AgentGymEnv(defer_user_stop=True)` and `close(termination_reason=...)`.
 
 Then start the OpenViking server with the bot enabled:
 

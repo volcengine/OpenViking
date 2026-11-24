@@ -5,16 +5,43 @@
 import asyncio
 import json
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskTracker
+from openviking.service.task_work_index import bind_task_context
+from openviking.storage.observers.queue_observer import QueueObserver
 from openviking.storage.queuefs.named_queue import (
     DequeueHandlerBase,
     NamedQueue,
 )
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.queuefs.queue_middleware import QueueMiddleware
+from tests.test_task_tracker import _FakeAgfs
+
+
+@pytest.fixture
+def queue_client(tmp_path):
+    import ragfs_python
+
+    client = ragfs_python.RAGFSBindingClient()
+    client.mount("queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.db")})
+    yield client
+    client.close()
+
+
+@pytest.fixture
+async def account_manager(queue_client, monkeypatch):
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    try:
+        yield QueueManager(queue_client), tracker
+    finally:
+        await tracker.close()
 
 
 @pytest.fixture
@@ -31,6 +58,51 @@ def transport(monkeypatch):
 class Handler(DequeueHandlerBase):
     async def on_dequeue(self, data):
         return ProcessResult.success(data)
+
+
+@pytest.mark.parametrize("key", ["serial_key", "group_key"])
+async def test_keyed_enqueue_native_receipt_and_payload(key):
+    import ragfs_python
+
+    client = ragfs_python.RAGFSBindingClient()
+    client.mount("queuefs", "/queue", {"backend": "memory"})
+    queue = NamedQueue(client, "/queue", "Test")
+    try:
+        receipt = await queue.enqueue({"serial_key": "business payload"}, **{key: "用户:A"})
+        assert str(UUID(receipt)) == receipt
+        message = await queue.dequeue_raw()
+        assert message["id"] == receipt
+        assert json.loads(message["data"]) == {"serial_key": "business payload"}
+        second = await queue.enqueue("opaque", **{key: "用户:A"})
+        concurrent = await queue.dequeue_raw()
+        if key == "serial_key":
+            assert concurrent is None
+            await queue.ack(receipt, message)
+            concurrent = await queue.dequeue_raw()
+        assert concurrent["id"] == second
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        {"group_key": "a", "serial_key": "b"},
+        {"serial_key": ""},
+        {"serial_key": "界" * 1366},
+        {"group_key": 42},
+    ],
+)
+async def test_invalid_keys_rejected_before_middleware(transport, keys):
+    class Recorder(QueueMiddleware):
+        enqueue = AsyncMock()
+
+    middleware = Recorder()
+    queue = NamedQueue(object(), "/queue", "Test", middlewares=[middleware])
+    with pytest.raises(ValueError):
+        await queue.enqueue({}, **keys)
+    middleware.enqueue.assert_not_awaited()
+    transport.write.assert_not_awaited()
 
 
 @pytest.mark.parametrize("operation", ["enqueue", "process", "ack", "clear"])
@@ -95,18 +167,6 @@ async def test_enqueue_failure_unwinds_middlewares(transport, failure):
     with pytest.raises(type(failure)):
         await queue.enqueue("payload")
     assert events == ["outer", "inner", "inner-cleanup", "outer-cleanup"]
-
-
-async def test_enqueue_middleware_rewrites_payload(transport):
-    class Rewrite(QueueMiddleware):
-        async def enqueue(self, ctx, call_next):
-            assert ctx.payload == "input"
-            ctx.payload = {"input": ctx.payload, "middleware": True}
-            return await call_next(ctx)
-
-    queue = NamedQueue(object(), "/queue", "Test", middlewares=[Rewrite()])
-    await queue.enqueue("input")
-    assert json.loads(transport.write.await_args.args[1]) == {"input": "input", "middleware": True}
 
 
 async def test_process_dequeued_publishes_processing_and_end_to_end_durations(
@@ -208,25 +268,30 @@ async def test_process_dequeued_exception_publishes_exception_outcome(transport,
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("handler failed"), asyncio.CancelledError()])
-async def test_handler_exception_still_skips_ack(transport, failure):
+async def test_handler_exception_still_skips_ack(account_manager, failure):
+    manager, tracker = account_manager
+
     class FailingHandler(DequeueHandlerBase):
         async def on_dequeue(self, data):
             raise failure
 
-    transport.read.return_value = b'{"id":"message-1","data":"{}"}'
-    queue = NamedQueue(
-        object(),
-        "/queue",
-        "Test",
-        dequeue_handler=FailingHandler(),
-        middlewares=[QueueMiddleware()],
-    )
-    if isinstance(failure, asyncio.CancelledError):
+    queue = manager.get_queue("Jobs", dequeue_handler=FailingHandler(), allow_create=True)
+    await tracker.create("add_resource", task_id="task", account_id="A", user_id="u1")
+    with bind_task_context("task", "A", "u1"):
+        await queue.enqueue({"account_id": "A"})
+
+    cancelled = isinstance(failure, asyncio.CancelledError)
+    if cancelled:
         with pytest.raises(asyncio.CancelledError):
             await queue.dequeue()
     else:
         assert await queue.dequeue() is None
-    transport.write.assert_not_awaited()
+
+    status = (await manager.check_status(account_id="A"))["Jobs"]
+    assert (status.pending, status.in_progress) == ((1, 0) if cancelled else (0, 1))
+    assert (await queue.get_status()).in_progress == 1
+    assert await QueueObserver(manager, "A").has_active_errors_async() is not cancelled
+    assert not await QueueObserver(manager, "B").has_active_errors_async()
 
 
 async def test_empty_success_result_still_acks(transport):
@@ -331,13 +396,57 @@ async def test_invalid_process_result_does_not_ack(transport):
     transport.write.assert_not_awaited()
 
 
-async def test_ack_error_does_not_double_count_processing(transport):
-    transport.read.return_value = b'{"id":"m","data":"{}"}'
-    transport.write.side_effect = OSError("ack failed")
-    queue = NamedQueue(object(), "/queue", "Test", dequeue_handler=Handler())
-    await queue.dequeue()
-    assert queue._processed == 1
-    assert queue._error_count == 0
+async def test_queue_account_counts_survive_retry_and_ack_failures(account_manager, monkeypatch):
+    manager, tracker = account_manager
+    results = iter([ProcessResult.retry(), ProcessResult.success()])
+
+    class RetryingHandler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            return next(results)
+
+    queue = manager.get_queue("Jobs", dequeue_handler=RetryingHandler(), allow_create=True)
+    await tracker.create("add_resource", task_id="A", account_id="A", user_id="u1")
+    with bind_task_context("A", "A", "u1"):
+        await queue.enqueue({"account_id": "A"}, serial_key="A")
+    assert (await manager.check_status(account_id="A"))["Jobs"].pending == 1
+    delivery = await queue.dequeue_raw()
+    retry = await queue.process_dequeued(delivery)
+
+    write = queue._async_agfs.write
+
+    async def fail_settlement(path, data):
+        if path.endswith(("/ack", "/retry")):
+            raise OSError("settlement failed")
+        return await write(path, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(queue._async_agfs, "write", fail_settlement)
+        with pytest.raises(OSError, match="settlement failed"):
+            await queue.settle_dequeued(delivery, retry)
+    status = (await manager.check_status(account_id="A"))["Jobs"]
+    assert (status.pending, status.in_progress, status.requeue_count) == (1, 0, 1)
+    assert (await queue.get_status()).in_progress == 1
+
+    await queue.settle_dequeued(delivery, retry)
+    redelivery = await queue.dequeue_raw()
+    assert redelivery["id"] == delivery["id"]
+    await tracker.create("add_resource", task_id="B", account_id="B", user_id="u1")
+    with bind_task_context("B", "B", "u1"):
+        await queue.enqueue(
+            {"payload": {"context_data": {"account_id": "B", "owner_user_id": "u1"}}}
+        )
+    success = await queue.process_dequeued(redelivery)
+    with monkeypatch.context() as patch:
+        patch.setattr(queue._async_agfs, "write", fail_settlement)
+        await queue.settle_dequeued(redelivery, success)
+    status = (await manager.check_status(account_id="A"))["Jobs"]
+    assert status.is_complete
+    assert (status.processed, status.error_count) == (2, 0)
+    runtime = await queue.get_status()
+    assert (runtime.in_progress, runtime.processed, runtime.error_count) == (1, 2, 0)
+    assert (await manager.check_status(account_id="B"))["Jobs"].pending == 1
+    assert await queue.clear()
+    assert (await manager.check_status(account_id="B"))["Jobs"].is_complete
 
 
 async def test_clear_short_circuit_reports_no_commit(transport):

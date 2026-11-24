@@ -1,0 +1,37 @@
+{
+  "openviking-memory": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs session-start __OPENVIKING_CLIENT_ID__",
+        "timeout": 30
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs pre-invocation __OPENVIKING_CLIENT_ID__",
+        "timeout": 20
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/uri-guard.mjs __OPENVIKING_CLIENT_ID__",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs stop __OPENVIKING_CLIENT_ID__",
+        "timeout": 30
+      }
+    ]
+  }
+}

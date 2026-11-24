@@ -7,21 +7,21 @@ import {
 import type { FileTreeEntryRow, FileTreeInfoLabels } from './types.js';
 
 /**
- * 行浮层的外壳。宿主提供 `renderRowTooltip` 时只渲染它返回的内容；它返回 `null`
+ * 行浮层的内容。宿主提供 `renderRowTooltip` 时只渲染它返回的内容；它返回 `null`
  * 表示这一行不显示浮层，不回退到内置内容。
  *
- * 宿主没有提供时，用按 `uri` 解析的内置浮层。先解析内容、再决定是否创建外壳，
+ * 宿主没有提供时，用按 `uri` 解析的内置内容。先解析内容、再决定是否渲染，
  * 因此没有可显示内容时不会留下一个只有背景和内边距的空壳。
  *
- * The shell around a row tooltip. When the host supplies `renderRowTooltip`, only
- * its result renders; returning `null` hides the tooltip for that row and does
+ * The content of a row surface. When the host supplies `renderRowTooltip`, only
+ * its result renders; returning `null` hides the surface for that row and does
  * not fall back to the built-in content.
  *
- * When the host supplies none, the built-in tooltip resolved from the row `uri`
- * renders. The content is resolved before the shell is created, so with nothing
+ * When the host supplies none, the built-in content resolved from the row `uri`
+ * renders. The content is resolved before anything is rendered, so with nothing
  * to show no empty shell with just background and padding is left behind.
  */
-export function FileTreeTooltipSurface({
+export function FileTreeTooltipContent({
   row,
   infoLabels,
   renderRowTooltip,
@@ -29,25 +29,17 @@ export function FileTreeTooltipSurface({
   row: FileTreeEntryRow;
   infoLabels?: FileTreeInfoLabels;
   renderRowTooltip?: (row: FileTreeEntryRow) => ReactNode;
-}) {
+}): ReactNode {
   if (renderRowTooltip) {
     const custom = renderRowTooltip(row);
-    if (custom === null || custom === undefined || custom === false)
+    if (custom === null || custom === undefined || custom === false) {
       return null;
-
-    return (
-      <span role="tooltip" className="ov-file-tree__tooltip">
-        {custom}
-      </span>
-    );
+    }
+    return custom;
   }
 
   const copy = resolveFileTreeInfoCopy(row, infoLabels);
   if (!copy) return null;
 
-  return (
-    <span role="tooltip" className="ov-file-tree__tooltip">
-      <FileTreeInfoTooltip copy={copy} />
-    </span>
-  );
+  return <FileTreeInfoTooltip copy={copy} />;
 }

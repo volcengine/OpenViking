@@ -38,6 +38,10 @@ Save a display language for subsequent interactive and agent commands. Use `en` 
 ov language en
 ```
 
+For scripts or agents, you can instead set `OPENVIKING_LANG=en` or `OPENVIKING_LANG=zh-CN`
+in the command environment to satisfy language setup without a settings file.
+An existing saved language still takes precedence.
+
 Confirm that the terminal can find the CLI and display its version:
 
 ```bash

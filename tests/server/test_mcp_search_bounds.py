@@ -11,12 +11,14 @@ slices to ``MAX_EXCLUDE_URIS`` regardless, so a caller passing more got the extr
 dropped in silence and the URIs it asked to exclude came back in the results. Over REST the
 same request is a validation error.
 
-Bounds are asserted on the tool's published input schema and through ``call_tool``, which
-is the path an MCP client actually takes — a direct call to the undecorated function is not
-validated by either face.
+Check the tool's published input schema and the errors returned to an MCP client.
 """
 
+from datetime import timedelta
+
 import pytest
+from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
 import openviking.server.mcp_endpoint as mcp_endpoint
@@ -44,57 +46,66 @@ async def test_schema_publishes_the_same_bounds_as_rest(name, expected):
     # driving the tool reads before it picks a value.
     prop = (await _search_schema())[name]
 
+    rest = SearchRequest.model_json_schema()["properties"][name]
     assert {key: prop.get(key) for key in expected} == expected
+    assert {key: rest.get(key) for key in expected} == expected
 
 
 @pytest.mark.asyncio
 async def test_exclude_uris_schema_carries_the_shared_cap():
     prop = (await _search_schema())["exclude_uris"]
 
-    assert prop.get("maxItems") == MAX_EXCLUDE_URIS
+    rest = SearchRequest.model_json_schema()["properties"]["exclude_uris"]
+    assert prop.get("maxItems") == rest.get("maxItems") == MAX_EXCLUDE_URIS
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,value", sorted((n, v) for n, (_, v) in BOUNDED.items()))
 async def test_call_tool_rejects_an_out_of_range_value(name, value):
-    with pytest.raises(Exception) as excinfo:
-        await mcp_endpoint.mcp.call_tool("search", {"query": "q", "mode": "context", name: value})
+    async with create_connected_server_and_client_session(
+        mcp_endpoint.mcp, read_timeout_seconds=timedelta(seconds=5)
+    ) as client:
+        result = await client.call_tool("search", {"query": "q", "mode": "context", name: value})
 
-    assert name in str(excinfo.value)
+    assert result.isError is True
+    assert any(isinstance(block, TextContent) and name in block.text for block in result.content)
+    with pytest.raises(ValidationError) as rest:
+        SearchRequest(query="q", mode="context", **{name: value})
+    assert [(error["loc"], error["type"]) for error in rest.value.errors()] == [
+        ((name,), "less_than_equal")
+    ]
 
 
 @pytest.mark.asyncio
 async def test_call_tool_rejects_more_exclusions_than_it_can_apply():
     too_many = [f"viking://user/u/memories/m{i}.md" for i in range(MAX_EXCLUDE_URIS + 1)]
-
-    with pytest.raises(Exception) as excinfo:
-        await mcp_endpoint.mcp.call_tool(
+    async with create_connected_server_and_client_session(
+        mcp_endpoint.mcp, read_timeout_seconds=timedelta(seconds=5)
+    ) as client:
+        result = await client.call_tool(
             "search", {"query": "q", "mode": "context", "exclude_uris": too_many}
         )
 
-    assert "exclude_uris" in str(excinfo.value)
+    assert result.isError is True
+    assert any(
+        isinstance(block, TextContent) and "exclude_uris" in block.text for block in result.content
+    )
+    with pytest.raises(ValidationError) as rest:
+        SearchRequest(query="q", mode="context", exclude_uris=too_many)
+    assert [(error["loc"], error["type"]) for error in rest.value.errors()] == [
+        (("exclude_uris",), "too_long")
+    ]
 
 
-async def test_rest_and_mcp_reject_invalid_search_requests():
-    # The point of this file is parity, so pin the side being matched too: if a bound is
-    # relaxed over REST, this fails next to the tool test that would then be wrong.
-    for name, (_, value) in BOUNDED.items():
-        with pytest.raises(ValidationError):
-            SearchRequest(query="q", mode="context", **{name: value})
-
-    with pytest.raises(ValidationError):
-        SearchRequest(
-            query="q",
-            mode="context",
-            exclude_uris=[f"viking://user/u/m{i}.md" for i in range(MAX_EXCLUDE_URIS + 1)],
-        )
-
+async def test_rest_and_mcp_reject_invalid_event_time_decay_requests():
     with pytest.raises(ValidationError, match="events_time_decay_protection"):
         SearchRequest(query="q", events_time_decay_protection="-1d")
     result = await mcp_endpoint.mcp.call_tool(
         "search", {"query": "q", "events_time_decay_protection": "-1d"}
     )
+    assert isinstance(result, CallToolResult)
     assert result.isError is True
+    assert result.structuredContent is not None
     assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
     assert "events_time_decay_protection" in result.structuredContent["error"]["message"]
     with pytest.raises(ValidationError, match="semantic query or image"):

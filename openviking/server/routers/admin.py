@@ -4,6 +4,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
@@ -39,6 +40,7 @@ from openviking.server.user_config import (
     read_user_config,
     resolve_add_targets,
     resolve_user_add_targets,
+    resolve_user_privacy,
     write_user_config,
 )
 from openviking.session.memory.account_templates import (
@@ -63,6 +65,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
 
 class CreateAccountRequest(BaseModel):
     account_id: str
@@ -226,9 +229,12 @@ async def set_agent_evolution_status(
     )
 
 
-def _get_api_key_manager(request: Request):
+def _get_api_key_manager(request: Request, *, for_write: bool = False):
     """Return API key management operations for compatibility callers."""
-    return get_api_key_manager_or_raise(request)
+    manager = get_api_key_manager_or_raise(request)
+    if for_write:
+        manager.require_writable()
+    return manager
 
 
 def _get_runtime_config_manager():
@@ -330,6 +336,7 @@ def _has_initial_user_config(user_config: UserConfig | None) -> bool:
             or user_config.add_targets.skill_uri
             or user_config.memory_policy
             or user_config.ttl is not None
+            or user_config.privacy.model_dump(exclude_none=True)
         )
     )
 
@@ -369,10 +376,10 @@ async def _rollback_account_creation(
         try:
             await deletion_service.delete_now(account_id, actor=actor)
             return
-        except Exception:
-            logger.exception(
-                "Synchronous account cleanup failed for %s; durable deletion remains queued",
-                account_id,
+        except Exception as exc:
+            logger.info(
+                "Synchronous account cleanup failed; durable deletion remains queued",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
             )
             return
 
@@ -381,13 +388,19 @@ async def _rollback_account_creation(
         await service.release_account_vector_resources(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to release vector resources for account %s", account_id)
+        logger.debug(
+            "Account rollback vector resource release failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
     if runtime_config is not None:
         try:
             await runtime_config.delete_account(account_id)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back runtime config for account %s", account_id)
+            logger.debug(
+                "Account rollback runtime config cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     viking_fs = getattr(service, "viking_fs", None)
     agfs = getattr(viking_fs, "_async_agfs", None)
@@ -396,19 +409,28 @@ async def _rollback_account_creation(
             await agfs.rm(f"/local/{account_id}", recursive=True)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back workspace for account %s", account_id)
+            logger.debug(
+                "Account rollback workspace cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     try:
         await manager.delete_account(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to roll back account registry entry for %s", account_id)
+        logger.debug(
+            "Account rollback registry cleanup failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
 
     if rollback_errors:
         logger.error(
-            "Account creation rollback for %s completed with %d error(s)",
-            account_id,
-            len(rollback_errors),
+            "Account creation rollback incomplete",
+            extra={
+                "account_id": account_id,
+                "failed": len(rollback_errors),
+                "error_type": type(rollback_errors[0]).__name__,
+            },
         )
 
 
@@ -434,9 +456,7 @@ def _user_settings_result(
         memory_policy["memory_types"] = sorted(
             get_default_registry().list_names(include_disabled=False)
         )
-    add_targets = resolve_add_targets(
-        resolve_user_add_targets(user_config, server_config), ctx=ctx
-    )
+    add_targets = resolve_add_targets(resolve_user_add_targets(user_config, server_config), ctx=ctx)
     return {
         "account_id": ctx.account_id,
         "user_id": ctx.user.user_id,
@@ -448,6 +468,9 @@ def _user_settings_result(
         "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
         if user_config.ttl is not None
         else None,
+        "privacy": asdict(
+            resolve_user_privacy(user_config.privacy, server_config.user_config_defaults.privacy)
+        ),
     }
 
 
@@ -477,7 +500,7 @@ async def create_account(
         runtime_config.validate_initial_settings(body.account_id, body.settings or {})
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     user_key = None
     account_created = False
     try:
@@ -541,6 +564,26 @@ async def list_accounts(
     return Response(status="ok", result=accounts)
 
 
+@router.get("/metric-inventory")
+@require_auth_root
+async def metric_inventory(
+    request: Request,
+    account_id: str | None = None,
+    page_size: int = Query(500, ge=1, le=1000),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Stream metadata only for an offline scan; requires the existing ROOT authentication."""
+    from fastapi.responses import StreamingResponse
+
+    from openviking.observability.reporting.inventory import inventory_lines
+
+    manager = _get_api_key_manager(request)
+    return StreamingResponse(
+        inventory_lines(get_service(), manager, account_id=account_id, page_size=page_size),
+        media_type="application/x-ndjson",
+    )
+
+
 @router.get("/accounts/{account_id}")
 @require_auth_root
 async def get_account(
@@ -573,6 +616,7 @@ async def delete_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Revoke an account and submit durable cleanup of its data."""
+    _get_api_key_manager(request, for_write=True)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -999,7 +1043,7 @@ async def register_user(
         role=resolved_role,
     )
     validate_config_input(body.user_config)
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     user_key = await manager.register_user(
         account_id,
         body.user_id,
@@ -1107,7 +1151,7 @@ async def get_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return effective add targets and memory policy, plus explicit User TTL."""
+    """Return effective User settings and explicit TTL."""
     _check_account_access(ctx, account_id)
     if ctx.role == Role.USER and user_id != ctx.user.user_id:
         raise PermissionDeniedError("USER can only access their own settings")
@@ -1141,7 +1185,7 @@ async def patch_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Patch User add targets, memory policy and TTL without restarting."""
+    """Patch User settings without restarting."""
     _check_account_access(ctx, account_id)
     if ctx.role == Role.USER and user_id != ctx.user.user_id:
         raise PermissionDeniedError("USER can only access their own settings")
@@ -1180,6 +1224,7 @@ async def remove_user(
     """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
     await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    _get_api_key_manager(request, for_write=True)
     deletion_service = request.app.state.deletion_service
     if deletion_service is None:
         raise FailedPreconditionError("Deletion service is not initialized.")
@@ -1210,7 +1255,7 @@ async def set_user_role(
     role = body.role.lower()
     if role not in ACCOUNT_USER_ASSIGNABLE_ROLES:
         raise InvalidArgumentError("set_user_role only supports user and admin roles.")
-    await _get_api_key_manager(request).set_role(account_id, user_id, role)
+    await _get_api_key_manager(request, for_write=True).set_role(account_id, user_id, role)
     return Response(
         status="ok",
         result={
@@ -1238,7 +1283,7 @@ async def regenerate_key(
             raise PermissionDeniedError("USER can only regenerate their own API key")
         if not is_personal_api_key_auth(request, ctx):
             raise PermissionDeniedError("Self-service key rotation requires a personal API key")
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     new_key = await manager.regenerate_key(
         account_id,
         user_id,
@@ -1260,7 +1305,9 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(account_id, body.group_id)
+    result = await _get_api_key_manager(request, for_write=True).create_group(
+        account_id, body.group_id
+    )
     return Response(status="ok", result=result)
 
 
@@ -1285,7 +1332,7 @@ async def delete_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
+    manager = _get_api_key_manager(request, for_write=True)
     for member_id in await manager.get_group_members(account_id, group_id):
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
     await manager.delete_group(account_id, group_id)
@@ -1318,7 +1365,7 @@ async def add_group_members(
     _check_account_access(ctx, account_id)
     for member_id in body.user_ids:
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
-    added = await _get_api_key_manager(request).add_group_members(
+    added = await _get_api_key_manager(request, for_write=True).add_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"added": added})
@@ -1337,7 +1384,7 @@ async def remove_group_members(
     _check_account_access(ctx, account_id)
     for member_id in body.user_ids:
         await _reject_non_root_global_target(request, ctx, account_id, member_id)
-    removed = await _get_api_key_manager(request).remove_group_members(
+    removed = await _get_api_key_manager(request, for_write=True).remove_group_members(
         account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"removed": removed})

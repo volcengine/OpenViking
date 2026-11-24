@@ -36,6 +36,55 @@ fn seed(dir: &std::path::Path, name: &str, url: &str) {
 }
 
 #[test]
+fn explicit_language_env_satisfies_startup_without_saved_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let settings = home.join(".openviking/ovcli.settings.conf");
+
+    for (language, expected_code) in [
+        (Some("en"), 0),
+        (Some("zh-CN"), 0),
+        (Some("zh_CN.UTF-8"), 0),
+        (Some(""), 2),
+        (Some("invalid"), 2),
+        (Some("fr_FR.UTF-8"), 2),
+        (None, 2),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ov"));
+        command
+            .current_dir(dir.path())
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("LANG", "en_US.UTF-8")
+            .env_remove("LC_ALL")
+            .env_remove("LC_MESSAGES")
+            .env_remove("OPENVIKING_LANG")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::null())
+            .arg("--version");
+        if let Some(language) = language {
+            command.env("OPENVIKING_LANG", language);
+        }
+        let result = command.output().unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(expected_code),
+            "OPENVIKING_LANG={language:?}: {result:?}"
+        );
+        if expected_code == 0 {
+            assert!(String::from_utf8_lossy(&result.stdout).contains("openviking"));
+        } else {
+            assert!(
+                String::from_utf8_lossy(&result.stderr)
+                    .contains("needs a display language before running commands")
+            );
+        }
+        assert!(!settings.exists(), "startup must not persist a language");
+    }
+}
+
+#[test]
 fn status_and_config_list_identify_the_selected_file() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), "ovcli.conf", "http://default.invalid");

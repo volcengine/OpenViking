@@ -22,6 +22,8 @@ export type Vendor =
 export type AuthMode = 'managed' | 'passthrough'
 /** Header the upstream key is sent in. */
 export type KeyHeader = 'authorization' | 'api-key' | 'x-api-key'
+/** Peers whose memories recall may return: every peer, or the request's peer only. */
+export type RecallPeerScope = 'all' | 'actor'
 
 /** Sources recall searches, in display order. */
 export const CONTEXT_TYPES = ['memory', 'resource', 'skill'] as const
@@ -57,7 +59,14 @@ export const LOG_KINDS = [
 ] as const
 export type LogKind = (typeof LOG_KINDS)[number]
 
-export type CaptureStatus = 'active' | 'disabled' | 'retrying' | 'paused'
+/** `retrying`, `paused` and `lost` appear only on records from earlier versions. */
+export type CaptureStatus =
+  | 'active'
+  | 'disabled'
+  | 'failed'
+  | 'retrying'
+  | 'paused'
+  | 'lost'
 
 type UpstreamSettings = {
   name: string
@@ -109,6 +118,7 @@ export type ProfileSettings = {
   name: string
   recall: boolean
   profile: boolean
+  soul: boolean
   profile_max_tokens: number
   capture: boolean
   context_types: ContextType[]
@@ -118,9 +128,12 @@ export type ProfileSettings = {
   score_threshold: number
   recall_timeout: number
   query_max_chars: number
+  recall_peer_scope: RecallPeerScope
   show_recall: boolean
   commit_tokens: number
   keep_recent_messages: number
+  /** Memory types OpenViking extracts; `null` means every enabled type. */
+  capture_memory_types: string[] | null
   idle_seconds: number
   compaction: boolean
   compaction_threshold: number
@@ -258,8 +271,8 @@ export type Overview = {
   recall_requests: number
   /** Average recall time in ms over `recall_requests`. */
   recall_ms: number
-  /** Conversations whose latest saving status is retrying or paused. */
-  capture_issues: { retrying: number; paused: number }
+  /** Conversations whose latest finished turn was not saved. */
+  capture_issues: { failed: number }
   sample_limit: number
   /** Days the request log keeps records. */
   log_retention_days: number
@@ -285,8 +298,10 @@ export type LogRecord = {
   recall_reason?: string
   capture_status?: CaptureStatus
   capture_reason?: string
-  /** Epoch seconds or null. */
-  capture_retry_at?: number | null
+  /** Messages this request wrote to OpenViking. */
+  capture_messages?: number
+  /** OpenViking session the messages were written to. */
+  openviking_session?: string
   tool_skip_reason?: string
   tool_stop_reason?: string
   hidden_rounds?: number

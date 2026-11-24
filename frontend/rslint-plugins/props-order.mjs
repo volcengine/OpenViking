@@ -14,6 +14,7 @@
 /** 按名称判定的字段类别。 */
 const NAMED_KINDS = {
   slots: 'slots',
+  previewSlots: 'slots',
   labels: 'labels',
   requestOptions: 'config',
 };

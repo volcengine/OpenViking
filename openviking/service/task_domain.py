@@ -255,6 +255,12 @@ class TaskRecord:
         public_meta = deepcopy(self.meta)
         public_meta.pop("submission_hash", None)
         public_meta.pop("submission_token", None)
+        request = public_meta.get("request")
+        if self.task_type == "compile" and isinstance(request, dict):
+            compile_meta = request.get("compile")
+            if isinstance(compile_meta, dict):
+                compile_meta.pop("input_signature", None)
+                compile_meta.pop("owner_user_id", None)
         return {
             **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
             "task_id": self.task_id,
@@ -271,6 +277,13 @@ class TaskRecord:
             "created_at_iso": datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat(),
             "updated_at_iso": datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat(),
         }
+
+    def has_compile_dependency_failure(self) -> bool:
+        """A checkpointed Runtime failure takes precedence over a Compile cancellation."""
+        return self.task_type == "compile" and self.meta.get("compile_runtime_http_status") in (
+            404,
+            424,
+        )
 
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_TASK_STATUSES
@@ -436,7 +449,14 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     works = list(works)
     if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
         return False
-    if task.status == TaskStatus.CANCELLING:
+    rollback_failed = (
+        task.task_type == "compile"
+        and isinstance(task.result, dict)
+        and task.result.get("rollback_incomplete") is True
+    )
+    if task.status == TaskStatus.CANCELLING and not (
+        task.error and (task.has_compile_dependency_failure() or rollback_failed)
+    ):
         task.status = TaskStatus.CANCELLED
     else:
         work_error = first_work_error(works)

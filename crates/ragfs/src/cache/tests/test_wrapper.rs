@@ -268,3 +268,35 @@ async fn query_index_gc_removes_expired_members_after_change_threshold() {
         vec![fresh_bucket]
     );
 }
+
+#[tokio::test]
+async fn query_bucket_expiration_uses_override_or_provider_default() {
+    for (override_seconds, expected_seconds) in [(Some(60), 60), (None, 300)] {
+        let backend = MemFileSystem::new();
+        backend.mkdir("/docs", 0o755).await.unwrap();
+        backend
+            .write("/docs/a.txt", b"a", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let provider = Arc::new(MemoryMockProvider::new());
+        let runtime = CacheRuntime::memory_with_provider(Arc::clone(&provider));
+        let cached = CachedFileSystem::with_runtime(Box::new(backend), runtime, SERVICE_NAME)
+            .with_shared_redis_ttl(override_seconds.map(Duration::from_secs));
+
+        cached
+            .read_dir("/docs", None, None, None, None)
+            .await
+            .unwrap();
+
+        let bucket_key = query_bucket_key(SERVICE_NAME, "/docs", "read_dir");
+        let remaining = provider
+            .expiration_remaining(&bucket_key)
+            .await
+            .expect("the read_dir bucket should carry an expiration");
+        assert!(
+            (Duration::from_secs(expected_seconds - 5)..=Duration::from_secs(expected_seconds))
+                .contains(&remaining),
+            "expected TTL near {expected_seconds}s with override {override_seconds:?}, got {remaining:?}"
+        );
+    }
+}

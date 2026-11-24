@@ -1,10 +1,13 @@
 # 隐私配置
 
 隐私配置在当前用户空间内，按 `category + target_key` 管理技能、会话中的敏感信息（如密钥、凭据等）。配置值变化时会生成版本快照，可查询历史版本并切换生效版本。提交与当前版本相同的值不会创建新版本。
+> 本页管理配置值和版本的接口不依赖于[用户 settings](08-admin.md#user-settings) 中的自动处理开关
 
 以下示例使用当前用户的 API Key。trusted 模式需补充部署要求的身份头。读取值的接口和 CLI 命令会返回实际值；树总览和字段元数据接口不返回值。下文的 `***` 仅为示例占位符，不表示接口自动脱敏。
 
 激活版本只改变 OpenViking 保存的配置，不会替外部服务轮换、撤销或恢复密钥。
+
+修改同一用户下同一个 `category + target_key` 的配置需要获取目标写锁。锁被其他操作占用时，接口返回 HTTP 409（`CONFLICT`），不等待锁释放或自动重试本次修改。
 
 ## 典型场景
 
@@ -99,7 +102,7 @@
 
 ### scan_privacy_content()
 
-显式扫描一个已经持久化的文件或目录。默认 dry-run，不返回命中的原值；`fix=true` 时替换无歧义命中，并异步刷新相应内容。
+显式扫描一个已经持久化的文件或目录。默认 dry-run，不返回命中的原值；`fix=true` 时替换命中值，并异步刷新相应内容。
 
 ```text
 POST /api/v1/privacy-configs/scan
@@ -114,6 +117,7 @@ POST /api/v1/privacy-configs/scan
 ```
 
 `uri` 必填，服务端刻意不支持按 scope 发起全域扫描。`node_limit` 只能在 1–1000 之间。服务端还强制限制为每个进程同时一个扫描、每秒最多读取 20 个文件、单文件最多 1 MiB、总输入最多 16 MiB、单文件最多记录 1000 个替换、每个命中文件最多返回 32 条引用详情、单次最多修复 100 个文件，并使用协作式 60 秒扫描预算；第二个并发请求返回 `RESOURCE_EXHAUSTED`。修复不会等待语义和向量刷新完成。响应会返回跳过文件计数、截断状态、停止原因和实际生效的限制。重复值对应多个 Privacy 字段时报告 `ambiguous`，不会任意选取引用。
+默认按照固定的顺序选择可还原的引用，也可以通过环境变量 `OPENVIKING_PRIVACY_AMBIGUOUS_STRICT=1` 来拒绝这种匹配操作。
 
 ---
 
@@ -622,6 +626,29 @@ ov privacy delete '{{ov_privacy:alice:viking://~/privacy/credential/github-prod#
 ov privacy scan --uri viking://~/resources/project-a
 ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ```
+
+### 使用 Privacy 引用运行外部命令
+
+`ov privacy run` 支持调用方或 Agent 直接使用 Privacy 引用（<code v-pre>{{ov_privacy:...}}</code>，可通过 `ov privacy reference` 或 `ov privacy tree --references` 获取）来运行本地外部命令（如 `gh`、`curl`）。在启动外部命令前，`ov privacy run` 会先解析环境变量或参数中的引用并注入敏感值；外部命令输出到 `stdout`/`stderr` 的内容中，匹配的敏感值也会被实时替换为对应的 Privacy 引用。
+
+> 输出替换仅作用于该外部命令的 `stdout` 和 `stderr`，不会处理其写入文件或发送到网络的内容。
+
+```bash
+# 1. 通过环境变量传入（推荐，避免敏感值出现在进程参数中）
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user
+
+# 2. 从文件批量加载（每行一条 NAME={{ov_privacy:...}}，支持成对引号与 # 注释）
+ov privacy run --env-file ./privacy.env -- gh api user
+
+# 3. 直接嵌在外部命令的单个参数中
+ov privacy run -- curl -H 'Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' https://api.example.com
+
+# 4. 需要管道或重定向时显式调用 sh -c，并通过环境变量传入引用
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- \
+  sh -c 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.example.com | jq .login'
+```
+
+> 在上面的示例 3 和 4 中，敏感值最终都会进入 `curl` 的进程参数（示例 3 由 `ov privacy run` 替换参数中的引用，示例 4 由 `sh` 展开 `$GITHUB_TOKEN`），可能会被本机其他进程、其他容器或宿主机看到。因此，建议优先使用 `--env` / `--env-file` 让目标程序直接读取环境变量（如示例 1、2），也可以设置 `OPENVIKING_PRIVACY_RUN_STRICT=1` 禁止在 `ov privacy run` 的命令参数中使用引用。
 
 ---
 

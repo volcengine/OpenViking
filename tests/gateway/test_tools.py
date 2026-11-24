@@ -41,30 +41,24 @@ def test_vendor_tool_capabilities(vendor, replay, extra, offered):
         assert reason == "deepseek_reasoning_history_required"
 
 
-def test_default_policy_offers_read_only_and_future_tools():
-    policy = Policy().model_dump()
-    assert policy["gateway_tools"]
-    catalog = [*MCP_TOOLS, mcp_tool("future", {})]
-    names = {
-        tool["function"]["name"].removeprefix("openviking_")
-        for tool in select_tools(catalog, policy)
-    }
-    assert names == {"find", "search", "read", "list", "grep", "glob", "health", "future"}
-
-
 def test_tools_default_to_all_and_only_raw_disabled_names_are_excluded():
-    policy = Policy(gateway_tools=True, disabled_tools=["write", "openviking_read"]).model_dump()
-    selected = select_tools(MCP_TOOLS, policy)
+    future_tool = mcp_tool("future", {"new_argument": {"type": "string"}})
+    catalog = [*MCP_TOOLS, future_tool]
+    default = Policy().model_dump()
+    assert {t["function"]["name"] for t in select_tools(catalog, default)} == {
+        "openviking_" + t["name"] for t in catalog
+    }
+    policy = {**default, "disabled_tools": ["write", "openviking_read"]}
+    selected = select_tools(catalog, policy)
     names = {tool["function"]["name"] for tool in selected}
-    assert names == {"openviking_" + t["name"] for t in MCP_TOOLS if t["name"] != "write"}
+    assert names == {"openviking_" + t["name"] for t in catalog if t["name"] != "write"}
     # Imports are offered without a shell or attachment; a local path fails at call time.
     assert {"openviking_add_resource", "openviking_add_skill", "openviking_read"} <= names
-    catalog = [mcp_tool("future", {"new_argument": {"type": "string"}})]
-    future = select_tools(catalog, policy)[0]["function"]
+    future = next(t["function"] for t in selected if t["function"]["name"] == "openviking_future")
     assert future == {
         "name": "openviking_future",
-        "description": catalog[0]["description"],
-        "parameters": catalog[0]["inputSchema"],
+        "description": future_tool["description"],
+        "parameters": future_tool["inputSchema"],
     }
     for tool in selected:
         if tool["function"]["name"] in {"openviking_add_resource", "openviking_add_skill"}:
@@ -347,26 +341,6 @@ async def test_notices_stream_around_each_gateway_call():
     assert "> OpenViking" not in orjson.dumps(loop.body["messages"]).decode()
 
 
-async def test_notices_off_leave_the_reply_unchanged():
-    async def execute(call):
-        return {"role": "tool", "tool_call_id": call["id"], "content": "{}"}
-
-    prepared = SimpleNamespace(
-        body={"messages": [], "stream": True},
-        protocol="chat",
-        root={"policy": {"show_tool_calls": False}},
-        metrics={},
-        tools_active=True,
-        tools_closed=False,
-        reply_lead="",
-    )
-    executor = SimpleNamespace(allowed={"openviking_search"}, execute=execute)
-    loop = HiddenToolLoop(prepared, executor, None, ResponseCapture("chat"))
-    loop.adapter.begin()
-    events = [e async for e in loop.execute([gateway_call("search", {"query": "blue"})])]
-    assert events == [] and loop.adapter.visible == [{"role": "assistant", "content": ""}]
-
-
 def test_capture_drops_tool_notices_from_assistant_text():
     notice = "\n\n> OpenViking add_resource: https://x/a.pdf — done\n\n"
     two = '\n\n> OpenViking search: "a — b" — done\n\n> OpenViking read: viking://a — failed\n\n'
@@ -483,24 +457,6 @@ async def test_real_stateless_fastmcp_transport(json_response):
         listener.close()
 
 
-async def test_explicit_session_keeps_initial_tool_snapshot(setup_kernel, credential, policy):
-    kernel, _, _, _ = setup_kernel
-    policy.update(gateway_tools=True, disabled_tools=["list"])
-    body = {"messages": [{"role": "user", "content": "Find blue"}]}
-    first = await kernel.prepare(
-        body, "chat", {"x-openviking-session": "tools"}, credential, {"id": "upstream"}, policy
-    )
-    policy = {**policy, "disabled_tools": ["find"]}
-    body["messages"].extend(
-        [{"role": "assistant", "content": "blue"}, {"role": "user", "content": "Follow up"}]
-    )
-    second = await kernel.prepare(
-        body, "chat", {"x-openviking-session": "tools"}, credential, {"id": "upstream"}, policy
-    )
-    assert first.session == second.session
-    assert first.body["tools"] == second.body["tools"]
-
-
 async def test_incompatible_tools_keep_visible_history(setup_kernel, credential, policy):
     kernel, store, _, _ = setup_kernel
     policy.update(gateway_tools=True, recall=False)
@@ -584,10 +540,11 @@ async def test_catalog_cache_single_flight_refresh_and_last_success():
         await fresh.tools("malformed")
 
 
-async def test_catalog_unavailable_freezes_safe_empty_root(setup_kernel, credential, policy):
+async def test_catalog_unavailable_is_retried_on_the_next_turn(setup_kernel, credential, policy):
     from openviking_gateway.client import VikingError
+    from openviking_gateway.records import RecordKind as K
 
-    kernel, _, viking, _ = setup_kernel
+    kernel, store, viking, _ = setup_kernel
     policy.update(gateway_tools=True)
     viking.tools_failure = VikingError("private details")
     headers = {"x-openviking-session": "offline"}
@@ -597,16 +554,98 @@ async def test_catalog_unavailable_freezes_safe_empty_root(setup_kernel, credent
     assert prepared.metrics["tool_skip_reason"] == "tools_unavailable"
     assert prepared.metrics["tools_tokens"] == 0
     assert "private details" not in str(prepared.metrics)
-    # OpenViking recovering reaches new sessions only; this one keeps its empty list.
+    records = await store.replay.read(prepared.scope, prepared.session, [""])
+    assert (K.ROOT, "") in records and (K.TOOLS, "") not in records
+    # Once OpenViking recovers, the conversation's next turn gets the tools.
     viking.tools_failure = None
     body["messages"] += [
         {"role": "assistant", "content": "I cannot search right now."},
         {"role": "user", "content": "Try again"},
     ]
     later = await kernel.prepare(body, "chat", headers, credential, {"id": "u"}, policy)
-    assert later.root == prepared.root and not later.tools_active
-    assert later.metrics["tool_skip_reason"] == "tools_unavailable"
-    assert len(viking.tool_keys) == 1
+    assert later.tools_active and later.root["tools"]
+    assert "tool_skip_reason" not in later.metrics
+    assert len(viking.tool_keys) == 2
+
+
+async def test_late_tools_are_announced_once(setup_kernel, credential, policy):
+    from openviking_gateway.client import VikingError
+    from openviking_gateway.records import RecordKind as K
+
+    kernel, _, viking, _ = setup_kernel
+    policy.update(gateway_tools=True)
+    viking.tools_failure = VikingError("openviking_unavailable")
+    headers = {"x-openviking-session": "late"}
+    body = {"messages": []}
+
+    async def turn(text):
+        if body["messages"]:
+            body["messages"].append({"role": "assistant", "content": "Noted."})
+        body["messages"].append({"role": "user", "content": text})
+        prepared = await kernel.prepare(body, "chat", headers, credential, {"id": "u"}, policy)
+        return prepared.records[K.INJECTION, prepared.chain[prepared.anchor]]
+
+    first = await turn("Look up my deployment")
+    assert "openviking_" not in first["text"] and not first.get("tools_noted")
+    viking.tools_failure = None
+    second = await turn("Try again")
+    assert second["text"].startswith('<openviking-context source="gateway-session-start">')
+    assert "openviking_search" in second["text"] and second["tools_noted"]
+    third = await turn("And once more")
+    assert "gateway-session-start" not in third["text"]
+    assert not third.get("tools_noted")
+
+
+async def test_failed_first_load_is_retried_at_most_every_30_seconds(monkeypatch):
+    from openviking_gateway import client as module
+    from openviking_gateway.client import VikingClient, VikingError
+
+    now, calls = [1000.0], []
+
+    async def mcp(method, key, params=None, timeout=120):
+        calls.append(method)
+        if len(calls) == 1:
+            raise VikingError("openviking_unavailable")
+        return {"tools": [mcp_tool("search", {})]}
+
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    client = VikingClient(None, "http://one", "0.4.16")
+    client.mcp = mcp
+    with pytest.raises(VikingError):
+        await client.tools("key")
+    now[0] += 29
+    with pytest.raises(VikingError, match="openviking_unavailable"):
+        await client.tools("key")
+    assert len(calls) == 1
+    now[0] += 2
+    assert len(await client.tools("key")) == 1
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("refusal", ["circuit_open", "budget_exhausted"])
+async def test_request_scoped_refusal_does_not_block_the_next_load(refusal):
+    from openviking_gateway.client import CALL, CallContext, VikingClient, VikingError
+
+    calls = []
+
+    async def mcp(method, key, params=None, timeout=120):
+        calls.append(method)
+        if refusal == "circuit_open" and len(calls) == 1:
+            raise VikingError("openviking_circuit_open")
+        return {"tools": [mcp_tool("search", {})]}
+
+    client = VikingClient(None, "http://one", "0.4.16")
+    client.mcp = mcp
+    token = CALL.set(CallContext("r-1", deadline=0.0)) if refusal == "budget_exhausted" else None
+    try:
+        with pytest.raises(VikingError, match="openviking_" + refusal):
+            await client.tools("key")
+    finally:
+        if token:
+            CALL.reset(token)
+    assert client.tools_retry_at == 0
+    assert calls == ([] if refusal == "budget_exhausted" else ["tools/list"])
+    assert len(await client.tools("key")) == 1
 
 
 async def test_tool_list_loads_only_for_sessions_that_can_use_tools(

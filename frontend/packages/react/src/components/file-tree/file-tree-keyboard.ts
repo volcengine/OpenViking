@@ -60,7 +60,7 @@ export function handleRowKeyDown(
     case 'Enter':
     case ' ':
       event.preventDefault();
-      if (!row.disabled) onSelect?.(row);
+      if (!row.disabled && row.selectable !== false) onSelect?.(row);
       return;
     default:
       return;

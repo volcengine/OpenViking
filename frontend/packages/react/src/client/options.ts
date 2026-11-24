@@ -90,7 +90,7 @@ export function resolveClientOptions(
 ): OvResolvedOptions {
   return {
     baseURL: options.baseURL ?? '',
-    credentials: options.credentials ?? 'same-origin',
+    credentials: options.credentials ?? 'include',
     headers: toHeaders(identity),
     signal: options.signal,
   };

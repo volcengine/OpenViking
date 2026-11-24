@@ -4,7 +4,6 @@
 from openviking.service.task_domain import (
     QueueWorkSummary,
     make_work_error,
-    project_work_error,
     queue_result,
     serialize_work_errors,
 )
@@ -12,56 +11,37 @@ from openviking.service.task_domain import (
 
 def test_make_work_error_omits_empty_optional_fields():
     assert make_work_error("m") == {"message": "m"}
-    assert make_work_error("m", uri="v://r") == {"message": "m", "uri": "v://r"}
-    assert make_work_error("m", err_brief="b") == {"message": "m", "err_brief": "b"}
-    assert make_work_error("m", "v://r", "b") == {
-        "message": "m",
-        "uri": "v://r",
-        "err_brief": "b",
-    }
+    assert make_work_error("m", uri="", err_brief="") == {"message": "m"}
 
 
-def test_project_legacy_string_is_message_only():
-    assert project_work_error("old failure") == {"message": "old failure"}
-
-
-def test_project_shaped_dict_keeps_known_fields_only():
-    out = project_work_error(
-        {"message": "m", "uri": "v://r", "err_brief": "b", "internal": "x"}
-    )
-    assert out == {"message": "m", "uri": "v://r", "err_brief": "b"}
-
-
-def test_project_unknown_type_yields_empty_message_not_fake_text():
-    assert project_work_error(object()) == {"message": ""}
-
-
-def test_serialize_masks_message_and_preserves_uri_brief():
-    out = serialize_work_errors([make_work_error("token sk-" + "a" * 40, "v://r", "keep")])
-    assert len(out) == 1
-    assert "[REDACTED]" in out[0]["message"]
-    assert out[0]["uri"] == "v://r"
-    assert out[0]["err_brief"] == "keep"
-
-
-def test_serialize_truncates_long_message():
-    out = serialize_work_errors([make_work_error("x" * 700)])
-    assert len(out[0]["message"]) == 514
-    assert out[0]["message"].endswith("...[truncated]")
+def test_serialize_masks_and_truncates_message_and_preserves_uri_brief():
+    uri = "viking://resources/project/page.md"
+    detail = "x" * 700
+    error = make_work_error("Provider rejected sk-example: " + detail, uri, "embedding_failed")
+    assert serialize_work_errors([error]) == [
+        {
+            "message": ("Provider rejected [REDACTED]: " + detail)[:500] + "...[truncated]",
+            "uri": uri,
+            "err_brief": "embedding_failed",
+        },
+    ]
 
 
 def test_serialize_drops_empty_or_unknown():
-    assert serialize_work_errors([make_work_error(""), object()]) == []
+    assert serialize_work_errors([make_work_error(""), 42]) == []
 
 
 def test_queue_result_projects_mixed_entries():
     summary = QueueWorkSummary(
         error_count=2,
-        errors=["legacy string", make_work_error("m", uri="v://r", err_brief="b")],
+        errors=[
+            "legacy string",
+            {"message": "m", "uri": "viking://resources/r", "err_brief": "b", "internal": "x"},
+        ],
     )
     result = queue_result(summary)
     assert result["error_count"] == 2
     assert result["errors"] == [
         {"message": "legacy string"},
-        {"message": "m", "uri": "v://r", "err_brief": "b"},
+        {"message": "m", "uri": "viking://resources/r", "err_brief": "b"},
     ]

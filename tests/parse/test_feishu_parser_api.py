@@ -117,6 +117,7 @@ async def _interrupt_staged_add_resource(monkeypatch, task_status):
     service = SimpleNamespace(
         execute_add_resource_job=AsyncMock(side_effect=asyncio.CancelledError),
         _link_resource_reason_memory=AsyncMock(),
+        _initial_source_checkpoint=ResourceService._initial_source_checkpoint,
     )
     viking_fs = SimpleNamespace(
         _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
@@ -329,7 +330,7 @@ async def test_feishu_parse_sends_uat_and_uses_artifact_root(tmp_path: Path):
         zf.writestr("真实文档标题/0.md", "content")
 
     api = _understanding_api_for_parse()
-    api._create_response_for_url = AsyncMock(return_value={"id": "response-1"})
+    api._submit_response = AsyncMock(return_value={"id": "response-1"})
     api._poll_response = AsyncMock(
         return_value={"status": "completed", "result": {"zip_url": "https://tos/result.zip"}}
     )
@@ -339,13 +340,14 @@ async def test_feishu_parse_sends_uat_and_uses_artifact_root(tmp_path: Path):
     result = await api.parse(
         "https://example.larkoffice.com/wiki/wikicnToken",
         feishu_access_token="u-test",
+        enable_nested_import=True,
+        nested_depth=3,
     )
 
-    api._create_response_for_url.assert_awaited_once_with(
-        url="https://example.larkoffice.com/wiki/wikicnToken",
-        doc_type="wiki",
-        lark_file={"user_access_token": "u-test"},
-    )
+    payload = api._submit_response.await_args.args[0]
+    assert payload["input"][0]["content"][0]["lark_file"] == {"user_access_token": "u-test"}
+    assert payload["enable_nested_import"] is True
+    assert payload["nested_depth"] == 3
     api._unpack_zip_to_temp_dir.assert_awaited_once_with(
         zip_path=zip_path,
         resource_name="真实文档标题",
@@ -373,6 +375,8 @@ async def test_feishu_parse_resumes_prepared_response_without_lark_auth(tmp_path
 
     result = await api.parse(
         "https://example.larkoffice.com/docx/doxcnToken",
+        enable_nested_import=True,
+        nested_depth=3,
         **{PREPARED_RESPONSE_ID_ARG: "response-1"},
     )
 
@@ -447,7 +451,18 @@ async def test_feishu_parse_requires_lark_auth():
 
 
 @pytest.mark.asyncio
-async def test_create_response_payload_contains_lark_file(monkeypatch):
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"enable_nested_import": True, "nested_depth": 3},
+        {"enable_nested_import": True},
+        {"nested_depth": 3},
+        {"enable_nested_import": False},
+        {"nested_depth": 0},
+    ],
+)
+async def test_submit_feishu_url_sends_explicit_nested_options(monkeypatch, options):
     seen = {}
 
     class FakeResponse:
@@ -479,37 +494,41 @@ async def test_create_response_payload_contains_lark_file(monkeypatch):
     api._api_key = "parser-key"
     api._http_timeout_sec = 10
 
-    result = await api._create_response_for_url(
-        url="https://example.larkoffice.com/base/bascnToken?table=tblToken",
-        doc_type="bitable",
-        lark_file={"user_access_token": "u-test"},
-    )
-
-    assert result == {"id": "response-1"}
-    assert seen["payload"]["input"][0]["content"] == [
-        {
-            "type": "input_file",
-            "file_url": "https://example.larkoffice.com/base/bascnToken?table=tblToken",
-            "lark_file": {"user_access_token": "u-test"},
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_submit_url_returns_response_id_without_persisting_auth():
-    api = _understanding_api_for_parse()
-    api._create_response_for_url = AsyncMock(return_value={"id": "response-1"})
-
+    url = "https://example.larkoffice.com/base/bascnToken?table=tblToken"
     response_id = await api.submit_url(
-        "https://example.larkoffice.com/docx/doxcnToken",
-        feishu_access_token="u-test",
+        url,
+        lark_file={"user_access_token": "u-test"},
+        **options,
     )
 
     assert response_id == "response-1"
-    api._create_response_for_url.assert_awaited_once_with(
-        url="https://example.larkoffice.com/docx/doxcnToken",
-        doc_type="docx",
-        lark_file={"user_access_token": "u-test"},
+    assert seen["url"] == "https://parser.example/api/v3/responses"
+    content = {"type": "input_file", "file_url": url, "lark_file": {"user_access_token": "u-test"}}
+    assert seen["payload"] == {
+        "input": [{"role": "user", "content": [content]}],
+        "tools": [{"type": "understanding"}],
+        "store": True,
+        **options,
+    }
+    # Dict equality alone treats False and 0 as equal.
+    for key, expected in options.items():
+        assert type(seen["payload"][key]) is type(expected)
+
+
+@pytest.mark.asyncio
+async def test_submit_non_feishu_url_omits_nested_options():
+    api = _understanding_api_for_parse()
+    api._submit_response = AsyncMock(return_value={"id": "response-1"})
+    url = "https://example.com/document.pdf"
+
+    await api.submit_url(url, enable_nested_import=True, nested_depth=3)
+
+    api._submit_response.assert_awaited_once_with(
+        {
+            "input": [{"role": "user", "content": [{"type": "input_file", "file_url": url}]}],
+            "tools": [{"type": "understanding"}],
+            "store": True,
+        }
     )
 
 
@@ -571,6 +590,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     source,
     preflight_name,
     internal_task,
+    watch_vfs,
 ):
     root_uri = "viking://resources/lark/doxcnToken"
     submit_understanding = AsyncMock(return_value="response-1")
@@ -585,7 +605,9 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         ),
     )
     task_tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
         start=AsyncMock(),
         patch_task=AsyncMock(),
         complete=AsyncMock(),
@@ -603,7 +625,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     )
 
     service = ResourceService(
-        viking_fs=SimpleNamespace(),
+        viking_fs=watch_vfs,
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
         runtime_config_manager=_runtime_config_manager(feishu_config),
@@ -626,7 +648,9 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
         assert feishu_access_token == "u-secret"
         assert kwargs["feishu_config"] is feishu_config
-        return SimpleNamespace(source_name=preflight_name, source_format="file")
+        return SimpleNamespace(
+            source_name=preflight_name, source_format="file", doc_type=source.split("/")[3]
+        )
 
     async def plan_source_job_target(*, source_info, **_kwargs):
         return root_uri, None, source_info.source_name is None, False
@@ -666,6 +690,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         feishu_access_token="u-secret",
         feishu_config=feishu_config,
         custom_option="forwarded",
+        _feishu_resolved_type=source.split("/")[3],
     )
     payload = queue_manager.enqueue.await_args.args[1]
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
@@ -711,6 +736,8 @@ async def test_local_source_job_stages_snapshot_before_enqueue(monkeypatch, tmp_
         process_resource=AsyncMock(),
     )
     viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        _get_vector_store=lambda: None,
         create_temp_uri=Mock(return_value="viking://temp/account-1/source-task"),
         write_file_bytes=AsyncMock(),
         delete_temp=AsyncMock(),
@@ -721,7 +748,9 @@ async def test_local_source_job_stages_snapshot_before_enqueue(monkeypatch, tmp_
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
     )
-    service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="task-1"))
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+    )
     service._plan_source_job_target = AsyncMock(return_value=(root_uri, None, False, False))
     monkeypatch.setattr(
         service,
@@ -819,7 +848,9 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         tree_builder=SimpleNamespace(resolve_target_uri=AsyncMock(return_value=(root_uri, None))),
     )
     task_tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
         patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
@@ -854,6 +885,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
             _uri_to_path=lambda _uri, ctx: "/resources/fixed",
             _async_agfs=agfs,
             _ensure_access=AsyncMock(),
+            _get_vector_store=lambda: None,
         ),
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
@@ -875,7 +907,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
 
     async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
         assert feishu_access_token == "u-secret"
-        return SimpleNamespace(source_name=None, source_format="file")
+        return SimpleNamespace(source_name=None, source_format="file", doc_type="docx")
 
     monkeypatch.setattr(
         "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
@@ -1121,6 +1153,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
             return_value={"status": "success", "root_uri": final_uri}
         ),
         _link_resource_reason_memory=AsyncMock(),
+        _initial_source_checkpoint=ResourceService._initial_source_checkpoint,
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -1268,6 +1301,7 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
         SimpleNamespace(
             execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job),
             _link_resource_reason_memory=AsyncMock(),
+            _initial_source_checkpoint=ResourceService._initial_source_checkpoint,
         ),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
@@ -1309,6 +1343,7 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
             return_value={"status": "success", "root_uri": "viking://resources/duplicated"}
         ),
         _link_resource_reason_memory=AsyncMock(),
+        _initial_source_checkpoint=ResourceService._initial_source_checkpoint,
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(

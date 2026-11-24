@@ -35,9 +35,12 @@ def create_session_compressor(
         v3 session compressor instance
     """
     if memory_version is not None:
-        logger.warning("memory.version is deprecated and ignored; using v3 memory compressor")
+        logger.info(
+            "memory.version is deprecated and ignored; using v3 memory compressor",
+            extra={"degraded": True},
+        )
 
-    logger.info("Using v3 memory compressor (v2 + commit streaming train)")
+    logger.debug("using v3 memory compressor (v2 + commit streaming train)")
     from openviking.session.compressor_v3 import SessionCompressorV3
 
     return SessionCompressorV3(

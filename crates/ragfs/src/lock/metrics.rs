@@ -4,7 +4,7 @@ use crate::lock::types::PathLockConflict;
 use crate::metrics::duration::DurationMetrics;
 
 /// Max number of recent conflicts retained for observability.
-const MAX_RECENT_CONFLICTS: usize = 32;
+pub(crate) const MAX_RECENT_CONFLICTS: usize = 32;
 
 /// Runtime metrics collected by `PathLockManager`.
 #[derive(Debug, Clone, Default)]
