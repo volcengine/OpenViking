@@ -10,7 +10,7 @@ import { createOpenVikingSetupService } from "../../services/setup/setup-flow.js
 
 vi.mock("node:readline", () => ({ createInterface: vi.fn() }));
 
-describe("openviking setup agent prefix validation", () => {
+describe("openviking setup command", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -20,20 +20,6 @@ describe("openviking setup agent prefix validation", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-
-  it.each(["", "  ", "main", "foo_main", "foo-main", "Foo_123"])(
-    "accepts valid agent prefix %j",
-    (value) => {
-      expect(/^[a-zA-Z0-9_-]*$/.test(value.trim())).toBe(true);
-    },
-  );
-
-  it.each(["foo.bar", "foo/bar", "foo bar", "中文", "foo:bar"])(
-    "rejects invalid agent prefix %j",
-    (value) => {
-      expect(/^[a-zA-Z0-9_-]*$/.test(value.trim())).toBe(false);
-    },
-  );
 
   it("reads legacy person from existing config but rejects it as setup input", () => {
     expect(setupCommandTest.normalizePeerRole("sender")).toBe("sender");
@@ -102,10 +88,22 @@ describe("openviking setup agent prefix validation", () => {
       baseUrl: "http://127.0.0.1:1933",
       allowOffline: true,
       recallTargetTypes: ["resource"],
+      peerRole: "assistant",
+      peerPrefix: "main",
     });
 
     const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(result.success).toBe(true);
-    expect(config.plugins.entries.openviking.config.recallTargetTypes).toEqual(["resource"]);
+    expect(config.plugins).toMatchObject({
+      allow: ["openviking"],
+      slots: { contextEngine: "openviking" },
+      entries: { openviking: { config: {
+        mode: "remote",
+        baseUrl: "http://127.0.0.1:1933",
+        peer_role: "assistant",
+        peer_prefix: "main",
+        recallTargetTypes: ["resource"],
+      } } },
+    });
   });
 });

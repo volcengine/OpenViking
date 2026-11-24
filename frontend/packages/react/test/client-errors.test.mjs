@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOvClient, isOvClientError } from '@openviking/react/client';
+import {
+  createOvClient,
+  isOvClientError,
+  OV_PATHS,
+} from '@openviking/react/client';
 
 /** 记录每次调用，并按 handler 返回预设响应。 */
 function fakeFetch(handler) {
@@ -93,13 +97,20 @@ test('query skips undefined and null and repeats array keys', async () => {
   );
 });
 
-test('a body is serialised and a body-less request sends none', async () => {
+test('creating a session sends JSON and listing sessions sends no body', async () => {
   const fetch = fakeFetch(ok);
   const client = createOvClient({ baseURL: 'https://ov.test', fetch });
 
-  await client.request({ method: 'POST', path: '/api/v1/x', body: { a: 1 } });
-  await client.request({ method: 'GET', path: '/api/v1/x' });
+  await client.request({
+    method: 'POST',
+    path: OV_PATHS.sessions,
+    body: { session_id: 'chat-1' },
+  });
+  await client.request({ method: 'GET', path: OV_PATHS.sessions });
 
-  assert.equal(fetch.calls[0].init.body, '{"a":1}');
-  assert.equal(fetch.calls[1].init.body, undefined);
+  const [create, list] = fetch.calls.map(({ init }) => init);
+  assert.equal(create.body, '{"session_id":"chat-1"}');
+  assert.equal(create.headers['content-type'], 'application/json');
+  assert.equal(list.body, undefined);
+  assert.equal(list.headers['content-type'], undefined);
 });

@@ -7,31 +7,9 @@ import {
   OV_PATHS,
 } from '@openviking/react/client';
 
-/** 记录每次调用，并按 handler 返回预设响应。 */
-function fakeFetch(handler) {
-  const calls = [];
-  const impl = async (url, init) => {
-    calls.push({ url, init });
-    return handler(url, init);
-  };
-  impl.calls = calls;
-  return impl;
-}
-
-/** 构造一条事件流响应，chunks 按顺序写入。 */
-function eventStream(chunks, init = {}) {
-  const encoder = new TextEncoder();
-  const body = new ReadableStream({
-    start(controller) {
-      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
-      controller.close();
-    },
-  });
-  return new Response(body, {
-    status: init.status ?? 200,
-    headers: { 'content-type': 'text/event-stream', ...(init.headers ?? {}) },
-  });
-}
+const request = { method: 'POST', path: OV_PATHS.botChatStream };
+const eventHeaders = { 'content-type': 'text/event-stream' };
+const encoder = new TextEncoder();
 
 async function collect(stream) {
   const events = [];
@@ -39,166 +17,172 @@ async function collect(stream) {
   return events;
 }
 
-test('a stream yields one event per blank-line separated block', async () => {
-  const fetch = fakeFetch(() =>
-    eventStream(['data: {"a":1}\n\n', 'data: {"b":2}\n\n']),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const stream = await client.stream({
-    method: 'POST',
-    path: OV_PATHS.botChatStream,
-    body: { message: 'hi' },
-  });
-
-  assert.deepEqual(await collect(stream), [
-    { data: '{"a":1}' },
-    { data: '{"b":2}' },
-  ]);
-});
-
-test('an event split across chunks is reassembled', async () => {
-  const fetch = fakeFetch(() =>
-    eventStream(['data: {"event":"con', 'tent_delta"}\n', '\n']),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const stream = await client.stream({ method: 'POST', path: '/x' });
-  assert.deepEqual(await collect(stream), [
-    { data: '{"event":"content_delta"}' },
-  ]);
-});
-
-test('multi-line data joins with newlines and other fields are kept', async () => {
-  const fetch = fakeFetch(() =>
-    eventStream(['id: 7\nevent: ping\nretry: 1500\ndata: a\ndata: b\n\n']),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const stream = await client.stream({ method: 'POST', path: '/x' });
-  assert.deepEqual(await collect(stream), [
-    { data: 'a\nb', event: 'ping', id: '7', retry: 1500 },
-  ]);
-});
-
-test('comment-only heartbeat blocks produce no event', async () => {
-  const fetch = fakeFetch(() =>
-    eventStream([': keepalive\n\n', 'data: {"ok":true}\n\n']),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const stream = await client.stream({ method: 'POST', path: '/x' });
-  assert.deepEqual(await collect(stream), [{ data: '{"ok":true}' }]);
-});
-
-test('a trailing block without a blank line is still dispatched', async () => {
-  const fetch = fakeFetch(() => eventStream(['data: {"last":true}']));
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const stream = await client.stream({ method: 'POST', path: '/x' });
-  assert.deepEqual(await collect(stream), [{ data: '{"last":true}' }]);
-});
-
-test('a stream sends the event-stream accept header and the JSON body', async () => {
-  const fetch = fakeFetch(() => eventStream(['data: x\n\n']));
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: 'sk-1',
-    fetch,
-  });
-
-  await client.stream({
-    method: 'POST',
-    path: OV_PATHS.botChatStream,
-    body: { message: '', Attach: true },
-    headers: { 'x-trace': 't1' },
-  });
-
-  const [{ init }] = fetch.calls;
-  assert.equal(init.headers.accept, 'text/event-stream');
-  assert.equal(init.headers['x-api-key'], 'sk-1');
-  assert.equal(init.headers['x-trace'], 't1');
-  assert.equal(init.headers['content-type'], 'application/json');
-  assert.deepEqual(JSON.parse(init.body), { message: '', Attach: true });
-});
-
-test('a caller header cannot replace an identity header', async () => {
-  const fetch = fakeFetch(() => eventStream(['data: x\n\n']));
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: 'sk-1',
-    fetch,
-  });
-
-  await client.stream({
-    method: 'POST',
-    path: '/x',
-    headers: { 'x-api-key': 'forged' },
-  });
-
-  assert.equal(fetch.calls[0].init.headers['x-api-key'], 'sk-1');
-});
-
-test('a non-event-stream response becomes OvClientError', async () => {
-  const fetch = fakeFetch(
-    () =>
-      new Response(JSON.stringify({ status: 'ok', result: [] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
+function fetchStream(chunks) {
+  return async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+          controller.close();
+        },
       }),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
+      { headers: eventHeaders },
+    );
+}
 
-  await assert.rejects(
-    () => client.stream({ method: 'POST', path: '/x' }),
-    (error) => {
-      assert.ok(isOvClientError(error));
-      assert.equal(error.code, 'UNEXPECTED_CONTENT_TYPE');
-      return true;
+for (const [name, chunks, expected] of [
+  [
+    'LF, comments, fields and trailing data',
+    [
+      ': keepalive\n\nid: 7\nevent: ping\nretry: 1500\ndata: a\ndata: ',
+      'b\n\ndata: last',
+    ],
+    [{ data: 'a\nb', event: 'ping', id: '7', retry: 1500 }, { data: 'last' }],
+  ],
+  [
+    'CRLF split within a field and line ending',
+    ['data: one\r', '\ndata: two\r\n\r\ndata: next\r\n\r\n'],
+    [{ data: 'one\ntwo' }, { data: 'next' }],
+  ],
+  [
+    'CR only',
+    ['event: ping\rdata: a\r\r', 'data: b\r\r'],
+    [{ data: 'a', event: 'ping' }, { data: 'b' }],
+  ],
+]) {
+  test(`frames SSE chunks with ${name}`, async () => {
+    const client = createOvClient({ fetch: fetchStream(chunks) });
+    assert.deepEqual(await collect(await client.stream(request)), expected);
+  });
+}
+
+test('sends a JSON request with the refreshed credential and SSE accept header', async () => {
+  let credentialReads = 0;
+  let sent;
+  const client = createOvClient({
+    apiKey: () => `key-${++credentialReads}`,
+    fetch: async (_url, init) => {
+      sent = init;
+      return fetchStream(['data: accepted\n\n'])();
     },
-  );
+  });
+  const stream = await client.stream({
+    ...request,
+    body: { message: '', Attach: true },
+    headers: { 'x-api-key': 'forged', 'x-trace': 't1' },
+  });
+
+  assert.deepEqual(await collect(stream), [{ data: 'accepted' }]);
+  assert.equal(credentialReads, 1);
+  assert.equal(sent.headers['x-api-key'], 'key-1');
+  assert.equal(sent.headers['x-trace'], 't1');
+  assert.equal(sent.headers.accept, 'text/event-stream');
+  assert.equal(sent.headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(sent.body), { message: '', Attach: true });
 });
 
-test('an HTTP failure before the stream starts is reported with its status', async () => {
-  const fetch = fakeFetch(
-    () =>
-      new Response(
-        JSON.stringify({
-          status: 'error',
-          error: { code: 'NOT_FOUND', message: 'no bot' },
+for (const [status, envelope, code] of [
+  [200, { status: 'ok', result: [] }, 'UNEXPECTED_CONTENT_TYPE'],
+  [
+    404,
+    { status: 'error', error: { code: 'NOT_FOUND', message: 'no bot' } },
+    'NOT_FOUND',
+  ],
+  [200, { status: 'error', error: { code: 'BUSY' } }, 'BUSY'],
+]) {
+  test(`reports ${code} when the response cannot start a stream`, async () => {
+    const client = createOvClient({
+      fetch: async () =>
+        new Response(JSON.stringify(envelope), {
+          status,
+          headers: { 'content-type': 'application/json' },
         }),
-        { status: 404, headers: { 'content-type': 'application/json' } },
-      ),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  await assert.rejects(
-    () => client.stream({ method: 'POST', path: '/x' }),
-    (error) => {
+    });
+    await assert.rejects(client.stream(request), (error) => {
       assert.ok(isOvClientError(error));
-      assert.equal(error.code, 'NOT_FOUND');
-      assert.equal(error.statusCode, 404);
+      assert.equal(error.code, code);
+      if (status !== 200) assert.equal(error.statusCode, status);
       return true;
+    });
+  });
+}
+
+test(
+  'passes the client abort signal to a pending fetch',
+  { timeout: 2000 },
+  async () => {
+    const controller = new AbortController();
+    const client = createOvClient({
+      signal: controller.signal,
+      fetch: async (_url, { signal }) => {
+        signal.throwIfAborted();
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      },
+    });
+
+    const pending = client.stream(request);
+    controller.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+  },
+);
+
+test('detaches the client signal listener after a transport failure', async (t) => {
+  const { signal } = new AbortController();
+  const add = t.mock.method(signal, 'addEventListener');
+  const remove = t.mock.method(signal, 'removeEventListener');
+  const client = createOvClient({
+    signal,
+    fetch: async () => {
+      throw new TypeError('network down');
     },
+  });
+
+  await assert.rejects(client.stream(request));
+  assert.equal(add.mock.callCount(), 1);
+  assert.deepEqual(
+    remove.mock.calls[0].arguments.slice(0, 2),
+    add.mock.calls[0].arguments.slice(0, 2),
   );
+  assert.equal(remove.mock.callCount(), 1);
 });
 
-test('an error envelope inside a non-stream 200 response is reported', async () => {
-  const fetch = fakeFetch(
-    () =>
-      new Response(
-        JSON.stringify({ status: 'error', error: { code: 'BUSY' } }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
+for (const exit of ['break', 'abort pending read']) {
+  test(
+    `dispatches a CR event before EOF and cancels the body on ${exit}`,
+    { timeout: 2000 },
+    async () => {
+      let cancel;
+      const cancelled = new Promise((resolve) => {
+        cancel = resolve;
+      });
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: one\r\r'));
+        },
+        cancel,
+      });
+      const client = createOvClient({
+        fetch: async () => new Response(body, { headers: eventHeaders }),
+      });
 
-  await assert.rejects(
-    () => client.stream({ method: 'POST', path: '/x' }),
-    (error) => {
-      assert.ok(isOvClientError(error));
-      assert.equal(error.code, 'BUSY');
-      return true;
+      const stream = await client.stream(request);
+      if (exit === 'break') {
+        for await (const event of stream) {
+          assert.deepEqual(event, { data: 'one' });
+          break;
+        }
+      } else {
+        const iterator = stream[Symbol.asyncIterator]();
+        assert.deepEqual((await iterator.next()).value, { data: 'one' });
+        const pending = iterator.next();
+        stream.abort();
+        assert.equal((await pending).done, true);
+      }
+      await cancelled;
     },
   );
-});
+}

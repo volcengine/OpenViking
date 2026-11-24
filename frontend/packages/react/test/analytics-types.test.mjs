@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-test('published analytics declarations reject unknown names and mismatched payloads', async () => {
+test('published analytics and monitoring declarations enforce event payloads', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ov-analytics-types-'));
   try {
     await symlink(
@@ -16,11 +16,13 @@ test('published analytics declarations reject unknown names and mismatched paylo
       join(directory, 'node_modules'),
       'dir',
     );
-    const source = await readFile(
-      new URL('./fixtures/analytics-types.ts', import.meta.url),
-    );
-    const file = join(directory, 'consumer.ts');
-    await writeFile(file, source);
+    const files = ['analytics-types.ts', 'monitoring-types.ts'];
+    for (const file of files) {
+      await copyFile(
+        new URL(`./fixtures/${file}`, import.meta.url),
+        join(directory, file),
+      );
+    }
     const result = spawnSync(
       process.execPath,
       [
@@ -34,7 +36,7 @@ test('published analytics declarations reject unknown names and mismatched paylo
         'nodenext',
         '--moduleResolution',
         'nodenext',
-        file,
+        ...files.map((file) => join(directory, file)),
       ],
       { encoding: 'utf8' },
     );

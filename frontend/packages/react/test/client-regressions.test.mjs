@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOvClient, isOvClientError } from '@openviking/react/client';
+import {
+  createOvClient,
+  isOvClientError,
+  OV_PATHS,
+} from '@openviking/react/client';
 
 /** 记录每次调用，并按 handler 返回预设响应。 */
 function fakeFetch(handler) {
@@ -18,28 +22,6 @@ const ok = () =>
   new Response(JSON.stringify({ status: 'ok', result: null }), {
     headers: { 'content-type': 'application/json' },
   });
-
-test('a JSON body declares its content type', async () => {
-  const fetch = fakeFetch(ok);
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  await client.request({ method: 'POST', path: '/api/v1/x', body: { a: 1 } });
-
-  assert.equal(
-    fetch.calls[0].init.headers['content-type'],
-    'application/json',
-    'a serialized body must be sent as JSON',
-  );
-});
-
-test('a body-less request sends no content type', async () => {
-  const fetch = fakeFetch(ok);
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.equal(fetch.calls[0].init.headers['content-type'], undefined);
-});
 
 test('a rejected fetch becomes OvClientError with NETWORK_ERROR', async () => {
   const fetch = async () => {
@@ -106,26 +88,6 @@ test('an explicit empty identity override removes the inherited header', async (
   );
 });
 
-test('an omitted identity field still inherits', async () => {
-  const fetch = fakeFetch(ok);
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: 'parent-key',
-    accountId: 'parent-account',
-    fetch,
-  });
-
-  await client.request({
-    method: 'GET',
-    path: '/api/v1/x',
-    options: { accountId: 'other-account' },
-  });
-
-  const sent = fetch.calls[0].init.headers;
-  assert.equal(sent['x-api-key'], 'parent-key', 'the credential is inherited');
-  assert.equal(sent['x-openviking-account'], 'other-account');
-});
-
 test('a per-request baseURL overrides the client one', async () => {
   const fetch = fakeFetch(ok);
   const client = createOvClient({ baseURL: 'https://ov.test/gateway', fetch });
@@ -149,59 +111,48 @@ test('a per-request baseURL overrides the client one', async () => {
   );
 });
 
-test('a default identity callback runs once per request', async () => {
-  const fetch = fakeFetch(ok);
-  let calls = 0;
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: () => `token-${++calls}`,
-    fetch,
-  });
-
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.equal(calls, 1, 'the callback must not be evaluated twice');
-  assert.equal(
-    fetch.calls[0].init.headers['x-api-key'],
-    'token-1',
-    'the value sent is the one the single evaluation produced',
-  );
-});
-
-test('a default identity callback runs once even when the request overrides another field', async () => {
+test('requests resolve one fresh credential even with a per-request identity override', async () => {
   const fetch = fakeFetch(ok);
   let calls = 0;
   const client = createOvClient({
     baseURL: 'https://ov.test',
     apiKey: () => `token-${++calls}`,
     accountId: 'acc_1',
+    resourceId: 'lib_1',
     fetch,
   });
 
+  await client.request({ method: 'GET', path: OV_PATHS.sessions });
   await client.request({
     method: 'GET',
-    path: '/api/v1/x',
+    path: OV_PATHS.sessions,
     options: { resourceId: 'lib_2' },
   });
-
-  assert.equal(calls, 1);
-  assert.equal(fetch.calls[0].init.headers['x-api-key'], 'token-1');
-  assert.equal(fetch.calls[0].init.headers['v-resource-id'], 'lib_2');
-});
-
-test('each request evaluates the callback again', async () => {
-  const fetch = fakeFetch(ok);
-  let calls = 0;
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: () => `token-${++calls}`,
-    fetch,
+  await client.request({
+    method: 'GET',
+    path: OV_PATHS.sessions,
+    options: { accountId: 'acc_2' },
   });
 
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.equal(calls, 2, 'one evaluation per request');
-  assert.equal(fetch.calls[0].init.headers['x-api-key'], 'token-1');
-  assert.equal(fetch.calls[1].init.headers['x-api-key'], 'token-2');
+  assert.equal(calls, 3);
+  assert.deepEqual(
+    fetch.calls.map(({ init }) => init.headers),
+    [
+      {
+        'x-api-key': 'token-1',
+        'x-openviking-account': 'acc_1',
+        'v-resource-id': 'lib_1',
+      },
+      {
+        'x-api-key': 'token-2',
+        'x-openviking-account': 'acc_1',
+        'v-resource-id': 'lib_2',
+      },
+      {
+        'x-api-key': 'token-3',
+        'x-openviking-account': 'acc_2',
+        'v-resource-id': 'lib_1',
+      },
+    ],
+  );
 });

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOvClient, isOvClientError } from '@openviking/react/client';
+import {
+  createOvClient,
+  isOvClientError,
+  OV_PATHS,
+} from '@openviking/react/client';
 
 /** 记录每次调用，并按 handler 返回预设响应。 */
 function fakeFetch(handler) {
@@ -21,20 +25,31 @@ function json(body, status = 200) {
   });
 }
 
-test('requestEnvelope returns has_more from outside result', async () => {
-  const fetch = fakeFetch(() =>
-    json({ status: 'ok', result: [{ id: 1 }], has_more: true }),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const envelope = await client.requestEnvelope({
-    method: 'GET',
-    path: '/api/v1/fs/ls',
-    query: { uri: 'viking://a' },
+test('directory pagination reads the envelope and request returns entries only', async () => {
+  const uri = 'viking://resources/guides';
+  const firstPage = [{ uri: `${uri}/intro.md` }];
+  const lastPage = [{ uri: `${uri}/setup.md` }];
+  const fetch = fakeFetch((url) => {
+    const offset = new URL(url).searchParams.get('offset');
+    return offset === '1'
+      ? json({ status: 'ok', result: lastPage, has_more: false })
+      : json({ status: 'ok', result: firstPage, has_more: true });
   });
+  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
+  const list = {
+    method: 'GET',
+    path: OV_PATHS.fsLs,
+    query: { uri, node_limit: 1, offset: 0 },
+  };
 
-  assert.deepEqual(envelope.result, [{ id: 1 }]);
-  assert.equal(envelope.hasMore, true);
+  const first = await client.requestEnvelope(list);
+  assert.deepEqual(first, { result: firstPage, hasMore: true });
+  const last = await client.requestEnvelope({
+    ...list,
+    query: { ...list.query, offset: first.result.length },
+  });
+  assert.deepEqual(last, { result: lastPage, hasMore: false });
+  assert.deepEqual(await client.request(list), firstPage);
 });
 
 test('hasMore is false when the response carries no flag', async () => {
@@ -43,24 +58,10 @@ test('hasMore is false when the response carries no flag', async () => {
 
   const envelope = await client.requestEnvelope({
     method: 'GET',
-    path: '/api/v1/fs/ls',
+    path: OV_PATHS.sessions,
   });
 
   assert.deepEqual(envelope.result, []);
-  assert.equal(envelope.hasMore, false);
-});
-
-test('hasMore is false for an explicit false flag', async () => {
-  const fetch = fakeFetch(() =>
-    json({ status: 'ok', result: [], has_more: false }),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const envelope = await client.requestEnvelope({
-    method: 'GET',
-    path: '/api/v1/fs/ls',
-  });
-
   assert.equal(envelope.hasMore, false);
 });
 
@@ -100,14 +101,4 @@ test('requestEnvelope rejects a blob request instead of guessing', async () => {
     },
   );
   assert.equal(fetch.calls.length, 0, 'no request should be sent');
-});
-
-test('request still returns only result', async () => {
-  const fetch = fakeFetch(() =>
-    json({ status: 'ok', result: [{ id: 1 }], has_more: true }),
-  );
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const result = await client.request({ method: 'GET', path: '/api/v1/fs/ls' });
-  assert.deepEqual(result, [{ id: 1 }]);
 });
