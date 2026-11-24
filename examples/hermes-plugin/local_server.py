@@ -415,4 +415,5 @@ class LocalServer:
                 "pid": process.pid if process else None,
                 "state": "ready" if ready else "starting" if process else "stopped",
                 "restart_required": self.paths.restart_required_marker.is_file(),
+                "runtime_validation_pending": self.paths.runtime_validation_pending_marker.is_file(),
             }

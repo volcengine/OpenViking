@@ -18,7 +18,7 @@ risk/
 
 > This is a shape example only — the real topics and findings come from the domain you supply. Note that page names state the **conclusion itself** (`growth-shifted-from-volume-to-pricing`), not a source title (`q2-report-summary`).
 
-Skill source: [examples/compile/ov-compile-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-distillation)
+Skill source: [openviking/system_assets/compile/example-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/knowledge-distillation)
 
 Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
 
@@ -32,7 +32,7 @@ ov ls -r viking://resources/finance-reports
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/knowledge-distillation -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-distillation
 ```
@@ -42,21 +42,23 @@ ov skills list
 Spell out the **analytical question, comparison dimensions, baseline, and scope** in `--instruction` — it directly sets the direction of the distillation:
 
 ```bash
-ov compile \
+ov compile create --compile-name finance-insights \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
   --instruction "Compare the last three years of reports; obtain changes and drivers in revenue quality, profitability, and risk"
+ov compile --compile-name finance-insights
 ```
 
 `--from` accepts multiple sources for cross-knowledge-base comparison:
 
 ```bash
-ov compile \
+ov compile create --compile-name finance-comparison \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
   --instruction "Compare the two yearly knowledge bases; surface changes and structural differences in key metrics"
+ov compile --compile-name finance-comparison
 ```
 
 The command returns a `task_id` immediately:

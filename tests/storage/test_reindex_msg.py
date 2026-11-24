@@ -63,16 +63,13 @@ def test_reindex_msg_rejects_missing_descriptor_fields():
 
 @pytest.mark.asyncio
 async def test_reindex_processor_terminalizes_root_after_descendants(monkeypatch):
-    from openviking.service.task_store import PersistentTaskStore
+    from openviking.service.task_store import PersistentTaskStore, WorkRegistration
     from openviking.service.task_tracker import TaskTracker
-    from openviking.service.task_work_index import QueueTaskMetadata, TaskWorkIndex
     from openviking.storage.queuefs.reindex_processor import ReindexProcessor
     from tests.test_task_tracker import _FakeAgfs
 
     owner = {"account_id": "account-1", "user_id": "user-1"}
     tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    index = TaskWorkIndex()
-    tracker.attach_work_index(index)
     monkeypatch.setattr(
         "openviking.storage.queuefs.reindex_processor.get_task_tracker", Mock(return_value=tracker)
     )
@@ -89,10 +86,14 @@ async def test_reindex_processor_terminalizes_root_after_descendants(monkeypatch
     processor = ReindexProcessor(viking_fs)
     processor._adopt_or_reacquire = AsyncMock(return_value={"lease": "root"})
     task = await tracker.create("admin_reindex", resource_id="viking://resources/demo", **owner)
-    root_work = QueueTaskMetadata(task.task_id, "root-work", **owner)
-    child_work = QueueTaskMetadata(task.task_id, "child-work", **owner)
-    assert index.register("Reindex", root_work)
-    assert index.register("Embedding", child_work)
+    assert (
+        await tracker.register_work(task.task_id, "root-work", "Reindex", **owner)
+        is WorkRegistration.CREATED
+    )
+    assert (
+        await tracker.register_work(task.task_id, "child-work", "Embedding", **owner)
+        is WorkRegistration.CREATED
+    )
     entered_descendant_wait = asyncio.Event()
     original_wait_for_task_work = tracker.wait_for_task_work
 
@@ -119,14 +120,12 @@ async def test_reindex_processor_terminalizes_root_after_descendants(monkeypatch
     assert not processing.done()
     assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.RUNNING
 
-    index.record_result(child_work, "completed")
-    await index.prepare_ack("Embedding", child_work)
+    await tracker.mark_work_done(task.task_id, "child-work", **owner)
     outcome = await asyncio.wait_for(processing, 1)
     assert outcome.outcome.value == "success"
     assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.RUNNING
 
-    index.record_result(root_work, "completed")
-    await index.prepare_ack("Reindex", root_work)
+    await tracker.mark_work_done(task.task_id, "root-work", **owner)
     completed = await tracker.wait(task.task_id, **owner, timeout=0)
     assert completed.status is TaskStatus.COMPLETED
     assert completed.result["rebuilt_records"] == 3
@@ -347,7 +346,7 @@ async def test_reindex_processor_cancellation_releases_root_lock_handoff():
 
 
 @pytest.mark.asyncio
-async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor(monkeypatch):
+async def test_reindex_processor_releases_adopted_lease_when_executor_startup_fails(monkeypatch):
     from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 
     tracker = SimpleNamespace(
@@ -355,32 +354,28 @@ async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor
         start=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
-        wait_for_task_work=AsyncMock(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.reindex_processor.get_task_tracker", Mock(return_value=tracker)
+        "openviking.storage.queuefs.reindex_processor.get_task_tracker", lambda: tracker
     )
-    monkeypatch.setattr(
-        "openviking.server.dependencies.get_service",
-        lambda: SimpleNamespace(_vlm_resolver=None, _vector_config_resolver=None),
+    agfs = SimpleNamespace(pathlock_release=AsyncMock(), pathlock_acquire_tree=AsyncMock())
+    fs = SimpleNamespace(
+        _async_agfs=agfs,
+        _uri_to_path=lambda uri, **kwargs: "/local/account-1/resources/demo",
+        stat=AsyncMock(side_effect=OSError("storage unavailable")),
     )
-    agfs = SimpleNamespace(pathlock_release=AsyncMock())
-
-    async def fail_after_releasing(_self, *, existing_lease, **_kwargs):
-        await agfs.pathlock_release(existing_lease)
-        raise RuntimeError("semantic plan enqueue failed")
-
-    monkeypatch.setattr(
-        "openviking.service.reindex_executor.ReindexExecutor._run",
-        fail_after_releasing,
+    service = SimpleNamespace(
+        viking_fs=fs, vikingdb_manager=SimpleNamespace(has_queue_manager=True)
     )
-    processor = ReindexProcessor(SimpleNamespace(_async_agfs=agfs))
-    processor._adopt_or_reacquire = AsyncMock(return_value={"lease": "root"})
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: service)
+    processor = ReindexProcessor(fs)
+    lease = {"lease": "root"}
+    processor._adopt_or_reacquire = AsyncMock(return_value=lease)
     message = ReindexMsg(
         task_id="task-1",
         uri="viking://resources/demo",
         object_type="resource",
-        mode="semantic_and_vectors",
+        mode="vectors_only",
         account_id="account-1",
         user_id="user-1",
         role="admin",
@@ -389,5 +384,6 @@ async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor
     outcome = await processor.on_dequeue({"id": "queue-1", "data": message.to_dict()})
 
     assert outcome.outcome.value == "failed"
-    agfs.pathlock_release.assert_awaited_once_with({"lease": "root"})
-    tracker.fail.assert_awaited_once()
+    agfs.pathlock_release.assert_awaited_once_with(lease)
+    tracker.complete.assert_not_awaited()
+    assert tracker.fail.await_args.args[:2] == ("task-1", "storage unavailable")

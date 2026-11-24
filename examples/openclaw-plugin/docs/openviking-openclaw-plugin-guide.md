@@ -209,7 +209,7 @@ transformContext auto recall 流程：
 
 ### 5.6 外置 Tool Result 回读
 
-当 OpenViking 服务端将大工具结果外置为 `viking://session/.../tool-results/...` 时，插件提供：
+当 OpenViking 服务端将大工具结果外置为 `viking://user/{user_id}/sessions/.../tool-results/...` 时，插件提供：
 
 | 工具 | 用途 |
 | --- | --- |
@@ -262,7 +262,7 @@ transformContext auto recall 流程：
 | --- | --- | --- | --- |
 | `POST /api/v1/search/find` | 快速语义检索，不依赖 session context | 自动召回、`memory_recall`、`ov_search`、`memory_forget` | body: `query`、`target_uri`、`limit`、`score_threshold`；返回 `memories[]`、`resources[]`、`skills[]`，每项含 `uri`、`level`、`abstract`、`score`、`category`：`client.ts:428` |
 | `POST /api/v1/search/search` | 带 session context 和 intent analysis 的检索 | 暂未使用 | body 可带 `session_id`；返回 `query_plan` / `query_results`。当前插件为了稳定和低延迟统一用 `find()`，session context 由插件自己组装 |
-| `POST /api/v1/search/grep` | 正则/关键词内容搜索 | `ov_archive_search` | body: `uri`、`pattern`、`case_insensitive`、`node_limit`；插件限定在 `viking://session/{id}/history` 内搜 archive：`client.ts:897` |
+| `POST /api/v1/search/grep` | 正则/关键词内容搜索 | `ov_archive_search` | body: `uri`、`pattern`、`case_insensitive`、`node_limit`；插件限定在 `viking://user/{user_id}/sessions/{id}/history` 内搜 archive：`client.ts:897` |
 | `POST /api/v1/search/glob` | glob 文件匹配 | 暂未封装 | body: `pattern`、`uri`、`node_limit`；适合按 `**/*.md`、`src/**/*.ts` 找资源路径 |
 
 #### 6.2.3 Filesystem / Content
@@ -339,8 +339,8 @@ transformContext auto recall 流程：
 | `viking://user/memories` | 当前用户长期记忆别名 |
 | `viking://resources` | account/resource 知识库 |
 | `viking://user/skills` | 当前 agent skill 空间 |
-| `viking://session/{sessionId}/history` | session archive 历史 |
-| `viking://session/{sessionId}/tool-results/{id}` | 外置工具结果 |
+| `viking://user/{user_id}/sessions/{sessionId}/history` | session archive 历史 |
+| `viking://user/{user_id}/sessions/{sessionId}/tool-results/{id}` | 外置工具结果 |
 
 插件通过 `viking://user/...` 写入和检索 user-scoped memory；OpenViking 会根据请求里的租户身份和 actor peer context 解析这个别名。agent 维度通过 `peer_id` / `X-OpenViking-Actor-Peer` 表达，不再使用旧 agent URI namespace。
 
@@ -1322,7 +1322,7 @@ python health_check_tools/ov-healthcheck.py
 5. 新开一轮问“我之前偏好什么语言回复技术文档？”。
 6. 观察最新 user message 是否注入 `<relevant-memories>`，或用 `memory_recall` 显式查。
 7. 用 OpenViking Console/TUI 检查 `viking://user/.../memories` 是否产生 leaf memory。
-8. 对长工具输出场景，确认 preview 中有 `viking://session/.../tool-results/...`，再用 tool-result 工具读取完整内容。
+8. 对长工具输出场景，确认 preview 中有 `viking://user/{user_id}/sessions/.../tool-results/...`，再用 tool-result 工具读取完整内容。
 
 ---
 

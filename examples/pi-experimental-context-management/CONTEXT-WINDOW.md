@@ -626,9 +626,9 @@ summarizer.
   `<archive_uri>/.overview.md` and, as a secondary signal, `GET /tasks/{id}`.
   `GET /sessions/{id}/context` is not used for waiting — right after a commit it
   still returns the previous overview.
-- **No `viking://~` alias.** The server rejects it with `Invalid scope '~'`.
-  URIs come from `GET /sessions/{id}`'s `uri` field (cached) or from the
-  commit's `archive_uri`; the fallback is the legacy `viking://session/{id}`.
+- Session URIs come from `GET /sessions/{id}`'s `uri` field (cached) or from the
+  commit's `archive_uri`; the fallback is the current user's
+  `viking://~/sessions/{id}` home alias.
 - **`ctx.getContextUsage()` is stale for one turn after a reset.** It counts
   the untransformed session, so the core ignores it while
   `awaitingFirstObservation` is set and reports its own estimate as

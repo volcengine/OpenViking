@@ -38,43 +38,19 @@ class TestStaleLockCleanup:
         monkeypatch.setattr(stale_lock_module.sys, "platform", platform)
         monkeypatch.setattr(stale_lock_module.os.path, "exists", _fake_exists)
 
-    def test_removes_stale_lock_in_standard_layout_on_windows(self, tmp_path: Path, monkeypatch):
-        """Stale LOCK at vectordb/<collection>/store/LOCK is removed."""
-        lock_path = self._create_lock_file(tmp_path, "vectordb", "context", "store", "LOCK")
-        self._set_runtime(monkeypatch, platform="win32")
-
-        removed = stale_lock_module.clean_stale_rocksdb_locks(str(tmp_path))
-
-        assert removed == 1
-        assert not lock_path.exists()
-
     def test_removes_multiple_collection_locks_on_windows(self, tmp_path: Path, monkeypatch):
-        """Handles multiple collections with stale LOCKs."""
-        lock1 = self._create_lock_file(tmp_path, "vectordb", "context", "store", "LOCK")
-        lock2 = self._create_lock_file(tmp_path, "vectordb", "memories", "store", "LOCK")
+        """Count each stale LOCK once, including paths found by both globs."""
+        standard = self._create_lock_file(tmp_path, "vectordb", "context", "store", "LOCK")
+        legacy = self._create_lock_file(tmp_path, "vectordb", "memories", "LOCK")
         self._set_runtime(monkeypatch, platform="win32")
 
         removed = stale_lock_module.clean_stale_rocksdb_locks(str(tmp_path))
 
         assert removed == 2
-        assert not lock1.exists()
-        assert not lock2.exists()
-
-    def test_no_error_on_empty_directory(self, tmp_path: Path, monkeypatch):
-        """No crash when data_dir has no LOCK files."""
-        self._set_runtime(monkeypatch, platform="win32")
-
-        removed = stale_lock_module.clean_stale_rocksdb_locks(str(tmp_path))
-
-        assert removed == 0
-
-    def test_no_error_on_nonexistent_directory(self, monkeypatch):
-        """No crash when data_dir does not exist."""
-        self._set_runtime(monkeypatch, platform="win32")
-
-        removed = stale_lock_module.clean_stale_rocksdb_locks("/tmp/does_not_exist_ov_test")
-
-        assert removed == 0
+        assert not standard.exists()
+        assert not legacy.exists()
+        assert stale_lock_module.clean_stale_rocksdb_locks(str(tmp_path)) == 0
+        assert stale_lock_module.clean_stale_rocksdb_locks(str(tmp_path / "missing")) == 0
 
     def test_noop_on_posix_without_container_marker(self, tmp_path: Path, monkeypatch):
         """POSIX without container markers should remain a no-op."""
@@ -133,12 +109,3 @@ class TestStaleLockCleanup:
 
         assert removed == 0
         assert lock_path.exists()
-
-    def test_deduplicates_overlapping_patterns(self, tmp_path: Path, monkeypatch):
-        """Same LOCK file matched by multiple glob patterns is only counted once."""
-        self._create_lock_file(tmp_path, "vectordb", "context", "store", "LOCK")
-        self._set_runtime(monkeypatch, platform="win32")
-
-        removed = stale_lock_module.clean_stale_rocksdb_locks(str(tmp_path))
-
-        assert removed == 1

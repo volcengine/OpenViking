@@ -1,0 +1,14 @@
+image:
+  tag: ci
+replicaCount: 2
+existingSecret: gateway-credentials
+config:
+  storage:
+    kernel: redis
+    management: redis
+    redis:
+      endpoints: ["redis://redis:6379"]
+      password_env: OPENVIKING_GATEWAY_REDIS_PASSWORD
+  encryption:
+    enabled: true
+    provider: local

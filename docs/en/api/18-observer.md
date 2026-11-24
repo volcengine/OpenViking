@@ -4,6 +4,8 @@ The Observer API reports immediate status for queues, the vector database, model
 
 ## Observer API
 
+The queue, lock, retrieval, and system HTTP endpoints accept `scope=account` for the authenticated account. Omitted scope or `scope=runtime` preserves existing behavior; other values are rejected. Account queue `pending` and `in_progress` count pending and running non-Inline Work across all account users, including work not yet fetched. Work completion removes it from these counts even if ACK fails; runtime counts still come from QueueFS. Account queue cumulative counters, lock statistics, and retrieval statistics use local memory. Model and vector observers already use account providers. System health/errors aggregate the five account components; filesystem remains in the response but is excluded from health/errors. Response fields, formats, resets, and metrics exports remain unchanged.
+
 Python examples below use `SyncHTTPClient`. Observer accessors are properties returning dictionaries: use `client.observer.queue`, without parentheses. Each access makes a request; keep the result when reading several fields.
 
 ### observer.queue

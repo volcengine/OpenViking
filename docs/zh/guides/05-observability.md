@@ -564,6 +564,58 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 - 看某一次具体请求为什么慢、token 花在哪、资源处理卡在哪个阶段：看 `telemetry`
 - 看一段时间内请求量、错误率、时延是否持续恶化：看 `/metrics`
 
+## 可选 Kafka 事件上报
+
+安装 `openviking[reporting]`，并在 `ov.conf` 中开启 `server.observability.reporting.enabled`
+和 `server.observability.reporting.telemetry.enabled`。
+上报器从 `reporting.kafka` 读取 Kafka 的地址、认证和 topic，
+从 `reporting.telemetry` 读取队列和部署标识。
+该功能默认关闭，业务调用不会因上报失败而中断。
+
+上报器使用内存队列；`telemetry.queue_capacity` 必须为正整数，默认 `1024`。
+队列满、投递重试耗尽或进程退出时可能丢失事件。投递失败和丢弃事件会输出采样告警，
+日志只包含数量。此上报器适用于允许少量丢失的分析统计，不提供持久化审计或计费账本
+保证。停止服务时应预留优雅退出时间，等待队列发送完成。
+
+部署可在 `reporting.telemetry.deployment` 中设置 `account_id`、`resource_id` 和 `region`。
+`OV_METRICS_ACCOUNT_ID`、`OV_RESOURCE_ID` 和 `OV_REGION` 仍可用作后备值。
+原始数据空间和成员保留为 `ov_account_id`、`ov_user_id`。仅当部署能够确定模型凭据
+归属时，设置 `OV_MODEL_COST_BEARER=customer` 或 `ov`；未设置时保持 `unknown`。
+混用不同归属的凭据时，可信部署配置应在每个 VLM／Embedding 凭据上分别设置
+`cost_bearer`（`ov`、`customer` 或 `unknown`）。实际选中的凭据将此元数据带入成功及失败
+调用事件，候选凭据切换时分别归属。明确的 `unknown` 不会被端点规则或整库默认值改写；
+只有未携带凭据元数据的历史调用才依次使用 `telemetry.model_cost_bearers` 精确规则和
+部署默认值，冲突规则保持 `unknown`。上报不包含原文、提示词或 API Key。
+
+共享记忆批处理根据本批输入请求确定上报归属，不使用长期存活的定时协程继承的旧请求。
+多个提交共用的模型调用只上报一次，通过 `source_task_ids` 保留已知来源任务；无法确定
+唯一归属时，`task_id`、`request_id` 为空。不能将这次调用展开为多条，也不能把整次 Token
+用量重复计到每个来源任务。文件变更能明确匹配输入操作时，恢复该操作的完整任务来源；
+真正合并多个任务的写入也采用上述多来源表达。空间和成员身份仍来自本批请求上下文。
+资源增量重新导入的删除路径也会在计划删除成功后上报删除事件。
+
+空间级模型凭据通过 ROOT 的配置接口下发或轮换时，`cost_bearer` 与该凭据一同保存，
+并传递到实际 VLM／Embedding 客户端。模型配置章节仍只允许 ROOT 修改，空间管理员
+和普通成员不能通过配置接口指定费用归属。
+
+以下是 `ov.conf` 中 `server.observability.reporting` 的示例值。
+
+```json
+{
+  "enabled": true,
+  "kafka": {
+    "bootstrap_servers": "broker.example:9092",
+    "topic": "metric-log"
+  },
+  "telemetry": {
+    "enabled": true
+  }
+}
+```
+
+迁移时，将 Nacos 或外部 JSON 中的 `kafka` 和 `telemetry` 移到上述位置，再重启内核。
+`reporting` 中的字符串按字面值读取，Kafka 凭据应填入实际值。
+
 ## 相关文档
 
 - [使用 Prometheus 和 Grafana 查看 OpenViking 指标](11-grafana-prometheus.md) - 从 `/metrics` 到 Prometheus、Grafana dashboard 的完整操作流程

@@ -128,7 +128,7 @@ test("preserves DSH tool call identity in captured tool results", () => {
   assert.equal(captured.parts[0].type, "tool");
   assert.equal(captured.parts[0].tool_id, "call-1");
   assert.equal(captured.parts[0].tool_name, "bash");
-  assert.match(captured.parts[0].tool_output, /workspace/);
+  assert.equal(captured.parts[0].tool_output, "/workspace");
   assert.equal(names.size, 0);
 });
 

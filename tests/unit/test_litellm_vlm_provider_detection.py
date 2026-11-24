@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM VLM provider detection and model prefix resolution."""
 
-import asyncio
 import os
 from unittest.mock import AsyncMock, Mock
 
@@ -79,13 +78,33 @@ class TestLiteLLMVLMProviderDetection:
 
 
 @pytest.mark.parametrize(
-    "model", ["ollama_chat/qwen2.5:7b", "ollama/qwen2.5:7b", "openai/qwen2.5:7b"]
+    ("model", "api_key", "api_base", "extra_body", "num_ctx", "think"),
+    [
+        pytest.param(
+            "ollama_chat/qwen2.5:7b", None, None, {}, 16384, False, id="ollama-chat-defaults"
+        ),
+        pytest.param(
+            "ollama/qwen2.5:7b",
+            "gateway-key",
+            "http://localhost:11434",
+            {"num_ctx": 32768, "think": True},
+            32768,
+            True,
+            id="ollama-overrides",
+        ),
+        pytest.param(
+            "openai/qwen2.5:7b",
+            "gateway-key",
+            "http://localhost:11434/v1",
+            {},
+            None,
+            None,
+            id="openai-compatible",
+        ),
+    ],
 )
-@pytest.mark.parametrize("api_key", [None, "test-key"])
-@pytest.mark.parametrize("api_base", [None, "http://localhost:11434"])
-@pytest.mark.parametrize("extra_body", [{}, {"num_ctx": 32768, "think": True}])
-def test_explicit_local_routes_reach_completion_unchanged(
-    monkeypatch, model, api_key, api_base, extra_body
+async def test_explicit_local_routes_apply_provider_specific_options(
+    monkeypatch, model, api_key, api_base, extra_body, num_ctx, think
 ):
     monkeypatch.setenv("OLLAMA_API_KEY", "")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "")
@@ -106,7 +125,7 @@ def test_explicit_local_routes_reach_completion_unchanged(
     monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", async_call)
 
     provider.get_completion(prompt="test", tools=tools)
-    asyncio.run(provider.get_completion_async(prompt="test", tools=tools))
+    await provider.get_completion_async(prompt="test", tools=tools)
 
     for call in (sync_call, async_call):
         kwargs = call.call_args.kwargs
@@ -114,5 +133,6 @@ def test_explicit_local_routes_reach_completion_unchanged(
         assert kwargs["tools"] == tools
         assert kwargs.get("api_key") == api_key
         assert kwargs.get("api_base") == api_base
-        if model.startswith(("ollama/", "ollama_chat/")):
-            assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False} | extra_body
+        assert kwargs.get("num_ctx") == num_ctx
+        assert "num_ctx" not in kwargs.get("extra_body", {})
+        assert kwargs.get("extra_body", {}).get("think") is think

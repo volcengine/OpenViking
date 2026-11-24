@@ -70,15 +70,14 @@ async def _add_resource(client: httpx.AsyncClient, filename: str, **extra):
 
 async def test_add_locations_resource_server_default_and_precedence(
     app,
+    service,
     user_role_client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
 ):
     client = user_role_client
-    # Legacy uid-less spelling: still accepted in stored configs, normalized to
-    # the viking://~ home alias at validation time.
     app.state.config.user_config_defaults = UserConfig(
-        add_targets=AddTargetsConfig(resource_uri="viking://user/resources")
+        add_targets=AddTargetsConfig(resource_uri="viking://~/resources")
     )
     assert (
         app.state.config.user_config_defaults.add_targets.resource_uri == "viking://~/resources"
@@ -87,11 +86,9 @@ async def test_add_locations_resource_server_default_and_precedence(
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")
 
-    # The one retained legacy PATCH spelling, proving the same normalization
-    # applies to old request bodies.
     response = await client.patch(
         "/api/v1/user-settings/add-locations",
-        json={"resource_uri": "viking://user/resources/project-a"},
+        json={"resource_uri": "viking://~/resources/project-a"},
     )
     assert response.status_code == 200, response.text
     body = response.json()["result"]
@@ -112,6 +109,34 @@ async def test_add_locations_resource_server_default_and_precedence(
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")
     assert "/project-a/" not in root_uri
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.acl import AclMode
+    from openviking_cli.session.user_id import UserIdentifier
+
+    restricted_uri = "viking://resources/one-off/sample"
+    await service.runtime_config_manager.patch_account("default", {"acl": {"enabled": True}})
+    await service.viking_fs.set_acl(
+        restricted_uri,
+        [{"principal": "user:editor", "level": "write"}],
+        acl_mode=AclMode.RESTRICTED,
+        ctx=RequestContext(user=UserIdentifier("default", "admin"), role=Role.ADMIN),
+    )
+    response = await client.patch(
+        "/api/v1/user-settings/add-locations", json={"resource_uri": restricted_uri}
+    )
+    assert response.status_code == 200, response.text
+    loaded = await client.get("/api/v1/user-settings/add-locations")
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["result"]["effective"]["resource_uri"] == restricted_uri
+    denied = await client.post(
+        "/api/v1/resources", json={"temp_file_id": sample_markdown_file.name, "wait": True}
+    )
+    assert denied.status_code == 403, denied.text
+    app.state.config.user_config_defaults.add_targets.resource_uri = restricted_uri
+    cleared = await client.delete("/api/v1/user-settings/add-locations")
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["result"]["effective"]["resource_uri"] == restricted_uri
 
 
 async def test_add_locations_skill_server_default(
@@ -158,7 +183,6 @@ async def test_add_locations_patch_accepts_home_alias_uris(
 
 
 async def test_add_locations_patch_rejects_bad_uris(client: httpx.AsyncClient):
-    # Rewritten to viking://~/skills/nested, which is still an invalid skill shape.
     response = await client.patch(
         "/api/v1/user-settings/add-locations",
         json={"skill_uri": "viking://user/skills/nested"},
@@ -169,7 +193,6 @@ async def test_add_locations_patch_rejects_bad_uris(client: httpx.AsyncClient):
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "skill_uri must be viking://~/skills" in body["error"]["message"]
 
-    # Rewritten to viking://~/skills, which is still not a resource directory.
     response = await client.patch(
         "/api/v1/user-settings/add-locations",
         json={"resource_uri": "viking://user/skills"},
@@ -181,28 +204,12 @@ async def test_add_locations_patch_rejects_bad_uris(client: httpx.AsyncClient):
 
 
 @pytest.mark.parametrize(
-    ("stored", "expected"),
-    [
-        ("viking://user/resources", "viking://~/resources"),
-        ("viking://user/resources/", "viking://~/resources"),
-        ("viking://user/resources/project-a/docs", "viking://~/resources/project-a/docs"),
-    ],
-)
-def test_add_targets_normalizes_legacy_resource_uri(stored, expected):
-    assert AddTargetsConfig(resource_uri=stored).resource_uri == expected
-
-
-def test_add_targets_normalizes_legacy_skill_uri():
-    assert AddTargetsConfig(skill_uri="viking://user/skills").skill_uri == "viking://~/skills"
-
-
-@pytest.mark.parametrize(
     "uri",
     [
         "viking://~/resources",
         "viking://~/resources/project-a",
         "viking://resources/shared",
-        "viking://user/alice/resources/project-a",
+        "viking://~/peers/work/resources/project-a",
     ],
 )
 def test_add_targets_accepts_supported_resource_uris(uri):
@@ -211,7 +218,7 @@ def test_add_targets_accepts_supported_resource_uris(uri):
 
 @pytest.mark.parametrize(
     "uri",
-    ["viking://~/skills", "viking://agent/skills", "viking://user/alice/skills"],
+    ["viking://~/skills", "viking://agent/skills"],
 )
 def test_add_targets_accepts_supported_skill_uris(uri):
     assert AddTargetsConfig(skill_uri=uri).skill_uri == uri
@@ -220,11 +227,12 @@ def test_add_targets_accepts_supported_skill_uris(uri):
 @pytest.mark.parametrize(
     "uri",
     [
-        # Rewritten to viking://~/skills, which is not a resource directory.
         "viking://user/skills",
         "viking://user/memories",
         "viking://~/memories",
         "viking://agent/skills",
+        "viking://user/alice/resources/project-a",
+        "viking://user/alice/peers/work/resources",
     ],
 )
 def test_add_targets_rejects_invalid_resource_uris(uri):
@@ -235,11 +243,11 @@ def test_add_targets_rejects_invalid_resource_uris(uri):
 @pytest.mark.parametrize(
     "uri",
     [
-        # Rewritten to viking://~/skills/nested, which is still an invalid shape.
         "viking://user/skills/nested",
         "viking://user/resources",
         "viking://~/skills/nested",
         "viking://resources/skills",
+        "viking://user/alice/skills",
     ],
 )
 def test_add_targets_rejects_invalid_skill_uris(uri):
@@ -247,14 +255,17 @@ def test_add_targets_rejects_invalid_skill_uris(uri):
         AddTargetsConfig(skill_uri=uri)
 
 
-def test_load_server_config_rejects_bad_add_locations(tmp_path):
+def test_load_server_config_add_locations(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
         json.dumps(
             {
                 "server": {
                     "user_config_defaults": {
-                        "add_targets": {"resource_uri": "viking://user/skills"}
+                        "add_targets": {
+                            "resource_uri": "viking://user/resources",
+                            "skill_uri": "viking://user/skills",
+                        }
                     }
                 }
             }
@@ -262,5 +273,20 @@ def test_load_server_config_rejects_bad_add_locations(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="resource_uri"):
-        load_server_config(str(config_path))
+    config = load_server_config(str(config_path))
+    assert config.user_config_defaults.add_targets.model_dump() == {
+        "resource_uri": "viking://~/resources",
+        "skill_uri": "viking://~/skills",
+    }
+
+    for field, uri in [
+        ("resource_uri", "viking://user/skills"),
+        ("resource_uri", "viking://user/alice/resources"),
+        ("skill_uri", "viking://user/alice/skills"),
+    ]:
+        config_path.write_text(
+            json.dumps({"server": {"user_config_defaults": {"add_targets": {field: uri}}}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=field):
+            load_server_config(str(config_path))

@@ -182,7 +182,11 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
 
+    # Notification failure cannot undo a committed append or keep its lease held.
+    hook = AsyncMock(side_effect=RuntimeError("registration unavailable"))
+    fs.set_post_write_hook(hook)
     await fs.append_file("viking://a.md", "+new")
+    hook.assert_awaited_once()
 
     assert fake.events[0] == ("ensure_parent", "/local/default/resources/a.md", None)
     assert fake.events[1][0] == "acquire"
@@ -277,7 +281,6 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
             else "/local/default/resources/target.md"
         ),
     )
-    monkeypatch.setattr(fs, "_collect_uris", AsyncMock(return_value=[]))
     monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
 
@@ -316,7 +319,6 @@ async def test_directory_mv_locks_source_and_destination_subtrees(monkeypatch):
             else "/local/default/resources/target"
         ),
     )
-    monkeypatch.setattr(fs, "_collect_uris", AsyncMock(return_value=[]))
     monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
     monkeypatch.setattr(fs, "_copy_for_mv", AsyncMock())
@@ -339,6 +341,7 @@ async def test_directory_mv_reuses_target_tree_for_vector_failure_cleanup(monkey
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
+    monkeypatch.setattr(fs, "_prepare_vector_store_uris", AsyncMock(return_value=object()))
 
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
@@ -350,7 +353,6 @@ async def test_directory_mv_reuses_target_tree_for_vector_failure_cleanup(monkey
             else "/local/default/resources/target"
         ),
     )
-    monkeypatch.setattr(fs, "_collect_uris", AsyncMock(return_value=[]))
     monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr(
         fs,

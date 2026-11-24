@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.utils import generate_uri
 from openviking.session.train import (
@@ -22,6 +23,7 @@ from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def _patch_runtime_defaults(monkeypatch):
@@ -131,6 +133,8 @@ class FakeVikingFS:
         self.writes = []
 
     async def read_file(self, uri, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri, content, ctx=None, lock_handle=None, lease_ref=None):
@@ -204,10 +208,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
 
     analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs, vlm_resolver=FakeResolver())
     context = TrajectoryAnalyzerContext(
-        request_context=SimpleNamespace(
-            user=SimpleNamespace(account_id="default", user_id="u"),
-            account_id="default",
-        ),
+        request_context=RequestContext(user=UserIdentifier("default", "u"), role=Role.USER),
         source_archive_uri="viking://user/u/sessions/s1/history/archive_001",
     )
 
@@ -220,7 +221,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
                 ToolPart(
                     tool_id="read-1",
                     tool_name="read",
-                    tool_input={"uri": "viking://user/u/memories/experiences/exchange.md"},
+                    tool_input={"uris": "viking://~/memories/experiences/exchange.md"},
                     tool_output="experience body",
                     tool_status="completed",
                 )
@@ -233,6 +234,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert FakeExtractLoop.created
     created_loop = FakeExtractLoop.created[0]
     assert created_loop._transaction_handle is None
+    assert created_loop.kwargs.get("thinking") is None
     provider = created_loop.kwargs["context_provider"]
     assert provider.get_extract_context().source_archive_uri == context.source_archive_uri
     assert provider._transaction_handle is None
@@ -360,3 +362,48 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     assert "task failed" in feedback_message.content
     assert "missing confirmation" in feedback_message.content
     assert analysis.metadata["extraction_message_count"] == 2
+    assert analysis.trajectories[0].outcome == "failure"
+    assert '"outcome": "failure"' in fs.writes[0][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("passed", [False, True])
+async def test_trajectory_uses_external_commit_verdict_instead_of_model_outcome(
+    monkeypatch, passed
+):
+    from openviking.session.train.components import trajectory_analyzer as module
+    from openviking.session.train.components.session_commit import _build_commit_messages
+
+    _patch_runtime_defaults(monkeypatch)
+    fs = FakeVikingFS()
+
+    class MisclassifiedExtractLoop(FakeExtractLoop):
+        async def run(self):
+            operations, messages = await super().run()
+            operations.upsert_operations[0].memory_fields["outcome"] = (
+                "failure" if passed else "success"
+            )
+            return operations, messages
+
+    monkeypatch.setattr(module, "ExtractLoop", MisclassifiedExtractLoop)
+    monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
+    rollout = _rollout()
+    rollout.evaluation = RubricEvaluation(
+        passed=passed, score=float(passed), criterion_results=[], feedback=[]
+    )
+    rollout.messages = [
+        Message.from_dict({"id": f"commit-{index}", **message})
+        for index, message in enumerate(_build_commit_messages(rollout))
+    ]
+    # Session commit transports the evaluation in messages, not on the new Rollout.
+    rollout.evaluation = None
+    analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs, vlm=SimpleNamespace(model="fake"))
+    context = TrajectoryAnalyzerContext(
+        request_context=RequestContext(user=UserIdentifier("default", "u"), role=Role.USER),
+    )
+
+    analysis = await analyzer.analyze(rollout, context)
+
+    expected = "success" if passed else "failure"
+    assert analysis.trajectories[0].outcome == expected
+    assert f'"outcome": "{expected}"' in fs.writes[0][1]

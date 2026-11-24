@@ -5,7 +5,10 @@
 import asyncio
 import hashlib
 import os
+import shutil
 import signal
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import AsyncMock, Mock, call
 
 import httpx
@@ -520,12 +523,45 @@ async def test_git_preflight_maps_missing_branch_to_not_found(monkeypatch):
         )
 
 
-async def test_git_preflight_rejects_server_local_paths():
+@pytest.mark.skipif(shutil.which("git") is None, reason="requires git")
+async def test_git_preflight_rejects_local_paths_and_redirects(monkeypatch):
     with pytest.raises(PermissionDeniedError, match="only accepts remote"):
-        await preflight_git_repository(
-            asset_name="local",
-            repo_url="file:///tmp/private.git",
+        await preflight_git_repository(asset_name="local", repo_url="file:///tmp/private.git")
+
+    requested = []
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requested.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/private")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    with HTTPServer(("127.0.0.1", 0), Redirect) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        source = f"http://127.0.0.1:{server.server_port}/org/repo"
+        # Treat the controlled origin as public, without changing git's DNS.
+        monkeypatch.setattr(
+            "openviking.utils.network_guard._resolve_host_addresses", lambda _host: {"8.8.8.8"}
         )
+        monkeypatch.setenv("NO_PROXY", "*")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", f"http.{source}.followRedirects")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+        try:
+            with pytest.raises(PermissionDeniedError):
+                await preflight_git_repository(asset_name="probe", repo_url=source)
+            assert len(requested) == 1
+            assert requested[0].startswith("/org/repo/info/refs")
+        finally:
+            await asyncio.to_thread(server.shutdown)
+            thread.join(timeout=2)
 
 
 async def test_resolve_endpoint_returns_standard_envelope(assets_client: httpx.AsyncClient):

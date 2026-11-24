@@ -35,6 +35,14 @@ class RerankConfig(BaseModel):
         description="Jev rerank mode: 'noul' or 'choice'",
     )
 
+    candidates_visible: bool = Field(
+        default=False,
+        description=(
+            "Jev Noul candidate visibility: false (default) isolates each candidate "
+            "in its own question; true shares all candidates in state. Ignored by choice."
+        ),
+    )
+
     extra_headers: Optional[Dict[str, str]] = Field(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
@@ -63,8 +71,8 @@ class RerankConfig(BaseModel):
     log_payloads: bool = Field(
         default=False,
         description=(
-            "Log complete rerank request and response payloads. Disabled by default "
-            "because payloads may contain sensitive query and document content."
+            "Log safe Jev rerank request and response summaries at DEBUG when enabled. "
+            "Query, document and response content are never logged. Disabled by default."
         ),
     )
 

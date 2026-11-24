@@ -30,17 +30,12 @@ def dedup_session_skill_operations(operations: ResolvedOperations) -> ResolvedOp
             continue
 
         duplicate_count += 1
-        kept_op = deduped_operations[existing_idx]
-        logger.info(
-            "Deduplicated duplicate session skill candidate '%s' against '%s'",
-            _skill_name(op),
-            _skill_name(kept_op),
-        )
+        logger.debug("duplicate session skill candidate skipped")
 
     if duplicate_count == 0:
         return operations
 
-    logger.info("Deduplicated %d duplicate session skill operations in batch", duplicate_count)
+    logger.debug("session skill operations deduplicated skipped=%d", duplicate_count)
     return ResolvedOperations(
         upsert_operations=deduped_operations,
         delete_file_contents=operations.delete_file_contents,

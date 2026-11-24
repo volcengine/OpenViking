@@ -48,6 +48,11 @@ const common = {
     done: 'Copied to clipboard',
     failed: "Couldn't copy. Select the text and copy it manually.",
   },
+  docs: {
+    link: 'Docs',
+    learnMore: 'Learn more',
+    troubleshoot: 'Troubleshooting',
+  },
   access: {
     title: 'Connect to OpenViking first',
     invalid: 'Your OpenViking API key is invalid',
@@ -70,7 +75,7 @@ const common = {
       'Root can view ov.conf in Settings → Server configuration → File editor.',
     reset:
       "Can't find it? Put a new key of at least 32 characters in the same place and restart.",
-    resetDocs: 'See the operations guide',
+    resetDocs: 'How to reset it',
     keyPlaceholder: '<at least 32 characters>',
     session:
       'Kept only in this browser tab. Closing the tab locks editing again.',
@@ -85,7 +90,7 @@ const common = {
     expired:
       'The gateway management key is no longer valid. Upstreams and profiles are read-only again.',
     readOnly:
-      'Upstreams and profiles are provided by your gateway admin. You can view and test them, and pick them when issuing a key.',
+      'Upstreams and profiles are provided by your gateway admin. You can view them and pick them when issuing a key.',
     adminReadOnly:
       'OpenViking admins and root also need the gateway management key to change them. If you deployed this server, the key is in ov.conf gateway.management_key.',
     shared:
@@ -119,7 +124,6 @@ const common = {
     fixLabel: 'What to change',
     terminal: 'Terminal',
     environment: 'Environment variable',
-    docs: 'How to deploy',
     enable: {
       description:
         'Studio can turn it on for you: it saves the setting to ov.conf and restarts the server.',

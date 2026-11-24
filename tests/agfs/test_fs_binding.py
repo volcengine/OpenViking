@@ -8,38 +8,32 @@ without HTTP server.
 """
 
 import asyncio
-import os
-import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
-from openviking.storage.viking_fs import init_viking_fs
+from openviking.storage import viking_fs
+from openviking.storage.errors import HandoffRecoveryRequired, LockAcquisitionError
+from openviking.storage.pathlock_recovery import adopt_or_reacquire
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.utils.config.agfs_config import AGFSConfig
 
-# Direct configuration for testing
-AGFS_CONF = AGFSConfig(path="/tmp/ov-test", backend="local")
 
-# clean up test directory if it exists
-if os.path.exists(AGFS_CONF.path):
-    shutil.rmtree(AGFS_CONF.path)
-
-
-@pytest.fixture(scope="module")
-async def viking_fs_binding_instance():
-    """Initialize VikingFS with binding mode."""
+@pytest.fixture
+async def viking_fs_binding_instance(tmp_path, monkeypatch):
     from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
-    # Create AGFS client
-    agfs_client = create_agfs_client(RagfsBindingConfig(agfs=AGFS_CONF))
-
-    vfs = init_viking_fs(agfs=agfs_client)
-    # make sure default/temp directory exists
-    await vfs.mkdir("viking://temp/", exist_ok=True)
-
-    yield vfs
+    config = AGFSConfig(path=str(tmp_path), backend="local")
+    client = create_agfs_client(RagfsBindingConfig(agfs=config))
+    try:
+        vfs = viking_fs.VikingFS(agfs=client)
+        monkeypatch.setattr(viking_fs, "_instance", vfs)
+        await vfs.mkdir("viking://temp/", exist_ok=True)
+        yield vfs
+    finally:
+        client.close()
 
 
 @pytest.mark.asyncio
@@ -49,7 +43,20 @@ class TestVikingFSBindingLocal:
     async def test_native_metrics_and_legacy_stats(self, viking_fs_binding_instance):
         """Use the binding fixture to check flat metrics and legacy stats; return None."""
         client = viking_fs_binding_instance._async_agfs
-        metrics = await client.run("metrics")
+        lease = await client.pathlock_acquire_tree(
+            f"/local/default/temp/metrics_scan_{uuid.uuid4().hex}"
+        )
+        try:
+            metrics = await client.run("metrics")
+        finally:
+            await client.pathlock_release(lease)
+        scan = next(m for m in metrics if m["name"] == "lock_descendant_scan_duration_seconds")
+        legacy_count = next(m for m in metrics if m["name"] == "lock_descendant_scans_total")
+        legacy_sum = next(
+            m for m in metrics if m["name"] == "lock_descendant_scan_duration_seconds_total"
+        )
+        assert scan["count"] == legacy_count["value"] > 0
+        assert scan["sum"] == legacy_sum["value"]
         shapes = {
             "counter": {"value", "scale"},
             "gauge": {"value"},
@@ -68,9 +75,12 @@ class TestVikingFSBindingLocal:
                 "source",
                 "event",
                 "route",
+                "error_kind",
             }
             if metric["type"] == "histogram":
-                assert len(metric["bucket_counts"]) == len(metric["bucket_bounds"]) + 1 == 12
+                assert metric["count"] > 0
+                assert len(metric["bucket_counts"]) == len(metric["bucket_bounds"]) + 1
+                assert metric["bucket_bounds"][-1] > 404261.58497 * 1e9
                 assert sum(metric["bucket_counts"]) == metric["count"]
                 assert metric["scale"] == 1e-9 and type(metric["sum"]) is int
             else:
@@ -251,14 +261,16 @@ class TestVikingFSBindingLocal:
         adopted = None
 
         try:
-            with pytest.raises(ValueError):
+            # A local source must be parked and match its registered coverage.
+            with pytest.raises(LockAcquisitionError, match="handoff does not match parked lease"):
                 adopted = await vfs._async_agfs.pathlock_adopt(handoff)
+            assert await vfs._async_agfs.pathlock_refresh(owned) == "refreshed"
         finally:
             if adopted is not None:
                 await vfs._async_agfs.pathlock_release(adopted)
             await vfs._async_agfs.pathlock_release(owned)
 
-    async def test_pathlock_adopt_accepts_legacy_handle_id_handoff(
+    async def test_pathlock_helper_recovers_legacy_handle_id_handoff(
         self, viking_fs_binding_instance
     ):
         """Accept legacy durable handoffs that use handle_id instead of owner_id."""
@@ -273,7 +285,18 @@ class TestVikingFSBindingLocal:
         adopted = None
 
         try:
-            adopted = await vfs._async_agfs.pathlock_adopt(legacy_handoff)
+            with pytest.raises(HandoffRecoveryRequired):
+                await vfs._async_agfs.pathlock_adopt(legacy_handoff)
+
+            async def operation_requests():
+                return [{"path": path, "kind": "exact"}]
+
+            adopted = await adopt_or_reacquire(
+                vfs._async_agfs,
+                legacy_handoff,
+                ctx=SimpleNamespace(account_id="default"),
+                fallback_requests=operation_requests,
+            )
             assert adopted["owner_id"] == owned["owner_id"]
             assert adopted["owned"] is True
         finally:
@@ -300,19 +323,17 @@ class TestVikingFSBindingLocal:
         await client.pathlock_release(lease)
 
     async def test_tree_operations(self, viking_fs_binding_instance):
-        """Test VikingFS tree operations."""
         vfs = viking_fs_binding_instance
-        base_dir = f"binding_tree_test_{uuid.uuid4().hex}"
-        sub_dir = f"viking://temp/{base_dir}/a/b/"
-        file_uri = f"{sub_dir}leaf.txt"
+        root = "viking://temp/tree"
+        sub_dir = f"{root}/a/b"
 
         await vfs.mkdir(sub_dir)
-        await vfs.write(file_uri, "leaf content")
+        await vfs.write(f"{sub_dir}/leaf.txt", "leaf content")
 
-        entries = await vfs.tree(f"viking://temp/{base_dir}/")
-        assert any("leaf.txt" in e["uri"] for e in entries)
-
-        await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)
+        entries = await vfs.tree(root)
+        assert {entry["uri"] for entry in entries} == {f"{root}/a", sub_dir, f"{sub_dir}/leaf.txt"}
+        directories = await vfs.tree(root, directories_only=True)
+        assert {entry["uri"] for entry in directories} == {f"{root}/a", sub_dir}
 
     async def test_glob_matches_deep_markdown_files(self, viking_fs_binding_instance):
         """Test glob recursively matches markdown files beyond tree's default depth."""

@@ -21,6 +21,7 @@ _EVENT_NAMES = {
     "memory.recalled": "experience.recall.count",
     "memory.injected": "experience.inject.count",
 }
+_RESOURCE_ID_SOURCES = frozenset({"environment", "account"})
 
 
 @contextmanager
@@ -139,7 +140,7 @@ def _build_tenant_id(
     )
 
 
-def _to_log_record(event: UsageEvent, *, resource_id: str) -> dict[str, Any]:
+def _to_log_record(event: UsageEvent, *, resource_id: str | None) -> dict[str, Any]:
     record = event.to_dict()
     event_type = str(record.get("event_type") or "")
     try:
@@ -152,6 +153,11 @@ def _to_log_record(event: UsageEvent, *, resource_id: str) -> dict[str, Any]:
         raise ValueError("event_id is required")
 
     account_id = str(record.get("account_id") or "")
+    if resource_id is None:
+        # Shared deployments map each Account one-to-one to its resource.
+        resource_id = account_id.strip()
+        if not resource_id:
+            raise ValueError("account_id is required when resource_id_source is account")
     user_id = str(record.get("user_id") or "")
     resource_uri = str(record.get("resource_uri") or "")
     return {
@@ -182,6 +188,7 @@ class FileLogUsageSink:
         self,
         *,
         path: str | os.PathLike[str],
+        resource_id_source: str = "environment",
         resource_id_env: str = "OV_RESOURCE_ID",
         rotation_interval_hours: int = 1,
         backup_count: int = 168,
@@ -189,9 +196,14 @@ class FileLogUsageSink:
         raw_path = str(path).strip()
         if not raw_path:
             raise ValueError("path is required")
-        self._resource_id = os.environ.get(resource_id_env, "").strip()
-        if not self._resource_id:
-            raise ValueError(f"{resource_id_env} is required")
+        if resource_id_source not in _RESOURCE_ID_SOURCES:
+            raise ValueError("resource_id_source must be environment or account")
+        # None means each record uses its event's account_id.
+        self._resource_id: str | None = None
+        if resource_id_source == "environment":
+            self._resource_id = os.environ.get(resource_id_env, "").strip()
+            if not self._resource_id:
+                raise ValueError(f"{resource_id_env} is required")
         if rotation_interval_hours <= 0:
             raise ValueError("rotation_interval_hours must be positive")
         if backup_count < 0:

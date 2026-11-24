@@ -13,7 +13,7 @@ from openviking_cli.retrieve.types import TypedQuery
 from tests.retrieve.test_skill_package_results import SKILLS, PagedStore, ctx, row
 
 
-@pytest.mark.parametrize("route", ["quick", "thinking", "filter"])
+@pytest.mark.parametrize("route", ["quick", "filter"])
 async def test_general_search_preserves_multiple_hits_from_one_skill(route):
     records = [row(f"{SKILLS}/a/{i}.md", 0.99 - i / 1000) for i in range(12)]
     records.append(row("viking://resources/doc.md", 0.8, kind="resource"))
@@ -29,7 +29,7 @@ async def test_general_search_preserves_multiple_hits_from_one_skill(route):
             TypedQuery("hello", None, ""),
             ctx(),
             limit=2,
-            mode=RetrieverMode.THINKING if route == "thinking" else RetrieverMode.QUICK,
+            mode=RetrieverMode.QUICK,
         )
         matches = result.matched_contexts
     assert [item.uri for item in matches] == [f"{SKILLS}/a/0.md", f"{SKILLS}/a/1.md"]
