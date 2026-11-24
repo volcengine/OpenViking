@@ -354,12 +354,14 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     from openviking.server.auth.plugins import oidc as oidc_module
 
     if mode == "oidc":
+        import base64
         import time
 
-        jwt = pytest.importorskip("jose.jwt")
+        jwt = pytest.importorskip("jwt", minversion="2.15.1")
         assert oidc_module._check_jwt_available()
         plugin = oidc_module.OIDCAuthPlugin()
         config = OIDCConfig(issuer="https://issuer.test", audience="openviking")
+        secret = b"oidc-identity-mapping-test-secret"
         claims = {
             "iss": config.issuer,
             "aud": config.audience,
@@ -376,7 +378,7 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
             config.identity.account_id.normalize = "lowercase"
             config.identity.user_id.claim = "https://openviking.example/user_id"
             expected = ("team", "Alice")
-        token = jwt.encode(claims, "test-secret", algorithm="HS256", headers={"kid": "test"})
+        token = jwt.encode(claims, secret, algorithm="HS256", headers={"kid": "test"})
         headers = [(b"authorization", f"Bearer {token}".encode())]
     else:
         plugin = ldap_module.LDAPAuthPlugin()
@@ -404,7 +406,9 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
         server_config = SimpleNamespace(oidc=config)
         plugin.validate_config(server_config)
         await plugin.initialize(None, None, server_config)
-        plugin._jwks["test"] = oidc_module.jwk.construct("test-secret", "HS256")
+        plugin._jwks["test"] = jwt.PyJWK.from_dict(
+            {"kty": "oct", "k": base64.urlsafe_b64encode(secret).decode(), "alg": "HS256"}
+        )
     else:
         plugin._config = config
         plugin._mapper = IdentityMapper(config.identity)
@@ -430,7 +434,7 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
         for changes, field in invalid_claims:
             token = jwt.encode(
                 {**claims, **changes},
-                "test-secret",
+                secret,
                 algorithm="HS256",
                 headers={"kid": "test"},
             )
@@ -443,34 +447,48 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
 
 
 @pytest.mark.parametrize(
-    "configured_issuer,token_issuer,accepted",
+    "configured_issuer,token_issuer,claim_changes,wrong_signature,accepted",
     [
-        ("https://issuer.test/app/", "https://issuer.test/app/", True),
-        ("https://issuer.test/app", "https://issuer.test/app", True),
-        ("https://issuer.test/app/", "https://issuer.test/app", False),
-        ("https://issuer.test/app", "https://issuer.test/app/", False),
-        ("https://issuer.test/app", "https://issuer.test/app///", False),
-        ("https://issuer.test/app", "https://attacker.test/app", False),
+        ("https://issuer.test/app/", "https://issuer.test/app/", {}, False, True),
+        ("https://issuer.test/app", "https://issuer.test/app", {}, False, True),
+        ("https://issuer.test/app/", "https://issuer.test/app", {}, False, False),
+        ("https://issuer.test/app", "https://issuer.test/app/", {}, False, False),
+        ("https://issuer.test/app", "https://issuer.test/app///", {}, False, False),
+        ("https://issuer.test/app", "https://other.test/app", {}, False, False),
+        (
+            "https://issuer.test/app",
+            "https://issuer.test/app",
+            {"aud": "another-app"},
+            False,
+            False,
+        ),
+        ("https://issuer.test/app", "https://issuer.test/app", {"exp": 1}, False, False),
+        ("https://issuer.test/app", "https://issuer.test/app", {"at_hash": "test"}, False, False),
+        ("https://issuer.test/app", "https://issuer.test/app", {}, True, False),
     ],
 )
-async def test_oidc_issuer_matches_exactly(configured_issuer, token_issuer, accepted, monkeypatch):
-    import base64
+async def test_oidc_authenticates_jwks_signed_tokens(
+    configured_issuer, token_issuer, claim_changes, wrong_signature, accepted, monkeypatch
+):
     import time
 
     import httpx
 
-    jwt = pytest.importorskip("jose.jwt")
+    jwt = pytest.importorskip("jwt", minversion="2.15.1")
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
 
     from openviking.server.auth.oidc_config import OIDCConfig
     from openviking.server.auth.plugins import oidc as oidc_module
 
     assert oidc_module._check_jwt_available()
     plugin = oidc_module.OIDCAuthPlugin()
-    config = SimpleNamespace(oidc=OIDCConfig(issuer=configured_issuer, audience="openviking"))
+    config = SimpleNamespace(oidc=OIDCConfig(issuer=configured_issuer, client_id="openviking"))
     plugin.validate_config(config)
     await plugin.initialize(None, None, config)
-    secret = "test-secret"
-    encoded_key = base64.urlsafe_b64encode(secret.encode()).rstrip(b"=").decode()
+    signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    public_jwk.update(alg="RS256", kid="test")
 
     def idp_response(request):
         if str(request.url) == "https://issuer.test/app/.well-known/openid-configuration":
@@ -478,9 +496,7 @@ async def test_oidc_issuer_matches_exactly(configured_issuer, token_issuer, acce
                 200, json={"issuer": configured_issuer, "jwks_uri": "https://issuer.test/keys"}
             )
         assert str(request.url) == "https://issuer.test/keys"
-        return httpx.Response(
-            200, json={"keys": [{"kty": "oct", "k": encoded_key, "alg": "HS256", "kid": "test"}]}
-        )
+        return httpx.Response(200, json={"keys": [public_jwk]})
 
     client_class = httpx.AsyncClient
     monkeypatch.setattr(
@@ -494,17 +510,25 @@ async def test_oidc_issuer_matches_exactly(configured_issuer, token_issuer, acce
             "aud": "openviking",
             "sub": "user-1",
             "exp": int(time.time()) + 60,
+            **claim_changes,
         },
-        secret,
-        algorithm="HS256",
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        if wrong_signature
+        else signing_key,
+        algorithm="RS256",
         headers={"kid": "test"},
     )
+    request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())]})
     if accepted:
-        claims = await plugin._validate_token(token)
-        assert claims["sub"] == "user-1"
+        identity = await plugin.resolve_identity(request)
+        assert (identity.account_id, identity.user_id, identity.role) == (
+            "default",
+            "user-1",
+            Role.USER,
+        )
     else:
-        with pytest.raises(UnauthenticatedError, match="Invalid claims"):
-            await plugin._validate_token(token)
+        with pytest.raises(UnauthenticatedError):
+            await plugin.resolve_identity(request)
 
 
 @pytest.mark.parametrize("role", ["root", "unknown"])
