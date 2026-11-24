@@ -205,7 +205,9 @@ async function main() {
   if (capture && capture.cc_session_id === sessionId) {
     const archived = Number(capture.commit_count || 0);
     const archivedTail = archived > 0 ? ` · ${archived} arch` : "";
-    if (capture.committed) {
+    if (capture.cursor_ahead) {
+      parts.push(yellow("✎ capture cursor ahead"));
+    } else if (capture.committed) {
       parts.push(dim(`✎ committed${archivedTail}`));
     } else if (capture.pending_tokens > 0) {
       // No "tok" suffix: server-side counter is approximate (chars/N), and
@@ -223,7 +225,7 @@ async function main() {
     // auto-capture overwrites the state every Stop hook, so transient
     // single-turn failures clear themselves after the next successful
     // capture. Sustained failures stay visible (which is the point).
-    if (Number(capture.turns_failed) > 0) {
+    if (!capture.cursor_ahead && Number(capture.turns_failed) > 0) {
       parts.push(red(`✗ ${capture.turns_failed} dropped`));
     }
   }

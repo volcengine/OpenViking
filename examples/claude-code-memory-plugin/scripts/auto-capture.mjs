@@ -278,6 +278,18 @@ async function main({ cfg, input, cwd }) {
   });
 
   if (newTurns.length === 0) {
+    if (state.capturedTurnCount > allTurns.length) {
+      const previous = readJsonState("last-capture.json");
+      writeJsonState("last-capture.json", {
+        ...(previous?.cc_session_id === sessionId ? previous : {}),
+        cc_session_id: sessionId,
+        ov_session_id: ovSessionId,
+        cursor_ahead: true,
+        ts: Date.now(),
+      });
+      log("skip", { stage: "incremental_check", reason: "saved capture cursor is ahead" });
+      return "OpenViking skipped capture because the saved capture cursor is ahead of the transcript.";
+    }
     log("skip", { stage: "incremental_check", reason: "no new turns" });
     return;
   }
