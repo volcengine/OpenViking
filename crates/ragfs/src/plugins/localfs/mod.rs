@@ -43,10 +43,7 @@ fn diagnostic_path_class(path: &str) -> &'static str {
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
-    if segments
-        .windows(2)
-        .any(|pair| pair == ["_system", "tasks"])
-    {
+    if segments.windows(2).any(|pair| pair == ["_system", "tasks"]) {
         "task"
     } else if segments.contains(&"resources") {
         "resource"
@@ -920,14 +917,38 @@ impl FileSystem for LocalFileSystem {
         let local_path = self.resolve_path(path)?;
 
         // Check if exists and is not a directory
-        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
+        let metadata_started = Instant::now();
+        let metadata_result = fs::metadata(&local_path);
+        report_slow_fs_phase(
+            "read",
+            "metadata",
+            path,
+            metadata_started,
+            if metadata_result.is_ok() {
+                "ok"
+            } else {
+                "error"
+            },
+            None,
+        );
+        let metadata = metadata_result.map_err(|_| Error::NotFound(path.to_string()))?;
 
         if metadata.is_dir() {
             return Err(Error::plugin(format!("is a directory: {}", path)));
         }
 
         // Read file
-        let data = fs::read(&local_path).map_err(|e| Self::map_error(path, e))?;
+        let read_started = Instant::now();
+        let read_result = fs::read(&local_path);
+        report_slow_fs_phase(
+            "read",
+            "read",
+            path,
+            read_started,
+            if read_result.is_ok() { "ok" } else { "error" },
+            None,
+        );
+        let data = read_result.map_err(|e| Self::map_error(path, e))?;
 
         // Apply offset and size
         let file_size = data.len() as u64;
@@ -949,13 +970,33 @@ impl FileSystem for LocalFileSystem {
         let local_path = self.resolve_path(path)?;
 
         // Check if it's a directory
-        if local_path.exists() && local_path.is_dir() {
+        let target_precheck_started = Instant::now();
+        let target_is_dir = local_path.exists() && local_path.is_dir();
+        report_slow_fs_phase(
+            "write",
+            "target_precheck",
+            path,
+            target_precheck_started,
+            "ok",
+            None,
+        );
+        if target_is_dir {
             return Err(Error::plugin(format!("is a directory: {}", path)));
         }
 
         // Check if parent directory exists
         if let Some(parent) = local_path.parent() {
-            if !parent.exists() {
+            let parent_precheck_started = Instant::now();
+            let parent_exists = parent.exists();
+            report_slow_fs_phase(
+                "write",
+                "parent_precheck",
+                path,
+                parent_precheck_started,
+                if parent_exists { "ok" } else { "error" },
+                None,
+            );
+            if !parent_exists {
                 return Err(Error::NotFound(parent.to_string_lossy().to_string()));
             }
         }
@@ -978,7 +1019,17 @@ impl FileSystem for LocalFileSystem {
                 options.write(true);
             }
         }
-        let mut file = options.open(&local_path).map_err(|e| {
+        let open_started = Instant::now();
+        let open_result = options.open(&local_path);
+        report_slow_fs_phase(
+            "write",
+            "open",
+            path,
+            open_started,
+            if open_result.is_ok() { "ok" } else { "error" },
+            None,
+        );
+        let mut file = open_result.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::NotFound(path.to_string())
             } else if e.kind() == std::io::ErrorKind::AlreadyExists {
@@ -993,8 +1044,20 @@ impl FileSystem for LocalFileSystem {
             file.seek(SeekFrom::Start(offset))
                 .map_err(|e| Error::plugin(format!("failed to seek: {}", e)))?;
         }
-        file.write_all(data)
-            .map_err(|e| Error::plugin(format!("failed to write: {}", e)))?;
+        let write_started = Instant::now();
+        let write_result = file.write_all(data);
+        report_slow_fs_phase(
+            "write",
+            "write",
+            path,
+            write_started,
+            if write_result.is_ok() { "ok" } else { "error" },
+            None,
+        );
+        write_result.map_err(|e| Error::plugin(format!("failed to write: {}", e)))?;
+        let close_started = Instant::now();
+        drop(file);
+        report_slow_fs_phase("write", "close", path, close_started, "ok", None);
         Ok(data.len() as u64)
     }
 
@@ -1034,42 +1097,120 @@ impl FileSystem for LocalFileSystem {
 
         let entries = Self::run_blocking_fs(move || {
             // Check if directory exists
-            if !local_path.exists() {
+            let path_exists_started = Instant::now();
+            let path_exists = local_path.exists();
+            report_slow_fs_phase(
+                "read_dir",
+                "path_exists",
+                &path,
+                path_exists_started,
+                if path_exists { "ok" } else { "error" },
+                None,
+            );
+            if !path_exists {
                 return Err(Error::NotFound(path.clone()));
             }
 
-            if !local_path.is_dir() {
-                return Err(Error::NotADirectory(path));
+            let path_is_dir_started = Instant::now();
+            let path_is_dir = local_path.is_dir();
+            report_slow_fs_phase(
+                "read_dir",
+                "path_is_dir",
+                &path,
+                path_is_dir_started,
+                if path_is_dir { "ok" } else { "error" },
+                None,
+            );
+            if !path_is_dir {
+                return Err(Error::NotADirectory(path.clone()));
             }
 
             // Read directory
-            let entries = fs::read_dir(&local_path)
+            let open_started = Instant::now();
+            let open_result = fs::read_dir(&local_path);
+            report_slow_fs_phase(
+                "read_dir",
+                "open",
+                &path,
+                open_started,
+                if open_result.is_ok() { "ok" } else { "error" },
+                None,
+            );
+            let mut entries = open_result
                 .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
 
-            let mut files = Vec::new();
-            for entry in entries {
-                let entry =
-                    entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
-                let Some(metadata) = Self::read_entry_metadata(&entry)? else {
-                    continue;
-                };
+            let iterate_started = Instant::now();
+            let iteration_result: Result<Vec<FileInfo>> = (|| {
+                let mut files = Vec::new();
+                loop {
+                    let next_entry_started = Instant::now();
+                    let next_entry = entries.next();
+                    report_slow_fs_phase(
+                        "read_dir",
+                        "next_entry",
+                        &path,
+                        next_entry_started,
+                        if matches!(&next_entry, Some(Err(_))) {
+                            "error"
+                        } else {
+                            "ok"
+                        },
+                        Some(files.len()),
+                    );
+                    let Some(entry) = next_entry else {
+                        break;
+                    };
+                    let entry =
+                        entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
 
-                let name = entry.file_name().to_string_lossy().to_string();
-                let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
-                let mod_time = metadata
-                    .modified()
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    let metadata_started = Instant::now();
+                    let metadata_result = Self::read_entry_metadata(&entry);
+                    let metadata_outcome = match &metadata_result {
+                        Ok(Some(_)) => "ok",
+                        Ok(None) => "skipped",
+                        Err(_) => "error",
+                    };
+                    report_slow_fs_phase(
+                        "read_dir",
+                        "entry_metadata",
+                        &path,
+                        metadata_started,
+                        metadata_outcome,
+                        Some(files.len()),
+                    );
+                    let Some(metadata) = metadata_result? else {
+                        continue;
+                    };
 
-                files.push(FileInfo::new(
-                    name,
-                    metadata.len(),
-                    mode,
-                    mod_time,
-                    metadata.is_dir(),
-                ));
-            }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
+                    let mod_time = metadata
+                        .modified()
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
-            Ok(files)
+                    files.push(FileInfo::new(
+                        name,
+                        metadata.len(),
+                        mode,
+                        mod_time,
+                        metadata.is_dir(),
+                    ));
+                }
+                Ok(files)
+            })();
+            report_slow_fs_phase(
+                "read_dir",
+                "iterate",
+                &path,
+                iterate_started,
+                if iteration_result.is_ok() {
+                    "ok"
+                } else {
+                    "error"
+                },
+                iteration_result.as_ref().ok().map(Vec::len),
+            );
+            iteration_result
         })
         .await?;
         Ok(crate::core::filesystem::apply_read_dir_options(
@@ -1518,6 +1659,33 @@ mod tests {
             let err = fs.write("/missing", b"data", 0, flag).await.unwrap_err();
             assert!(matches!(err, Error::NotFound(_)));
         }
+    }
+
+    #[tokio::test]
+    async fn test_localfs_read_write_and_read_dir_contracts() {
+        let (_dir, fs) = localfs();
+        fs.write("/a.txt", b"abcdef", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/b.txt", b"second", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        assert_eq!(fs.read("/a.txt", 2, 3).await.unwrap(), b"cde");
+        let mut names = fs
+            .read_dir("/", None, None, None, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["a.txt", "b.txt"]);
+
+        assert!(matches!(
+            fs.read("/missing.txt", 0, 0).await.unwrap_err(),
+            Error::NotFound(_)
+        ));
     }
 
     #[test]
