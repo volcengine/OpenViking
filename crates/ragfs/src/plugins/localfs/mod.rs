@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use std::io::{self, ErrorKind};
 
@@ -24,6 +25,89 @@ use crate::core::types::{
     ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepContextLine, GrepOptions, GrepResult,
     PluginConfig, WriteFlag,
 };
+
+const SLOW_FS_PHASE_THRESHOLD: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Eq, PartialEq)]
+struct SlowFsPhaseEvent {
+    operation: &'static str,
+    phase: &'static str,
+    path_class: &'static str,
+    elapsed_ms: u128,
+    outcome: &'static str,
+    entry_count: Option<usize>,
+}
+
+fn diagnostic_path_class(path: &str) -> &'static str {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments
+        .windows(2)
+        .any(|pair| pair == ["_system", "tasks"])
+    {
+        "task"
+    } else if segments.contains(&"resources") {
+        "resource"
+    } else {
+        "other"
+    }
+}
+
+fn slow_fs_phase_event(
+    operation: &'static str,
+    phase: &'static str,
+    path: &str,
+    elapsed: Duration,
+    outcome: &str,
+    entry_count: Option<usize>,
+) -> Option<SlowFsPhaseEvent> {
+    if elapsed < SLOW_FS_PHASE_THRESHOLD {
+        return None;
+    }
+    Some(SlowFsPhaseEvent {
+        operation,
+        phase,
+        path_class: diagnostic_path_class(path),
+        elapsed_ms: elapsed.as_millis(),
+        outcome: match outcome {
+            "ok" => "ok",
+            "skipped" => "skipped",
+            _ => "error",
+        },
+        entry_count,
+    })
+}
+
+fn report_slow_fs_phase(
+    operation: &'static str,
+    phase: &'static str,
+    path: &str,
+    started: Instant,
+    outcome: &str,
+    entry_count: Option<usize>,
+) {
+    let Some(event) = slow_fs_phase_event(
+        operation,
+        phase,
+        path,
+        started.elapsed(),
+        outcome,
+        entry_count,
+    ) else {
+        return;
+    };
+    tracing::warn!(
+        operation = event.operation,
+        phase = event.phase,
+        path_class = event.path_class,
+        elapsed_ms = event.elapsed_ms,
+        outcome = event.outcome,
+        entry_count = event.entry_count.unwrap_or(0),
+        "localfs_slow_phase"
+    );
+}
 
 struct LocalGrepSink<'a> {
     file: String,
@@ -1265,6 +1349,59 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn test_slow_fs_phase_event_is_safe_and_thresholded() {
+        assert!(slow_fs_phase_event(
+            "read",
+            "metadata",
+            "/local/private/_system/tasks/user/secret-task.json",
+            std::time::Duration::from_millis(999),
+            "error",
+            None,
+        )
+        .is_none());
+
+        let task = slow_fs_phase_event(
+            "read",
+            "metadata",
+            "/local/private/_system/tasks/user/secret-task.json",
+            std::time::Duration::from_millis(1_000),
+            "error",
+            None,
+        )
+        .unwrap();
+        assert_eq!(task.operation, "read");
+        assert_eq!(task.phase, "metadata");
+        assert_eq!(task.path_class, "task");
+        assert_eq!(task.elapsed_ms, 1_000);
+        assert_eq!(task.outcome, "error");
+        assert_eq!(task.entry_count, None);
+
+        let resource = slow_fs_phase_event(
+            "read_dir",
+            "iterate",
+            "/local/private/resources/secret-name",
+            std::time::Duration::from_millis(1_001),
+            "ok",
+            Some(37),
+        )
+        .unwrap();
+        assert_eq!(resource.path_class, "resource");
+        assert_eq!(resource.entry_count, Some(37));
+
+        let other = slow_fs_phase_event(
+            "write",
+            "open",
+            "/plugins/private-token",
+            std::time::Duration::from_secs(2),
+            "private error text must not be stored",
+            None,
+        )
+        .unwrap();
+        assert_eq!(other.path_class, "other");
+        assert_eq!(other.outcome, "error");
     }
 
     #[test]
