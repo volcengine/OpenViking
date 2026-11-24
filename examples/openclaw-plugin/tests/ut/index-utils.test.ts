@@ -113,14 +113,22 @@ describe("prepareRecallQuery", () => {
     });
   });
 
-  it("truncates overly long recall queries after sanitization", () => {
-    const rawQuery = "x".repeat(4100);
+  it("retains the start and end of a sanitized query within the character budget", () => {
+    const rawQuery = "<relevant-memories>stale</relevant-memories>" + "a".repeat(2100) + "b".repeat(2000);
 
     const result = prepareRecallQuery(rawQuery);
 
-    expect(result.query).toBe("x".repeat(4000));
+    expect(result.query).toMatch(/^a+ … b+$/);
     expect(result.truncated).toBe(true);
     expect(result.originalChars).toBe(4100);
     expect(result.finalChars).toBe(4000);
+  });
+
+  it("does not leave an unpaired surrogate where the middle was removed", () => {
+    const result = prepareRecallQuery("🚀".repeat(2050));
+
+    expect(result.truncated).toBe(true);
+    expect(result.query).not.toMatch(/[\uD800-\uDFFF]/u);
+    expect(result.finalChars).toBeLessThanOrEqual(4000);
   });
 });

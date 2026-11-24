@@ -158,6 +158,26 @@ describe("before_prompt_build auto-recall", () => {
     expect(block).toContain(memory);
     expect(client.searchContext).toHaveBeenCalledWith(prompt, expect.objectContaining({ dedupTurns: 5 }));
   });
+
+  it("searches for the question after a long pasted log", async () => {
+    const client = makeClient();
+    const context = "Build log for the edge-router service.";
+    const longPrompt = `${context}\n${"Compilation step finished.\n".repeat(200)}${prompt}`;
+
+    await recallForPromptHook({
+      cfg,
+      logger: makeLogger(),
+      getClient: vi.fn().mockResolvedValue(client as unknown as OpenVikingClient),
+      resolveAgentId: (sessionId: string) => `agent:${sessionId}`,
+      sessionId: "s1",
+      prompt: longPrompt,
+    });
+
+    const [query] = client.searchContext.mock.calls[0] as [string];
+    expect(query.startsWith(context)).toBe(true);
+    expect(query.endsWith(prompt)).toBe(true);
+    expect(query.length).toBeLessThanOrEqual(4000);
+  });
 });
 
 describe("assemble with prompt-hook recall", () => {
