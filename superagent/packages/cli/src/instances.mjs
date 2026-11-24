@@ -20,6 +20,7 @@ export const IM_LABELS = Object.freeze({
   qq: 'QQ',
   slack: 'Slack',
   // A QQ account through OneBot, told apart from the official QQ bot.
+  get dingtalk() { return t('钉钉（群机器人）', 'DingTalk (group bot)'); },
   get onebot() { return t('QQ（OneBot）', 'QQ (OneBot)'); },
 });
 

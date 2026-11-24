@@ -508,6 +508,17 @@ test('adding OneBot to an existing instance connects only it, next to nothing el
   assert.match(h.written(), /它会跟进所在的每个群，在 ~[\\/]\.ov-superagent[\\/]data[\\/]asd[\\/]onebot[\\/]config\.json 里可以把群改成 "mention" 或 "off"/);
 });
 
+test('adding DingTalk requires an owner-capable primary and connects only the new group bot', async (t) => {
+  const h = harness(t, ['2', '5', '8', '1,8', '11']);
+  const before = existing(h, {});
+  h.options.connect.dingtalk = async ({ plan }) => { h.calls.push(['dingtalk', plan.dataDir]); };
+  assert.equal(await setupCommand(h.options), 0);
+  assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'dingtalk'], channel: 'lark' }]);
+  assert.deepEqual(h.calls, [['dingtalk', before.dataDir], ['restart', 'asd']]);
+  assert.match(h.written(), /钉钉群机器人需要另选一个支持 owner 私聊的主渠道/);
+  assert.match(h.written(), /接下来接入：钉钉 AppKey \+ AppSecret/);
+});
+
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
   const h = harness(t, ['2', '5', '1,4', '7', '2', '11']);
   const before = existing(h, { connectors: ['lark', 'slack'] });
@@ -675,28 +686,28 @@ test('changing an instance lists every setting; only the ones opened change', as
 });
 
 test('an external connector keeps its id in the wizard and can be the only IM', async (t) => {
-  const external = { id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: [], prompt: null };
+  const external = { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: [], prompt: null };
   const shown = harness(t, ['2', '12']);
   existing(shown, {
-    channel: 'dingtalk', connectors: ['dingtalk'], externalConnectors: [external], profile: undefined,
+    channel: 'mattermost', connectors: ['mattermost'], externalConnectors: [external], profile: undefined,
   });
   assert.equal(await setupCommand(shown.options), 0);
-  assert.match(shown.written(), /7\) 主渠道\s+dingtalk/);
+  assert.match(shown.written(), /7\) 主渠道\s+mattermost/);
   assert.doesNotMatch(shown.written(), /主渠道\s+undefined/);
 
   //                    change  IMs  none  save
   const h = harness(t, ['2',    '5', '0',  '11']);
   const before = existing(h, {
-    connectors: ['lark', 'dingtalk'], externalConnectors: [external],
+    connectors: ['lark', 'mattermost'], externalConnectors: [external],
   });
   assert.equal(await setupCommand(h.options), 0);
   assert.match(h.written(), /0 为全不选/);
-  assert.match(h.written(), /主渠道原来是飞书，它不再接入，改成dingtalk/);
-  assert.match(h.written(), /主渠道：飞书 → dingtalk/);
+  assert.match(h.written(), /主渠道原来是飞书，它不再接入，改成mattermost/);
+  assert.match(h.written(), /主渠道：飞书 → mattermost/);
   assert.doesNotMatch(h.written(), /undefined/);
   const [after] = h.manifest().agents;
-  assert.equal(after.channel, 'dingtalk');
-  assert.deepEqual(after.connectors, ['dingtalk']);
+  assert.equal(after.channel, 'mattermost');
+  assert.deepEqual(after.connectors, ['mattermost']);
   assert.deepEqual(after.externalConnectors, [external]);
   assert.equal(after.profile, undefined);
   assert.equal(before.profile, 'superagent-asd');

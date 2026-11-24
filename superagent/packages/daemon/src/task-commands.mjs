@@ -49,7 +49,7 @@ function said(text) {
   return String(text ?? '').replace(/^\[[^\]]*\]\s*/, '');
 }
 
-const SOURCE = { lark: '飞书', weixin: '微信', slack: 'Slack', telegram: 'Telegram', qq: 'QQ', onebot: 'QQ', email: '邮件' };
+const SOURCE = { lark: '飞书', weixin: '微信', slack: 'Slack', telegram: 'Telegram', qq: 'QQ', onebot: 'QQ', dingtalk: '钉钉', email: '邮件' };
 
 // Where a task was asked: a group by its name (clipped), a direct chat as one
 // (it has no name; the requester says with whom), a mail by its source. A

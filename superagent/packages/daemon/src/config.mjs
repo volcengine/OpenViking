@@ -109,7 +109,7 @@ function jsonStringArrayEnv(name, fallback = []) {
   return value;
 }
 
-const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot']);
+const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']);
 const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
 // Internal event sources. `timer` is how a reminder is delivered.
 const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);

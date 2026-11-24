@@ -8,6 +8,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { loginCommand } from '../src/login.mjs';
+import { connectDingTalk } from '../src/dingtalk.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { larkScopes } from '../src/setup.mjs';
 import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
@@ -62,6 +63,47 @@ test('login renews what an instance has; connecting a new IM is setup\'s', async
   await assert.rejects(loginCommand(['email', 'haha'], m.options), /实例 haha 没有接邮箱；要接入，运行 ov-superagent setup，选择修改 haha/);
 });
 
+test('DingTalk login renews only the secondary connector and restarts after successful validation', async (t) => {
+  const m = machine(t, (home) => [agent(home, 'work', { connectors: ['lark', 'dingtalk'] })]);
+  m.options.connect.dingtalk = async ({ plan }) => { m.calls.push(['dingtalk', plan.id]); };
+  assert.equal(await loginCommand(['dingtalk', 'work'], m.options), 0);
+  assert.deepEqual(m.calls, [['dingtalk', 'work'], ['restart', 'work']]);
+  assert.equal(m.manifest().agents[0].channel, 'lark');
+  m.calls.length = 0;
+  m.options.connect.dingtalk = async () => { throw new Error('invalid app credentials'); };
+  await assert.rejects(loginCommand(['dingtalk', 'work'], m.options), /invalid app credentials/);
+  assert.deepEqual(m.calls, []);
+});
+
+test('DingTalk credential rotation keeps the original file until OAuth validation succeeds', async (t) => {
+  const m = machine(t, () => []);
+  const dataDir = path.join(m.home, 'ding-instance');
+  const file = path.join(dataDir, 'dingtalk.json');
+  fs.mkdirSync(dataDir);
+  fs.writeFileSync(file, 'previous credentials');
+  const prompter = {
+    section() {},
+    info() {},
+    text: async (label, options) => options.initial ?? 'fixture-key',
+    secret: async () => 'fixture-secret',
+  };
+  let valid = false;
+  t.mock.method(globalThis, 'fetch', async (url, request) => {
+    assert.equal(url, 'https://api.dingtalk.com/v1.0/oauth2/accessToken');
+    assert.deepEqual(JSON.parse(request.body), { appKey: 'fixture-key', appSecret: 'fixture-secret' });
+    return valid ? Response.json({ accessToken: 'fixture-token', expireIn: 7200 }) : new Response('', { status: 403 });
+  });
+  await assert.rejects(connectDingTalk({ plan: { dataDir }, prompter }), /HTTP 403/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'previous credentials');
+  valid = true;
+  await connectDingTalk({ plan: { dataDir }, prompter });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    clientId: 'fixture-key', clientSecret: 'fixture-secret', robotCode: 'fixture-key',
+  });
+  assert.deepEqual(fs.readdirSync(dataDir), ['dingtalk.json']);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
 test('a mailbox password is renewed for the mailbox chosen, and the instance restarts', async (t) => {
   const file = (home, id) => path.join(home, '.ov-superagent', 'email', 'wx', `${id}.json`);
   const m = machine(t, (home) => {
@@ -97,7 +139,7 @@ test('usage, and nothing to renew before setup', async (t) => {
   const empty = machine(t, () => []);
   await assert.rejects(loginCommand(['weixin'], empty.options), /先运行 ov-superagent setup/);
   assert.equal(await loginCommand(['setup'], empty.options), 2);
-  assert.match(empty.written(), /用法：ov-superagent login <lark\|weixin\|email\|telegram\|slack\|qq\|onebot> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例/);
+  assert.match(empty.written(), /用法：ov-superagent login <lark\|weixin\|email\|telegram\|slack\|qq\|onebot\|dingtalk> \[实例\]\n  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例/);
 });
 
 test('Telegram login stops the poller before verification and restarts with the new key', async (t) => {

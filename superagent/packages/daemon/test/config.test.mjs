@@ -92,16 +92,16 @@ describe('configuration safety', { concurrency: false }, () => {
   });
 
   it('accepts an external connector program as a channel without treating it as a built-in', () => {
-    setEnv('OV_SUPERAGENT_CHANNEL', 'dingtalk');
-    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["dingtalk","lark"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'mattermost');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["mattermost","lark"]');
     setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([
-      { id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'] },
+      { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'] },
     ]));
     const config = getConfig();
-    assert.equal(config.channel, 'dingtalk');
-    assert.deepEqual(config.connectors, ['dingtalk', 'lark']);
+    assert.equal(config.channel, 'mattermost');
+    assert.deepEqual(config.connectors, ['mattermost', 'lark']);
     assert.deepEqual(config.externalConnectors, [{
-      id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'], prompt: null,
+      id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'], prompt: null,
     }]);
     setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
     setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');

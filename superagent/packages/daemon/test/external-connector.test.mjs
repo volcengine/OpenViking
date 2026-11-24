@@ -19,11 +19,11 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 
 test('an external connector is its own program, listed beside built-in ones', () => {
   const instances = connectorInstances({
-    connectors: ['lark', 'dingtalk'],
-    externalConnectors: [{ id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'] }],
+    connectors: ['lark', 'mattermost'],
+    externalConnectors: [{ id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'] }],
   });
-  assert.deepEqual(instances.find((item) => item.id === 'dingtalk'), {
-    id: 'dingtalk', type: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'],
+  assert.deepEqual(instances.find((item) => item.id === 'mattermost'), {
+    id: 'mattermost', type: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'],
   });
   assert.deepEqual(instances.find((item) => item.id === 'lark'), { id: 'lark', type: 'lark' });
 });
@@ -32,9 +32,9 @@ test('an external connector config carries no Lark profile or owner', () => {
   const config = childConfig({
     profile: 'superagent-sre', larkOwnerOpenId: 'ou_owner', larkCliBin: '/fake/lark-cli',
     projectDir: '/proj', dataDir: '/data', tempDir: '/tmp/superagent', logLevel: 'info',
-  }, { id: 'dingtalk', type: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: [] });
-  assert.equal(config.channel, 'dingtalk');
-  assert.equal(config.instance, 'dingtalk');
+  }, { id: 'mattermost', type: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: [] });
+  assert.equal(config.channel, 'mattermost');
+  assert.equal(config.instance, 'mattermost');
   assert.equal(config.profile, undefined);
   assert.equal(config.larkOwnerOpenId, undefined);
   assert.equal(config.larkCliBin, undefined);
@@ -46,20 +46,20 @@ test('the configured program speaks protocol 0.2 and names the owner', async (t)
   const fixture = fileURLToPath(new URL('./external-connector-fixture.mjs', import.meta.url));
   const registry = new ProcessRegistry(logger);
   const connector = new ConnectorProcess({
-    id: 'dingtalk', type: 'dingtalk', command: process.execPath, args: [fixture, '--once'],
+    id: 'mattermost', type: 'mattermost', command: process.execPath, args: [fixture, '--once'],
   }, {
     projectDir: dir, dataDir: dir, maxEventBytes: 1_000_000, logLevel: 'error',
     profile: 'should-not-leak', larkOwnerOpenId: 'ou_secret', larkCliBin: '/fake/lark-cli',
   }, registry, logger);
   t.after(async () => { await connector.stop(); await registry.stopAll(1000); });
   const spec = await connector.preflight();
-  assert.equal(spec.manifest.name, 'dingtalk');
+  assert.equal(spec.manifest.name, 'mattermost');
   assert.equal(spec.manifest.actions['message.send'].content.includes('markdown'), true);
   assert.equal(connector.owner.id, 'owner-1');
   assert.equal(connector.owner.target.chat_id, 'direct:1');
   const received = JSON.parse(fs.readFileSync(path.join(dir, 'received.json'), 'utf8'));
   assert.deepEqual(received.argv, [fixture, '--once']);
-  assert.equal(received.config.channel, 'dingtalk');
+  assert.equal(received.config.channel, 'mattermost');
   assert.equal(received.config.profile, undefined);
   assert.equal(received.config.larkOwnerOpenId, undefined);
   assert.equal(received.config.larkCliBin, undefined);
@@ -67,18 +67,18 @@ test('the configured program speaks protocol 0.2 and names the owner', async (t)
 
 test('the model is told which external connector a line came from', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-external-prompt-'));
-  const prompt = path.join(dir, 'dingtalk.md');
+  const prompt = path.join(dir, 'mattermost.md');
   fs.writeFileSync(prompt, 'Never invent a target on another connector.\n');
   try {
     const text = assembleConversationPolicy({
-      connectors: ['lark', 'dingtalk'],
-      externalConnectors: [{ id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', prompt }],
+      connectors: ['lark', 'mattermost'],
+      externalConnectors: [{ id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', prompt }],
     });
-    assert.match(text, /^## dingtalk$/m);
-    assert.match(text, /source=dingtalk/);
+    assert.match(text, /^## mattermost$/m);
+    assert.match(text, /source=mattermost/);
     assert.match(text, /Never invent a target on another connector/);
-    assert.ok(text.indexOf('## Lark') < text.indexOf('## dingtalk'));
-    assert.ok(text.indexOf('## dingtalk') < text.indexOf('## Role'));
+    assert.ok(text.indexOf('## Lark') < text.indexOf('## mattermost'));
+    assert.ok(text.indexOf('## mattermost') < text.indexOf('## Role'));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -88,22 +88,22 @@ test('a missing external prompt is skipped instead of failing policy assembly', 
   const missing = path.join(os.tmpdir(), 'ovsa-missing-prompt.md');
   const warnings = [];
   const text = assembleConversationPolicy({
-    connectors: ['dingtalk'],
-    externalConnectors: [{ id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', prompt: missing }],
+    connectors: ['mattermost'],
+    externalConnectors: [{ id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', prompt: missing }],
   }, { logger: { warn: (message, fields) => warnings.push([message, fields]) } });
-  assert.match(text, /^## dingtalk$/m);
+  assert.match(text, /^## mattermost$/m);
   assert.equal(text.includes(missing), false);
-  assert.deepEqual(warnings, [['external_connector_prompt_unreadable', { connector: 'dingtalk', code: 'ENOENT' }]]);
+  assert.deepEqual(warnings, [['external_connector_prompt_unreadable', { connector: 'mattermost', code: 'ENOENT' }]]);
 });
 
 test('an external prompt shows at most 16384 characters', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-external-prompt-'));
-  const prompt = path.join(dir, 'dingtalk.md');
+  const prompt = path.join(dir, 'mattermost.md');
   fs.writeFileSync(prompt, `${'a'.repeat(16_384)}TAIL`);
   try {
     const text = assembleConversationPolicy({
-      connectors: ['dingtalk'],
-      externalConnectors: [{ id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', prompt }],
+      connectors: ['mattermost'],
+      externalConnectors: [{ id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', prompt }],
     });
     assert.equal(text.includes('a'.repeat(16_384)), true);
     assert.equal(text.includes('TAIL'), false);
@@ -118,19 +118,19 @@ test('an inbound line wakes the model and the reply, then /help, is delivered ba
   const fixture = fileURLToPath(new URL('./external-connector-fixture.mjs', import.meta.url));
   const registry = new ProcessRegistry(logger);
   const connector = new ConnectorProcess({
-    id: 'dingtalk', type: 'dingtalk', command: process.execPath, args: [fixture],
+    id: 'mattermost', type: 'mattermost', command: process.execPath, args: [fixture],
   }, {
     projectDir: dir, dataDir: dir, maxEventBytes: 1_000_000, logLevel: 'error', sendTimeoutMs: 5_000,
   }, registry, logger);
   const store = new Store(path.join(dir, 'state.sqlite3'), logger);
   store.initializeCognition('codex', 'runtime-token');
   const connectors = {
-    manifests: () => [['dingtalk', connector.manifest]],
+    manifests: () => [['mattermost', connector.manifest]],
     invoke: (_id, action, input) => connector.invoke(action, input),
     available: () => connector.available,
   };
   const actions = new ActionService({
-    config: { channel: 'dingtalk', connectors: ['dingtalk'], maxReplyChars: 4_000, maxEventBytes: 1_000_000, maxEventAgeMs: 60_000 },
+    config: { channel: 'mattermost', connectors: ['mattermost'], maxReplyChars: 4_000, maxEventBytes: 1_000_000, maxEventAgeMs: 60_000 },
     store, connectors, logger,
   });
   const delivered = [];
@@ -197,7 +197,7 @@ test('an inbound line wakes the model and the reply, then /help, is delivered ba
 
 test('Volc cannot run an external connector', () => {
   const runtime = Object.create(AgentRuntime.prototype);
-  runtime.config = { connectors: ['dingtalk'], externalConnectors: [{ id: 'dingtalk' }] };
+  runtime.config = { connectors: ['mattermost'], externalConnectors: [{ id: 'mattermost' }] };
   assert.throws(() => runtime._assertConnectorSupport('volc'), /external connector/);
   runtime.config = { connectors: ['lark'], externalConnectors: [] };
   assert.doesNotThrow(() => runtime._assertConnectorSupport('volc'));

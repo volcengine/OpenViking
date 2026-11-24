@@ -428,10 +428,10 @@ test('requires a complete per-agent self-hosted binding for Ark', () => {
 
 test('starts an external connector program and can make it the primary channel', () => {
   const manifest = validManifest();
-  const external = { id: 'dingtalk', command: '/usr/local/bin/ovsa-dingtalk', args: ['--once'] };
+  const external = { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'] };
   Object.assign(manifest.agents[1], {
-    channel: 'dingtalk',
-    connectors: ['dingtalk'],
+    channel: 'mattermost',
+    connectors: ['mattermost'],
     externalConnectors: [external],
     profile: undefined,
   });
@@ -440,12 +440,12 @@ test('starts an external connector program and can make it the primary channel',
     const env = { OV_SUPERAGENT_CONFIG: manifestPath };
     const deployment = loadDeploymentManifest(env);
     const agent = selectDeploymentAgent(deployment);
-    assert.equal(agent.channel, 'dingtalk');
-    assert.deepEqual(agent.connectors, ['dingtalk']);
+    assert.equal(agent.channel, 'mattermost');
+    assert.deepEqual(agent.connectors, ['mattermost']);
     assert.deepEqual(agent.externalConnectors, [{ ...external, prompt: null }]);
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.OV_SUPERAGENT_CHANNEL, 'dingtalk');
-    assert.equal(env.OV_SUPERAGENT_CONNECTORS_JSON, '["dingtalk"]');
+    assert.equal(env.OV_SUPERAGENT_CHANNEL, 'mattermost');
+    assert.equal(env.OV_SUPERAGENT_CONNECTORS_JSON, '["mattermost"]');
     assert.deepEqual(JSON.parse(env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON), [{ ...external, prompt: null }]);
   });
   for (const [name, mutate, error] of [
@@ -458,8 +458,8 @@ test('starts an external connector program and can make it the primary channel',
     }, /reserved/],
     ['missing prompt', (agent) => {
       agent.externalConnectors = [{ ...external, prompt: '/no/such/ovsa-prompt.md' }];
-      agent.connectors = ['dingtalk'];
-      agent.channel = 'dingtalk';
+      agent.connectors = ['mattermost'];
+      agent.channel = 'mattermost';
       delete agent.profile;
     }, /does not exist/],
     ['relative command', (agent) => { agent.externalConnectors = [{ id: 'discord', command: 'ovsa-discord' }]; agent.connectors = ['lark', 'discord']; }, /absolute path/],
@@ -468,8 +468,8 @@ test('starts an external connector program and can make it the primary channel',
       agent.model = 'ark';
       agent.volcSessionId = 'sesn-1';
       agent.volcEnvironmentId = 'env-1';
-      agent.connectors = ['dingtalk'];
-      agent.channel = 'dingtalk';
+      agent.connectors = ['mattermost'];
+      agent.channel = 'mattermost';
       agent.externalConnectors = [external];
       delete agent.profile;
     }, /ark runtime/],

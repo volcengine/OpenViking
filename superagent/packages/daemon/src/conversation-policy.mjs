@@ -19,7 +19,7 @@ import { PI_SHELL_DEFAULT_S, PI_SHELL_MAX_S } from './pi-runtime.mjs';
 export const DEFAULT_PROMPT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent');
 
 // Connector sections, in the order they are assembled.
-const CONNECTOR_SECTIONS = Object.freeze(['lark', 'slack', 'weixin', 'telegram', 'qq', 'onebot', 'email']);
+const CONNECTOR_SECTIONS = Object.freeze(['lark', 'slack', 'weixin', 'telegram', 'qq', 'onebot', 'dingtalk', 'email']);
 
 function promptDir(config) {
   return config?.promptDir || DEFAULT_PROMPT_DIR;

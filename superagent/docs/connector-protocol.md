@@ -124,7 +124,7 @@ should reuse `spec/check/discover/read` and `RECORD/SCHEMA/STATE` semantics.
 
 `connector` identifies the provider; `instance` identifies a configured source
 instance/account and is unique within a Core. Built-in chat connectors currently
-use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, or `instance=onebot`. An external connector uses the `id` from
+use `instance=lark`, `instance=weixin`, `instance=telegram`, `instance=slack`, `instance=qq`, `instance=onebot`, or `instance=dingtalk`. An external connector uses the `id` from
 `externalConnectors` (see [External Connector](external-connector.md)). The source process authenticates both
 identities; input cannot select another Connector's identity.
 
@@ -656,3 +656,15 @@ at most 200 messages and 64 KiB. `chat.list` lists the groups from `get_group_li
 cursor, as context only; private history leaves out what classification drops
 there live (command prefixes, the account's lines the Connector did not send,
 a stranger's `/`). There is no catch-up read after downtime.
+
+### DingTalk
+
+DingTalk Stream receives internal group text that mentions the bot.
+`message.send` and `message.reply` take Markdown; a reply is a new message in
+the group, since `msg=dtm_<group>.<message>` carries the group (base64url
+DingTalk ids). Owner notices and email approvals go to the primary IM.
+
+A message is committed to `<dataDir>/dingtalk/state.sqlite3` before the Stream
+callback is acknowledged and removed once written to the Core, as Slack does.
+The SDK reconnects a dropped Stream; one down for 60 seconds is reported as a
+failed Connector and restarted by the Core.

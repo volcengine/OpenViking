@@ -264,7 +264,7 @@ function parseDaemonEnv(value, ignored) {
   return Object.freeze(result);
 }
 
-const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot']);
+const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']);
 const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
 // Internal event sources. `timer` is how a reminder is delivered; an external
 // program must not take that name and inherit its exemptions.
@@ -356,8 +356,11 @@ function parseAgent(value, index, ignored) {
   }
   // The primary IM: where notices to the owner go. A mailbox is never one.
   const channel = value.channel === undefined
-    ? (connectors?.find((connector) => connector !== 'email') ?? 'lark')
+    ? (connectors?.find((connector) => connector !== 'email' && connector !== 'dingtalk') ?? 'lark')
     : manifestString(value.channel, `${label}.channel`);
+  if (channel === 'dingtalk') {
+    throw new Error(`${label}.channel requires an owner-capable IM; add dingtalk to connectors as a secondary channel`);
+  }
   if (!BUILTIN_CHANNELS.includes(channel) && !externalIds.has(channel)) {
     throw new Error(`${label}.channel must be a built-in IM or an external connector`);
   }

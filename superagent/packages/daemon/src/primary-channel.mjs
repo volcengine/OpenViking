@@ -3,6 +3,7 @@
 
 import { updateManifest } from './deployment-manifest.mjs';
 
+// Only channels that can address an owner in a direct chat are eligible.
 const IM_NAMES = { lark: '飞书', weixin: '微信', telegram: 'Telegram', slack: 'Slack', qq: 'QQ', onebot: 'QQ' };
 const label = (id) => (IM_NAMES[id] ? `${IM_NAMES[id]}（${id}）` : (id || '未设置'));
 const PRIMARY_NOTES = {
