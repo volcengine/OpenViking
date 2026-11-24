@@ -353,6 +353,14 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     from openviking.server.auth.plugins import ldap as ldap_module
     from openviking.server.auth.plugins import oidc as oidc_module
 
+    config = (
+        OIDCConfig(issuer="https://issuer.test", audience="openviking")
+        if mode == "oidc"
+        else LDAPConfig(host="directory.test", base_dn="dc=test")
+    )
+    config.identity.role.source = "fixed"
+    config.identity.role.value = "root"
+
     if mode == "oidc":
         import base64
         import time
@@ -360,7 +368,6 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
         jwt = pytest.importorskip("jwt", minversion="2.15.1")
         assert oidc_module._check_jwt_available()
         plugin = oidc_module.OIDCAuthPlugin()
-        config = OIDCConfig(issuer="https://issuer.test", audience="openviking")
         secret = b"oidc-identity-mapping-test-secret"
         claims = {
             "iss": config.issuer,
@@ -380,9 +387,38 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
             expected = ("team", "Alice")
         token = jwt.encode(claims, secret, algorithm="HS256", headers={"kid": "test"})
         headers = [(b"authorization", f"Bearer {token}".encode())]
+        server_config = SimpleNamespace(oidc=config)
+        plugin.validate_config(server_config)
+        await plugin.initialize(None, None, server_config)
+        plugin._jwks["test"] = jwt.PyJWK.from_dict(
+            {"kty": "oct", "k": base64.urlsafe_b64encode(secret).decode(), "alg": "HS256"}
+        )
+
+        # Validly signed tokens must not acquire another identity through
+        # implicit character replacement, including after an explicit mapping.
+        invalid_claims = [
+            ({config.identity.user_id.claim: value}, "user_id")
+            for value in ("alice|prod", "alice_prod\n", "")
+        ]
+        if custom:
+            invalid_claims.extend(
+                ({"org": value}, "account_id") for value in ("Team|prod", "Team\n", "_system")
+            )
+        for changes, field in invalid_claims:
+            invalid_token = jwt.encode(
+                {**claims, **changes},
+                secret,
+                algorithm="HS256",
+                headers={"kid": "test"},
+            )
+            request = await make_request(
+                runtime, mode, headers=[(b"authorization", f"Bearer {invalid_token}".encode())]
+            )
+            request.app.state.auth_plugin = plugin
+            with pytest.raises(UnauthenticatedError, match=field):
+                await plugin.resolve_identity(request)
     else:
         plugin = ldap_module.LDAPAuthPlugin()
-        config = LDAPConfig(host="directory.test", base_dn="dc=test")
         headers = [(b"authorization", b"Basic YWxpY2U6cGFzc3dvcmQ=")]
         monkeypatch.setattr(ldap_module, "LDAP_AVAILABLE", True)
         monkeypatch.setattr(
@@ -400,16 +436,6 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
             config.identity.account_id.source = "dn_attribute"
             config.identity.account_id.attribute = "ou"
             expected = ("Team", "alice")
-    config.identity.role.source = "fixed"
-    config.identity.role.value = "root"
-    if mode == "oidc":
-        server_config = SimpleNamespace(oidc=config)
-        plugin.validate_config(server_config)
-        await plugin.initialize(None, None, server_config)
-        plugin._jwks["test"] = jwt.PyJWK.from_dict(
-            {"kty": "oct", "k": base64.urlsafe_b64encode(secret).decode(), "alg": "HS256"}
-        )
-    else:
         plugin._config = config
         plugin._mapper = IdentityMapper(config.identity)
     request = await make_request(runtime, mode, headers=headers)
@@ -419,31 +445,6 @@ async def test_builtin_external_mapping_preserves_identity_and_user_role(
     assert identity.role == Role.USER
     ctx = await get_request_context(request, identity, None, None, None)
     assert ctx.role == Role.USER
-
-    if mode == "oidc":
-        # Validly signed tokens must not acquire another identity through
-        # implicit character replacement, including after an explicit mapping.
-        invalid_claims = [
-            ({config.identity.user_id.claim: value}, "user_id")
-            for value in ("alice|prod", "alice_prod\n", "")
-        ]
-        if custom:
-            invalid_claims.extend(
-                ({"org": value}, "account_id") for value in ("Team|prod", "Team\n", "_system")
-            )
-        for changes, field in invalid_claims:
-            token = jwt.encode(
-                {**claims, **changes},
-                secret,
-                algorithm="HS256",
-                headers={"kid": "test"},
-            )
-            request = await make_request(
-                runtime, mode, headers=[(b"authorization", f"Bearer {token}".encode())]
-            )
-            request.app.state.auth_plugin = plugin
-            with pytest.raises(UnauthenticatedError, match=field):
-                await plugin.resolve_identity(request)
 
 
 @pytest.mark.parametrize(
