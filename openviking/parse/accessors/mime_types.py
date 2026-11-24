@@ -46,11 +46,11 @@ class IANAMediaType:
         Returns:
             Parsed IANAMediaType object
         """
-        media_type = media_type.strip().lower()
+        media_type = media_type.strip()
 
         # Split into type/subtype and parameters
         parts = media_type.split(";", 1)
-        type_subtype = parts[0].strip()
+        type_subtype = parts[0].strip().lower()
         params_str = parts[1].strip() if len(parts) > 1 else ""
 
         # Parse type and subtype
@@ -89,9 +89,9 @@ class IANAMediaType:
                     continue
                 if "=" in param:
                     key, value = param.split("=", 1)
-                    parameters[key.strip()] = value.strip()
+                    parameters[key.strip().lower()] = value.strip()
                 else:
-                    parameters[param] = ""
+                    parameters[param.lower()] = ""
 
         return cls(
             type=type_part,

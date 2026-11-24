@@ -7,6 +7,7 @@ Verifies fix for https://github.com/volcengine/OpenViking/issues/251:
 - Code file extensions routed to download, not webpage parse
 """
 
+import httpx
 import pytest
 
 from openviking.parse.accessors.http_accessor import HTTPAccessor, URLType, URLTypeDetector
@@ -213,6 +214,25 @@ class TestHTTPAccessorGetFallback:
 
         assert url_type == URLType.DOWNLOAD_PDF
         assert metadata["media_type_alias"] == "application/x-pdf"
+
+    @pytest.mark.parametrize("media_type", ["Application/PDF", "Application/X-PDF"])
+    def test_content_type_parameter_values_preserve_case(self, media_type):
+        metadata = {}
+        headers = httpx.Headers(
+            {
+                "Content-Type": (
+                    f'{media_type}; PROFILE="https://example.com/Profiles/InvoiceV2"; '
+                    "Boundary=AaB03X"
+                )
+            }
+        )
+
+        url_type = URLTypeDetector().detect_from_headers(headers, metadata)
+
+        assert url_type == URLType.DOWNLOAD_PDF
+        assert metadata["media_type"] == (
+            'application/pdf; profile="https://example.com/Profiles/InvoiceV2"; boundary=AaB03X'
+        )
 
     @pytest.mark.asyncio
     async def test_ac3_url_with_generic_content_type_stays_audio(self, monkeypatch):

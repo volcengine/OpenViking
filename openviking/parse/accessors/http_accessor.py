@@ -314,10 +314,10 @@ class URLTypeDetector:
             Detected URLType, or URLType.UNKNOWN if no match
         """
         # Normalize and parse according to IANA standards
-        media_type_str = content_type.lower().strip()
+        media_type_str = content_type.strip()
 
         # Handle common aliases
-        media_type_token = media_type_str.split(";", 1)[0].strip()
+        media_type_token = media_type_str.split(";", 1)[0].strip().lower()
         if media_type_token in MEDIA_TYPE_ALIASES:
             meta["media_type_alias"] = media_type_token
             media_type_str = (
