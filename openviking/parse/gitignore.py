@@ -120,7 +120,7 @@ class GitignoreMatcher:
         if not gitignore_path.is_file():
             return None
         try:
-            content = gitignore_path.read_text(encoding="utf-8", errors="ignore")
+            content = gitignore_path.read_text(encoding="utf-8-sig", errors="ignore")
         except OSError:
             return None
 

@@ -490,8 +490,11 @@ class TestIncludeExclude:
 class TestGitignoreHandling:
     """Test gitignore-aware exclusion in scan_directory."""
 
-    def test_respects_root_gitignore(self, tmp_path: Path, registry: ParserRegistry) -> None:
-        (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_respects_root_gitignore(
+        self, tmp_path: Path, registry: ParserRegistry, encoding: str
+    ) -> None:
+        (tmp_path / ".gitignore").write_text("*.log\n", encoding=encoding)
         (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
         (tmp_path / "skip.log").write_text("no", encoding="utf-8")
 
