@@ -86,6 +86,6 @@ node --test agent-plugins/plugin.test.mjs
 node examples/memory-plugin-shared/sync.mjs
 ```
 
-`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs` — the same `resolveConnection()` every other plugin's hooks and proxy use — so the hook-tuning knobs — which this spec has no hooks to run — never enter the bundle.
+`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs` — the same `resolveConnection()` every other plugin's hooks and proxy use — so the hook-tuning knobs never enter the bundle. The one workspace capability the bundle does carry is the registry's connection pointer, which `buildProxyConnection()` resolves from its launch directory so a session's proxy presents the same identity as its hooks; that is why the workspace registry modules are vendored here too.
 
 Both test files run in CI via `.github/workflows/pr.yml`.

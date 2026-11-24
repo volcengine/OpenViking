@@ -813,6 +813,13 @@ export function checkWorkspace(report, { cwd = process.cwd(), env = process.env,
   const resolved = resolveWorkspaceSettings(cwd, env, { clientVersion });
   summary.settings = resolved.settings;
   summary.provenance = resolved.provenance;
+  summary.connectionFile = resolved.connectionFile || "";
+  if (resolved.connectionFile) {
+    report.ok(
+      `connection  ← registry pointer feeds ${homeShort(resolved.connectionFile)}`,
+      "the workspace registry names this user-private connection file for hooks and MCP proxies alike",
+    );
+  }
   const identity = resolveWorkspaceIdentity({ cwd, env });
   const registryPath = entryPath(root, env, identity);
 

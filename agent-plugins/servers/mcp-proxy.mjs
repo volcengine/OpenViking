@@ -25,6 +25,10 @@ import { createOpenVikingMcpProxy } from "./shared/mcp-proxy-core.mjs";
 export function readProxyConfig(env = process.env) {
   const cfg = buildProxyConnection("agent-plugins", {
     env,
+    // The launch directory is where the session's workspace is looked up: a
+    // registry entry there may point at the user-private connection file this
+    // session presents — the same file the session's hooks resolve.
+    cwd: process.cwd(),
     manifestUrl: new URL("../plugin.json", import.meta.url),
   });
   return toMcpProxyConfig(cfg, { env });
