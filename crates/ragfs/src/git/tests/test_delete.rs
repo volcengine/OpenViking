@@ -315,3 +315,80 @@ async fn delete_root_then_create_independent_branch_with_same_content() {
     );
     assert!(svc.path_is_file("acct", &other, "file").await.unwrap());
 }
+
+#[tokio::test]
+async fn delete_peer_stale_child_falls_back_to_live_history() {
+    for collect in [false, true] {
+        let (_dir, vfs, _, _, peer) = make_service("acct");
+        let reader = peer
+            .clone()
+            .with_commit_index(Some(make_snapshot_log_store().await));
+        let ids = delete_chain(&reader, &vfs, 3).await;
+        peer.delete_commits(deletion(&ids[1..2], false))
+            .await
+            .unwrap();
+        if collect {
+            let grace = std::time::Duration::from_secs(600);
+            peer.gc_at("acct", std::time::SystemTime::now() + 2 * grace, grace)
+                .await
+                .unwrap();
+        }
+        let preview = reader
+            .delete_commits(deletion(&ids[..1], true))
+            .await
+            .unwrap();
+        assert_eq!(preview.reparented, [(ids[2], vec![])]);
+        let mut request = deletion(&ids[..1], false);
+        request.expected_overlay_root = Some(preview.overlay_root);
+        reader.delete_commits(request).await.unwrap();
+        assert_eq!(delete_log(&reader).await, [ids[2]]);
+    }
+}
+
+#[tokio::test]
+async fn delete_peer_lag_triggers_backfill_even_when_preview_succeeds() {
+    use crate::git::CommitIndexStore;
+    for empty in [false, true] {
+        let (dir, vfs, _, refs, writer) = make_service("acct");
+        let spy = Arc::new(GetSpyObjectStore {
+            inner: LocalObjectStore::new(dir.path()),
+            gets: Default::default(),
+        });
+        let index = make_snapshot_log_store().await;
+        let reader =
+            GitService::new(vfs.clone(), spy.clone(), refs).with_commit_index(Some(index.clone()));
+        let mut ids = delete_chain(if empty { &writer } else { &reader }, &vfs, 3).await;
+        ids.extend(delete_chain(&writer, &vfs, 6).await);
+        reader
+            .delete_commits(deletion(&ids[..1], true))
+            .await
+            .unwrap();
+        let head = ids.last().unwrap().to_string();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !index
+                .latest_commit("acct", "main")
+                .await
+                .unwrap()
+                .is_some_and(|row| row.commit_oid == head)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("successful preview should also schedule index catch-up");
+        spy.reset();
+        reader
+            .delete_commits(deletion(&ids[..1], true))
+            .await
+            .unwrap();
+        assert_eq!(
+            spy.gets
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|oid| ids.contains(oid))
+                .count(),
+            2
+        );
+    }
+}

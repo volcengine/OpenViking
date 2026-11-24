@@ -57,6 +57,18 @@ impl Planner<'_> {
         Ok(&self.commits[&id])
     }
 
+    // A peer's SQLite row can outlive both the commit's visibility and its loose object.
+    async fn candidate_meta(&mut self, id: ObjectId) -> Result<Option<&Node>, GitError> {
+        match self.meta(id).await {
+            Ok(node) => Ok(Some(node)),
+            Err(
+                GitError::CommitNotFound(missing)
+                | GitError::ObjectStore(ObjectStoreError::NotFound(missing)),
+            ) if missing == id => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
     fn index_read<T>(&mut self, result: Result<T, crate::git::SnapshotLogError>) -> Option<T> {
         match result {
             Ok(value) => Some(value),
@@ -79,12 +91,16 @@ impl Planner<'_> {
             let Some(branch) = name.strip_prefix("refs/heads/") else {
                 continue;
             };
-            let Some(Some(latest)) =
-                self.index_read(store.latest_commit(self.account, branch).await)
+            let Some(latest) = self.index_read(store.latest_commit(self.account, branch).await)
             else {
                 return Ok(None);
             };
+            let Some(latest) = latest else {
+                self.svc.trigger_commit_index_backfill(self.account, branch);
+                return Ok(None);
+            };
             if latest.commit_oid != tip.to_string() {
+                self.svc.trigger_commit_index_backfill(self.account, branch);
                 // A concurrently appended suffix does not invalidate the
                 // indexed prefix. Verify its connection to the actual head.
                 let Ok(index_tip) = latest.commit_oid.parse::<ObjectId>() else {
@@ -110,7 +126,11 @@ impl Planner<'_> {
                 let Ok(root) = ObjectId::from_hex(first.commit_oid.as_bytes()) else {
                     return Ok(None);
                 };
-                if !self.meta(root).await?.parents.is_empty() {
+                let Some(root_node) = self.candidate_meta(root).await? else {
+                    self.svc.invalidate_commit_index(self.account, branch).await;
+                    return Ok(None);
+                };
+                if !root_node.parents.is_empty() {
                     return Ok(None);
                 }
             }
@@ -168,8 +188,12 @@ impl Planner<'_> {
             let first_in_run = previous_id.is_none_or(|p| !self.targets.contains(&p));
             let last_in_run = !self.targets.contains(&child);
             if node.parents.as_slice() != previous_id.as_slice()
-                || (first_in_run && self.meta(id).await? != &node)
-                || (last_in_run && self.meta(child).await?.parents.as_slice() != [id])
+                || (first_in_run && self.candidate_meta(id).await? != Some(&node))
+                || (last_in_run
+                    && self
+                        .candidate_meta(child)
+                        .await?
+                        .is_none_or(|n| n.parents.as_slice() != [id]))
             {
                 self.svc.invalidate_commit_index(self.account, branch).await;
                 return Ok(None);
