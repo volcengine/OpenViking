@@ -734,12 +734,17 @@ if (url && endpoint(c.url) !== endpoint(url)) {
   const envKey = process.env.OPENVIKING_BEARER_TOKEN || process.env.OPENVIKING_API_KEY;
   const envUrl = process.env.OPENVIKING_URL || process.env.OPENVIKING_BASE_URL;
   const hasNewKey = apiKey && apiKey.trim() && apiKey !== "__OPENVIKING_KEEP__";
-  if ((legacyKey && endpoint(legacyUrl) !== endpoint(url) && !hasNewKey) ||
-      (envKey && !envUrl)) {
+  if (!hasNewKey && ((legacyKey && endpoint(legacyUrl) !== endpoint(url)) || (envKey && !envUrl))) {
     console.error(process.env.OVCLI_LANG === "zh"
       ? "新连接可能沿用其他服务的密钥。请填写新连接的 API Key，为环境变量中的密钥指定对应 URL，或使用单独的连接配置。"
       : "The new connection could reuse a key from another server. Set its API key and pair any environment key with its own URL, or use a separate connection configuration.");
     process.exit(1);
+  }
+  if (envKey && !envUrl) {
+    // Saving a file does not change environment precedence in the caller's agents.
+    console.warn(process.env.OVCLI_LANG === "zh"
+      ? "未指定 URL 的环境变量密钥可能覆盖已保存的 API Key，并被发送到新服务。启动 Agent 前，请清除该环境变量或为此密钥指定其服务地址。"
+      : "An environment key without a URL can override the saved API key and be sent to the new server. Before starting your agent, unset it or pair it with its own server URL.");
   }
   // Do not migrate authentication settings to a different or unknown server.
   for (const field of ["api_key", "root_api_key", "account", "account_id", "user", "user_id",
@@ -1761,10 +1766,9 @@ gather_credentials() {
     fi
   fi
   if [ -z "$CRED_URL" ]; then
-    if [ -n "$CUR_KEY" ]; then
-      err "$(t 'The saved API key has no server URL. Reconfigure the connection or pass --url.' '已保存的 API key 没有对应的服务地址。请重新配置连接或指定 --url。')"
-      return 1
-    fi
+    # Keeping an implicit connection must not pin its saved key to a new URL.
+    # The clients still resolve their usual default when no URL is saved.
+    if [ -n "$CUR_KEY" ]; then return 0; fi
     CRED_URL="http://127.0.0.1:1933"
   fi
   if ! same_connection_url "$CRED_URL" "$CUR_URL"; then
@@ -1803,6 +1807,10 @@ probe_server() { # probe_server <url> <key> <account> <user> -> PROBE_RESULT, PR
 
 check_server() {
   local key def
+  if [ -z "$CRED_URL" ]; then
+    info "$(t 'Kept the existing connection. Skipping the server check because there is no explicit server URL.' '已沿用现有连接。未明确设置服务地址，跳过连接检查。')"
+    return 0
+  fi
   command -v curl >/dev/null 2>&1 || return 0
   while :; do
     key="$(cred_value "$CRED_KEY" "$CUR_KEY")"
@@ -3903,7 +3911,7 @@ print_plan() {
   user="$(cred_value "$CRED_USER" "$CUR_USER")"
   step_heading "$(t 'Review' '确认安装内容')"
   print_selection
-  info "$(t 'Server:' '服务地址：') $CRED_URL"
+  info "$(t 'Server:' '服务地址：') ${CRED_URL:-$(t '(existing settings)' '（沿用现有设置）')}"
   info "API key: $(mask_secret "$(cred_value "$CRED_KEY" "$CUR_KEY")")"
   if [ -n "$account" ]; then info "account: $account"; fi
   if [ -n "$user" ]; then info "user: $user"; fi

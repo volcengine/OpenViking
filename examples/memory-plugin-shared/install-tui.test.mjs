@@ -977,6 +977,78 @@ printf '<%s>\\n' "$CRED_KEY"
   assert.match(result.stdout, /<>/);
 });
 
+test("an explicit installer key can be saved despite an unpaired environment key", (t) => {
+  for (const [variable, previous] of [
+    ["OPENVIKING_API_KEY", null],
+    ["OPENVIKING_BEARER_TOKEN", { url: "https://previous.example/openviking", api_key: "previous-key" }],
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    if (previous) writeFileSync(file, JSON.stringify(previous));
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking replacement-key '' ''
+`, {
+      HOME: home,
+      OPENVIKING_CONFIG_FILE: undefined,
+      OPENVIKING_URL: undefined,
+      OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined,
+      OPENVIKING_BEARER_TOKEN: undefined,
+      [variable]: "environment-key",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /can override the saved API key/);
+    assert.doesNotMatch(result.stderr, /environment-key|replacement-key/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+      url: "https://byteplus.example/openviking", api_key: "replacement-key",
+    });
+  }
+});
+
+test("an unpaired environment key is not used to save a different endpoint without a new key", (t) => {
+  const home = makeTempHome(t);
+  const file = join(home, "ovcli.conf");
+  const previous = { url: "https://previous.example/openviking", api_key: "previous-key" };
+  writeFileSync(file, JSON.stringify(previous));
+  const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, {
+    HOME: home,
+    OPENVIKING_CONFIG_FILE: undefined,
+    OPENVIKING_URL: undefined,
+    OPENVIKING_BASE_URL: undefined,
+    OPENVIKING_API_KEY: "environment-key",
+    OPENVIKING_BEARER_TOKEN: undefined,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /could reuse a key from another server/);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+});
+
+test("keeping a saved key with an implicit URL does not pin or probe a new endpoint", (t) => {
+  for (const legacyUrl of [undefined, "https://previous.example/openviking"]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const legacy = join(home, "ov.conf");
+    const previous = { api_key: "implicit-key", timeout: 4 };
+    writeFileSync(file, JSON.stringify(previous));
+    if (legacyUrl) writeFileSync(legacy, JSON.stringify({ server: { url: legacyUrl } }));
+    const result = runInstallerPrelude(`
+OV_HOME=${JSON.stringify(home)}
+OVCLI_CONF=${JSON.stringify(file)}
+INTERACTIVE=1
+tui_menu() { TUI_MENU_CHOICE=0; }
+probe_server() { printf 'Unexpected probe\\n' >&2; exit 9; }
+gather_credentials
+check_server
+write_ovcli
+`, { HOME: home, OPENVIKING_CONFIG_FILE: legacy });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /no explicit server URL/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+  }
+});
+
 test("a connection change with no new key cannot activate a key from a legacy server", (t) => {
   const home = makeTempHome(t);
   const file = join(home, "ovcli.conf");
