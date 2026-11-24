@@ -12,10 +12,17 @@ export { VikingBotComposer } from './lazy-composer.js';
 export { VikingBotMessageList } from './viking-bot-message-list.js';
 export {
   VikingBotInteraction,
+  VikingBotConfirmation,
   DEFAULT_INTERACTION_LABELS,
 } from './interaction/index.js';
 export type { InteractionLabels } from './interaction/index.js';
+export type {
+  VikingBotConfirmationProps,
+  VikingBotConfirmationRow,
+  VikingBotConfirmationLabels,
+} from './confirmation/types.js';
 export { DEFAULT_LABELS } from './labels.js';
+export type { VikingBotDebugContext } from './message-debug.js';
 export {
   groupByActivity,
   groupMessages,
@@ -35,6 +42,7 @@ export type {
   VikingBotStreamingState,
   VikingBotTextPart,
   VikingBotToolPart,
+  VikingBotTask,
   VikingBotToolResultPart,
   VikingBotToolResultLink,
 } from './model.js';
@@ -45,6 +53,14 @@ export type {
   VikingBotProps,
 } from './types.js';
 export type {
+  VikingBotInteractionCustomInputContext,
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionDirectoryPermission,
+  VikingBotInteractionDirectoryInfo,
+  VikingBotInteractionDirectoryOperations,
+  VikingBotInteractionTargetRequest,
+  VikingBotInteractionSingleRequest,
+  VikingBotInteractionSingleAnswer,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,
@@ -54,3 +70,9 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './interaction/types.js';
+
+export type {
+  VikingBotInteractionFields,
+  VikingBotInteractionField,
+  VikingBotInteractionFieldContext,
+} from './interaction/field-types.js';

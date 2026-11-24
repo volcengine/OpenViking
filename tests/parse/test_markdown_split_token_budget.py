@@ -2,6 +2,7 @@
 
 import pytest
 
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking_cli.utils.config.parser_config import ParserConfig
 
@@ -24,23 +25,27 @@ def test_short_tail_does_not_overflow_character_budget():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_headings", [False, True])
-async def test_layout_uses_character_budget_ignoring_legacy_tokens(with_headings):
-    parser = MarkdownParser(ParserConfig(max_section_size=1))
+async def test_layout_uses_character_budget_ignoring_legacy_tokens(with_headings, tmp_path):
+    parser = MarkdownParser(config=ParserConfig(max_section_size=1))
     content = ("# Title\n\n" if with_headings else "") + "中" * 1990
-    layout = await parser._compute_layout(content, "viking://temp/test", resource_name="doc")
-    writes = [op for op in layout.ops if op.kind == "write"]
-    assert len(writes) == 1
-    assert writes[0].content == content
+    store = LocalParseOutputStore(str(tmp_path / "out"))
+
+    result = await parser.parse_content(content, source_path="doc.md", parse_output_store=store)
+
+    assert result.artifact_ref is not None
+    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {"doc/doc.md"}
+    assert await store.read_bytes(result.artifact_ref, "doc/doc.md") == content.encode()
 
 
 @pytest.mark.asyncio
-async def test_heading_merges_stay_within_character_budget():
+async def test_split_sections_keep_source_order_within_character_budget():
     parser = MarkdownParser()
-    content = "\n\n".join(f"## Heading {i}\n\n" + "文" * 750 for i in range(12))
+    children = [f"## Chapter {i}\n\n" + "文" * 750 for i in range(1, 4)]
+    content = "\n\n".join(["# Guide\n\nIntroduction", *children, "# Appendix\n\nNotes"])
     layout = await parser._compute_layout(content, "viking://temp/test", resource_name="doc")
-    writes = [op for op in layout.ops if op.kind == "write"]
-    assert all(len(op.content) <= 2000 for op in writes)
-    assert sum(op.content.count("文") for op in writes) == 9000
+    sections = [op.content for op in layout.ops if op.kind == "write"]
+    assert all(len(section) <= 2000 for section in sections)
+    assert "\n\n".join(sections) == content
 
 
 @pytest.mark.parametrize("leading_row", ["", "| short |\n"])

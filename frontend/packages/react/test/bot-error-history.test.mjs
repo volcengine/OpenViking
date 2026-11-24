@@ -49,7 +49,7 @@ for (const truncated of [false, true])
     );
     assert.equal(controller.getSnapshot().status, 'error');
     assert.equal(
-      controller.getSnapshot().messages.at(-1).parts[0].text,
+      controller.getSnapshot().messages.at(-2).parts[0].text,
       'partial A2',
     );
     assert.equal(await controller.send('Q3'), true);

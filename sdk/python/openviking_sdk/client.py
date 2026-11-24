@@ -59,6 +59,7 @@ from .options import (
     AddResourceOptions,
     AddSkillOptions,
     BatchAddMessagesOptions,
+    BatchWriteOperation,
     BatchWriteOptions,
     CommitSessionOptions,
     CompileOptions,
@@ -593,8 +594,7 @@ class AsyncHTTPClient:
         extra = dict(option_values.pop("extra", {}) or {})
         payload = dict(fixed or {})
         protected_fields = set(payload) | set(protected or ())
-        official_fields = allowed - {"extra"}
-        conflicts = sorted(set(extra) & (official_fields | protected_fields))
+        conflicts = sorted(set(extra) & (set(option_values) | protected_fields))
         if conflicts:
             raise ValueError(f"extra cannot override '{conflicts[0]}'")
 
@@ -1627,7 +1627,7 @@ class AsyncHTTPClient:
     async def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
         timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
@@ -1978,19 +1978,61 @@ class AsyncHTTPClient:
             return None
         return self._handle_response(response)
 
-    async def compile(
+    async def create_compile_task(
         self,
         from_uris: List[str],
         to: str,
         skill: str,
         options: Optional[CompileOptions] = None,
+        *,
+        compile_name: str,
     ) -> Dict[str, Any]:
-        """Return a queued task, or saved settings when args explicitly configure scheduling."""
+        """Save a persistent Compile configuration without starting an execution.
+
+        compile_name is unique for the caller within the account and is returned unchanged.
+        Scheduling controls belong in options.args; no execution is started.
+        """
+        if not compile_name:
+            raise ValueError("compile_name is required")
         payload = self._build_options_payload(
             options,
             CompileOptions,
-            fixed={"from": list(from_uris), "to": to, "skill": skill},
+            fixed={"compile_name": compile_name, "from": list(from_uris), "to": to, "skill": skill},
         )
+        response = await self._request("POST", "/api/v1/compile/create", json=payload)
+        return self._handle_response(response)
+
+    async def compile(
+        self,
+        from_uris: Optional[List[str]] = None,
+        to: Optional[str] = None,
+        skill: Optional[str] = None,
+        options: Optional[CompileOptions] = None,
+        *,
+        compile_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue saved or full inputs and return a task_id for querying or cancellation.
+
+        Named runs use only options.args.owner_user_id; other args are ignored.
+        """
+        if compile_name is not None:
+            if not compile_name:
+                raise ValueError("compile_name must not be empty")
+            if from_uris is not None or to is not None or skill is not None:
+                raise ValueError("compile_name cannot be combined with Compile inputs")
+            payload = self._build_options_payload(
+                options, CompileOptions, fixed={"compile_name": compile_name}
+            )
+            if set(payload) - {"compile_name", "args"}:
+                raise ValueError("compile_name cannot be combined with Compile inputs")
+        else:
+            if not skill or not to or (skill != "memory" and not from_uris):
+                raise ValueError("Full Compile requires to, skill and non-memory from_uris")
+            payload = self._build_options_payload(
+                options,
+                CompileOptions,
+                fixed={"from": list(from_uris or []), "skill": skill, **({"to": to} if to else {})},
+            )
         response = await self._request("POST", "/api/v1/compile", json=payload)
         return self._handle_response(response)
 
@@ -2661,7 +2703,7 @@ class AsyncHTTPClient:
 
         # Binary branch: server sets application/octet-stream + X-Snapshot-* headers.
         content_type = response.headers.get("content-type", "")
-        if content_type.startswith("application/octet-stream"):
+        if response.is_success and content_type.startswith("application/octet-stream"):
             return {
                 "oid": response.headers.get("x-snapshot-oid", ""),
                 "size": int(response.headers.get("x-snapshot-size", "0")),
@@ -2675,10 +2717,11 @@ class AsyncHTTPClient:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Walk commit history newest-first."""
-        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        """Walk commit history newest-first, skipping ``offset`` matches."""
+        params: Dict[str, Any] = {"branch": branch, "limit": limit, "offset": offset}
         if paths:
             params["paths"] = paths
         response = await self._request(
@@ -3319,7 +3362,7 @@ class SyncHTTPClient:
     def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
         timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
@@ -3529,14 +3572,35 @@ class SyncHTTPClient:
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))
 
-    def compile(
+    def create_compile_task(
         self,
         from_uris: List[str],
         to: str,
         skill: str,
         options: Optional[CompileOptions] = None,
+        *,
+        compile_name: str,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.compile(from_uris, to, skill, options))
+        """Save a Compile configuration and return its compile_name without executing it."""
+        return run_async(
+            self._async_client.create_compile_task(
+                from_uris, to, skill, options, compile_name=compile_name
+            )
+        )
+
+    def compile(
+        self,
+        from_uris: Optional[List[str]] = None,
+        to: Optional[str] = None,
+        skill: Optional[str] = None,
+        options: Optional[CompileOptions] = None,
+        *,
+        compile_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue a persistent execution by name or an independent full compilation."""
+        return run_async(
+            self._async_client.compile(from_uris, to, skill, options, compile_name=compile_name)
+        )
 
     def rule_compile(
         self,
@@ -3895,9 +3959,10 @@ class AsyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._client.git_log(branch=branch, limit=limit, paths=paths)
+        return await self._client.git_log(branch=branch, limit=limit, offset=offset, paths=paths)
 
     async def diff(
         self,
@@ -4001,9 +4066,10 @@ class SyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+        return run_async(self._ns().log(branch=branch, limit=limit, offset=offset, paths=paths))
 
     def diff(
         self,

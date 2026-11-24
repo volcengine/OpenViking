@@ -17,7 +17,8 @@ import type {
   BatchWriteOptions,
   ClientConfig,
   CommitSessionOptions,
-  CompileOptions,
+  CompileInput,
+  CompileRequest,
   CreateSessionOptions,
   ExperienceOutcomeOptions,
   ExperienceTrajectoryOptions,
@@ -569,6 +570,7 @@ export class OpenVikingClient {
       tags: options.tags,
       include_provenance: options.includeProvenance,
       read_content: options.readContent,
+      args: kind === "search" ? (options as SearchOptions).args : undefined,
     });
     return this.request("POST", `/api/v1/search/${kind}`, {
       body: mergeExtra(body, options.extra),
@@ -841,6 +843,7 @@ export class OpenVikingClient {
       content,
       mode: options.mode,
       processing_mode: options.processingMode,
+      use_snapshot: options.useSnapshot,
       tags: options.tags,
       acl: options.acl,
       tag_mode:
@@ -849,6 +852,8 @@ export class OpenVikingClient {
           : undefined,
       wait: options.wait,
       telemetry: options.telemetry,
+      resolve_conflicts: options.resolveConflicts,
+      defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/write", {
       body: mergeExtra(body, options.extra),
@@ -868,6 +873,9 @@ export class OpenVikingClient {
           content: operation.content,
           content_base64: operation.contentBase64,
           mode: operation.mode,
+          expected_sha256: operation.expectedSha256,
+          if_absent: operation.ifAbsent,
+          resolve_conflicts: operation.resolveConflicts,
           tags: operation.tags,
           tag_mode: operation.tagMode,
           acl: operation.acl,
@@ -876,7 +884,9 @@ export class OpenVikingClient {
       wait: options.wait,
       telemetry: options.telemetry,
       processing_mode: options.processingMode,
+      use_snapshot: options.useSnapshot,
       defer_processing: options.deferProcessing,
+      skip_conflicts: options.skipConflicts,
     });
     return this.request("POST", "/api/v1/content/batch-write", {
       body: mergeExtra(body, options.extra),
@@ -1231,26 +1241,17 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
-  /** Start an asynchronous Compile task. */
-  compile(
-    fromUris: string[],
-    to: string,
-    skill: string,
-    options: CompileOptions = {},
-  ): Promise<JsonObject> {
-    const body = compact({
-      from: fromUris,
-      to,
-      skill,
-      instruction: options.instruction,
-      args:
-        options.args && Object.keys(options.args).length
-          ? options.args
-          : undefined,
-    });
-    return this.request("POST", "/api/v1/compile", {
-      body: mergeExtra(body, options.extra, ["instruction", "args"]),
-    });
+  /** Save named inputs without execution; compile_name is required and returned unchanged. */
+  createCompileTask(
+    input: CompileInput & { compile_name: string },
+  ): Promise<{ compile_name: string }> {
+    if (!input.compile_name) throw new TypeError("compile_name is required");
+    return this.request("POST", "/api/v1/compile/create", { body: input });
+  }
+
+  /** Queue a named persistent run or an independent full compilation. */
+  compile(input: CompileRequest): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/compile", { body: input });
   }
 
   /** Get a background task. */
@@ -1391,10 +1392,10 @@ export class OpenVikingClient {
       },
     );
   }
-  /** Return snapshot history from newest to oldest. */
-  gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
+  /** Return up to limit commits for branch/paths, newest first, skipping offset matches. */
+  gitLog(branch = "main", limit = 20, paths?: string[], offset = 0): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
-      query: { branch, limit, paths },
+      query: { branch, limit, offset, paths },
     });
   }
   /** Compare one file between two snapshot refs. */

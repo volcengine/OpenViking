@@ -23,9 +23,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from pdfminer.pdfparser import PDFSyntaxError
 from pdfminer.pdftypes import resolve1
-from pdfminer.psparser import LIT
+from pdfminer.psparser import LIT, PSEOF
 
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -35,6 +37,7 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
@@ -111,7 +114,7 @@ class PDFParser(BaseParser):
 
         Raises:
             FileNotFoundError: If PDF file doesn't exist
-            ValueError: If conversion fails with all strategies
+            InvalidArgumentError: If the PDF structure is invalid
         """
         start_time = time.time()
         pdf_path = Path(source)
@@ -162,16 +165,23 @@ class PDFParser(BaseParser):
             result.meta["intermediate_markdown_length"] = len(markdown_content)
             result.meta["intermediate_markdown_preview"] = markdown_content[:500]
 
-            logger.info(
-                f"PDF parsed successfully: {pdf_path.name} "
-                f"({len(markdown_content)} chars markdown, "
-                f"{result.parse_time:.2f}s)"
+            logger.debug(
+                "PDF parsed path=%s markdown_chars=%d duration=%.2fs",
+                safe_path_for_log(str(pdf_path)),
+                len(markdown_content),
+                result.parse_time,
             )
 
             return result
 
+        except OpenVikingError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to parse PDF {pdf_path}: {e}")
+            logger.info(
+                "PDF parsing failed; returning empty result path=%s error_type=%s degraded=true",
+                safe_path_for_log(str(pdf_path)),
+                type(e).__name__,
+            )
             return create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT),
                 source_path=str(pdf_path),
@@ -197,7 +207,7 @@ class PDFParser(BaseParser):
             Tuple of (markdown_content, metadata_dict)
 
         Raises:
-            ValueError: If all conversion strategies fail
+            ValueError: If the configured strategy is unknown
         """
         if self.config.strategy == "local":
             return await self._convert_local(pdf_path, resource_name=resource_name)
@@ -210,16 +220,13 @@ class PDFParser(BaseParser):
             try:
                 return await self._convert_local(pdf_path, resource_name=resource_name)
             except Exception as e:
-                logger.warning(f"Local conversion failed: {e}")
+                logger.debug("Local PDF conversion failed error_type=%s", type(e).__name__)
 
                 # Fallback to MinerU if configured
                 if self.config.mineru_endpoint:
-                    logger.info("Falling back to MinerU API")
+                    logger.info("Local PDF conversion unavailable; falling back to MinerU API")
                     return await self._convert_mineru(pdf_path, resource_name=resource_name)
-                else:
-                    raise ValueError(
-                        f"Local conversion failed and no MinerU endpoint configured: {e}"
-                    )
+                raise
 
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
@@ -239,6 +246,7 @@ class PDFParser(BaseParser):
         该方法会在 :meth:`_convert_local` 中通过 asyncio.to_thread 调用。
         """
         pdfplumber = lazy_import("pdfplumber")
+        from pdfplumber.utils.exceptions import PdfminerException
 
         # Import storage utilities
         if storage is None:
@@ -250,6 +258,7 @@ class PDFParser(BaseParser):
             resource_name = pdf_path.stem
 
         parts = []
+        failed_images = 0
         meta = {
             "strategy": "local",
             "library": "pdfplumber",
@@ -297,9 +306,8 @@ class PDFParser(BaseParser):
 
                 meta["headings_found"] = len(bookmarks)
                 meta["heading_source"] = heading_source
-                logger.info(
-                    "Heading detection: source=%s, headings=%d, bookmarks=%d, resolved=%d, "
-                    "unresolved=%d",
+                logger.debug(
+                    "PDF headings detected source=%s headings=%d bookmarks=%d resolved=%d unresolved=%d",
                     heading_source,
                     len(bookmarks),
                     meta["bookmarks_found"],
@@ -393,32 +401,49 @@ class PDFParser(BaseParser):
                                     )
                                     meta["images_extracted"] += 1
                             except Exception as img_err:
-                                logger.warning(
-                                    f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
+                                failed_images += 1
+                                logger.debug(
+                                    "PDF image extraction failed page=%d image=%d error_type=%s",
+                                    page_num,
+                                    img_idx + 1,
+                                    type(img_err).__name__,
                                 )
                     finally:
                         self._release_page_cache(page)
 
+            if failed_images:
+                logger.info(
+                    "PDF image extraction incomplete failed=%d degraded=true", failed_images
+                )
             if not parts:
-                logger.warning(f"No content extracted from {pdf_path}")
+                logger.info(
+                    "PDF content empty; returning empty result path=%s degraded=true",
+                    safe_path_for_log(str(pdf_path)),
+                )
                 return "", meta
 
             markdown_content = "\n\n".join(parts)
-            logger.info(
-                f"Local conversion: {meta['pages_processed']}/{meta['total_pages']} pages, "
-                f"{meta['headings_found']} headings ({meta['heading_source']}, "
-                f"bookmarks={meta['bookmarks_found']}, "
-                f"resolved={meta['bookmarks_resolved']}), "
-                f"{meta['images_extracted']} images "
-                f"({meta['images_deduplicated']} duplicates skipped), "
-                f"{meta['tables_extracted']} tables → "
-                f"{len(markdown_content)} chars"
+            logger.debug(
+                "Local PDF conversion completed pages=%d total_pages=%d headings=%d images=%d deduplicated=%d tables=%d markdown_chars=%d",
+                meta["pages_processed"],
+                meta["total_pages"],
+                meta["headings_found"],
+                meta["images_extracted"],
+                meta["images_deduplicated"],
+                meta["tables_extracted"],
+                len(markdown_content),
             )
 
             return markdown_content, meta
 
         except Exception as e:
-            logger.error(f"pdfplumber conversion failed: {e}")
+            # pdfplumber wraps the original pdfminer error as its first argument.
+            error = e.args[0] if isinstance(e, PdfminerException) else e
+            if isinstance(error, (PDFSyntaxError, PSEOF)):
+                raise InvalidArgumentError(
+                    f"Invalid PDF file: {pdf_path.name}. Error: {error}"
+                ) from e
+            logger.debug("Local PDF conversion failed error_type=%s", type(e).__name__)
             raise
 
     @staticmethod
@@ -485,7 +510,10 @@ class PDFParser(BaseParser):
             return bookmarks
 
         except Exception as e:
-            logger.warning(f"Failed to extract bookmarks: {e}")
+            logger.info(
+                "PDF bookmark extraction failed; using alternate headings error_type=%s degraded=true",
+                type(e).__name__,
+            )
             return []
 
     def _build_page_number_map(self, pdf) -> Dict[int, int]:
@@ -570,13 +598,14 @@ class PDFParser(BaseParser):
             heading_sizes = heading_sizes[:max_levels]
 
             if not heading_sizes:
-                logger.debug(f"Font analysis: body_size={body_size}pt, no heading sizes found")
+                logger.debug("Font analysis completed body_size=%s heading_count=0", body_size)
                 return []
 
             size_to_level = {s: i + 1 for i, s in enumerate(heading_sizes)}
             logger.debug(
-                f"Font analysis: body_size={body_size}pt, "
-                f"heading_sizes={heading_sizes}, size_to_level={size_to_level}"
+                "Font analysis completed body_size=%s heading_count=%d",
+                body_size,
+                len(heading_sizes),
             )
 
             # Step 3: Extract heading text page by page
@@ -646,13 +675,15 @@ class PDFParser(BaseParser):
             headings = [h for h in headings if h["title"] not in header_titles]
 
             logger.debug(
-                f"Font heading detection: {len(headings)} headings found "
-                f"(filtered {len(header_titles)} header titles)"
+                "Font headings detected total=%d filtered=%d", len(headings), len(header_titles)
             )
             return headings
 
         except Exception as e:
-            logger.warning(f"Failed to detect headings by font: {e}")
+            logger.info(
+                "Font heading detection failed; omitting headings error_type=%s degraded=true",
+                type(e).__name__,
+            )
             return []
 
     def _extract_image_from_page(self, page, img_info: dict) -> Optional[bytes]:
@@ -692,7 +723,7 @@ class PDFParser(BaseParser):
             return buffer.getvalue()
 
         except Exception as e:
-            logger.debug(f"Image extraction error: {e}")
+            logger.debug("PDF image extraction failed error_type=%s", type(e).__name__)
             return None
 
     async def _convert_mineru(
@@ -749,7 +780,7 @@ class PDFParser(BaseParser):
                     data["return_images"] = True
 
                     # Make API request
-                    logger.info(f"Calling MinerU API: {url}")
+                    logger.debug("Calling MinerU API endpoint=%s", safe_uri_for_log(url))
                     response = await client.post(
                         url,
                         files=files,
@@ -777,7 +808,10 @@ class PDFParser(BaseParser):
                 ).total_seconds()
 
             if not markdown_content:
-                logger.warning(f"MinerU returned empty content for {pdf_path}")
+                logger.info(
+                    "MinerU returned empty content path=%s degraded=true",
+                    safe_path_for_log(str(pdf_path)),
+                )
                 return markdown_content, meta
 
             if storage is None:
@@ -806,8 +840,17 @@ class PDFParser(BaseParser):
                     )
                     repl[f"images/{img_name}"] = image_path.relative_to(media_dir).as_posix()
                 except Exception as img_err:
-                    logger.warning(f"Failed to save MinerU image {img_name}: {img_err}")
+                    logger.debug(
+                        "MinerU image save failed path=%s error_type=%s",
+                        safe_path_for_log(img_name),
+                        type(img_err).__name__,
+                    )
 
+            failed_images = len(file_result.get("images") or {}) - len(repl)
+            if failed_images:
+                logger.info(
+                    "MinerU image extraction incomplete failed=%d degraded=true", failed_images
+                )
             if repl:
                 # Single pass over the markdown replaces every known reference;
                 # unknown ``images/...`` text is left untouched.
@@ -817,12 +860,12 @@ class PDFParser(BaseParser):
                 markdown_content = ref_pattern.sub(lambda m: repl[m.group(0)], markdown_content)
                 meta["images_saved"] = len(repl)
 
-            logger.info(f"MinerU conversion: {len(markdown_content)} chars")
+            logger.debug("MinerU conversion completed markdown_chars=%d", len(markdown_content))
 
             return markdown_content, meta
 
         except Exception as e:
-            logger.error(f"MinerU API call failed: {e}")
+            logger.debug("MinerU API call failed error_type=%s", type(e).__name__)
             raise
 
     def _format_table_markdown(self, table: List[List[Optional[str]]]) -> str:
@@ -850,7 +893,7 @@ class PDFParser(BaseParser):
         def clean_cell(cell):
             if cell is None:
                 return ""
-            return str(cell).strip().replace("|", "\\|")  # Escape pipe characters
+            return "<br>".join(str(cell).strip().replace("|", "\\|").splitlines())
 
         lines = []
 

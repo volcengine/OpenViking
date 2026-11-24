@@ -6,28 +6,28 @@ import asyncio
 import json
 import logging
 import time
-import uuid
-from dataclasses import replace
 from typing import NamedTuple
 from urllib.parse import quote, unquote_plus
 
 import aiohttp
+import async_timeout
 import orjson
 from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
-from starlette.background import BackgroundTask
 
 from openviking.core.peer_id import normalize_peer_id
+from openviking.observability.log_safety import short_hash
 
-from .capture import CapturePipeline
 from .client import PEER_HEADER
+from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
+from .observe import GatewayError, RequestRecord, degrade, elapsed_ms, error_code
 from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
 from .storage import digest
 from .tool_executor import ToolExecutor
 from .tool_loop import HiddenToolLoop, ToolLoopError
-from .tool_protocols import ResponseCapture, tool_protocol
+from .tool_protocols import ResponseCapture, stream_failure, tool_protocol
 from .tool_protocols.common import SummaryError
 from .vendors import ARK_VENDORS, apply_vendor
 
@@ -48,6 +48,8 @@ PATH_PROTOCOL = {
     "/v1/chat/completions": "chat",
     "/v1/responses": "responses",
 }
+# Each bookkeeping step after a reply gets this long; the record is written either way.
+BOOKKEEPING_SECONDS = 30
 PRIMARY_PATH = {
     "anthropic": "/v1/messages",
     "chat": "/v1/chat/completions",
@@ -55,8 +57,60 @@ PRIMARY_PATH = {
 }
 
 
+async def open_upstream(http, method, url, wait, total=None, **kwargs):
+    """Start a model call that waits at most ``wait`` seconds at a time on the upstream.
+
+    The reply must start within ``wait`` (connecting, sending the body and receiving the
+    headers), and its body may then pause for at most ``wait`` between reads, so a reply that
+    keeps arriving is never cut. ``total``, when given, also bounds the whole call.
+    """
+    # aiohttp's sock_read covers the headers and every body read but starts only after the
+    # request body is written; the outer bound covers connecting and sending the body.
+    timeout = aiohttp.ClientTimeout(total=total, sock_read=wait)
+    async with async_timeout.timeout(wait):
+        return await http.request(method, url, timeout=timeout, **kwargs)
+
+
+def upstream_failure(error):
+    """The model-route error for a failed upstream call; never the exception's own text."""
+    # aiohttp's ServerTimeoutError is a ClientError too: the timeout check comes first.
+    if isinstance(error, asyncio.TimeoutError):
+        return GatewayError("upstream_timeout", "Model upstream did not answer in time")
+    if isinstance(error, aiohttp.ClientConnectorError):
+        return GatewayError("upstream_unreachable", "Model upstream is unreachable")
+    return GatewayError("upstream_disconnected", "Model upstream closed the connection")
+
+
+def tool_failure(error):
+    """A tool-loop failure as the loop reports it; a transport error gets its fixed detail."""
+    if isinstance(error, ToolLoopError):
+        return error
+    failure = upstream_failure(error)
+    return ToolLoopError(
+        failure.detail["detail"], failure.status_code, code=failure.detail["reason"]
+    )
+
+
+def announced_id(events):
+    """The reply ID a Responses stream announces first; its capture reads one only at the end."""
+    return next(
+        (e["response"].get("id") or "" for e in events if isinstance(e.get("response"), dict)), ""
+    )
+
+
+def provider_error(event):
+    """The part of a stream event that reports the provider's own error, or None."""
+    if event.get("type") == "response.failed":
+        return event.get("response") or event
+    if event.get("type") == "error" or isinstance(event.get("error"), dict):
+        return event
+    return None
+
+
 class _ClosingStreamingResponse(StreamingResponse):
-    def __init__(self, content, *, close_upstream, cleanup, **kwargs):
+    """A stream that runs ``cleanup`` however it ends, the client leaving included."""
+
+    def __init__(self, content, *, cleanup, close_upstream=None, **kwargs):
         super().__init__(content, **kwargs)
         self._close_upstream = close_upstream
         self._cleanup = cleanup
@@ -66,13 +120,28 @@ class _ClosingStreamingResponse(StreamingResponse):
             await super().__call__(scope, receive, send)
         finally:
             try:
-                self._close_upstream()
+                if self._close_upstream:
+                    self._close_upstream()
             finally:
                 try:
                     if close := getattr(self.body_iterator, "aclose", None):
                         await close()
                 finally:
                     await self._cleanup()
+
+
+class _FinishingResponse(Response):
+    """A reply that runs ``cleanup`` once it was sent, or failed to be."""
+
+    def __init__(self, content, *, cleanup, **kwargs):
+        super().__init__(content, **kwargs)
+        self._cleanup = cleanup
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._cleanup()
 
 
 def filtered_headers(headers, request=False):
@@ -88,10 +157,11 @@ def filtered_headers(headers, request=False):
             "cookie",
             "accept-encoding",
         }
+    # Neither a client nor a provider may set the gateway's own headers on the other side.
     return {
         k: v
         for k, v in headers.items()
-        if k.lower() not in blocked and not (request and k.lower().startswith("x-openviking-"))
+        if k.lower() not in blocked and not k.lower().startswith("x-openviking-")
     }
 
 
@@ -106,7 +176,10 @@ def upstream_url(upstream, path, query=""):
     if not upstream.get("append_endpoint_path", True):
         primary = PRIMARY_PATH[upstream["protocol"]]
         if path != primary and not path.startswith(primary + "/"):
-            raise HTTPException(404, f"This upstream is an exact endpoint for {primary} only")
+            raise GatewayError(
+                "upstream_endpoint_mismatch",
+                f"This upstream is an exact endpoint for {primary} only",
+            )
         path = path[len(primary) :]
     elif upstream["protocol"] != "anthropic":
         path = path.removeprefix("/v1")
@@ -123,17 +196,18 @@ def upstream_key(upstream, incoming):
         else incoming.get("x-openviking-upstream-key", "")
     )
     if key.startswith("sk-ant-oat"):
-        raise HTTPException(
-            403, "Claude subscription OAuth credentials are not supported; use an API key"
+        raise GatewayError(
+            "oauth_credential_unsupported",
+            "Claude subscription OAuth credentials are not supported; use an API key",
         )
     if not key:
-        raise HTTPException(401, "Upstream API key is missing")
+        raise GatewayError("upstream_key_missing", "Upstream API key is missing")
     return key
 
 
 def context_error(detail, status=400, reason="context_override_invalid"):
     """An ``X-OpenViking-Context`` error, in the management API's ``{reason, detail}`` shape."""
-    return HTTPException(status, {"reason": reason, "detail": detail})
+    return GatewayError(reason, detail, status=status)
 
 
 def context_override(policy, header):
@@ -208,7 +282,9 @@ def upstream_headers(upstream, incoming):
 
 def check_coding_plan(upstream):
     if upstream.get("coding_plan") and not upstream.get("allow_coding_plan"):
-        raise HTTPException(403, "Coding Plan upstreams are disabled; configure a model API key")
+        raise GatewayError(
+            "coding_plan_disabled", "Coding Plan upstreams are disabled; configure a model API key"
+        )
 
 
 def matches(upstream, protocol, model):
@@ -261,7 +337,7 @@ async def resolve_binding(management, config, credential):
 
 
 class ProxyRequest:
-    def __init__(self, app, request, path, credential):
+    def __init__(self, app, request, path, credential, record=None):
         self.app, self.request, self.credential = app, request, credential
         self.config, self.store, self.management = (
             app.state.config,
@@ -276,21 +352,30 @@ class ProxyRequest:
         self.protocol = PATH_PROTOCOL.get(self.path)
         self.prepared = None
         self.peer = None
-        self.metrics = {"request_id": uuid.uuid4().hex, "kind": "passthrough"}
+        self.record = record or RequestRecord(app, request)
+        # The record under construction: what the request writes however it ends.
+        self.metrics = self.record.metrics
+        self.metrics.setdefault("kind", "passthrough")
 
     async def run(self):
         if self.request.headers.get("upgrade", "").lower() == "websocket":
+            self.record.fail(426, "websocket_unsupported")
             return Response(status_code=426, headers={"Upgrade": "HTTP/1.1"})
         raw = bytearray()
-        async for chunk in self.request.stream():
-            raw.extend(chunk)
-            if len(raw) > self.config.max_body_bytes:
-                raise HTTPException(413, "Request exceeds configured body limit")
-        self.raw = bytes(raw)
-        self.body = await asyncio.to_thread(parse_body, self.raw) if raw else None
+        with self.record.stage("read"):
+            async for chunk in self.request.stream():
+                raw.extend(chunk)
+                if len(raw) > self.config.max_body_bytes:
+                    raise GatewayError("body_too_large", "Request exceeds configured body limit")
+            self.raw = bytes(raw)
+            self.body = await asyncio.to_thread(parse_body, self.raw) if raw else None
+        if isinstance(self.body, dict):
+            self.metrics["stream"] = bool(self.body.get("stream"))
         original = self.body
-        await self.route()
-        await self.prepare()
+        with self.record.stage("route"):
+            await self.route()
+        with self.record.stage("prepare"):
+            await self.prepare()
         if self.body != original:
             self.raw = await asyncio.to_thread(orjson.dumps, self.body)
         self.target = self.url(self.upstream)
@@ -298,18 +383,27 @@ class ProxyRequest:
         if self.raw:
             self.headers.setdefault("content-type", "application/json")
         self.started = time.monotonic()
+        self.metrics["added_ms"] = elapsed_ms(self.record.started)
+        self.record.attempted = True
         try:
-            self.response = await self.app.state.http.request(
+            self.response = await open_upstream(
+                self.app.state.http,
                 self.request.method,
                 self.target,
+                self.config.upstream_timeout_seconds,
                 data=self.raw or None,
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
                 allow_redirects=False,
             )
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            raise HTTPException(502, "Model upstream is unavailable")
-        self.metrics.update(status=self.response.status, upstream_id=self.upstream["id"])
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            self.metrics["duration_ms"] = elapsed_ms(self.started)
+            raise upstream_failure(error) from None
+        self.metrics.update(
+            status=self.response.status,
+            upstream_status=self.response.status,
+            upstream_ttfb_ms=elapsed_ms(self.started),
+            upstream_id=self.upstream["id"],
+        )
         self.capture = ResponseCapture(self.protocol or self.upstream["protocol"])
         # Only the tool loop rewrites a reply, so the recall notice goes through it too.
         if (
@@ -335,11 +429,13 @@ class ProxyRequest:
         # Calls on a stored response are pinned to its upstream and carry no model.
         if binding.models and self.raw and not self.path.startswith("/v1/responses/"):
             if self.request.headers.get("content-encoding", "identity").lower() != "identity":
-                raise HTTPException(415, "Compressed request bodies are not supported")
+                raise GatewayError(
+                    "compressed_body_unsupported", "Compressed request bodies are not supported"
+                )
             if not self.model or not isinstance(self.model, str):
-                raise HTTPException(400, "Request model is missing")
+                raise GatewayError("model_missing", "Request model is missing")
         if binding.models and self.model and self.model not in binding.models:
-            raise HTTPException(403, "Model is not allowed by this key")
+            raise GatewayError("model_not_allowed", "Model is not allowed by this key")
         self.metrics["model"] = self.model
         self.policy = binding.policy
         # The header is checked on every request that carries it, enhanced or not.
@@ -356,7 +452,7 @@ class ProxyRequest:
         if url is not None:
             self.upstreams = [u for u in self.upstreams if u["base_url"] == url.rstrip("/")]
             if not self.upstreams:
-                raise HTTPException(403, "Upstream URL is not allowed")
+                raise GatewayError("upstream_url_not_allowed", "Upstream URL is not allowed")
         # A stored response is pinned below; an exact responses endpoint may hold it.
         stored_response = self.path.startswith("/v1/responses/")
         candidates = sorted(
@@ -369,18 +465,22 @@ class ProxyRequest:
             key=lambda u: (-u["priority"], u["id"]),
         )
         if not candidates:
-            raise HTTPException(404, "No allowed upstream matches this protocol and model")
+            raise GatewayError(
+                "no_matching_upstream", "No allowed upstream matches this protocol and model"
+            )
         self.upstream = candidates[0]
         if self.path.startswith("/v1/responses/"):
             identifier = digest(self.credential["id"] + self.path.split("/")[3])
             mapping = await self.management.get(self.credential["account"], "responses", identifier)
             if not mapping:
-                raise HTTPException(404, "Unknown response for this key")
+                raise GatewayError("response_unknown", "Unknown response for this key")
             self.upstream = next(
                 (u for u in self.upstreams if u["id"] == mapping["upstream_id"]), None
             )
             if not self.upstream or not self.upstream.get("enabled", True):
-                raise HTTPException(403, "Response upstream is no longer allowed")
+                raise GatewayError(
+                    "response_upstream_disallowed", "Response upstream is no longer allowed"
+                )
         # Pinned upstream selection in the kernel is restricted to allowed models.
         self.candidates = candidates
         # A missing client key fails before the request freezes a session or calls OpenViking.
@@ -396,7 +496,7 @@ class ProxyRequest:
             and not self.request.headers.get("content-encoding")
         ):
             if not self.policy:
-                raise HTTPException(403, "Context policy is unavailable")
+                raise GatewayError("policy_unavailable", "Context policy is unavailable")
             self.body, self.prepared, metrics = await self.app.state.kernel.enhance(
                 self.body,
                 self.protocol,
@@ -408,18 +508,19 @@ class ProxyRequest:
                 self.candidates,
                 self.summarize,
                 peer=self.peer,
+                budget=Budget(self.config.prepare_timeout_seconds),
             )
-            self.metrics.update(metrics)
+            self.record.merge(metrics)
             if self.prepared:
                 self.upstream = self.prepared.upstream
         elif self.raw and self.body is None:
-            self.metrics["degradation"] = "unsafe_json"
+            degrade(self.metrics, "unsafe_json")
         check_coding_plan(self.upstream)
         if self.body:
             self.body = await self.outgoing(self.body, self.upstream, self.prepared)
             if self.prepared:
                 self.prepared.body = self.body
-                self.metrics.update(self.prepared.metrics)
+                self.record.merge(self.prepared.metrics)
 
     def url(self, upstream):
         key = upstream_key(upstream, self.request.headers)
@@ -443,12 +544,16 @@ class ProxyRequest:
             raise SummaryError(f"summary_http_{error.status_code}") from error
         headers.setdefault("content-type", "application/json")
         body = await self.outgoing(body, upstream, prepared)
+        self.record.attempted = True
         try:
             async with self.app.state.http.post(
                 target,
                 data=orjson.dumps(body),
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
+                timeout=aiohttp.ClientTimeout(
+                    total=self.config.summary_timeout_seconds
+                    or self.config.upstream_timeout_seconds
+                ),
                 allow_redirects=False,
             ) as response:
                 if response.status >= 300:
@@ -464,57 +569,108 @@ class ProxyRequest:
         try:
             await self.app.state.kernel.relayed(self.prepared, self.capture)
         except Exception:
-            logger.exception("OpenViking Gateway reply bookkeeping failed")
+            logger.info(
+                "gateway reply bookkeeping failed; preserving response", extra={"degraded": True}
+            )
 
     async def finish(self):
-        self.metrics.update(self.capture.usage or {})
-        if self.upstream.get("vendor") in ARK_VENDORS:
-            self.metrics["cache_min_tokens"] = self.upstream.get("cache_min_tokens", 1024)
-            self.metrics["cache_eligible"] = (
-                self.metrics.get("input_tokens", 0) >= self.metrics["cache_min_tokens"]
-            )
-        self.metrics["duration_ms"] = round((time.monotonic() - self.started) * 1000, 2)
+        """Book an answered request and write its record; called once per answered request."""
         try:
-            if (
-                self.response.status < 300
-                and self.prepared
-                and await self.management.get(
-                    self.credential["account"], "keys", self.credential["id"]
+            self.metrics.update(self.capture.usage or {})
+            if self.upstream.get("vendor") in ARK_VENDORS:
+                self.metrics["cache_min_tokens"] = self.upstream.get("cache_min_tokens", 1024)
+                self.metrics["cache_eligible"] = (
+                    self.metrics.get("input_tokens", 0) >= self.metrics["cache_min_tokens"]
                 )
-            ):
-                await self.app.state.kernel.completed(self.prepared, self.credential, self.capture)
-            if (
-                self.capture.response_id
-                and self.path == "/v1/responses"
-                and self.body
-                and self.body.get("store") is not False
-            ):
-                await self.management.save(
-                    self.credential["account"],
-                    "responses",
-                    digest(self.credential["id"] + self.capture.response_id),
-                    {"upstream_id": self.upstream["id"], "user_id": self.credential["user_id"]},
-                    ttl=self.config.response_ttl_seconds,
-                )
-            if self.prepared:
-                # Delivery may have failed or recovered while this request was in flight.
-                # A worker row inserted between this read and the log below can still be
-                # older than this row; if the read fails, the prepare-time fields are kept.
+            self.metrics["duration_ms"] = elapsed_ms(self.started)
+            if self.metrics["status"] >= 300 and "error_reason" not in self.metrics:
+                self.record.fail(self.metrics["status"], "upstream_error")
+            # Each step fails on its own: the record is written whatever happens here.
+            if self.response.status < 300 and self.prepared:
                 try:
-                    capture = await self.store.capture.get(
-                        self.prepared.scope, self.prepared.session
-                    )
-                    CapturePipeline.metrics(
-                        replace(self.prepared, capture=capture, metrics=self.metrics),
-                        Policy.model_validate(self.prepared.root["policy"]),
-                    )
+                    await self.completed()
                 except Exception:
-                    logger.exception("OpenViking Gateway capture status refresh failed")
-            await self.management.log(
-                self.credential["account"], self.metrics, user_id=self.credential["user_id"]
+                    self.bookkeeping_failed("completed")
+            try:
+                if (
+                    self.capture.response_id
+                    and self.path == "/v1/responses"
+                    and self.body
+                    and self.body.get("store") is not False
+                ):
+                    async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+                        await self.management.save(
+                            self.credential["account"],
+                            "responses",
+                            digest(self.credential["id"] + self.capture.response_id),
+                            {
+                                "upstream_id": self.upstream["id"],
+                                "user_id": self.credential["user_id"],
+                            },
+                            ttl=self.config.response_ttl_seconds,
+                        )
+            except Exception:
+                self.bookkeeping_failed("responses")
+            # Last: a slow OpenViking holds up nothing but this request's record.
+            if self.response.status < 300 and self.prepared:
+                await self.save()
+        finally:
+            await self.record.emit()
+
+    async def completed(self):
+        async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+            if await self.management.get(self.credential["account"], "keys", self.credential["id"]):
+                await self.app.state.kernel.completed(self.prepared, self.credential, self.capture)
+
+    async def save(self):
+        """Write the turn this reply ends to OpenViking; a failure is recorded, never raised.
+
+        Nothing retries it. The next turn that ends writes what is missing, as long as
+        the client resends the history unchanged.
+        """
+        stats = self.app.state.stats
+        try:
+            async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+                if not await self.management.get(
+                    self.credential["account"], "keys", self.credential["id"]
+                ):
+                    return
+                saved = await self.app.state.kernel.save(
+                    self.prepared, self.credential, self.capture
+                )
+        except Exception as error:
+            reason = getattr(error, "reason", "")
+            if not reason:
+                reason = (
+                    "save_timeout" if isinstance(error, asyncio.TimeoutError) else "save_failed"
+                )
+            stats.capture_failed += 1
+            self.metrics.update(capture_status="failed", capture_reason=reason)
+            logger.error(
+                "gateway finished turn save failed; preserving response session_hash=%s error_type=%s",
+                short_hash(str(self.prepared.session)),
+                type(error).__name__,
+                extra={
+                    "degraded": True,
+                    "operation": "gateway.capture_save",
+                    "error_type": type(error).__name__,
+                },
             )
-        except Exception:
-            logger.exception("OpenViking Gateway response bookkeeping failed")
+            return
+        if saved:
+            stats.capture_delivered += 1
+            self.metrics.update(
+                capture_messages=saved,
+                openviking_session=self.prepared.capture.value["ov_session"],
+            )
+
+    def bookkeeping_failed(self, step):
+        logger.info(
+            "gateway response bookkeeping failed; preserving response stage=%s",
+            step,
+            extra={"degraded": True},
+        )
+        self.metrics.setdefault("bookkeeping_failed", []).append(step)
 
     async def tool_response(self):
         response, prepared, capture = self.response, self.prepared, self.capture
@@ -527,7 +683,9 @@ class ProxyRequest:
             self.config.max_body_bytes,
             self.config.mcp_file_links,
         )
-        loop = HiddenToolLoop(prepared, executor, self.store, capture)
+        loop = HiddenToolLoop(
+            prepared, executor, self.store, capture, self.app.state.kernel.capture
+        )
         headers = {
             k.lower(): v
             for k, v in filtered_headers(response.headers).items()
@@ -535,14 +693,15 @@ class ProxyRequest:
         }
 
         async def send(payload, timeout):
-            # Without a total tool deadline each continuation gets the usual upstream timeout.
-            return await self.app.state.http.post(
+            # A total tool deadline also bounds the whole continuation, body included.
+            return await open_upstream(
+                self.app.state.http,
+                "POST",
                 self.target,
+                self.config.upstream_timeout_seconds,
+                total=timeout,
                 data=orjson.dumps(payload),
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=timeout or self.config.upstream_timeout_seconds
-                ),
                 allow_redirects=False,
             )
 
@@ -551,6 +710,7 @@ class ProxyRequest:
         async def stream():
             nonlocal completed
             finished = False
+            self.record.stream_started()
             chunks = heartbeat(loop.run(response, send), HEARTBEAT_SECONDS)
             try:
                 async for chunk in chunks:
@@ -558,17 +718,24 @@ class ProxyRequest:
                         yield b": keep-alive\n\n"
                         continue
                     await self.relay()
+                    self.metrics.setdefault("first_chunk_ms", elapsed_ms(self.record.started))
                     yield chunk
                 finished = True
                 completed = True
             except (ToolLoopError, aiohttp.ClientError) as error:
-                self.metrics["degradation"] = "hidden_tool_loop_failed"
+                error = tool_failure(error)
+                degrade(self.metrics, "hidden_tool_loop_failed")
+                self.record.stream_failed(response.status, error.code, error)
                 yield loop.error(error)
+            except Exception:
+                self.record.stream_failed(response.status, "internal_error")
+                raise
             finally:
                 await chunks.aclose()
                 if not finished:
                     capture.complete = False
-                self.metrics.update(prepared.metrics)
+                    self.record.stream_failed(response.status, "client_disconnected")
+                self.record.merge(prepared.metrics)
 
         async def cleanup():
             if not completed:
@@ -577,6 +744,7 @@ class ProxyRequest:
 
         if self.body.get("stream"):
             headers["content-type"] = "text/event-stream"
+            self.record.deferred = True
             return _ClosingStreamingResponse(
                 stream(), headers=headers, close_upstream=response.close, cleanup=cleanup
             )
@@ -584,25 +752,29 @@ class ProxyRequest:
             async for _ in loop.run(response, send):
                 pass
         except (ToolLoopError, aiohttp.ClientError) as error:
+            error = tool_failure(error)
             capture.complete = False
-            self.metrics.update(
-                degradation="hidden_tool_loop_failed", status=getattr(error, "status", 502)
-            )
-            await self.finish()
-            if isinstance(error, ToolLoopError) and error.content is not None:
-                return Response(
+            degrade(self.metrics, "hidden_tool_loop_failed")
+            if error.content is not None:
+                self.metrics["upstream_status"] = error.status
+                if code := error_code(error.content):
+                    self.metrics["upstream_error_code"] = code
+                self.record.fail(error.status, "upstream_error")
+                failed = Response(
                     error.content, status_code=error.status, headers=filtered_headers(error.headers)
                 )
-            raise HTTPException(
-                getattr(error, "status", 502), str(error), headers=getattr(error, "headers", None)
-            )
-        self.metrics.update(prepared.metrics)
+            else:
+                failed = self.record.error_response(error)
+            await self.finish()
+            return failed
+        self.record.merge(prepared.metrics)
         await self.relay()
-        return Response(
+        self.record.deferred = True
+        return _FinishingResponse(
             orjson.dumps(loop.final),
             headers=headers,
             media_type="application/json",
-            background=BackgroundTask(self.finish),
+            cleanup=self.finish,
         )
 
     async def observe_response(self):
@@ -612,9 +784,10 @@ class ProxyRequest:
             headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
 
             async def stream():
+                self.record.stream_started()
                 decoder = SSEDecoder()
                 observe = not response.headers.get("content-encoding")
-                finished = False
+                finished, opened = False, ""
                 chunks = heartbeat(response.content.iter_any(), HEARTBEAT_SECONDS)
                 try:
                     async for chunk in chunks:
@@ -626,39 +799,70 @@ class ProxyRequest:
                             try:
                                 # A chunk inside one event completes none: no reply to reread.
                                 if frames := decoder.feed(chunk):
-                                    capture.events(d for d in map(decoder.data, frames) if d)
+                                    events = [d for d in map(decoder.data, frames) if d]
+                                    capture.events(events)
+                                    opened = opened or announced_id(events)
+                                    failed = next(filter(None, map(provider_error, events)), None)
+                                    # Relayed as it is; the record notes it.
+                                    if failed and "stream_error" not in self.metrics:
+                                        self.metrics["stream_error"] = "upstream_event"
+                                        if code := error_code(failed):
+                                            self.metrics["upstream_error_code"] = code
+                                        self.record.fail(response.status, "upstream_error")
                             except Exception:
                                 observe = False
                                 capture.complete = False
-                                self.metrics["degradation"] = "capture_parse_failure"
+                                degrade(self.metrics, "capture_parse_failure")
                             await self.relay()
+                        self.metrics.setdefault("first_chunk_ms", elapsed_ms(self.record.started))
                         yield chunk
                     finished = True
+                except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                    # A provider error event ends the reply as much as its terminal event.
+                    ended = capture.finished or "stream_error" in self.metrics
+                    capture.complete = False
+                    reason = upstream_failure(error).detail["reason"]
+                    self.record.stream_failed(response.status, reason)
+                    # Only between events and before the reply ended can an event be added
+                    # that the client parses; otherwise the connection is cut.
+                    if observe and not decoder.buffer and not ended and self.protocol:
+                        yield stream_failure(
+                            self.protocol, self.body, reason, capture.response_id or opened
+                        )
+                        return
+                    raise
+                except Exception:
+                    self.record.stream_failed(response.status, "internal_error")
+                    raise
                 finally:
                     await chunks.aclose()
                     response.close()
                     if not finished:
                         capture.complete = False
+                        self.record.stream_failed(response.status, "client_disconnected")
 
-            return StreamingResponse(
-                stream(),
-                status_code=response.status,
-                headers=headers,
-                background=BackgroundTask(self.finish),
+            self.record.deferred = True
+            return _ClosingStreamingResponse(
+                stream(), status_code=response.status, headers=headers, cleanup=self.finish
             )
         try:
-            content = await response.read()
+            try:
+                content = await response.read()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                capture.complete = False
+                self.metrics["duration_ms"] = elapsed_ms(self.started)
+                raise upstream_failure(error) from None
             if response.status < 300 and not response.headers.get("content-encoding"):
                 try:
                     capture.nonstream(orjson.loads(content))
                 except (ValueError, TypeError, KeyError):
                     pass
+            elif response.status >= 300 and (code := error_code(content)):
+                self.metrics["upstream_error_code"] = code
         finally:
             response.close()
         await self.relay()
-        return Response(
-            content,
-            status_code=response.status,
-            headers=headers,
-            background=BackgroundTask(self.finish),
+        self.record.deferred = True
+        return _FinishingResponse(
+            content, status_code=response.status, headers=headers, cleanup=self.finish
         )

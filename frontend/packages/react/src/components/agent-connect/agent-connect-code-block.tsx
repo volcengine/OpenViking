@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { useId } from 'react';
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
@@ -18,21 +19,24 @@ export interface CodeBlockControls {
 interface CodeBlockProps extends CodeBlockControls {
   display: string;
   copyText: string;
+  /** 调用方按密钥占位符确认；原值可能与掩码相同，不能比较文本推断。 */
+  hasKey: boolean;
   language?: string;
 }
 
 export function AgentConnectCodeBlock({
   display,
   copyText,
+  hasKey,
   language,
   locale,
   visibleBlockId,
   onReveal,
   onCopy,
 }: CodeBlockProps) {
+  const exposure = useExposure('agent_connect_code_block_copy_show');
   const id = useId();
   const revealed = visibleBlockId === id;
-  const hasKey = display !== copyText;
   const labels = resolveAgentConnectLabels(locale);
   const { status, setRoot, copy } = useAgentConnectCopy(copyText, onCopy);
   const revealLabel = revealed ? labels.hideApiKey : labels.showApiKey;
@@ -65,6 +69,7 @@ export function AgentConnectCodeBlock({
             </Button>
           ) : null}
           <Button
+            ref={exposure}
             size="mini"
             type="text"
             iconOnly

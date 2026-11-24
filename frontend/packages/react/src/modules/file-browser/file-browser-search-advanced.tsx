@@ -1,3 +1,5 @@
+import SearchAdvancedCloseIcon from '../../../../icons/svg/file-browser/search-advanced-close.svg?react';
+import type { OvRequestOptions } from '../../client/types.js';
 import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import type { ScopeOption, SearchFilters, SearchMode } from './search-types.js';
 import { EMPTY_FILTERS } from './search-types.js';
@@ -25,6 +27,7 @@ export interface FileBrowserSearchAdvancedProps {
   mode: SearchMode;
   filters: SearchFilters;
   scopes: ScopeOption[];
+  requestOptions?: OvRequestOptions;
   locale: Locale;
   text: ResolvedLabels;
   onChange: (filters: SearchFilters) => void;
@@ -35,6 +38,7 @@ export function FileBrowserSearchAdvanced({
   mode,
   filters,
   scopes,
+  requestOptions,
   locale,
   text,
   onChange,
@@ -64,26 +68,14 @@ export function FileBrowserSearchAdvanced({
           aria-label={text.searchAdvanced}
           onClick={onClose}
         >
-          <svg
-            aria-hidden="true"
-            width={12}
-            height={12}
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <path
-              d="m4 4 8 8M12 4l-8 8"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
+          <SearchAdvancedCloseIcon aria-hidden="true" />
         </button>
       </div>
 
       <div className="ov-file-browser-search__advanced-body">
         <FileBrowserSearchScopes
           scopes={scopes}
+          requestOptions={requestOptions}
           filters={filters}
           availability={availability}
           text={text}
@@ -96,20 +88,14 @@ export function FileBrowserSearchAdvanced({
           text={text}
           onChange={onChange}
         />
-        <section className="ov-file-browser-search__group">
+        {availability.caseInsensitive ? (
           <Checkbox
             checked={filters.caseInsensitive}
-            disabled={!availability.caseInsensitive}
             onChange={(next) => onChange({ ...filters, caseInsensitive: next })}
           >
             {text.searchIgnoreCase}
-            {!availability.caseInsensitive ? (
-              <span className="ov-file-browser-search__group-note">
-                {text.searchFilterUnsupported}
-              </span>
-            ) : null}
           </Checkbox>
-        </section>
+        ) : null}
       </div>
     </aside>
   );

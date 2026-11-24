@@ -7,7 +7,7 @@ import { tourIllustrations } from './illustrations.js';
 
 type Props = Pick<
   DirectoryTourProps,
-  'locale' | 'labels' | 'onClose' | 'renderContent'
+  'locale' | 'labels' | 'onClose' | 'showCloseButton' | 'renderContent'
 > & {
   step: DirectoryTourStep;
   index: number;
@@ -15,6 +15,7 @@ type Props = Pick<
   titleId: string;
   bodyId: string;
   advance: () => void;
+  unavailable: boolean;
 };
 
 export function TourCard({
@@ -24,10 +25,12 @@ export function TourCard({
   locale,
   labels,
   onClose,
+  showCloseButton,
   renderContent,
   titleId,
   bodyId,
   advance,
+  unavailable,
 }: Props) {
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
   const illustration =
@@ -42,7 +45,7 @@ export function TourCard({
           : 'ov-directory-tour__card'
       }
     >
-      {!renderContent && onClose && (
+      {!renderContent && showCloseButton && onClose && (
         <Button
           size="mini"
           type="text"
@@ -85,6 +88,11 @@ export function TourCard({
           </h2>
           <div id={bodyId} className="ov-directory-tour__description">
             {step.description}
+            {unavailable && (
+              <div className="ov-directory-tour__unavailable" role="status">
+                {text.unavailable}
+              </div>
+            )}
           </div>
           <footer className="ov-directory-tour__actions">
             {total > 1 && (

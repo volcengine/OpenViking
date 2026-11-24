@@ -1,15 +1,10 @@
+import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
-import {
-  mount,
-  ok,
-  recordingFetch,
-  settle,
-  setTextarea,
-} from './helpers/module-dom.mjs';
+import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
 
 const uri = 'viking://resources/guide.md';
 function fixture(isDir = false) {
@@ -80,6 +75,7 @@ test('custom preview editing retains drafts after failure and respects readOnly'
   let actions;
   let fail = true;
   let writes = 0;
+  let snapshots = 0;
   const fallback = fixture();
   const fetch = (input, init) => {
     if (String(input).includes('/content/write')) {
@@ -95,6 +91,10 @@ test('custom preview editing retains drafts after failure and respects readOnly'
             ),
           )
         : ok({});
+    }
+    if (String(input).includes('/snapshot/commit')) {
+      snapshots++;
+      return Promise.resolve(new Response('', { status: 503 }));
     }
     return fallback(input, init);
   };
@@ -114,23 +114,32 @@ test('custom preview editing retains drafts after failure and respects readOnly'
       view.container.querySelector('.ov-file-preview__edit-toolbar'),
       null,
     );
-    const editor = view.container.querySelector('textarea');
-    assert.equal(editor.value, '# Guide');
-    await setTextarea(editor, '# Updated guide');
-    await act(async () => assert.equal(await actions.saveEditing(), false));
+    const editor = await waitForEditor(view.container);
+    assert.equal(editor.textContent, '# Guide');
+    await setEditor(editor, '# Updated guide');
+    const save = async () => {
+      let result;
+      await act(async () => {
+        result = await actions.saveEditing();
+      });
+      return result;
+    };
+    assert.equal(await save(), false);
+    assert.equal(snapshots, 0);
     await settle();
-    assert.equal(view.container.querySelector('textarea'), editor);
-    assert.equal(editor.value, '# Updated guide');
+    assert.equal(view.container.querySelector('.cm-content'), editor);
+    assert.equal(editor.textContent, '# Updated guide');
     assert.equal(actions.busy, false);
     fail = false;
-    await act(async () => assert.equal(await actions.saveEditing(), true));
+    assert.equal(await save(), true);
+    assert.equal(snapshots, 0);
     await settle();
     assert.equal(actions.editing, false);
     assert.equal(writes, 2);
     await view.render(tree(fetch, { previewSlots, readOnly: true }));
     assert.equal(actions.canEdit, false);
     await act(async () => actions.startEditing());
-    assert.equal(view.container.querySelector('textarea'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
   } finally {
     await view.unmount();
   }

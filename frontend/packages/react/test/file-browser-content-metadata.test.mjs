@@ -38,18 +38,23 @@ for (const kinds of [undefined, []]) {
     try {
       assert.equal(f.tab.source.content, body);
       assert.equal(await f.tab.editing.loadContent(), body);
+      const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
+      assert.equal(editorDocument.content, body);
+      assert.equal(editorDocument.readOnlySuffix, footer);
+      assert.notEqual(f.tab.editing.promptForVersionNote, true);
       assert.ok(
         f.history.every((value) => !value?.includes('CONFLICTS_CONTENT')),
       );
       await f.tab.editing.save(`${body}Updated.\n`);
+      assert.equal(f.fetch.countOf('/api/v1/snapshot/commit'), 0);
       assert.deepEqual(
         f.fetch.calls.find((call) => call.path.endsWith('/write')).body,
         {
           uri: 'viking://~/resources/handbook/policy.md',
           content: `${body}Updated.\n`,
           mode: 'replace',
-          edit_source: 'manual',
           resolve_conflicts: true,
+          use_snapshot: true,
         },
       );
       if (!kinds) {
@@ -105,6 +110,8 @@ for (const suffix of [
       assert.equal(f.tab.source.content, text);
       assert.equal(f.tab.source.truncated, false);
       assert.equal(await f.tab.editing.loadContent(), text);
+      const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
+      assert.equal(editorDocument.readOnlySuffix, suffix);
       if (suffix === footer)
         assert.ok(f.fetch.calls.some((call) => call.query.limit === '-1'));
       else {
@@ -122,11 +129,12 @@ for (const suffix of [
 }
 
 test('consecutive Wiki trailers remain available to the conflict dashboard', async () => {
-  const f = await fixture({
-    content: `${body}<!-- CONFLICTS_CONTENT -->\n${footer}\n${footer}`,
-  });
+  const trailers = `<!-- CONFLICTS_CONTENT -->\r\n${footer}\r\n${footer}\r\n \t`;
+  const f = await fixture({ content: body + trailers });
   try {
     assert.equal(f.tab.source.content, body);
+    const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
+    assert.equal(editorDocument.readOnlySuffix, trailers);
     await act(async () => f.browser.actions.openDashboard(file));
     await settle();
     assert.equal(
@@ -151,6 +159,8 @@ for (const uri of [
     try {
       assert.equal(f.tab.source.content, text);
       assert.equal(await f.tab.editing.loadContent(), text);
+      const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
+      assert.equal(editorDocument.readOnlySuffix, undefined);
       await f.tab.editing.save(text);
       assert.equal(
         'resolve_conflicts' in f.fetch.calls.find((call) => call.body).body,

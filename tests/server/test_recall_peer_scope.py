@@ -3,6 +3,7 @@
 
 import httpx
 
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve import ContextType, MatchedContext
 
 
@@ -33,6 +34,16 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
 ):
     calls = []
     read_calls = []
+    root = "viking://user/default"
+    content = {
+        f"{root}/memories/events/global.md": "Owner-wide release details.",
+        f"{root}/peers/current/memories/events/current.md": "Current peer release details.",
+        f"{root}/peers/other/memories/events/other.md": "Other peer release details.",
+    }
+    seed_ctx = RequestContext(user=service.user, role=Role.ROOT)
+    for uri, text in content.items():
+        await service.viking_fs.write_file(uri, text, ctx=seed_ctx)
+    read = service.fs.read
 
     async def fake_find(**kwargs):
         calls.append(kwargs)
@@ -47,21 +58,19 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
             )
         return _FakeFindResult([])
 
-    async def fake_read(uri, **kwargs):
-        read_calls.append((uri, kwargs.get("ctx")))
-        return f"content for {uri}"
+    async def observe_read(uri, **kwargs):
+        read_calls.append((uri, kwargs["ctx"]))
+        return await read(uri, **kwargs)
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
-    response = await client.post(
-        "/api/v1/search/recall",
-        headers={"X-OpenViking-Actor-Peer": "current"},
-        json={
-            "query": "peer memory",
-            "quotas": {"events": 3, "entities": 0, "preferences": 0, "experiences": 0},
-            "max_chars": 5000,
-        },
-    )
+    monkeypatch.setattr(service.fs, "read", observe_read)
+    payload = {
+        "query": "peer memory",
+        "quotas": {"events": 3, "entities": 0, "preferences": 0, "experiences": 0},
+        "max_chars": 5000,
+    }
+    headers = {"X-OpenViking-Actor-Peer": "current"}
+    response = await client.post("/api/v1/search/recall", headers=headers, json=payload)
 
     assert response.status_code == 200
     result = response.json()["result"]
@@ -75,39 +84,15 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
     other_read_ctx = next(ctx for uri, ctx in read_calls if uri.endswith("/other.md"))
     assert other_read_ctx.actor_peer_id is None
 
+    assert {entry["uri"]: entry["text"] for entry in result["entries"]} == content
 
-async def test_actor_scope_skips_the_open_peer_scan(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    calls = []
-
-    async def fake_find(**kwargs):
-        calls.append(kwargs)
-        if kwargs["target_uri"].endswith("/events"):
-            return _FakeFindResult(
-                [_memory("viking://user/test_user/peers/current/memories/events/current.md")]
-            )
-        return _FakeFindResult([])
-
-    async def fake_read(uri, **kwargs):
-        del uri, kwargs
-        return "Summary: actor only.\n2026-07-09 ChatLog: details"
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
-    response = await client.post(
-        "/api/v1/search/recall",
-        headers={"X-OpenViking-Actor-Peer": "current"},
-        json={
-            "query": "peer memory",
-            "peer_scope": "actor",
-            "quotas": {"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
-            "max_chars": 300,
-        },
+    calls.clear()
+    read_calls.clear()
+    restricted = await client.post(
+        "/api/v1/search/recall", headers=headers, json={**payload, "peer_scope": "actor"}
     )
-
-    assert response.status_code == 200
-    assert response.json()["result"]["rendered"].count("<memory ") == 1
+    assert restricted.status_code == 200, restricted.text
+    entries = restricted.json()["result"]["entries"]
+    assert [entry["origin"] for entry in entries] == ["actor_peer", "self"]
     assert all(not call["target_uri"].endswith("/peers") for call in calls)
+    assert all(not uri.endswith("/other.md") for uri, _ in read_calls)

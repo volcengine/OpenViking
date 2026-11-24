@@ -22,7 +22,7 @@ export function fixture(uri, isDir, intercept, targets = []) {
     if (call.path.endsWith('/fs/stat'))
       return ok({
         isDir: call.uri === uri ? isDir : true,
-        permission: 'manage',
+        access: 'manage',
       });
     if (call.path.endsWith('/fs/ls'))
       return ok(

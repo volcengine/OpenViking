@@ -33,7 +33,7 @@ for (const [fileName, tag] of [
       assert.equal(view.container.querySelector('[data-file-viewer]'), null);
       assert.equal(context.canEdit, false);
       await act(async () => context.startEditing());
-      assert.equal(view.container.querySelector('textarea'), null);
+      assert.equal(view.container.querySelector('.cm-content'), null);
       const media = view.container.querySelector(tag);
       assert.ok(media);
       if (tag === 'img')

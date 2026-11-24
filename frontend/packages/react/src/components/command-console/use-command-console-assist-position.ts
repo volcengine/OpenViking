@@ -18,33 +18,70 @@ export function useCommandConsoleAssistPosition(
     if (!open || !panel || !anchor) return;
     const dismiss = () =>
       onDismiss(anchor.querySelector('textarea')?.value ?? '');
-    const outside = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !panel.contains(event.target) &&
-        !anchor.contains(event.target)
-      )
-        dismiss();
+    const roots: Node[] = [];
+    const hosts: Element[] = [];
+    let root = anchor.getRootNode();
+    while (true) {
+      roots.push(root);
+      if (root.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) break;
+      const host = (root as ShadowRoot).host;
+      hosts.push(host);
+      root = host.getRootNode();
+    }
+    const outside = (event: Event) => {
+      const path = event.composedPath();
+      if (!path.includes(panel) && !path.includes(anchor)) dismiss();
     };
+    const seen = roots.map(() => new WeakSet<Event>());
+    const pendingChecks = new Set<ReturnType<typeof setTimeout>>();
+    const outsideListeners = roots.map((eventRoot, index) => {
+      const listener = (event: Event) => {
+        seen[index]!.add(event);
+        const innerHost = index ? hosts[index - 1] : null;
+        if (innerHost && event.composedPath().includes(innerHost)) {
+          // Closed roots hide their internals from outer listeners. Wait until
+          // the next task: Chromium may run a microtask before dispatch reaches
+          // the inner root. The inner listener marks a real internal press as
+          // seen; a direct press on host whitespace has no such mark.
+          const pending = setTimeout(() => {
+            pendingChecks.delete(pending);
+            if (!seen[index - 1]!.has(event)) dismiss();
+          }, 0);
+          pendingChecks.add(pending);
+          return;
+        }
+        outside(event);
+      };
+      eventRoot.addEventListener('pointerdown', listener, true);
+      return listener;
+    });
     const escape = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) return;
       if (
-        event.key === 'Escape' &&
-        (anchor.contains(document.activeElement) ||
-          panel.contains(document.activeElement))
-      ) {
-        event.preventDefault();
-        dismiss();
-      }
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.key !== 'Escape'
+      )
+        return;
+      event.preventDefault();
+      dismiss();
     };
-    document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', escape);
+    // Capture presses at every root boundary. Each closed root can inspect the
+    // section of the composed path hidden from its parent root.
+    anchor.ownerDocument.addEventListener('keydown', escape);
     if (!('popover' in HTMLElement.prototype)) {
       panel.removeAttribute('popover');
       panel.dataset.inline = '';
       return () => {
-        document.removeEventListener('pointerdown', outside);
-        document.removeEventListener('keydown', escape);
+        pendingChecks.forEach(clearTimeout);
+        roots.forEach((eventRoot, index) =>
+          eventRoot.removeEventListener(
+            'pointerdown',
+            outsideListeners[index]!,
+            true,
+          ),
+        );
+        anchor.ownerDocument.removeEventListener('keydown', escape);
       };
     }
     const nativeAnchors = CSS.supports(
@@ -68,13 +105,14 @@ export function useCommandConsoleAssistPosition(
         Math.min(rect.left, window.innerWidth - width - 12),
       );
       panel.style.width = `${width}px`;
+      const right = window.innerWidth - left - width;
+      const side = left >= 334 ? 'left' : right >= 334 ? 'right' : 'stack';
+      panel.dataset.side = side;
+      // 详情与列表上下堆叠时共用一份高度，上限放宽到 640，列表才不会只剩几行。
       panel.style.setProperty(
         '--ov-ui-command-console-assist-height',
-        `${Math.min(420, available)}px`,
+        `${Math.min(side === 'stack' ? 640 : 420, available)}px`,
       );
-      const right = window.innerWidth - left - width;
-      panel.dataset.side =
-        left >= 334 ? 'left' : right >= 334 ? 'right' : 'stack';
       panel.style.setProperty(
         '--ov-ui-command-console-assist-detail-width',
         `${Math.min(400, (left >= 334 ? left : right) - 14)}px`,
@@ -101,11 +139,18 @@ export function useCommandConsoleAssistPosition(
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
+      pendingChecks.forEach(clearTimeout);
       observer.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
-      document.removeEventListener('pointerdown', outside);
-      document.removeEventListener('keydown', escape);
+      roots.forEach((eventRoot, index) =>
+        eventRoot.removeEventListener(
+          'pointerdown',
+          outsideListeners[index]!,
+          true,
+        ),
+      );
+      anchor.ownerDocument.removeEventListener('keydown', escape);
       anchor.style.setProperty('anchor-name', previousAnchor);
       if (panel.matches(':popover-open')) panel.hidePopover();
     };

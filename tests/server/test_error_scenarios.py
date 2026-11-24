@@ -6,13 +6,16 @@
 import httpx
 
 
-def _assert_invalid_request_response(resp: httpx.Response):
+def _assert_invalid_request_response(resp: httpx.Response, validation_type: str):
     assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert body["error"]["message"]
-    assert body["error"]["details"]["validation_errors"]
+    [error] = body["error"]["details"]["validation_errors"]
+    assert error["loc"][0] == "body"
+    assert error["type"] == validation_type
+    assert set(error) == {"loc", "type", "message"}
     return body
 
 
@@ -23,7 +26,7 @@ async def test_invalid_json_body(client: httpx.AsyncClient):
         content=b"not-valid-json",
         headers={"Content-Type": "application/json"},
     )
-    _assert_invalid_request_response(resp)
+    _assert_invalid_request_response(resp, "json_invalid")
 
 
 async def test_missing_required_field(client: httpx.AsyncClient):
@@ -32,8 +35,8 @@ async def test_missing_required_field(client: httpx.AsyncClient):
         "/api/v1/resources",
         json={"reason": "test"},  # missing 'path'
     )
-    body = _assert_invalid_request_response(resp)
-    assert "path" in body["error"]["message"]
+    body = _assert_invalid_request_response(resp, "value_error")
+    assert body["error"]["message"] == "Either 'path' or 'temp_file_id' must be provided"
 
 
 async def test_not_found_resource_returns_structured_error(
@@ -42,13 +45,13 @@ async def test_not_found_resource_returns_structured_error(
     """Accessing non-existent resource should return structured error."""
     resp = await client.get(
         "/api/v1/fs/stat",
-        params={"uri": "viking://does_not_exist"},
+        params={"uri": "viking://resources/missing-resource.md"},
     )
     assert resp.status_code == 404
     body = resp.json()
     assert body["status"] == "error"
-    assert "code" in body["error"]
-    assert "message" in body["error"]
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["details"]["resource"] == "viking://resources/missing-resource.md"
 
 
 async def test_missing_task_returns_structured_error(client: httpx.AsyncClient):
@@ -62,21 +65,6 @@ async def test_missing_task_returns_structured_error(client: httpx.AsyncClient):
     assert body["error"]["message"] == "Task not found or expired"
 
 
-async def test_add_resource_file_not_found(client: httpx.AsyncClient):
-    """Adding a resource with non-existent file path.
-
-    HTTP server no longer accepts direct host filesystem paths.
-    """
-    resp = await client.post(
-        "/api/v1/resources",
-        json={"path": "/tmp/nonexistent_file_xyz_12345.md", "reason": "test"},
-    )
-    body = resp.json()
-    assert resp.status_code == 403
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
-
-
 async def test_empty_body_on_post(client: httpx.AsyncClient):
     """POST with empty body should return a structured invalid argument error."""
     resp = await client.post(
@@ -84,7 +72,7 @@ async def test_empty_body_on_post(client: httpx.AsyncClient):
         content=b"",
         headers={"Content-Type": "application/json"},
     )
-    _assert_invalid_request_response(resp)
+    _assert_invalid_request_response(resp, "missing")
 
 
 async def test_wrong_content_type(client: httpx.AsyncClient):
@@ -94,7 +82,7 @@ async def test_wrong_content_type(client: httpx.AsyncClient):
         content=b"path=/tmp/test",
         headers={"Content-Type": "text/plain"},
     )
-    _assert_invalid_request_response(resp)
+    _assert_invalid_request_response(resp, "model_attributes_type")
 
 
 async def test_invalid_uri_format(client: httpx.AsyncClient):

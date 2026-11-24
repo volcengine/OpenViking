@@ -1,3 +1,7 @@
+import {
+  observation,
+  type ObservedSpec,
+} from '../shared/monitoring/request-observer.js';
 import { OvClientError } from './errors.js';
 import {
   isAbortError,
@@ -82,10 +86,12 @@ export async function openStream(
   // usual "request overrides default" precedence: reading only `spec.options.signal`
   // meant aborting `createOvClient({ signal })` left the signal handed to fetch
   // un-aborted.
+  const observer = observation(spec as ObservedSpec);
   const resolved = await resolveFor(defaults, spec.options);
   const callerSignals = [resolved.signal, spec.options?.signal].filter(
     (candidate): candidate is AbortSignal => Boolean(candidate),
   );
+  if (observer) observer.callerSignals = callerSignals;
   // 调用方取消与 `abort()` 走**同一条**释放路径：只中止传输层不够，响应体的
   // `cancel()` 也得调用，否则在两次 `next()` 之间（迭代空闲时）取消会留下一个仍
   // 挂着的连接。`release` 在下面定义，因此这里通过一个可替换的引用转发。
@@ -140,16 +146,21 @@ export async function openStream(
   // that already threw.
   let body: ReadableStream<Uint8Array>;
   try {
+    if (observer) observer.phase = 'business-envelope';
     if (!response.ok) {
       const raw = await readText(response, controller.signal);
+      observer?.capture(raw);
       throw toClientError(response, parseJson(raw) ?? raw);
     }
 
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes(EVENT_STREAM) || !response.body) {
       // 服务端可能用 JSON 外壳报告失败，例如代理层在建立流之前就拒绝了请求。
-      const envelope = parseJson(await readText(response, controller.signal));
-      if (envelope !== undefined) throwIfErrorEnvelope(response, envelope);
+      const raw = await readText(response, controller.signal);
+      observer?.capture(raw);
+      const envelope = parseJson(raw);
+      if (envelope !== undefined)
+        throwIfErrorEnvelope(response, envelope, observer?.business);
       throw new OvClientError({
         code: 'UNEXPECTED_CONTENT_TYPE',
         message: `Expected ${EVENT_STREAM}, got ${contentType || 'no content type'}`,
@@ -179,7 +190,10 @@ export async function openStream(
   // and cancelling a stream already locked by an async iterator throws "locked".
   // `reader.cancel()` ends a pending `read()` immediately and passes the
   // cancellation back to the response body through the pipe.
-  const reader = decodeEventStream(body).getReader();
+  const reader = decodeEventStream(
+    body,
+    observer ? (size) => observer.bytes(size) : undefined,
+  ).getReader();
 
   // 释放要**取消流**，而不是调用包装层生成器的 `return()`。
   //

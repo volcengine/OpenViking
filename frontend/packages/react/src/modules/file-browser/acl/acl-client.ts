@@ -32,16 +32,18 @@ export async function readPermission(
   uri: string,
   options: OvRequestOptions,
 ) {
-  const stat = await client.request<{ permission?: unknown }>({
+  const stat = await client.request<{ access?: unknown }>({
     method: 'GET',
     path: OV_PATHS.fsStat,
     query: { uri },
     options,
   });
-  if (stat.permission !== undefined) {
-    if (!isLevel(stat.permission))
+  if (stat.access !== undefined) {
+    if (stat.access === 'denied' || stat.access === 'container')
+      return undefined;
+    if (!isLevel(stat.access))
       throw new TypeError('Unknown resource permission');
-    return stat.permission;
+    return stat.access;
   }
   // A successful manager-only endpoint proves manage. 403 does not distinguish
   // read from write, so retain an unknown level instead of guessing either one.
@@ -63,11 +65,15 @@ export async function writeAcl(
   },
 ) {
   const value = await client.request({
-    method: change ? 'PUT' : 'DELETE',
+    method: 'PUT',
     path: OV_PATHS.acl,
-    ...(change
-      ? { body: { uri, acl_mode: change.mode, entries: change.direct_entries } }
-      : { query: { uri } }),
+    // Restoring inheritance is the same operation as the native DELETE alias,
+    // but PUT is also supported by hosted data gateways.
+    body: {
+      uri,
+      acl_mode: change?.mode ?? 'inherit',
+      entries: change?.direct_entries ?? [],
+    },
     options,
   });
   return parseReport(value, uri);

@@ -1,19 +1,18 @@
-import { Button } from '../../shared/primitives/button/button.js';
-import { Tooltip } from '../../shared/primitives/tooltip/index.js';
-import CopySvg from '../../../../icons/svg/command-console/copy.svg?react';
-import { BubbleTools } from '@ark-design/ui/bubble';
+import { CopyAction } from './copy-action.js';
 import { messageText } from './message-groups.js';
 import type { VikingBotLabels, VikingBotMessage } from './model.js';
 
 export function MessageFooter({
   message,
   showTime,
+  debugText,
   labels,
   locale,
   onCopy,
 }: {
   message: VikingBotMessage;
   showTime?: boolean;
+  debugText?: () => string;
   labels: VikingBotLabels;
   locale?: string;
   onCopy?: (text: string) => void;
@@ -35,29 +34,34 @@ export function MessageFooter({
   if (!time && !canCopy) return null;
   return (
     <div className="ov-viking-bot__message-footer">
-      {time ? <time dateTime={message.createdAt}>{time}</time> : null}
-      {canCopy ? (
-        onCopy ? (
-          <Tooltip content={labels.copy}>
-            <Button
-              size="mini"
-              type="text"
-              iconOnly
-              htmlType="button"
-              className="ov-viking-bot__copy"
-              aria-label={labels.copy}
-              onClick={() => onCopy(text)}
-            >
-              <CopySvg aria-hidden="true" focusable="false" />
-            </Button>
-          </Tooltip>
-        ) : (
-          <BubbleTools
-            items={['copy']}
-            copyText={text}
-            labels={{ copy: labels.copy, copied: labels.copied }}
+      {time ? (
+        debugText ? (
+          <CopyAction
+            className="ov-viking-bot__message-time"
+            text={debugText}
+            labels={{
+              ...labels,
+              copy:
+                message.role === 'user'
+                  ? labels.copySessionDebug
+                  : labels.copyMessageDebug,
+              copied: labels.debugCopied,
+            }}
+            failureLabel={labels.debugCopyFailed}
+            onCopy={onCopy}
+            icon={() => <time dateTime={message.createdAt}>{time}</time>}
           />
+        ) : (
+          <time dateTime={message.createdAt}>{time}</time>
         )
+      ) : null}
+      {canCopy ? (
+        <CopyAction
+          className="ov-viking-bot__copy"
+          text={text}
+          labels={labels}
+          onCopy={onCopy}
+        />
       ) : null}
     </div>
   );

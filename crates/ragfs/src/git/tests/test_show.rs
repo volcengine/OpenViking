@@ -256,6 +256,41 @@
         }
     }
 
+    #[tokio::test]
+    async fn test_path_is_file_uses_tree_mode_without_reading_blob() {
+        let (dir, vfs, object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/entry/nested.md", b"tracked content");
+        let commit = make_commit(&svc, "acct", "main", "first").await;
+        let path = "resources/entry/nested.md";
+        let tree = load_commit_meta(object_store.as_ref(), "acct", &commit)
+            .await
+            .unwrap()
+            .tree;
+        let (blob, _) = lookup(object_store.as_ref(), "acct", tree, path)
+            .await
+            .unwrap()
+            .unwrap();
+        let hex = blob.to_hex().to_string();
+        std::fs::remove_file(
+            dir.path()
+                .join("acct")
+                .join("objects")
+                .join(&hex[..2])
+                .join(&hex[2..]),
+        )
+        .unwrap();
+
+        assert!(svc.path_is_file("acct", &commit, path).await.unwrap());
+        assert!(!svc
+            .path_is_file("acct", &commit, "resources/entry")
+            .await
+            .unwrap());
+        assert!(!svc
+            .path_is_file("acct", &commit, "resources/absent")
+            .await
+            .unwrap());
+    }
+
     // ── 14 ─────────────────────────────────────────────────────────────
     #[tokio::test]
     async fn test_show_unknown_ref() {

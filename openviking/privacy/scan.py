@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 from openviking.core.namespace import classify_uri, resolve_request_uri
@@ -147,6 +148,7 @@ async def _scan_privacy_content(
     stop_reason: str | None = None
     fix_truncated = False
     last_read_at = 0.0
+    settings = replace(await service.privacy_configs.get_settings(ctx), mode="registered")
 
     def skip(reason: str) -> None:
         skipped_files[reason] = skipped_files.get(reason, 0) + 1
@@ -216,13 +218,28 @@ async def _scan_privacy_content(
         except UnicodeDecodeError:
             skip("non_utf8")
             continue
-        result = await sanitizer.sanitize(
-            content,
-            ctx=ctx,
-            uri=file_uri,
-            max_replacements=PRIVACY_SCAN_MAX_REPLACEMENTS_PER_FILE,
-            fail_on_match_limit=False,
-        )
+        try:
+            result = await sanitizer.sanitize(
+                content,
+                ctx=ctx,
+                uri=file_uri,
+                max_replacements=PRIVACY_SCAN_MAX_REPLACEMENTS_PER_FILE,
+                fail_on_match_limit=False,
+                settings=settings,
+            )
+        except InvalidArgumentError as exc:
+            if exc.details.get("reason") != "privacy_structure_changed":
+                raise
+            skip("privacy_structure_changed")
+            matches.append(
+                {
+                    "uri": file_uri,
+                    "fixable": False,
+                    "fixed": False,
+                    "reason": "privacy_structure_changed",
+                }
+            )
+            continue
         if result.match_limit_exceeded:
             skip("match_limit_exceeded")
             matches.append(
@@ -260,7 +277,7 @@ async def _scan_privacy_content(
                 len(candidates) > PRIVACY_SCAN_MAX_REFERENCE_DETAILS_PER_FILE
                 for candidates in all_ambiguous
             ),
-            "fixable": not result.ambiguous_references,
+            "fixable": True,
             "fixed": False,
         }
         if fix and item["fixable"]:

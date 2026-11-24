@@ -76,10 +76,15 @@ const profiles = {
       description:
         '新对话开始时，向模型提供你的 OpenViking 用户画像。此设置独立于记忆召回。',
     },
+    soul: {
+      label: '会话开头提供 soul.md',
+      description:
+        '新对话开始时，向模型提供你保存在 OpenViking 的 soul.md，也就是你给模型的长期指令，并告诉模型遵循它。soul.md 全文提供，不占开头内容预算。',
+    },
     profileMaxTokens: {
       label: '开头内容预算',
       description:
-        '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。',
+        '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。soul.md 不计入。',
     },
     showRecall: {
       label: '显示召回摘要',
@@ -142,18 +147,18 @@ const profiles = {
     description:
       '把已完成的轮次写入 OpenViking 会话，让 OpenViking 从中提取记忆。',
     idleSeconds: {
-      label: '最新回复等待时长',
+      label: '空闲提交时间',
       description:
-        '下一条消息到达时，上一轮会立即保存。最新一轮回复会先等待这段时间，如果没有后续消息，就保存下来，OpenViking 随即开始提取记忆。',
+        '超过这段时间没有轮次结束时，已保存的内容会全部提交并提取记忆。网关把提交交给 OpenViking（openviking_auto_commit）时，小于 300 秒的值按 300 秒处理，且 OpenViking 服务端需要开启会话自动提交。',
     },
     commitTokens: {
       label: '提交阈值',
       description:
-        '已保存但未提交的对话达到这个量时提交一次。OpenViking 在提交时提取记忆。',
+        '一轮结束时，未提交的消息达到这个 Token 数就会提交并提取记忆，最近的消息继续留在会话中。',
     },
     keepRecentMessages: {
       label: '保留最近消息',
-      description: '每次提交至少在会话中留下最近这么多条消息，按整轮计算。',
+      description: '达到提交阈值而提交时，在会话中保留最近多少条消息。',
     },
   },
   longConversations: {

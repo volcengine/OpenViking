@@ -1,3 +1,6 @@
+import { useRenderErrors } from './command-console-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { TaskStatusList } from '../../shared/task-status/task-status.js';
 import {
   getCommandConsoleCommandInputText,
   matchCommandConsoleCommandInput,
@@ -7,12 +10,16 @@ import { CommandConsoleRecordBody } from './command-console-record-body.js';
 import type { CommandConsoleRecordProps } from './command-console-record-body.js';
 import { CommandConsoleRecordTime } from './command-console-record-time.js';
 import { CommandConsoleResultHeader } from './command-console-result-header.js';
-import { CommandConsoleUriText } from './command-console-uri-text.js';
+import {
+  CommandConsoleCommandArguments,
+  CommandConsoleUriText,
+} from './command-console-uri-text.js';
 
 const STATUS_TEXT = {
   pending: 'pending',
   success: 'success',
   error: 'error',
+  cancelled: 'cancelled',
 } as const;
 
 /** 一条执行记录：命令回显、状态与结果。 */
@@ -37,9 +44,8 @@ export function CommandConsoleRecordItem(props: CommandConsoleRecordProps) {
                   name={input.command.name}
                 />
               </span>
-              <CommandConsoleUriText
-                text={input.rest}
-                mode="literal"
+              <CommandConsoleCommandArguments
+                input={input}
                 onOpenUri={props.onOpenUri}
               />
             </>
@@ -62,7 +68,13 @@ export function CommandConsoleRecordItem(props: CommandConsoleRecordProps) {
           label={statusLabel}
         />
         <div className="ov-command-console__result-body">
-          <CommandConsoleRecordBody {...props} />
+          <ErrorBoundary
+            message={useRenderErrors().result}
+            resetKeys={[record.id, record.status]}
+          >
+            <TaskStatusList tasks={record.tasks} locale={props.locale} />
+            <CommandConsoleRecordBody {...props} />
+          </ErrorBoundary>
         </div>
       </article>
     </div>

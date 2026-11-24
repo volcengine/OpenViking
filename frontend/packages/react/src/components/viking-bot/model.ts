@@ -1,5 +1,8 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
+export type VikingBotTask = TaskSnapshot;
 import type { ReactNode } from 'react';
 import type { VikingBotReference } from './capabilities.js';
+import type { VikingBotDebugLabels } from './message-debug.js';
 
 /**
  * 片段类型判别值。两种宿主风格共用这一层：宿主在接入层把各自的流事件
@@ -84,6 +87,8 @@ export interface VikingBotToolPart {
   output?: string;
   /** Normalized result cards; the host adapts its search response. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 调用耗时，单位毫秒。Call duration in milliseconds. */
   durationMs?: number;
   /** Execution timestamps for the activity duration. */
@@ -109,6 +114,8 @@ export interface VikingBotToolResultPart {
   output: string;
   /** Normalized result cards, replacing the raw output presentation. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 该结果是否为错误。Whether the result is an error. */
   isError?: boolean;
   /** 所属执行块标识。Owning activity block. */
@@ -154,6 +161,8 @@ export type VikingBotMessagePart =
 
 /** 一条消息。A single message. */
 export interface VikingBotMessage {
+  /** Readable submitted answers; original parts remain available for persistence. */
+  answerSummary?: readonly { label: string; value: string }[];
   /** 消息唯一标识。Unique message key. */
   id: string;
   /**
@@ -169,11 +178,15 @@ export interface VikingBotMessage {
   createdAt?: string;
   /** 该助手消息是否仍在生成中。Whether the assistant message is still being written. */
   streaming?: boolean;
+  /** 助手回复被中断。The assistant reply was interrupted before completion. */
+  interrupted?: boolean;
   /**
    * system 消息的语气，缺省为 `info`；`error` 用于连接中断等提示。
    * Tone of a system message, `info` by default; `error` for failures.
    */
   tone?: 'info' | 'error';
+  /** 客户端失败提示，不进入会话存储或模型输入。Client-only failure notice. */
+  clientError?: Error;
   /**
    * 合并后的消息携带的原始动作清单；合并时保留每条消息自己的 messageId，
    * 渲染时按原始消息回传，避免把动作挂到错误的消息上。
@@ -196,6 +209,12 @@ export interface VikingBotMessage {
     key: string;
     /** 动作文案。Action label. */
     label?: ReactNode;
+    /** 按钮样式，缺省为普通按钮。Button appearance, standard by default. */
+    appearance?: 'pill';
+    /** 按钮图标。Decorative button icon. */
+    icon?: ReactNode;
+    /** 显示加载图标并禁用按钮。Shows a spinner and disables the button. */
+    loading?: boolean;
     /** 动作状态。Action status. */
     status?: 'idle' | 'pending' | 'submitted' | 'success' | 'error';
     /** 不可用时的说明。Reason shown when unavailable. */
@@ -217,6 +236,8 @@ export interface VikingBotStreamingState {
 export interface VikingBotAttachment {
   /** 附件唯一标识。Unique attachment key. */
   key: string;
+  /** 上传服务返回的标识。Identifier returned by the upload service. */
+  uploadId?: string;
   /** 文件名。File name. */
   name: string;
   /** 本地对象 URL 或宿主解析出的预览地址。Local object URL or a host-resolved preview link. */
@@ -242,16 +263,32 @@ export interface VikingBotDraft {
 }
 
 /** 可替换文案，组件内置英文默认值。Replaceable copy; the component ships English defaults. */
-export interface VikingBotLabels {
+export interface VikingBotLabels extends VikingBotDebugLabels {
   activityRunning?: string;
   activityCompleted?: string;
   toolInput?: string;
   toolOutput?: string;
   similarity?: string;
   sessionHistory?: string;
+  /** 会话操作菜单名称。 Accessible name of a session’s action menu. */
+  sessionActions?: string;
+  /** 重命名菜单项。 Rename menu item. */
+  renameSessionAction?: string;
+  /** 删除菜单项。 Delete menu item. */
+  removeSessionAction?: string;
   session?: string;
   locateSession?: string;
   emptySessions?: string;
+  renameSession?: string;
+  removeSession?: string;
+  sessionName?: string;
+  requiredSessionName?: string;
+  saveSessionName?: string;
+  cancelSessionAction?: string;
+  confirmSessionRemoval?: string;
+  sessionRemovalNotice?: string;
+  renameSessionFailed?: string;
+  removeSessionFailed?: string;
   loading?: string;
   loadMore?: string;
   reference?: string;
@@ -273,8 +310,12 @@ export interface VikingBotLabels {
   stop?: string;
   /** 添加附件按钮文案。Attach button label. */
   attach?: string;
+  /** 达到附件上限时的提示，参数为配置的上限。Hint receiving the configured attachment limit. */
+  attachmentLimit?: (limit: number) => string;
   /** 移除附件按钮文案。Remove-attachment button label. */
   removeAttachment?: string;
+  uploadingAttachment?: string;
+  attachmentUploadFailed?: string;
   /** 复制按钮文案。Copy button label. */
   copy?: string;
   /** 复制成功提示。Message shown after a successful copy. */

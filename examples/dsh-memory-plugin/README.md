@@ -129,6 +129,16 @@ range and DSH refuses to load the bundle; `dsh plugin allow-version` grants an e
 exemption if you accept the risk. Local devDependencies and `overrides` stay
 pinned to rc.6 to exercise the minimum supported contract.
 
+## Diagnostics
+
+`scripts/ov-memory-doctor.mjs` checks the profile install, the client configuration, and the server connection, and lists a fix for every problem it finds. The `ov-memory-doctor` skill runs it from inside a session; from a terminal, replace `web` with the profile:
+
+```bash
+node ~/.dsh/profiles/web/node_modules/@openviking/dsh-memory-plugin/scripts/ov-memory-doctor.mjs
+```
+
+`DSH_HOME` moves `~/.dsh`. Options: `--json`, `--offline`, `--timeout <ms>`, `--no-color`.
+
 ## Troubleshooting startup
 
 If startup reports that `@deepseek-ai/dsh-llm` does not export `assertNever`,
@@ -228,6 +238,7 @@ Two consequences follow from the proxy being one process per profile:
 
 The bridge and the skill provider are mounted last in `apply()`, after every
 lifecycle registration, so a proxy that cannot start holds up nothing above it.
+With `mcpEnabled: false` neither is mounted, because the skills direct the model to the MCP tools.
 
 ### Why the skill gets its own provider
 
@@ -280,6 +291,8 @@ The profile's `cordis.patch.yml` can also carry plugin config:
     mcpToolCallTimeoutMs: 60000
 ```
 
+`mcpEnabled: false`, in this block or in `ovcli.conf`'s `plugin` or `plugin.dsh`, mounts neither the OpenViking MCP tools nor the bundled skills; recall, capture, and commit continue.
+
 Recall normally uses `POST /api/v1/search/search` with `mode: "context"`.
 `recallMaxTokens` (`OPENVIKING_RECALL_MAX_TOKENS`) sets this request's
 `max_tokens` budget for server-assembled context. When it is unset, the plugin
@@ -313,13 +326,14 @@ The older size settings apply to fallback recall, not the primary context reques
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
 - `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
 - `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
-- Failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
+- Retryable failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
+- Non-retryable capture, commit, and initialization failures emit a warning once per session and stage, with the HTTP status, a bounded error code, and an endpoint template. Success resets that stage’s warning. Unexpected write exceptions also warn once until a write completes. Warnings omit message payloads and error text. Permanent failures are not queued for replay.
 - `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `write` or `edit` under a skill directory (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) points at `mcp__openviking__add_skill` instead, which creates or replaces a whole skill from its `SKILL.md` text. A `grep` whose pattern is `viking://` text still runs.
 - `tools/post-execute` lets a `bash` command (`pwsh` on Windows, where DSH mounts it in place of `bash`) that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. IDs that contain Windows-invalid path characters are normalized to a readable underscore form plus a stable hash, so two native IDs cannot collapse onto the same OpenViking session; already-portable IDs keep their existing mapping. Existing sessions whose native IDs require normalization start a new OpenViking session after this upgrade. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. With the default peer settings, no peer is sent outside a git repository, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 
-Workspace peer settings are loaded from `session.header.cwd` when the session first uses memory. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
+Workspace settings (peer, `recall.*`, `capture.*`) are loaded from `session.header.cwd` when the session first uses memory, not from the directory DSH was launched in. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
 
 ```json
 {
@@ -347,10 +361,10 @@ upgrade adds tools without a bundle release.
 use it only when the user explicitly requests deletion.
 
 The bundle also serves the shared `openviking-memory`, `openviking-skills`,
-`ov-experience-memory`, and `openviking-rule-search` skills from `skills/`
+`ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills from `skills/`
 through its own isolated `ctx.skills` provider, so the
 model gets the same guidance the other integrations ship: when to search, read,
-and write, and how to find, use, create, share, and migrate OpenViking skills.
+and write, how to find, use, create, share, and migrate OpenViking skills, and how to diagnose the bundle.
 
 ## Testing
 

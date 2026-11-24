@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fenceMarkdownFrontmatter } from '../src/components/file-preview/file-preview-frontmatter.ts';
+import { fenceMarkdownFrontmatter } from '../src/shared/markdown/preview-frontmatter.ts';
 
 test('leading metadata is fenced without changing the following Markdown table', () => {
   const table = '| Name | Count |\r\n| --- | --- |\r\n| Item | 3 |';

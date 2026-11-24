@@ -4,8 +4,8 @@ mod dispatch;
 
 use crate::CliContext;
 use crate::cli::preprocess::{
-    first_command_token, is_config_agent_command_request, plain_help_misuse,
-    pre_parse_output_options, pre_parse_requires_cli_config_file, preprocess_cli_args,
+    CliInvocation, first_command_token, is_config_agent_command_request, named_compile_conflict,
+    plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_cli_args,
 };
 use crate::cli::{Cli, Commands, UploadCliOptions, legacy_upload_option_error};
 use crate::config::Config;
@@ -111,50 +111,68 @@ fn render_pre_language_help_request(args: &[OsString]) -> Option<String> {
 
 pub(crate) async fn run() {
     let args = preprocess_cli_args(std::env::args_os().collect());
-    let command_display = error_ui::display_command(&args);
-    let (pre_parse_output_format, pre_parse_compact) = pre_parse_output_options(&args);
     if let Some(help) = render_pre_language_help_request(&args) {
         print!("{help}");
         return;
     }
-    match ensure_language_selected_before_command(&args).await {
+    let invocation = CliInvocation::parse(args);
+    let args = &invocation.display_args;
+    let command_display = error_ui::display_command(args);
+    match ensure_language_selected_before_command(args).await {
         Ok(true) => {}
         Ok(false) => return,
         Err(e) => {
             error_ui::print_runtime_error(
                 &command_display,
                 &e,
-                pre_parse_output_format,
-                pre_parse_compact,
+                invocation.output,
+                invocation.compact,
                 false,
             );
             std::process::exit(2);
         }
     }
 
-    if help_ui::is_top_level_help_request(&args) {
+    if help_ui::is_top_level_help_request(args) {
         print!("{}", help_ui::render_top_level_help());
         return;
     }
-    if let Some(help) = help_ui::render_command_help_request(&args) {
+    if let Some(help) = help_ui::render_command_help_request(args) {
         print!("{help}");
         return;
     }
-    if let Some(misuse) = plain_help_misuse(&args) {
+    if let Some(flag) = named_compile_conflict(args) {
+        let (title, message, guidance) = match i18n::Language::current() {
+            i18n::Language::ZhCn => (
+                "命令错误",
+                format!("--compile-name 不能与 {flag} 同时使用。"),
+                "请用 ov compile create --compile-name <名称> 保存输入参数，再用 ov compile --compile-name <名称> 运行。\n详见编译指南：https://docs.openviking.ai/zh/getting-started/13-compile#提交编译",
+            ),
+            i18n::Language::En => (
+                "Command Error",
+                format!("--compile-name cannot be combined with {flag}."),
+                "Save inputs with ov compile create --compile-name <name>, then run ov compile --compile-name <name>.\nSee https://docs.openviking.ai/en/getting-started/13-compile#submit-compilation",
+            ),
+        };
+        error_ui::print_report(&error_ui::ErrorReport::new(title, message), false);
+        eprintln!("\n{guidance}");
+        std::process::exit(2);
+    }
+    if let Some(misuse) = plain_help_misuse(args) {
         let report = error_ui::report_for_plain_help_error(&command_display, misuse.help_command);
         error_ui::print_report(&report, false);
         std::process::exit(2);
     }
 
-    let mut preloaded_required_config = if pre_parse_requires_cli_config_file(&args) {
+    let mut preloaded_required_config = if pre_parse_requires_cli_config_file(args) {
         match Config::load_required() {
             Ok(config) => Some(config),
             Err(e) => {
                 error_ui::print_runtime_error(
                     &command_display,
                     &e,
-                    pre_parse_output_format,
-                    pre_parse_compact,
+                    invocation.output,
+                    invocation.compact,
                     false,
                 );
                 std::process::exit(2);
@@ -164,13 +182,13 @@ pub(crate) async fn run() {
         None
     };
 
-    let cli = match Cli::try_parse_from(args.clone()) {
+    let cli = match invocation.cli {
         Ok(cli) => cli,
         Err(error) => {
             if error.exit_code() == 0 {
                 let _ = error.print();
             } else {
-                let report = error_ui::report_for_clap_error(&args, &error.to_string());
+                let report = error_ui::report_for_clap_error(args, &error.to_string());
                 error_ui::print_report(&report, false);
             }
             std::process::exit(error.exit_code());
@@ -240,7 +258,7 @@ pub(crate) async fn run() {
             error_ui::print_runtime_error(
                 &command_display,
                 &e,
-                pre_parse_output_format,
+                invocation.output,
                 compact,
                 cli.verbose,
             );
@@ -263,7 +281,7 @@ pub(crate) async fn run() {
             error_ui::print_runtime_error(
                 &command_display,
                 &e,
-                pre_parse_output_format,
+                invocation.output,
                 compact,
                 cli.verbose,
             );

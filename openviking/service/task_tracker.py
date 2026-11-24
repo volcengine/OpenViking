@@ -52,6 +52,7 @@ from openviking.service.task_events import PROCESS_EVENT_KINDS
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
+    QueueWorkCounts,
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
@@ -95,10 +96,9 @@ _CANCELLABLE_TASK_TYPES = {
 _IDENTITY_CLEANUP_TASK_TYPES = {"account_delete", "user_delete"}
 _CANCEL_POLL_INTERVAL = 30
 _WAIT_INITIAL_POLL_INTERVAL = 0.05
-_WAIT_MAX_POLL_INTERVAL = 10.0
+_WAIT_MAX_POLL_INTERVAL = 1.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
-_sanitize_error = sanitize_error
 _sanitize_task_result = sanitize_task_result
 
 
@@ -1449,18 +1449,25 @@ class TaskTracker:
 
     async def has_work(
         self,
-        task_id: str,
+        task_id: Optional[str] = None,
         *,
         exclude_work_id: Optional[str] = None,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        exclude_inline: bool = False,
     ) -> bool:
+        """Check open Work for a Task, or for one account when task_id is omitted."""
         return await self._store.has_open_work(
             task_id,
             exclude_work_id=exclude_work_id,
             account_id=account_id,
             user_id=user_id,
+            **({"exclude_inline": True} if exclude_inline else {}),
         )
+
+    async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
+        """Read pending/running Work counts for all queues in one account."""
+        return await self._store.get_queue_work_counts(account_id=account_id)
 
     def has_active_producer(self, task_id: str) -> bool:
         state = self._running.get()

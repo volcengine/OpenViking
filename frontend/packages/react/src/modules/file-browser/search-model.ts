@@ -65,6 +65,7 @@ export function normalizeFilters(
     ...filters,
     scopes: a.scope === 'single' ? filters.scopes.slice(0, 1) : filters.scopes,
     levels: a.levels ? filters.levels : [],
+    timeField: a.time ? filters.timeField : '',
     since: a.time ? filters.since : '',
     until: a.time ? filters.until : '',
     caseInsensitive: a.caseInsensitive ? filters.caseInsensitive : false,
@@ -96,6 +97,23 @@ const ALL_SCOPES: readonly ScopeOption[] = [
 const covers = (root: string, uri: string): boolean =>
   uri === root || uri.startsWith(`${root}/`);
 
+export function setSearchScope(
+  scopes: readonly string[],
+  uri: string,
+  checked: boolean,
+): string[] {
+  return checked
+    ? [...scopes.filter((scope) => !covers(uri, scope)), uri]
+    : scopes.filter((scope) => scope !== uri);
+}
+
+export function isSearchScopeAllowed(
+  scopes: readonly ScopeOption[],
+  uri: string,
+): boolean {
+  return scopes.some((scope) => covers(scope.uri, uri));
+}
+
 /**
  * 按当前根算出可勾选的目录。
  *
@@ -120,6 +138,7 @@ const covers = (root: string, uri: string): boolean =>
  */
 export function buildScopeOptions(rootUri: string): ScopeOption[] {
   if (!rootUri || rootUri === 'viking://') return [...ALL_SCOPES];
+  rootUri = rootUri.replace(/\/+$/, '');
   if (ALL_SCOPES.some((option) => covers(option.uri, rootUri))) {
     return [{ uri: rootUri }];
   }
@@ -146,7 +165,7 @@ function withFilters(
       ...(filters.levels.length > 0 ? { level: filters.levels } : {}),
       ...(filters.since ? { since: filters.since } : {}),
       ...(filters.until ? { until: filters.until } : {}),
-      ...(filters.since || filters.until
+      ...(filters.timeField && (filters.since || filters.until)
         ? { time_field: filters.timeField }
         : {}),
     };

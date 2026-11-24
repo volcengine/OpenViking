@@ -1,25 +1,16 @@
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
-from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers.text import TextParser
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
+from openviking.parse.registry import ParserRegistry
 
 
-async def test_file_parse_preserves_text_parser_metadata_and_instruction(tmp_path):
+async def test_file_parse_preserves_text_parser_metadata_and_content(tmp_path):
     source = tmp_path / "notes.txt"
     source.write_text("Plain text content", encoding="utf-8")
-    delegate_parse = AsyncMock(
-        return_value=create_parse_result(
-            root=ResourceNode(type=NodeType.ROOT),
-            source_format="markdown",
-            parser_name="MarkdownParser",
-        )
-    )
-    parser = TextParser.__new__(TextParser)
-    parser._md_parser = SimpleNamespace(parse=delegate_parse)
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
 
-    result = await parser.parse(source, instruction="preserve this", marker=True)
+    result = await ParserRegistry().parse(source, parse_output_store=store)
 
-    delegate_parse.assert_awaited_once_with(source, instruction="preserve this", marker=True)
     assert result.source_format == "text"
     assert result.parser_name == "TextParser"
+    assert result.artifact_ref is not None
+    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {"notes/notes.md"}
+    assert await store.read_bytes(result.artifact_ref, "notes/notes.md") == b"Plain text content"

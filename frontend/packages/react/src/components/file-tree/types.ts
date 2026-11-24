@@ -111,7 +111,7 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
   disabled?: boolean;
   /** 允许展开但不选中，例如仅能遍历的目录。Allows expansion without selection. */
   selectable?: boolean;
-  /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
+  /** 权限元数据，不展示标记或执行鉴权。Permission metadata; no badge or authorization. */
   access?: 'read-only' | 'denied' | 'container';
   /**
    * 名称右侧的次要说明，例如摘要或行内描述。
@@ -409,9 +409,6 @@ export interface FileTreeInfoLabels {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FileTreeLabels {
-  readOnly?: string;
-  noAccess?: string;
-  traverseOnly?: string;
   /** 搜索入口文案。Search trigger label. */
   search?: string;
   /** 刷新按钮的无障碍名称。Accessible refresh button label. */
@@ -421,6 +418,10 @@ export interface FileTreeLabels {
    * Empty tree message.
    */
   empty?: string;
+  /** 展开空目录后的提示。Message inside an expanded empty directory. */
+  emptyDirectory?: string;
+  /** 共享资源根目录的标签。Label on the shared resources root. */
+  shared?: string;
   /**
    * 加载失败提示。
    * Load failure message.
@@ -562,6 +563,15 @@ export interface FileTreeProps extends Omit<
    * Selected row id, owned by the host.
    */
   selectedId?: string | null;
+  /** 受控多选；父子节点独立。Controlled independent multiple selection. */
+  selectedIds?: readonly string[];
+  /**
+   * 行尾插槽的位置，默认 `viewport-end` 吸附树的可视区域右侧；
+   * `row-end` 位于完整行末尾并随内容横向滚动。
+   * Positions the trailing slot. Defaults to `viewport-end`, pinned to the
+   * tree's visible right edge; `row-end` scrolls with the full row content.
+   */
+  rowTrailingPosition?: 'row-end' | 'viewport-end';
   /**
    * 显示内置搜索入口；默认显示，未提供 operations.search 时禁用。
    * Shows the built-in search trigger. Visible by default; disabled without operations.search.
@@ -603,14 +613,18 @@ export interface FileTreeProps extends Omit<
    * the row element, for one-off highlights, analytics or custom `data-*`.
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
+  /** 展开箭头与文件图标之间的内容。Content between the toggle and icon. */
+  renderRowLeading?: (row: FileTreeEntryRow) => ReactNode;
   /**
-   * 渲染行尾的看板指示器。返回 `null` 时该行不显示指示器。内容与交互都由
-   * 宿主决定，包括点击行为与折叠时的数量角标。
-   * Renders the dashboard indicator at the end of a row. Returning `null` shows
-   * no indicator. Both the content and its interaction belong to the host,
-   * including the click behaviour and any collapsed-count badge.
+   * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
+   * 内容与交互都由宿主决定，包括点击行为，位置由 `rowTrailingPosition` 控制。
+   *
+   * Renders a trailing marker at the end of a row, such as a board entry, a status
+   * badge or a count. Returning `null` shows no marker. Both the content and its
+   * interaction belong to the host, including the click behaviour.
+   * `rowTrailingPosition` controls its position.
    */
-  renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
+  renderRowTrailing?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染文件行的行首图标，例如按扩展名区分的类型图标。返回 `null` 或省略时用
    * 内置的通用文件图标；目录行始终用内置的文件夹图标。

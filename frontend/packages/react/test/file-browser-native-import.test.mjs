@@ -1,3 +1,4 @@
+import { notificationError, toastContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -40,7 +41,7 @@ test('import uploads multipart, retains the selected File after failure and reup
   const view = await mount(tree(fetch, target));
   try {
     await openAction('Import .ovpack');
-    const file = new File(['archive'], 'demo.ovpack');
+    const file = new File(['PK\x03\x04archive'], 'demo.ovpack');
     const input = workflow().querySelector('input[type="file"]');
     Object.defineProperty(input, 'files', {
       configurable: true,
@@ -50,7 +51,8 @@ test('import uploads multipart, retains the selected File after failure and reup
       input.dispatchEvent(new window.Event('change', { bubbles: true })),
     );
     await submit();
-    assert.ok(workflow().querySelector('[role="alert"]'));
+    assert.ok(notificationError());
+    assert.equal(Boolean(workflow().querySelector('[role="alert"]')), false);
     assert.equal(input.files[0], file);
     const count = fetch.calls.length;
     await view.render(tree(fetch, target, { locale: 'zh-CN' }));
@@ -85,7 +87,7 @@ test('import uploads multipart, retains the selected File after failure and reup
       workflow().querySelector('[role="status"]').textContent,
       /导入成功/,
     );
-    assert.equal(workflow().querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
   } finally {
     await view.unmount();
   }
@@ -95,7 +97,7 @@ for (const revoked of [{ readOnly: true }, { acl: true }]) {
   test(`import rechecks current write capability: ${JSON.stringify(revoked)}`, async () => {
     const fetch = fixture(target, true, (call) => {
       if (call.path.endsWith('/fs/stat'))
-        return ok({ isDir: true, permission: 'read' });
+        return ok({ isDir: true, access: 'read' });
       if (call.path.endsWith('/resources/temp_upload'))
         return ok({ temp_file_id: 'upload' });
       if (call.path.endsWith('/pack/import')) return ok({ uri: target });
@@ -103,7 +105,7 @@ for (const revoked of [{ readOnly: true }, { acl: true }]) {
     const view = await mount(tree(fetch, target));
     try {
       await openAction('Import .ovpack');
-      const file = new File(['archive'], 'demo.ovpack');
+      const file = new File(['PK\x03\x04archive'], 'demo.ovpack');
       const input = workflow().querySelector('input[type="file"]');
       Object.defineProperty(input, 'files', {
         configurable: true,
@@ -134,3 +136,40 @@ for (const revoked of [{ readOnly: true }, { acl: true }]) {
     }
   });
 }
+
+test('OVPack dialog rejects other extensions and invalid archive headers before upload', async () => {
+  const fetch = fixture(target, true);
+  const view = await mount(tree(fetch, target));
+  try {
+    await openAction('Import .ovpack');
+    const input = workflow().querySelector('input[type="file"]');
+    let previousToast;
+    for (const file of [
+      new File(['video'], 'sample.mp4'),
+      new File(['text'], 'sample.txt'),
+      new File(['not a ZIP'], 'renamed.ovpack'),
+    ]) {
+      Object.defineProperty(input, 'files', {
+        configurable: true,
+        value: [file],
+      });
+      await act(async () =>
+        input.dispatchEvent(new window.Event('change', { bubbles: true })),
+      );
+      const notice = toastContent();
+      assert.match(notice?.textContent, /valid .ovpack/);
+      assert.notEqual(notice, previousToast);
+      previousToast = notice;
+      assert.equal(button('Import', workflow()).disabled, true);
+      await submit();
+    }
+    await view.render(tree(fetch, target, { locale: 'zh-CN' }));
+    assert.match(toastContent()?.textContent, /请选择有效的 \.ovpack 文件/);
+    const uploads = fetch.calls.filter(({ path }) =>
+      /(?:temp_upload|pack\/import)$/.test(path),
+    );
+    assert.equal(uploads.length, 0);
+  } finally {
+    await view.unmount();
+  }
+});

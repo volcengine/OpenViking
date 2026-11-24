@@ -81,7 +81,15 @@
   min-height: 0;
   height: 100%;
   color: var(--ov-viking-bot-text);
-  font-family: inherit;
+  font-family: var(
+    --ov-ui-font-family,
+    'PingFang SC',
+    'Noto Sans SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif
+  );
   font-size: 13px;
 }
 
@@ -92,9 +100,12 @@
 .ov-viking-bot,
 .ov-viking-bot__interaction {
   --color-text-1: var(--ov-viking-bot-text);
-  --color-text-2: var(--ov-viking-bot-text);
+  --color-text-2: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   --color-text-3: var(--ov-viking-bot-text-muted);
-  --color-text-4: var(--ov-viking-bot-text-muted);
+  --color-text-4: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default)
+  );
   --color-bg-1: var(--ov-viking-bot-bg);
   --color-bg-2: var(--ov-viking-bot-surface);
   --color-bg-3: var(--ov-viking-bot-surface);
@@ -160,6 +171,10 @@
   min-height: 0;
   overflow: auto;
 }
+/* 消息区渲染失败时，兜底占满消息区并垂直居中。 */
+.ov-viking-bot__body > .ov-error-boundary {
+  flex: 1;
+}
 
 .ov-viking-bot__list {
   display: flex;
@@ -168,6 +183,45 @@
   min-height: 0;
   gap: 12px;
   padding: 12px;
+}
+.ov-viking-bot__list--loading {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.ov-viking-bot__loading-diamond {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  grid-template: repeat(5, 1fr) / repeat(5, 1fr);
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__loading-diamond > span {
+  background: currentColor;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ov-viking-bot__loading-diamond > span {
+    opacity: 0.15;
+    animation: ov-viking-bot-diamond-pulse 800ms ease-out infinite;
+  }
+}
+
+@keyframes ov-viking-bot-diamond-pulse {
+  0% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.15;
+  }
 }
 
 .ov-viking-bot__message {
@@ -269,7 +323,13 @@
 
 .ov-viking-bot__tool-name {
   color: var(--ov-viking-bot-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(
+    --ov-ui-font-mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace
+  );
   font-weight: 500;
 }
 
@@ -336,6 +396,28 @@
   padding: 6px 8px;
   color: var(--ov-viking-bot-text-muted);
   font-size: 12px;
+}
+
+.ov-viking-bot__notice.ov-viking-bot__notice--error {
+  border: 1px solid
+    color-mix(in srgb, var(--ov-viking-bot-danger) 35%, var(--ov-viking-bot-bg));
+  background: color-mix(
+    in srgb,
+    var(--ov-viking-bot-danger) 8%,
+    var(--ov-viking-bot-bg)
+  );
+  padding: 10px 12px;
+  color: var(--ov-viking-bot-danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ov-viking-bot__notice--error svg [stroke] {
+  stroke: currentColor;
+}
+
+.ov-viking-bot__notice--error svg [fill]:not([fill='none']) {
+  fill: currentColor;
 }
 
 .ov-viking-bot__message--system {
@@ -425,16 +507,6 @@
 .ov-viking-bot .ark-agentic-sender-send-btn--submit-button:active,
 .ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:active {
   background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-custom-editing,
-.ov-viking-bot__interaction .ark-agentic-ask-human-custom-editing {
-  border-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-step-arrow:focus-visible,
-.ov-viking-bot__interaction .ark-agentic-ask-human-step-arrow:focus-visible {
-  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
 }
 
 .ov-viking-bot .ark-agentic-bubble__edit-btn--confirm,

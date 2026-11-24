@@ -22,10 +22,20 @@ class AccountConfigReader(Protocol):
     async def get_account(self, account_id: str, field: str) -> Any: ...
 
 
+class AclPrincipalDirectory(Protocol):
+    async def get_user_membership(self, account_id: str, user_id: str) -> Any: ...
+
+    async def get_groups(self, account_id: str) -> list[Any]: ...
+
+
 class AclLevel(str, Enum):
     READ = "read"
     WRITE = "write"
     MANAGE = "manage"
+
+    def allows(self, action: AclAction) -> bool:
+        required = _LEVEL_MASK[AclLevel(action.value)]
+        return _LEVEL_MASK[self] & required == required
 
 
 class AclAction(str, Enum):
@@ -103,12 +113,7 @@ class DirectAcl:
         return DirectAcl.from_entries((*self.entries, *other.entries))
 
     def principals_for(self, action: AclAction) -> frozenset[str]:
-        required_mask = _LEVEL_MASK[AclLevel(action.value)]
-        return frozenset(
-            entry.principal
-            for entry in self.entries
-            if _LEVEL_MASK[entry.level] & required_mask == required_mask
-        )
+        return frozenset(entry.principal for entry in self.entries if entry.level.allows(action))
 
     def context_fields(self, prefix: str) -> dict[str, Any]:
         grants = [_encode_grant(entry) for entry in self.entries]
@@ -299,9 +304,19 @@ def has_implicit_manage(ctx: RequestContext, uri: str) -> bool:
     return is_acl_uri(uri) and ctx.role == Role.ADMIN
 
 
+def acl_permission(acl: EffectiveAcl, ctx: RequestContext) -> AclLevel | None:
+    """Resolve the caller's highest grant across its user and group principals."""
+    principals = acl_principals(ctx)
+    return max(
+        (entry.level for entry in acl.permissions.entries if entry.principal in principals),
+        key=_LEVEL_MASK.__getitem__,
+        default=None,
+    )
+
+
 def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> bool:
-    principals = acl.permissions.principals_for(action)
-    return not principals.isdisjoint(acl_principals(ctx))
+    permission = acl_permission(acl, ctx)
+    return permission is not None and permission.allows(action)
 
 
 class AclManager:
@@ -314,6 +329,34 @@ class AclManager:
     ) -> None:
         self._context_store = context_store
         self._runtime_config = runtime_config
+        self._principal_directory: AclPrincipalDirectory | None = None
+
+    def set_principal_directory(self, directory: AclPrincipalDirectory) -> None:
+        """Bind the registered identities used by API key authentication."""
+        self._principal_directory = directory
+
+    async def validate_principals(self, principals: Iterable[str], ctx: RequestContext) -> None:
+        """Reject grants that cannot apply within the resource's account."""
+        if self._principal_directory is None:
+            return
+        for principal in sorted(set(principals)):
+            kind, _, identifier = normalize_acl_principal(principal).partition(":")
+            if kind == "user":
+                if identifier == "*":
+                    continue
+                exists = await self._principal_directory.get_user_membership(
+                    ctx.account_id, identifier
+                )
+            else:
+                exists = any(
+                    group["group_id"] == identifier
+                    for group in await self._principal_directory.get_groups(ctx.account_id)
+                )
+            if not exists:
+                raise InvalidArgumentError(
+                    "ACL principal must exist in the resource's account; "
+                    "cross-account ACL sharing is not supported"
+                )
 
     def set_runtime_config_manager(self, runtime_config: AccountConfigReader) -> None:
         """Bind the authoritative account configuration reader."""
@@ -596,6 +639,8 @@ class AclManager:
         if entries is None and acl_mode is None:
             raise InvalidArgumentError("entries or acl_mode must be provided")
         proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None
+        if proposed_direct is not None:
+            await self.validate_principals((e.principal for e in proposed_direct.entries), ctx)
         old_records = await self._subtree_records(uri, ctx)
         try:
             effective = await self._apply_subtree(

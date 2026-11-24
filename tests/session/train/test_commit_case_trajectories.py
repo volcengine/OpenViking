@@ -440,7 +440,7 @@ async def test_commit_preserves_evaluator_training_semantics(
     calls = runtime.trainer.calls
     assert [analysis.evaluation.score for analysis, _ in calls] == ([1.0] if same else [1.0, 0.0])
     assert [gradients[0].confidence for _, gradients in calls] == pytest.approx(
-        [0.9] if same else [0.9, 0.7]
+        [0.9] if same else [0.9, 0.3 if separate_extraction else 0.7]
     )
     expected_training = (
         [{"book", "cancel", "shared", "other"}]

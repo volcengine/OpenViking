@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -85,7 +86,10 @@ test('action factory tracks selected directory summary and full render override 
     assert.equal(context.path, 'viking://resources/.overview.md');
     assert.ok(button(context.path));
     await view.render(make({ slots: { actions: null } }));
-    assert.equal(document.querySelector('.ov-file-preview__toolbar'), null);
+    assert.equal(
+      Boolean(document.querySelector('.ov-file-preview__toolbar')),
+      false,
+    );
   } finally {
     await view.unmount();
   }
@@ -114,23 +118,20 @@ test('async non-void results are ignored; failures show error, unlock and allow 
     await click(button('Run'));
     assert.equal(calls, 1);
     await act(async () => reject(new Error('Try again')));
-    assert.match(
-      document.querySelector('[role="alert"]').textContent,
-      /Try again/,
-    );
+    assert.match(notificationError().textContent, /Try again/);
     assert.equal(button('Run').disabled, false);
     assert.ok(button('Run').querySelector('[data-icon="Run"]'));
     await click(button('Run'));
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
     await act(async () => resolve({ ok: true }));
     assert.ok(button('Run').querySelector('[data-icon="Run"]'));
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
     await view.render(tree([action('Sync', { onClick: () => 42 })]));
     await click(button('Sync'));
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
     await view.render(tree([action('False', { onClick: () => false })]));
     await click(button('False'));
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
     await settle();
   } finally {
     resolve?.();
@@ -156,10 +157,7 @@ test('changing locale preserves pending execution and translates a rejected resu
     assert.equal(button('Run').disabled, true);
     assert.equal(calls, 1);
     await act(async () => reject(undefined));
-    assert.match(
-      document.querySelector('[role="alert"]').textContent,
-      /操作失败/,
-    );
+    assert.match(notificationError().textContent, /操作失败/);
     await view.render(
       tree(
         [run],
@@ -168,8 +166,8 @@ test('changing locale preserves pending execution and translates a rejected resu
       ),
     );
     assert.equal(
-      document.querySelector('[role="alert"]').textContent,
-      'Host failure',
+      notificationError().querySelector('.ov-notification__title').textContent,
+      'Run · Host failure',
     );
     assert.equal(button('Run').disabled, false);
   } finally {

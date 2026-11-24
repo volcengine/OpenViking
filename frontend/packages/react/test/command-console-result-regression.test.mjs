@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { JSDOM } from 'jsdom';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const render = (content, extra = {}) => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       value: '',
       records: [{ id: 'one', command: 'custom', status: 'success', content }],
@@ -65,11 +65,13 @@ test('structured resource targets reject executable schemes and retain safe nati
 test('JSON indentation preserves exact numeric tokens, negative zero, exponents, escapes and duplicate keys', () => {
   const text = String.raw`{"big":9007199254740993,"negative":-0,"huge":1e400,"precise":0.10000000000000001,"same":1,"same":2,"nested":[{},[],"a\"b"]}`;
   const document = render({ variant: 'text', text });
-  const output = document.querySelector(
-    '.ov-command-console__code-content',
-  ).textContent;
-  assert.equal(output.replace(/\s+/g, ''), text);
-  assert.match(output, /\n {2}"big":/);
+  const output = document.querySelector('.ov-command-console__code-content');
+  assert.equal(output.getAttribute('tabindex'), '0');
+  assert.equal(output.getAttribute('role'), 'region');
+  assert.equal(output.getAttribute('aria-label'), 'Command output');
+  const outputText = output.textContent;
+  assert.equal(outputText.replace(/\s+/g, ''), text);
+  assert.match(outputText, /\n {2}"big":/);
   assert.equal(
     render({ variant: 'text', text: '{invalid}' }).querySelector(
       '.ov-command-console__plain',

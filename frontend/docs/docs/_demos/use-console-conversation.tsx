@@ -14,7 +14,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   const [attachments, setAttachments] = useState<
     readonly VikingBotAttachment[]
   >([]);
-  const [sessions, setSessions] = useState<readonly VikingBotSession[]>([
+  const [sessions] = useState<readonly VikingBotSession[]>([
     {
       id: 'session_20261109030400_6c4ebf',
       title: zh ? '整理项目资料' : 'Organize project resources',
@@ -28,7 +28,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   ]);
   const [currentId, setCurrentId] = useState<string>();
   const [expanded, setExpanded] = useState(true);
-  const reset = (id: string) => {
+  const reset = (id?: string) => {
     setCurrentId(id);
     setDraft('');
     setAttachments([]);
@@ -36,11 +36,11 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   };
   const prompts: readonly [string, string] = zh
     ? [
-        '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
+        '将选中目录中的文件整理成 Wiki。',
         '基于选中的目录生成日报，并设置定时更新',
       ]
     : [
-        'Organize files in the selected directory into a Wiki, preserving sources and relationships.',
+        'Organize the files in the selected directory into a Wiki.',
         'Create a daily report from the selected directory and schedule updates.',
       ];
   return {
@@ -107,33 +107,33 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
     quickInputs: [
       {
         id: 'wiki',
-        label: zh ? '创建 Wiki' : 'Create Wiki',
+        label: 'Wiki',
         prompt: prompts[0],
-        icon: <VikingBotIcon name="book" viewBox="-0.833333 -2.357143 16 16" />,
+        icon: (
+          <VikingBotIcon
+            name="book"
+            width={14}
+            height={14}
+            viewBox="-0.833333 -2.357143 16 16"
+            strokeWidth={8 / 7}
+          />
+        ),
       },
       {
         id: 'report',
         label: zh ? '定时日报' : 'Scheduled report',
         prompt: prompts[1],
-        icon: <VikingBotIcon name="report" />,
+        icon: <VikingBotIcon name="report" width={14} height={14} />,
       },
     ],
     sessions: {
       items: sessions,
       currentId,
       currentUri: currentId ? `viking://session/${currentId}` : undefined,
-      onNew: () => {
-        const id = `docs-${Date.now()}`;
-        setSessions((items) => [
-          {
-            id,
-            title: zh ? '新会话' : 'New session',
-            updatedAt: new Date().toISOString(),
-          },
-          ...items,
-        ]);
-        reset(id);
-      },
+      // 与内置对话一致：新建只清空当前会话，真正的会话在首次发送时才创建。
+      // Like the built-in conversation, starting anew only clears the current
+      // session; a real session is created on the first send.
+      onNew: () => reset(),
       onSelect: reset,
     },
     references: {

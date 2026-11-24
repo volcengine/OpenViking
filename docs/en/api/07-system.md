@@ -344,6 +344,8 @@ Wait until the processing queues are drained. This check is not scoped to the ca
 
 No parameters are required. The optional JSON body accepts legacy `timeout`, which is deprecated and ignored. Empty-body calls continue to work. Configure HTTP timeouts on the client.
 
+Optional `scope`: `"account"` waits for the authenticated account's unfinished non-`Inline` Work; omitted or `"runtime"` keeps queue-drain behavior.
+
 #### 3. Usage Examples
 
 **HTTP API**

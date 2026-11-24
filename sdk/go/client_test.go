@@ -890,7 +890,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" || body["use_snapshot"] != true || body["resolve_conflicts"] != true {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -898,11 +898,13 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
-		ProcessingMode: "vectors_only",
-		Tags:           []string{},
-		TagMode:        "replace",
-		Wait:           true,
-		Extra:          map[string]any{"future_flag": 0},
+		ProcessingMode:   "vectors_only",
+		Tags:             []string{},
+		TagMode:          "replace",
+		Wait:             true,
+		UseSnapshot:      true,
+		ResolveConflicts: true,
+		Extra:            map[string]any{"future_flag": 0},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +997,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			} else if body["wait"] != *wait {
 				t.Errorf("wait = %#v, want %v", body["wait"], *wait)
 			}
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != true {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != false || body["skip_conflicts"] != true {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -1004,11 +1006,12 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			}
 			operation, ok := operations[0].(map[string]any)
 			if !ok || !reflect.DeepEqual(operation, map[string]any{
-				"uri":      "viking://resources/project/a.txt",
-				"content":  "hello",
-				"mode":     "upsert",
-				"tags":     []any{"team=search"},
-				"tag_mode": "append",
+				"uri":             "viking://resources/project/a.txt",
+				"content":         "hello",
+				"mode":            "upsert",
+				"expected_sha256": strings.Repeat("a", 64),
+				"tags":            []any{"team=search"},
+				"tag_mode":        "append",
 				"acl": map[string]any{
 					"acl_mode": "restricted",
 					"entries":  []any{map[string]any{"principal": "group:engineering", "level": "write"}},
@@ -1030,16 +1033,17 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 
 	operations := []BatchWriteOperation{
 		{
-			URI:     "resources/project/a.txt",
-			Content: String("hello"),
-			Mode:    "upsert",
-			Tags:    []string{"team=search"},
-			TagMode: "append",
-			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
+			URI:            "resources/project/a.txt",
+			Content:        String("hello"),
+			Mode:           "upsert",
+			ExpectedSHA256: String(strings.Repeat("a", 64)),
+			Tags:           []string{"team=search"},
+			TagMode:        "append",
+			ACL:            &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
 	}
 	for _, wait = range []*bool{nil, Bool(false), Bool(true)} {
-		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}
+		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", SkipConflicts: true, Extra: map[string]any{"future_flag": 0}}
 		if _, err := client.BatchWrite(context.Background(), "resources/project", operations, opts); err != nil {
 			t.Fatal(err)
 		}
@@ -2118,16 +2122,11 @@ func TestCompileAndListTasksRequests(t *testing.T) {
 	}))
 	defer closeServer()
 
-	compiled, err := client.Compile(
-		context.Background(),
-		[]string{"viking://resources/source"},
-		"viking://resources/output",
-		"viking://agent/skills/wiki",
-		&CompileOptions{
-			Instruction: "Keep supporting evidence.",
-			Args:        map[string]any{"model_name": "endpoint-1"},
-		},
-	)
+	compiled, err := client.Compile(context.Background(), CompileRequest{Input: &CompileInput{
+		FromURIs: []string{"viking://resources/source"},
+		To:       "viking://resources/output", Skill: "viking://agent/skills/wiki",
+		Instruction: "Keep supporting evidence.", Args: map[string]any{"model_name": "endpoint-1"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2432,5 +2431,67 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 		if !ok || value != nil {
 			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
 		}
+	}
+}
+
+func TestPersistentCompileRequests(t *testing.T) {
+	compileName := "research-summary"
+	args := map[string]any{"owner_user_id": "alice", "model_name": "ignored"}
+	namedRequests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		switch r.URL.Path {
+		case "/api/v1/compile/create":
+			if body["skill"] != "viking://agent/skills/wiki" || body["compile_name"] != compileName {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"compile_name": compileName})
+		case "/api/v1/compile":
+			namedRequests++
+			expected := map[string]any{"compile_name": compileName}
+			if namedRequests == 2 {
+				expected["args"] = args
+			}
+			if !reflect.DeepEqual(body, expected) {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
+		default:
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+	input := CompileInput{FromURIs: []string{"viking://resources/source"}, To: "viking://resources/output", Skill: "viking://agent/skills/wiki"}
+	if _, err := client.CreateCompileTask(context.Background(), "", input); err == nil {
+		t.Fatal("expected required compile_name error")
+	}
+	saved, err := client.CreateCompileTask(context.Background(), compileName, input)
+	if err != nil || saved["compile_name"] != compileName {
+		t.Fatalf("saved = %#v, err = %v", saved, err)
+	}
+	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []CompileRequest{{}, {CompileName: compileName, Input: &input}, {Input: &input, Args: args}} {
+		if _, err := client.Compile(context.Background(), request); err == nil {
+			t.Fatal("expected invalid request error")
+		}
+	}
+}
+
+func TestMemoryCompileInputOmitsAbsentSources(t *testing.T) {
+	encoded, err := json.Marshal(CompileInput{To: "viking://~/memories", Skill: "memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["from"]; exists {
+		t.Fatalf("absent sources must not be null: %s", encoded)
 	}
 }

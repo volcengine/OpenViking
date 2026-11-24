@@ -62,7 +62,7 @@ A context profile controls memory recall and conversation capture. In the **Prof
 | Memory recall | Enabled | Add relevant memories to new messages |
 | Search scope | Memory | Use saved project conventions |
 | Conversation capture | Enabled | Save conversations to OpenViking for memory extraction |
-| Latest-response wait | 30 seconds | Save the final turn and submit the session after idle time |
+| Commit when idle for | 30 seconds | Commit the session 30 seconds after the last turn, so memory extraction starts soon |
 | Retained recent messages | 0 | Include this short conversation's messages in archiving and memory extraction |
 | Recall summary | Enabled | Show a summary of added memories in the response |
 | OpenViking tools | Disabled | Complete this workflow through automatic recall and capture |
@@ -71,11 +71,9 @@ In the profile editor, select **Recall memory**, enable **Show recall summary**,
 
 [![Studio memory recall settings: enable the recall summary and select Memories](/quickstart/gateway/recall-en.jpg)](/quickstart/gateway/recall-en.jpg)
 
-Next, select **Save conversations**, set **Save the latest reply after** to **30 seconds**, and set **Keep recent messages** to **0**. Then turn off tools in the **OpenViking tools** section and save the profile.
+Next, select **Save conversations**, set **Commit when idle for** to **30 seconds**, and set **Keep recent messages** to **0**. Then turn off tools in the **OpenViking tools** section and save the profile.
 
-[![Studio conversation capture settings: wait 30 seconds and keep zero recent messages](/quickstart/gateway/capture-en.jpg)](/quickstart/gateway/capture-en.jpg)
-
-Save the profile, issue a key using it, and start a new conversation below. Profile changes apply to conversations started afterward. For everyday use, adjust waiting and retention to your tasks; see [Context profiles](../gateway/08-context-profiles.md).
+Save the profile, issue a key using it, and start a new conversation below. Profile changes apply to conversations started afterward. For everyday use, adjust the commit settings and retention to your tasks; see [Context profiles](../gateway/08-context-profiles.md).
 
 ### Issue a key
 
@@ -115,7 +113,7 @@ Send two turns that introduce the Mist project conventions: check four risks, us
 python3 gateway-demo.py capture --language en --run v1
 ```
 
-The sample first sends the conventions, then sends “Thank you” with the complete first-turn history. The terminal should show two responses. History in the second request lets the gateway save the first turn; the final turn is saved and submitted after the configured idle wait.
+The sample first sends the conventions, then sends “Thank you” with the complete first-turn history. The terminal should show two responses. The gateway saves each turn as soon as its reply ends, and commits the session 30 seconds after the last turn.
 
 Confirm both requests succeeded in Studio's request log. Then find the `gateway-…` session containing the Mist project conventions in the **Sessions** page. Use the actual service-generated session ID for the CLI checks below.
 
@@ -123,7 +121,7 @@ Confirm both requests succeeded in Studio's request log. Then find the `gateway-
 
 ## Inspect the memory
 
-After messages stop, the gateway waits the configured 30 seconds before submitting the final turn. Background extraction takes additional time. Check every 10 seconds for up to 5 minutes initially. If processing continues, keep the session and task IDs and check again later. For failed or cancelled tasks, inspect the error or cancellation reason.
+After the last turn, the gateway waits the configured 30 seconds before committing the session. Background extraction takes additional time. Check every 10 seconds for up to 5 minutes initially. If processing continues, keep the session and task IDs and check again later. For failed or cancelled tasks, inspect the error or cancellation reason.
 
 List sessions, then replace `<gateway-session-id>` with the ID found in Studio to inspect its commit information:
 
@@ -186,7 +184,7 @@ Wording can vary. Check both whether the memory was recalled and whether the ans
 | --- | --- |
 | Requests fail or the model is unavailable | Check the gateway address, the key's upstream binding, model name, and Chat Completions protocol; inspect the request log |
 | No session appears in Studio | Check conversation capture, confirm that the current user matches the gateway key's user, and inspect the request's capture status |
-| A session exists but no memory is generated | Check idle waiting, retained recent messages, and the `session_commit` task status |
+| A session exists but no memory is generated | Check **Commit when idle for**, retained recent messages, and the `session_commit` task status |
 | Memory exists but is not recalled | Check the key's user, context profile, and search scope; after changing the profile, retry in a new conversation |
 | Recall is recorded but the answer omits conventions | Compare memory text with the response and ask the model to revise using the saved conventions |
 

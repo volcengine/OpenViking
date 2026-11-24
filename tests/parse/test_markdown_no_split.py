@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for parsed documents whose Markdown body must remain in one file."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image
 
+from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME, _rewrite_content
 from openviking.parse.mode import ParseMode, normalize_parse_mode
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
 from openviking_cli.exceptions import InvalidArgumentError
@@ -98,19 +102,46 @@ async def test_long_markdown_no_split_plans_one_complete_file(
 
 
 @pytest.mark.asyncio
-async def test_long_markdown_default_mode_still_splits() -> None:
-    content = _long_markdown()
-    parser = MarkdownParser(config=ParserConfig(max_section_size=32, max_section_chars=128))
-
-    layout = await parser._compute_layout(
-        content,
-        "viking://temp/test",
-        source_path="/tmp/社交网络中英文剧本.pdf",
-        resource_name="社交网络中英文剧本",
+@pytest.mark.parametrize("same_basename", [False, True])
+@pytest.mark.parametrize("split_content", [False, True])
+async def test_long_markdown_default_mode_still_splits(tmp_path, same_basename, split_content):
+    """Splitting preserves each source image even when sibling sections share an output folder."""
+    references = []
+    sections = []
+    for label, color in [("Left", "red"), ("Right", "blue")]:
+        name = "chart.png" if same_basename else f"{label}.png"
+        reference = f"{label}/{name}"
+        image = tmp_path / reference
+        image.parent.mkdir()
+        Image.new("RGB", (64, 64), color).save(image)
+        references.append(reference)
+        sections.append(f"# {label}\n\n" + f"{label} text. " * 65 + f"\n\n![chart]({reference})")
+    source = tmp_path / "guide.md"
+    source.write_text("\n\n".join(sections), encoding="utf-8")
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+    result = await MarkdownParser(config=ParserConfig(max_section_chars=1000)).parse(
+        source, parse_output_store=store, split_content=split_content
     )
-
-    writes = [op for op in layout.ops if op.kind == "write"]
-    assert len(writes) > 1
+    assert result.artifact_ref is not None
+    root = Path(result.artifact_ref.root) / result.artifact_ref.resource_rel
+    documents = list(root.glob("*.md"))
+    assert len(documents) == (2 if split_content else 1)
+    mapping = json.loads((root / IMAGE_MAPPINGS_FILENAME).read_text(encoding="utf-8"))
+    filenames = {name for values in mapping.values() for name in values.values()}
+    assert len(filenames) == len(list(root.glob("*.png"))) == 2
+    manifest = await read_artifact_manifest(store, result.artifact_ref)
+    seen = set()
+    for document in documents:
+        values = mapping[document.name]
+        for reference, name in values.items():
+            assert (root / name).read_bytes() == (tmp_path / reference).read_bytes()
+            assert f"guide/{name}" in manifest
+            seen.add(reference)
+        _, count = _rewrite_content(
+            document.read_text(encoding="utf-8"), "viking://resources/guide", filenames, values
+        )
+        assert count == len(values)
+    assert seen == set(references)
 
 
 @pytest.mark.asyncio

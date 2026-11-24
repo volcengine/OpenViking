@@ -13,6 +13,7 @@ export function ComposerFooter({
   labels,
   disabled,
   filesDisabled,
+  attachmentLimit,
   accept,
   onFiles,
   actions,
@@ -24,6 +25,7 @@ export function ComposerFooter({
   references?: VikingBotReferences;
   disabled?: boolean;
   filesDisabled?: boolean;
+  attachmentLimit?: number;
   accept?: string;
   onFiles?: (files: readonly File[]) => void;
   actions?: ReactNode;
@@ -35,6 +37,11 @@ export function ComposerFooter({
         {onFiles ? (
           <ComposerFileButton
             label={labels.attach}
+            tip={
+              attachmentLimit === undefined
+                ? undefined
+                : labels.attachmentLimit(attachmentLimit)
+            }
             accept={accept}
             disabled={filesDisabled}
             onFiles={onFiles}

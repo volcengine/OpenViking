@@ -1,113 +1,88 @@
-import { useCallback, useMemo, useState } from 'react';
+import { Select, SelectOption } from '../../shared/primitives/select/index.js';
+import type { ReactNode } from 'react';
+import { useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { readFileContent } from './fs-read-content.js';
-import { readHistoricalText, readPreviewHistory } from './preview-native.js';
-import { diffLines } from './preview-diff.js';
+import { PreviewQueryState } from './preview-query-state.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
-import { PreviewHistoryList } from './preview-history-list.js';
-import { PreviewHistoryRevision } from './preview-history-revision.js';
-import { usePreviewMutation } from './use-preview-mutation.js';
+import { readHistoryFiles } from './preview-history-files.js';
+import { PreviewHistoryFile } from './preview-history-file.js';
 import type { PreviewWorkflowProps } from './preview-workflow-types.js';
 
-export function PreviewHistory({
-  uri,
-  versioned,
-  showContent,
-  text,
-  locale,
-  requestOptions,
-  loadingText,
-  retryText,
-}: PreviewWorkflowProps & {
+export type PreviewHistoryProps = PreviewWorkflowProps & {
+  canWrite: boolean;
   versioned: boolean;
   showContent: boolean;
+  directory: boolean;
   loadingText: string;
   retryText: string;
-}) {
-  const query = useDashboardQuery(
+  directoryFileSelector?: ReactNode;
+  directoryHeader?: ReactNode;
+};
+export function PreviewHistory(props: PreviewHistoryProps) {
+  const files = useDashboardQuery(
     useCallback(
       (client: OvClient, options: OvRequestOptions) =>
-        readPreviewHistory(client, uri, versioned, options),
-      [uri, versioned],
+        readHistoryFiles(client, props.uri, options),
+      [props.uri],
     ),
-    requestOptions,
+    props.requestOptions,
+    props.directory,
   );
-  const [selectedId, setSelectedId] = useState<string>();
-  const [compare, setCompare] = useState(false);
-  const [view, setView] = useState<'preview' | 'source'>('preview');
-  const [copiedId, setCopiedId] = useState<string>();
-  const entries = query.data;
-  const selected = showContent
-    ? (entries?.find((entry) => entry.id === selectedId) ?? entries?.[0])
-    : undefined;
-  const content = useDashboardQuery(
-    useCallback(
-      (client: OvClient, options: OvRequestOptions) =>
-        readHistoricalText(client, selected!, options, versioned),
-      [selected, versioned],
-    ),
-    requestOptions,
-    Boolean(selected),
-  );
-  const current = useDashboardQuery(
-    useCallback(
-      (client: OvClient, options: OvRequestOptions) =>
-        readFileContent(client, uri, options, -1, versioned),
-      [uri, versioned],
-    ),
-    requestOptions,
-    Boolean(selected) && compare,
-  );
-  const copy = usePreviewMutation(uri, requestOptions);
-  const statusText = { ...text, loading: loadingText, retry: retryText };
-  const changes = useMemo(
-    () =>
-      compare && content.data !== undefined && current.data !== undefined
-        ? diffLines(content.data, current.data.content)
-        : undefined,
-    [compare, content.data, current.data],
-  );
-  const identical =
-    content.data !== undefined && content.data === current.data?.content;
+  const [selectedFile, setSelectedFile] = useState<string>();
+  const file = props.directory
+    ? (files.data?.find((uri) => uri === selectedFile) ?? files.data?.[0])
+    : props.uri;
+  const text = {
+    ...props.text,
+    loading: props.loadingText,
+    retry: props.retryText,
+  };
   return (
-    <div className="ov-file-history__layout">
-      <PreviewHistoryList
-        query={query}
-        showContent={showContent}
-        selectedId={selected?.id}
-        compare={compare}
-        text={statusText}
-        locale={locale}
-        onCompare={() => setCompare(!compare)}
-        onSelect={(id) => {
-          setSelectedId(id);
-          setCopiedId(undefined);
-          copy.reset();
-        }}
-      />
-      {showContent ? (
-        <PreviewHistoryRevision
-          content={content}
-          current={current}
-          selectedPath={selected?.path}
-          view={view}
-          compare={compare}
-          changes={changes}
-          identical={identical}
-          copy={copy}
-          copied={Boolean(copiedId && copiedId === selected?.id)}
-          text={statusText}
-          setView={setView}
-          onCopy={() => {
-            const body = content.data;
-            if (body !== undefined && selected)
-              void copy.run(
-                async () => navigator.clipboard.writeText(body),
-                () => setCopiedId(selected.id),
-              );
-          }}
+    <>
+      {props.directory && !file ? (
+        <div className="ov-file-history__body ov-file-history__single-pane">
+          <PreviewQueryState query={files} text={text} />
+          {files.data?.length === 0 ? (
+            <p className="ov-file-history__state">{text.historyEmpty}</p>
+          ) : null}
+        </div>
+      ) : null}
+      {file ? (
+        <PreviewHistoryFile
+          directoryHeader={
+            props.directory ? (
+              <p className="ov-file-history__directory-path" title={props.uri}>
+                {props.uri}
+              </p>
+            ) : undefined
+          }
+          directoryFileSelector={
+            props.directory ? (
+              <div className="ov-file-history__file-navigation">
+                <Select<string>
+                  name="history-file"
+                  aria-label={text.selectFile}
+                  value={file ? [file] : []}
+                  locale={props.locale}
+                  disabled={!files.data?.length}
+                  onChange={(values) => setSelectedFile(values[0])}
+                >
+                  {files.data?.map((uri) => (
+                    <SelectOption key={uri} value={uri}>
+                      {uri}
+                    </SelectOption>
+                  ))}
+                </Select>
+              </div>
+            ) : undefined
+          }
+          key={file}
+          {...props}
+          uri={file}
+          showContent={props.directory || props.showContent}
+          versioned={props.directory || props.versioned}
         />
       ) : null}
-    </div>
+    </>
   );
 }
