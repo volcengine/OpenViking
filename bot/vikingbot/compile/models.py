@@ -207,7 +207,7 @@ class CompileResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
-    # Skipped target-state conflicts, each containing uri, code and message; never delivered.
+    # Skipped target-state conflicts, each containing uri, code and message; never published.
     conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0

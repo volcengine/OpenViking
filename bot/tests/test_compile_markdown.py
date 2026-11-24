@@ -85,6 +85,7 @@ async def pipeline(tmp_path):
         list_resources=AsyncMock(return_value=[]),
         read_raw=AsyncMock(return_value="source fact"),
         download_bytes=AsyncMock(),
+        git_show_bytes=AsyncMock(),
         batch_write=AsyncMock(return_value={"created": ["viking://resources/wiki/topic.md"]}),
     )
     pipeline = Pipeline(
@@ -441,7 +442,7 @@ async def test_failed_routes_keep_completed_drafts_through_finalization(
         f"# Fact {i}" in "\n".join(op["content"] for op in bundle.operations) for i in range(3)
     )
     await pipeline.write_coverage([op["uri"] for op in bundle.operations])
-    assert (await pipeline.files.get("coverage"))["counts"] == {"delivered": 3}
+    assert (await pipeline.files.get("coverage"))["counts"] == {"published": 3}
 
 
 async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):
@@ -573,7 +574,7 @@ async def test_complex_recovery_requires_read_evidence_for_unchanged_drafts(
     page = "# Topic\n\n[Source](viking://resources/source/one.md)\n"
     pipeline.old.update({"topic.md": page, "independent.md": page})
     pipeline.client.download_bytes.return_value = page.encode()
-    pipeline.client.download_snapshot_bytes = AsyncMock(return_value=b"source fact")
+    pipeline.client.git_show_bytes = AsyncMock(return_value=b"source fact")
 
     async def worker(system, data, model, *, stage, runtime):
         assigned = data["inputs"][0]
@@ -872,7 +873,7 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
     )
     pipeline.client.download_bytes = AsyncMock(side_effect=lambda uri: uri.encode())
     pipeline.client.read_content = AsyncMock(return_value="A window, not the whole file")
-    pipeline.client.download_snapshot_bytes = AsyncMock(
+    pipeline.client.git_show_bytes = AsyncMock(
         side_effect=lambda uri, _: (
             b"Different bytes" if uri == beta and case == "stale" else uri.encode()
         )

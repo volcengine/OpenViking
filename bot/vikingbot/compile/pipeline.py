@@ -248,7 +248,7 @@ class Pipeline:
         """Track assignment provenance and acknowledged output URIs without claiming semantic coverage."""
         manifest = await self.files.get("inputs") or {}
         final = await self.files.get("finalize") or {}
-        delivered = set(published)
+        published = set(published)
         inputs = {}
         for source_id, metadata in self.evidence.items():
             item = inputs.setdefault(metadata["uri"], {"ranges": {}, "outputs": []})
@@ -259,7 +259,7 @@ class Pipeline:
         }
         for path, refs in (references | rejected).items():
             uri = safe_join_viking_uri(self.target, path)
-            entry = {"uri": uri, "delivered": path not in rejected and uri in delivered}
+            entry = {"uri": uri, "published": path not in rejected and uri in published}
             if path in rejected:
                 entry["rejected"] = True
             for source_uri in {self.evidence[ref]["uri"] for ref in refs}:
@@ -272,9 +272,9 @@ class Pipeline:
             if (
                 state == "prepared"
                 and item["outputs"]
-                and all(o["delivered"] for o in item["outputs"])
+                and all(o["published"] for o in item["outputs"])
             ):
-                state = "delivered"
+                state = "published"
             manifest[uri] = item["status"] = state
         await self.files.put("inputs", manifest)
         await self.files.put(

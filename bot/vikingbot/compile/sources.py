@@ -94,7 +94,7 @@ async def verify_recovery_sources(
         return None
     for uri, digest in {**source_hashes, **(target_hashes or {})}.items():
         try:
-            frozen = await client.download_snapshot_bytes(uri, head)
+            frozen = await client.git_show_bytes(uri, head)
         except Exception as error:
             logger.warning("Could not verify Compile recovery source ({})", type(error).__name__)
             return None

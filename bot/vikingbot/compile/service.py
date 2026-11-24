@@ -1222,7 +1222,7 @@ class BotCompileService:
                 and not partial
                 and not pipeline.warnings
                 and not rendered.operations
-                and counts.get("delivered") == len(ordered)
+                and counts.get("published") == len(ordered)
                 and pipeline.evidence.keys() <= pipeline.recovery_evidence
             ):
                 recovery_proof = await verify_recovery_sources(
