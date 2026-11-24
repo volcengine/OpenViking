@@ -18,6 +18,7 @@ def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
         service_name="openviking",
+        runtime_mode="dedicated",
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),

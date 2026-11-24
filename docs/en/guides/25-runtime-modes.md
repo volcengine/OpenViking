@@ -1,8 +1,10 @@
 # Dedicated and Serverless Runtime Modes
 
 `ov.conf` accepts `runtime_mode: dedicated` (default) or `serverless`.
-The mode is startup-only: Account and Cluster configuration APIs cannot change
-it. Restart after editing the file.
+Choose the mode when deploying a new instance. Changing modes in place on an
+existing instance is unsupported: restarting with a different mode does not
+migrate existing Accounts or their vector data. Account and Cluster configuration
+APIs cannot change the mode.
 
 `server.roles` independently selects API, Queue Worker, and Scheduler duties.
 Nodes should use the same runtime mode. Non-API nodes retain system and metrics

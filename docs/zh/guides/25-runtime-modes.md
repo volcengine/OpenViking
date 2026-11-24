@@ -1,7 +1,8 @@
 # Dedicated 与 Serverless 运行模式
 
 `ov.conf` 顶层的 `runtime_mode` 可选 `dedicated`（默认）或 `serverless`。
-模式只在启动配置中修改，Account / Cluster 动态配置接口不能修改它；修改后需重启进程。
+请在部署新实例时选择运行模式。已有实例不支持原地切换模式：修改配置并重启不会迁移存量 Account
+或其向量数据。Account / Cluster 动态配置接口不能修改运行模式。
 
 `server.roles` 独立选择 API、Queue Worker 和 Scheduler，各节点应使用相同的运行模式。
 不含 `api` 的节点保留系统接口和监控端点，包括 `/health`、`/ready`；
