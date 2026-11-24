@@ -13,7 +13,7 @@ import { MAX_FILE_BYTES } from '../src/actions/content.mjs';
 import { Harness } from '../src/harness.mjs';
 import { normalizeEvent as normalizeConnectorEvent, deterministicFilter } from '../src/event.mjs';
 import { normalizeLarkMessage, normalizeLarkEvent } from '../src/connectors/lark-events.mjs';
-import { resolveCardAction, settledChoiceCard } from '../src/card-messages.mjs';
+import { editCard, resolveCardAction, settledChoiceCard } from '../src/card-messages.mjs';
 import { fakeConnectors, larkConnectors, larkSuccess as success } from './action-fixture.mjs';
 import { chatEvent } from './event-fixture.mjs';
 import { fileLink } from './symlink-fixture.mjs';
@@ -294,4 +294,45 @@ it('validates card structure, size, mentions and choice keys without invoking th
     { choices: { ...question, timeout_seconds: 1 } },
   ]) await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, ...body }));
   assert.equal(f.calls.length, 0);
+});
+
+// What the Lark connector throws when Lark refuses the edit of a card just clicked.
+const LOCKED = new Error('lark-cli update answered card failed: Failed to create card content, ext=ErrCode: 11310; ErrMsg: card action is lock; ');
+const UNIVERSAL = new Error('lark-cli update answered card failed: { "code": 230099, "message": "Failed to create card content, ext=ErrCode: 200800; ErrMsg: create universal card fail; " }');
+
+function cardEdits(outcomes) {
+  const calls = [];
+  return { calls, connectors: { async updateCard(messageId, card) {
+    calls.push({ messageId, card });
+    const outcome = outcomes[calls.length - 1];
+    if (outcome) throw outcome;
+    return { ok: true };
+  } } };
+}
+
+it('edits a card again while a click on it keeps it busy, up to four tries', async () => {
+  const card = { elements: [] };
+  const unlocked = cardEdits([LOCKED, UNIVERSAL]);
+  assert.deepEqual(await editCard(unlocked.connectors, 'om_locked1234567', card, { waitMs: 0 }), { tries: 3, superseded: false });
+  assert.equal(unlocked.calls.length, 3);
+
+  const stuck = cardEdits([LOCKED, LOCKED, LOCKED, LOCKED, LOCKED]);
+  await assert.rejects(editCard(stuck.connectors, 'om_locked1234567', card, { waitMs: 0 }), /ErrCode: 11310/);
+  assert.equal(stuck.calls.length, 4);
+
+  const old = cardEdits([new Error('message too old to edit')]);
+  await assert.rejects(editCard(old.connectors, 'om_locked1234567', card, { waitMs: 0 }), /too old/);
+  assert.equal(old.calls.length, 1, 'any other refusal is final');
+});
+
+it('stops waiting out the lock when a newer edit of the card is coming', async () => {
+  let newer = false;
+  const edits = cardEdits([LOCKED, LOCKED]);
+  const pending = editCard(edits.connectors, 'om_locked1234567', {}, { waitMs: 5, superseded: () => newer });
+  setTimeout(() => { newer = true; }, 1);
+  assert.deepEqual(await pending, { tries: 1, superseded: true });
+  assert.equal(edits.calls.length, 1);
+  const now = cardEdits([LOCKED]);
+  assert.deepEqual(await editCard(now.connectors, 'om_locked1234567', {}, { superseded: () => true }), { tries: 1, superseded: true },
+    'a newer edit already waiting: no wait at all');
 });

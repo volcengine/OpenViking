@@ -11,7 +11,8 @@
 //
 // The overview is also a card (Card JSON 2.0, a table per group of tasks),
 // sent where the connector takes cards (Lark); elsewhere, and should the card
-// be refused, the text goes.
+// be refused, the text goes. Both cards carry a refresh button that redraws
+// the card in place (daemon.mjs, handleSlashCommand).
 
 import { formatBytes } from './task-dirs.mjs';
 
@@ -37,6 +38,12 @@ function since(ms, now) {
 function clock(ms) {
   const date = new Date(ms);
   return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+// When a card was drawn, to the second: a refresh shows it took.
+function drawnAt(ms) {
+  const date = new Date(ms);
+  return `更新于 ${[date.getHours(), date.getMinutes(), date.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':')}`;
 }
 
 function oneLine(text, chars) {
@@ -166,6 +173,27 @@ function overviewText(view, now) {
 // The callback value on a card control that runs a command (commands.mjs).
 export const CARD_COMMAND = 'superagent_command';
 
+// The refresh button: it runs /tasks with the argument it carries (none, or
+// the task its card shows), and the answer redraws the card it is on.
+function refreshButton(arg) {
+  return { tag: 'button', text: plain('刷新'), type: 'default', size: 'medium',
+    behaviors: [{ type: 'callback', value: { [CARD_COMMAND]: '/tasks', arg, refresh: true } }] };
+}
+
+// A choice that redraws the card it was made on rather than send a new one.
+export function refreshesCard(event) {
+  return event?.messageType === 'card_action' && event.data?.interaction?.value?.refresh === true
+    && /^om_[A-Za-z0-9_-]{8,}$/.test(event.parentId ?? '');
+}
+
+// Controls side by side, on a phone too: the first takes what the other leaves.
+function controls(fill, button) {
+  return { tag: 'column_set', flex_mode: 'none', horizontal_spacing: '8px', columns: [
+    { tag: 'column', width: 'weighted', weight: 1, vertical_align: 'center', elements: [fill] },
+    { tag: 'column', width: 'auto', vertical_align: 'center', elements: [button] },
+  ] };
+}
+
 // A task's status as a coloured tag.
 const TAG = {
   running: ['运行中', 'blue'], queued: ['排队', 'wathet'], waiting: ['等待回复', 'orange'], done: ['完成', 'green'],
@@ -235,14 +263,13 @@ function overviewCard(view, now) {
   // Choosing a task sends its card, as /tasks <id> would (commands.mjs,
   // commandCandidate): every task the card lists, the dormant ones too.
   const listed = [...parts.sections.flatMap(([, tasks]) => tasks.slice(0, LIVE_SHOWN)), ...parts.dormant.slice(0, LIVE_SHOWN)];
-  if (listed.length) {
-    elements.push({
-      tag: 'select_static', placeholder: plain('查看任务详情…'), width: 'fill',
-      options: listed.map((task) => ({ text: plain(`${task.id}「${oneLine(task.title, 30)}」`), value: task.id })),
-      behaviors: [{ type: 'callback', value: { [CARD_COMMAND]: '/tasks' } }],
-    });
-  }
-  elements.push({ tag: 'div', text: plain('/tasks <编号> 查看详情 · /tasks stop <编号> [原因] 停止任务', grey) });
+  const refresh = refreshButton('');
+  elements.push(listed.length ? controls({
+    tag: 'select_static', placeholder: plain('查看任务详情…'), width: 'fill',
+    options: listed.map((task) => ({ text: plain(`${task.id}「${oneLine(task.title, 30)}」`), value: task.id })),
+    behaviors: [{ type: 'callback', value: { [CARD_COMMAND]: '/tasks' } }],
+  }, refresh) : refresh);
+  elements.push({ tag: 'div', text: plain(`${drawnAt(now)} · /tasks <编号> 查看详情 · /tasks stop <编号> [原因] 停止任务`, grey) });
   return {
     schema: '2.0', config: { update_multi: true },
     header: { template: 'blue', title: plain('后台任务'), subtitle: plain(parts.slots) },
@@ -317,7 +344,8 @@ function detailCard(task, parts, now, { live }) {
         parts.handovers.slice(-5).map((handover) => ({ at: clock(handover.at), round: `第 ${handover.round} 轮`, move: `${handover.from} → ${handover.to}`,
           reason: `${handover.reason}${handover.pending ? '；新 worker 还没完成一次运行' : ''}` }))));
   }
-  elements.push({ tag: 'div', text: plain(`${live ? `/tasks stop ${task.id} [原因] 停止任务 · ` : ''}/tasks 查看全部任务`, { text_size: 'notation', text_color: 'grey' }) });
+  elements.push(controls(note(`${drawnAt(now)} · ${live ? `/tasks stop ${task.id} [原因] 停止任务 · ` : ''}/tasks 查看全部任务`),
+    refreshButton(task.id)));
   return {
     schema: '2.0', config: { update_multi: true },
     header: { template: HEADER[task.status] ?? 'blue', title: plain(`${task.id}「${oneLine(task.title, 80)}」`), subtitle: plain(state(task, now)) },

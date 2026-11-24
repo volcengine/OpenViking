@@ -3,7 +3,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
-import { registerCard } from '../card-messages.mjs';
+import { editCard, registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
 } from '../approvals.mjs';
@@ -1322,7 +1322,7 @@ export class ActionService {
     }
     this.logger.info('approval_settled', { ...trace, outcome: settled.state, edited: settled.edited ?? false });
     try {
-      await this.connectors.updateCard(cardId, settledApprovalCard(draft, settled));
+      await editCard(this.connectors, cardId, settledApprovalCard(draft, settled));
     } catch (error) {
       this.logger.warn('approval_card_update_failed', { error: safeError(error) });
     }
