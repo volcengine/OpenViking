@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-import openviking.storage.viking_fs as viking_fs_module
 from openviking.pyagfs import compile_grep_pattern
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
@@ -16,6 +17,7 @@ from openviking.storage.viking_fs import _grep as grep_module
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepConfig
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 class _DummyAgfs:
@@ -277,7 +279,8 @@ async def test_collect_grep_files_skips_acl_denied_subtrees(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_collect_grep_files_propagates_root_acl_denial(monkeypatch):
+@pytest.mark.parametrize("uri", ["viking://", "viking://resources"])
+async def test_collect_grep_files_propagates_root_acl_denial(monkeypatch, uri):
     viking_fs = VikingFS(agfs=_DummyAgfs())
     monkeypatch.setattr(viking_fs, "stat", AsyncMock(return_value={"isDir": True}))
     monkeypatch.setattr(
@@ -288,7 +291,7 @@ async def test_collect_grep_files_propagates_root_acl_denial(monkeypatch):
 
     with pytest.raises(PermissionDeniedError, match="access denied"):
         await viking_fs._collect_grep_files(
-            "viking://resources",
+            uri,
             excluded_prefix=None,
             level_limit=1,
         )
@@ -1172,7 +1175,7 @@ async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch)
         lambda uri, ctx=None: uri.replace("viking://", "/"),
     )
     monkeypatch.setattr(fs.agfs, "read", fake_agfs_read, raising=False)
-    monkeypatch.setattr(viking_fs_module, "_DEFAULT_GREP_FILE_CONCURRENCY", 2)
+    monkeypatch.setattr(grep_module, "_pkg", lambda: SimpleNamespace(_DEFAULT_GREP_FILE_CONCURRENCY=2))
 
     result = await fs.grep("viking://resources", pattern="match", node_limit=2)
 
@@ -1398,3 +1401,30 @@ async def test_grep_with_agfs_allows_acl_granted_content(monkeypatch):
 
     assert [m["uri"] for m in result["matches"]] == ["viking://resources/secret.md"]
     assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_grep_account_root_includes_readable_nested_resources(tmp_path, monkeypatch):
+    agfs = MockLocalAGFS(root_path=tmp_path)
+    files = {
+        "resources/a.md": "test shared file",
+        "resources/docs/nested.md": "test nested file",
+        "user/current/resources/private.md": "test own private file",
+        "user/other/resources/private.md": "test other private file",
+    }
+    for path, content in files.items():
+        agfs.write(f"/local/account/{path}", content)
+    fs = VikingFS(agfs=agfs)
+    monkeypatch.setattr(fs._async_agfs, "grep", AsyncMock(side_effect=NotImplementedError))
+    service = FSService(viking_fs=fs)
+    ctx = RequestContext(user=UserIdentifier("account", "current"), role=Role.USER)
+
+    resources = await service.grep("viking://resources", "test", ctx=ctx)
+    root = await service.grep("viking://", "test", ctx=ctx)
+
+    resources_uris = {match["uri"] for match in resources["matches"]}
+    assert resources_uris == {"viking://resources/a.md", "viking://resources/docs/nested.md"}
+    assert {match["uri"] for match in root["matches"]} == resources_uris | {
+        "viking://user/current/resources/private.md"
+    }
+    assert root["files_scanned"] == 3
