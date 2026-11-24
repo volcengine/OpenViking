@@ -1,19 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mount } from './helpers/console-dom.mjs';
-import { act, click, type } from './helpers/command-console-dom.mjs';
+import { act, click, key, type } from './helpers/command-console-dom.mjs';
 
 test('Console shows the Compile guide and extended parameters in the selected locale', async () => {
-  for (const [locale, example, help] of [
+  for (const [locale, example, help, modelHelp, runtimeHelp] of [
     [
       'en-US',
       'ov find "What is the value of OpenViking?"',
-      /Use ov compile create to save a configuration/,
+      /Create a configuration to run with compile/,
+      /server Runtime configuration/,
+      /built-in VikingBot Runtime uses the server's agent_loop provider and model[\s\S]*If the Runtime uses an Ark endpoint/,
     ],
     [
       'zh-CN',
       'ov find "OpenViking 有什么价值？"',
-      /使用 ov compile create 创建编译配置/,
+      /创建编译配置，供 compile 执行/,
+      /服务端 Runtime 配置决定/,
+      /内置 VikingBot Runtime 使用服务端 agent_loop 的 provider 和 model[\s\S]*Runtime 使用方舟接入点时/,
     ],
   ]) {
     const host = await mount(
@@ -30,9 +34,11 @@ test('Console shows the Compile guide and extended parameters in the selected lo
       );
       await click(find);
       assert.equal(host.input.value, example);
-      await type(host.input, '/compile');
-      const compile = host.container.querySelector('[role="option"]');
-      await act(() => compile.focus());
+      await type(host.input, '/compile create');
+      const create = [
+        ...host.container.querySelectorAll('[role="option"]'),
+      ].find((option) => option.textContent.includes('compile create'));
+      await act(() => create.focus());
       const hint = host.container.querySelector('.ov-command-console__hint');
       assert.match(
         hint.querySelector('.ov-command-console__hint-usage').textContent,
@@ -52,8 +58,47 @@ test('Console shows the Compile guide and extended parameters in the selected lo
           'update_schedule.minute',
         ],
       );
+      assert.match(hint.textContent, modelHelp);
+      assert.match(hint.textContent, runtimeHelp);
+      assert.doesNotMatch(hint.textContent, /doubao-2-1-lite/);
+      assert.match(
+        hint.textContent,
+        locale === 'zh-CN'
+          ? /有有效计划则为 true/
+          : /true if a valid schedule is present/,
+      );
+      assert.match(
+        hint.textContent,
+        locale === 'zh-CN'
+          ? /false 关闭定时自动执行，但保留已保存的 update_schedule/
+          : /Set to false to disable scheduled runs while keeping the saved update_schedule/,
+      );
+      assert.match(hint.textContent, /00:00.{1,4}03:59/);
       await host.execute('ov help');
-      assert.match(host.records.at(-1).textContent, help);
+      const rows = [
+        ...host.records
+          .at(-1)
+          .querySelectorAll('.ov-command-console__help-item'),
+      ];
+      assert.deepEqual(
+        rows
+          .slice(0, 4)
+          .map(
+            (row) =>
+              row.querySelector('.ov-command-console__help-name').textContent,
+          ),
+        ['ov add-resource', 'ov add-skill', 'ov compile create', 'ov compile'],
+      );
+      assert.match(rows[2].textContent, help);
+      await click(rows[0]);
+      assert.equal(host.input.value, 'ov add-resource ');
+      await type(host.input, '/help');
+      await key(host.input, 'Tab');
+      assert.equal(host.input.value, 'ov help ');
+      await type(host.input, '/compile');
+      await key(host.input, 'Tab');
+      assert.equal(host.input.value, 'ov compile ');
+      assert.equal(host.records.length, 1);
     } finally {
       await host.dispose();
     }

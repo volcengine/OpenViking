@@ -35,6 +35,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
@@ -124,7 +125,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let commitTraceId = "";
   if (ok + queued > 0) {
     const commitRes = enqueueOnly
-      ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
+      ? await enqueueCommitAfterWrites(ovSessionId)
       : await commitSession(fetchJSON, ovSessionId);
     committed = !enqueueOnly && commitRes.ok;
     commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);

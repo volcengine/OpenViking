@@ -1,5 +1,5 @@
 import { Button } from '../primitives/button/button.js';
-import { Empty } from '../primitives/empty/empty.js';
+import { Empty, type EmptyIllustration } from '../primitives/empty/empty.js';
 
 export interface DashboardStatus {
   loading?: boolean;
@@ -25,17 +25,23 @@ export function DashboardState({
   loading,
   failed,
   retry,
+  illustration = 'chart',
 }: {
   state?: DashboardStatus;
   empty: string;
   loading: string;
   failed: string;
   retry: string;
+  illustration?: EmptyIllustration;
 }) {
   if (!state.loading && !state.error) {
     return (
       <div className="ov-dashboard-state">
-        <Empty size="compact" illustration="chart" title={empty} />
+        <Empty
+          size={illustration === 'documents' ? 'default' : 'compact'}
+          illustration={illustration}
+          title={empty}
+        />
       </div>
     );
   }

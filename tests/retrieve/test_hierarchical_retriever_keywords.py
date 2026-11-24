@@ -56,7 +56,9 @@ async def test_keywords_quick_search_skips_embedding_and_uses_keyword_recall():
         search_type="keywords",
     )
 
-    assert [item.uri for item in result.matched_contexts] == ["viking://resources/oauth.md"]
+    assert [(item.uri, item.score) for item in result.matched_contexts] == [
+        ("viking://resources/oauth.md", 3.5)
+    ]
     assert storage.calls[0]["query"] == "OAuth token"
     assert storage.calls[0]["limit"] == 5
 
@@ -75,7 +77,9 @@ async def test_keywords_thinking_search_uses_global_keyword_recall_and_rerank():
         search_type="keywords",
     )
 
-    assert [item.uri for item in result.matched_contexts] == ["viking://resources/oauth.md"]
+    assert [(item.uri, item.score) for item in result.matched_contexts] == [
+        ("viking://resources/oauth.md", 0.9)
+    ]
     assert len(storage.calls) == 1
     assert storage.calls[0]["query"] == "OAuth token"
     assert storage.calls[0]["limit"] == 10

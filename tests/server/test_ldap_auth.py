@@ -1,6 +1,9 @@
+from unittest.mock import Mock
+
 import pytest
 
-from openviking.server.auth.plugins.ldap import LDAPAuthPlugin, _format_user_dn
+from openviking.server.auth.ldap_config import LDAPConfig
+from openviking.server.auth.plugins.ldap import LDAPAuthPlugin
 
 
 @pytest.mark.parametrize(
@@ -10,22 +13,18 @@ from openviking.server.auth.plugins.ldap import LDAPAuthPlugin, _format_user_dn
         "uid=%s,ou=users,dc=example,dc=com",
     ],
 )
-def test_format_user_dn_escapes_username(pattern: str) -> None:
-    dn = _format_user_dn(
-        pattern,
-        "victim,ou=attacker",
-    )
-
-    assert dn == r"uid=victim\,ou\=attacker,ou=users,dc=example,dc=com"
-
-
-def test_attrs_from_dn_round_trips_escaped_rdn_value() -> None:
+def test_direct_bind_preserves_escaped_identity_without_server_attributes(pattern: str) -> None:
     username = "victim,ou=attacker"
-
-    dn = _format_user_dn(
-        "uid=%s,ou=users,dc=example,dc=com",
-        username,
+    dn = r"uid=victim\,ou\=attacker,ou=users,dc=example,dc=com"
+    connection = Mock()
+    plugin = LDAPAuthPlugin()
+    plugin._config = LDAPConfig(
+        host="directory.test", base_dn="dc=example,dc=com", user_dn_pattern=pattern
     )
+    plugin._new_connection = Mock(return_value=connection)
+    plugin._search_user_attributes = Mock(return_value=(None, {}))
 
-    assert dn == r"uid=victim\,ou\=attacker,ou=users,dc=example,dc=com"
-    assert LDAPAuthPlugin._attrs_from_dn(dn) == {"uid": [username.encode()]}
+    attributes = plugin._authenticate_ldap(username, "test-password")
+
+    connection.simple_bind_s.assert_called_once_with(dn, "test-password")
+    assert attributes == {"uid": [username.encode()], "dn": [dn.encode()]}

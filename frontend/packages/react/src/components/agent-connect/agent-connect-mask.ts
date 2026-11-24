@@ -14,7 +14,7 @@ export function remarkMaskApiKey({ keyToken }: { keyToken: string }) {
           node.type === 'html') &&
         node.value
       ) {
-        node.value = node.value.split(keyToken).join('••••••••');
+        node.value = node.value.split(keyToken).join('********');
       }
       node.children?.forEach(mask);
     }

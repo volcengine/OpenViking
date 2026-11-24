@@ -407,7 +407,7 @@ async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
         ctx=ctx,
         category="skill",
         target_key="partial-restore-skill",
-        values={"api_key": "secret-xyz"},
+        values={"api_key": "secret-xyz", "environment": "cn"},
         updated_by=ctx.user.user_id,
     )
 
@@ -417,57 +417,29 @@ async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
     assert "{{ov_privacy:skill:partial-restore-skill:region}}" in restored
     assert "[Privacy Config Notice]" in restored
     assert "Missing config: region=<missing>" in restored
-
-
-@pytest.mark.asyncio
-async def test_skill_read_appends_notice_for_extra_configured_keys(service):
-    ctx = RequestContext(
-        user=UserIdentifier.the_default_user("privacy_extra_config"), role=Role.ROOT
-    )
-    await service.initialize_user_directories(ctx)
-
-    skill_uri = f"{canonical_user_root(ctx)}/skills/extra-config-skill"
-    await service.viking_fs.mkdir(skill_uri, exist_ok=True, ctx=ctx)
-    await service.viking_fs.write_file(
-        f"{skill_uri}/SKILL.md",
-        'api_key: "{{ov_privacy:skill:extra-config-skill:api_key}}"\n',
-        ctx=ctx,
-    )
-
-    await service.privacy_configs.upsert(
-        ctx=ctx,
-        category="skill",
-        target_key="extra-config-skill",
-        values={"api_key": "secret-xyz", "region": "cn"},
-        updated_by=ctx.user.user_id,
-    )
-
-    restored = await service.fs.read(f"{skill_uri}/SKILL.md", ctx=ctx)
-
-    assert 'api_key: "secret-xyz"' in restored
-    assert "[Privacy Config Notice]" in restored
-    assert "Configured but not referenced in content: region=cn" in restored
+    assert "Configured but not referenced in content: environment=cn" in restored
 
 
 @pytest.mark.asyncio
 async def test_privacy_config_service_uses_user_root(service):
-    ctx = RequestContext(
-        user=UserIdentifier("acme", "privacy_user_policy"),
-        role=Role.USER,
-    )
-    await service.initialize_user_directories(ctx)
-
+    contexts = [
+        RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER),
+        RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER),
+        RequestContext(user=UserIdentifier("other-account", "alice"), role=Role.USER),
+    ]
+    values = [{"api_key": f"synthetic-value-{index}"} for index in range(len(contexts))]
     privacy = service.privacy_configs
-    await privacy.upsert(
-        ctx=ctx,
-        category="skill",
-        target_key="policy-skill",
-        values={"api_key": "secret-1"},
-        updated_by=ctx.user.user_id,
-    )
+    for ctx, value in zip(contexts, values, strict=True):
+        await service.initialize_user_directories(ctx)
+        created = await privacy.upsert(
+            ctx, "skill", "same-skill", value, updated_by=ctx.user.user_id
+        )
+        assert created.version == 1
 
-    current = await privacy.get_current(ctx, "skill", "policy-skill")
-    assert current is not None
+    for ctx, value in zip(contexts, values, strict=True):
+        current = await privacy.get_current(ctx, "skill", "same-skill")
+        assert current is not None
+        assert current.values == value
 
 
 def test_placeholderization_only_replaces_structured_values():

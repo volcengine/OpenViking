@@ -105,6 +105,7 @@ async def record_skill_change(
     request_id: Optional[str],
     before_hash: Optional[str],
     after_hash: Optional[str],
+    lease_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Append one event while preserving the original creator and owner."""
     if operation not in {"create", "update", "delete"}:
@@ -131,7 +132,7 @@ async def record_skill_change(
             "request_id": request_id or str(uuid.uuid4()),
         }
     )
-    # History lives beside the package, outside its tree lease.
+    # History is outside the package lease but inside a caller's skills-root lease.
     storage = (
         viking_fs if hasattr(viking_fs, "write_file") else viking_fs._ensure_initialized()  # noqa: SLF001
     )
@@ -139,6 +140,7 @@ async def record_skill_change(
         _history_uri(root_uri),
         json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True),
         ctx=ctx,
+        **({"lease_ref": lease_ref} if lease_ref is not None else {}),
     )
     return record
 

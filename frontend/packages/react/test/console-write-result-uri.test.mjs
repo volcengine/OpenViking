@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { click, type } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
 
-test('write links the quoted destination and only the URI within quoted content', async () => {
+test('write keeps quoted URIs plain while editing and links complete URIs in the echo', async () => {
   const destination = 'viking://resources/output folder/out.md';
   const uri = 'viking://resources/a.md';
   const content = `${uri} -> /tmp/a.md`;
@@ -30,10 +30,22 @@ test('write links the quoted destination and only the URI within quoted content'
       for (const link of links) await click(link);
     }
     await type(host.input, command);
-    await checkLinks('.ov-command-console__input-mirror');
+    const mirror = host.container.querySelector(
+      '.ov-command-console__input-mirror',
+    );
+    assert.equal(mirror.textContent, command);
+    assert.equal(host.input.value, command);
+    assert.equal(mirror.querySelectorAll('a').length, 0);
+    assert.deepEqual(
+      [...mirror.querySelectorAll('span[aria-hidden=true]')]
+        .map((span) => span.textContent)
+        .filter((text) => text.startsWith('viking://')),
+      [destination, uri],
+    );
+    assert.deepEqual(opened, []);
     await host.execute(command);
     await checkLinks('.ov-command-console__bubble-text');
-    assert.deepEqual(opened, [destination, uri, destination, uri]);
+    assert.deepEqual(opened, [destination, uri]);
   } finally {
     await host.dispose();
   }

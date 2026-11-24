@@ -22,6 +22,15 @@ export const telemetry: Argument = {
   placeholder: 'true|json',
 };
 
+export function isRemoteResourceSource(path: unknown, addType: unknown) {
+  return (
+    typeof path === 'string' &&
+    (Boolean(addType) ||
+      path.startsWith('git@') ||
+      /^[a-z][a-z\d+.-]*:\/\//i.test(path))
+  );
+}
+
 export const RESOURCE_COMMAND_SPEC: CommandSpec = {
   name: 'add-resource',
   positional: [
@@ -118,12 +127,7 @@ export const RESOURCE_COMMAND_SPEC: CommandSpec = {
       );
     if ([body.to, body.parent, autoParent].filter(Boolean).length > 1)
       throw new ConsoleCommandError('invalidArgument', '--to / --parent / -p');
-    const remote =
-      typeof path === 'string' &&
-      (body.add_type ||
-        path.startsWith('git@') ||
-        /^[a-z][a-z\d+.-]*:\/\//i.test(path));
-    const source = remote
+    const source = isRemoteResourceSource(path, body.add_type)
       ? { path }
       : {
           temp_file_id:

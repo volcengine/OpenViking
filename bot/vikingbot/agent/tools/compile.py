@@ -61,7 +61,7 @@ class CompileImageReadTool(VikingMultiReadTool):
         await self.reader._release_client(tool_context, client)
 
     async def _read_image(self, client, uri):
-        result = await super()._read_image(client, uri)
+        result = await super()._read_image(client, uri, for_compile=True)
         if result["success"]:
             if uri in self.hashes and result["sha256"] != self.hashes[uri]:
                 return {
@@ -549,6 +549,7 @@ class SubmitWikiBundleTool(Tool):
         link_errors: list[str] = []
         warnings: list[str] = []
         valid_links: list[Any] = []
+        spans_by_page: dict[int, list[tuple[int, int]]] = {}
         for index, link in enumerate(bundle.links):
             prefix = f"links[{index}]"
             if link.f is None or link.t is None:
@@ -564,11 +565,16 @@ class SubmitWikiBundleTool(Tool):
                 warnings.append(f"{prefix} has no match_text and was dropped")
                 continue
             source_page = page_by_id[link.f]
+            if link.f not in spans_by_page:
+                spans_by_page[link.f] = LinkRenderer.protected_markdown_spans(
+                    source_page.body_markdown
+                )
             if not LinkRenderer.can_render_link(
                 source_page.body_markdown,
                 link.match_text,
                 page_uris[link.f],
                 page_uris[link.t],
+                protected_spans=spans_by_page[link.f],
             ):
                 warnings.append(
                     f"{prefix} anchor {link.match_text!r} was not found and the link was dropped"

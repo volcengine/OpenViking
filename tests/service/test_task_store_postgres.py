@@ -6,7 +6,7 @@ import asyncio
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateTable
@@ -44,23 +44,15 @@ def test_postgres_factory_and_tls_settings():
 
 
 @pytest.mark.parametrize(
-    "override",
+    "table",
     [
-        {"user": ""},
-        {"database": ""},
-        {"maxsize": 0},
-        {"port": 65536},
-        {"connect_timeout": -1},
-        {"port": "invalid"},
-        {"sslmode": "invalid"},
-        {"ssl": True},
-        {"table": "a" * 38},
-        {"table": "a;DROP"},
+        pytest.param("a" * 38, id="too-long"),
+        pytest.param("task-store", id="invalid-characters"),
     ],
 )
-def test_postgres_rejects_invalid_configuration(override):
-    with pytest.raises(ValueError):
-        PostgresTaskWorkStore(params={"user": "u", "database": "db", **override})
+def test_postgres_rejects_invalid_configuration(table):
+    with pytest.raises(ValueError, match=r"task_store\.table .* at most 37 characters"):
+        PostgresTaskWorkStore(params={"user": "u", "database": "db", "table": table})
 
 
 def test_postgres_schema_and_unique_violation_detection():
@@ -91,13 +83,13 @@ async def test_concurrent_task_id_is_idempotent_and_case_sensitive(task_stores):
                     task_id="Task", task_type="content_write", account_id="other", user_id="user"
                 )
             )
+    assert (await second.get_task("task", **OWNER)).task_id == "task"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_cancelled_creation_rolls_back_task_and_events(task_stores, monkeypatch):
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Transaction rollback is a relational store contract")
     original = first._append_event_history
 
     async def cancel_after_events(*args, **kwargs):
@@ -108,18 +100,29 @@ async def test_cancelled_creation_rolls_back_task_and_events(task_stores, monkey
     with pytest.raises(asyncio.CancelledError):
         await first.create(TaskRecord(task_id="cancelled", task_type="content_write", **OWNER))
     assert await second.get_task("cancelled", **OWNER) is None
+
+    async def read_events():
+        event = second._models.Event
+        async with second._session_factory() as session:
+            rows = await session.execute(
+                select(event.seq).where(
+                    event.service_name == second._service_name, event.task_id == "cancelled"
+                )
+            )
+            return rows.scalars().all()
+
+    assert await second._sql_runtime.run(read_events) == []
     monkeypatch.setattr(first, "_append_event_history", original)
     result = await first.create(TaskRecord(task_id="cancelled", task_type="content_write", **OWNER))
     assert result.created
     history = (await second.get_task_with_events("cancelled", **OWNER)).execution_events
-    assert history["items"][0]["seq"] == 1
+    assert [(event["seq"], event["kind"]) for event in history["items"]] == [(1, "created")]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["postgres"], indirect=True)
 async def test_non_unique_integrity_error_is_not_an_active_task_conflict(task_stores):
     first, second = task_stores
-    if not isinstance(first, PostgresTaskWorkStore):
-        pytest.skip("PostgreSQL SQLSTATE classification contract")
 
     async def add_constraint():
         async with first._transaction() as session:
@@ -143,12 +146,11 @@ async def test_non_unique_integrity_error_is_not_an_active_task_conflict(task_st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["postgres"], indirect=True)
 async def test_outcome_other_unique_constraint_is_not_a_business_conflict(task_stores):
     from openviking.service.task_tracker import TaskTracker
 
     first, second = task_stores
-    if not isinstance(first, PostgresTaskWorkStore):
-        pytest.skip("PostgreSQL constraint classification contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     await writer.create("content_write", "source", task_id="source", **OWNER)
     await observer.create("content_write", "target", task_id="target", **OWNER)

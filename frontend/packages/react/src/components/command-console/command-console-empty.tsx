@@ -27,9 +27,9 @@ export function pickCommandConsoleCommands(
     if (!firstByName.has(shortcut.name))
       firstByName.set(shortcut.name, shortcut);
   }
-  return [...firstByName.values()].flatMap((shortcut) => {
-    const command = byName.get(shortcut.name);
-    return command ? [{ ...command, value: shortcut.value }] : [];
+  return [...firstByName.values()].flatMap(({ name, value, compactLabel }) => {
+    const command = byName.get(name);
+    return command ? [{ ...command, value, compactLabel }] : [];
   });
 }
 

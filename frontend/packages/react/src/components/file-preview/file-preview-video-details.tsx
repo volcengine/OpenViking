@@ -26,6 +26,7 @@ export function FilePreviewVideoDetails({
 }) {
   const id = useId();
   const [selectedTab, setTab] = useState<'transcript' | 'frames'>('transcript');
+  const [transcriptHovered, setTranscriptHovered] = useState(false);
   const tab = expanded ? 'transcript' : selectedTab;
   const transcript = useRef<HTMLDivElement>(null);
   const activeEntry = useRef<HTMLLIElement>(null);
@@ -36,7 +37,7 @@ export function FilePreviewVideoDetails({
   useLayoutEffect(() => {
     const panel = transcript.current;
     const entry = activeEntry.current;
-    if (tab !== 'transcript' || !panel || !entry) return;
+    if (tab !== 'transcript' || transcriptHovered || !panel || !entry) return;
 
     // Scroll only the transcript panel so playback never moves the host page.
     const { top, bottom } = panel.getBoundingClientRect();
@@ -46,7 +47,7 @@ export function FilePreviewVideoDetails({
     } else if (bounds.bottom > bottom) {
       panel.scrollTop += bounds.bottom - bottom;
     }
-  }, [active, details.segments, expanded, tab]);
+  }, [active, details.segments, expanded, tab, transcriptHovered]);
 
   const items = [
     { key: 'transcript', label: text.videoTranscript },
@@ -110,6 +111,12 @@ export function FilePreviewVideoDetails({
         role={expanded ? 'region' : 'tabpanel'}
         aria-labelledby={`${id}-transcript`}
         hidden={tab !== 'transcript'}
+        onPointerEnter={(event) => {
+          if (event.pointerType === 'mouse') setTranscriptHovered(true);
+        }}
+        onPointerLeave={(event) => {
+          if (event.pointerType === 'mouse') setTranscriptHovered(false);
+        }}
       >
         {details.segments.length ? (
           <ol className="ov-file-preview__video-transcript">

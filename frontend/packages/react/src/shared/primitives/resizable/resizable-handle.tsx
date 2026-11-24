@@ -1,38 +1,38 @@
 import { useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent } from 'react';
 
-import { clampResizableWidth } from './clamp.js';
+import { clampResizableSize } from './clamp.js';
 import type { ResizableHandleProps } from './types.js';
 
 export type { ResizableHandleProps, ResizeDirection } from './types.js';
-export { clampResizableWidth } from './clamp.js';
 
 /**
- * 一条可拖拽的分隔条，用来改相邻面板的宽度。
+ * 一条可拖拽的分隔条，用来改相邻面板的尺寸。
  *
- * 宽度是受控的：组件只上报夹取后的新值，面板多宽由调用方决定。拖动期间用
+ * 尺寸是受控的：组件只上报夹取后的新值。拖动期间用
  * 指针捕获接住后续事件，因此不需要往 `window` 上挂监听，也不留全局副作用
- * ——`preventDefault` 已经挡住拖动引起的文字选中。方向键同样能改宽，键盘用户
+ * ——`preventDefault` 已经挡住拖动引起的文字选中。方向键也能调整尺寸，键盘用户
  * 不必依赖指针。
  *
- * 省略 `onResize` 时退化成一根装饰线：不可拖动、不可聚焦，也不播报宽度。
+ * 省略 `onResize` 时退化成一根装饰线。
  *
  * A draggable divider that resizes the neighbouring panel.
  *
- * The width is controlled: this only reports a clamped new value and the caller
- * decides how wide the panel is. Pointer capture receives the rest of the drag, so
+ * The pane size is controlled: this reports the clamped new value. Pointer capture
+ * receives the rest of the drag, so
  * nothing is bound to `window` and no global state is touched — `preventDefault`
  * already stops the drag from selecting text. The arrow keys resize too, so a
  * keyboard user never needs a pointer.
  *
  * Without `onResize` it degrades to a decorative rule: not draggable, not
- * focusable, and it announces no width.
+ * focusable.
  */
 export function ResizableHandle({
   label,
   min,
   max,
   value,
+  orientation = 'vertical',
   step = 16,
   direction = 1,
   onResize,
@@ -41,10 +41,11 @@ export function ResizableHandle({
 }: ResizableHandleProps) {
   const dragRef = useRef<{
     pointerId: number;
-    x: number;
-    width: number;
+    position: number;
+    size: number;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const horizontal = orientation === 'horizontal';
 
   const endDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (!dragRef.current) return;
@@ -64,8 +65,8 @@ export function ResizableHandle({
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       pointerId: event.pointerId,
-      x: event.clientX,
-      width: value,
+      position: horizontal ? event.clientY : event.clientX,
+      size: value,
     };
     setDragging(true);
   };
@@ -73,21 +74,19 @@ export function ResizableHandle({
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || !onResize || drag.pointerId !== event.pointerId) return;
-    onResize(
-      clampResizableWidth(
-        drag.width + (event.clientX - drag.x) * direction,
-        min,
-        max,
-      ),
-    );
+    const position = horizontal ? event.clientY : event.clientX;
+    const size = drag.size + (position - drag.position) * direction;
+    onResize(clampResizableSize(size, min, max));
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!onResize) return;
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const decrease = horizontal ? 'ArrowUp' : 'ArrowLeft';
+    const increase = horizontal ? 'ArrowDown' : 'ArrowRight';
+    if (event.key !== decrease && event.key !== increase) return;
     event.preventDefault();
-    const delta = (event.key === 'ArrowRight' ? step : -step) * direction;
-    onResize(clampResizableWidth(value + delta, min, max));
+    const delta = (event.key === increase ? step : -step) * direction;
+    onResize(clampResizableSize(value + delta, min, max));
   };
 
   return (
@@ -102,7 +101,7 @@ export function ResizableHandle({
       // out of the tab order.
       tabIndex={onResize ? 0 : undefined}
       aria-label={label}
-      aria-orientation="vertical"
+      aria-orientation={orientation}
       aria-valuemin={min}
       aria-valuemax={max}
       aria-valuenow={Math.round(value)}

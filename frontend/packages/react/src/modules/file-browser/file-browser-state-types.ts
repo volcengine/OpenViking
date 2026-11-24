@@ -1,3 +1,5 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
+import type { FileBrowserExpansionSnapshot } from './types.js';
 import type { DirectorySummaryLabels } from './file-browser-labels.js';
 import type { ReactNode } from 'react';
 import type { OvRequestOptions } from '../../client/index.js';
@@ -22,6 +24,8 @@ export interface FileBrowserApi {
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
+  previewIsCompile: boolean;
+  previewHasDirectorySummary: boolean;
   dashboardError: Error | null;
   refreshWikiConflicts: () => void;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */
@@ -32,6 +36,8 @@ export interface FileBrowserApi {
   currentUri: string | null;
   /** 刷新是否进行中。Whether a refresh is running. */
   refreshing: boolean;
+  /** 树和当前预览共用的刷新次数。Refresh revision shared by the tree and active preview. */
+  refreshGeneration: number;
   /** 预览字符数文案。Localized preview character count. */
   previewFooter?: string;
   /** 当前资源的更新时间（ISO 8601）。Update time of the current resource (ISO 8601). */
@@ -71,7 +77,7 @@ export interface FileBrowserActions {
     uri: string,
     options?: FileBrowserOpenResourceOptions,
   ) => Promise<boolean>;
-  reveal: (uri: string) => Promise<boolean>;
+  reveal: (uri: string, preserveExpansion?: boolean) => Promise<boolean>;
   cancelReveal: () => void;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
@@ -92,6 +98,7 @@ export interface FileBrowserActions {
 /** Internal options for the composed FileBrowser loader. */
 export interface UseFileBrowserOptions {
   rootUri: string;
+  hideDeniedEntries?: boolean;
   accessLabels?: Pick<FileBrowserLabels, 'accessDenied' | 'traverseOnly'>;
   /** Built-in copy; inherits the Provider locale, otherwise en-US. */
   locale?: Locale;
@@ -99,6 +106,7 @@ export interface UseFileBrowserOptions {
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /** Overrides individual requests for the built-in experience dashboard. */
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时
@@ -129,6 +137,10 @@ export interface UseFileBrowserOptions {
   formatCharacterCount?: (count: number) => string;
   /** 首次加载后自动展开到的路径。Path to expand to after the first load. */
   defaultExpandedUri?: string;
+  defaultExpandedUris?: readonly string[];
+  defaultExpansionSnapshot?: FileBrowserExpansionSnapshot;
+  onExpandedUrisChange?: (uris: readonly string[]) => void;
+  onExpansionSnapshotChange?: (snapshot: FileBrowserExpansionSnapshot) => void;
   currentUri: string | null;
   requestOptions?: OvRequestOptions;
   onUriChange: (uri: string | null) => void;

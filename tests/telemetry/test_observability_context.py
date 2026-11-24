@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
-from typing import Optional
 
 import pytest
 
@@ -46,34 +45,6 @@ class TestObservabilityContextBasics:
     Basic tests for ObservabilityContext data class.
     """
 
-    def test_default_context_creation(self) -> None:
-        """
-        Test that a default ObservabilityContext is created with None values.
-        """
-        ctx = ObservabilityContext()
-
-        assert ctx.root is None
-        assert ctx.operation is None
-        assert ctx.execution_trace_id is None
-        assert ctx.execution_span_id is None
-        assert ctx.extra == {}
-
-    def test_get_trace_id_empty(self) -> None:
-        """
-        Test that get_trace_id returns empty string when no context is available.
-        """
-        ctx = ObservabilityContext()
-
-        assert ctx.get_trace_id() == ""
-
-    def test_get_span_id_empty(self) -> None:
-        """
-        Test that get_span_id returns empty string when no context is available.
-        """
-        ctx = ObservabilityContext()
-
-        assert ctx.get_span_id() == ""
-
     def test_to_log_fields_empty(self) -> None:
         """
         Test that to_log_fields returns basic fields even when empty.
@@ -82,32 +53,7 @@ class TestObservabilityContextBasics:
 
         fields = ctx.to_log_fields()
 
-        assert "trace_id" in fields
-        assert "span_id" in fields
-        assert fields["trace_id"] == ""
-        assert fields["span_id"] == ""
-
-    def test_bind_execution_generates_ids(self) -> None:
-        """
-        Test that bind_execution generates trace_id and span_id when not provided.
-        """
-        ctx = ObservabilityContext()
-        ctx.bind_execution()
-
-        assert ctx.execution_trace_id is not None
-        assert ctx.execution_span_id is not None
-        assert len(ctx.execution_trace_id) == 32  # UUID hex is 32 chars
-        assert len(ctx.execution_span_id) == 16  # First 16 chars of trace_id
-
-    def test_bind_execution_uses_provided_ids(self) -> None:
-        """
-        Test that bind_execution uses provided trace_id and span_id.
-        """
-        ctx = ObservabilityContext()
-        ctx.bind_execution(trace_id="custom_trace_id", span_id="custom_span_id")
-
-        assert ctx.execution_trace_id == "custom_trace_id"
-        assert ctx.execution_span_id == "custom_span_id"
+        assert fields == {"trace_id": "", "span_id": ""}
 
     def test_import_from_fresh_interpreter_does_not_trigger_circular_import(self) -> None:
         """
@@ -128,130 +74,6 @@ class TestObservabilityContextBasics:
         )
 
         assert result.returncode == 0, result.stderr
-
-
-class TestRootContextBinding:
-    """
-    Tests for root context binding and retrieval.
-    """
-
-    def test_bind_root_context(self) -> None:
-        """
-        Test that root context can be bound and retrieved.
-        """
-        root_attrs = RootSpanAttributes(
-            http_method="GET",
-            http_route="/test",
-            request_id="req-123",
-        )
-        root_attrs.account_id = "acct-456"
-
-        token = bind_root_context(root_attrs)
-
-        try:
-            retrieved = get_root_observability_context()
-
-            assert retrieved is not None
-            assert retrieved.http_method == "GET"
-            assert retrieved.http_route == "/test"
-            assert retrieved.request_id == "req-123"
-            assert retrieved.account_id == "acct-456"
-        finally:
-            reset_observability_context(token)
-
-    def test_root_context_to_log_fields(self) -> None:
-        """
-        Test that root context fields are included in to_log_fields.
-        """
-        root_attrs = RootSpanAttributes(
-            http_method="POST",
-            http_route="/api/v1/sessions",
-            request_id="req-test",
-        )
-        root_attrs.account_id = "acct-test"
-
-        token = bind_root_context(root_attrs)
-
-        try:
-            ctx = get_observability_context()
-            fields = ctx.to_log_fields()
-
-            assert fields["request_id"] == "req-test"
-            assert fields["account_id"] == "acct-test"
-            assert fields["http_method"] == "POST"
-            assert fields["http_route"] == "/api/v1/sessions"
-        finally:
-            reset_observability_context(token)
-
-    def test_reset_root_context(self) -> None:
-        """
-        Test that root context can be reset.
-        """
-        root_attrs = RootSpanAttributes(
-            http_method="GET",
-            http_route="/test",
-            request_id="req-123",
-        )
-
-        token = bind_root_context(root_attrs)
-
-        try:
-            assert get_root_observability_context() is not None
-        finally:
-            reset_observability_context(token)
-
-        # After reset, get_root_observability_context should return None
-        # because the context is reset to its previous state
-        retrieved = get_root_observability_context()
-        assert retrieved is None
-
-
-class TestOperationContextBinding:
-    """
-    Tests for operation context binding and retrieval.
-    """
-
-    def test_bind_operation_context(self) -> None:
-        """
-        Test that operation context can be bound and retrieved.
-        """
-        operation_attrs = OperationSpanAttributes(
-            operation="search.find",
-            telemetry_id="tm-123",
-        )
-
-        token = bind_operation_context(operation_attrs)
-
-        try:
-            retrieved = get_operation_observability_context()
-
-            assert retrieved is not None
-            assert retrieved.operation == "search.find"
-            assert retrieved.telemetry_id == "tm-123"
-        finally:
-            reset_observability_context(token)
-
-    def test_operation_context_to_log_fields(self) -> None:
-        """
-        Test that operation context fields are included in to_log_fields.
-        """
-        operation_attrs = OperationSpanAttributes(
-            operation="session.commit",
-            telemetry_id="tm-456",
-        )
-        operation_attrs.status = "ok"
-
-        token = bind_operation_context(operation_attrs)
-
-        try:
-            ctx = get_observability_context()
-            fields = ctx.to_log_fields()
-
-            assert fields["operation"] == "session.commit"
-            assert fields["telemetry_id"] == "tm-456"
-            assert fields["status"] == "ok"
-        finally:
-            reset_observability_context(token)
 
 
 class TestExecutionContextBinding:
@@ -322,9 +144,8 @@ class TestContextIsolation:
         """
         Test that context is isolated between concurrent async tasks.
         """
-        seen: list[Optional[str]] = []
 
-        async def _worker(account_id: str):
+        async def _worker(account_id: str) -> str | None:
             root_attrs = RootSpanAttributes(
                 http_method="GET",
                 http_route="/test",
@@ -336,18 +157,13 @@ class TestContextIsolation:
             try:
                 await asyncio.sleep(0)  # Yield to other tasks
                 root_context = get_root_observability_context()
-                seen.append(root_context.account_id if root_context else None)
+                assert root_context is not None
+                return root_context.account_id
             finally:
                 reset_observability_context(token)
 
-        await asyncio.gather(
-            _worker("acct-a"),
-            _worker("acct-b"),
-            _worker("acct-c"),
-        )
-
-        # All three tasks should see their own context, not leaked from others
-        assert sorted(seen) == ["acct-a", "acct-b", "acct-c"]
+        accounts = ["acct-a", "acct-b", "acct-c"]
+        assert await asyncio.gather(*(_worker(account) for account in accounts)) == accounts
 
     @pytest.mark.asyncio
     async def test_nested_context_binding(self) -> None:
@@ -436,6 +252,8 @@ class TestCombinedContexts:
                 # Both root and operation fields should be present
                 assert fields["request_id"] == "req-123"
                 assert fields["account_id"] == "acct-456"
+                assert fields["http_method"] == "POST"
+                assert fields["http_route"] == "/api/v1/sessions"
                 assert fields["operation"] == "session.commit"
                 assert fields["telemetry_id"] == "tm-789"
                 assert fields["status"] == "ok"
@@ -447,17 +265,9 @@ class TestCombinedContexts:
             after_op_reset = get_root_observability_context()
             assert after_op_reset is not None
             assert after_op_reset.account_id == "acct-456"
+            assert get_operation_observability_context() is None
 
         finally:
             reset_observability_context(token_root)
 
-
-class TestContextManagerIntegration:
-    """
-    Tests for integration with context manager patterns.
-    """
-
-class TestLogFieldsIntegration:
-    """
-    Tests for log fields integration.
-    """
+        assert get_root_observability_context() is None

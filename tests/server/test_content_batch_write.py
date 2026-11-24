@@ -31,7 +31,6 @@ from openviking_cli.exceptions import (
     ConflictError,
     InvalidArgumentError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
@@ -205,7 +204,7 @@ async def test_system_batch_write_is_file_only_without_queue_work(
         "viking://system/memory/memory_templates/builtin",
     ],
 )
-async def test_system_builtin_batch_write_rejects_external_root_writes(
+async def test_root_can_write_builtin_binary_assets_without_indexing(
     _coordinator_queue_for_unit_tests,
     root,
 ):
@@ -216,23 +215,24 @@ async def test_system_builtin_batch_write_rejects_external_root_writes(
     coordinator = ContentWriteCoordinator(vfs)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
-    with pytest.raises(PermissionDeniedError):
-        await coordinator.batch_write(
-            root_uri=root,
-            operations=[
-                {
-                    "uri": uri,
-                    "content_base64": base64.b64encode(content).decode("ascii"),
-                    "mode": "replace",
-                }
-            ],
-            ctx=ctx,
-            wait=False,
-        )
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": uri,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "mode": "replace",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
 
-    assert vfs.files == {}
-    assert vfs._async_agfs.paths == []
-    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    assert result["created"] == [uri]
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert vfs.files == {uri: content}
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
     _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
 
 
@@ -1480,16 +1480,10 @@ async def test_batch_write_api_upserts_files(client_with_resource):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("filename", "content"),
-    [
-        ("compile-figure.png", b"\x89PNG\r\n\x1a\ncompile"),
-        ("compile-report.pdf", b"%PDF-1.7\ncompile"),
-    ],
-)
-async def test_batch_write_api_creates_binary_file(client_with_resource, filename, content):
+async def test_batch_write_api_creates_binary_file(client_with_resource):
     client, root = client_with_resource
-    artifact = f"{root}/{filename}"
+    artifact = f"{root}/compile-figure.png"
+    content = b"\x89PNG\r\n\x1a\ncompile"
     response = await client.post(
         "/api/v1/content/batch-write",
         json={
@@ -1512,7 +1506,9 @@ async def test_batch_write_api_creates_binary_file(client_with_resource, filenam
 
 
 @pytest.mark.asyncio
-async def test_batch_write_api_create_overwrites_and_batch_continues(client_with_resource):
+async def test_batch_write_api_create_overwrites_and_batch_continues(
+    client_with_resource, request_context
+):
     client, root = client_with_resource
     listing = await client.get(
         "/api/v1/fs/ls",
@@ -1520,62 +1516,41 @@ async def test_batch_write_api_create_overwrites_and_batch_continues(client_with
     )
     existing = listing.json()["result"][0]
     created = f"{root}/compile-created-by-upsert.md"
+    appended = f"{root}/compile-created-by-append.md"
+    writes = [
+        (existing, "create", "create aliases replace"),
+        (created, "upsert", "created by upsert"),
+        (appended, "append", "initial append body"),
+    ]
     response = await client.post(
         "/api/v1/content/batch-write",
         json={
             "root_uri": root,
             "wait": False,
             "operations": [
-                {
-                    "uri": existing,
-                    "content": "create aliases replace",
-                    "mode": "create",
-                },
-                {
-                    "uri": created,
-                    "content": "created by upsert",
-                    "mode": "upsert",
-                },
+                {"uri": uri, "content": content, "mode": mode} for uri, mode, content in writes
             ],
         },
     )
     assert response.status_code == 200
     result = response.json()["result"]
     assert result["updated"] == [existing]
-    assert result["created"] == [created]
-    existing_body = await client.get("/api/v1/content/read", params={"uri": existing, "raw": True})
-    assert existing_body.status_code == 200
-    assert existing_body.json()["result"] == "create aliases replace"
-    created_body = await client.get("/api/v1/content/read", params={"uri": created, "raw": True})
-    assert created_body.status_code == 200
-    assert created_body.json()["result"] == "created by upsert"
+    assert result["created"] == sorted([created, appended])
+    for uri, _, content in writes:
+        body = await client.get("/api/v1/content/read", params={"uri": uri, "raw": True})
+        assert body.status_code == 200
+        assert body.json()["result"] == content
 
-
-@pytest.mark.asyncio
-async def test_batch_write_api_missing_append_creates_file(client_with_resource):
-    client, root = client_with_resource
-    target = f"{root}/compile-created-by-append.md"
-
-    response = await client.post(
-        "/api/v1/content/batch-write",
-        json={
-            "root_uri": root,
-            "wait": False,
-            "operations": [
-                {
-                    "uri": target,
-                    "content": "initial append body",
-                    "mode": "append",
-                }
-            ],
-        },
+    task = await get_task_tracker().wait(
+        result["task_id"],
+        account_id=request_context.account_id,
+        user_id=request_context.user.user_id,
+        timeout=15,
     )
-
-    assert response.status_code == 200
-    assert response.json()["result"]["created"] == [target]
-    body = await client.get("/api/v1/content/read", params={"uri": target, "raw": True})
-    assert body.status_code == 200
-    assert body.json()["result"] == "initial append body"
+    assert task.status is TaskStatus.COMPLETED
+    assert task.result is not None
+    assert task.result["created"] == sorted([created, appended])
+    assert task.result["updated"] == [existing]
 
 
 @pytest.mark.asyncio

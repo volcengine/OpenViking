@@ -26,6 +26,9 @@ export const kimicode = {
   capturesOnlyWhenEnabled: true,
   detachesCapture: true,
   profileStage: "first-prompt",
+  // Kimi drops a hook entry that carries any key beyond event, matcher,
+  // command and timeout, so the replay bound lives here, not in the manifest.
+  pendingReplayLimit: 2,
   requestBudgets: {
     "session-start": 25_000,
     "user-prompt-submit": 17_000,

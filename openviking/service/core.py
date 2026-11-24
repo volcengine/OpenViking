@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
@@ -67,10 +68,14 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking_cli.utils.config.config_loader import load_json_config
 from openviking_cli.utils.config.config_utils import DEFAULT_SERVICE_NAME
 from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
-from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfigSingleton,
+    initialize_openviking_config,
+)
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 logger = get_logger(__name__)
@@ -240,7 +245,37 @@ class OpenVikingService:
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
-        binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
+        from openviking.server.dependencies import get_server_config
+
+        config_file = OpenVikingConfigSingleton.get_config_file()
+        account_store_cache_instance = None
+        server_config = get_server_config()
+        if server_config is not None:
+            account_store = server_config.account_store
+        elif config_file is not None:
+            server = load_json_config(config_file).get("server")
+            account_store = server.get("account_store") if isinstance(server, dict) else None
+        else:
+            account_store = None
+        provider = (
+            account_store.get("provider")
+            if isinstance(account_store, dict)
+            else getattr(account_store, "provider", None)
+        )
+        params = (
+            account_store.get("params")
+            if isinstance(account_store, dict)
+            else getattr(account_store, "params", None)
+        )
+        if provider == "redis_mysql":
+            from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
+
+            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(params)
+
+        binding_config, self._encryptor = build_runtime_ragfs_binding_config(
+            self._config,
+            account_store_cache_instance=account_store_cache_instance,
+        )
         return binding_config
 
     @property
@@ -586,10 +621,17 @@ class OpenVikingService:
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
-        account_count, user_count = await directory_initializer.initialize_account_workspace(
-            default_ctx,
-            sync_system_assets=False,
+        # The vector collection can be pre-created externally. Existing resource
+        # metadata distinguishes a workspace restart from initial provisioning.
+        new_workspace = not await self._viking_fs.exists(
+            "viking://resources/.abstract.md", ctx=default_ctx
         )
+        source_type = "create_collection" if new_workspace else "workspace_init"
+        with bind_dashboard_token_source_type(source_type):
+            account_count, user_count = await directory_initializer.initialize_account_workspace(
+                default_ctx,
+                sync_system_assets=False,
+            )
         logger.info(
             "Initialized preset directories account=%d user=%d",
             account_count,
@@ -635,7 +677,6 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
-            resource_memory_link_service=self._resource_memory_link_service,
             watch_manager=self._watch_manager,
         )
         self._pack_service.set_dependencies(
@@ -1127,14 +1168,15 @@ class OpenVikingService:
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0, 0
-        if lease_ref is not None:
-            return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease_ref
-            )
-        async with self.account_workspace_lock(ctx) as lease:
-            return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease
-            )
+        with bind_dashboard_token_source_type("create_account"):
+            if lease_ref is not None:
+                return await self._directory_initializer.initialize_account_workspace(
+                    ctx, lease_ref=lease_ref
+                )
+            async with self.account_workspace_lock(ctx) as lease:
+                return await self._directory_initializer.initialize_account_workspace(
+                    ctx, lease_ref=lease
+                )
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
@@ -1166,8 +1208,9 @@ class OpenVikingService:
                     f"User workspace is busy and cannot be initialized now: {ctx.user.user_id}",
                     uri=uri,
                 ) from exc
-            return await self._directory_initializer.initialize_user_directories(
-                ctx, lease_ref=lease
-            )
+            with bind_dashboard_token_source_type("register_user"):
+                return await self._directory_initializer.initialize_user_directories(
+                    ctx, lease_ref=lease
+                )
         finally:
             await guard.close()

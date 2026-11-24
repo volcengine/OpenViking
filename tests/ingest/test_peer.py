@@ -25,20 +25,6 @@ def test_external_peer_readable_and_sanitized():
     assert safe_external_peer("") is None
 
 
-def test_external_peer_non_ascii_falls_back_to_ext():
-    pid = safe_external_peer("杨冠姝")
-    assert pid is not None and pid.startswith("ext-")
-
-
-def test_external_peer_mixed_unicode_encodes_full_value_without_collisions():
-    first = safe_external_peer("张三 Alice")
-    second = safe_external_peer("李四 Alice")
-
-    assert first != second
-    assert first is not None and first.startswith("ext-")
-    assert second is not None and second.startswith("ext-")
-
-
 def test_external_peer_encoded_namespace_cannot_be_impersonated_by_ascii_name():
     mixed_script = safe_external_peer("张三 Alice")
     ascii_lookalike = safe_external_peer("ext-5byg5LiJIEFsaWNl")

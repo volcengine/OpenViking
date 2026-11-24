@@ -9,9 +9,12 @@ export interface ConsoleMessage {
   usage?: string;
 }
 
+export type ConsoleResultNotice = 'noTasks' | 'grepLimitReached';
+
 /** Internal metadata is formatted by the Hook and never exposed in its records. */
 export type ConsoleRecord = CommandConsoleRecord & {
   localMessage?: ConsoleMessage;
+  resultNotice?: ConsoleResultNotice;
   taskKeys?: readonly string[];
   telemetry?: Record<string, unknown>;
 };

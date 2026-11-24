@@ -168,16 +168,16 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
   // Links inside a Markdown body: hand the raw target to the host's `openUri` and
   // let it resolve and navigate. The component does not resolve relative paths —
   // that needs the current document's location, which only the host knows.
-  const onLinkClick = useLinkClickHandler(fileTab, actions);
-  // 只有宿主给了 `openUri` 才接管导航：传入回调后底座会阻止默认跳转，宿主
-  // 没提供能力时接管等于把链接点死。
+  // 文件链接由宿主的 `openUri` 接管；目录同文档锚点独立处理，其他目录链接
+  // 按宿主是否提供 `openUri` 决定是否接管。
   //
-  // Hand navigation over only when the host supplies `openUri`: passing the
-  // callback makes the base skip the default jump, so taking over without a
-  // handler would leave links dead.
-  const linkClickHandler = fileTab?.operations?.openUri
-    ? onLinkClick
-    : undefined;
+  // File links use the host's `openUri`. Directory anchors are handled locally;
+  // other directory links are taken over only when the host supplies `openUri`.
+  const linkClickHandler = useLinkClickHandler(
+    fileTab ?? directoryTab,
+    actions,
+    directory.activeLevel?.key,
+  );
   // 目录页签的当前层级由外壳持有，复制正文、复制路径与正文因此取同一份来源。
   // The shell owns the active level, so copy-content, copy-path and the body read the
   // same source.

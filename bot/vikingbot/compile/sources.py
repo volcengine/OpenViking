@@ -9,8 +9,12 @@ from dataclasses import asdict, dataclass
 from typing import Iterable
 from urllib.parse import urlsplit
 
+from loguru import logger
+
 from openviking.parse.parsers.media.utils import get_media_type
+from openviking.utils.compile_recovery import source_set_digest
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
+from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileLimits
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+\S")
@@ -66,10 +70,37 @@ async def read_source(client, uri) -> str | CompileSourceRange:
         raise CompileFailure(
             "INVALID_ARGUMENT", f"Unsupported Compile image format: {uri}", stage="pipeline"
         )
-    result = await VikingMultiReadTool._read_image(client, uri)
+    result = await VikingMultiReadTool._read_image(client, uri, for_compile=True)
     if not result["success"]:
         raise CompileFailure("SOURCE_READ_FAILED", f"{uri}: {result['content']}", stage="pipeline")
     return CompileSourceRange(uri, 0, 0, 0, 0, "", image=result["image"], sha256=result["sha256"])
+
+
+async def verify_recovery_sources(
+    client,
+    changes,
+    source_hashes: dict[str, str],
+    target_hashes: dict[str, str] | None = None,
+) -> str | None:
+    """Verify the processed source set and the bytes used against the frozen plan."""
+    expected = changes.get("recovery_sources")
+    head = changes.get("head")
+    if (
+        not expected
+        or not head
+        or not source_hashes
+        or source_set_digest(source_hashes) != expected
+    ):
+        return None
+    for uri, digest in {**source_hashes, **(target_hashes or {})}.items():
+        try:
+            frozen = await client.git_show_bytes(uri, head)
+        except Exception as error:
+            logger.warning("Could not verify Compile recovery source ({})", type(error).__name__)
+            return None
+        if not isinstance(frozen, bytes) or content_hash(frozen) != digest:
+            return None
+    return expected
 
 
 def split_source(

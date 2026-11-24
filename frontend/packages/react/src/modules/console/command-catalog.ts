@@ -17,8 +17,8 @@ const COMMAND_GROUPS = {
   core: [
     'add-resource',
     'add-skill',
-    'compile',
     'compile create',
+    'compile',
     'find',
     'read',
     'write',
@@ -64,7 +64,7 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
   'add-skill',
   'add-memory',
   'find',
-  'compile',
+  'compile create',
 ] as const;
 
 export function consoleQuickCommands(
@@ -73,7 +73,7 @@ export function consoleQuickCommands(
   const guides = resolveConsoleLocale(locale).commandGuides;
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
-    value: name === 'compile' ? 'ov compile ' : guides[name].examples[0],
+    value: guides[name].examples[0],
   }));
 }
 
@@ -90,6 +90,10 @@ export function consoleCommands(
       (spec) => !spec.admin || options?.allowAdminCommands,
     ).map((spec) => {
       const guide = guides[spec.name];
+      const description =
+        spec.name === 'add-resource' && options?.onOpenLocalResourceImport
+          ? text.localResourceImportHelp
+          : (guide?.description ?? text.commands[spec.name]);
       const positional = (
         spec.preferredPositional ??
         spec.positional ??
@@ -103,8 +107,7 @@ export function consoleCommands(
         {
           name: spec.name,
           inputText: `ov ${spec.name}`,
-          hiddenFromSuggestions: spec.name === 'compile create',
-          description: guide?.description ?? text.commands[spec.name],
+          description,
           summary: text.commands[spec.name],
           examples: guide?.examples ?? parameterExamples[spec.name],
           quickStart: guide?.quickStart,
@@ -145,10 +148,9 @@ export function consoleCommands(
       ] as const;
     }),
   );
-  const compile = catalog.get('compile');
   const create = catalog.get('compile create');
-  if (compile && create) {
-    compile.parameterDetails = {
+  if (create) {
+    create.parameterDetails = {
       usage: create.usage,
       options: create.options,
       extra: text.compileArgsHelp,
@@ -177,9 +179,8 @@ export function createCommandHelp(
   locale: Locale,
   options?: ConsoleCommandOptions,
 ): CommandConsoleRecordContent {
-  const commands = consoleCommands(locale, options).filter(
-    (command) => !command.hiddenFromSuggestions,
-  );
+  const text = resolveConsoleLocale(locale);
+  const commands = consoleCommands(locale, options);
   return {
     variant: 'command-help',
     sections: consoleCommandGroups(locale)
@@ -191,8 +192,11 @@ export function createCommandHelp(
           .filter((command) => command.group === key)
           .map((item) => ({
             key: item.name,
-            name: item.usage,
-            description: item.description,
+            name: item.inputText ?? `ov ${item.name}`,
+            description:
+              item.name === 'add-resource' && options?.onOpenLocalResourceImport
+                ? text.localResourceImportSummary
+                : (item.summary ?? item.description),
           })),
       })),
   };

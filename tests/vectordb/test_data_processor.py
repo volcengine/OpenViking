@@ -2,19 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
-import shutil
 import unittest
-from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
-
-DB_PATH = "./test_data/db_test_data_processor/"
-
-
-def clean_dir(path: str) -> None:
-    shutil.rmtree(path, ignore_errors=True)
 
 
 class TestDataProcessor(unittest.TestCase):
@@ -28,54 +20,40 @@ class TestDataProcessor(unittest.TestCase):
         }
         self.processor = DataProcessor(self.fields_dict)
 
-    def test_scalar_index_meta_mapping(self):
-        scalar_meta = self.processor.build_scalar_index_meta(["created_at", "geo", "uri", "tags"])
-        mapped = {(item["FieldName"], item["FieldType"]) for item in scalar_meta}
-        self.assertIn(("created_at", "int64"), mapped)
-        self.assertIn(("geo_lon", "float32"), mapped)
-        self.assertIn(("geo_lat", "float32"), mapped)
-        self.assertIn(("uri", "path"), mapped)
-        self.assertIn(("tags", "list<string>"), mapped)
-
-    def test_datetime_and_geo_point_conversion(self):
-        data = {
-            "created_at": "2026-02-06T12:34:56+00:00",
-            "geo": "116.412138,39.914912",
-            "tags": ["a", "b"],
-        }
+    def test_index_schema_rows_and_filters_use_matching_time_and_geo_units(self):
+        date = "2026-02-06T20:34:56+08:00"
+        lon, lat = 116.412138, 39.914912
+        epoch_ms = 1770381296000
+        data = {"created_at": date, "geo": f"{lon},{lat}", "tags": ["a", "b"]}
         converted = self.processor.convert_fields_dict_for_index(data)
-        self.assertIsInstance(converted["created_at"], int)
-        self.assertNotIn("geo", converted)
-        self.assertIn("geo_lon", converted)
-        self.assertIn("geo_lat", converted)
-        self.assertEqual(converted["tags"], ["a", "b"])
+        schema = self.processor.build_scalar_index_meta(["created_at", "geo", "uri", "tags"])
+        types = {item["FieldName"]: item["FieldType"] for item in schema}
 
-    def test_filter_conversion_time_range(self):
-        filters = {
-            "op": "time_range",
-            "field": "created_at",
-            "gte": "2026-02-06T12:34:56+00:00",
-        }
-        converted = self.processor.convert_filter_for_index(filters)
-        expected = int(
-            datetime.fromisoformat("2026-02-06T12:34:56+00:00").astimezone(timezone.utc).timestamp()
-            * 1000
+        self.assertEqual(
+            types,
+            {
+                "created_at": "int64",
+                "geo_lon": "float32",
+                "geo_lat": "float32",
+                "uri": "path",
+                "tags": "list<string>",
+            },
         )
-        self.assertEqual(converted["gte"], expected)
+        self.assertEqual(
+            converted,
+            {"created_at": epoch_ms, "geo_lon": lon, "geo_lat": lat, "tags": ["a", "b"]},
+        )
 
-    def test_filter_conversion_geo_range(self):
-        filters = {
-            "op": "geo_range",
-            "field": "geo",
-            "center": "116.412138,39.914912",
-            "radius": "10km",
-        }
-        converted = self.processor.convert_filter_for_index(filters)
-        self.assertEqual(converted["field"], ["geo_lon", "geo_lat"])
-        # Radius is converted to degrees: 10000m / 111320.0
-        self.assertAlmostEqual(converted["radius"], 10000.0 / 111320.0, places=6)
-        self.assertAlmostEqual(converted["center"][0], 116.412138, places=6)
-        self.assertAlmostEqual(converted["center"][1], 39.914912, places=6)
+        time_filter = self.processor.convert_filter_for_index(
+            {"op": "time_range", "field": "created_at", "gte": "2026-02-06T12:34:56+00:00"}
+        )
+        geo_filter = self.processor.convert_filter_for_index(
+            {"op": "geo_range", "field": "geo", "center": f"{lon},{lat}", "radius": "10km"}
+        )
+        self.assertEqual(time_filter["gte"], epoch_ms)
+        self.assertEqual(geo_filter["field"], ["geo_lon", "geo_lat"])
+        self.assertEqual(geo_filter["center"], [lon, lat])
+        self.assertAlmostEqual(geo_filter["radius"], 10_000 / 111_320.0, places=6)
 
     def test_validate_and_process(self):
         # Test basic validation
@@ -117,22 +95,17 @@ class TestDataProcessor(unittest.TestCase):
         self.assertEqual(processed["tags"], ["ok \ufffd"])
         processed["abstract"].encode("utf-8")
 
-    def test_convert_fields_for_index_sanitizes_lone_surrogates(self):
-        fields_json = '{"abstract": "bad \\ud800", "tags": ["ok \\udc00"], "uri": "/tmp/test"}'
+    def test_index_conversion_repairs_legacy_surrogates_and_preserves_valid_emoji(self):
+        fields_json = json.dumps(
+            {"abstract": "legacy \ud800 face 😀", "tags": ["ok \udc00"], "uri": "/tmp/test"}
+        )
 
         converted_json = self.processor.convert_fields_for_index(fields_json)
         converted_json.encode("utf-8")
         converted = json.loads(converted_json)
 
-        self.assertEqual(converted["abstract"], "bad \ufffd")
+        self.assertEqual(converted["abstract"], "legacy \ufffd face 😀")
         self.assertEqual(converted["tags"], ["ok \ufffd"])
-
-    def test_convert_fields_for_index_preserves_valid_emoji(self):
-        fields_json = json.dumps({"abstract": "face \U0001f600", "uri": "/tmp/test"})
-
-        converted = json.loads(self.processor.convert_fields_for_index(fields_json))
-
-        self.assertEqual(converted["abstract"], "face \U0001f600")
 
     def test_convert_fields_for_index_handles_corrupted_json(self):
         corrupted = '{"abstract": "truncated\x00\xff", "uri": "/tmp/bad"'

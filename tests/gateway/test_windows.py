@@ -610,8 +610,8 @@ async def test_continuation_reminders_skip_messages_that_are_not_tool_results(
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_reset_continues_in_the_new_window(running_gateway, saved_cuts, protocol, streaming):
-    app, client, admin, _, _, _ = running_gateway
+async def test_reset_continues_in_the_new_window(running_gateway, protocol, streaming):
+    app, client, admin, _, _, writes = running_gateway
     await enable_tools(client, admin, agent_windows=True)
     run = await send(running_gateway, protocol, streaming, [[(NEW_CONTEXT, NOTES)]])
     assert run.response.status_code == 200, run.response.text
@@ -640,7 +640,6 @@ async def test_reset_continues_in_the_new_window(running_gateway, saved_cuts, pr
     assert await stored(app, "replacement") == {
         anchor: {"source": "window", "text": header, "tokens": token_estimate(header)}
     }
-    assert saved_cuts == [anchor]
     assert await stored(app, "hidden") == {
         hidden_chain([*run.body[field], *visible], protocol)[-1]: {
             "messages": round_output(protocol, run.upstream[1]),
@@ -650,6 +649,24 @@ async def test_reset_continues_in_the_new_window(running_gateway, saved_cuts, pr
     }
     logs = (await client.get("/admin/logs", headers=admin)).json()
     assert logs[0]["window"] == 2 and logs[0]["window_reset"] is True
+
+    # The history up to the cut is written at once; the turn's end writes the reply.
+    cut, end = writes
+    assert cut["messages"][-1]["source_message_ids"] == ["gateway:" + anchor]
+    saved = end["messages"][-1]["parts"][0]["text"]
+    assert saved.endswith("answer-2") and "new_context" not in saved
+    run.body[field] += [
+        *visible,
+        {"role": "user", "content": "Go"},
+    ]
+    response = await client.post(PATHS[protocol], headers=run.headers, json=run.body)
+    assert response.status_code == 200, response.text
+    replay = run.requests[-1][field]
+    prefix = [m for m in run.body[field] if m.get("role") in {"system", "developer"}]
+    assert replay[: len(prefix) + 1] == [*prefix, {"role": "user", "content": header}]
+    assert replay[len(prefix) + 1 : -1] == round_output(protocol, run.upstream[1])
+    assert text_content(replay[-1]).startswith("Go\n")
+    assert "[context-status] window w2 " in text_content(replay[-1])
 
 
 async def test_last_reset_in_a_request_wins(running_gateway, saved_cuts):
@@ -716,33 +733,6 @@ async def test_context_remaining_reads_the_latest_round(running_gateway):
         "Advice: no action needed; keep working.",
     }
     assert not await stored(app, "replacement")
-
-
-@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-async def test_reset_replays_on_the_next_request(running_gateway, protocol):
-    app, client, admin, _, _, writes = running_gateway
-    await enable_tools(client, admin, agent_windows=True)
-    run = await send(running_gateway, protocol, False, [[(NEW_CONTEXT, NOTES)]])
-    field = FIELDS[protocol]
-    header = run.requests[1][field][-1]["content"]
-    # The history up to the cut is written at once; the turn's end writes the reply.
-    anchor = hidden_chain(run.body[field], protocol)[-1]
-    cut, end = writes
-    assert cut["messages"][-1]["source_message_ids"] == ["gateway:" + anchor]
-    saved = end["messages"][-1]["parts"][0]["text"]
-    assert saved.endswith("answer-2") and "new_context" not in saved
-    run.body[field] += [
-        *visible_messages(protocol, run.response, False),
-        {"role": "user", "content": "Go"},
-    ]
-    response = await client.post(PATHS[protocol], headers=run.headers, json=run.body)
-    assert response.status_code == 200, response.text
-    replay = run.requests[-1][field]
-    prefix = [m for m in run.body[field] if m.get("role") in {"system", "developer"}]
-    assert replay[: len(prefix) + 1] == [*prefix, {"role": "user", "content": header}]
-    assert replay[len(prefix) + 1 : -1] == round_output(protocol, run.upstream[1])
-    assert text_content(replay[-1]).startswith("Go\n")
-    assert "[context-status] window w2 " in text_content(replay[-1])
 
 
 async def test_reset_builds_the_window_the_next_request_replays(running_gateway, saved_cuts):

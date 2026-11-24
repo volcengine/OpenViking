@@ -1,5 +1,6 @@
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { useRef } from 'react';
+import { formatVikingUriLabel } from '../../shared/path-label.js';
 
 import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
 
@@ -78,7 +79,7 @@ export function useFilePreviewActions() {
       ),
     copyPath: async (tab: FilePreviewTab, path: string) => {
       analytics.current?.emit('file_preview_copy_path_click', () => ({}));
-      return copyText(path, tab.onCopyPath, (copied) =>
+      return copyText(formatVikingUriLabel(path), tab.onCopyPath, (copied) =>
         analytics.current?.emit(
           copied
             ? 'file_preview_copy_path_success'

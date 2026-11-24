@@ -9,6 +9,9 @@ import {
   INSTALLER_HARNESSES,
 } from './agent-connect-installer.js';
 
+export const PRELAUNCH_BASE_URL =
+  'https://shms8eb05es6du8q1aoq5.apigateway-cn-beijing.volceapi.com/openviking';
+
 export const DEFAULT_BASE_URL =
   'https://api.vikingdb.cn-beijing.volces.com/openviking';
 
@@ -43,10 +46,10 @@ export function getAgentConnectInstructions(
       );
     return {
       fixed: true,
-      display: instructions('••••••••'),
+      display: instructions('********'),
       copy: instructions(apiKey),
       command: {
-        display: getInstallerCommand(harness, locale, '••••••••', baseUrl),
+        display: getInstallerCommand(harness, locale, '********', baseUrl),
         copy: getInstallerCommand(harness, locale, apiKey, baseUrl),
       },
     };
@@ -95,7 +98,7 @@ export function getAgentConnectInstructions(
   }
   return {
     fixed: false,
-    display: hydrate('••••••••'),
+    display: hydrate('********'),
     copy: hydrate(apiKey),
     markdown: hydrate(keyToken),
     keyToken,

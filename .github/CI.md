@@ -42,13 +42,13 @@ and container image for its consumers; no extra selector job or token is needed.
 Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
 macOS and Windows assignments are unchanged.
 
-Self-hosted builds and tests require Docker access and use disposable containers with
+Linux builds and tests using CI images require Docker access and use disposable containers with
 job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
 Wheels retain Ubuntu 20.04/glibc 2.31. API native runtime preparation uses Ubuntu
 24.04 on both destinations so its artifact remains compatible with hosted tests.
-Self-hosted API, database and cuVS consumers also use Ubuntu 24.04 containers;
-hosted consumers retain their existing host execution. Database consumers use
-service-container DNS inside containers and loopback on hosted runners.
+API, database and cuVS consumers use Ubuntu 24.04 containers on both destinations.
+Linux Full Test, API Effect Tests and CodeQL analysis also use the same image on
+hosted runners. Database consumers use service-container DNS on both destinations.
 The Linux wheel execution timeout is 60 minutes and native preparation is limited
 to 45 minutes, with a 15-minute limit on system package installation. Timeouts start when execution begins, not while queued; there is
 no automatic queue fallback.
@@ -85,18 +85,24 @@ immutable digest reference printed in the workflow summary:
 | Image | Repository variable | Consumers |
 | --- | --- | --- |
 | Ubuntu 20.04 amd64 | `CI_UBUNTU20_IMAGE` | Linux x86_64 wheels on hosted and self-hosted runners |
-| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer and self-hosted API/database/cuVS consumers |
+| Ubuntu 24.04 amd64 | `CI_UBUNTU24_IMAGE` | API native producer and Linux API/database/cuVS on hosted and eligible self-hosted runners; Full Test, API Effect Tests and CodeQL analysis on hosted runners only |
 
 Another reachable public
 registry can also host the image; avoid mutable `latest` tags.
 
-The API native producer uses the Ubuntu 24.04 image and passes it to its self-hosted test
-consumers. Each bootstrap checks actual dpkg installation status: complete images
+The API native producer uses the Ubuntu 24.04 image and passes it to its Linux test
+consumers regardless of runner pool. Other Linux test/analysis jobs select the
+same variable directly. Lite Test accepts an explicit `linux_container` override;
+an empty override uses the configured image. Each bootstrap checks actual dpkg installation status: complete images
 skip apt, while incomplete images install the required packages. With no image
-variable, the producer uses stock `ubuntu:24.04` and installs packages as before.
+variable, these jobs use stock `ubuntu:24.04` and install their required packages.
 With no `CI_UBUNTU20_IMAGE`, x86_64 wheels fall back to stock `ubuntu:20.04`.
-The first pull still downloads the image; subsequent jobs on the same host reuse
-Docker's cached layers. Rebuild and validate periodically for OS package updates,
+GitHub-hosted jobs start on fresh machines and pull the image for each job;
+there is no Docker layer cache shared between jobs. Self-hosted jobs on the same
+host can reuse Docker's cached layers after the first pull. On hosted runners,
+the image primarily fixes system package versions and aligns the environments;
+skipping apt alone does not establish an end-to-end speedup.
+Rebuild and validate periodically for OS package updates,
 then update the digest variable. Remove the variable to return to stock Ubuntu.
 The Ubuntu 20.04 Dockerfile can be built with the same local command below by
 substituting `ubuntu20-ci.Dockerfile` and `openviking-ci-ubuntu20`.
@@ -230,15 +236,15 @@ need DDL privileges to create and drop isolated Task/Work and Watch tables.
 
 The executed suites cover account-store initialization and distributed
 authentication, Redis/MySQL credential snapshots and cache invalidation,
-Task/Work lifecycle and concurrency, and Watch persistence and cross-instance
-ownership. File variants of Task/Work and Watch also run for comparison.
+Task/Work lifecycle and concurrency, and Watch persistence, refresh, restart
+and cross-instance ownership. File variants of Task/Work and Watch also run
+for comparison.
 PostgreSQL account-store tests are not included because that backend is not yet
 on this branch's `main` baseline.
 
 `database_integration.py verify` rejects skipped/failed database cases, missing
-account contracts, and any backend suite with zero passing cases. The two
-Watch file-only skips are expected. GitHub publishes database case counts in
-the job summary and retains `database-integration-results` JUnit XML for seven
+account contracts, and any backend suite with zero passing cases. GitHub
+publishes database case counts in the job summary and retains `database-integration-results` JUnit XML for seven
 days, including failed runs.
 
 To reproduce against **fresh, disposable** local databases, set `OV_TEST_MYSQL`
@@ -251,11 +257,14 @@ run the same commands as the workflow:
 ```sh
 uv run --no-sync python .github/scripts/database_integration.py prepare
 uv run --no-sync python -m pytest -q -o addopts='' \
-  tests/server/test_account_services.py::test_mysql_load_creates_default_account \
   tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+  tests/server/test_mysql_account_store.py \
   tests/server/test_redis_mysql_account_store.py \
   tests/service/test_task_work_contract.py \
+  tests/service/test_task_store_postgres.py \
   tests/resource/test_watch_store.py \
+  tests/resource/test_watch_main_integration.py \
+  tests/resource/test_watch_process.py \
   --junitxml=database-integration.xml
 uv run --no-sync python .github/scripts/database_integration.py verify database-integration.xml
 python3 -m pytest --noconftest -q -o addopts='' tests/misc/test_database_integration_ci.py

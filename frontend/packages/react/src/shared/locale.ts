@@ -36,6 +36,6 @@ export function resolveLocale<T extends object>(
   locale: Locale = 'en-US',
   overrides?: Partial<T>,
 ): T {
-  const defaults = messages[locale] ?? messages['en-US'];
+  const defaults = messages[Object.hasOwn(messages, locale) ? locale : 'en-US'];
   return overrides ? mergeLabels(defaults, overrides) : defaults;
 }

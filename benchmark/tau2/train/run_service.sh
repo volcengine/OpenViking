@@ -82,8 +82,8 @@ Options:
                      Worker threads used to host rollouts off the uvicorn event loop.
                      Default: 200. Use 0 to disable threaded hosting.
   --repair-vikingbot-gym
-                     If --rollout-backend=vikingbot and tau2.gym/gymnasium is missing,
-                     install tau2-bench[gym] into the current Python environment.
+                     If the VikingBot backend cannot load a compatible Tau Gym,
+                     install its dependencies from the selected Tau checkout.
                      Default: enabled. Set TAU2_REPAIR_VIKINGBOT_GYM=0 or pass
                      --no-repair-vikingbot-gym to disable automatic repair.
   --no-kill-existing Do not stop existing process listening on --port
@@ -123,6 +123,12 @@ if [[ "${REPAIR_VIKINGBOT_GYM}" != "0" && "${REPAIR_VIKINGBOT_GYM}" != "1" ]]; t
   exit 1
 fi
 
+if [[ -z "${DATA_ROOT}" && "${ROLLOUT_BACKEND}" == "vikingbot" ]]; then
+  _candidate="${TAU2_BENCH_ROOT:-${TAU2_DIR}/vikingbot/.generated/tau2-bench}/data/tau2"
+  if [[ -d "${_candidate}/domains" ]]; then
+    DATA_ROOT="${_candidate}"
+  fi
+fi
 if [[ -z "${DATA_ROOT}" ]]; then
   for _candidate in \
     "${REPO_ROOT}/tau2-bench/data/tau2" \
@@ -157,11 +163,7 @@ export AGENT_API_BASE="${AGENT_API_BASE:-${OPENAI_API_BASE}}"
 export USER_API_BASE="${USER_API_BASE:-${OPENAI_API_BASE}}"
 
 check_vikingbot_user_simulator() {
-  "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
-from tau2.gym.gym_agent import AgentGymEnv
-import gymnasium  # noqa: F401
-assert AgentGymEnv is not None
-PY
+  "${PYTHON_BIN}" "${TAU2_DIR}/common/tau2_env/check_gym.py"
 }
 
 repair_vikingbot_user_simulator() {
@@ -170,25 +172,22 @@ repair_vikingbot_user_simulator() {
     echo "[tau2-service] set TAU2_BENCH_ROOT or pass --data-root <tau2-bench>/data/tau2." >&2
     return 1
   fi
-  echo "[tau2-service] repairing vikingbot user simulator dependency: ${PYTHON_BIN} -m pip install -e ${TAU2_BENCH_ROOT}[gym]"
-  "${PYTHON_BIN}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]"
+  echo "[tau2-service] Installing Tau Gym from ${TAU2_BENCH_ROOT}"
+  "${PYTHON_BIN}" -m pip install -e "${TAU2_BENCH_ROOT}[gym,knowledge,voice]" 'audioop-lts; python_version >= "3.13"'
 }
 
 if [[ "${ROLLOUT_BACKEND}" == "vikingbot" ]]; then
-  if ! check_vikingbot_user_simulator && [[ "${REPAIR_VIKINGBOT_GYM}" == "1" ]]; then
+  if ! check_vikingbot_user_simulator >/dev/null 2>&1 && [[ "${REPAIR_VIKINGBOT_GYM}" == "1" ]]; then
     if ! repair_vikingbot_user_simulator; then
       echo "[tau2-service] vikingbot user simulator repair failed; validating again before exit." >&2
     fi
   fi
   if ! check_vikingbot_user_simulator; then
     cat >&2 <<EOF
-[tau2-service] vikingbot backend requires tau2.gym.gym_agent.AgentGymEnv and gymnasium.
-[tau2-service] Without them, communicate_with_user falls back to a fixed string and the user simulator is NOT active.
+[tau2-service] vikingbot requires a Tau Gym with deferred user STOP and close(termination_reason=...).
 [tau2-service]
-[tau2-service] Fix one of:
+[tau2-service] Install the compatible checkout:
 [tau2-service]   source benchmark/tau2/vikingbot/setup_env.sh
-[tau2-service]   ${PYTHON_BIN} -m pip install -e "${TAU2_BENCH_ROOT:-<tau2-bench>}[gym]"
-[tau2-service]   bash benchmark/tau2/train/run_service.sh --rollout-backend vikingbot --repair-vikingbot-gym
 EOF
     exit 1
   fi

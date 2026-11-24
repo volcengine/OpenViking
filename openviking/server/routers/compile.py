@@ -201,6 +201,7 @@ async def compile_embeddings(
     from openviking.core.namespace import classify_uri
     from openviking.models.embedder.base import embed_compat
     from openviking.models.model_error import ModelError, ModelErrorKind
+    from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 
     target = validate_request_viking_uri(resolve_path_variables(request.target_uri), _ctx)
     classification = classify_uri(target)
@@ -236,7 +237,9 @@ async def compile_embeddings(
     # Small chunks also bound providers whose embed_async implementation has no limiter.
     vectors = []
     for start in range(0, len(request.texts), 4):
-        vectors.extend(
-            await asyncio.gather(*(embed(text) for text in request.texts[start : start + 4]))
-        )
+        with bind_dashboard_token_source_type("compile"):
+            batch = await asyncio.gather(
+                *(embed(text) for text in request.texts[start : start + 4])
+            )
+        vectors.extend(batch)
     return Response(status="ok", result={"model": model, "vectors": vectors}).model_dump()

@@ -7,11 +7,11 @@ import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
 
 const commands = {
   ...transferSession,
-  'add-resource': 'Add a resource from a URL',
+  'add-resource': 'Import a web URL, repository, or local file',
   'add-skill': 'Install a Skill',
   'add-memory': 'Add memory directly',
-  compile: 'Compile material with a Skill',
-  'compile create': 'Create a compile configuration',
+  compile: 'Run compilation',
+  'compile create': 'Create a configuration to run with compile',
 
   grep: 'Match text in resources',
   glob: 'Match resource paths',
@@ -52,23 +52,33 @@ const messages = {
       ConsoleLabels,
       | 'commandConsole'
       | 'vikingBot'
+      | 'activationTitle'
+      | 'activationDescription'
       | 'commandTitle'
       | 'commandDescription'
       | 'quickStart'
     >
   >,
+  noTasks: 'No tasks',
+  grepLimitReached: 'The search reached its limit. More matches may exist.',
   telemetryResult: (value: string) => `Telemetry: ${value}`,
-  taskCompletion: {
-    title: 'Task complete',
-    description: 'Background task completed.',
-    resource: 'The resource import is complete. Click to view the result.',
-    viewResult: 'View result',
+  taskResult: 'Task result',
+  memoryCommit: {
+    idle: 'Extract long-term memory',
+    pending: 'Extract long-term memory',
+    submitted: 'Extract long-term memory',
+    success: 'Long-term memory extracted',
+    empty: 'There are no new messages to extract memories from.',
+    skipped: 'No new memories were generated.',
+    failed: 'Could not submit the session',
+    completed: 'Memory extraction completed.',
+    saved: 'Memories were generated and saved.',
+    view: 'View memory',
   },
   compileQuickInputs: {
     createWiki: {
-      label: 'Create Wiki',
-      prompt:
-        'Organize the files in the selected directory into a Wiki, preserving sources and the relationships between documents',
+      label: 'Wiki',
+      prompt: 'Organize the files in the selected directory into a Wiki.',
     },
     dailyReport: {
       label: 'Schedule daily report',
@@ -77,10 +87,14 @@ const messages = {
     },
   },
   commands,
+  localResourceImportHelp:
+    'Enter a web or repository URL to import it directly. Run the command by itself or with only a local path to open the Local upload page and choose files or folders.',
+  localResourceImportSummary:
+    'Import a web URL or repository, or open Local upload for files and folders',
   commandGuides: {
     'add-resource': {
       description:
-        'Import a web or repository URL into Resources. The browser terminal does not accept local file paths.',
+        'Enter a web or repository URL to import it directly. For local uploads, choose a file in the browser.',
       examples: [
         'ov add-resource https://github.com/volcengine/OpenViking/blob/main/README.md',
       ],
@@ -104,7 +118,8 @@ const messages = {
         'Search for relevant resources, memories, and skills in the current context.',
       examples: ['ov find "What is the value of OpenViking?"'],
     },
-    compile: compileHelp['en-US'].guide,
+    'compile create': compileHelp['en-US'].createGuide,
+    compile: compileHelp['en-US'].runGuide,
   } satisfies Partial<Record<keyof typeof commands, ConsoleCommandGuide>>,
   compileArgsHelp: compileHelp['en-US'].args,
   parameters: {
@@ -121,9 +136,9 @@ const messages = {
     'session-id': 'Session to append and commit',
     limit: 'Maximum number of results',
     'compile-name':
-      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters.',
+      'Case-sensitive name using Han characters, ASCII letters, digits, underscores or hyphens, with no leading hyphen. Up to 64 characters for ASCII-only names or 32 if the name contains Han characters. Names must be unique per user and cannot be renamed.',
     'compile-from':
-      'At least one existing readable source directory. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
+      'At least one existing readable source directory. Individual files are unsupported. Repeat --from or separate URIs with commas. Duplicate URIs are removed.',
     'compile-to':
       'Writable output directory. The server can create it if needed.',
     from: 'Existing source directory URIs. Repeat --from or separate URIs with commas',
@@ -146,6 +161,10 @@ const messages = {
     status: 'Config & status',
   },
   messages: {
+    localResourceImportOpened: () =>
+      'Choose files or folders on the Local upload page.',
+    localResourceImportFlags: () =>
+      'Use Local upload to configure the import, or use --temp-file-id to apply command options.',
     cancelled: () =>
       'Request cancelled; the server may still process an accepted operation.',
     ...transferErrors,

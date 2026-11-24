@@ -5,11 +5,9 @@ import test from 'node:test';
 import { flattenResult } from '../src/modules/file-browser/search-hit-order.ts';
 
 import { normalizeFindResult } from '../src/modules/file-browser/search-model.ts';
-import {
-  flattenTree,
-  nameFromUri,
-  toEntryRow,
-} from '../src/shared/directory-tree/rows.ts';
+const { flattenTree, nameFromUri, toEntryRow } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'directory-rows.js'))
+);
 const { toDirectoryTab, toFileTab } = await import(
   pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'browser-preview-model.js'))
 );

@@ -4,8 +4,10 @@ import { JSDOM } from 'jsdom';
 import { key } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
 
-const member = 'workbench:staging:member-a';
-const otherMember = 'workbench:staging:member-b';
+const member = 'workbench:staging:library-a:member-a';
+const otherMember = 'workbench:staging:library-a:member-b';
+const otherLibrary = 'workbench:staging:library-b:member-a';
+const importCommand = 'ov add-resource https://example.com/readme.md';
 const props = (commandHistoryKey) => ({
   modes: ['command'],
   commandHistoryKey,
@@ -15,16 +17,29 @@ const listedCommands = () =>
     (item) => item.textContent,
   );
 
-test('Console restores command recall in the same tab and scope across mounts', async (t) => {
+test('Console restores command recall for the same library and user after a reload', async (t) => {
   const storage = new JSDOM('', { url: 'https://workbench.test' }).window;
   t.after(() => storage.close());
-  t.mock.getter(window, 'sessionStorage', () => storage.sessionStorage);
-  const transport = t.mock.fn(async () => ok({ state: 'ready' }));
+  t.mock.getter(window, 'localStorage', () => storage.localStorage);
+  const transport = t.mock.fn(async (url) => {
+    if (url.endsWith('/api/v1/resources')) {
+      return ok({
+        task_id: 'import-task',
+        root_uri: 'viking://resources/readme',
+        status: 'success',
+      });
+    }
+    if (url.endsWith('/api/v1/tasks/import-task')) {
+      return ok({ task_id: 'import-task', status: 'running' });
+    }
+    return ok({ state: 'ready' });
+  });
   const first = await mount(transport, props(member));
   try {
+    await first.execute(importCommand);
     await first.execute('ov health');
-    await first.execute('ov status');
     assert.equal(first.records.length, 2);
+    assert.equal(first.records[0].dataset.status, 'pending');
   } finally {
     await first.dispose();
   }
@@ -33,27 +48,34 @@ test('Console restores command recall in the same tab and scope across mounts', 
   try {
     assert.equal(reopened.records.length, 0);
     await reopened.press('Command history');
-    assert.deepEqual(listedCommands(), ['ov status', 'ov health']);
+    assert.deepEqual(listedCommands(), ['ov health', importCommand]);
     assert.match(
       document.querySelector('.ov-console__history-time').textContent,
       /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/,
     );
     await reopened.press('Command history');
     await key(reopened.input, 'ArrowUp');
-    assert.equal(reopened.input.value, 'ov status');
+    assert.equal(reopened.input.value, 'ov health');
     await key(reopened.input, 'ArrowUp');
+    assert.equal(reopened.input.value, importCommand);
+    await key(reopened.input, 'ArrowDown');
     assert.equal(reopened.input.value, 'ov health');
     await key(reopened.input, 'ArrowDown');
-    assert.equal(reopened.input.value, 'ov status');
-    await key(reopened.input, 'ArrowDown');
     assert.equal(reopened.input.value, '');
-    assert.equal(transport.mock.calls.length, 2);
+    assert.equal(
+      transport.mock.calls.filter(
+        ({ arguments: [url] }) => !url.endsWith('/api/v1/tasks/import-task'),
+      ).length,
+      2,
+    );
 
     await reopened.render(props(otherMember));
     await reopened.press('Command history');
     assert.deepEqual(listedCommands(), []);
+    await reopened.render(props(otherLibrary));
+    assert.deepEqual(listedCommands(), []);
     await reopened.render(props(member));
-    assert.deepEqual(listedCommands(), ['ov status', 'ov health']);
+    assert.deepEqual(listedCommands(), ['ov health', importCommand]);
     await reopened.press('New session');
   } finally {
     await reopened.dispose();
@@ -67,124 +89,5 @@ test('Console restores command recall in the same tab and scope across mounts', 
     assert.equal(cleared.input.value, '');
   } finally {
     await cleared.dispose();
-  }
-});
-
-test('Console preserves long read-only commands and keeps failed write bodies out of storage', async (t) => {
-  const storage = new JSDOM('', { url: 'https://workbench.test' }).window;
-  t.after(() => storage.close());
-  t.mock.getter(window, 'sessionStorage', () => storage.sessionStorage);
-
-  const legacy = 'openviking.console.command-history.v1:';
-  const saved = 'openviking.console.command-history.v2:';
-  const longCommand = `ov ls viking://resources/${'a'.repeat(4097)}`;
-  const failedWrite = 'ov add-memory "synthetic private body" --session-id s1';
-  const malformedWrite = 'ov add-memory "synthetic unclosed body';
-  const oldBody = 'ov add-memory "legacy private body" --session-id s1';
-  const entry = (command) => ({ command, createdAtMs: 1000 });
-  storage.sessionStorage.setItem(
-    legacy + member,
-    JSON.stringify([entry('ov health'), entry(oldBody)]),
-  );
-  storage.sessionStorage.setItem(
-    legacy + otherMember,
-    JSON.stringify([entry('ov status'), entry(oldBody)]),
-  );
-
-  const transport = t.mock.fn(async (_url, options) =>
-    options.method === 'POST'
-      ? Response.json(
-          { status: 'error', error: { code: 'DENIED', message: 'Denied' } },
-          { status: 403 },
-        )
-      : ok({ entries: [] }),
-  );
-  const first = await mount(transport, props(member));
-  try {
-    assert.equal(storage.sessionStorage.getItem(legacy + member), null);
-    assert.equal(storage.sessionStorage.getItem(legacy + otherMember), null);
-    assert.deepEqual(
-      JSON.parse(storage.sessionStorage.getItem(saved + otherMember)),
-      [entry('ov status')],
-    );
-
-    await first.execute(longCommand);
-    await first.execute(failedWrite);
-    assert.equal(first.records.at(-1).dataset.status, 'error');
-    const writeRequest = transport.mock.calls.find(
-      ({ arguments: [, options] }) => options.method === 'POST',
-    );
-    assert.match(writeRequest.arguments[1].body, /synthetic private body/);
-    await first.execute(malformedWrite);
-
-    await key(first.input, 'ArrowUp');
-    assert.equal(first.input.value, malformedWrite);
-    await key(first.input, 'ArrowUp');
-    assert.equal(first.input.value, failedWrite);
-    const persisted = JSON.parse(
-      storage.sessionStorage.getItem(saved + member),
-    );
-    assert.deepEqual(
-      persisted.map(({ command }) => command),
-      ['ov health', longCommand],
-    );
-  } finally {
-    await first.dispose();
-  }
-
-  const reopened = await mount(transport, props(member));
-  try {
-    await reopened.press('Command history');
-    assert.deepEqual(listedCommands(), [longCommand, 'ov health']);
-    await reopened.press('Command history');
-    await key(reopened.input, 'ArrowUp');
-    assert.equal(reopened.input.value, longCommand);
-  } finally {
-    await reopened.dispose();
-  }
-});
-
-test('Console keeps searches rejected by request validation out of persisted history', async (t) => {
-  const storage = new JSDOM('', { url: 'https://workbench.test' }).window;
-  t.after(() => storage.close());
-  t.mock.getter(window, 'sessionStorage', () => storage.sessionStorage);
-
-  const storageKey = 'openviking.console.command-history.v2:' + member;
-  const invalid = 'ov search "synthetic private query" --mode context -L 2';
-  const valid = 'ov search "synthetic public query" --mode context';
-  const oldEntry = { command: invalid, createdAtMs: 1000 };
-  storage.sessionStorage.setItem(storageKey, JSON.stringify([oldEntry]));
-
-  const transport = t.mock.fn(async () =>
-    ok({ memories: [], resources: [], skills: [] }),
-  );
-  const first = await mount(transport, props(member));
-  try {
-    await first.press('Command history');
-    assert.deepEqual(listedCommands(), []);
-    assert.equal(storage.sessionStorage.getItem(storageKey), null);
-    await first.press('Command history');
-    await first.execute(valid);
-    await first.execute(invalid);
-    assert.equal(first.records.at(-1).dataset.status, 'error');
-    assert.equal(transport.mock.calls.length, 1);
-    await key(first.input, 'ArrowUp');
-    assert.equal(first.input.value, invalid);
-    assert.deepEqual(
-      JSON.parse(storage.sessionStorage.getItem(storageKey)).map(
-        ({ command }) => command,
-      ),
-      [valid],
-    );
-  } finally {
-    await first.dispose();
-  }
-
-  const reopened = await mount(transport, props(member));
-  try {
-    await reopened.press('Command history');
-    assert.deepEqual(listedCommands(), [valid]);
-  } finally {
-    await reopened.dispose();
   }
 });

@@ -8,11 +8,17 @@ import {
   openAction,
   act,
   settle,
+  ok,
 } from './helpers/preview-native-dom.mjs';
 
-test('download fetches original bytes and export posts to the native ovpack endpoint', async () => {
+test('file download and directory export use their native endpoints', async () => {
   const uri = `${rootUri}/doc.md`;
+  const directory = `${rootUri}/folder.with.dots`;
   const fetch = fixture(uri, false, (call) => {
+    if (call.path.endsWith('/fs/ls'))
+      return ok(
+        call.uri === rootUri ? [{ uri }, { uri: directory, isDir: true }] : [],
+      );
     if (call.path.endsWith('/content/download'))
       return Promise.resolve(new Response('original bytes'));
     if (call.path.endsWith('/pack/export'))
@@ -34,16 +40,17 @@ test('download fetches original bytes and export posts to the native ovpack endp
   const view = await mount(tree(fetch, uri));
   try {
     await openAction('Download');
+    await view.render(tree(fetch, directory));
     await openAction('Export .ovpack');
     assert.equal(await blobs[0].text(), 'original bytes');
     assert.deepEqual(
       [...new Uint8Array(await blobs[1].arrayBuffer())],
       [80, 75, 3, 4],
     );
-    assert.deepEqual(names, ['doc.md', 'doc.md.ovpack']);
+    assert.deepEqual(names, ['doc.md', 'folder.with.dots.ovpack']);
     const pack = fetch.calls.find((call) => call.path.endsWith('/pack/export'));
     assert.equal(pack.init.method, 'POST');
-    assert.deepEqual(pack.body, { uri });
+    assert.deepEqual(pack.body, { uri: directory });
   } finally {
     await view.unmount();
     URL.createObjectURL = originalCreate;

@@ -6,19 +6,24 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.crypto.encryptor import build_credential_encryptor
 from openviking.server.identity import RequestContext, Role
+from openviking.service.compile_service import CompileService
 from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.fs_service import FSService
 from openviking.service.task_domain import TaskRecord
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.encryption_config import EncryptionConfig
+from openviking_cli.utils.config.open_viking_config import CompileApiConfig, ConnectorConfig
 from tests.test_task_tracker import _FakeAgfs
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
-async def test_none_provider_key_uses_plain_enqueue_for_create_and_resume(
+async def test_connector_monitors_for_same_target_can_be_dequeued_independently(
     monkeypatch, tmp_path, backend
 ):
     import ragfs_python
@@ -35,42 +40,54 @@ async def test_none_provider_key_uses_plain_enqueue_for_create_and_resume(
     manager = QueueManager(transport)
     queue = manager.get_queue(manager.EXTERNAL_TASK, allow_create=True)
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
-    service = ExternalTaskService()
-    service.register(
-        SimpleNamespace(
-            task_type="connector",
-            task_id_prefix="con_",
-            serialization_key=lambda payload: ConnectorDelegate.serialization_key(None, payload),
+    service = ExternalTaskService(
+        credential_encryptor=build_credential_encryptor(
+            EncryptionConfig(local={"root_key": "42" * 32})
         )
     )
-    queue._async_agfs.write = AsyncMock(wraps=queue._async_agfs.write)
-    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    provider = ConnectorDelegate(viking_fs=None)
+    service.register(provider)
+    config = ConnectorConfig(
+        enable=True,
+        connector="https://connector.example/doc/add",
+        tracker="https://connector.example/task/info",
+    )
+    monkeypatch.setattr(
+        "openviking.connector.delegate.get_openviking_config",
+        lambda: SimpleNamespace(connector=config),
+    )
+    monkeypatch.setattr("openviking.connector.delegate.get_external_task_service", lambda: service)
+    submit = AsyncMock(side_effect=[{"task_key": "remote-first"}, {"task_key": "remote-second"}])
+    monkeypatch.setattr(provider, "_client", lambda _: SimpleNamespace(submit_doc_add=submit))
+    ctx = RequestContext(
+        user=UserIdentifier("acme", "alice"), role=Role.USER, api_key="test-api-key"
+    )
     try:
-        task = await service.create(
-            "connector", resource_id=None, payload={"submit": {"to": "target"}}, ctx=ctx
+        target = "viking://resources/target"
+        first_task = await provider.create(
+            "tos://doc-bucket/first.md", ctx, target, create_parent=True
         )
-        assert service.queue_serial_key(task) is None
-        await service._resume_submission(task, ctx)
-        assert [call.args[0] for call in queue._async_agfs.write.await_args_list] == [
-            f"{queue.path}/enqueue",
-            f"{queue.path}/enqueue",
-        ]
+        second_task = await provider.create(
+            "tos://doc-bucket/second.md", ctx, target, create_parent=True
+        )
+        assert first_task["connector_task_key"] == "remote-first"
+        assert second_task["connector_task_key"] == "remote-second"
         first = await queue.dequeue_raw()
         second = await queue.dequeue_raw()
         assert first is not None and second is not None
         assert first["id"] != second["id"]
-        assert json.loads(first["data"])["task_id"] == task.task_id
-        assert json.loads(second["data"])["task_id"] == task.task_id
+        assert json.loads(first["data"])["task_id"] == first_task["task_id"]
+        assert json.loads(second["data"])["task_id"] == second_task["task_id"]
     finally:
         transport.close()
 
 
 def test_explicit_provider_key_preserves_account_and_task_type_scope():
     service = ExternalTaskService()
-    for task_type in ["compile", "other"]:
-        service.register(
-            SimpleNamespace(task_type=task_type, serialization_key=lambda payload: payload["to"])
-        )
+    service.register(CompileService(CompileApiConfig(), tasks=service, fs=FSService()))
+    service.register(
+        SimpleNamespace(task_type="other", serialization_key=lambda payload: payload["to"])
+    )
     task = TaskRecord(
         task_id="A",
         task_type="compile",

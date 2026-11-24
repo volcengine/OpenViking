@@ -51,14 +51,15 @@ from openviking.pyagfs.exceptions import (
     GitRestoreWritebackPartialError,
 )
 from openviking.server.identity import RequestContext, Role
-from openviking.service.external_task_service import ExternalTaskSnapshot
-from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
+from openviking.service.external_task_service import SUBMIT_EXHAUSTED, ExternalTaskSnapshot
+from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.pathlock_recovery import (
     is_compile_lock_conflict,
     lock_retry_delay,
 )
+from openviking.utils.compile_recovery import source_set_digest
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -242,6 +243,7 @@ class CompileStore(Protocol):
     async def put_run(
         self, account_id: str, owner_user_id: str, compile_name: str, run: dict
     ) -> None: ...
+    async def cancel_queued_run(self, task: TaskRecord) -> None: ...
     def lock_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Any: ...
@@ -487,6 +489,20 @@ class CompileStateStore:
         path = self._run_path(account_id, owner_user_id, compile_name, run["task_id"])
         async with self.locked(path) as lease:
             await self.write_json(path, run, lease)
+
+    async def cancel_queued_run(self, task: TaskRecord) -> None:
+        """Finalize an unstarted Run using the Task's persisted cancellation time."""
+        compile_meta = (task.meta.get("request") or {}).get("compile") or {}
+        owner = compile_meta.get("owner_user_id")
+        name = compile_meta.get("compile_name")
+        if task.account_id is None or not owner or not name:
+            return
+        path = self._run_path(task.account_id, owner, name, task.task_id)
+        async with self.locked(path) as lease:
+            run = await self.read_json(path)
+            if run is not None and run["status"] == "queued" and run["started_at"] is None:
+                run.update(status="cancelled", finished_at=task.updated_at)
+                await self.write_json(path, run, lease)
 
     async def list_runs(
         self,
@@ -879,13 +895,23 @@ class CompileLifecycle:
         checkpoint = self._checkpoint(task)
         if "baseline" not in checkpoint:
             progress = {}
+            recovering = False
             if (
                 record is not None
                 and execution_signature(record) == request["compile"]["input_signature"]
             ):
                 progress = deepcopy(record["progress"])
+                recovering = record["execution_context"].get("partial_compile") == {
+                    "base": progress.get("source_commit"),
+                    "signature": request["compile"]["input_signature"],
+                }
             await self._save_checkpoint(
-                task, {"baseline": progress, "progress_before": progress.get("source_commit")}
+                task,
+                {
+                    "baseline": progress,
+                    "progress_before": progress.get("source_commit"),
+                    "recovering": recovering,
+                },
             )
         progress = self._checkpoint(task).get("baseline") or {}
         run["status"] = "running"
@@ -962,6 +988,9 @@ class CompileLifecycle:
             if diff_dirs
             else []
         )
+        if self._checkpoint(task).get("recovering") and incremental and not full_dirs and changes:
+            if all(change["change_type"] in {"added", "modified"} for change in changes):
+                plan["recovery_sources"] = source_set_digest(change["uri"] for change in changes)
         await self._save_run(task, run)
         await self._save_checkpoint(
             task,
@@ -994,44 +1023,62 @@ class CompileLifecycle:
         return deepcopy(plan)
 
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
-        """Finish output publication or rollback before exposing a terminal Task result."""
+        """Finalize the run, allowing submit failures to settle after lock retries."""
         name = self._compile_name(task)
         scope = (task.account_id, self._owner_user_id(task), name, task.task_id) if name else ()
+        skip_rollback = snapshot.stage == SUBMIT_EXHAUSTED and "external_task_id" not in task.auth
         retries = task.meta.get("rollback_lock_retries", 0)
-        if scope and isinstance(retries, int) and retries >= ROLLBACK_LOCK_MAX_RETRIES:
+        if (
+            not skip_rollback
+            and scope
+            and isinstance(retries, int)
+            and retries >= ROLLBACK_LOCK_MAX_RETRIES
+        ):
             await self._refresh_checkpoint(task)
             if self._checkpoint(task).get("phase") == "rollback_exhausted":
                 return await self._fail_blocked_rollback(task, snapshot, scope)
-        try:
-            async with self._admission(task):
-                await self._refresh_checkpoint(task)
-                # A baseline key proves registration completed; early cancellation can bypass start.
-                if "baseline" not in self._checkpoint(task):
-                    await self.record_queued(task)
-                async with self._store.lock_run(*scope) if scope else nullcontext():
-                    return await self._finish(task, snapshot)
-        except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
-            if not is_compile_lock_conflict(exc):
-                raise
-            if (
-                snapshot.status == "completed"
-                and task.status != TaskStatus.CANCELLING
-                and self._checkpoint(task).get("phase") != "rolling_back"
-            ):
-                if not isinstance(exc, LockAcquisitionError):
+        submission_retry_delays = iter((1, 3))
+        while True:
+            try:
+                async with self._admission(task):
+                    await self._refresh_checkpoint(task)
+                    # Early cancellation can skip run registration.
+                    if "baseline" not in self._checkpoint(task):
+                        await self.record_queued(task)
+                    async with self._store.lock_run(*scope) if scope else nullcontext():
+                        return await self._finish(task, snapshot, skip_rollback=skip_rollback)
+            except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
+                if not is_compile_lock_conflict(exc):
                     raise
-                return ExternalTaskSnapshot(status="running", stage="committing")
-            delay = lock_retry_delay(retries, ROLLBACK_LOCK_MAX_RETRIES)
-            if delay is None:
-                await self._refresh_checkpoint(task)
-                if scope:
-                    await self._save_checkpoint(task, {"phase": "rollback_exhausted"})
-                return await self._fail_blocked_rollback(task, snapshot, scope)
-            update = {"rollback_lock_retries": retries + 1}
-            await self._patch_task(task, TaskPatch(meta=update))
-            task.meta.update(update)
-            await asyncio.sleep(delay)
-            return ExternalTaskSnapshot(status="cancelling", stage="cancelling")
+                if skip_rollback:
+                    submission_delay = next(submission_retry_delays, None)
+                    if submission_delay is None:
+                        logger.warning(
+                            "Compile submission failure exceeded run finalization lock retries",
+                            extra={"task_id": task.task_id, "error_type": type(exc).__name__},
+                        )
+                        return snapshot
+                    await asyncio.sleep(submission_delay)
+                    continue
+                if (
+                    snapshot.status == "completed"
+                    and task.status != TaskStatus.CANCELLING
+                    and self._checkpoint(task).get("phase") != "rolling_back"
+                ):
+                    if not isinstance(exc, LockAcquisitionError):
+                        raise
+                    return ExternalTaskSnapshot(status="running", stage="committing")
+                delay = lock_retry_delay(retries, ROLLBACK_LOCK_MAX_RETRIES)
+                if delay is None:
+                    await self._refresh_checkpoint(task)
+                    if scope:
+                        await self._save_checkpoint(task, {"phase": "rollback_exhausted"})
+                    return await self._fail_blocked_rollback(task, snapshot, scope)
+                update = {"rollback_lock_retries": retries + 1}
+                await self._patch_task(task, TaskPatch(meta=update))
+                task.meta.update(update)
+                await asyncio.sleep(delay)
+                return ExternalTaskSnapshot(status="cancelling", stage="cancelling")
 
     async def _fail_blocked_rollback(
         self, task: Any, snapshot: ExternalTaskSnapshot, scope: tuple
@@ -1087,7 +1134,9 @@ class CompileLifecycle:
             error_message=run.get("error"),
         )
 
-    async def _finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
+    async def _finish(
+        self, task: Any, snapshot: ExternalTaskSnapshot, *, skip_rollback: bool
+    ) -> ExternalTaskSnapshot:
         from openviking.service.task_tracker import get_task_tracker
 
         run = await self._read_run(task)
@@ -1095,7 +1144,6 @@ class CompileLifecycle:
             await self._advance_progress(task, run)
             await self._save_checkpoint(task, {"phase": "finished"})
             return self._finished_snapshot(run, snapshot.error_code)
-        ctx = await self.task_ctx(task)
         target = task.meta["request"]["to"]
         meta = run["meta"]
         if (
@@ -1107,7 +1155,20 @@ class CompileLifecycle:
             snapshot = ExternalTaskSnapshot(status="cancelled")
         try:
             if snapshot.status == "completed" and meta["start_snapshot"]:
-                await self._save_checkpoint(task, {"phase": "committing"})
+                ctx = await self.task_ctx(task)
+                partial = self._checkpoint(task).get("partial_delivery") is True or (
+                    isinstance(snapshot.result, dict)
+                    and snapshot.result.get("completion_status") == "partial"
+                )
+                checkpoint: dict[str, Any] = {"phase": "committing"}
+                if partial:
+                    # Finalization can resume without the original Runtime response.
+                    checkpoint["partial_delivery"] = True
+                elif isinstance(snapshot.result, dict):
+                    expected = (self._checkpoint(task).get("plan") or {}).get("recovery_sources")
+                    if expected and snapshot.result.get("recovery_proof") == expected:
+                        checkpoint["verified_recovery"] = True
+                await self._save_checkpoint(task, checkpoint)
                 run["status"] = "committing"
                 await self._save_run(task, run)
                 if meta["finish_snapshot"] is None:
@@ -1141,6 +1202,8 @@ class CompileLifecycle:
                         ctx=ctx,
                     )
                     run["result"] = dict.fromkeys(_RESULT_KEYS.values(), 0)
+                    if partial:
+                        run["result"]["completion_status"] = "partial"
                     for change in changes:
                         if is_versioned(change["uri"]):
                             run["result"][_RESULT_KEYS[change["change_type"]]] += 1
@@ -1163,18 +1226,20 @@ class CompileLifecycle:
                             committed_at=self._checkpoint(task)["target_committed_at"],
                         )
             if snapshot.status in {"failed", "cancelled"}:
-                # A publication snapshot is not a completed rollback checkpoint.
-                if (
-                    self._checkpoint(task).get("phase") != "rolling_back"
-                    and meta["finish_snapshot"]
-                ):
-                    meta["finish_snapshot"] = None
-                    await self._save_run(task, run)
-                await self._save_checkpoint(
-                    task, {"phase": "rolling_back", "terminal_status": snapshot.status}
-                )
-                if meta["start_snapshot"] and not meta["finish_snapshot"]:
-                    await run_to_completion(lambda: self._rollback(target, task, run, ctx))
+                if not skip_rollback:
+                    # A publication snapshot is not a completed rollback checkpoint.
+                    if (
+                        self._checkpoint(task).get("phase") != "rolling_back"
+                        and meta["finish_snapshot"]
+                    ):
+                        meta["finish_snapshot"] = None
+                        await self._save_run(task, run)
+                    await self._save_checkpoint(
+                        task, {"phase": "rolling_back", "terminal_status": snapshot.status}
+                    )
+                    if meta["start_snapshot"] and not meta["finish_snapshot"]:
+                        ctx = await self.task_ctx(task)
+                        await run_to_completion(lambda: self._rollback(target, task, run, ctx))
                 run["result"] = None
                 run["error"] = "; ".join(
                     filter(None, [snapshot.error_message or snapshot.status, run.get("error")])
@@ -1196,9 +1261,21 @@ class CompileLifecycle:
         )
 
     async def _advance_progress(self, task: Any, run: dict) -> None:
-        """Advance only the matching configuration's unchanged successful predecessor."""
+        """Advance a matching baseline after publication or verified recovery."""
         compile_name = self._compile_name(task)
         if not compile_name or run["status"] != "completed" or not run["meta"]["start_snapshot"]:
+            return
+        result = run.get("result") or {}
+        partial = result.get("completion_status") == "partial"
+        checkpoint = self._checkpoint(task)
+        previous = checkpoint.get("progress_before")
+        if partial and not previous:
+            return
+        if not (
+            partial
+            or checkpoint.get("verified_recovery")
+            or any(result.get(key, 0) for key in _RESULT_KEYS.values())
+        ):
             return
         from openviking.service.task_tracker import get_task_tracker
 
@@ -1211,10 +1288,15 @@ class CompileLifecycle:
                 return
             if execution_signature(record) != task.meta["request"]["compile"]["input_signature"]:
                 return
-            if (record["progress"] or {}).get("source_commit") != self._checkpoint(task).get(
-                "progress_before"
-            ):
+            if (record["progress"] or {}).get("source_commit") != previous:
                 return
+            if partial:
+                record["execution_context"]["partial_compile"] = {
+                    "base": previous,
+                    "signature": task.meta["request"]["compile"]["input_signature"],
+                }
+                return
+            record["execution_context"].pop("partial_compile", None)
             record["progress"] = {
                 "source_commit": run["meta"]["start_snapshot"],
                 "processed_roots": list(run["params"]["from"]),
@@ -1279,7 +1361,7 @@ class CompileLifecycle:
                         written_paths=restored, deleted_paths=deleted, project_dir=to, real_ctx=ctx
                     )
                 except Exception:
-                    logger.exception("Compile rollback reindex scheduling failed")
+                    logger.error("compile rollback reindex scheduling failed")
                     self._fs._schedule_vector_rebuild(written=restored, deleted=deleted, ctx=ctx)
 
     async def _commit(

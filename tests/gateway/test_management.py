@@ -339,8 +339,19 @@ async def test_upstream_test_status_contract(running_gateway, status, body, ok, 
     app, client, admin, _, _, _ = running_gateway
 
     async def handler(request):
-        if request.path == "/v1/chat/completions":
+        if request.path != "/v1/chat/completions":
+            return None
+        if not ok:
             return web.json_response(body, status=status)
+        # A valid generation result can span multiple reads before EOF.
+        response = web.StreamResponse(headers={"Content-Type": "application/json"})
+        await response.prepare(request)
+        raw = json.dumps(body).encode()
+        for start in range(0, len(raw), 7):
+            await response.write(raw[start : start + 7])
+            await asyncio.sleep(0)
+        await response.write_eof()
+        return response
 
     app.state.test_backend["handler"] = handler
     result = (
@@ -394,32 +405,10 @@ async def test_upstream_connection_status_contract(running_gateway, status, body
     assert requests == [("GET", b"")]
 
 
-async def test_upstream_test_reads_chunked_response_to_eof(running_gateway):
-    app, client, admin, _, _, _ = running_gateway
-    body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "OK"}}]}).encode()
-
-    async def handler(request):
-        if request.path == "/v1/chat/completions":
-            response = web.StreamResponse(headers={"Content-Type": "application/json"})
-            await response.prepare(request)
-            for start in range(0, len(body), 7):
-                await response.write(body[start : start + 7])
-                await asyncio.sleep(0)
-            await response.write_eof()
-            return response
-
-    app.state.test_backend["handler"] = handler
-    result = (
-        await client.post(P + "/upstreams/chat/test", headers=admin, json={"model": "model"})
-    ).json()
-
-    assert result["ok"] and result["reason"] == "passed"
-
-
 @pytest.mark.parametrize(
     "protocol,path,input_field,limit_field",
     [
-        ("chat", "/v1/chat/completions", "messages", "max_tokens"),
+        ("chat", "/api/v3/chat/completions", "messages", "max_tokens"),
         ("responses", "/v1/responses", "input", "max_output_tokens"),
         ("anthropic", "/v1/messages", "messages", "max_tokens"),
     ],
@@ -429,12 +418,12 @@ async def test_upstream_test_generates_with_protocol_and_alias(
 ):
     app, client, admin, _, captured, _ = running_gateway
     upstream = await app.state.management.get("tenant", "upstreams", protocol)
-    await app.state.management.save(
-        "tenant",
-        "upstreams",
-        protocol,
-        {**upstream, "aliases": {"client-model": "model"}},
-    )
+    configured = {**upstream, "aliases": {"client-model": "model"}}
+    if protocol == "chat":
+        configured.update(
+            vendor="ark", base_url=upstream["base_url"].removesuffix("/v1") + "/api/v3"
+        )
+    await app.state.management.save("tenant", "upstreams", protocol, configured)
 
     result = (
         await client.post(
@@ -444,7 +433,7 @@ async def test_upstream_test_generates_with_protocol_and_alias(
         )
     ).json()
 
-    assert result["ok"] and result["reason"] == "passed"
+    assert result["ok"] and result["reason"] == "passed" and result["status"] == 200
     sent_path, raw, headers = captured[-1]
     payload = json.loads(raw)
     assert sent_path == path
@@ -466,40 +455,6 @@ async def test_upstream_test_generates_with_protocol_and_alias(
         assert "input_schema" in payload["tools"][0]
     if protocol == "anthropic":
         assert headers["anthropic-version"] == "2023-06-01"
-
-
-async def test_upstream_test_honors_exact_endpoint_url(running_gateway):
-    app, client, admin, _, captured, _ = running_gateway
-    upstream = await app.state.management.get("tenant", "upstreams", "chat")
-    await app.state.management.save(
-        "tenant",
-        "upstreams",
-        "chat",
-        {
-            **upstream,
-            "append_endpoint_path": False,
-            "allow_gateway_tools": False,
-            "headers": {
-                "X-Test-Header": "stored-value",
-                "content-type": "application/vnd.test+json",
-            },
-        },
-    )
-
-    result = (
-        await client.post(
-            P + "/upstreams/chat/test",
-            headers=admin,
-            json={"model": "model"},
-        )
-    ).json()
-
-    assert result["ok"] and result["url"].endswith("/v1")
-    assert captured[-1][0] == "/v1"
-    assert captured[-1][2]["X-Test-Header"] == "stored-value"
-    sent_headers = {name.lower(): value for name, value in captured[-1][2].items()}
-    assert sent_headers["content-type"] == "application/vnd.test+json"
-    assert "tools" not in json.loads(captured[-1][1])
 
 
 async def test_upstream_test_continues_without_unavailable_tools(running_gateway):
@@ -925,7 +880,7 @@ async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_g
     seen = []
 
     async def handler(request):
-        if request.path.startswith("/v1/"):
+        if request.path == "/v1" or request.path.startswith("/v1/"):
             seen.append((request.method, request.path, request.query_string, dict(request.headers)))
 
     app.state.test_backend["handler"] = handler
@@ -933,8 +888,14 @@ async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_g
     assert result["ok"] and result["url"] == upstream["base_url"] + "/models?tenant=a&key={api_key}"
     assert seen[-1][2] == "tenant=a&key=model-secret" and "Authorization" not in seen[-1][3]
 
-    endpoint = upstream["base_url"] + "/chat/completions?api-version=1"
-    exact = {**upstream, "base_url": endpoint, "append_endpoint_path": False}
+    endpoint = upstream["base_url"] + "?api-version=1"
+    exact = {
+        **upstream,
+        "base_url": endpoint,
+        "append_endpoint_path": False,
+        "allow_gateway_tools": False,
+        "headers": {"X-Test-Header": "stored-value", "content-type": "application/vnd.test+json"},
+    }
     await app.state.management.save("tenant", "upstreams", "chat", exact)
     before = len(captured)
     result = (await client.post(P + "/upstreams/chat/test", headers=admin, json={})).json()
@@ -947,5 +908,9 @@ async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_g
     assert len(captured) == before
     model = {"model": "model"}
     result = (await client.post(P + "/upstreams/chat/test", headers=admin, json=model)).json()
-    assert result["kind"] == "model" and result["url"] == endpoint
-    assert seen[-1][:3] == ("POST", "/v1/chat/completions", "api-version=1")
+    assert result["ok"] and result["kind"] == "model" and result["url"] == endpoint
+    assert seen[-1][:3] == ("POST", "/v1", "api-version=1")
+    sent_headers = {name.lower(): value for name, value in seen[-1][3].items()}
+    assert sent_headers["x-test-header"] == "stored-value"
+    assert sent_headers["content-type"] == "application/vnd.test+json"
+    assert "tools" not in json.loads(captured[-1][1])

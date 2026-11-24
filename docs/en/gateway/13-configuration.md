@@ -28,7 +28,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `host` | Standalone | `127.0.0.1` | | Listen address |
 | `port` | Standalone | `1935` | 1–65,535 | Listen port |
 | `workers` | Standalone | `1` | 1–64 | Worker processes |
-| `log_path` | Standalone | empty | File path | Write the application log as JSON lines to this rotating file (256 MiB, four old files) instead of text on stderr; needs `workers: 1`. See [Monitoring](../guides/22-gateway-operations.md#monitoring) |
+| `log_path` | Standalone | empty | File path | Write the application log using the common UTC text format to this rotating file (256 MiB, four old files) instead of stderr; needs `workers: 1`. See [Monitoring](../guides/22-gateway-operations.md#monitoring) |
 | `keep_alive_seconds` | Standalone | `75` | More than 0 | Seconds to keep an idle HTTP connection open between requests; set it above the load balancer's backend idle timeout |
 | `public_url` | Both | empty | HTTP(S) URL, without `/gateway` | The external address clients use; the gateway appends `/gateway` itself. When empty, an embedded gateway uses the server's public address; with neither, setup guides use the request's origin, and MCP file uploads and downloads do not work unless `mcp_file_links` is `direct`. See [Public address](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | Both | `proxy` | `proxy`, `direct` | How links from the MCP upload and download tools reach the client. `proxy` rewrites them to `public_url` plus `/gateway/uploads` or `/gateway/downloads` and needs `public_url`. `direct` passes OpenViking's links through unchanged and needs the server's `OPENVIKING_PUBLIC_BASE_URL` (or `server.public_base_url`) to be reachable by the client |

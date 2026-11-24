@@ -9,7 +9,6 @@ import { PreviewHistoryFile } from './preview-history-file.js';
 import type { PreviewWorkflowProps } from './preview-workflow-types.js';
 
 export type PreviewHistoryProps = PreviewWorkflowProps & {
-  canSaveSnapshot: boolean;
   canWrite: boolean;
   versioned: boolean;
   showContent: boolean;

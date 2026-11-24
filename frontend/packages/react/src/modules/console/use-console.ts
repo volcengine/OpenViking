@@ -12,21 +12,26 @@ import { useOvClient, useOvSignal } from '../../client/provider.js';
 import { consoleCommands } from './command-catalog.js';
 import { ConsoleCommandError } from './command-messages.js';
 import { createConsoleController } from './controller.js';
+import { useConversationDraft } from './use-conversation-draft.js';
 import type { ConsoleMode, ConsoleOptions, ConsoleResult } from './types.js';
 
 /** Internal command execution and draft orchestration. */
-export function useConsole({
-  mode: controlledMode,
-  modes = ['conversation', 'command'],
-  defaultMode = 'conversation',
-  locale: localeProp,
-  scopeKey,
-  commandHistoryKey,
-  onModeChange,
-  requestOptions = {},
-  taskService,
-  commandOptions,
-}: ConsoleOptions = {}): ConsoleResult {
+export function useConsole(
+  {
+    mode: controlledMode,
+    modes = ['conversation', 'command'],
+    defaultMode = 'conversation',
+    locale: localeProp,
+    scopeKey,
+    commandHistoryKey,
+    onModeChange,
+    requestOptions = {},
+    taskService,
+    commandOptions,
+  }: ConsoleOptions = {},
+  conversationIdentity?: object,
+  conversationScopeKey?: string,
+): ConsoleResult {
   const event = useTrack();
   const locale = useLocale(localeProp);
   const tracking = useTaskTracking({
@@ -82,7 +87,7 @@ export function useConsole({
   // Effect necessity: commands keep network requests alive after user events.
   // Their lifetime follows this client/identity instance, which events cannot
   // observe on unmount or disable; cleanup aborts requests and invalidates late results.
-  // Starting also restores this controller's tab-session history after client mount.
+  // Starting also restores this controller's browser-local history after client mount.
   useEffect(
     () => (commandEnabled ? controller.start() : undefined),
     [controller, commandEnabled],
@@ -90,6 +95,11 @@ export function useConsole({
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
+  );
+  const conversationDraft = useConversationDraft(
+    controller,
+    conversationIdentity,
+    conversationScopeKey,
   );
   const [internalMode, setInternalMode] = useState<ConsoleMode>(defaultMode);
   const requestedMode = controlledMode ?? internalMode;
@@ -123,6 +133,7 @@ export function useConsole({
   );
   return {
     ...state,
+    ...conversationDraft,
     records,
     error,
     mode,
@@ -138,7 +149,6 @@ export function useConsole({
       onModeChange?.(next);
     },
     setCommand: controller.setCommand,
-    setConversationDraft: controller.setConversationDraft,
     execute: (command?: string) =>
       controller.execute(command, locale, commandOptions),
     retry: () => controller.retry(locale, commandOptions),

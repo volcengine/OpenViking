@@ -113,23 +113,24 @@ async def test_content_write_rejects_watch_task_control_files(user_ctx, uri):
 
 
 @pytest.mark.parametrize(
-    "uri",
+    ("path", "mode"),
     [
-        "viking://resources/project/.path.ovlock",
-        "viking://resources/project/.exact.ovlock.",
-        "viking://resources/project/.exact.ovlock.probe.md",
-        "viking://resources/project/.exact.ovlock.notes.md.0123abcd",
-        "viking://resources/project/.redirect.json",
-        "viking://resources/project/.sync_log.json",
+        (".path.ovlock", "replace"),
+        (".exact.ovlock.", "replace"),
+        (".exact.ovlock.probe.md", "replace"),
+        (".exact.ovlock.notes.md.0123abcd", "replace"),
+        (".redirect.json", "replace"),
+        (".sync_log.json", "replace"),
+        (".path.ovlock/child.md", "create"),
+        (".exact.ovlock.probe.md/nested/child.md", "append"),
     ],
 )
-@pytest.mark.parametrize("suffix", ["", "/child.md", "/nested/child.md"])
-@pytest.mark.parametrize("mode", ["create", "replace", "append"])
-async def test_content_write_rejects_storage_internal_files(user_ctx, uri, suffix, mode):
+async def test_content_write_rejects_storage_internal_files(user_ctx, path, mode):
     coordinator = ContentWriteCoordinator(_NoWriteVikingFS())
+    uri = f"viking://resources/project/{path}"
 
     with pytest.raises(InvalidArgumentError, match="storage internal file"):
-        await coordinator.write(uri=uri + suffix, content="x", mode=mode, ctx=user_ctx)
+        await coordinator.write(uri=uri, content="x", mode=mode, ctx=user_ctx)
 
 
 async def test_batch_write_rejects_storage_internal_parent_before_writing(user_ctx):

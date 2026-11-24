@@ -55,6 +55,7 @@
 .ov-auth,
 .ov-agent-connect,
 .ov-console,
+.ov-console-skeleton,
 .ov-divider,
 .ov-file-browser-action-bar,
 .ov-drawer,
@@ -78,6 +79,8 @@
   /* 紧凑浮层（下拉菜单、时间范围选择）的投影：比卡片浮层更收，托起一块小面板。 */
   /* The shadow of a compact surface such as a dropdown or range picker. */
   --ov-ui-overlay-shadow-default: 0 8px 24px rgb(0 0 0 / 10%);
+  --ov-ui-card-hover-shadow-default:
+    0 5px 15px rgb(0 0 0 / 5%), 0 15px 35px -2px rgb(0 0 0 / 5%);
 
   --ov-ui-auth-on-primary-default: #ffffff;
   --ov-ui-auth-backdrop-default: rgb(0 0 0 / 40%);
@@ -153,6 +156,8 @@
   --ov-ui-warning-solid-default: #ff952b;
   --ov-ui-warning-default: #b26a00;
   --ov-ui-warning-light-default: #fff0b3;
+  --ov-ui-file-preview-badge-bg-default: #ffeddb;
+  --ov-ui-file-preview-badge-text-default: #eb7d00;
 
   /* 浮层。 */
   --ov-ui-overlay-default: rgb(0 0 0 / 40%);
@@ -226,6 +231,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-auth,
 .dark .ov-agent-connect,
 .dark .ov-console,
+.dark .ov-console-skeleton,
 .dark .ov-divider,
 .dark .ov-file-browser-action-bar,
 .dark .ov-drawer,
@@ -298,6 +304,8 @@ html.dark .ov-error-boundary,
   --ov-ui-danger-default: #ff668a;
   --ov-ui-warning-default: #e0a04a;
   --ov-ui-warning-light-default: #3a2f14;
+  --ov-ui-file-preview-badge-bg-default: var(--ov-ui-warning-light-default);
+  --ov-ui-file-preview-badge-text-default: var(--ov-ui-warning-default);
 
   --ov-ui-tooltip-bg-default: #2a2d33;
   --ov-ui-overlay-default: rgb(0 0 0 / 64%);
@@ -654,6 +662,11 @@ html.dark .ov-directory-tour {
   --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
   --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
   --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
+  --ov-ui-tour-illustration-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-memories-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-shared-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-experiences-default: var(--ov-ui-bg-3-default);
+  --ov-ui-tour-illustration-peers-default: var(--ov-ui-bg-3-default);
 }
 
 /* Persistent notice surface from the console Arco theme (MIT). */
@@ -669,4 +682,14 @@ html.dark .ov-notification-stack {
 
 .ov-toast-stack {
   --ov-ui-toast-shadow-default: var(--ov-ui-overlay-shadow-default);
+}
+
+/* VikingBot activation cover, shown when the host supplies no tutorial media. */
+.ov-console {
+  --ov-ui-activation-preview-sky-default: #7ab7f6;
+  --ov-ui-activation-preview-haze-default: #dce1f6;
+}
+.dark .ov-console {
+  --ov-ui-activation-preview-sky-default: #315b92;
+  --ov-ui-activation-preview-haze-default: #292841;
 }
