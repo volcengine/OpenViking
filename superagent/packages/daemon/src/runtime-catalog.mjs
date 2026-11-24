@@ -384,6 +384,18 @@ const MODEL_ERROR_CODES = Object.freeze({
   'DSH_CONNECTION_LOST': MODEL_ERROR_KINDS.TRANSIENT,
 });
 
+// Bridges rethrow a provider failure as text (`pi stop: error: 429: {…}`), so
+// the status can survive only inside the message. Reading it back is what keeps
+// a rate limit a rate limit: without it the failure looks unclassifiable and its
+// raw text is posted to the conversation (#8280).
+const MESSAGE_STATUS = /\b(?:error|status|http)\s*[:=]?\s*([1-5]\d\d)\b|\b([1-5]\d\d)\s*:\s*\{/i;
+
+function statusFromMessage(message) {
+  const match = MESSAGE_STATUS.exec(String(message ?? ''));
+  const status = Number(match?.[1] ?? match?.[2] ?? 0);
+  return status >= 100 && status <= 599 ? status : 0;
+}
+
 function httpStatusOf(error) {
   for (const value of [
     error?.status, error?.statusCode, error?.httpStatus,
@@ -419,7 +431,7 @@ export function classifyModelError(error) {
     return { kind: null, status: 0, code: '', retryable: false };
   }
   const code = String(error.code ?? error.data?.code ?? '').trim();
-  const status = httpStatusOf(error);
+  const status = httpStatusOf(error) || statusFromMessage(error.message);
   const result = (kind) => ({
     kind,
     status,

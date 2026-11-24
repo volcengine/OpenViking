@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createLogger } from '../src/logger.mjs';
-import { FailurePolicy } from '../src/notices.mjs';
+import { FailurePolicy, classifyRuntimeFailure } from '../src/notices.mjs';
 import { mentionTarget as mentionTargetOf } from '../src/runtime-input.mjs';
 import { chatEvent } from './event-fixture.mjs';
 
@@ -394,5 +394,76 @@ describe('failure notice mute', () => {
     assert.equal(policy.failureNoticeMutes.size, 0);
     await policy.notifyTurnFailure({ inboundSeqs: [3], error: 'model exploded' });
     assert.equal(replies.length, 2);
+  });
+});
+
+describe('a provider failure that arrives as text', () => {
+  // pi wraps the provider message into `new Error('pi stop: error: ' + text)`,
+  // so the status survives only inside the string. This is the 429 from the
+  // report: TPM rate limit, provider request id, JSON envelope.
+  const RATE_LIMIT = 'pi stop: error: 429: {"code":"<provider-code>","message":"TPM (Tokens Per Minute) limit of the model <model-id> is exceeded. Please try again later Request id: <request-id>","param":"","type":"TooManyRequests"}';
+
+  function makePolicy() {
+    const replies = [];
+    const ownerNotices = [];
+    const activities = [];
+    const inboundRows = {
+      1: {
+        seq: 1,
+        messageId: 'om_failed_123456',
+        chatId: 'oc_chat123456',
+        threadId: null,
+        conversationKey: 'profile:tenant:oc_chat123456:main',
+        senderId: 'ou_sender123456',
+        content: '帮我看下这个',
+        createTimeMs: Date.UTC(2026, 7, 7, 10, 0),
+        mentions: [],
+      },
+    };
+    const policy = new FailurePolicy({
+      config: {},
+      store: {
+        getCognitionState: () => ({ runtime: 'codex' }),
+        inboundBySeq: (seq) => inboundRows[seq] ? chatEvent(inboundRows[seq]) : null,
+      },
+      actions: {
+        async replyToEvent(event, text) { replies.push({ messageId: event.messageId, text }); return { ok: true }; },
+        async notifyOwnerForEvent(event, text) { ownerNotices.push({ messageId: event.messageId, text }); return { ok: true }; },
+      },
+      logger: createLogger('error', { test: 'text-carried-status' }),
+      runtime: { runtime: 'codex' },
+      recordActivity(kind, fields) { activities.push({ kind, ...fields }); return true; },
+    });
+    return { policy, replies, ownerNotices, activities };
+  }
+
+  it('classifies the wrapped 429 as recoverable', () => {
+    assert.deepEqual(classifyRuntimeFailure(new Error(RATE_LIMIT)), { blocked: false, recoverable: true });
+    assert.deepEqual(classifyRuntimeFailure({ message: RATE_LIMIT }), { blocked: false, recoverable: true });
+  });
+
+  it('reads the status out of the text when the wording gives nothing away', () => {
+    // No "rate limit", no "too many requests": only the status can classify this.
+    const bare = 'pi stop: error: 429: {"message":"slow down"}';
+    assert.deepEqual(classifyRuntimeFailure(new Error(bare)), { blocked: false, recoverable: true });
+  });
+
+  it('reports it to the owner without replying to the conversation', async () => {
+    const { policy, replies, ownerNotices } = makePolicy();
+    assert.equal(await policy.onTurnFailed({ inboundSeqs: [1], error: new Error(RATE_LIMIT) }), false);
+    assert.equal(replies.length, 0);
+    assert.equal(ownerNotices.length, 1);
+    assert.match(ownerNotices[0].text, /TPM/);
+  });
+
+  it('keeps provider text out of the notice a conversation receives', async () => {
+    const { policy, replies } = makePolicy();
+    await policy.onTurnFailed({
+      inboundSeqs: [1],
+      error: new Error('business error: model <model-id> failed, request <request-id>'),
+    });
+    assert.equal(replies.length, 1);
+    assert.match(replies[0].text, /处理异常/);
+    assert.doesNotMatch(replies[0].text, /<model-id>|<request-id>|business error/);
   });
 });
