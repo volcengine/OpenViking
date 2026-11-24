@@ -42,6 +42,12 @@ from openviking.storage.viking_fs._base import (
     _is_directory_not_empty_error,
     logger,
 )
+from openviking.storage.viking_fs._read_cache import (
+    CACHE as _READ_CACHE,
+)
+from openviking.storage.viking_fs._read_cache import (
+    make_key as _make_read_cache_key,
+)
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -50,6 +56,15 @@ from openviking_cli.exceptions import (
     ResourceExhaustedError,
 )
 from openviking_cli.utils.uri import VikingURI
+
+
+def _slice_read_text(text: str, offset: int, limit: int) -> str:
+    """Slice by line number; a full read (default arguments) returns the text as-is."""
+    if offset == 0 and limit == -1:
+        return text
+    lines = text.splitlines(keepends=True)
+    sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+    return "".join(sliced)
 
 
 def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
@@ -304,6 +319,7 @@ class _OpsMixin:
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
+            _READ_CACHE.invalidate_prefix(uri)
             estimated_count = await _delete_vectors()
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
@@ -381,6 +397,7 @@ class _OpsMixin:
                 raise
             # Add estimated_deleted_count to the result
             emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
+            _READ_CACHE.invalidate_prefix(uri)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
@@ -414,12 +431,14 @@ class _OpsMixin:
         cleanup of already-expired, uniquely-named upload directories).
         """
         path = self._uri_to_path(uri, ctx=ctx)
-        return await self._async_agfs.rm(
+        result = await self._async_agfs.rm(
             path,
             recursive=recursive,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        _READ_CACHE.invalidate_prefix(uri)
+        return result
 
     async def cp(
         self,
@@ -934,6 +953,15 @@ class _OpsMixin:
             await self._async_agfs.rm(
                 old_path, recursive=is_dir, fs_ctx=self._pathlock_fs_ctx(ctx, lease)
             )
+            # mv is cp + rm on the AGFS layer, so it never goes through rm() and
+            # would otherwise leave the source URI serving stale cached content.
+            # Invalidate both endpoints; directory moves cover the whole subtree.
+            if is_dir:
+                _READ_CACHE.invalidate_prefix(old_uri)
+                _READ_CACHE.invalidate_prefix(new_uri)
+            else:
+                _READ_CACHE.invalidate(old_uri)
+                _READ_CACHE.invalidate(new_uri)
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
                 "operation": "move",
@@ -2075,6 +2103,7 @@ class _OpsMixin:
         )
         emit_file_change(uri, ctx, "modified" if existed else "added" if existed is False else None)
         await self._notify_post_write(uri, ctx)
+        _READ_CACHE.invalidate(uri)
 
     async def read_file(
         self,
@@ -2097,6 +2126,17 @@ class _OpsMixin:
         uri = await self.resolve_uri(uri, real_ctx)
         ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
+
+        # Cache after authorization and before the AGFS read. A hit skips both
+        # _uri_to_path and the underlying read but never skips the ACL check.
+        # The version is captured before the read: a write that lands while we
+        # are reading bumps it, and the refill below then becomes a no-op miss.
+        cache_key = _make_read_cache_key(real_ctx, uri)
+        cache_version = _READ_CACHE.version(uri)
+        cached_text = _READ_CACHE.get(cache_key, cache_version)
+        if cached_text is not None:
+            return _slice_read_text(cached_text, offset, limit)
+
         path = self._uri_to_path(uri, ctx=ctx)
         # AGFS read returns empty bytes for non-existent files instead of
         # raising, so the stat probe only runs when the read came back empty.
@@ -2138,12 +2178,8 @@ class _OpsMixin:
                 raise read_error
 
         text = self._decode_bytes(raw)
-
-        if offset == 0 and limit == -1:
-            return text
-        lines = text.splitlines(keepends=True)
-        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
-        return "".join(sliced)
+        _READ_CACHE.put(cache_key, text, cache_version)
+        return _slice_read_text(text, offset, limit)
 
     async def read_file_bytes(
         self,
@@ -2229,6 +2265,7 @@ class _OpsMixin:
         )
         emit_file_change(uri, ctx, "modified" if existed else "added" if existed is False else None)
         await self._notify_post_write(uri, ctx)
+        _READ_CACHE.invalidate(uri)
 
     async def append_file(
         self,
@@ -2280,6 +2317,7 @@ class _OpsMixin:
             emit_file_change(
                 uri, ctx, "modified" if existed else "added" if existed is False else None
             )
+            _READ_CACHE.invalidate(uri)
             if getattr(self, "_post_write_hook", None) is not None:
                 written_at_ms = time.time_ns() // 1_000_000
 
@@ -2584,6 +2622,8 @@ class _OpsMixin:
 
         await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
         await self._async_agfs.rm(from_path)
+        _READ_CACHE.invalidate(from_uri)
+        _READ_CACHE.invalidate(to_uri)
 
     # ========== Temp File Operations (backward compatible) ==========
 
