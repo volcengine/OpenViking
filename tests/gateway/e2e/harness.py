@@ -83,11 +83,9 @@ class Harness:
                 "openviking_keys": True,
                 "tenancy": "key",
                 "management_api": False,
-                "capture_concurrency": 4,
                 "request_log_sink": "stdout",
                 "health_interval_seconds": 1,
                 "default_profile": {
-                    "idle_seconds": 5,
                     "gateway_tools": False,
                     "profile": False,
                     "show_recall": False,
@@ -106,6 +104,8 @@ class Harness:
                             "mock-long",
                             "mock-tools",
                             "mock-silent-gzip",
+                            "mock-hang",
+                            "mock-stall",
                         ],
                     }
                     for protocol in ("chat", "anthropic", "responses")
@@ -576,11 +576,21 @@ def session_keys(harness, session, key="key-a", protocol="chat"):
 
 
 def written_messages(snapshot, library="library-a"):
-    return [
-        message
-        for session in snapshot["libraries"][library]["sessions"].values()
-        for message in session["messages"]
-    ]
+    sessions = snapshot["libraries"].get(library, {}).get("sessions", {})
+    return [message for session in sessions.values() for message in session["messages"]]
+
+
+def wait_written(harness, count, library="library-a", timeout=30):
+    """The mock's records once ``library`` holds ``count`` messages.
+
+    The request that ends a turn writes it after the reply is sent, so it lands shortly after.
+    """
+
+    def check():
+        snapshot = records(harness)
+        return snapshot if len(written_messages(snapshot, library)) == count else None
+
+    return wait_for(check, timeout=timeout)
 
 
 def message_text(message):

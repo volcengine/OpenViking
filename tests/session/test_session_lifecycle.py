@@ -108,12 +108,6 @@ class TestSessionLoad:
         assert loaded.compression.compression_index == 2
         assert loaded.stats.compression_count == 2
 
-    async def test_session_properties(self, session: Session):
-        """Test session properties"""
-        assert hasattr(session, "uri")
-        assert hasattr(session, "messages")
-        assert hasattr(session, "session_id")
-
 
 class TestSessionServiceGet:
     """Test persisted-session lookup semantics."""

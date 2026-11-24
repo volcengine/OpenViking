@@ -90,19 +90,24 @@ it('groups gateway management with bot management and highlights every gateway s
   )
 })
 
-it('keeps unavailable membership pages out of local development while exposing service configuration', () => {
+it('keeps only Gateway management in local development', () => {
   render(
     <SidebarProvider>
       <StudioManagementNavigation
-        pathname="/admin/configuration/server"
+        pathname="/admin/gateway"
         isRoot
         developmentMode
+        showGateway
       />
     </SidebarProvider>,
   )
+  expect(screen.getByRole('link', { name: 'Gateway' })).toBeTruthy()
   expect(
-    screen.getByRole('link', { name: 'Server configuration' }),
-  ).toBeTruthy()
+    screen.queryByRole('link', { name: 'Server configuration' }),
+  ).toBeNull()
+  expect(
+    screen.queryByRole('link', { name: 'VikingBot management' }),
+  ).toBeNull()
   expect(screen.queryByRole('link', { name: /^Users$/ })).toBeNull()
   expect(screen.queryByRole('link', { name: /^User groups$/ })).toBeNull()
 })

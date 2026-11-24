@@ -1,0 +1,116 @@
+# ContextPicker
+
+Search and select files or directories in a controlled dialog, with single or independent multiple selection and customizable actions.
+
+## When to use
+
+- Select an output directory or a file from a tree.
+- Select multiple source directories while preserving selection across searches and pages.
+- Add host actions such as creating directories or adding skills.
+
+## Import
+
+```tsx
+import { ContextPicker } from '@openviking/react/components/context-picker';
+import '@openviking/react/components/context-picker/style.css';
+```
+
+## Examples
+
+### Controlled selection
+
+Switch between multiple source directories, a single output directory and a single skill. Try asynchronous selection restoration, search, disabled controls and retries. Creation and upload actions are simulated.
+
+```tsx file="../../_demos/context-picker-basic.tsx" preview
+
+```
+
+### Host-controlled HITL
+
+The host owns the dialog and directory data, then calls `select` to return the custom answer.
+
+```tsx file="../../_demos/viking-bot-custom-directory.tsx" preview
+
+```
+
+## API
+
+### ContextPicker
+
+| Property          | Description                                                            | Type                                                                | Default                          |
+| ----------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------- |
+| open              | Controls whether the dialog is open                                    | `boolean`                                                           | Required                         |
+| rows              | Visible tree rows; the host owns expansion and pagination              | `readonly FileTreeRow[]`                                            | Required                         |
+| value             | Selection, matched to visible rows by URI                              | `readonly ContextPickerEntry[]`                                     | Required                         |
+| multiple          | Checks each entry independently without cascading                      | `boolean`                                                           | `false`                          |
+| query             | Controlled search query                                                | `string`                                                            | `''`                             |
+| loading           | Search or refresh pending state                                        | `boolean`                                                           | `false`                          |
+| isReady           | Whether the first load has completed                                   | `boolean`                                                           | `true`                           |
+| confirming        | Locks selection, search and dismissal during confirmation              | `boolean`                                                           | `false`                          |
+| disabled          | Disables selection, search and dismissal                               | `boolean`                                                           | `false`                          |
+| confirmDisabled   | Disables confirmation independently                                    | `boolean`                                                           | `false`                          |
+| autoReveal        | Requests ancestor expansion and paging to reveal the opening selection | `boolean`                                                           | `true`                           |
+| showSelection     | Shows the selected-entry strip                                         | `boolean`                                                           | `true` for single selection      |
+| title             | Dialog title                                                           | `string`                                                            | Select files or directories      |
+| error             | Displays an error while retaining existing rows and selection          | `ReactNode`                                                         | -                                |
+| operations        | Host handlers for expansion, paging and retry                          | `Pick<FileTreeOperations, 'toggleExpand' \| 'loadMore' \| 'retry'>` | -                                |
+| rootOrder         | Root ordering                                                          | `'input' \| 'context'`                                              | `'input'`                        |
+| loadingFallback   | Initial loading content                                                | `ReactNode`                                                         | FileTree loading state           |
+| errorFallback     | Initial error content                                                  | `ReactNode`                                                         | -                                |
+| emptyFallback     | Empty-state content                                                    | `ReactNode`                                                         | No matching files or directories |
+| triggerRef        | Theme anchor; restores the invoking element’s focus on close           | `RefObject<HTMLElement \| null>`                                    | -                                |
+| className         | Additional dialog root class                                           | `string`                                                            | -                                |
+| locale            | Interface language                                                     | `'zh-CN' \| 'en-US'`                                                | -                                |
+| onChange          | Reports the complete selection after entry activation                  | `(value: ContextPickerEntry[]) => void`                             | -                                |
+| onQueryChange     | Reports query changes; supplying it enables search                     | `(query: string) => void`                                           | -                                |
+| onConfirm         | Reports confirmation; the host saves and closes                        | `(value: readonly ContextPickerEntry[]) => void`                    | -                                |
+| onCancel          | Reports dismissal from Cancel, Close or Escape                         | `() => void`                                                        | -                                |
+| onOpenEntry       | Opens a selected entry from the strip                                  | `(entry: ContextPickerEntry) => void`                               | -                                |
+| renderRowIcon     | File icon renderer                                                     | `(row: FileTreeEntryRow) => ReactNode`                              | FileTree file icon               |
+| renderRowTooltip  | Row tooltip renderer                                                   | `(row: FileTreeEntryRow) => ReactNode`                              | FileTree tooltip                 |
+| renderRowTrailing | Trailing row content                                                   | `(row: FileTreeEntryRow) => ReactNode`                              | -                                |
+| slots             | Action and content slots                                               | `ContextPickerSlots`                                                | -                                |
+| labels            | Copy overrides                                                         | `ContextPickerLabels`                                               | -                                |
+
+### ContextPickerEntry
+
+| Property | Description                                | Type                    | Default  |
+| -------- | ------------------------------------------ | ----------------------- | -------- |
+| uri      | Entry identity, available before rows load | `string`                | Required |
+| name     | Entry name                                 | `string`                | Required |
+| type     | Entry type                                 | `'directory' \| 'file'` | Required |
+
+### ContextPickerSlots
+
+| Property    | Description                                              | Type                                  | Default                          |
+| ----------- | -------------------------------------------------------- | ------------------------------------- | -------------------------------- |
+| footerStart | Lower-left actions or status; null hides default content | `ReactNode`                           | Selection count in multiple mode |
+| content     | Content after the tree, such as permissions or upload UI | `ReactNode`                           | -                                |
+| selection   | Replacement for the selection strip; null hides it       | `ReactNode`                           | Selected entries                 |
+| confirm     | Wraps the confirmation button                            | `(button: ReactElement) => ReactNode` | -                                |
+
+### ContextPickerLabels
+
+| Property      | Description                    | Type                        | Default                          |
+| ------------- | ------------------------------ | --------------------------- | -------------------------------- |
+| title         | Default title                  | `string`                    | Select files or directories      |
+| search        | Search label and placeholder   | `string`                    | Search by name                   |
+| selected      | Selection strip label          | `string`                    | Selected:                        |
+| unselected    | Hint when no entry is selected | `string`                    | Not selected                     |
+| clearSearch   | Clear-search action            | `string`                    | Clear search                     |
+| selectedCount | Selection counter              | `(count: number) => string` | `${count} selected`              |
+| cancel        | Cancel action                  | `string`                    | Cancel                           |
+| confirm       | Confirm action                 | `string`                    | Confirm                          |
+| empty         | Empty-state message            | `string`                    | No matching files or directories |
+
+## Notes
+
+- The host controls `value`, `query` and `open`, restores drafts on cancellation and closes after success. Pass `confirming` while saving; retain the draft and provide `error` on failure.
+- `selectable: false` prevents selection while allowing expansion. `disabled: true` disables both. The host evaluates permissions and validates before saving.
+- Selection persists independently of visible rows. Searching, selecting, expanding or paging manually stops the opening reveal.
+- Opening reveal invokes `operations.toggleExpand` and `operations.loadMore`. The host updates `rows` and supplies error and retry states; the component makes no requests.
+- Supply upload and creation actions through slots. File filtering, permissions and upload protocols belong to the host. See [FileTree](./file-tree) for row and operation types.
+
+## Theme variables
+
+`--ov-ui-context-picker-tree-height` sets the tree panel height: `416px` for single selection and `544px` for multiple selection.

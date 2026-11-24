@@ -23,6 +23,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  security-scan:
+    uses: ./.github/workflows/_codeql.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
   plugin-tests:
     needs: check-deps
     if: needs.check-deps.outputs.plugins_changed == 'true'
@@ -168,10 +175,14 @@ jobs:
           fi
       - name: Test packaging and CI selection contracts
         run: |
-          python3 -m pip install pytest
+          python3 -m pip install pytest PyYAML
           python3 -m pytest --noconftest -q -o addopts='' \
             tests/misc/test_abi3_packaging_config.py \
-            tests/misc/test_release_tag_selection.py
+            tests/misc/test_release_tag_selection.py \
+            tests/misc/test_linux_runner.py \
+            tests/misc/test_macos_wheel_cache.py \
+            tests/misc/test_cli_model_query_retry.py \
+            tests/misc/test_cache_maintenance.py
 
   build:
     needs: check-deps

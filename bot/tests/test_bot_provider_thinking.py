@@ -20,6 +20,55 @@ from openviking.models.vlm.base import VLMResponse
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "litellm"])
+@pytest.mark.parametrize("thinking", [False, True])
+@pytest.mark.parametrize("effort", ["low", "none", None])
+async def test_vlm_adapter_inherits_configured_reasoning_effort(
+    monkeypatch, backend, thinking, effort
+):
+    from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+
+    captured = {}
+
+    async def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
+
+    vlm_type = OpenAIVLM if backend == "openai" else OpenVikingLiteLLMVLMProvider
+    vlm = vlm_type(
+        {
+            "provider": backend,
+            "model": "glm-5.3-flash",
+            "api_key": "sk-test",
+            "reasoning_effort": effort,
+        }
+    )
+    if backend == "litellm":
+        monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", create)
+    else:
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    adapter = VLMProviderAdapter(vlm, vlm.model, langfuse_client=LangfuseClient())
+
+    response = await adapter.chat([{"role": "user", "content": "hi"}], thinking=thinking)
+
+    assert response.content == "ok"
+    assert captured.get("reasoning_effort") == effort
+    assert ("reasoning_effort" in captured) == (effort is not None)
+
+    assert await vlm.get_completion_async("hi", reasoning_effort="high") == "ok"
+    assert captured["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_unknown_media_transport_and_backup_do_not_block_images(monkeypatch):
     completion = AsyncMock(return_value=VLMResponse(content="done"))
     unknown = SimpleNamespace(provider="openai", get_completion_async=completion)

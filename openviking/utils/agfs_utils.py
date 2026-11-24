@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
 from typing import Any, Callable, Dict
+from urllib.parse import urlsplit
 
+from openviking.observability.log_safety import DEFAULT_LOG_FORMAT, safe_path_for_log
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.config_utils import (
     DEFAULT_SERVICE_NAME,
@@ -33,6 +35,8 @@ class RagfsBindingConfig:
     provider_type: int | None = None
     log: Dict[str, Any] | None = None
     service_name: str = DEFAULT_SERVICE_NAME
+    shared_redis_backend: bool = False
+    account_store_cache_instance: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the service name used by cache-backed modules."""
@@ -48,6 +52,7 @@ class RagfsBindingConfig:
         queue_backend = getattr(queuefs, "backend", None)
         cachefs = getattr(self.agfs, "cachefs", None)
         cachefs_backend = getattr(cachefs, "backend", "local")
+        cachefs_instance = getattr(cachefs, "instance", "default")
         pathlock = self.agfs.pathlock.model_dump(mode="json", exclude_none=True)
         if pathlock.get("provider") == "sqlite":
             sqlite_path = pathlock.get("sqlite_path")
@@ -66,39 +71,89 @@ class RagfsBindingConfig:
             database.parent.mkdir(parents=True, exist_ok=True)
             pathlock["sqlite_path"] = str(database)
         pathlock_uses_cache = pathlock.get("provider") == "cache"
+        if not pathlock_uses_cache:
+            pathlock.pop("instance", None)
+        coordination = self.agfs.coordination.model_dump(mode="json", exclude_none=True)
+        if coordination["provider"] != "cache":
+            coordination.pop("instance", None)
         backups = getattr(self.agfs, "backups", None)
+        account_store_uses_cache = self.account_store_cache_instance is not None
         uses_runtime = (
             cachefs_backend == "cache"
             or queue_backend == "cache"
             or pathlock_uses_cache
+            or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
+            or account_store_uses_cache
         )
-        if (
-            pathlock_uses_cache
-            and self.cache is not None
-            and self.cache.provider.strip() != "redis"
-        ):
-            raise ValueError("cache-backed PathLock requires top-level cache.provider=redis")
-        if self.cache is not None and uses_runtime:
-            cache_config = _build_provider_cache_config(
+        if self.cache is not None:
+            if account_store_uses_cache:
+                account_store_cache = _require_cache_instance(
+                    self.cache,
+                    self.account_store_cache_instance,
+                    "Redis MySQL Account Store",
+                )
+                if _get_config_value(account_store_cache, "provider") != "redis":
+                    raise ValueError(
+                        "Redis MySQL Account Store requires cache instance "
+                        f"'{self.account_store_cache_instance}' to use provider='redis'"
+                    )
+            if cachefs_backend == "cache":
+                _require_cache_instance(self.cache, cachefs_instance, "CacheFS")
+            if queue_backend == "cache":
+                _require_cache_instance(
+                    self.cache,
+                    getattr(queuefs, "instance", "default"),
+                    "QueueFS",
+                )
+            if pathlock_uses_cache:
+                pathlock_instance = pathlock.get("instance", "default")
+                pathlock_cache = _require_cache_instance(
+                    self.cache,
+                    pathlock_instance,
+                    "PathLock",
+                )
+                if _get_config_value(pathlock_cache, "provider").strip() != "redis":
+                    raise ValueError(
+                        f"cache-backed PathLock requires cache instance '{pathlock_instance}' "
+                        "to use provider='redis'"
+                    )
+            if coordination["provider"] == "cache":
+                _require_cache_instance(
+                    self.cache,
+                    coordination.get("instance", "default"),
+                    "Coordination",
+                )
+            if _get_config_value(backups, "provider", "filesystem") == "cache":
+                _require_cache_instance(
+                    self.cache,
+                    _get_config_value(backups, "instance", "default"),
+                    "multi-write",
+                )
+            cache_config = _build_named_cache_config(
                 self.cache,
                 cachefs_backend == "cache",
-                uses_runtime,
+                cachefs_instance,
                 self.service_name,
+                uses_runtime,
             )
-        elif self.cache is not None:
-            cache_config = _disabled_cache_config(self.service_name)
+            shared_redis_ttl = int(getattr(cachefs, "shared_redis_ttl_seconds", 0))
+            cache_config["cachefs"]["shared_redis_ttl_seconds"] = (
+                shared_redis_ttl if self.shared_redis_backend else 0
+            )
         else:
             if uses_runtime:
                 raise ValueError(
-                    "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
-                    "or cache-backed multi-write uses the shared Runtime"
+                    "top-level cache config is required when Redis MySQL Account Store, CacheFS, "
+                    "QueueFS, cache-backed PathLock, coordination, or cache-backed multi-write "
+                    "uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
             "service_name": self.service_name,
             "cache": cache_config,
             "pathlock": pathlock,
+            "coordination": coordination,
         }
 
         if self.log is not None:
@@ -123,33 +178,57 @@ def _disabled_cache_config(service_name: str = DEFAULT_SERVICE_NAME) -> Dict[str
     return {
         "enabled": False,
         "runtime_enabled": False,
-        "provider": "redis",
+        "instances": {},
+        "cachefs": {
+            "enabled": False,
+            "instance": "default",
+            "service_name": service_name,
+            "shared_redis_ttl_seconds": 0,
+        },
     }
 
 
-def _build_provider_cache_config(
-    provider_config: Any,
-    cachefs_enabled: bool,
-    runtime_enabled: bool,
-    service_name: str,
-) -> Dict[str, Any]:
-    """Build a provider-backed cache config that shares the top-level service name."""
-    provider = provider_config.provider.strip()
-    params = dict(provider_config.params)
-    cache_config = _disabled_cache_config(service_name)
-    cache_config.update({
-        "enabled": cachefs_enabled,
-        "runtime_enabled": runtime_enabled,
-        "provider": provider,
-    })
-    if provider == "redis":
-        from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+def _require_cache_instance(cache_config: Any, instance: str, consumer: str) -> Any:
+    """Return one configured cache instance or explain which consumer is invalid."""
+    instances = _get_config_value(cache_config, "instances", {})
+    configured = _get_config_value(instances, instance)
+    if configured is None:
+        raise ValueError(f"{consumer} references unknown cache instance '{instance}'")
+    return configured
 
-        redis = RedisCacheConfig.model_validate(params)
-        cache_config["redis"] = redis.model_dump(mode="json")
-        return cache_config
-    if provider == "dynamic":
-        cache_config["dynamic"] = params
+
+def _build_named_cache_config(
+    named_config: Any,
+    cachefs_enabled: bool,
+    cachefs_instance: str,
+    service_name: str,
+    runtime_enabled: bool,
+) -> Dict[str, Any]:
+    """Build named cache provider configs that share the top-level service name."""
+    instances = {}
+    for name, provider_config in _get_config_value(named_config, "instances", {}).items():
+        provider = _get_config_value(provider_config, "provider").strip()
+        params = dict(_get_config_value(provider_config, "params", {}))
+        instance_config: Dict[str, Any] = {"provider": provider}
+        if provider == "redis":
+            from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+            instance_config["redis"] = RedisCacheConfig.model_validate(params).model_dump(
+                mode="json"
+            )
+        else:
+            instance_config["dynamic"] = params
+        instances[name] = instance_config
+    cache_config = _disabled_cache_config(service_name)
+    cache_config.update(
+        {
+            "enabled": cachefs_enabled,
+            "runtime_enabled": runtime_enabled,
+            "instances": instances,
+        }
+    )
+    cache_config["cachefs"]["enabled"] = cachefs_enabled
+    cache_config["cachefs"]["instance"] = cachefs_instance
     return cache_config
 
 
@@ -177,6 +256,99 @@ def _run_coro_blocking(coro: Any) -> Any:
     return result[0] if result else None
 
 
+def _redis_service_keys(endpoints: Any, tls: bool = False) -> set[str]:
+    """Normalize Redis endpoints into comparable service keys.
+
+    Endpoints may be full URLs (``redis://host:port``) or bare ``host:port``
+    addresses. ``ExpiryRedisConfig`` accepts both and resolves bare addresses
+    with its ``tls`` flag at runtime, so bare addresses are resolved the same
+    way here. The transport scheme is not part of the key: one host and port
+    identifies one Redis service, and Redis applies ``maxmemory`` and the
+    eviction policy to the whole service.
+    """
+    if not endpoints:
+        return set()
+    if isinstance(endpoints, str):
+        endpoints = [endpoints]
+    keys = set()
+    for endpoint in endpoints:
+        address = str(endpoint).strip()
+        if not address:
+            continue
+        if "://" not in address:
+            address = ("rediss" if tls else "redis") + f"://{address}"
+        try:
+            parsed = urlsplit(address)
+            host = (parsed.hostname or "").lower()
+            port = parsed.port
+        except ValueError:
+            continue
+        if not host:
+            continue
+        default_port = 6380 if parsed.scheme.lower() == "rediss" else 6379
+        keys.add(f"{host}:{port if port is not None else default_port}")
+    return keys
+
+
+def _cache_redis_service_keys(instance: Any) -> set[str]:
+    """Return Redis service keys after applying cache instance defaults."""
+    from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+    params = dict(_get_config_value(instance, "params", {}))
+    redis = RedisCacheConfig.model_validate(params)
+    return _redis_service_keys(redis.endpoints)
+
+
+def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_config: Any) -> bool:
+    """Whether the CacheFS-selected Redis service is shared with stateful users."""
+    if cache_config is None:
+        return False
+    cachefs = _get_config_value(agfs_config, "cachefs")
+    if _get_config_value(cachefs, "backend") != "cache":
+        return False
+    cachefs_instance = _get_config_value(cachefs, "instance", "default")
+    cachefs_config = _require_cache_instance(cache_config, cachefs_instance, "CacheFS")
+    if _get_config_value(cachefs_config, "provider") != "redis":
+        return False
+    cache_keys = _cache_redis_service_keys(cachefs_config)
+    if not cache_keys:
+        return False
+
+    def shares_instance(consumer: Any, consumer_name: str) -> bool:
+        """Compare CacheFS against the selected Redis instance for one consumer."""
+        instance = _get_config_value(consumer, "instance", "default")
+        selected = _require_cache_instance(cache_config, instance, consumer_name)
+        if _get_config_value(selected, "provider") != "redis":
+            return False
+        selected_keys = _cache_redis_service_keys(selected)
+        return bool(cache_keys & selected_keys)
+
+    queuefs = _get_config_value(agfs_config, "queuefs")
+    if _get_config_value(queuefs, "backend") == "cache" and shares_instance(queuefs, "QueueFS"):
+        return True
+    pathlock = _get_config_value(agfs_config, "pathlock")
+    if _get_config_value(pathlock, "provider") == "cache" and shares_instance(pathlock, "PathLock"):
+        return True
+    coordination = _get_config_value(agfs_config, "coordination")
+    if _get_config_value(coordination, "provider") == "cache" and shares_instance(
+        coordination,
+        "Coordination",
+    ):
+        return True
+    backups = _get_config_value(agfs_config, "backups")
+    if _get_config_value(backups, "provider", "filesystem") == "cache" and shares_instance(
+        backups,
+        "multi-write",
+    ):
+        return True
+    expiry_redis = _get_config_value(expiry_config, "redis")
+    expiry_keys = _redis_service_keys(
+        _get_config_value(expiry_redis, "endpoints"),
+        tls=bool(_get_config_value(expiry_redis, "tls", False)),
+    )
+    return bool(cache_keys & expiry_keys)
+
+
 def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     """Return a full OpenViking config dict for encryption bootstrap."""
     if hasattr(config, "to_dict"):
@@ -192,7 +364,11 @@ def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     return dumped
 
 
-def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
+def build_runtime_ragfs_binding_config(
+    config: Any,
+    *,
+    account_store_cache_instance: str | None = None,
+) -> tuple[RagfsBindingConfig, Any | None]:
     """Build the runtime AGFS binding config from storage and encryption settings."""
     from openviking.crypto.config import bootstrap_encryption
 
@@ -201,6 +377,8 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     if agfs_config is None:
         raise ValueError("OpenViking config storage.agfs is required")
     cache_config = _get_config_value(config, "cache")
+    expiry_config = _get_config_value(config, "expiry")
+    shared_redis_backend = _cache_shares_redis_backend(cache_config, agfs_config, expiry_config)
 
     log_config = _get_config_value(config, "log")
     log_level = _get_config_value(log_config, "level", "INFO")
@@ -214,6 +392,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     binding_log = {
         "level": log_level,
         "output": log_output,
+        "format": _get_config_value(log_config, "format", DEFAULT_LOG_FORMAT),
     }
 
     encryptor = _run_coro_blocking(bootstrap_encryption(_dump_openviking_config(config)))
@@ -223,6 +402,8 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             cache=cache_config,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
+            shared_redis_backend=shared_redis_backend,
+            account_store_cache_instance=account_store_cache_instance,
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -237,6 +418,8 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             provider_type=encryptor.provider_type,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
+            shared_redis_backend=shared_redis_backend,
+            account_store_cache_instance=account_store_cache_instance,
         ),
         encryptor,
     )
@@ -301,8 +484,15 @@ def _build_queuefs_plugin_config(
 
         plugin_config["db_path"] = queue_db_path
 
-    if backend == "cache":
+    if backend in {"cache", "postgres"}:
         plugin_config["service_name"] = service_name
+    if backend == "cache":
+        plugin_config["instance"] = getattr(queuefs_config, "instance", "default")
+    if backend == "postgres":
+        plugin_config["postgres_dsn_env"] = getattr(queuefs_config, "postgres_dsn_env", None)
+        plugin_config["postgres_lease_seconds"] = getattr(
+            queuefs_config, "postgres_lease_seconds", 60
+        )
 
     return plugin_config
 
@@ -339,7 +529,7 @@ def _generate_plugin_config(
     backups_config = getattr(agfs_config, "backups", None)
     redirects_config = getattr(agfs_config, "redirects", None)
     if redirects_config is not None:
-        logger.warning("storage.agfs.redirects is deprecated and ignored")
+        logger.info("storage.agfs.redirects is deprecated and ignored")
 
     # Build primary backend plugin config
     primary_plugin_config: Dict[str, Any] = {}
@@ -545,8 +735,8 @@ def _serialize_backups_config(
     result["items"] = items
 
     if deprecated_fields:
-        logger.warning(
-            "Deprecated backups configuration fields are ignored: %s",
+        logger.info(
+            "deprecated backups configuration fields ignored fields=%s",
             ", ".join(dict.fromkeys(deprecated_fields)),
         )
     result["service_name"] = service_name
@@ -561,7 +751,9 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
     any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
     (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
     ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
-    ``GitS3ConfigPy`` struct.
+    ``GitS3ConfigPy`` struct. ``snapshot`` is copied from the Python config
+    model, with the default SnapshotLog SQLite path resolved under
+    ``storage_path`` so independent workspaces do not share one index DB.
     """
     backend = getattr(git_config, "backend", "local")
     result: Dict[str, Any] = {
@@ -571,6 +763,19 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
         "author_name": getattr(git_config, "author_name", "viking-bot"),
         "author_email": getattr(git_config, "author_email", "bot@viking.local"),
     }
+    snapshot = getattr(git_config, "snapshot", None)
+    if snapshot is not None:
+        if hasattr(snapshot, "model_dump"):
+            result["snapshot"] = snapshot.model_dump(mode="json", exclude_none=True)
+        elif isinstance(snapshot, dict):
+            result["snapshot"] = dict(snapshot)
+        snapshot_log = result.get("snapshot", {}).get("log")
+        if isinstance(snapshot_log, dict) and snapshot_log.get("provider", "sqlite") == "sqlite":
+            sqlite_cfg = snapshot_log.setdefault("sqlite", {})
+            if isinstance(sqlite_cfg, dict) and not sqlite_cfg.get("path"):
+                sqlite_cfg["path"] = str(
+                    storage_path / "_system" / "snapshot" / "log" / "snapshot_log.db"
+                )
 
     if backend == "s3":
         s3_cfg = getattr(git_config, "s3", None)
@@ -701,7 +906,7 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
-            logger.debug("[RAGFSUtils] Ensured localfs storage directory exists")
+            logger.debug("localfs storage directory ensured")
         for backup_item in plugin_config.get("config", {}).get("backups", {}).get("items", []):
             if backup_item.get("backend") != "localfs":
                 continue
@@ -720,10 +925,17 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         try:
             cfg = plugin_config.get("config", {})
             logger.debug(
-                f"[RAGFSUtils] Mounting {plugin_name} at {mount_path} with config keys: {list(cfg.keys()) if isinstance(cfg, dict) else type(cfg)}"
+                "mounting storage plugin=%s path=%s config_fields=%d",
+                plugin_name,
+                safe_path_for_log(mount_path),
+                len(cfg) if isinstance(cfg, dict) else 0,
             )
             agfs.mount(plugin_name, mount_path, cfg)
-            logger.debug(f"[RAGFSUtils] Successfully mounted {plugin_name}")
+            logger.debug("storage plugin mounted plugin=%s", plugin_name)
         except Exception as e:
-            logger.error(f"[RAGFSUtils] Failed to mount {plugin_name}: {e}")
+            logger.debug(
+                "storage plugin mount failed plugin=%s error_type=%s",
+                plugin_name,
+                type(e).__name__,
+            )
             raise

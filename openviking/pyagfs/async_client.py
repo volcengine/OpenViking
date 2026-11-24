@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from threading import Lock
 from typing import Any, BinaryIO, Dict, List, Union
 
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import InvalidPathLockRequestError
 
-from .leader import _LOCAL_LEADER_BACKEND, LeaderCandidate, LeaderMode, leader_candidate
-from .protocols import AGFSSyncClientProtocol
+from .leader import LeaderCandidate, leader_candidate
+from .protocols import AGFSSyncClientProtocol, CacheRuntimeHandleProtocol
 
 _SYSTEM_ACCOUNT_ID = "_system"
 
@@ -92,6 +93,22 @@ class AsyncAGFSClient:
 
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
+        self._cache_runtimes: dict[str, CacheRuntimeHandleProtocol] = {}
+        self._cache_runtime_lock = Lock()
+
+    def cache_runtime(self, instance: str = "default") -> CacheRuntimeHandleProtocol:
+        """Return the configured cache Runtime selected by instance.
+
+        Pass the owning component's configured instance name. Omitting
+        ``instance`` uses ``default``; an unknown configured name raises
+        ``ValueError``.
+        """
+        with self._cache_runtime_lock:
+            runtime = self._cache_runtimes.get(instance)
+            if runtime is None:
+                runtime = self._client.cache_runtime(instance)
+                self._cache_runtimes[instance] = runtime
+            return runtime
 
     def leader_candidate(
         self,
@@ -101,19 +118,28 @@ class AsyncAGFSClient:
         ttl_secs: float,
         renew_interval_secs: float,
         retry_interval_secs: float,
-        mode: LeaderMode = "distributed",
     ) -> LeaderCandidate:
         """Create a leader candidate whose terms expose only a stop event."""
         return leader_candidate(
             self._client,
-            _LOCAL_LEADER_BACKEND,
             key=key,
             holder_id=holder_id,
             ttl_secs=ttl_secs,
             renew_interval_secs=renew_interval_secs,
             retry_interval_secs=retry_interval_secs,
-            mode=mode,
         )
+
+    async def revision_allocate(self, key: str) -> int:
+        """Reserve a revision without publishing it."""
+        return await self._client.revision_allocate_async(key)
+
+    async def revision_publish(self, key: str, revision: int) -> int:
+        """Publish persisted work; returns the maximum published revision."""
+        return await self._client.revision_publish_async(key, revision)
+
+    async def revision_latest(self, key: str) -> int:
+        """Read the maximum published revision, or zero for an unseen key."""
+        return await self._client.revision_latest_async(key)
 
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync method off-thread, settling I/O before propagating cancellation."""
@@ -306,6 +332,22 @@ class AsyncAGFSClient:
             )
         )
 
+    async def _copy_file(self, src_path: str, dst_path: str, *, fs_ctx: Dict[str, str]) -> None:
+        """Copy a prevalidated file under a lease after its parent is prepared."""
+        from .helpers import _copy_file
+
+        await run_to_completion(
+            lambda: asyncio.to_thread(
+                _copy_file,
+                self._client,
+                src_path,
+                dst_path,
+                stream=True,
+                fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, True),
+                parent_prepared=True,
+            )
+        )
+
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:
         if "ctx" not in kwargs or kwargs["ctx"] is None:
             path = kwargs.get("path")
@@ -369,6 +411,10 @@ class AsyncAGFSClient:
         )
 
     # -- pathlock async wrappers ------------------------------------------------
+
+    def pathlock_handle_mode(self) -> str:
+        """Read the runtime provider's handle mode; this performs no storage I/O."""
+        return self._client.pathlock_handle_mode()
 
     async def pathlock_acquire_exact(
         self,
@@ -634,4 +680,5 @@ class AsyncAGFSClient:
         return await self.run(
             "pathlock_observe",
             _fs_ctx_or_default("/", fs_ctx),
+            **({"account_scope": True} if fs_ctx is not None else {}),
         )

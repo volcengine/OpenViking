@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY
 from openviking.core.context import (
     Context,
     ContextLevel,
@@ -61,14 +62,12 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 _MEMORY_CHUNK_PATTERN = re.compile(r"^(?P<base>.+)#chunk_[0-9]{4,}$")
 
 REINDEX_TASK_TYPE = "admin_reindex"
 REINDEX_ENQUEUE_ERROR = "Failed to enqueue reindex processing"
-_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 _USER_REINDEX_FIXED_ROOTS = ("resources", "skills", "memories", "peers")
 _USER_REINDEX_EXCLUDED_ROOTS = frozenset({"sessions", "privacy", "settings"})
 _MEMORY_NON_SOURCE_FILENAMES = ABSTRACT_OVERVIEW_FILENAMES | {
@@ -152,17 +151,6 @@ class ReindexExecutor:
         "skill": {"vectors_only", "semantic_and_vectors"},
         "memory": {"vectors_only", "semantic_and_vectors"},
     }
-
-    @staticmethod
-    def _effective_file_vectorization_concurrency() -> int:
-        config = get_openviking_config().reindex
-        return max(
-            1,
-            min(
-                int(config.file_vectorization_concurrency),
-                _MAX_FILE_VECTORIZATION_CONCURRENCY,
-            ),
-        )
 
     async def _run_ordered_counter_batches(
         self,
@@ -1095,7 +1083,6 @@ class ReindexExecutor:
             ctx=run.ctx,
             request_intent=request,
             recursive=recursive,
-            source_read_concurrency=self._effective_file_vectorization_concurrency(),
             root_is_dir=resolved_root_is_dir,
             formal_inventory=(
                 (True if root_is_dir is None else root_is_dir, formal_entries, True)
@@ -1808,20 +1795,19 @@ class ReindexExecutor:
                 file_counters.warnings.append(f"{failure_message}: {exc}")
             return file_counters
 
-        concurrency = self._effective_file_vectorization_concurrency()
         if file_uris:
             logger.info(
                 "Reindex memory file vectorization: root=%s files=%d concurrency=%d",
                 uri,
                 len(file_uris),
-                concurrency,
+                FILE_TASK_CONCURRENCY,
             )
         if reconcile_only:
             counters.scanned_records += len(file_uris) + len(directory_uris)
         else:
             await self._run_ordered_counter_batches(
                 [file_uri for file_uri in file_uris if root_is_dir or file_uri == uri],
-                concurrency=concurrency,
+                concurrency=FILE_TASK_CONCURRENCY,
                 processor=process_file,
                 counters=counters,
             )

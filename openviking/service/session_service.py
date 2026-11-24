@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.observability.log_safety import short_hash
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -295,10 +296,6 @@ class SessionService:
         """
         self._record_lifecycle_metric("create", "attempt")
         try:
-            if session_id:
-                existing = self.session(ctx, session_id)
-                if await existing.exists():
-                    raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
@@ -321,7 +318,9 @@ class SessionService:
                     event_tags,
                     discard_invalid=True,
                 )
-            await session.ensure_exists()
+            created = await session.ensure_exists()
+            if session_id and not created:
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
@@ -414,7 +413,7 @@ class SessionService:
             await self._session_expiry_adapter.unregister_after_delete(
                 ItemIdentity(SESSION_ITEM_TYPE, ctx.account_id, ctx.user.user_id, session_id)
             )
-        logger.info(f"Deleted session: {session_id}")
+        logger.debug("session deleted session_hash=%s", short_hash(session_id))
         self._record_lifecycle_metric("delete", "ok")
         return True
 
@@ -680,8 +679,13 @@ class SessionService:
                 ):
                     return False
                 self._auto_commit_inflight.add(claim)
-        except Exception:
-            logger.debug("Skipped auto-commit scheduling for %s", session_id, exc_info=True)
+        except Exception as exc:
+            logger.info(
+                "automatic session commit scheduling failed; skipping session_hash=%s error_type=%s",
+                short_hash(session_id),
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             return False
 
         task = asyncio.create_task(self.run_auto_commit(session_id, ctx, reason=reason_hint))
@@ -723,7 +727,13 @@ class SessionService:
                     record_auto_commit_success=True,
                 )
         except Exception as exc:
-            logger.warning("Automatic session commit failed for %s: %s", session_id, exc)
+            logger.error(
+                "automatic session commit failed session_hash=%s trigger=%s error_type=%s",
+                short_hash(session_id),
+                reason,
+                type(exc).__name__,
+                extra={"operation": "session.auto_commit", "error_type": type(exc).__name__},
+            )
         finally:
             async with self._auto_commit_inflight_lock:
                 self._auto_commit_inflight.discard(claim)

@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -41,27 +42,25 @@ class SessionAutoCommitScheduler:
         if check_interval is not None:
             self._check_interval = float(check_interval)
         else:
-            self._check_interval = float(
-                getattr(config, "check_interval_seconds", 600.0)
-            )
+            self._check_interval = float(getattr(config, "check_interval_seconds", 600.0))
         raw_rate = getattr(config, "scan_rate_limit_files_per_second", 2.0)
         rate = float(raw_rate) if raw_rate is not None else 2.0
         self._scan_rate_limit = max(0.0, rate)
-        self._min_read_interval = (
-            1.0 / self._scan_rate_limit if self._scan_rate_limit > 0 else 0.0
-        )
+        self._min_read_interval = 1.0 / self._scan_rate_limit if self._scan_rate_limit > 0 else 0.0
         self._last_scan_read_at = 0.0
         self._sleep = sleep
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._agfs_client: Optional[AsyncAGFSClient] = None
+        self._scan_failures = 0
 
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
         logger.info(
-            "SessionAutoCommitScheduler started with check interval %.3fs", self._check_interval
+            "session auto-commit scheduler started check_interval_seconds=%.3f",
+            self._check_interval,
         )
         self._task = asyncio.create_task(self._run_loop())
 
@@ -88,7 +87,11 @@ class SessionAutoCommitScheduler:
             try:
                 await self._scan_once()
             except Exception as exc:
-                logger.error("Session auto-commit scheduler loop failed: %s", exc, exc_info=True)
+                logger.info(
+                    "session auto-commit scan failed; retrying next round error_type=%s",
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
 
             elapsed = time.monotonic() - round_start
             wait = self._check_interval - elapsed
@@ -99,6 +102,7 @@ class SessionAutoCommitScheduler:
                     break
 
     async def _scan_once(self) -> None:
+        self._scan_failures = 0
         now = datetime.now(timezone.utc)
         scanned = 0
         due = 0
@@ -123,9 +127,18 @@ class SessionAutoCommitScheduler:
             ):
                 scheduled += 1
 
-        if due > 0:
+        if self._scan_failures:
             logger.info(
-                "SessionAutoCommitScheduler scanned=%d due=%d scheduled=%d",
+                "session auto-commit scan degraded scanned=%d failed_operations=%d due=%d scheduled=%d",
+                scanned,
+                self._scan_failures,
+                due,
+                scheduled,
+                extra={"degraded": True, "failed": self._scan_failures},
+            )
+        elif due > 0:
+            logger.info(
+                "session auto-commit scan completed scanned=%d due=%d scheduled=%d",
                 scanned,
                 due,
                 scheduled,
@@ -156,30 +169,33 @@ class SessionAutoCommitScheduler:
             raw = content.decode("utf-8") if isinstance(content, bytes) else str(content)
             meta = json.loads(raw)
             if not isinstance(meta, dict):
-                logger.warning(
-                    "Invalid session meta object for idle auto-commit: %s (%s)",
-                    meta_path,
+                self._scan_failures += 1
+                logger.debug(
+                    "idle auto-commit metadata object invalid target_id=%s object_type=%s",
+                    safe_path_for_log(meta_path),
                     type(meta).__name__,
                 )
                 return None
         except json.JSONDecodeError as exc:
-            logger.warning(
-                "Invalid session meta JSON for idle auto-commit: %s (%s)",
-                meta_path,
-                exc,
+            self._scan_failures += 1
+            logger.debug(
+                "idle auto-commit metadata JSON invalid target_id=%s error_type=%s",
+                safe_path_for_log(meta_path),
+                type(exc).__name__,
             )
             return None
         except Exception as exc:
             if is_not_found_error(exc):
                 logger.debug(
-                    "Session meta disappeared during idle auto-commit scan: %s",
-                    meta_path,
+                    "session metadata disappeared during idle auto-commit scan target_id=%s",
+                    safe_path_for_log(meta_path),
                 )
                 return None
-            logger.warning(
-                "Failed to read session meta for idle auto-commit: %s",
-                meta_path,
-                exc_info=True,
+            self._scan_failures += 1
+            logger.debug(
+                "idle auto-commit metadata read failed target_id=%s error_type=%s",
+                safe_path_for_log(meta_path),
+                type(exc).__name__,
             )
             return None
 
@@ -187,10 +203,11 @@ class SessionAutoCommitScheduler:
             if not _is_idle_candidate(meta, now):
                 return None
         except (TypeError, ValueError) as exc:
-            logger.warning(
-                "Invalid session meta fields for idle auto-commit: %s (%s)",
-                meta_path,
-                exc,
+            self._scan_failures += 1
+            logger.debug(
+                "idle auto-commit metadata fields invalid target_id=%s error_type=%s",
+                safe_path_for_log(meta_path),
+                type(exc).__name__,
             )
             return None
 
@@ -201,13 +218,12 @@ class SessionAutoCommitScheduler:
             return None
         return session_id, account_id, user_id
 
-    async def _iter_session_meta_paths(
-        self, agfs: AsyncAGFSClient
-    ) -> AsyncIterator[str]:
+    async def _iter_session_meta_paths(self, agfs: AsyncAGFSClient) -> AsyncIterator[str]:
         try:
             account_entries = await agfs.ls(AGFS_SESSION_SCAN_ROOT)
-        except Exception:
-            logger.warning("Failed to scan AGFS tree for idle auto-commit", exc_info=True)
+        except Exception as exc:
+            self._scan_failures += 1
+            logger.debug("idle auto-commit root listing failed error_type=%s", type(exc).__name__)
             return
 
         seen: set[str] = set()
@@ -223,14 +239,15 @@ class SessionAutoCommitScheduler:
             except Exception as exc:
                 if is_not_found_error(exc):
                     logger.debug(
-                        "Account user directory missing during idle auto-commit scan: %s",
-                        account_id,
+                        "account user directory missing during idle auto-commit scan account_hash=%s",
+                        short_hash(account_id),
                     )
                 else:
-                    logger.warning(
-                        "Failed to scan users for idle auto-commit: /local/%s/user",
-                        account_id,
-                        exc_info=True,
+                    self._scan_failures += 1
+                    logger.debug(
+                        "idle auto-commit user listing failed account_hash=%s error_type=%s",
+                        short_hash(account_id),
+                        type(exc).__name__,
                     )
                 continue
 
@@ -244,14 +261,15 @@ class SessionAutoCommitScheduler:
                 except Exception as exc:
                     if is_not_found_error(exc):
                         logger.debug(
-                            "User sessions directory missing during idle auto-commit scan: %s",
-                            sessions_root,
+                            "user sessions directory missing during idle auto-commit scan target_id=%s",
+                            safe_path_for_log(sessions_root),
                         )
                     else:
-                        logger.warning(
-                            "Failed to scan sessions for idle auto-commit: %s",
-                            sessions_root,
-                            exc_info=True,
+                        self._scan_failures += 1
+                        logger.debug(
+                            "idle auto-commit session listing failed target_id=%s error_type=%s",
+                            safe_path_for_log(sessions_root),
+                            type(exc).__name__,
                         )
                     continue
 

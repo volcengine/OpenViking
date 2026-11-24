@@ -161,6 +161,59 @@ async def probe(base_url, api_key, model="mock-silent", minimum_seconds=39, read
     }
 
 
+async def stall_probe(base_url, api_key, model="mock-stall", read_timeout=60):
+    """Each SDK must report the gateway's error event on a stream the provider stops sending."""
+    import anthropic
+    import openai
+
+    base_url = base_url.rstrip("/")
+    options = {"api_key": api_key, "max_retries": 0, "timeout": read_timeout}
+
+    async def sdk(kind):
+        if kind == "anthropic":
+            async with anthropic.AsyncAnthropic(base_url=base_url, **options) as client:
+                try:
+                    async with client.messages.stream(
+                        model=model, max_tokens=64, messages=[{"role": "user", "content": "Hi"}]
+                    ) as stream:
+                        async for _ in stream.text_stream:
+                            pass
+                except anthropic.APIStatusError as error:
+                    return {"client": kind, "status": "passed", "error": str(error)}
+        else:
+            async with openai.AsyncOpenAI(base_url=base_url + "/v1", **options) as client:
+                if kind == "openai-chat":
+                    try:
+                        stream = await client.chat.completions.create(
+                            model=model, messages=[{"role": "user", "content": "Hi"}], stream=True
+                        )
+                        async for _ in stream:
+                            pass
+                    except openai.APIError as error:
+                        return {"client": kind, "status": "passed", "error": error.message}
+                else:
+                    # The SDK hands a Responses failure over as an event, not an exception.
+                    async with client.responses.stream(
+                        model=model, input="Hi", store=False
+                    ) as stream:
+                        async for event in stream:
+                            if event.type == "response.failed":
+                                message = event.response.error.message
+                                return {"client": kind, "status": "passed", "error": message}
+        raise AssertionError(f"{kind} ended without an error")
+
+    labels = ("openai-chat", "openai-responses", "anthropic")
+    outcomes = await asyncio.gather(*map(sdk, labels), return_exceptions=True)
+    results = [
+        {"client": label, "status": "failed", "error": f"{type(value).__name__}: {value}"}
+        if isinstance(value, BaseException)
+        else value
+        for label, value in zip(labels, outcomes, strict=True)
+    ]
+    passed = all(r["status"] == "passed" and "upstream_timeout" in r["error"] for r in results)
+    return {"model": model, "results": results, "passed": passed}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True, help="Gateway origin, without /v1")

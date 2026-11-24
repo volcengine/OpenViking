@@ -1,0 +1,117 @@
+name: Build Linux CI Base Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: Ubuntu baseline (20.04 for wheels, 24.04 for API tests)
+        type: choice
+        options:
+          - '24.04'
+          - '20.04'
+        default: '24.04'
+      publish:
+        description: Publish the validated image to GHCR
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          UBUNTU_VERSION: ${{ inputs.ubuntu_version }}
+        run: |
+          case "$UBUNTU_VERSION" in
+            20.04) baseline=20 ;;
+            24.04) baseline=24 ;;
+            *) echo "Unsupported Ubuntu baseline: $UBUNTU_VERSION" >&2; exit 1 ;;
+          esac
+          echo "tag=ghcr.io/${REPOSITORY,,}-ci-ubuntu${baseline}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=.github/images/ubuntu${baseline}-ci.Dockerfile" >> "$GITHUB_OUTPUT"
+          echo "variable=CI_UBUNTU${baseline}_IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Provide bootstrap CA certificates
+        run: cp /etc/ssl/certs/ca-certificates.crt .github/images/bootstrap-ca-certificates.crt
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .github/images
+          file: ${{ steps.image.outputs.dockerfile }}
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.tag }}
+          load: true
+          push: false
+      - name: Verify installed system dependencies
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+          UBUNTU_VERSION: ${{ inputs.ubuntu_version }}
+        run: |
+          docker run --rm --network none --env UBUNTU_VERSION "$IMAGE" bash -euc '
+            . /etc/os-release
+            test "$VERSION_ID" = "$UBUNTU_VERSION"
+            cc=gcc
+            cxx=g++
+            if [ "$UBUNTU_VERSION" = 20.04 ]; then
+              cc=gcc-10
+              cxx=g++-10
+              test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.31"
+              packages=(
+                git ca-certificates cmake build-essential gcc-10 g++-10 ccache tzdata curl
+                pkg-config unzip xz-utils python3 libicu66
+                libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev
+                libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev
+                libncursesw5-dev tk-dev uuid-dev libexpat1-dev
+              )
+              for package in "${packages[@]}"; do
+                test "$(dpkg-query -W -f="\${Status}" "$package")" = "install ok installed"
+              done
+            fi
+            git --version
+            "$cc" --version
+            "$cxx" --version
+            cmake --version
+            ccache --version
+            python3 --version
+            pkg-config --modversion openssl
+            printf "#include <openssl/ssl.h>\nint main(void) { return OPENSSL_init_ssl(0, 0) != 1; }\n" \
+              | "$cc" -x c - -lssl -lcrypto -o /tmp/openssl-smoke
+            /tmp/openssl-smoke
+            printf "#include <filesystem>\nint main() { return std::filesystem::path(\"/tmp\").empty(); }\n" \
+              | "$cxx" -std=c++17 -x c++ - -o /tmp/cpp-smoke
+            /tmp/cpp-smoke
+            # Match the optimized memcmp probe used by AWS-LC (GCC bug 95189).
+            printf "%s\n" "#include <string.h>" \
+              "int main(void) { char a[] = \"\\0abc\"; return memcmp(a, \"\\0\\0\\0\\0\", 4) == 0; }" \
+              | "$cc" -O3 -x c - -o /tmp/memcmp-smoke
+            /tmp/memcmp-smoke
+            command -v curl unzip xz
+            if [ "$UBUNTU_VERSION" = 24.04 ]; then
+              ffmpeg -version
+              command -v lsof ps
+            fi
+            test -s /etc/ssl/certs/ca-certificates.crt
+          '
+      - uses: docker/login-action@v4
+        if: inputs.publish
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish validated image
+        if: inputs.publish
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+          IMAGE_VARIABLE: ${{ steps.image.outputs.variable }}
+        run: |
+          docker push "$IMAGE"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          printf 'Set `%s` to `%s` after making the package publicly readable.\n' \
+            "$IMAGE_VARIABLE" "$reference" >> "$GITHUB_STEP_SUMMARY"

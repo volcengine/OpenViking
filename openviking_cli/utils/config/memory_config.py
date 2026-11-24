@@ -132,15 +132,15 @@ class MemoryConfig(BaseModel):
             data = dict(data)
             if "agent_memory_enabled" in data:
                 data.pop("agent_memory_enabled", None)
-                logger.debug(
-                    "memory.agent_memory_enabled is deprecated and ignored; "
-                    "use session memory_policy.memory_types to control trajectory/experience extraction"
+                logger.info(
+                    "memory.agent_memory_enabled is deprecated and ignored; use session memory_policy.memory_types to control trajectory/experience extraction",
+                    extra={"degraded": True},
                 )
             if "working_memory_enabled" in data:
                 data.pop("working_memory_enabled", None)
-                logger.debug(
-                    "memory.working_memory_enabled is deprecated and ignored; "
-                    "use session memory_policy.working_memory.enabled to control archive summaries"
+                logger.info(
+                    "memory.working_memory_enabled is deprecated and ignored; use session memory_policy.working_memory.enabled to control archive summaries",
+                    extra={"degraded": True},
                 )
         return data
 
@@ -148,8 +148,9 @@ class MemoryConfig(BaseModel):
     @classmethod
     def accept_deprecated_version(cls, value: Any) -> str:
         if value not in (None, ""):
-            logger.debug(
-                "memory.version is deprecated and ignored; memory extraction always uses v3"
+            logger.info(
+                "memory.version is deprecated and ignored; memory extraction always uses v3",
+                extra={"degraded": True},
             )
         return "v3"
 

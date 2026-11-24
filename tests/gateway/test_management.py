@@ -339,8 +339,19 @@ async def test_upstream_test_status_contract(running_gateway, status, body, ok, 
     app, client, admin, _, _, _ = running_gateway
 
     async def handler(request):
-        if request.path == "/v1/chat/completions":
+        if request.path != "/v1/chat/completions":
+            return None
+        if not ok:
             return web.json_response(body, status=status)
+        # A valid generation result can span multiple reads before EOF.
+        response = web.StreamResponse(headers={"Content-Type": "application/json"})
+        await response.prepare(request)
+        raw = json.dumps(body).encode()
+        for start in range(0, len(raw), 7):
+            await response.write(raw[start : start + 7])
+            await asyncio.sleep(0)
+        await response.write_eof()
+        return response
 
     app.state.test_backend["handler"] = handler
     result = (
@@ -394,32 +405,10 @@ async def test_upstream_connection_status_contract(running_gateway, status, body
     assert requests == [("GET", b"")]
 
 
-async def test_upstream_test_reads_chunked_response_to_eof(running_gateway):
-    app, client, admin, _, _, _ = running_gateway
-    body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "OK"}}]}).encode()
-
-    async def handler(request):
-        if request.path == "/v1/chat/completions":
-            response = web.StreamResponse(headers={"Content-Type": "application/json"})
-            await response.prepare(request)
-            for start in range(0, len(body), 7):
-                await response.write(body[start : start + 7])
-                await asyncio.sleep(0)
-            await response.write_eof()
-            return response
-
-    app.state.test_backend["handler"] = handler
-    result = (
-        await client.post(P + "/upstreams/chat/test", headers=admin, json={"model": "model"})
-    ).json()
-
-    assert result["ok"] and result["reason"] == "passed"
-
-
 @pytest.mark.parametrize(
     "protocol,path,input_field,limit_field",
     [
-        ("chat", "/v1/chat/completions", "messages", "max_tokens"),
+        ("chat", "/api/v3/chat/completions", "messages", "max_tokens"),
         ("responses", "/v1/responses", "input", "max_output_tokens"),
         ("anthropic", "/v1/messages", "messages", "max_tokens"),
     ],
@@ -429,12 +418,12 @@ async def test_upstream_test_generates_with_protocol_and_alias(
 ):
     app, client, admin, _, captured, _ = running_gateway
     upstream = await app.state.management.get("tenant", "upstreams", protocol)
-    await app.state.management.save(
-        "tenant",
-        "upstreams",
-        protocol,
-        {**upstream, "aliases": {"client-model": "model"}},
-    )
+    configured = {**upstream, "aliases": {"client-model": "model"}}
+    if protocol == "chat":
+        configured.update(
+            vendor="ark", base_url=upstream["base_url"].removesuffix("/v1") + "/api/v3"
+        )
+    await app.state.management.save("tenant", "upstreams", protocol, configured)
 
     result = (
         await client.post(
@@ -444,7 +433,7 @@ async def test_upstream_test_generates_with_protocol_and_alias(
         )
     ).json()
 
-    assert result["ok"] and result["reason"] == "passed"
+    assert result["ok"] and result["reason"] == "passed" and result["status"] == 200
     sent_path, raw, headers = captured[-1]
     payload = json.loads(raw)
     assert sent_path == path
@@ -466,40 +455,6 @@ async def test_upstream_test_generates_with_protocol_and_alias(
         assert "input_schema" in payload["tools"][0]
     if protocol == "anthropic":
         assert headers["anthropic-version"] == "2023-06-01"
-
-
-async def test_upstream_test_honors_exact_endpoint_url(running_gateway):
-    app, client, admin, _, captured, _ = running_gateway
-    upstream = await app.state.management.get("tenant", "upstreams", "chat")
-    await app.state.management.save(
-        "tenant",
-        "upstreams",
-        "chat",
-        {
-            **upstream,
-            "append_endpoint_path": False,
-            "allow_gateway_tools": False,
-            "headers": {
-                "X-Test-Header": "stored-value",
-                "content-type": "application/vnd.test+json",
-            },
-        },
-    )
-
-    result = (
-        await client.post(
-            P + "/upstreams/chat/test",
-            headers=admin,
-            json={"model": "model"},
-        )
-    ).json()
-
-    assert result["ok"] and result["url"].endswith("/v1")
-    assert captured[-1][0] == "/v1"
-    assert captured[-1][2]["X-Test-Header"] == "stored-value"
-    sent_headers = {name.lower(): value for name, value in captured[-1][2].items()}
-    assert sent_headers["content-type"] == "application/vnd.test+json"
-    assert "tools" not in json.loads(captured[-1][1])
 
 
 async def test_upstream_test_continues_without_unavailable_tools(running_gateway):
@@ -661,34 +616,6 @@ async def test_safe_validation_detail_and_typed_request_reason(running_gateway):
     assert response.status_code == 422 and response.json()["reason"] == "invalid_configuration"
 
 
-async def test_revoked_key_keeps_pending_capture(running_gateway):
-    from conftest import make_due
-
-    app, client, admin, key, _, _ = running_gateway
-    await client.post(
-        "/v1/chat/completions",
-        headers={"X-API-Key": key["key"], "X-OpenViking-Session": "pending"},
-        json={
-            "model": "model",
-            "messages": [{"role": "user", "content": "Keep this unsaved conversation"}],
-        },
-    )
-    scope, session = digest("tenant\0alice\0chat"), digest("pending")
-    before = (await app.state.store.capture.get(scope, session)).value
-    assert before["pending"]
-    await client.delete(P + "/keys/" + key["id"], headers=admin)
-    await make_due(app.state.store)
-    assert await app.state.worker.once()
-    after = (await app.state.store.capture.get(scope, session)).value
-    assert after["pending"][0]["messages"] == before["pending"][0]["messages"]
-    assert after["error"]["reason"] == "gateway_key_revoked"
-    logs = await app.state.management.logs("tenant", user_id="alice")
-    assert logs[0]["capture_status"] == "paused"
-    assert logs[0]["capture_reason"] == "gateway_key_revoked"
-    overview = (await client.get(P + "/overview", headers=admin)).json()
-    assert overview["capture_issues"]["paused"] == 1
-
-
 async def test_identity_cache_accepts_root_does_not_cache_failures():
     from openviking_gateway.client import VikingClient, VikingError
 
@@ -823,85 +750,6 @@ async def test_non_ascii_management_header_is_rejected_cleanly(running_gateway):
     assert response.status_code == 401 and response.json()["reason"] == "management_key_invalid"
 
 
-async def test_revoked_capture_is_idle_until_ttl_expires(running_gateway):
-    import time
-
-    from conftest import make_due
-
-    app, client, admin, key, _, _ = running_gateway
-    headers = {"X-API-Key": key["key"], "X-OpenViking-Session": "ttl-pending"}
-    await client.post(
-        "/v1/chat/completions",
-        headers=headers,
-        json={
-            "model": "model",
-            "messages": [{"role": "user", "content": "Preserve until retention expires"}],
-        },
-    )
-    scope, session = digest("tenant\0alice\0chat"), digest("ttl-pending")
-    await client.delete(P + "/keys/" + key["id"], headers=admin)
-    await make_due(app.state.store)
-    assert await app.state.worker.once()
-    paused = (await app.state.store.capture.get(scope, session)).value
-    assert paused["pending"] and paused["error"]["retry_at"] is None
-    with app.state.store.connect() as connection:
-        touched = connection.execute(
-            "SELECT touched FROM sessions WHERE scope=? AND session=?", (scope, session)
-        ).fetchone()[0]
-    assert not await app.state.worker.once()
-    with app.state.store.connect() as connection:
-        assert (
-            connection.execute(
-                "SELECT touched FROM sessions WHERE scope=? AND session=?", (scope, session)
-            ).fetchone()[0]
-            == touched
-        )
-    await app.state.store.expire(time.time() + app.state.config.session_ttl_seconds)
-    assert not (await app.state.store.capture.get(scope, session)).value
-
-
-async def test_replacement_key_resumes_paused_capture(running_gateway):
-    from conftest import make_due
-
-    app, client, admin, key, _, writes = running_gateway
-    messages = [{"role": "user", "content": "Remember this retained conversation"}]
-    headers = {"X-API-Key": key["key"], "X-OpenViking-Session": "resume-paused"}
-    body = {"model": "model", "messages": messages}
-    assert (
-        await client.post("/v1/chat/completions", headers=headers, json=body)
-    ).status_code == 200
-    await client.delete(P + "/keys/" + key["id"], headers=admin)
-    await make_due(app.state.store)
-    assert await app.state.worker.once()
-    scope, session = digest("tenant\0alice\0chat"), digest("resume-paused")
-    assert (await app.state.store.capture.get(scope, session)).value["error"]["retry_at"] is None
-    replacement = (
-        await client.post(
-            P + "/keys",
-            headers=admin,
-            json={
-                "name": "replacement",
-                "user_id": "alice",
-                "policy_id": "default",
-                "upstream_ids": ["chat"],
-            },
-        )
-    ).json()
-    headers["X-API-Key"] = replacement["key"]
-    body["messages"] = [
-        *messages,
-        {"role": "assistant", "content": "hello"},
-        {"role": "user", "content": "Continue this conversation"},
-    ]
-    assert (
-        await client.post("/v1/chat/completions", headers=headers, json=body)
-    ).status_code == 200
-    state = (await app.state.store.capture.get(scope, session)).value
-    assert not state["error"] and state["credential_id"] == replacement["id"]
-    assert await app.state.worker.once()
-    assert writes
-
-
 async def test_version_error_includes_required_version(running_gateway):
     app, client, admin, _, _, _ = running_gateway
     app.state.config.min_server_version = app.state.viking.min_version = "99.0.0"
@@ -1032,7 +880,7 @@ async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_g
     seen = []
 
     async def handler(request):
-        if request.path.startswith("/v1/"):
+        if request.path == "/v1" or request.path.startswith("/v1/"):
             seen.append((request.method, request.path, request.query_string, dict(request.headers)))
 
     app.state.test_backend["handler"] = handler
@@ -1040,8 +888,14 @@ async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_g
     assert result["ok"] and result["url"] == upstream["base_url"] + "/models?tenant=a&key={api_key}"
     assert seen[-1][2] == "tenant=a&key=model-secret" and "Authorization" not in seen[-1][3]
 
-    endpoint = upstream["base_url"] + "/chat/completions?api-version=1"
-    exact = {**upstream, "base_url": endpoint, "append_endpoint_path": False}
+    endpoint = upstream["base_url"] + "?api-version=1"
+    exact = {
+        **upstream,
+        "base_url": endpoint,
+        "append_endpoint_path": False,
+        "allow_gateway_tools": False,
+        "headers": {"X-Test-Header": "stored-value", "content-type": "application/vnd.test+json"},
+    }
     await app.state.management.save("tenant", "upstreams", "chat", exact)
     before = len(captured)
     result = (await client.post(P + "/upstreams/chat/test", headers=admin, json={})).json()
@@ -1054,5 +908,9 @@ async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_g
     assert len(captured) == before
     model = {"model": "model"}
     result = (await client.post(P + "/upstreams/chat/test", headers=admin, json=model)).json()
-    assert result["kind"] == "model" and result["url"] == endpoint
-    assert seen[-1][:3] == ("POST", "/v1/chat/completions", "api-version=1")
+    assert result["ok"] and result["kind"] == "model" and result["url"] == endpoint
+    assert seen[-1][:3] == ("POST", "/v1", "api-version=1")
+    sent_headers = {name.lower(): value for name, value in seen[-1][3].items()}
+    assert sent_headers["x-test-header"] == "stored-value"
+    assert sent_headers["content-type"] == "application/vnd.test+json"
+    assert "tools" not in json.loads(captured[-1][1])

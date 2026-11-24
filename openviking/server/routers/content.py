@@ -31,7 +31,7 @@ from openviking.server.telemetry import run_operation
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, OpenVikingError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -46,6 +46,7 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
+    use_snapshot: bool = False
     timeout: float | None = Field(
         default=None,
         deprecated=True,
@@ -56,10 +57,9 @@ class WriteContentRequest(BaseModel):
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
-    # Who made the edit; versions of Compile outputs record it (console edit = manual).
-    edit_source: Literal["manual", "agent", "compile"] = "manual"
     # Mark this edit as conflict resolution.
     resolve_conflicts: bool = False
+    defer_processing: bool = False
 
 
 class BatchWriteOperation(BaseModel):
@@ -73,6 +73,7 @@ class BatchWriteOperation(BaseModel):
     expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     # Atomically create only when the target does not exist.
     if_absent: bool = False
+    resolve_conflicts: bool = False
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
@@ -94,6 +95,7 @@ class BatchWriteRequest(BaseModel):
     root_uri: str
     operations: list[BatchWriteOperation]
     wait: bool = True
+    use_snapshot: bool = False
     timeout: float | None = Field(
         default=None,
         deprecated=True,
@@ -105,7 +107,6 @@ class BatchWriteRequest(BaseModel):
     # Save content without semantic or vector work; the caller schedules processing.
     defer_processing: bool = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
-    edit_source: Literal["manual", "agent", "compile"] = "manual"
 
 
 class SetTagsRequest(BaseModel):
@@ -114,6 +115,18 @@ class SetTagsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
+    tags: list[str] | None = None
+    mode: str = "replace"
+    recursive: bool = False
+    telemetry: TelemetryRequest = False
+
+
+class BatchSetTagsRequest(BaseModel):
+    """Request to update retrieval tags for a batch of files or directories."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uris: list[str] = Field(min_length=1, max_length=50)
     tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
@@ -165,7 +178,7 @@ def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
     return uri
 
 
-@router.get("/read")
+@router.get("/read", response_model=Response)
 async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
@@ -306,8 +319,9 @@ async def write(
             tags=request.tags,
             tag_mode=request.tag_mode,
             acl=request.acl,
-            edit_source=request.edit_source,
             resolve_conflicts=request.resolve_conflicts,
+            use_snapshot=request.use_snapshot,
+            defer_processing=request.defer_processing,
         ),
     )
     return Response(
@@ -340,8 +354,8 @@ async def batch_write(
             wait=request.wait,
             skip_conflicts=request.skip_conflicts,
             defer_processing=request.defer_processing,
+            use_snapshot=request.use_snapshot,
             processing_mode=request.processing_mode,
-            edit_source=request.edit_source,
         ),
     )
     return Response(
@@ -356,15 +370,49 @@ async def set_tags(
     request: SetTagsRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Set explicit k=v retrieval tags metadata for a file or directory."""
+    """Set explicit retrieval tags metadata for one file or directory."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     tags = [] if request.mode == "clear" else request.tags or []
+
+    async def update_tags():
+        result = await service.fs.batch_set_tags(
+            uris=[uri],
+            tags=tags,
+            mode=request.mode,
+            recursive=request.recursive,
+            ctx=_ctx,
+        )
+        if result["failed"]:
+            error = result["failed"][0]["error"]
+            raise OpenVikingError(error["message"], code=error["code"])
+        return result["items"][0]
+
     execution = await run_operation(
         operation="content.set_tags",
         telemetry=request.telemetry,
-        fn=lambda: service.fs.set_tags(
-            uri=uri,
+        fn=update_tags,
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/batch_set_tags")
+async def batch_set_tags(
+    request: BatchSetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit retrieval tags metadata for a batch of files or directories."""
+    service = get_service()
+    tags = [] if request.mode == "clear" else request.tags or []
+    execution = await run_operation(
+        operation="content.batch_set_tags",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.batch_set_tags(
+            uris=request.uris,
             tags=tags,
             mode=request.mode,
             recursive=request.recursive,

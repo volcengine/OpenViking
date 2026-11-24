@@ -17,7 +17,7 @@ def mock_service():
     """Create a mock OpenVikingService."""
     service = MagicMock()
     service.vikingdb_manager = AsyncMock()
-    service.vikingdb_manager.query = AsyncMock(return_value=[])
+    service.vikingdb_manager.filter = AsyncMock(return_value=[])
 
     # Mock session access
     mock_session = MagicMock()

@@ -64,6 +64,9 @@ class LockError(VikingDBException):
 class LockAcquisitionError(LockError):
     """Raised when lock acquisition fails."""
 
+    # The native lock manager sets the owner only for a timeout on a live conflicting lock.
+    conflicting_owner: str | None = None
+
 
 class HandoffRecoveryRequired(LockAcquisitionError):
     """A durable consumer must acquire fresh logical coverage before resuming."""

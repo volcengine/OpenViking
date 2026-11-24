@@ -47,19 +47,18 @@ class DevAuthPlugin(AuthPlugin):
         """Dev mode is only allowed on localhost."""
         if _is_localhost(config.host):
             return
-        import logging
-
-        logger = logging.getLogger(__name__)
-        logger.error(
+        print(
             "SECURITY: server.auth_mode='dev' requires server.host to be localhost, "
-            "but it is set to '%s'. Dev mode exposes an unauthenticated ROOT "
+            "but a non-localhost host is configured. Dev mode exposes an unauthenticated ROOT "
             "endpoint and must not be exposed to the network.",
-            config.host,
+            file=sys.stderr,
+            flush=True,
         )
-        logger.error(
-            "To fix, either:\n"
-            '  1. Set server.auth_mode="api_key" and configure server.root_api_key, or\n'
-            '  2. Bind dev mode to localhost (server.host = "127.0.0.1")'
+        print(
+            'Set server.auth_mode="api_key" and configure server.root_api_key, '
+            'or bind dev mode to localhost (server.host = "127.0.0.1").',
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 

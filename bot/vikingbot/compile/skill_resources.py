@@ -20,7 +20,7 @@ class SkillResources(Tool):
 
     A task snapshots at most 32 attachments, 256 KiB each and 1 MiB total. Reads
     return complete requested line ranges with hashes and explicit remaining lines.
-    Hashes bind execution caches and recovery to attachments read by execution stages.
+    Hashes identify attachment snapshots used by execution stages.
     Complete snapshots are saved in the task sandbox with their Skill-relative layout
     so commands can use scripts and loaded dependencies through ordinary file paths.
     """
@@ -90,14 +90,6 @@ class SkillResources(Tool):
                 await self.files.put("skill-dependencies", self.hashes)
             return self.snapshots[path]
 
-    async def valid(self, dependencies):
-        """Revalidate cache dependencies against authorized current content before reuse."""
-        for path, expected in dependencies.items():
-            await self.read(path, refresh=True)
-            if self.hashes[path] != expected:
-                return False
-        return True
-
     async def execute(self, tool_context=None, path="", offset=0, limit=None):
         """Return the requested lines, never a silently truncated rule or template."""
         if offset < 0 or (limit is not None and limit < 1):
@@ -141,24 +133,15 @@ class EvidenceReader(Tool):
         "additionalProperties": False,
     }
 
-    def __init__(self, files, data):
+    def __init__(self, files, data, *, recovery_evidence=None):
         self.files = files
         self.allowed = set()
         self.spans, full = {}, set()
-        self.delivered = (
-            {
-                ref
-                for ref, value in data.get("original_evidence", {}).items()
-                if value.get("complete", True)
-            }
-            if isinstance(data, dict)
-            else set()
-        )
+        self.recovery_evidence = recovery_evidence
         for item in data.get("inputs", []) if isinstance(data, dict) else []:
             payload = item.get("payload", {})
             if "text" in payload and "uri" in payload:
                 self.allowed.add(item["id"])
-                self.delivered.add(item["id"])
             self.allowed.update(payload.get("source_ranges", []))
             spans = payload.get("evidence_spans", [])
             full.update(set(payload.get("source_ranges", [])) - {s["source_range"] for s in spans})
@@ -166,7 +149,7 @@ class EvidenceReader(Tool):
                 self.spans.setdefault(span["source_range"], []).append(
                     (span["start_line"], span["end_line"])
                 )
-        # A record without locations still needs full evidence, even if a neighbour has hints.
+        # An input without locations retains full evidence access, even when another input supplies hints.
         for reference in full:
             self.spans.pop(reference, None)
 
@@ -219,6 +202,8 @@ class EvidenceReader(Tool):
             raise ValueError("Supply both start_line and end_line, or neither")
         spans = [] if start_line is None else [(start_line, end_line)]
         value = await self.read(source_range, spans, include_image=True)
+        if self.recovery_evidence is not None and value["complete"]:
+            self.recovery_evidence.add(source_range)
         image = value.pop("image", None)
         text = json.dumps(value, ensure_ascii=False)
         if image:

@@ -24,15 +24,16 @@ class TaskStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql"}:
+        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
             raise ValueError(
-                f"storage.task_store.provider must be 'file' or 'mysql', got {self.provider!r}"
+                "storage.task_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
+                f"got {self.provider!r}"
             )
         return self
 
 
 class WatchStoreConfig(BaseModel):
-    """Watch store: the VikingFS control file for one node, MySQL when nodes share Watches."""
+    """Watch store: a single-process control file or shared relational metadata."""
 
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -40,9 +41,10 @@ class WatchStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql"}:
+        if self.provider not in {"file", "mysql", "postgres"}:
             raise ValueError(
-                f"storage.watch_store.provider must be 'file' or 'mysql', got {self.provider!r}"
+                "storage.watch_store.provider must be 'file', 'mysql' or 'postgres', "
+                f"got {self.provider!r}"
             )
         return self
 
@@ -102,9 +104,9 @@ class StorageConfig(BaseModel):
         if isinstance(data, dict) and "task_tracker" in data:
             data = dict(data)
             data.pop("task_tracker", None)
-            logger.warning(
-                "StorageConfig: 'task_tracker' is deprecated and ignored. "
-                "Task records are always persisted."
+            logger.info(
+                "'task_tracker' is deprecated and ignored. Task records are always persisted.",
+                extra={"degraded": True},
             )
         return data
 
@@ -112,9 +114,9 @@ class StorageConfig(BaseModel):
     def resolve_paths(self):
         """Normalize storage paths and map legacy transaction settings into native pathlock config."""
         if "lock_timeout" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.lock_timeout' is deprecated and ignored. "
-                "The runtime wait timeout is fixed at 0.0 seconds."
+            logger.info(
+                "'transaction.lock_timeout' is deprecated and ignored. The runtime wait timeout is fixed at 0.0 seconds.",
+                extra={"degraded": True},
             )
 
         if (
@@ -122,21 +124,19 @@ class StorageConfig(BaseModel):
             and "lock_expire_secs" not in self.agfs.pathlock.model_fields_set
         ):
             self.agfs.pathlock.lock_expire_secs = self.transaction.lock_expire
-            logger.warning(
-                "StorageConfig: 'transaction.lock_expire' is deprecated. "
-                "Mapped to 'storage.agfs.pathlock.lock_expire_secs'."
+            logger.info(
+                "'transaction.lock_expire' is deprecated. Mapped to 'storage.agfs.pathlock.lock_expire_secs'."
             )
         elif "lock_expire" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.lock_expire' is deprecated and ignored because "
-                "'storage.agfs.pathlock.lock_expire_secs' is set."
+            logger.info(
+                "'transaction.lock_expire' is deprecated and ignored because 'storage.agfs.pathlock.lock_expire_secs' is set.",
+                extra={"degraded": True},
             )
 
         if "redo_recovery_enabled" in self.transaction.model_fields_set:
-            logger.warning(
-                "StorageConfig: 'transaction.redo_recovery_enabled' is deprecated and ignored. "
-                "Session commit phase-2 recovery now resumes from the persistent "
-                "'session_commit' queue."
+            logger.info(
+                "'transaction.redo_recovery_enabled' is deprecated and ignored. Session commit phase-2 recovery now resumes from the persistent 'session_commit' queue.",
+                extra={"degraded": True},
             )
 
         # Update paths to use workspace (expand ~ first)
@@ -169,6 +169,16 @@ class StorageConfig(BaseModel):
             from openviking.service.task_store_mysql import MySQLTaskWorkStore
 
             store = MySQLTaskWorkStore(params=self.task_store.params, service_name=service_name)
+        elif self.task_store.provider == "postgres":
+            from openviking.service.task_store_postgres import PostgresTaskWorkStore
+
+            store = PostgresTaskWorkStore(params=self.task_store.params, service_name=service_name)
+        elif self.task_store.provider == "sqlite":
+            from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+            params = dict(self.task_store.params)
+            params.setdefault("path", str(Path(self.workspace) / "task_store" / "tasks.db"))
+            store = SQLiteTaskWorkStore(params=params, service_name=service_name)
         else:
             from openviking.service.task_store import PersistentTaskStore
 
@@ -177,6 +187,10 @@ class StorageConfig(BaseModel):
 
     def build_watch_store(self, *, service_name: str, viking_fs: Any):
         """Build the configured Watch store."""
+        if self.watch_store.provider == "postgres":
+            from openviking.resource.watch_store_postgres import PostgresWatchStore
+
+            return PostgresWatchStore(service_name=service_name, params=self.watch_store.params)
         if self.watch_store.provider == "mysql":
             from openviking.resource.watch_store_mysql import MySQLWatchStore
 

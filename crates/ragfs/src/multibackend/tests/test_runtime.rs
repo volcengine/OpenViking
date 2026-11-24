@@ -271,7 +271,10 @@ fn only_transient_pathlock_errors_are_retryable() {
         }
     )));
     assert!(FlushWorker::is_retryable_pathlock_error(&Error::PathLock(
-        PathLockError::Timeout { elapsed_ms: 1 }
+        PathLockError::Timeout {
+            elapsed_ms: 1,
+            conflicting_owner: None
+        }
     )));
     assert!(FlushWorker::is_retryable_pathlock_error(&Error::PathLock(
         PathLockError::Busy {

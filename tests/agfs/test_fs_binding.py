@@ -8,41 +8,32 @@ without HTTP server.
 """
 
 import asyncio
-import os
-import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
 
+from openviking.storage import viking_fs
 from openviking.storage.errors import HandoffRecoveryRequired, LockAcquisitionError
 from openviking.storage.pathlock_recovery import adopt_or_reacquire
-from openviking.storage.viking_fs import init_viking_fs
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.utils.config.agfs_config import AGFSConfig
 
-# Direct configuration for testing
-AGFS_CONF = AGFSConfig(path="/tmp/ov-test", backend="local")
 
-# clean up test directory if it exists
-if os.path.exists(AGFS_CONF.path):
-    shutil.rmtree(AGFS_CONF.path)
-
-
-@pytest.fixture(scope="module")
-async def viking_fs_binding_instance():
-    """Initialize VikingFS with binding mode."""
+@pytest.fixture
+async def viking_fs_binding_instance(tmp_path, monkeypatch):
     from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
-    # Create AGFS client
-    agfs_client = create_agfs_client(RagfsBindingConfig(agfs=AGFS_CONF))
-
-    vfs = init_viking_fs(agfs=agfs_client)
-    # make sure default/temp directory exists
-    await vfs.mkdir("viking://temp/", exist_ok=True)
-
-    yield vfs
+    config = AGFSConfig(path=str(tmp_path), backend="local")
+    client = create_agfs_client(RagfsBindingConfig(agfs=config))
+    try:
+        vfs = viking_fs.VikingFS(agfs=client)
+        monkeypatch.setattr(viking_fs, "_instance", vfs)
+        await vfs.mkdir("viking://temp/", exist_ok=True)
+        yield vfs
+    finally:
+        client.close()
 
 
 @pytest.mark.asyncio
@@ -84,6 +75,7 @@ class TestVikingFSBindingLocal:
                 "source",
                 "event",
                 "route",
+                "error_kind",
             }
             if metric["type"] == "histogram":
                 assert metric["count"] > 0
@@ -331,19 +323,17 @@ class TestVikingFSBindingLocal:
         await client.pathlock_release(lease)
 
     async def test_tree_operations(self, viking_fs_binding_instance):
-        """Test VikingFS tree operations."""
         vfs = viking_fs_binding_instance
-        base_dir = f"binding_tree_test_{uuid.uuid4().hex}"
-        sub_dir = f"viking://temp/{base_dir}/a/b/"
-        file_uri = f"{sub_dir}leaf.txt"
+        root = "viking://temp/tree"
+        sub_dir = f"{root}/a/b"
 
         await vfs.mkdir(sub_dir)
-        await vfs.write(file_uri, "leaf content")
+        await vfs.write(f"{sub_dir}/leaf.txt", "leaf content")
 
-        entries = await vfs.tree(f"viking://temp/{base_dir}/")
-        assert any("leaf.txt" in e["uri"] for e in entries)
-
-        await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)
+        entries = await vfs.tree(root)
+        assert {entry["uri"] for entry in entries} == {f"{root}/a", sub_dir, f"{sub_dir}/leaf.txt"}
+        directories = await vfs.tree(root, directories_only=True)
+        assert {entry["uri"] for entry in directories} == {f"{root}/a", sub_dir}
 
     async def test_glob_matches_deep_markdown_files(self, viking_fs_binding_instance):
         """Test glob recursively matches markdown files beyond tree's default depth."""

@@ -47,6 +47,9 @@ const workspace = {
       selectUserDescription: '请先选择具备有效数据凭据的 User，再进入工作台。',
       unavailable: '无法访问管理模式',
       unavailableDescription: '当前连接未提供管理权限，请检查连接凭据。',
+      devUnavailable: 'dev 模式不支持管理后台',
+      devUnavailableDescription:
+        '当前服务使用 dev 认证模式。如需管理 Account、User 和服务配置，请在 ov.conf 中启用 api_key 模式。',
       checking: '正在校验权限…',
       makeDefault: '设为默认入口',
       isDefault: '默认入口',
@@ -68,6 +71,8 @@ const workspace = {
       github: 'GitHub',
       sdkApi: 'SDK 与 API',
       users: '用户与权限',
+      version: 'v{{version}}',
+      versionTitle: 'OpenViking 版本',
     },
     header: {
       backToConfig: '返回工作区配置',
