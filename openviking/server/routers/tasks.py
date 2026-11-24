@@ -12,8 +12,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
+from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.service.task_domain import TaskRecord, TaskStatus
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import (
@@ -25,6 +27,14 @@ from openviking_cli.exceptions import (
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
 
+def _list_item(task: TaskRecord) -> dict:
+    """Return a task list entry with Compile rollback bookkeeping reserved for task details."""
+    item = task.to_dict()
+    if task.task_type == "compile":
+        item["meta"].pop("rollback_lock_retries", None)
+    return item
+
+
 @router.get("/tasks/{task_id}")
 async def get_task(
     task_id: str,
@@ -33,18 +43,21 @@ async def get_task(
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
+    get_task_record = tracker.get_with_events if include_events else tracker.get
     if _ctx.role == Role.ROOT:
-        task = await tracker.get(task_id)
+        task = await get_task_record(task_id)
         if task is None:
-            task = await tracker.get(task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)
+            task = await get_task_record(
+                task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id
+            )
         if task is None:
-            task = await tracker.get(
+            task = await get_task_record(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
                 user_id=SYSTEM_TASK_USER_ID,
             )
     else:
-        task = await tracker.get(
+        task = await get_task_record(
             task_id,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
@@ -81,6 +94,14 @@ async def cancel_task(
             code="NOT_FOUND",
             details={"resource": task_id, "type": "task"},
         )
+    if (
+        task.task_type == "compile"
+        and task.status == TaskStatus.CANCELLED
+        and task.stage == "queued"
+    ):
+        lifecycle = get_service().compile.lifecycle
+        if lifecycle is not None:
+            await lifecycle.store.cancel_queued_run(task)
     return Response(status="ok", result=task.to_dict())
 
 
@@ -92,7 +113,9 @@ async def list_tasks(
         description="Filter by status (pending/running/cancelling/completed/failed/cancelled)",
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
-    include_internal: bool = Query(False, description="Include internal Connector child tasks"),
+    include_internal: bool = Query(
+        False, description="Include internal Connector and Compile directory indexing tasks"
+    ),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     pagination: Optional[str] = Query(None, pattern="^cursor$"),
     cursor: Optional[str] = Query(None, max_length=2048),
@@ -141,7 +164,7 @@ async def list_tasks(
         )
         tasks = await list_call
         more = len(tasks) > limit
-        items = [t.to_dict() for t in tasks[:limit]]
+        items = [_list_item(t) for t in tasks[:limit]]
         return Response(
             status="ok",
             result={
@@ -180,4 +203,4 @@ async def list_tasks(
             user_id=_ctx.user.user_id,
             include_internal=include_internal,
         )
-    return Response(status="ok", result=[t.to_dict() for t in tasks])
+    return Response(status="ok", result=[_list_item(t) for t in tasks])

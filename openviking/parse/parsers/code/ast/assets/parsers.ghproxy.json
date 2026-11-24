@@ -1,0 +1,1571 @@
+{
+  "version": "1.13.3",
+  "platforms": {
+    "linux-aarch64": {
+      "url": "https://gh-proxy.com/https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.13.3/parsers-linux-aarch64.tar.zst",
+      "sha256": "e4c45c5804c9deb6bc4353962f5478160ca1abb219a745f455a8f56d04b0c1b6",
+      "size": 18245391
+    },
+    "linux-x86_64": {
+      "url": "https://gh-proxy.com/https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.13.3/parsers-linux-x86_64.tar.zst",
+      "sha256": "30ffd923ed139943b0ccc60c0451f79ca232467f246372d84d88b2dba4e79122",
+      "size": 18678016
+    },
+    "macos-arm64": {
+      "url": "https://gh-proxy.com/https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.13.3/parsers-macos-arm64.tar.zst",
+      "sha256": "d982fa3ab89d9d710e2c002a7cd5a8bf8c8d6a6143ee27c4495e6a0ee70af387",
+      "size": 20912159
+    },
+    "macos-x86_64": {
+      "url": "https://gh-proxy.com/https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.13.3/parsers-macos-x86_64.tar.zst",
+      "sha256": "40fd0957a236df1c0d32a1e410b66f6affd71d09146021f1f035f99cc4ee8303",
+      "size": 18276060
+    },
+    "windows-aarch64": {
+      "url": "https://gh-proxy.com/https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.13.3/parsers-windows-aarch64.tar.zst",
+      "sha256": "2fc29f7a8ede2e6084b3c20d3a08d0b3e615c92e859b7a014b141b123c24dc5f",
+      "size": 17671433
+    },
+    "windows-x86_64": {
+      "url": "https://gh-proxy.com/https://github.com/xberg-io/tree-sitter-language-pack/releases/download/v1.13.3/parsers-windows-x86_64.tar.zst",
+      "sha256": "142433cbeb0176b37414fc23b6203cc60c85fe1df455e44b95a93772a0e6023a",
+      "size": 18054899
+    }
+  },
+  "languages": {
+    "abl": {
+      "group": "all",
+      "size": 0
+    },
+    "actionscript": {
+      "group": "all",
+      "size": 0
+    },
+    "ada": {
+      "group": "all",
+      "size": 0
+    },
+    "agda": {
+      "group": "all",
+      "size": 0
+    },
+    "al": {
+      "group": "all",
+      "size": 0
+    },
+    "angular": {
+      "group": "all",
+      "size": 0
+    },
+    "apex": {
+      "group": "all",
+      "size": 0
+    },
+    "arduino": {
+      "group": "all",
+      "size": 0
+    },
+    "asciidoc": {
+      "group": "all",
+      "size": 0
+    },
+    "asm": {
+      "group": "all",
+      "size": 0
+    },
+    "astro": {
+      "group": "all",
+      "size": 0
+    },
+    "awk": {
+      "group": "all",
+      "size": 0
+    },
+    "bash": {
+      "group": "all",
+      "size": 0
+    },
+    "bass": {
+      "group": "all",
+      "size": 0
+    },
+    "batch": {
+      "group": "all",
+      "size": 0
+    },
+    "beancount": {
+      "group": "all",
+      "size": 0
+    },
+    "bibtex": {
+      "group": "all",
+      "size": 0
+    },
+    "bicep": {
+      "group": "all",
+      "size": 0
+    },
+    "bitbake": {
+      "group": "all",
+      "size": 0
+    },
+    "blade": {
+      "group": "all",
+      "size": 0
+    },
+    "brightscript": {
+      "group": "all",
+      "size": 0
+    },
+    "bsl": {
+      "group": "all",
+      "size": 0
+    },
+    "c": {
+      "group": "all",
+      "size": 0
+    },
+    "c3": {
+      "group": "all",
+      "size": 0
+    },
+    "caddy": {
+      "group": "all",
+      "size": 0
+    },
+    "cairo": {
+      "group": "all",
+      "size": 0
+    },
+    "capnp": {
+      "group": "all",
+      "size": 0
+    },
+    "cedar": {
+      "group": "all",
+      "size": 0
+    },
+    "cedarschema": {
+      "group": "all",
+      "size": 0
+    },
+    "cel": {
+      "group": "all",
+      "size": 0
+    },
+    "cfml": {
+      "group": "all",
+      "size": 0
+    },
+    "chatito": {
+      "group": "all",
+      "size": 0
+    },
+    "chuck": {
+      "group": "all",
+      "size": 0
+    },
+    "circom": {
+      "group": "all",
+      "size": 0
+    },
+    "clarity": {
+      "group": "all",
+      "size": 0
+    },
+    "clojure": {
+      "group": "all",
+      "size": 0
+    },
+    "cmake": {
+      "group": "all",
+      "size": 0
+    },
+    "cobol": {
+      "group": "all",
+      "size": 0
+    },
+    "comment": {
+      "group": "all",
+      "size": 0
+    },
+    "commonlisp": {
+      "group": "all",
+      "size": 0
+    },
+    "cooklang": {
+      "group": "all",
+      "size": 0
+    },
+    "corn": {
+      "group": "all",
+      "size": 0
+    },
+    "cpon": {
+      "group": "all",
+      "size": 0
+    },
+    "cpp": {
+      "group": "all",
+      "size": 0
+    },
+    "crystal": {
+      "group": "all",
+      "size": 0
+    },
+    "csharp": {
+      "group": "all",
+      "size": 0
+    },
+    "css": {
+      "group": "all",
+      "size": 0
+    },
+    "cst": {
+      "group": "all",
+      "size": 0
+    },
+    "csv": {
+      "group": "all",
+      "size": 0
+    },
+    "cuda": {
+      "group": "all",
+      "size": 0
+    },
+    "cue": {
+      "group": "all",
+      "size": 0
+    },
+    "cylc": {
+      "group": "all",
+      "size": 0
+    },
+    "d": {
+      "group": "all",
+      "size": 0
+    },
+    "dart": {
+      "group": "all",
+      "size": 0
+    },
+    "desktop": {
+      "group": "all",
+      "size": 0
+    },
+    "devicetree": {
+      "group": "all",
+      "size": 0
+    },
+    "dhall": {
+      "group": "all",
+      "size": 0
+    },
+    "diff": {
+      "group": "all",
+      "size": 0
+    },
+    "djot": {
+      "group": "all",
+      "size": 0
+    },
+    "dockerfile": {
+      "group": "all",
+      "size": 0
+    },
+    "dot": {
+      "group": "all",
+      "size": 0
+    },
+    "doxygen": {
+      "group": "all",
+      "size": 0
+    },
+    "dtd": {
+      "group": "all",
+      "size": 0
+    },
+    "earthfile": {
+      "group": "all",
+      "size": 0
+    },
+    "ebnf": {
+      "group": "all",
+      "size": 0
+    },
+    "editorconfig": {
+      "group": "all",
+      "size": 0
+    },
+    "eds": {
+      "group": "all",
+      "size": 0
+    },
+    "eex": {
+      "group": "all",
+      "size": 0
+    },
+    "elisp": {
+      "group": "all",
+      "size": 0
+    },
+    "elixir": {
+      "group": "all",
+      "size": 0
+    },
+    "elm": {
+      "group": "all",
+      "size": 0
+    },
+    "elsa": {
+      "group": "all",
+      "size": 0
+    },
+    "elvish": {
+      "group": "all",
+      "size": 0
+    },
+    "embeddedtemplate": {
+      "group": "all",
+      "size": 0
+    },
+    "enforce": {
+      "group": "all",
+      "size": 0
+    },
+    "erlang": {
+      "group": "all",
+      "size": 0
+    },
+    "facility": {
+      "group": "all",
+      "size": 0
+    },
+    "faust": {
+      "group": "all",
+      "size": 0
+    },
+    "fennel": {
+      "group": "all",
+      "size": 0
+    },
+    "fidl": {
+      "group": "all",
+      "size": 0
+    },
+    "firrtl": {
+      "group": "all",
+      "size": 0
+    },
+    "fish": {
+      "group": "all",
+      "size": 0
+    },
+    "foam": {
+      "group": "all",
+      "size": 0
+    },
+    "forth": {
+      "group": "all",
+      "size": 0
+    },
+    "fortran": {
+      "group": "all",
+      "size": 0
+    },
+    "fsharp": {
+      "group": "all",
+      "size": 0
+    },
+    "fsharp_signature": {
+      "group": "all",
+      "size": 0
+    },
+    "func": {
+      "group": "all",
+      "size": 0
+    },
+    "gap": {
+      "group": "all",
+      "size": 0
+    },
+    "gdscript": {
+      "group": "all",
+      "size": 0
+    },
+    "gdshader": {
+      "group": "all",
+      "size": 0
+    },
+    "gherkin": {
+      "group": "all",
+      "size": 0
+    },
+    "git_config": {
+      "group": "all",
+      "size": 0
+    },
+    "git_rebase": {
+      "group": "all",
+      "size": 0
+    },
+    "gitattributes": {
+      "group": "all",
+      "size": 0
+    },
+    "gitcommit": {
+      "group": "all",
+      "size": 0
+    },
+    "gitignore": {
+      "group": "all",
+      "size": 0
+    },
+    "gleam": {
+      "group": "all",
+      "size": 0
+    },
+    "glimmer": {
+      "group": "all",
+      "size": 0
+    },
+    "glsl": {
+      "group": "all",
+      "size": 0
+    },
+    "gn": {
+      "group": "all",
+      "size": 0
+    },
+    "gnuplot": {
+      "group": "all",
+      "size": 0
+    },
+    "go": {
+      "group": "all",
+      "size": 0
+    },
+    "godot_resource": {
+      "group": "all",
+      "size": 0
+    },
+    "gomod": {
+      "group": "all",
+      "size": 0
+    },
+    "gosum": {
+      "group": "all",
+      "size": 0
+    },
+    "gotmpl": {
+      "group": "all",
+      "size": 0
+    },
+    "gowork": {
+      "group": "all",
+      "size": 0
+    },
+    "gpg": {
+      "group": "all",
+      "size": 0
+    },
+    "graphql": {
+      "group": "all",
+      "size": 0
+    },
+    "gren": {
+      "group": "all",
+      "size": 0
+    },
+    "groovy": {
+      "group": "all",
+      "size": 0
+    },
+    "gstlaunch": {
+      "group": "all",
+      "size": 0
+    },
+    "hack": {
+      "group": "all",
+      "size": 0
+    },
+    "hare": {
+      "group": "all",
+      "size": 0
+    },
+    "haskell": {
+      "group": "all",
+      "size": 0
+    },
+    "haxe": {
+      "group": "all",
+      "size": 0
+    },
+    "hcl": {
+      "group": "all",
+      "size": 0
+    },
+    "heex": {
+      "group": "all",
+      "size": 0
+    },
+    "hjson": {
+      "group": "all",
+      "size": 0
+    },
+    "hlsl": {
+      "group": "all",
+      "size": 0
+    },
+    "hocon": {
+      "group": "all",
+      "size": 0
+    },
+    "hoon": {
+      "group": "all",
+      "size": 0
+    },
+    "html": {
+      "group": "all",
+      "size": 0
+    },
+    "htmldjango": {
+      "group": "all",
+      "size": 0
+    },
+    "http": {
+      "group": "all",
+      "size": 0
+    },
+    "hurl": {
+      "group": "all",
+      "size": 0
+    },
+    "hyprlang": {
+      "group": "all",
+      "size": 0
+    },
+    "idris": {
+      "group": "all",
+      "size": 0
+    },
+    "ini": {
+      "group": "all",
+      "size": 0
+    },
+    "ispc": {
+      "group": "all",
+      "size": 0
+    },
+    "jai": {
+      "group": "all",
+      "size": 0
+    },
+    "janet": {
+      "group": "all",
+      "size": 0
+    },
+    "java": {
+      "group": "all",
+      "size": 0
+    },
+    "javadoc": {
+      "group": "all",
+      "size": 0
+    },
+    "javascript": {
+      "group": "all",
+      "size": 0
+    },
+    "jinja2": {
+      "group": "all",
+      "size": 0
+    },
+    "jq": {
+      "group": "all",
+      "size": 0
+    },
+    "jsdoc": {
+      "group": "all",
+      "size": 0
+    },
+    "json": {
+      "group": "all",
+      "size": 0
+    },
+    "json5": {
+      "group": "all",
+      "size": 0
+    },
+    "jsonnet": {
+      "group": "all",
+      "size": 0
+    },
+    "julia": {
+      "group": "all",
+      "size": 0
+    },
+    "just": {
+      "group": "all",
+      "size": 0
+    },
+    "kcl": {
+      "group": "all",
+      "size": 0
+    },
+    "kconfig": {
+      "group": "all",
+      "size": 0
+    },
+    "kdl": {
+      "group": "all",
+      "size": 0
+    },
+    "kotlin": {
+      "group": "all",
+      "size": 0
+    },
+    "latex": {
+      "group": "all",
+      "size": 0
+    },
+    "lean": {
+      "group": "all",
+      "size": 0
+    },
+    "ledger": {
+      "group": "all",
+      "size": 0
+    },
+    "less": {
+      "group": "all",
+      "size": 0
+    },
+    "linkerscript": {
+      "group": "all",
+      "size": 0
+    },
+    "liquid": {
+      "group": "all",
+      "size": 0
+    },
+    "llvm": {
+      "group": "all",
+      "size": 0
+    },
+    "lua": {
+      "group": "all",
+      "size": 0
+    },
+    "luadoc": {
+      "group": "all",
+      "size": 0
+    },
+    "luap": {
+      "group": "all",
+      "size": 0
+    },
+    "luau": {
+      "group": "all",
+      "size": 0
+    },
+    "magik": {
+      "group": "all",
+      "size": 0
+    },
+    "make": {
+      "group": "all",
+      "size": 0
+    },
+    "markdown": {
+      "group": "all",
+      "size": 0
+    },
+    "markdown_inline": {
+      "group": "all",
+      "size": 0
+    },
+    "matlab": {
+      "group": "all",
+      "size": 0
+    },
+    "mermaid": {
+      "group": "all",
+      "size": 0
+    },
+    "meson": {
+      "group": "all",
+      "size": 0
+    },
+    "mlir": {
+      "group": "all",
+      "size": 0
+    },
+    "mojo": {
+      "group": "all",
+      "size": 0
+    },
+    "move": {
+      "group": "all",
+      "size": 0
+    },
+    "nasm": {
+      "group": "all",
+      "size": 0
+    },
+    "netlinx": {
+      "group": "all",
+      "size": 0
+    },
+    "nginx": {
+      "group": "all",
+      "size": 0
+    },
+    "nickel": {
+      "group": "all",
+      "size": 0
+    },
+    "nim": {
+      "group": "all",
+      "size": 0
+    },
+    "ninja": {
+      "group": "all",
+      "size": 0
+    },
+    "nix": {
+      "group": "all",
+      "size": 0
+    },
+    "norg": {
+      "group": "all",
+      "size": 0
+    },
+    "norg_meta": {
+      "group": "all",
+      "size": 0
+    },
+    "nqc": {
+      "group": "all",
+      "size": 0
+    },
+    "nushell": {
+      "group": "all",
+      "size": 0
+    },
+    "objc": {
+      "group": "all",
+      "size": 0
+    },
+    "ocaml": {
+      "group": "all",
+      "size": 0
+    },
+    "ocaml_interface": {
+      "group": "all",
+      "size": 0
+    },
+    "ocamllex": {
+      "group": "all",
+      "size": 0
+    },
+    "odin": {
+      "group": "all",
+      "size": 0
+    },
+    "openscad": {
+      "group": "all",
+      "size": 0
+    },
+    "org": {
+      "group": "all",
+      "size": 0
+    },
+    "pascal": {
+      "group": "all",
+      "size": 0
+    },
+    "pem": {
+      "group": "all",
+      "size": 0
+    },
+    "perl": {
+      "group": "all",
+      "size": 0
+    },
+    "pgn": {
+      "group": "all",
+      "size": 0
+    },
+    "php": {
+      "group": "all",
+      "size": 0
+    },
+    "phpdoc": {
+      "group": "all",
+      "size": 0
+    },
+    "pkl": {
+      "group": "all",
+      "size": 0
+    },
+    "po": {
+      "group": "all",
+      "size": 0
+    },
+    "poe_filter": {
+      "group": "all",
+      "size": 0
+    },
+    "pony": {
+      "group": "all",
+      "size": 0
+    },
+    "postscript": {
+      "group": "all",
+      "size": 0
+    },
+    "powershell": {
+      "group": "all",
+      "size": 0
+    },
+    "printf": {
+      "group": "all",
+      "size": 0
+    },
+    "prisma": {
+      "group": "all",
+      "size": 0
+    },
+    "prolog": {
+      "group": "all",
+      "size": 0
+    },
+    "promql": {
+      "group": "all",
+      "size": 0
+    },
+    "properties": {
+      "group": "all",
+      "size": 0
+    },
+    "proto": {
+      "group": "all",
+      "size": 0
+    },
+    "prql": {
+      "group": "all",
+      "size": 0
+    },
+    "psv": {
+      "group": "all",
+      "size": 0
+    },
+    "pug": {
+      "group": "all",
+      "size": 0
+    },
+    "puppet": {
+      "group": "all",
+      "size": 0
+    },
+    "purescript": {
+      "group": "all",
+      "size": 0
+    },
+    "pymanifest": {
+      "group": "all",
+      "size": 0
+    },
+    "python": {
+      "group": "all",
+      "size": 0
+    },
+    "ql": {
+      "group": "all",
+      "size": 0
+    },
+    "qmldir": {
+      "group": "all",
+      "size": 0
+    },
+    "qmljs": {
+      "group": "all",
+      "size": 0
+    },
+    "query": {
+      "group": "all",
+      "size": 0
+    },
+    "r": {
+      "group": "all",
+      "size": 0
+    },
+    "racket": {
+      "group": "all",
+      "size": 0
+    },
+    "rasi": {
+      "group": "all",
+      "size": 0
+    },
+    "razor": {
+      "group": "all",
+      "size": 0
+    },
+    "rbs": {
+      "group": "all",
+      "size": 0
+    },
+    "re2c": {
+      "group": "all",
+      "size": 0
+    },
+    "readline": {
+      "group": "all",
+      "size": 0
+    },
+    "regex": {
+      "group": "all",
+      "size": 0
+    },
+    "rego": {
+      "group": "all",
+      "size": 0
+    },
+    "requirements": {
+      "group": "all",
+      "size": 0
+    },
+    "rescript": {
+      "group": "all",
+      "size": 0
+    },
+    "robot": {
+      "group": "all",
+      "size": 0
+    },
+    "roc": {
+      "group": "all",
+      "size": 0
+    },
+    "ron": {
+      "group": "all",
+      "size": 0
+    },
+    "rst": {
+      "group": "all",
+      "size": 0
+    },
+    "rtf": {
+      "group": "all",
+      "size": 0
+    },
+    "ruby": {
+      "group": "all",
+      "size": 0
+    },
+    "rust": {
+      "group": "all",
+      "size": 0
+    },
+    "scala": {
+      "group": "all",
+      "size": 0
+    },
+    "scheme": {
+      "group": "all",
+      "size": 0
+    },
+    "scss": {
+      "group": "all",
+      "size": 0
+    },
+    "slang": {
+      "group": "all",
+      "size": 0
+    },
+    "smali": {
+      "group": "all",
+      "size": 0
+    },
+    "smalltalk": {
+      "group": "all",
+      "size": 0
+    },
+    "smithy": {
+      "group": "all",
+      "size": 0
+    },
+    "sml": {
+      "group": "all",
+      "size": 0
+    },
+    "snakemake": {
+      "group": "all",
+      "size": 0
+    },
+    "solidity": {
+      "group": "all",
+      "size": 0
+    },
+    "souffle": {
+      "group": "all",
+      "size": 0
+    },
+    "sourcepawn": {
+      "group": "all",
+      "size": 0
+    },
+    "sparql": {
+      "group": "all",
+      "size": 0
+    },
+    "sql": {
+      "group": "all",
+      "size": 0
+    },
+    "sql_bigquery": {
+      "group": "all",
+      "size": 0
+    },
+    "squirrel": {
+      "group": "all",
+      "size": 0
+    },
+    "ssh_config": {
+      "group": "all",
+      "size": 0
+    },
+    "stan": {
+      "group": "all",
+      "size": 0
+    },
+    "starlark": {
+      "group": "all",
+      "size": 0
+    },
+    "superhtml": {
+      "group": "all",
+      "size": 0
+    },
+    "svelte": {
+      "group": "all",
+      "size": 0
+    },
+    "sway": {
+      "group": "all",
+      "size": 0
+    },
+    "swift": {
+      "group": "all",
+      "size": 0
+    },
+    "systemverilog": {
+      "group": "all",
+      "size": 0
+    },
+    "tablegen": {
+      "group": "all",
+      "size": 0
+    },
+    "tact": {
+      "group": "all",
+      "size": 0
+    },
+    "tcl": {
+      "group": "all",
+      "size": 0
+    },
+    "teal": {
+      "group": "all",
+      "size": 0
+    },
+    "templ": {
+      "group": "all",
+      "size": 0
+    },
+    "tera": {
+      "group": "all",
+      "size": 0
+    },
+    "terraform": {
+      "group": "all",
+      "size": 0
+    },
+    "test": {
+      "group": "all",
+      "size": 0
+    },
+    "textproto": {
+      "group": "all",
+      "size": 0
+    },
+    "thrift": {
+      "group": "all",
+      "size": 0
+    },
+    "tlaplus": {
+      "group": "all",
+      "size": 0
+    },
+    "tmux": {
+      "group": "all",
+      "size": 0
+    },
+    "todotxt": {
+      "group": "all",
+      "size": 0
+    },
+    "toml": {
+      "group": "all",
+      "size": 0
+    },
+    "tsv": {
+      "group": "all",
+      "size": 0
+    },
+    "tsx": {
+      "group": "all",
+      "size": 0
+    },
+    "turtle": {
+      "group": "all",
+      "size": 0
+    },
+    "twig": {
+      "group": "all",
+      "size": 0
+    },
+    "typescript": {
+      "group": "all",
+      "size": 0
+    },
+    "typespec": {
+      "group": "all",
+      "size": 0
+    },
+    "typoscript": {
+      "group": "all",
+      "size": 0
+    },
+    "typst": {
+      "group": "all",
+      "size": 0
+    },
+    "udev": {
+      "group": "all",
+      "size": 0
+    },
+    "ungrammar": {
+      "group": "all",
+      "size": 0
+    },
+    "uxntal": {
+      "group": "all",
+      "size": 0
+    },
+    "v": {
+      "group": "all",
+      "size": 0
+    },
+    "vb": {
+      "group": "all",
+      "size": 0
+    },
+    "verilog": {
+      "group": "all",
+      "size": 0
+    },
+    "vhdl": {
+      "group": "all",
+      "size": 0
+    },
+    "vhs": {
+      "group": "all",
+      "size": 0
+    },
+    "vim": {
+      "group": "all",
+      "size": 0
+    },
+    "vimdoc": {
+      "group": "all",
+      "size": 0
+    },
+    "vrl": {
+      "group": "all",
+      "size": 0
+    },
+    "vue": {
+      "group": "all",
+      "size": 0
+    },
+    "wast": {
+      "group": "all",
+      "size": 0
+    },
+    "wat": {
+      "group": "all",
+      "size": 0
+    },
+    "wgsl": {
+      "group": "all",
+      "size": 0
+    },
+    "wgsl_bevy": {
+      "group": "all",
+      "size": 0
+    },
+    "wit": {
+      "group": "all",
+      "size": 0
+    },
+    "x86asm": {
+      "group": "all",
+      "size": 0
+    },
+    "xcompose": {
+      "group": "all",
+      "size": 0
+    },
+    "xml": {
+      "group": "all",
+      "size": 0
+    },
+    "yaml": {
+      "group": "all",
+      "size": 0
+    },
+    "yuck": {
+      "group": "all",
+      "size": 0
+    },
+    "zig": {
+      "group": "all",
+      "size": 0
+    },
+    "ziggy": {
+      "group": "all",
+      "size": 0
+    },
+    "ziggy_schema": {
+      "group": "all",
+      "size": 0
+    },
+    "zsh": {
+      "group": "all",
+      "size": 0
+    }
+  },
+  "groups": {
+    "all": [
+      "abl",
+      "actionscript",
+      "ada",
+      "agda",
+      "al",
+      "angular",
+      "apex",
+      "arduino",
+      "asciidoc",
+      "asm",
+      "astro",
+      "awk",
+      "bash",
+      "bass",
+      "batch",
+      "beancount",
+      "bibtex",
+      "bicep",
+      "bitbake",
+      "blade",
+      "brightscript",
+      "bsl",
+      "c",
+      "c3",
+      "caddy",
+      "cairo",
+      "capnp",
+      "cedar",
+      "cedarschema",
+      "cel",
+      "cfml",
+      "chatito",
+      "chuck",
+      "circom",
+      "clarity",
+      "clojure",
+      "cmake",
+      "cobol",
+      "comment",
+      "commonlisp",
+      "cooklang",
+      "corn",
+      "cpon",
+      "cpp",
+      "crystal",
+      "csharp",
+      "css",
+      "cst",
+      "csv",
+      "cuda",
+      "cue",
+      "cylc",
+      "d",
+      "dart",
+      "desktop",
+      "devicetree",
+      "dhall",
+      "diff",
+      "djot",
+      "dockerfile",
+      "dot",
+      "doxygen",
+      "dtd",
+      "earthfile",
+      "ebnf",
+      "editorconfig",
+      "eds",
+      "eex",
+      "elisp",
+      "elixir",
+      "elm",
+      "elsa",
+      "elvish",
+      "embeddedtemplate",
+      "enforce",
+      "erlang",
+      "facility",
+      "faust",
+      "fennel",
+      "fidl",
+      "firrtl",
+      "fish",
+      "foam",
+      "forth",
+      "fortran",
+      "fsharp",
+      "fsharp_signature",
+      "func",
+      "gap",
+      "gdscript",
+      "gdshader",
+      "gherkin",
+      "git_config",
+      "git_rebase",
+      "gitattributes",
+      "gitcommit",
+      "gitignore",
+      "gleam",
+      "glimmer",
+      "glsl",
+      "gn",
+      "gnuplot",
+      "go",
+      "godot_resource",
+      "gomod",
+      "gosum",
+      "gotmpl",
+      "gowork",
+      "gpg",
+      "graphql",
+      "gren",
+      "groovy",
+      "gstlaunch",
+      "hack",
+      "hare",
+      "haskell",
+      "haxe",
+      "hcl",
+      "heex",
+      "hjson",
+      "hlsl",
+      "hocon",
+      "hoon",
+      "html",
+      "htmldjango",
+      "http",
+      "hurl",
+      "hyprlang",
+      "idris",
+      "ini",
+      "ispc",
+      "jai",
+      "janet",
+      "java",
+      "javadoc",
+      "javascript",
+      "jinja2",
+      "jq",
+      "jsdoc",
+      "json",
+      "json5",
+      "jsonnet",
+      "julia",
+      "just",
+      "kcl",
+      "kconfig",
+      "kdl",
+      "kotlin",
+      "latex",
+      "lean",
+      "ledger",
+      "less",
+      "linkerscript",
+      "liquid",
+      "llvm",
+      "lua",
+      "luadoc",
+      "luap",
+      "luau",
+      "magik",
+      "make",
+      "markdown",
+      "markdown_inline",
+      "matlab",
+      "mermaid",
+      "meson",
+      "mlir",
+      "mojo",
+      "move",
+      "nasm",
+      "netlinx",
+      "nginx",
+      "nickel",
+      "nim",
+      "ninja",
+      "nix",
+      "norg",
+      "norg_meta",
+      "nqc",
+      "nushell",
+      "objc",
+      "ocaml",
+      "ocaml_interface",
+      "ocamllex",
+      "odin",
+      "openscad",
+      "org",
+      "pascal",
+      "pem",
+      "perl",
+      "pgn",
+      "php",
+      "phpdoc",
+      "pkl",
+      "po",
+      "poe_filter",
+      "pony",
+      "postscript",
+      "powershell",
+      "printf",
+      "prisma",
+      "prolog",
+      "promql",
+      "properties",
+      "proto",
+      "prql",
+      "psv",
+      "pug",
+      "puppet",
+      "purescript",
+      "pymanifest",
+      "python",
+      "ql",
+      "qmldir",
+      "qmljs",
+      "query",
+      "r",
+      "racket",
+      "rasi",
+      "razor",
+      "rbs",
+      "re2c",
+      "readline",
+      "regex",
+      "rego",
+      "requirements",
+      "rescript",
+      "robot",
+      "roc",
+      "ron",
+      "rst",
+      "rtf",
+      "ruby",
+      "rust",
+      "scala",
+      "scheme",
+      "scss",
+      "slang",
+      "smali",
+      "smalltalk",
+      "smithy",
+      "sml",
+      "snakemake",
+      "solidity",
+      "souffle",
+      "sourcepawn",
+      "sparql",
+      "sql",
+      "sql_bigquery",
+      "squirrel",
+      "ssh_config",
+      "stan",
+      "starlark",
+      "superhtml",
+      "svelte",
+      "sway",
+      "swift",
+      "systemverilog",
+      "tablegen",
+      "tact",
+      "tcl",
+      "teal",
+      "templ",
+      "tera",
+      "terraform",
+      "test",
+      "textproto",
+      "thrift",
+      "tlaplus",
+      "tmux",
+      "todotxt",
+      "toml",
+      "tsv",
+      "tsx",
+      "turtle",
+      "twig",
+      "typescript",
+      "typespec",
+      "typoscript",
+      "typst",
+      "udev",
+      "ungrammar",
+      "uxntal",
+      "v",
+      "vb",
+      "verilog",
+      "vhdl",
+      "vhs",
+      "vim",
+      "vimdoc",
+      "vrl",
+      "vue",
+      "wast",
+      "wat",
+      "wgsl",
+      "wgsl_bevy",
+      "wit",
+      "x86asm",
+      "xcompose",
+      "xml",
+      "yaml",
+      "yuck",
+      "zig",
+      "ziggy",
+      "ziggy_schema",
+      "zsh"
+    ]
+  }
+}

@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, Optional
 
+from openviking.service.task_events import append_task_event
+
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -28,6 +30,7 @@ class WorkState(str, Enum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class WorkRecoveryMode(str, Enum):
@@ -47,12 +50,58 @@ ACTIVE_TASK_STATUSES = (
     TaskStatus.RUNNING,
     TaskStatus.CANCELLING,
 )
-TERMINAL_WORK_STATES = (WorkState.DONE, WorkState.FAILED)
+TERMINAL_WORK_STATES = (WorkState.DONE, WorkState.FAILED, WorkState.CANCELLED)
 MAX_QUEUE_ERROR_DETAILS = 100
 
 
 class TaskWorkRejected(Exception):
     """Task lifecycle state prevented Work registration."""
+
+
+_TASK_PATCHABLE_FIELDS = frozenset({"result", "stage", "meta", "auth"})
+
+
+@dataclass(frozen=True)
+class TaskPatch:
+    """One atomic, field-scoped Task mutation.
+
+    Non-``None`` values update their matching fields. ``clear_fields`` is the
+    explicit counterpart for nullable fields, keeping ``None`` available to
+    mean "leave unchanged". Status, errors, and Work state remain owned by
+    their dedicated state-transition methods.
+    """
+
+    result: Optional[Dict[str, Any]] = None
+    stage: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+    auth: Optional[Dict[str, Any]] = None
+    clear_fields: frozenset[str] = field(default_factory=frozenset)
+    add_enqueue_complete_work_ids: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        clear_fields = frozenset(str(name) for name in self.clear_fields)
+        unknown = clear_fields - _TASK_PATCHABLE_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported TaskPatch clear fields: {sorted(unknown)}")
+        for field_name in clear_fields:
+            if getattr(self, field_name) is not None:
+                raise ValueError(f"TaskPatch cannot update and clear {field_name}")
+        object.__setattr__(self, "clear_fields", clear_fields)
+        object.__setattr__(
+            self,
+            "add_enqueue_complete_work_ids",
+            frozenset(str(work_id) for work_id in self.add_enqueue_complete_work_ids if work_id),
+        )
+
+    def is_empty(self) -> bool:
+        return (
+            self.result is None
+            and self.stage is None
+            and self.meta is None
+            and self.auth is None
+            and not self.clear_fields
+            and not self.add_enqueue_complete_work_ids
+        )
 
 
 @dataclass(frozen=True)
@@ -89,7 +138,7 @@ class QueueWorkSummary:
     processed: int = 0
     requeue_count: int = 0
     error_count: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[Any] = field(default_factory=list)
     queue_wait_ms: float = 0.0
     execute_ms: float = 0.0
 
@@ -113,6 +162,60 @@ def sanitize_error(error: str) -> str:
     if len(sanitized) > _MAX_ERROR_LEN:
         sanitized = sanitized[:_MAX_ERROR_LEN] + "...[truncated]"
     return sanitized
+
+
+def make_work_error(
+    message: str,
+    uri: Optional[str] = None,
+    err_brief: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build one per-resource work error dict (the persisted/public shape).
+
+    Embedding/semantic handlers call this directly; optional fields are
+    omitted when empty so legacy ``{message}`` records stay byte-stable.
+    """
+    entry: Dict[str, Any] = {"message": message}
+    if uri:
+        entry["uri"] = uri
+    if err_brief:
+        entry["err_brief"] = err_brief
+    return entry
+
+
+def project_work_error(raw: Any) -> Dict[str, Any]:
+    """Project one work error (legacy string or shaped dict) into
+    ``{message, uri?, err_brief?}``, keeping known fields only.
+
+    Unknown types yield an empty ``message`` so callers drop them instead of
+    fabricating a fake error; historical records are never back-filled.
+    """
+    if isinstance(raw, str):
+        return {"message": raw}
+    if isinstance(raw, dict):
+        entry: Dict[str, Any] = {"message": str(raw.get("message") or "")}
+        if isinstance(raw.get("uri"), str) and raw["uri"]:
+            entry["uri"] = raw["uri"]
+        if isinstance(raw.get("err_brief"), str) and raw["err_brief"]:
+            entry["err_brief"] = raw["err_brief"]
+        return entry
+    return {"message": ""}
+
+
+def serialize_work_errors(values: Optional[Iterable[Any]]) -> list[Dict[str, Any]]:
+    """Project handler work errors into stored dicts, masking only ``message``.
+
+    Accepts legacy plain strings or shaped dicts. ``uri``/``err_brief`` are
+    never masked. Empty messages are dropped.
+    """
+    details: list[Dict[str, Any]] = []
+    for value in values or ():
+        entry = project_work_error(value)
+        message = sanitize_error(str(entry.get("message") or ""))
+        if not message:
+            continue
+        entry["message"] = message
+        details.append(entry)
+    return details
 
 
 def sanitize_task_result(result: Any) -> Any:
@@ -152,6 +255,12 @@ class TaskRecord:
         public_meta = deepcopy(self.meta)
         public_meta.pop("submission_hash", None)
         public_meta.pop("submission_token", None)
+        request = public_meta.get("request")
+        if self.task_type == "compile" and isinstance(request, dict):
+            compile_meta = request.get("compile")
+            if isinstance(compile_meta, dict):
+                compile_meta.pop("input_signature", None)
+                compile_meta.pop("owner_user_id", None)
         return {
             **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
             "task_id": self.task_id,
@@ -168,6 +277,13 @@ class TaskRecord:
             "created_at_iso": datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat(),
             "updated_at_iso": datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat(),
         }
+
+    def has_compile_dependency_failure(self) -> bool:
+        """A checkpointed Runtime failure takes precedence over a Compile cancellation."""
+        return self.task_type == "compile" and self.meta.get("compile_runtime_http_status") in (
+            404,
+            424,
+        )
 
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_TASK_STATUSES
@@ -188,12 +304,14 @@ class WorkRecord:
     state: WorkState = WorkState.PENDING
     requeue_count: int = 0
     error: Optional[str] = None
-    errors: list[str] = field(default_factory=list)
+    errors: list[Any] = field(default_factory=list)
     context_count: int = 0
     enqueued_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     updated_at: float = field(default_factory=time.time)
+    account_id: Optional[str] = None
+    user_id: Optional[str] = None
 
     def is_open(self) -> bool:
         return self.state not in TERMINAL_WORK_STATES
@@ -254,3 +372,125 @@ def first_work_error(works: Iterable[WorkRecord]) -> Optional[str]:
         (work.error for work in works if work.state == WorkState.FAILED and work.error),
         None,
     )
+
+
+def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None:
+    """Append lifecycle events shared by all TaskStore implementations."""
+    recorded_at = datetime.now(timezone.utc).isoformat()
+    if previous is None:
+        kinds = ["created"]
+    else:
+        kinds = []
+        if task.error is not None and previous.error is None:
+            kinds.append("error_recorded")
+        if task.status == TaskStatus.CANCELLED and previous.status != TaskStatus.CANCELLING:
+            task.execution_events = append_task_event(
+                task.execution_events,
+                kind="status_changed",
+                status=TaskStatus.CANCELLING.value,
+                stage=sanitize_error(previous.stage) if previous.stage else None,
+                recorded_at=recorded_at,
+            )
+        if task.status != previous.status:
+            kinds.append("status_changed")
+        if task.stage != previous.stage and task.status not in TERMINAL_TASK_STATUSES:
+            kinds.append("stage_changed")
+
+    stage = previous.stage if previous and task.status in TERMINAL_TASK_STATUSES else task.stage
+    for kind in kinds:
+        task.execution_events = append_task_event(
+            task.execution_events,
+            kind=kind,
+            status=task.status.value,
+            stage=sanitize_error(stage) if stage else None,
+            error=sanitize_error(task.error)
+            if kind == "error_recorded" and task.error
+            else None,
+            recorded_at=recorded_at,
+        )
+
+
+def queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
+    """Project queue aggregates into the public Task result shape."""
+    summary = summary or QueueWorkSummary()
+    return {
+        "processed": summary.processed,
+        "requeue_count": summary.requeue_count,
+        "error_count": summary.error_count,
+        "errors": [
+            project_work_error(error)
+            for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]
+        ],
+    }
+
+
+def collect_queue_work_errors(result: Optional[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Collect projected per-resource errors from a terminal task result.
+
+    The synchronous wait paths (add_resource / content write / reindex) expose
+    the same ``message``/``uri``/``err_brief`` items that ``GET /tasks`` returns
+    under ``result.queue_status.<stage>.errors``.
+    """
+    if not isinstance(result, dict):
+        return []
+    queue_status = result.get("queue_status")
+    if not isinstance(queue_status, dict):
+        return []
+    collected: list[Dict[str, Any]] = []
+    for stage_name in ("Semantic", "Embedding"):
+        stage = queue_status.get(stage_name)
+        if isinstance(stage, dict) and isinstance(stage.get("errors"), (list, tuple)):
+            collected.extend(project_work_error(item) for item in stage["errors"])
+    return collected[:MAX_QUEUE_ERROR_DETAILS]
+
+
+def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
+    """Apply the shared Task terminal-state and result projection rules."""
+    works = list(works)
+    if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
+        return False
+    rollback_failed = (
+        task.task_type == "compile"
+        and isinstance(task.result, dict)
+        and task.result.get("rollback_incomplete") is True
+    )
+    if task.status == TaskStatus.CANCELLING and not (
+        task.error and (task.has_compile_dependency_failure() or rollback_failed)
+    ):
+        task.status = TaskStatus.CANCELLED
+    else:
+        work_error = first_work_error(works)
+        if work_error and task.error is None:
+            task.error = sanitize_error(work_error)
+        if task.error is not None:
+            task.status = TaskStatus.FAILED
+        elif task.result is not None:
+            task.status = TaskStatus.COMPLETED
+        else:
+            task.error = "Task operation interrupted before its result was persisted"
+            task.status = TaskStatus.FAILED
+    if isinstance(task.result, dict):
+        summary = summarize_works(works)
+        projected = {
+            queue_name: queue_result(summary.queues.get(queue_name))
+            for queue_name in ("Semantic", "Embedding")
+        }
+        if any(work.queue_name in projected for work in works):
+            task.result["queue_status"] = projected
+        for queue_name, field_name in (
+            ("Semantic", "semantic_status"),
+            ("Embedding", "vector_status"),
+        ):
+            if task.result.get(field_name) == "queued":
+                task.result[field_name] = (
+                    "failed"
+                    if projected.get(queue_name, {}).get("error_count", 0)
+                    else "complete"
+                )
+    # Cancelled deliveries still need their execution stage and private context
+    # for recovery and cleanup. Both expire with the Task record.
+    if task.status != TaskStatus.CANCELLED:
+        task.stage = task.status.value
+        task.auth = {}
+    task.processing_seconds = processing_seconds(works)
+    return True

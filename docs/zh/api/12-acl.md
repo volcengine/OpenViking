@@ -24,6 +24,8 @@ POST /api/v1/acl/revoke
 
 以上操作均要求 `manage`，无权限时返回 403。账号 ADMIN 隐式拥有 manage。
 
+ACL principal 的作用范围是资源所属账号，ACL 不支持跨账号共享资源。在 `api_key` 模式下，指定的用户和组必须已在该账号注册。grant、revoke、替换授权列表和导入时的 ACL 条目包含未知或其他账号的 principal 时返回 400。`user:*` 仅表示同一账号的用户。已删除 principal 的旧授权可通过清空或替换条目移除。
+
 查询响应中的 `result`：
 
 ```json
@@ -72,6 +74,29 @@ POST /api/v1/acl/revoke
 账号 `acl.enabled` 默认 false，关闭时按原 namespace 规则访问，ACL 不参与鉴权；开启后共享根目录固定 `user:* = manage` 且不可修改。传入 ACL 不会自动开启账号开关，也不会自动切换 restricted。
 
 ACL 仍保存在 context 索引内，允许短暂不一致，按现有异步任务和 wait 语义生效。独立修改 ACL 要求目标已有 context 记录；本次不增加无向量记录或空文件支持。
+
+## 大小写别名与 ACL
+
+使用 `localfs` 且底层文件系统大小写不敏感时，ACL 按请求 URI 解析权限，底层文件系统可能把仅大小写不同的 URI 解析到同一个真实文件或目录。若别名 URI 的权限判断被放行，后续 `read`、`stat`、`ls`、`write`、`rm`、`cp`、`mv` 等操作可能作用到真实对象。
+
+直观例子：
+
+```bash
+# Bob 的目录只给 Bob 权限
+ov acl set viking://resources/bob-private --acl-mode restricted --entry user:bob=manage
+
+# Alice 读取精确路径，应返回 403
+ov read viking://resources/bob-private/private.md
+
+# 在大小写不敏感的 localfs 上，别名目录可能命中同一个真实目录
+ov read viking://resources/BOB-PRIVATE/private.md
+ov ls viking://resources/BOB-PRIVATE
+ov write viking://resources/BOB-PRIVATE/private.md --content changed --mode replace
+```
+
+同一风险也适用于共享资源树中可通过公开 URI 访问的系统生成文件，例如 `.abstract.md` 和 `.overview.md`。例如真实文件是 `viking://resources/bob-private/.overview.md` 时，`viking://resources/BOB-PRIVATE/.OVERVIEW.md` 也可能命中它。未通过公开 URI 暴露的底层内部数据库、队列或锁文件不属于该 URI 别名问题的直接影响范围。
+
+大小写敏感系统上，`BOB-PRIVATE` 和 `bob-private` 是不同路径；别名目标不存在时返回 `NOT_FOUND`，不会触发该问题。
 
 **CLI**
 

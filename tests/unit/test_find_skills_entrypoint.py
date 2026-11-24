@@ -50,13 +50,14 @@ def _service(rerank_config):
     return SearchService(fs)
 
 
-async def test_find_skills_applies_the_configured_rerank_threshold(seen):
-    """Without the rerank config the package floor is 0 while general find sits at 0.1."""
+async def test_find_skills_does_not_apply_the_rerank_threshold(seen):
+    """Package search never reranks, so rerank.threshold must not filter its vector scores."""
     rerank_config = SimpleNamespace(threshold=0.1)
 
     await _service(rerank_config).find_skills(query="deploy", ctx=_ctx(), target_uri=SKILLS)
 
-    assert seen["init"]["rerank_config"] is rerank_config
+    assert seen["init"].get("rerank_config") is None
+    assert seen["retrieve"]["score_threshold"] is None
 
 
 async def test_find_skills_forwards_the_filter_as_the_retrieval_scope(seen):

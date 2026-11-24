@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import datetime
 import email.utils
-import logging
 import math
 import random
 import re
@@ -19,8 +18,10 @@ from openviking.models.model_error import (
     model_error_kind,
 )
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
+from openviking.storage.errors import InvalidPathLockRequestError
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -173,6 +174,7 @@ _PERMANENT_IO_ERRORS = (
     IsADirectoryError,
     NotADirectoryError,
     AGFSNotADirectoryError,
+    InvalidPathLockRequestError,
 )
 
 TRANSIENT_API_ERROR_PATTERNS = (
@@ -554,13 +556,14 @@ def retry_sync(
                 jitter=jitter,
             )
             if logger:
-                logger.warning(
-                    "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
+                logger.info(
+                    "retry operation=%s attempt=%d/%d delay=%.2fs error_type=%s",
                     operation_name,
                     attempt + 1,
                     retry_limit,
-                    e,
                     delay,
+                    type(e).__name__,
+                    extra={"operation": operation_name, "error_type": type(e).__name__},
                 )
             time.sleep(delay)
             attempt += 1
@@ -602,13 +605,14 @@ async def retry_async(
                 jitter=jitter,
             )
             if logger:
-                logger.warning(
-                    "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
+                logger.info(
+                    "retry operation=%s attempt=%d/%d delay=%.2fs error_type=%s",
                     operation_name,
                     attempt + 1,
                     retry_limit,
-                    e,
                     delay,
+                    type(e).__name__,
+                    extra={"operation": operation_name, "error_type": type(e).__name__},
                 )
             await asyncio.sleep(delay)
             attempt += 1
@@ -652,13 +656,14 @@ class PrimaryBackupSwitcher:
             elapsed = time.monotonic() - self._switch_to_backup_time
             if elapsed >= self._failback_timeout:
                 logger.info(
-                    f"Failback timeout elapsed ({elapsed:.0f}s), attempting to switch back to primary"
+                    "failback timeout elapsed; attempting primary elapsed_seconds=%.0f", elapsed
                 )
                 return True
 
             if self._backup_request_count >= self._failback_request_count:
                 logger.info(
-                    f"Failback request count reached ({self._backup_request_count}), attempting to switch back to primary"
+                    "failback request count reached; attempting primary total=%d",
+                    self._backup_request_count,
                 )
                 return True
 
@@ -668,7 +673,7 @@ class PrimaryBackupSwitcher:
         """Record a successful primary call - stay on primary."""
         with self._lock:
             if self._using_backup:
-                logger.info("Primary succeeded, switching back from backup to primary")
+                logger.info("primary recovered; switching from backup to primary")
                 self._using_backup = False
                 self._backup_request_count = 0
             # else already on primary, do nothing
@@ -698,7 +703,11 @@ class PrimaryBackupSwitcher:
             with self._lock:
                 if not self._using_backup:
                     label = kind.value if kind is not None else classify_api_error(error)
-                    logger.warning("Primary failed with %s, switching to backup", label)
+                    logger.info(
+                        "primary failed; switching to backup error_code=%s",
+                        label,
+                        extra={"error_code": label},
+                    )
                     self._using_backup = True
                 # Always reset timer and counter when we fail (whether initial fail or failback fail)
                 self._switch_to_backup_time = time.monotonic()
@@ -785,8 +794,9 @@ class OrderedCredentialSwitcher:
                     self._last_switch_time = time.monotonic()
                     self._active_request_count = 0
                     logger.info(
-                        f"Failback condition met (timer={timer_hit}, count={count_hit}), "
-                        f"switching active credential from {previous_idx} to {self._active_idx}"
+                        "failback condition met; switching credential previous_index=%d active_index=%d",
+                        previous_idx,
+                        self._active_idx,
                     )
             return self._active_idx
 
@@ -838,8 +848,9 @@ class OrderedCredentialSwitcher:
                     self._active_request_count += 1
                 return
             logger.info(
-                f"Fast failover: credential {idx} served the request; "
-                f"switching active credential from {self._active_idx} to {idx}"
+                "failover succeeded; switching credential previous_index=%d active_index=%d",
+                self._active_idx,
+                idx,
             )
             self._active_idx = idx
             self._last_switch_time = time.monotonic()

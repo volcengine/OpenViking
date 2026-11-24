@@ -11,16 +11,16 @@ const connect = {
     loopback: {
       title: "Only the gateway's own machine can use this address",
       embedded:
-        "Clients on other machines can't reach it. Set `gateway.public_url` in `ov.conf` to an address they can reach (without `/gateway`), then restart the server.",
+        "Clients on other machines can't reach it. Set `gateway.public_url` in `ov.conf` to an address they can reach (without `/admin/gateway`), then restart the server.",
       standalone:
-        "Clients on other machines can't reach it. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to an address they can reach (without `/gateway`), then restart the gateway.",
+        "Clients on other machines can't reach it. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to an address they can reach (without `/admin/gateway`), then restart the gateway.",
     },
     notPublic: {
       title: 'Clients may not be able to reach this address',
       embedded:
-        'This is the address your browser used to open Studio. Set `gateway.public_url` in `ov.conf` to the address clients should use (without `/gateway`), then restart the server.',
+        'This is the address your browser used to open Studio. Set `gateway.public_url` in `ov.conf` to the address clients should use (without `/admin/gateway`), then restart the server.',
       standalone:
-        'This is the address your browser used to open Studio. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to the address clients should use (without `/gateway`), then restart the gateway.',
+        'This is the address your browser used to open Studio. Set `public_url` in `gateway.conf`, or `OPENVIKING_GATEWAY_PUBLIC_URL`, to the address clients should use (without `/admin/gateway`), then restart the gateway.',
     },
     keys: 'Clients authenticate with a gateway key (`ovgw_…`) in place of a provider API key.',
     manageKeys: 'Manage keys',
@@ -103,7 +103,7 @@ const connect = {
         metadata:
           "Codex may warn that it has no metadata for an unfamiliar model name. The warning doesn't affect requests.",
         login:
-          "A ChatGPT login doesn't work through the gateway. Give the upstream a provider API key.",
+          "Codex can't sign in to the gateway with a ChatGPT login. To use a ChatGPT subscription, add CLIProxyAPI as the upstream, a setup OpenAI's Codex team has endorsed; otherwise give the upstream a provider API key.",
       },
     },
     chat: {
@@ -235,12 +235,22 @@ const connect = {
     upstreams: 'Upstreams that need it: {{names}}',
     none: 'None of your upstreams needs it right now.',
   },
+  context: {
+    title: 'Override profile settings',
+    description:
+      "A client can change its key's context profile for a new conversation by sending the profile fields to change as a JSON object in this header.",
+    tools:
+      '`{"disabled_tools":["forget","set_acl"]}` withholds those two tools for the conversation.',
+    scope:
+      'The settings a conversation starts with stay for the rest of it. Profiles with “Let clients override settings” turned off reject the header.',
+  },
   plugin: {
     title: 'Using an OpenViking plugin too?',
     description:
       "If a conversation already gets memory from an OpenViking plugin, the gateway steps aside for it: no recall, no saving and no OpenViking tools, so memory isn't added twice. Other conversations are unaffected.",
     detection:
-      'The gateway recognizes a plugin by the memory blocks it adds or its OpenViking tools. Integrations can also announce themselves with this header.',
+      'The gateway recognizes a plugin by the memory blocks it adds to messages. Integrations can also announce themselves with this header.',
+    mcp: "OpenViking MCP tools alone don't count: the gateway still recalls and saves memory, and only stops offering its own OpenViking tools.",
     restart:
       "This lasts for the rest of the conversation. To use the gateway's memory again, start a new conversation without the plugin.",
   },

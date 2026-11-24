@@ -14,8 +14,8 @@ export function apply(ctx, input = {}) {
   const client = new OpenVikingClient(config);
   const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
     // Rebuild from the host input, not the config already merged for boot's cwd.
-    // The shared loader preserves host/env precedence over workspace peers.
-    resolveConfig(input, process.env, cwd).effectivePeer
+    // The shared loader preserves host/env precedence over workspace settings.
+    resolveConfig(input, process.env, cwd)
   ));
   const skipMemory = session => (
     config.skipSubagentSessions && session?.header?.origin === "subagent"
@@ -82,12 +82,14 @@ export function apply(ctx, input = {}) {
     if (decision.kind !== "enter" || signal.aborted) return decision;
     const [profile, recall] = await Promise.all([
       runtime.profileMessage(agent),
-      runtime.recallMessage(agent, decision.messages),
+      runtime.recallMessage(agent, decision.messages, signal),
     ]);
     if (signal.aborted) return decision;
     const additions = [profile, recall].filter(Boolean);
+    // Keep the rest of the decision: goal-round-driver marks its entries with
+    // `startsRequestSeries`, and rebuilding the object would drop that flag.
     return additions.length > 0
-      ? { kind: "enter", messages: [...decision.messages, ...additions] }
+      ? { ...decision, messages: [...decision.messages, ...additions] }
       : decision;
   }, { prepend: true });
 
@@ -108,6 +110,9 @@ export function apply(ctx, input = {}) {
   // Mounted last, and deliberately not awaited: the bridge's apply blocks on
   // its first tools/list, so a server that accepts the connection but never
   // answers would otherwise hold up every registration above it.
+  // The skills tell the model to call the MCP tools, so `mcpEnabled: false`
+  // leaves both out, as on OpenCode and pi.
+  if (config.mcpEnabled === false) return;
   mountOpenVikingMcp(ctx, config);
   mountOpenVikingSkills(ctx);
 }

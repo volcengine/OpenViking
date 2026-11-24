@@ -31,9 +31,7 @@ DEPLOYMENT = "quick_local"
 EMBEDDING_MODEL = "bge-small-zh-v1.5-f16"
 EMBEDDING_DIMENSION = 512
 # Accept new releases in the server API series; resolve only in explicit setup.
-OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
-# Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
-# This restriction applies only to the private server, never Hermes's dependencies.
+OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.5.0,<0.6"
 
 _OPENVIKING_REQUIREMENT = Requirement(OPENVIKING_REQUIREMENT)
 _OPENVIKING_VERSION_SPECIFIER = _OPENVIKING_REQUIREMENT.specifier
@@ -41,6 +39,7 @@ _ROOT_DIRNAME = "openviking"
 _SERVER_CONFIG_FILENAME = "ov.conf"
 _OVCLI_CONFIG_FILENAME = "ovcli.conf"
 _RESTART_REQUIRED_FILENAME = ".restart-required"
+_RUNTIME_VALIDATION_PENDING_FILENAME = ".runtime-validation-pending"
 _WORKSPACE_DIRNAME = "data"
 _MODEL_CACHE_DIRNAME = "models"
 # Leave OpenViking's default 1933 available for independently managed servers.
@@ -107,6 +106,10 @@ class QuickLocalPaths:
     @property
     def restart_required_marker(self) -> Path:
         return self.root / _RESTART_REQUIRED_FILENAME
+
+    @property
+    def runtime_validation_pending_marker(self) -> Path:
+        return self.root / _RUNTIME_VALIDATION_PENDING_FILENAME
 
 
 @dataclass(frozen=True)
@@ -387,7 +390,10 @@ class QuickLocalSetup:
                 "Quick Local preflight belongs to a different Hermes profile."
             )
         vlm = resolve_hermes_vlm_config()
-        runtime_changed = self._ensure_openviking_installed(preflight.paths)
+        runtime_changed = (
+            self._ensure_openviking_installed(preflight.paths)
+            or preflight.paths.runtime_validation_pending_marker.is_file()
+        )
 
         reusable_endpoint = find_reusable_endpoint(preflight.paths, self._health_check)
         if reusable_endpoint:
@@ -398,11 +404,12 @@ class QuickLocalSetup:
                 )
             server_config = build_server_config(preflight.paths, vlm, port=port)
             config_changed = not _stored_server_config_matches(preflight.paths, server_config)
-            if (
+            restart_required = (
                 runtime_changed
                 or config_changed
                 or preflight.paths.restart_required_marker.is_file()
-            ):
+            )
+            if restart_required:
                 # Validate in disposable storage before changing the live service.
                 validation_port = find_available_port()
                 if validation_port is None:
@@ -417,6 +424,7 @@ class QuickLocalSetup:
                 from .local_server import LocalServer
 
                 LocalServer(hermes_home).configure(server_config, runtime_changed=runtime_changed)
+                preflight.paths.runtime_validation_pending_marker.unlink(missing_ok=True)
                 self._emit(
                     QuickLocalStage.WRITE_CONFIG,
                     "Restarting Quick Local with the updated settings...",
@@ -425,7 +433,7 @@ class QuickLocalSetup:
             self._emit(
                 QuickLocalStage.COMPLETE,
                 "Quick Local is ready with the updated settings."
-                if runtime_changed or config_changed
+                if restart_required
                 else "Existing Quick Local server is reachable; reusing it.",
             )
             return QuickLocalSetupResult(
@@ -454,6 +462,7 @@ class QuickLocalSetup:
 
         preflight.paths.workspace.mkdir(parents=True, exist_ok=True)
         LocalServer(hermes_home).configure(server_config, runtime_changed=runtime_changed)
+        preflight.paths.runtime_validation_pending_marker.unlink(missing_ok=True)
         endpoint = self._start_managed_server(preflight.paths, endpoint)
         self._emit(
             QuickLocalStage.WRITE_CONFIG,
@@ -471,14 +480,9 @@ class QuickLocalSetup:
 
     def _ensure_openviking_installed(self, paths: QuickLocalPaths) -> bool:
         """Ensure a compatible runtime, returning whether installation was needed."""
-        from .local_packages import (
-            install_requirements,
-            resolve_server_requirement,
-            verified_requirements,
-        )
+        from .local_packages import runtime_requirements, verified_requirements
 
-        requirements = install_requirements(allow_source_build=self.allow_source_build)
-        requirements[0] = resolve_server_requirement(allow_source_build=self.allow_source_build)
+        requirements = runtime_requirements(allow_source_build=self.allow_source_build)
         receipt = paths.root / "runtime-requirements.json"
         try:
             installed_requirements = json.loads(receipt.read_text(encoding="utf-8"))
@@ -524,6 +528,10 @@ class QuickLocalSetup:
             raise QuickLocalSetupError(
                 "Could not install a compatible OpenViking local embedding runtime."
             )
+        # Installation alone must not authorize chat to restart a healthy server.
+        atomic_json_write(
+            paths.runtime_validation_pending_marker, {"validation_pending": True}, mode=0o600
+        )
         atomic_json_write(receipt, requirements, mode=0o600)
         return True
 
@@ -1187,6 +1195,7 @@ def repair_private_paths(paths: QuickLocalPaths) -> None:
         paths.server_config,
         paths.ovcli_config,
         paths.restart_required_marker,
+        paths.runtime_validation_pending_marker,
         paths.root / "server-process.json",
         paths.root / "server.lock",
         paths.root / "runtime-requirements.json",

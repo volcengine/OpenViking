@@ -10,7 +10,20 @@ import os
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 from urllib.parse import quote
 
 import httpx
@@ -46,6 +59,7 @@ from .options import (
     AddResourceOptions,
     AddSkillOptions,
     BatchAddMessagesOptions,
+    BatchWriteOperation,
     BatchWriteOptions,
     CommitSessionOptions,
     CompileOptions,
@@ -54,10 +68,13 @@ from .options import (
     ExperienceTrajectoryOptions,
     FindOptions,
     ListPage,
+    MCPToolMount,
     Message,
     PreflightAssetOptions,
     ReindexOptions,
     ResolveAssetsOptions,
+    RuleCompileOptions,
+    RuleSearchOptions,
     SearchContextOptions,
     SearchContextResult,
     SearchOptions,
@@ -95,6 +112,7 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+_OptionsT = TypeVar("_OptionsT", bound=Mapping[str, Any])
 
 
 def _option_keys(options_type: Type[Any]) -> set[str]:
@@ -103,6 +121,19 @@ def _option_keys(options_type: Type[Any]) -> set[str]:
     if optional_keys is not None and required_keys is not None:
         return set(optional_keys) | set(required_keys)
     return set(getattr(options_type, "__annotations__", {}))
+
+
+def _normalize_timeout_options(timeout: Any, options: Optional[_OptionsT]) -> Optional[_OptionsT]:
+    """Accept options in the positional slot used after timeout was removed.
+
+    Timeout values are deprecated and ignored. A mapping in that slot is treated
+    as options; supplying options in both slots is an error.
+    """
+    if isinstance(timeout, Mapping):
+        if options is not None:
+            raise TypeError("options were provided in both the timeout and options slots")
+        return cast(_OptionsT, timeout)
+    return options
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -563,8 +594,7 @@ class AsyncHTTPClient:
         extra = dict(option_values.pop("extra", {}) or {})
         payload = dict(fixed or {})
         protected_fields = set(payload) | set(protected or ())
-        official_fields = allowed - {"extra"}
-        conflicts = sorted(set(extra) & (official_fields | protected_fields))
+        conflicts = sorted(set(extra) & (set(option_values) | protected_fields))
         if conflicts:
             raise ValueError(f"extra cannot override '{conflicts[0]}'")
 
@@ -713,9 +743,10 @@ class AsyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         add_type = option_values.get("add_type")
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -788,9 +819,10 @@ class AsyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         if "target_uri" in option_values:
             option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
         request_data = self._build_options_payload(
@@ -898,9 +930,10 @@ class AsyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         if "target_uri" in option_values:
             option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
         request_data = self._build_options_payload(
@@ -938,6 +971,248 @@ class AsyncHTTPClient:
         if target_uri is not None:
             params["target_uri"] = target_uri
         response = await self._request("DELETE", f"/api/v1/skills/{skill_name}", params=params)
+        return self._handle_response(response)
+
+    async def add_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "name": name,
+            "url": url,
+            "headers": dict(headers or {}),
+            "wait": wait,
+        }
+        if target_uri is not None:
+            payload["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def remove_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        name_path = self._path_segment(name)
+        params = {"target_uri": VikingURI.normalize(target_uri)} if target_uri is not None else None
+        if params is None:
+            response = await self._request("DELETE", f"/api/v1/mcps/{name_path}")
+        else:
+            response = await self._request(
+                "DELETE",
+                f"/api/v1/mcps/{name_path}",
+                params=params,
+            )
+        return self._handle_response(response)
+
+    async def list_mcps(self, target_uri: Optional[str] = None) -> Dict[str, Any]:
+        params = {"target_uri": VikingURI.normalize(target_uri)} if target_uri is not None else None
+        if params is None:
+            response = await self._request("GET", "/api/v1/mcps")
+        else:
+            response = await self._request("GET", "/api/v1/mcps", params=params)
+        return self._handle_response(response)
+
+    async def find_mcp_tools(
+        self,
+        query: str,
+        limit: int = 10,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"query": query, "limit": limit}
+        if target_uri is not None:
+            payload["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/find",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def validate_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/validate",
+            json={"name": name, "url": url, "headers": dict(headers or {})},
+        )
+        return self._handle_response(response)
+
+    async def get_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        name_path = self._path_segment(name)
+        params = {"target_uri": VikingURI.normalize(target_uri)} if target_uri is not None else None
+        if params is None:
+            response = await self._request("GET", f"/api/v1/mcps/{name_path}")
+        else:
+            response = await self._request(
+                "GET",
+                f"/api/v1/mcps/{name_path}",
+                params=params,
+            )
+        return self._handle_response(response)
+
+    async def sync_mcp(
+        self,
+        name: str,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        name_path = self._path_segment(name)
+        payload: Dict[str, Any] = {"wait": wait}
+        if target_uri is not None:
+            payload["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request(
+            "POST",
+            f"/api/v1/mcps/{name_path}/sync",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def get_mcp_status(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"name": name}
+        if target_uri is not None:
+            params["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request("GET", "/api/v1/mcps/status", params=params)
+        return self._handle_response(response)
+
+    async def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/invoke",
+            json={
+                "uri": VikingURI.normalize(tool_uri),
+                "arguments": dict(arguments or {}),
+            },
+        )
+        return self._handle_response(response)
+
+    async def mount_mcp_tool(
+        self,
+        tool_uri: str,
+        node_uri: str,
+        title: str,
+        description: Optional[str] = None,
+        timeout_seconds: int = 60,
+        arguments: Optional[Mapping[str, Any]] = None,
+        tags: Optional[Sequence[str]] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "tool_uri": VikingURI.normalize(tool_uri),
+            "node_uri": VikingURI.normalize(node_uri),
+            "title": title,
+            "description": description,
+            "timeout_seconds": timeout_seconds,
+            "arguments": dict(arguments or {}),
+            "wait": wait,
+        }
+        if tags is not None:
+            payload["tags"] = list(tags)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/mount",
+            json=payload,
+        )
+        return self._handle_response(response)
+
+    async def batch_mount_mcp_tools(
+        self,
+        mounts: Sequence[MCPToolMount],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        """Mount in order; inspect failed/not_attempted even after HTTP success."""
+        payloads = []
+        for mount in mounts:
+            payload: Dict[str, Any] = {
+                "tool_uri": VikingURI.normalize(str(mount["tool_uri"])),
+                "node_uri": VikingURI.normalize(str(mount["node_uri"])),
+                "title": mount["title"],
+                "description": mount.get("description"),
+                "timeout_seconds": mount.get("timeout_seconds", 60),
+                "arguments": dict(mount.get("arguments") or {}),
+            }
+            if mount.get("tags") is not None:
+                payload["tags"] = list(mount["tags"])
+            payloads.append(payload)
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/batch-mount",
+            json={"mounts": payloads, "wait": wait},
+        )
+        return self._handle_response(response)
+
+    async def unmount_mcp_tool(
+        self,
+        node_uri: str,
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        response = await self._request(
+            "DELETE",
+            "/api/v1/mcps/mount",
+            params={
+                "node_uri": VikingURI.normalize(node_uri),
+                "wait": wait,
+            },
+        )
+        return self._handle_response(response)
+
+    async def batch_unmount_mcp_tools(
+        self,
+        node_uris: Sequence[str],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        """Unmount in order, retaining completed changes on partial failure."""
+        response = await self._request(
+            "POST",
+            "/api/v1/mcps/batch-unmount",
+            json={
+                "node_uris": [VikingURI.normalize(node_uri) for node_uri in node_uris],
+                "wait": wait,
+            },
+        )
+        return self._handle_response(response)
+
+    async def list_mcp_mounts(
+        self,
+        mcp: str,
+        tool: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"mcp": mcp}
+        if tool is not None:
+            params["tool"] = tool
+        if target_uri is not None:
+            params["target_uri"] = VikingURI.normalize(target_uri)
+        response = await self._request("GET", "/api/v1/mcps/mounts", params=params)
         return self._handle_response(response)
 
     async def list_watches(
@@ -1033,7 +1308,8 @@ class AsyncHTTPClient:
             )
         return self._handle_response(response)
 
-    async def wait_processed(self) -> Dict[str, Any]:
+    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for processing; timeout is deprecated and ignored."""
         response = await self._request(
             "POST",
             "/api/v1/system/wait",
@@ -1259,6 +1535,7 @@ class AsyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
     ) -> None:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
         response = await self._request("DELETE", "/api/v1/fs", params=params)
@@ -1327,10 +1604,11 @@ class AsyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         payload = self._build_options_payload(
-            options,
+            _normalize_timeout_options(timeout, options),
             WriteOptions,
             fixed={
                 "uri": VikingURI.normalize(uri),
@@ -1349,8 +1627,9 @@ class AsyncHTTPClient:
     async def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         """Apply multiple content writes, then refresh semantics once."""
@@ -1360,7 +1639,7 @@ class AsyncHTTPClient:
             item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
             normalized_operations.append(item)
         payload = self._build_options_payload(
-            options,
+            _normalize_timeout_options(timeout, options),
             BatchWriteOptions,
             fixed={
                 "root_uri": VikingURI.normalize(root_uri),
@@ -1372,6 +1651,26 @@ class AsyncHTTPClient:
             "POST",
             "/api/v1/content/batch-write",
             json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def ensure_directory_index(
+        self,
+        uri: str,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Preserve summaries; fallback_abstract seeds L0 only when both are absent.
+        Return readable levels, or a queued task with wait=False.
+        """
+        response = await self._request(
+            "POST",
+            "/api/v1/content/ensure_directory_index",
+            json={
+                "uri": VikingURI.normalize(uri),
+                "fallback_abstract": fallback_abstract,
+                "wait": wait,
+            },
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1398,6 +1697,33 @@ class AsyncHTTPClient:
         response = await self._request(
             "POST",
             "/api/v1/fs/attrs/set_tags",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def batch_set_tags(
+        self,
+        uris: List[str],
+        tags: Optional[List[str]] = None,
+        mode: str = "replace",
+        recursive: bool = False,
+        options: Optional[SetTagsOptions] = None,
+    ) -> Dict[str, Any]:
+        fixed: Dict[str, Any] = {
+            "uris": [VikingURI.normalize(uri) for uri in uris],
+            "mode": mode,
+            "recursive": recursive,
+        }
+        if tags is not None:
+            fixed["tags"] = tags
+        payload = self._build_options_payload(
+            options,
+            SetTagsOptions,
+            fixed=fixed,
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/content/batch_set_tags",
             json=payload,
         )
         return self._handle_response_data(response).get("result", {})
@@ -1652,19 +1978,158 @@ class AsyncHTTPClient:
             return None
         return self._handle_response(response)
 
-    async def compile(
+    async def create_compile_task(
         self,
         from_uris: List[str],
         to: str,
         skill: str,
         options: Optional[CompileOptions] = None,
+        *,
+        compile_name: str,
     ) -> Dict[str, Any]:
+        """Save a persistent Compile configuration without starting an execution.
+
+        compile_name is unique for the caller within the account and is returned unchanged.
+        Scheduling controls belong in options.args; no execution is started.
+        """
+        if not compile_name:
+            raise ValueError("compile_name is required")
         payload = self._build_options_payload(
             options,
             CompileOptions,
-            fixed={"from": list(from_uris), "to": to, "skill": skill},
+            fixed={"compile_name": compile_name, "from": list(from_uris), "to": to, "skill": skill},
         )
+        response = await self._request("POST", "/api/v1/compile/create", json=payload)
+        return self._handle_response(response)
+
+    async def compile(
+        self,
+        from_uris: Optional[List[str]] = None,
+        to: Optional[str] = None,
+        skill: Optional[str] = None,
+        options: Optional[CompileOptions] = None,
+        *,
+        compile_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue saved or full inputs and return a task_id for querying or cancellation.
+
+        Named runs use only options.args.owner_user_id; other args are ignored.
+        """
+        if compile_name is not None:
+            if not compile_name:
+                raise ValueError("compile_name must not be empty")
+            if from_uris is not None or to is not None or skill is not None:
+                raise ValueError("compile_name cannot be combined with Compile inputs")
+            payload = self._build_options_payload(
+                options, CompileOptions, fixed={"compile_name": compile_name}
+            )
+            if set(payload) - {"compile_name", "args"}:
+                raise ValueError("compile_name cannot be combined with Compile inputs")
+        else:
+            if not skill or not to or (skill != "memory" and not from_uris):
+                raise ValueError("Full Compile requires to, skill and non-memory from_uris")
+            payload = self._build_options_payload(
+                options,
+                CompileOptions,
+                fixed={"from": list(from_uris or []), "skill": skill, **({"to": to} if to else {})},
+            )
         response = await self._request("POST", "/api/v1/compile", json=payload)
+        return self._handle_response(response)
+
+    async def rule_compile(
+        self,
+        instruction: Optional[str] = None,
+        options: Optional[RuleCompileOptions] = None,
+    ) -> Dict[str, Any]:
+        """Compile inline instructions and resource-backed files into durable rules."""
+        option_values = dict(options or {})
+        raw_sources: Any = option_values.pop("sources", [])
+        if option_values:
+            names = ", ".join(sorted(option_values))
+            raise ValueError(f"Unsupported rule compile options: {names}")
+        if not isinstance(raw_sources, list):
+            raise ValueError("Rule compile sources must be a list")
+
+        sources: List[Dict[str, Any]] = []
+        for source in raw_sources:
+            if isinstance(source, dict):
+                normalized = dict(source)
+                if normalized.get("resource_uri"):
+                    normalized["resource_uri"] = VikingURI.normalize(
+                        str(normalized["resource_uri"])
+                    )
+                    sources.append(normalized)
+                    continue
+                for target_field in ("to", "parent"):
+                    if normalized.get(target_field):
+                        normalized[target_field] = VikingURI.normalize(
+                            str(normalized[target_field])
+                        )
+                path_value = normalized.get("path")
+                if isinstance(path_value, str):
+                    local_path = Path(path_value).expanduser()
+                    if local_path.exists() and not normalized.get("add_type"):
+                        normalized.pop("path")
+                        normalized.setdefault("source_name", local_path.name)
+                        if local_path.is_dir():
+                            zip_path = self._zip_directory(str(local_path))
+                            try:
+                                normalized["temp_file_id"] = await self._upload_temp_file(zip_path)
+                            finally:
+                                Path(zip_path).unlink(missing_ok=True)
+                        else:
+                            normalized["temp_file_id"] = await self._upload_temp_file(
+                                str(local_path)
+                            )
+                sources.append(normalized)
+                continue
+
+            value = os.fspath(source)
+            if value.startswith("viking://"):
+                sources.append({"resource_uri": VikingURI.normalize(value)})
+                continue
+            path = Path(value).expanduser()
+            if path.is_dir():
+                zip_path = self._zip_directory(str(path))
+                try:
+                    temp_file_id = await self._upload_temp_file(zip_path)
+                finally:
+                    Path(zip_path).unlink(missing_ok=True)
+                sources.append(
+                    {
+                        "temp_file_id": temp_file_id,
+                        "source_name": path.name,
+                    }
+                )
+            elif path.is_file():
+                sources.append(
+                    {
+                        "temp_file_id": await self._upload_temp_file(str(path)),
+                        "source_name": path.name,
+                    }
+                )
+            else:
+                sources.append({"path": value})
+
+        payload = {"instruction": instruction, "sources": sources}
+        response = await self._request(
+            "POST",
+            "/api/v1/rules/compile",
+            json=self._compact_request_body(payload),
+        )
+        return self._handle_response(response)
+
+    async def rule_search(
+        self,
+        task_context: str,
+        options: Optional[RuleSearchOptions] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_options_payload(
+            options,
+            RuleSearchOptions,
+            fixed={"task_context": task_context},
+        )
+        response = await self._request("POST", "/api/v1/rules/search", json=payload)
         return self._handle_response(response)
 
     async def cancel_task(self, task_id: str) -> Dict[str, Any]:
@@ -1947,6 +2412,14 @@ class AsyncHTTPClient:
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
+    async def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        """Return one account's credential-free metadata.
+
+        Raises NotFoundError when the account does not exist.
+        """
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}")
+        return self._handle_response(response)
+
     async def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         response = await self._request("DELETE", f"/api/v1/admin/accounts/{account_id}")
         return self._handle_response(response)
@@ -1992,6 +2465,18 @@ class AsyncHTTPClient:
             params["query"] = query
         response = await self._request(
             "GET", f"/api/v1/admin/accounts/{account_id}/users", params=params
+        )
+        return self._handle_response(response)
+
+    async def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Return one user's credential-free membership info (user_id, role).
+
+        Raises NotFoundError when the user does not exist. Never returns
+        api_key or key_prefix.
+        """
+        response = await self._request(
+            "GET",
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}",
         )
         return self._handle_response(response)
 
@@ -2046,49 +2531,20 @@ class AsyncHTTPClient:
     async def admin_add_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.put(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        response = await self._request(
+            "PUT",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
         )
         return self._handle_response(response)
 
     async def admin_remove_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.delete(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
-        )
-        return self._handle_response(response)
-
-    async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        action = "cleanup" if cleanup else "migrate"
-        response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
-        return self._handle_response(response)
-
-    async def admin_get_agent_evolution(self) -> Dict[str, Any]:
-        """Return the effective Agent Evolution switch for the caller's account."""
-        response = await self._request("GET", "/api/v1/admin/agent-evolution")
-        return self._handle_response(response)
-
-    async def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
-        """Persist and hot-reload Agent Evolution for the caller's account."""
         response = await self._request(
-            "PUT", "/api/v1/admin/agent-evolution", json={"enabled": enabled}
-        )
-        return self._handle_response(response)
-
-    async def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
-        """Return effective and explicitly overridden settings for one account."""
-        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}/settings")
-        return self._handle_response(response)
-
-    async def admin_set_account_agent_evolution(
-        self, account_id: str, enabled: bool
-    ) -> Dict[str, Any]:
-        """Update the allowlisted Agent Evolution setting for one account."""
-        response = await self._request(
-            "PATCH",
-            f"/api/v1/admin/accounts/{account_id}/settings",
-            json={"agent_evolution": {"enabled": enabled}},
+            "DELETE",
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members",
+            json={"user_ids": [user_id]},
         )
         return self._handle_response(response)
 
@@ -2247,7 +2703,7 @@ class AsyncHTTPClient:
 
         # Binary branch: server sets application/octet-stream + X-Snapshot-* headers.
         content_type = response.headers.get("content-type", "")
-        if content_type.startswith("application/octet-stream"):
+        if response.is_success and content_type.startswith("application/octet-stream"):
             return {
                 "oid": response.headers.get("x-snapshot-oid", ""),
                 "size": int(response.headers.get("x-snapshot-size", "0")),
@@ -2261,10 +2717,11 @@ class AsyncHTTPClient:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Walk commit history newest-first."""
-        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        """Walk commit history newest-first, skipping ``offset`` matches."""
+        params: Dict[str, Any] = {"branch": branch, "limit": limit, "offset": offset}
         if paths:
             params["paths"] = paths
         response = await self._request(
@@ -2290,6 +2747,22 @@ class AsyncHTTPClient:
             "/api/v1/snapshot/diff",
             params=params,
         )
+        return self._handle_response(response)
+
+    async def git_diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs under directories; a null base means an empty tree."""
+        params: Dict[str, Any] = {"paths": paths, "to": to_ref, "offset": offset, "limit": limit}
+        if from_ref is not None:
+            params["from"] = from_ref
+        response = await self._request("GET", "/api/v1/snapshot/diff-paths", params=params)
         return self._handle_response(response)
 
     async def git_get_ignore(self) -> str:
@@ -2350,6 +2823,7 @@ class SyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -2358,7 +2832,7 @@ class SyncHTTPClient:
                 to=to,
                 parent=parent,
                 wait=wait,
-                options=options,
+                options=_normalize_timeout_options(timeout, options),
             )
         )
 
@@ -2374,9 +2848,14 @@ class SyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.add_skill(data, wait=wait, options=options))
+        return run_async(
+            self._async_client.add_skill(
+                data, wait=wait, options=_normalize_timeout_options(timeout, options)
+            )
+        )
 
     def list_skills(
         self,
@@ -2452,10 +2931,13 @@ class SyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.update_skill(skill_name, data, wait=wait, options=options)
+            self._async_client.update_skill(
+                skill_name, data, wait=wait, options=_normalize_timeout_options(timeout, options)
+            )
         )
 
     def delete_skill(
@@ -2464,6 +2946,150 @@ class SyncHTTPClient:
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.delete_skill(skill_name, target_uri=target_uri))
+
+    def add_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.add_mcp(
+                name,
+                url,
+                headers=headers,
+                target_uri=target_uri,
+                wait=wait,
+            )
+        )
+
+    def remove_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.remove_mcp(name, target_uri=target_uri))
+
+    def list_mcps(self, target_uri: Optional[str] = None) -> Dict[str, Any]:
+        return run_async(self._async_client.list_mcps(target_uri=target_uri))
+
+    def find_mcp_tools(
+        self,
+        query: str,
+        limit: int = 10,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.find_mcp_tools(
+                query,
+                limit=limit,
+                target_uri=target_uri,
+            )
+        )
+
+    def validate_mcp(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.validate_mcp(name, url, headers=headers))
+
+    def get_mcp(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.get_mcp(name, target_uri=target_uri))
+
+    def sync_mcp(
+        self,
+        name: str,
+        *,
+        target_uri: Optional[str] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.sync_mcp(
+                name,
+                target_uri=target_uri,
+                wait=wait,
+            )
+        )
+
+    def get_mcp_status(
+        self,
+        name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.get_mcp_status(name, target_uri=target_uri))
+
+    def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.invoke_mcp_tool(tool_uri, arguments=arguments))
+
+    def mount_mcp_tool(
+        self,
+        tool_uri: str,
+        node_uri: str,
+        title: str,
+        description: Optional[str] = None,
+        timeout_seconds: int = 60,
+        arguments: Optional[Mapping[str, Any]] = None,
+        tags: Optional[Sequence[str]] = None,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.mount_mcp_tool(
+                tool_uri,
+                node_uri,
+                title,
+                description=description,
+                timeout_seconds=timeout_seconds,
+                arguments=arguments,
+                tags=tags,
+                wait=wait,
+            )
+        )
+
+    def unmount_mcp_tool(self, node_uri: str, *, wait: bool = False) -> Dict[str, Any]:
+        return run_async(self._async_client.unmount_mcp_tool(node_uri, wait=wait))
+
+    def batch_mount_mcp_tools(
+        self,
+        mounts: Sequence[MCPToolMount],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.batch_mount_mcp_tools(mounts, wait=wait))
+
+    def batch_unmount_mcp_tools(
+        self,
+        node_uris: Sequence[str],
+        *,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.batch_unmount_mcp_tools(node_uris, wait=wait))
+
+    def list_mcp_mounts(
+        self,
+        mcp: str,
+        tool: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.list_mcp_mounts(
+                mcp,
+                tool=tool,
+                target_uri=target_uri,
+            )
+        )
 
     def list_watches(
         self,
@@ -2516,7 +3142,8 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.trigger_watch(task_id, to_uri=to_uri))
 
-    def wait_processed(self) -> Dict[str, Any]:
+    def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for processing; timeout is deprecated and ignored."""
         return run_async(self._async_client.wait_processed())
 
     def ls(
@@ -2691,6 +3318,7 @@ class SyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
     ) -> None:
         run_async(self._async_client.rm(uri, recursive=recursive, wait=wait))
 
@@ -2718,21 +3346,45 @@ class SyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.write(uri, content, mode=mode, wait=wait, options=options)
+            self._async_client.write(
+                uri,
+                content,
+                mode=mode,
+                wait=wait,
+                options=_normalize_timeout_options(timeout, options),
+            )
         )
 
     def batch_write(
         self,
         root_uri: str,
-        operations: List[Dict[str, Any]],
+        operations: Sequence[Union[BatchWriteOperation, Mapping[str, Any]]],
         wait: bool = True,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.batch_write(root_uri, operations, wait=wait, options=options)
+            self._async_client.batch_write(
+                root_uri,
+                operations,
+                wait=wait,
+                options=_normalize_timeout_options(timeout, options),
+            )
+        )
+
+    def ensure_directory_index(
+        self,
+        uri: str,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Index uri; use fallback_abstract only when both summaries are absent."""
+        return run_async(
+            self._async_client.ensure_directory_index(uri, fallback_abstract, wait=wait)
         )
 
     def set_tags(
@@ -2745,6 +3397,24 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.set_tags(uri, tags, mode=mode, recursive=recursive, options=options)
+        )
+
+    def batch_set_tags(
+        self,
+        uris: List[str],
+        tags: Optional[List[str]] = None,
+        mode: str = "replace",
+        recursive: bool = False,
+        options: Optional[SetTagsOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.batch_set_tags(
+                uris,
+                tags,
+                mode=mode,
+                recursive=recursive,
+                options=options,
+            )
         )
 
     def acl_get(self, uri: str) -> Dict[str, Any]:
@@ -2902,14 +3572,49 @@ class SyncHTTPClient:
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))
 
-    def compile(
+    def create_compile_task(
         self,
         from_uris: List[str],
         to: str,
         skill: str,
         options: Optional[CompileOptions] = None,
+        *,
+        compile_name: str,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.compile(from_uris, to, skill, options))
+        """Save a Compile configuration and return its compile_name without executing it."""
+        return run_async(
+            self._async_client.create_compile_task(
+                from_uris, to, skill, options, compile_name=compile_name
+            )
+        )
+
+    def compile(
+        self,
+        from_uris: Optional[List[str]] = None,
+        to: Optional[str] = None,
+        skill: Optional[str] = None,
+        options: Optional[CompileOptions] = None,
+        *,
+        compile_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue a persistent execution by name or an independent full compilation."""
+        return run_async(
+            self._async_client.compile(from_uris, to, skill, options, compile_name=compile_name)
+        )
+
+    def rule_compile(
+        self,
+        instruction: Optional[str] = None,
+        options: Optional[RuleCompileOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.rule_compile(instruction, options))
+
+    def rule_search(
+        self,
+        task_context: str,
+        options: Optional[RuleSearchOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.rule_search(task_context, options))
 
     def cancel_task(self, task_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.cancel_task(task_id))
@@ -3057,6 +3762,9 @@ class SyncHTTPClient:
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
 
+    def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_account(account_id))
+
     def admin_register_user(
         self,
         account_id: str,
@@ -3093,6 +3801,9 @@ class SyncHTTPClient:
     def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_remove_user(account_id, user_id))
 
+    def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_user(account_id, user_id))
+
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
 
@@ -3124,21 +3835,6 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.admin_remove_group_member(account_id, group_id, user_id)
         )
-
-    def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_migrate(cleanup=cleanup))
-
-    def admin_get_agent_evolution(self) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_get_agent_evolution())
-
-    def admin_set_agent_evolution(self, enabled: bool) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_set_agent_evolution(enabled))
-
-    def admin_get_account_settings(self, account_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_get_account_settings(account_id))
-
-    def admin_set_account_agent_evolution(self, account_id: str, enabled: bool) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_set_account_agent_evolution(account_id, enabled))
 
     def list_experience_trajectories(
         self,
@@ -3263,9 +3959,10 @@ class AsyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._client.git_log(branch=branch, limit=limit, paths=paths)
+        return await self._client.git_log(branch=branch, limit=limit, offset=offset, paths=paths)
 
     async def diff(
         self,
@@ -3279,6 +3976,20 @@ class AsyncHTTPSnapshotNamespace:
             path,
             from_ref=from_ref,
             to_ref=to_ref,
+        )
+
+    async def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return await self._client.git_diff_paths(
+            paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
         )
 
     async def get_gitignore(self) -> str:
@@ -3355,9 +4066,10 @@ class SyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
+        return run_async(self._ns().log(branch=branch, limit=limit, offset=offset, paths=paths))
 
     def diff(
         self,
@@ -3368,6 +4080,22 @@ class SyncHTTPSnapshotNamespace:
     ) -> Dict[str, Any]:
         """Compare one file between two snapshot refs."""
         return run_async(self._ns().diff(path, from_ref=from_ref, to_ref=to_ref))
+
+    def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return run_async(
+            self._ns().diff_paths(
+                paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+            )
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

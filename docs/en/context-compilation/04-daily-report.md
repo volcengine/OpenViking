@@ -2,7 +2,7 @@
 
 Compile timestamped conversation logs, agent sessions, IM messages, collaborative documents, meeting notes, and task records into concise, evidence-grounded **daily reports**: one page per day.
 
-Skill source: [examples/compile/ov-compile-skills/daily-report](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/daily-report)
+Skill source: [openviking/system_assets/compile/example-skills/daily-report](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/daily-report)
 
 Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
 
@@ -18,7 +18,7 @@ ov ls -r viking://resources/work-logs
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/daily-report -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/daily-report -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/daily-report
 ```
@@ -28,21 +28,23 @@ ov skills list
 Spell out the **date, timezone, report subject, and emphasis** in `--instruction` — the Skill uses it to scope and prioritize:
 
 ```bash
-ov compile \
+ov compile create --compile-name daily-report \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "Daily report for 2026-08-20 in Asia/Shanghai, focused on my outcomes and decisions"
+ov compile --compile-name daily-report
 ```
 
 For several days at once, put the date range in `--instruction` (each day is still its own page):
 
 ```bash
-ov compile \
+ov compile create --compile-name report-range \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
   --instruction "One daily report per day for 2026-08-18 to 2026-08-20 in Asia/Shanghai"
+ov compile --compile-name report-range
 ```
 
 The command returns a `task_id` immediately:

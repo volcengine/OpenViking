@@ -67,9 +67,9 @@ several sections (a bad key → "api key rejected" + "system/status → 401").
 
 The API key is never printed in full. Three-segment keys are shown as
 `account=<a> user=<u> secret=abcd…wxyz` (the first two segments are base64url
-identity, decoded so the user can see which account/user the key claims);
-legacy keys as `abcd…wxyz (64 chars)`. Keep it that way in anything you show
-the user.
+identity, decoded so the user can see which account/user the key claims).
+Other shapes are shown as `abcd…wxyz (N chars, unsupported format)`. Keep it
+that way in anything you show the user.
 
 ## Step 2 — map findings to causes
 

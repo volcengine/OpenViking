@@ -10,16 +10,18 @@ import pytest
 
 from openviking.core.namespace import resolve_request_uri
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
+from openviking.service.fs_service import FSService
+from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend, _record
 
 SESSION_URI = "viking://user/alice/sessions/session-1"
 SESSION_PATH = "/local/account/user/alice/sessions/session-1"
 RESOURCE_URI = "viking://resources/project"
-RESOURCE_PATH = "/local/account/resources/project"
 
 
 @pytest.fixture
@@ -28,17 +30,17 @@ def storage():
     lease = {"lease_ref": "delete-lease"}
     agfs = SimpleNamespace(
         stat=AsyncMock(return_value={"isDir": True}),
-        ls=AsyncMock(return_value=[]),
+        ls=AsyncMock(side_effect=AssertionError("rm must not list descendant files")),
         pathlock_acquire_tree=AsyncMock(return_value=lease),
         pathlock_acquire_exact=AsyncMock(return_value=lease),
+        pathlock_acquire_batch=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
         rm=AsyncMock(return_value={}),
     )
-    vector = SimpleNamespace(count=AsyncMock(return_value=7), delete_uris=AsyncMock())
+    vector = SimpleNamespace(count=AsyncMock(return_value=7), delete_uris=AsyncMock(return_value=7))
     acl = SimpleNamespace(is_enabled=AsyncMock(return_value=False), resolve_many=AsyncMock())
     fs = VikingFS(agfs=SimpleNamespace(), vector_store=vector, acl_manager=acl)
     fs._async_agfs = agfs
-    fs._collect_uris = AsyncMock(return_value=[])
     ctx = RequestContext(user=UserIdentifier("account", "alice"), role=Role.USER)
     return SimpleNamespace(fs=fs, agfs=agfs, vector=vector, acl=acl, ctx=ctx, lease=lease)
 
@@ -48,7 +50,6 @@ def storage():
     "request_uri",
     [
         SESSION_URI,
-        "viking://session/session-1",
         "viking://~/sessions/session-1",
         "viking://temp/alice/raw-upload-1",
     ],
@@ -63,7 +64,6 @@ async def test_no_vector_rm_skips_subtree_enumeration_and_vector_store(
     result = await storage.fs.rm(uri, recursive=True, ctx=storage.ctx, no_vector=True)
 
     assert result == {"estimated_deleted_count": 0}
-    storage.fs._collect_uris.assert_not_awaited()
     storage.agfs.ls.assert_not_awaited()
     storage.vector.count.assert_not_awaited()
     storage.vector.delete_uris.assert_not_awaited()
@@ -86,7 +86,7 @@ async def test_session_file_rm_keeps_exact_lock_and_skips_vector_store(storage):
     result = await storage.fs.rm(uri, ctx=storage.ctx, no_vector=True)
 
     assert result == {"estimated_deleted_count": 0}
-    storage.fs._collect_uris.assert_not_awaited()
+    storage.agfs.ls.assert_not_awaited()
     storage.vector.count.assert_not_awaited()
     storage.vector.delete_uris.assert_not_awaited()
     storage.agfs.pathlock_acquire_tree.assert_not_awaited()
@@ -122,7 +122,7 @@ async def test_missing_no_vector_rm_does_not_scan_or_clean_vector_records(
     result = await storage.fs.rm(uri, recursive=True, ctx=storage.ctx, no_vector=True)
 
     assert result == {"estimated_deleted_count": 0}
-    storage.fs._collect_uris.assert_not_awaited()
+    storage.agfs.ls.assert_not_awaited()
     storage.vector.count.assert_not_awaited()
     storage.vector.delete_uris.assert_not_awaited()
     storage.agfs.pathlock_acquire_tree.assert_not_awaited()
@@ -139,16 +139,97 @@ async def test_session_rm_releases_its_tree_lease_when_backend_delete_fails(stor
     assert storage.agfs.rm.await_args.kwargs["fs_ctx"]["lease_ref"] == "delete-lease"
 
 
-async def test_session_rm_reuses_outer_lease_without_releasing_it(storage):
-    outer_lease = {"lease_ref": "outer-lease"}
+async def test_session_rm_rechecks_existence_after_waiting_for_tree_lock(storage):
+    storage.agfs.stat.side_effect = [
+        {"isDir": True},
+        FileNotFoundError(SESSION_PATH),
+    ]
 
-    await storage.fs.rm(
-        SESSION_URI, recursive=True, ctx=storage.ctx, lease_ref=outer_lease, no_vector=True
+    result = await storage.fs.rm(SESSION_URI, recursive=True, ctx=storage.ctx, no_vector=True)
+
+    assert result == {"estimated_deleted_count": 0}
+    storage.agfs.pathlock_acquire_tree.assert_awaited_once_with(SESSION_PATH)
+    storage.agfs.rm.assert_not_awaited()
+    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+
+
+async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
+    tmp_path, monkeypatch
+):
+    import fakeredis.aioredis
+
+    from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
+    from openviking.ttl.adapter import TTLBackfillRequest, TTLRecycleRequest
+    from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.wiring import install_ttl_hook
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.exceptions import NotFoundError
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
+    from openviking_cli.utils.config.ttl_config import TTLConfig
+
+    agfs = create_agfs_client(
+        RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="local"))
     )
+    vectors = SimpleNamespace(count=AsyncMock(return_value=1), delete_uris=AsyncMock())
+    fs = VikingFS(agfs=agfs, vector_store=vectors)
+    engine = DirectoryTTL(resource_id="recycle-contract", batch_interval=0, delete_interval=0)
+    engine.fs = fs
+    engine.policies = AsyncMock(return_value=(TTLConfig(sessions=7, user_events=7), None))
+    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    ctx = engine.context("account")
+    session = "viking://user/alice/sessions/fresh"
+    event = "viking://user/alice/memories/events/2020/01/01"
+    request = TTLRecycleRequest(engine.resource_id, ctx.account_id)
+    callback = CallbackRequest(ItemIdentity("ttl", ctx.account_id, "_system", "maintenance"))
+    try:
+        # A historical Session missed incremental registration; backfill must recover it.
+        await fs.write_file(session + "/messages.jsonl", "recent message", ctx=ctx)
+        install_ttl_hook(fs, engine)
+        await engine.start()
+        # Soft TTL permits writing old Events until the background deletion happens.
+        await fs.write_file(event + "/event.md", "historical event", ctx=ctx)
+        await engine._registration_task
+        prefix = engine.prefix(ctx.account_id)
+        event_score = await engine.redis.zscore(prefix + "user_events", event)
+        assert event_score is not None
+        await engine.register_initial_backfill(
+            TTLBackfillRequest(
+                engine.resource_id,
+                ctx.account_id,
+                ("viking://user/alice/sessions", "viking://user/alice/memories/events"),
+            )
+        )
+        assert (await engine.recycle_due(request)).deleted == 0
+        assert await fs.read_file(event + "/event.md", ctx=ctx) == "historical event"
+        monkeypatch.setattr(
+            "openviking.ttl.runtime.time.time_ns", lambda: engine._recycle_after_ms * 1_000_000
+        )
+        await engine.handle(callback)
+        await engine._task
+        assert (await engine.read_initial(ctx.account_id))["done"]
+        assert await engine.redis.zscore(prefix + "sessions", session) is not None
 
-    storage.agfs.pathlock_acquire_tree.assert_not_awaited()
-    storage.agfs.pathlock_release.assert_not_awaited()
-    assert storage.agfs.rm.await_args.kwargs["fs_ctx"]["lease_ref"] == "outer-lease"
+        # The file's fresh ModTime wins over a stale Session index entry.
+        await engine.redis.zadd(prefix + "sessions", {session: 1})
+        vectors.delete_uris.side_effect = OSError("vector deletion unavailable")
+        failed = await engine.recycle_due(request)
+        assert failed.failed == 1 and failed.skipped >= 1
+        assert await engine.redis.zscore(prefix + "sessions", session) > 1
+        assert await engine.redis.zscore(prefix + "user_events", event) == event_score
+        assert await fs.read_file(event + "/event.md", ctx=ctx) == "historical event"
+        assert (await fs._async_agfs.pathlock_observe())["active_locks"] == 0
+
+        vectors.delete_uris.side_effect = None
+        recycled = await engine.recycle_due(request)
+        assert recycled.deleted == 1 and recycled.failed == 0
+        with pytest.raises(NotFoundError):
+            await fs.stat(event, ctx=ctx)
+        assert await engine.redis.zscore(prefix + "user_events", event) is None
+        assert await fs.read_file(session + "/messages.jsonl", ctx=ctx) == "recent message"
+        assert (await fs._async_agfs.pathlock_observe())["active_locks"] == 0
+    finally:
+        await engine.aclose()
+        agfs.close()
 
 
 async def test_session_rm_preserves_retryable_busy_error(storage):
@@ -181,64 +262,106 @@ async def test_session_rm_preserves_namespace_and_path_validation(storage, acl_e
     storage.vector.delete_uris.assert_not_awaited()
 
 
-@pytest.mark.parametrize("missing", [False, True])
-@pytest.mark.parametrize("uri", [RESOURCE_URI, SESSION_URI])
-async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
-    child_uri = f"{uri}/document.md"
-    storage.fs._collect_uris.return_value = [child_uri]
+@pytest.mark.parametrize(
+    ("uri", "missing"),
+    [(RESOURCE_URI, False), (RESOURCE_URI, True), (f"{SESSION_URI}/messages.jsonl", False)],
+)
+async def test_default_rm_still_cleans_vector_records(
+    storage, vector_backend_factory, tmp_path, monkeypatch, uri, missing
+):
+    is_dir = uri == RESOURCE_URI
+    storage.agfs.stat.return_value = {"isDir": is_dir}
     if missing:
-        storage.agfs.stat.side_effect = FileNotFoundError(RESOURCE_PATH)
+        storage.agfs.stat.side_effect = FileNotFoundError(uri)
 
-    result = await storage.fs.rm(uri, recursive=True, ctx=storage.ctx)
-
-    assert result == {"estimated_deleted_count": 7}
-    storage.fs._collect_uris.assert_awaited_once()
-    storage.vector.count.assert_awaited_once()
-    assert storage.vector.count.await_args.kwargs["ctx"] == storage.ctx
-    storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, uri])
-    if missing:
-        storage.agfs.rm.assert_not_awaited()
-    else:
-        storage.agfs.rm.assert_awaited_once()
-        storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
-
-
-@pytest.mark.parametrize("no_vector", [False, True])
-@pytest.mark.parametrize("child_allowed", [False, True])
-async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector, child_allowed):
-    child_uri = f"{RESOURCE_URI}/restricted.md"
-    storage.fs._collect_uris.return_value = [child_uri]
-    storage.acl.is_enabled.return_value = True
-    allowed = EffectiveAcl(
-        AclMode.RESTRICTED,
-        DirectAcl((AclEntry("user:alice", AclLevel.MANAGE),)),
-        DirectAcl(),
+    target_uris = [uri]
+    if is_dir:
+        target_uris.extend(f"{uri}/nested/{i}.md" for i in range(205))
+    records = [
+        {
+            "id": f"target-{i}",
+            "uri": target_uri,
+            "account_id": storage.ctx.account_id,
+            "level": i % 3,
+            "vector": [0.1] * 4,
+        }
+        for i, target_uri in enumerate(target_uris)
+    ]
+    sibling = {**records[0], "id": "sibling", "uri": f"{uri}.bak"}
+    foreign = {**records[0], "id": "foreign", "account_id": "other"}
+    foreign_ctx = RequestContext(user=UserIdentifier("other", "alice"), role=Role.ROOT)
+    backend = vector_backend_factory(
+        VectorDBBackendConfig(backend="local", name="context", dimension=4, path=str(tmp_path))
     )
-    denied = EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
-
-    async def resolve_many(uris, ctx):
-        return {uri: denied if uri == child_uri and not child_allowed else allowed for uri in uris}
-
-    storage.acl.resolve_many.side_effect = resolve_many
-
-    if child_allowed:
-        result = await storage.fs.rm(
-            RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
         )
-        assert result == {"estimated_deleted_count": 0 if no_vector else 7}
-        storage.agfs.rm.assert_awaited_once()
-    else:
-        with pytest.raises(PermissionDeniedError, match="restricted.md"):
-            await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector)
+        await backend.upsert_many([*records, sibling], ctx=storage.ctx)
+        await backend.upsert_many([foreign], ctx=foreign_ctx)
+        monkeypatch.setattr(backend, "count", AsyncMock())
+        storage.fs.vector_store = backend
+
+        result = await storage.fs.rm(uri, recursive=True, ctx=storage.ctx)
+
+        assert result == {"estimated_deleted_count": len(records)}
+        remaining = await backend.get_strict(
+            [record["id"] for record in records] + ["sibling"], ctx=storage.ctx
+        )
+        assert [record["id"] for record in remaining] == ["sibling"]
+        assert [r["id"] for r in await backend.get_strict(["foreign"], ctx=foreign_ctx)] == [
+            "foreign"
+        ]
+        backend.count.assert_not_awaited()
+        storage.agfs.ls.assert_not_awaited()
+        if missing:
+            storage.agfs.rm.assert_not_awaited()
+        else:
+            storage.agfs.rm.assert_awaited_once()
+            assert storage.agfs.rm.await_args.kwargs["recursive"] is is_dir
+            storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+    finally:
+        await backend.close()
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record(
+                "root",
+                RESOURCE_URI,
+                account_id=storage.ctx.account_id,
+                level=0,
+                acl_mode="restricted",
+                acl_direct_grants=["7:user:alice"] if allowed else [],
+            ),
+            _record(
+                "child",
+                f"{RESOURCE_URI}/nested/restricted.md",
+                account_id=storage.ctx.account_id,
+                acl_mode="restricted",
+                acl_direct_grants=[],
+            ),
+        ]
+    )
+    storage.fs.vector_store = backend
+    storage.fs.acl_manager = backend.acl_manager
+    service = FSService(viking_fs=storage.fs)
+    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
+
+    if allowed:
+        # Direct deletion still checks the child; FSService authorizes the subtree at its root.
+        with pytest.raises(PermissionDeniedError, match="manage permission required"):
+            await storage.fs.rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
+        assert set(backend.records) == {"root", "child"}
         storage.agfs.rm.assert_not_awaited()
 
-    storage.fs._collect_uris.assert_awaited_once_with(
-        RESOURCE_PATH, True, ctx=storage.ctx, strict=True
-    )
-    if no_vector or not child_allowed:
-        storage.vector.count.assert_not_awaited()
-        storage.vector.delete_uris.assert_not_awaited()
+        await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
+        assert not backend.records
+        storage.agfs.rm.assert_awaited_once()
     else:
-        storage.vector.count.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, RESOURCE_URI])
-    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+        with pytest.raises(PermissionDeniedError):
+            await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
+        assert set(backend.records) == {"root", "child"}
+        storage.agfs.rm.assert_not_awaited()

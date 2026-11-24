@@ -11,6 +11,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_user_root
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
@@ -71,18 +72,28 @@ class DeletionService:
         oauth_store: Any = None,
         usage_audit_runtime: Any = None,
         gateway_app: Any = None,
+        require_registered_identity: bool = True,
     ) -> None:
         self._service = service
         self._manager = manager
         self._service_loop = service_loop
+        self._manager_dispatcher = OwnerLoopDispatcher(service_loop)
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
         self._gateway_app = gateway_app
+        self._require_registered_identity = require_registered_identity
         self._request_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Bind the queue consumer and reconcile persisted deletion fences."""
         self._service.viking_fs.set_deletion_guard(self._is_deleting)
+        creation_guard = (
+            self._creation_blocked if self._require_registered_identity else self._is_deleting
+        )
+        get_task_tracker().set_deletion_guard(creation_guard)
+        watches = getattr(self._service, "watch_manager", None)
+        if watches is not None:
+            watches.set_deletion_guard(creation_guard)
         queue_manager = self._service._queue_manager
         queue = queue_manager.get_queue(queue_manager.DATA_CLEANUP)
         queued_task_ids = {
@@ -128,7 +139,25 @@ class DeletionService:
                 queued_task_ids.add(task_id)
 
     async def _is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
-        return await self._manager.get_deletion(account_id, user_id) is not None
+        deletion = await self._manager_dispatcher.run(
+            lambda: self._manager.get_deletion(account_id, user_id)
+        )
+        return deletion is not None
+
+    async def _creation_blocked(self, account_id: str, user_id: str) -> bool:
+        """Reject missing registered identities, also after their deletion fence is gone."""
+        if account_id == SYSTEM_TASK_ACCOUNT_ID:
+            return False
+        # Queue workers call this guard from their own loops; the account store
+        # and its cache clients belong to the service loop.
+        return await self._manager_dispatcher.run(
+            lambda: self._is_creation_blocked(account_id, user_id)
+        )
+
+    async def _is_creation_blocked(self, account_id: str, user_id: str) -> bool:
+        if await self._manager.get_deletion(account_id, user_id) is not None:
+            return True
+        return await self._manager.get_user(account_id, user_id) is None
 
     async def delete(
         self,
@@ -315,10 +344,16 @@ class DeletionService:
                 from openviking_gateway.app import delete_data
 
                 await run_to_completion(lambda: delete_data(self._gateway_app, account_id, user_id))
-            scheduler = self._service.watch_scheduler
-            if scheduler is not None:
-                await run_to_completion(lambda: scheduler.delete_tasks(account_id, user_id))
+            watches = getattr(self._service, "watch_manager", None)
+            if watches is not None:
+                await run_to_completion(lambda: watches.delete_tasks(account_id, user_id))
             await run_to_completion(lambda: self._cancel_tasks(account_id, user_id))
+            if user_id is None:
+                from openviking.ttl.wiring import get_ttl_adapter
+
+                ttl = get_ttl_adapter()
+                if ttl is not None:
+                    await run_to_completion(lambda: ttl.delete_account(account_id))
             await run_to_completion(
                 lambda: tracker.delete_tasks(
                     account_id,
@@ -369,7 +404,16 @@ class DeletionService:
             if deleted is not True:
                 raise RuntimeError("Cleanup task no longer owns the identity deletion")
         except Exception as exc:
-            logger.exception("%s cleanup failed for %s/%s", scope, account_id, user_id)
+            logger.error(
+                "Identity cleanup failed scope=%s",
+                scope,
+                extra={
+                    "account_id": account_id,
+                    "user_id": user_id,
+                    "task_id": task_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
             error = f"{scope.capitalize()} cleanup failed: {exc}"
             await tracker.fail(task_id, error, **owner)
             return error
@@ -409,16 +453,26 @@ class DeletionService:
             try:
                 await tracker.cancel(task.task_id, **owner)
             except ValueError:
-                # Some system work cannot be cancelled. Wait for its owner to
+                if task.task_type == "connector_import":
+                    # The import runs in the remote Connector service, which
+                    # cannot be stopped; failing the Task ends local monitoring.
+                    await tracker.fail(task.task_id, "Identity deleted", **owner)
+                # Other system work cannot be cancelled. Wait for its owner to
                 # finish instead of deleting the data underneath it.
-                pass
         for task in active:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Timed out waiting for tasks to stop")
-            await tracker.wait(
-                task.task_id, account_id=task.account_id, user_id=task.user_id, timeout=remaining
-            )
+            try:
+                await tracker.wait(
+                    task.task_id,
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                    timeout=remaining,
+                )
+            except KeyError:
+                # A Task created concurrently with this deletion withdraws itself.
+                continue
 
     async def _delete_uploads(self, ctx: RequestContext) -> None:
         viking_fs = self._service.viking_fs
@@ -432,6 +486,7 @@ class DeletionService:
         except NotFoundError:
             return
 
+        skipped_uploads = 0
         for upload in uploads:
             uri = str(upload.get("uri") or "").rstrip("/")
             if not uri or uri == _SHARED_UPLOAD_ROOT:
@@ -447,11 +502,24 @@ class DeletionService:
             meta_uri = f"{uri}/meta"
             try:
                 meta = json.loads(await viking_fs.read_file(meta_uri, ctx=ctx))
-            except Exception:
-                logger.warning("Skipping shared upload with unreadable metadata: %s", meta_uri)
+            except Exception as exc:
+                skipped_uploads += 1
+                logger.debug(
+                    "Shared upload metadata unreadable; skipping upload",
+                    extra={
+                        "target_id": safe_uri_for_log(meta_uri),
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 continue
             if meta.get("account") == ctx.account_id and meta.get("user") == ctx.user.user_id:
                 await viking_fs.rm(uri, recursive=True, ctx=ctx)
+
+        if skipped_uploads:
+            logger.info(
+                "Shared uploads skipped during identity cleanup",
+                extra={"total": len(uploads), "skipped": skipped_uploads},
+            )
 
 
 class _DeletionProcessor(DequeueHandlerBase):
@@ -509,6 +577,7 @@ async def setup_deletion(
     oauth_store: Any = None,
     usage_audit_runtime: Any = None,
     gateway_app: Any = None,
+    require_registered_identity: bool = True,
 ) -> Optional[DeletionService]:
     """Create the deletion service after storage and authentication are ready."""
     if manager is None or service.viking_fs is None or service._queue_manager is None:
@@ -520,6 +589,7 @@ async def setup_deletion(
         oauth_store=oauth_store,
         usage_audit_runtime=usage_audit_runtime,
         gateway_app=gateway_app,
+        require_registered_identity=require_registered_identity,
     )
     await deletion_service.initialize()
     return deletion_service

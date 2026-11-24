@@ -57,6 +57,8 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 
 </details>
 
+Once installed, start a new Codex session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
 ## Verify
 
 Launch `codex`; on the first prompt of a session, the `SessionStart` hook should load your profile, and the plugin should then recall relevant memories for every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
@@ -81,7 +83,6 @@ The plugin handles memory at these Codex lifecycle events:
 | `Stop` | Append new conversation turns to the OpenViking session. |
 | `PreCompact` | Capture remaining turns and commit the complete transcript before compaction. |
 | `SessionEnd` | Commit the session on graceful exit for subsequent memory extraction. |
-| `PreToolUse` (`Bash`) | Detect `viking://` URIs in shell commands and suggest the OpenViking MCP tools. The command still runs; the model can ignore the notice when the URI is intentional data, such as an `ov` argument. |
 
 Starting a new session also sweeps orphaned sessions from earlier runs once their idle TTL has expired.
 

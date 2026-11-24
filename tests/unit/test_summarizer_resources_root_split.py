@@ -38,6 +38,7 @@ class _DummyQueueManager:
 class _DummyVikingFS:
     def __init__(self, entries_by_uri):
         self.entries_by_uri = entries_by_uri
+        self._async_agfs = SimpleNamespace()
 
     async def ls(self, uri, show_all_hidden=False, ctx=None, **kwargs):
         return self.entries_by_uri.get(uri, [])
@@ -180,7 +181,7 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
 
 
 @pytest.mark.asyncio
-async def test_grouped_file_refresh_coalesces_only_direct_parents():
+async def test_content_write_groups_files_without_coalescing_file_work():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
@@ -205,6 +206,7 @@ async def test_grouped_file_refresh_coalesces_only_direct_parents():
                 FileRefreshRequest("viking://resources/src/main.py", md5="c"),
             ],
             ctx=ctx,
+            generation_trigger="content_write",
         )
 
     assert result["enqueued_count"] == 2
@@ -213,6 +215,7 @@ async def test_grouped_file_refresh_coalesces_only_direct_parents():
         "viking://resources/src": "refresh_now",
     }
     assert len(queue.msgs) == 2
+    assert all(not msg.coalesce_key for msg in queue.msgs)
     messages = {msg.uri: msg for msg in queue.msgs}
     assert messages["viking://resources/docs"].changes == {
         "added": ["viking://resources/docs/a.md"],

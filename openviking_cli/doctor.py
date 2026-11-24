@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-import os
 import platform
 import shutil
 import sys
@@ -24,7 +23,7 @@ from openviking.server.config import (
     ServerConfig,
     get_server_url_from_server_data,
 )
-from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.config_loader import expand_config_environment, resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -65,7 +64,7 @@ def _load_config_json(config_path: Path) -> Optional[dict]:
     """Parse ov.conf as JSON. Returns None if the file is unreadable or not valid JSON."""
     try:
         raw = config_path.read_text(encoding="utf-8-sig")
-        raw = os.path.expandvars(raw)
+        raw = expand_config_environment(raw)
         return json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return None
@@ -95,7 +94,7 @@ def check_config() -> tuple[bool, str, Optional[str]]:
 
     try:
         raw = config_path.read_text(encoding="utf-8-sig")
-        raw = os.path.expandvars(raw)
+        raw = expand_config_environment(raw)
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"

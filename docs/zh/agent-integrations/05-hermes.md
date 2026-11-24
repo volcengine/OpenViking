@@ -1,5 +1,7 @@
 # Hermes
 
+> **推荐通过 [OpenViking 网关](../guides/15-gateway.md) 接入。** 关掉下面的插件，把模型的 Base URL 指向网关、API Key 换成网关密钥，网关会为新用户消息召回记忆并保存对话。[上游](../gateway/07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录无法走网关。配置见[把客户端接入 OpenViking 网关](../gateway/03-connect-clients.md#openclaw-and-hermes)，从零开始见[网关快速上手](../gateway/02-quickstart.md)，两种方式的取舍见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)，官网介绍见 [openviking.ai/gateway](https://openviking.ai/gateway)。
+
 为 [Hermes Agent](https://hermes-agent.nousresearch.com/) 配置 OpenViking 长期记忆。
 
 ## 开始使用
@@ -34,8 +36,8 @@ hermes
 配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
 请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
 
-Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和已知本地
-embedding 问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
+Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和运行环境
+升级说明见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
 
 ## 查看状态
 

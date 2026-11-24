@@ -17,7 +17,7 @@ from .windows import native_definitions
 TOOL_OVERRIDES = {
     "find": {"notice": ("query",)},
     "search": {"notice": ("query",)},
-    "read": {"notice": ("uris",)},
+    "read": {"notice": ("uri", "uris")},
     "download": {
         "notice": ("uri",),
         "description": " Run the returned curl command with the client's shell tool.",

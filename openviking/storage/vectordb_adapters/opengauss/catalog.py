@@ -7,11 +7,15 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from openviking.observability.log_safety import short_hash
+from openviking_cli.exceptions import FailedPreconditionError, UnimplementedError
 from openviking_cli.utils import get_logger
 
 from .sql import (
     _META_TABLE,
+    _bounded_identifier,
     _field_to_column_ddl,
+    _index_meta_table_name,
     _is_undefined_table_error,
     _quote_identifier,
     _validate_identifier,
@@ -47,8 +51,7 @@ def _validate_distributed_environment(conn) -> None:
             )
         if not reference_function_exists:
             logger.info(
-                "opengauss_adapter: CN has no create_reference_table; metadata tables "
-                "will use spq hash distribution"
+                "opengauss_adapter: CN has no create_reference_table; metadata tables will use spq hash distribution"
             )
 
         cursor.execute(
@@ -193,7 +196,10 @@ def _try_make_distributed_table(
     _validate_identifier(distribution_column, kind="openGauss distribution column name")
     if _is_table_already_distributed(conn, table_name):
         _verify_distributed_table_kind(conn, table_name, "distributed")
-        logger.info("opengauss_adapter: table '%s' is already distributed, skipping", table_name)
+        logger.info(
+            "opengauss_adapter: table '%s' is already distributed, skipping",
+            short_hash(str(table_name)),
+        )
         return
     cur = conn.cursor()
     try:
@@ -204,9 +210,9 @@ def _try_make_distributed_table(
         conn.commit()
         _verify_distributed_table_kind(conn, table_name, "distributed")
         logger.info(
-            "opengauss_adapter: distributed table '%s' created with %d shards",
-            table_name,
-            shard_count,
+            "opengauss_adapter: distributed table '%s' created with %s shards",
+            short_hash(str(table_name)),
+            type(shard_count).__name__,
         )
     except Exception as error:
         conn.rollback()
@@ -289,9 +295,32 @@ def _create_collection_table(
     ``id`` after creation.  The caller must have already created / ensured the
     metadata tables so their distributed form is initialized first.
     """
+    from .capabilities import probe_fulltext_capabilities
+    from .fulltext import (
+        _BM25_INDEX_CATALOG_SQL,
+        _declares_fulltext,
+        _fulltext_index_spec,
+        _matches_bm25_index,
+    )
+
     fields: List[Dict[str, Any]] = meta.get("Fields", [])
+    fulltext = _declares_fulltext(meta)
+    if fulltext and distributed:
+        raise UnimplementedError("SPQ native BM25 has not been certified")
+    if fulltext:
+        capability = probe_fulltext_capabilities(conn)["bm25"]
+        if capability["state"] != "available":
+            raise FailedPreconditionError(
+                f"Native BM25 is unavailable: {capability['state']}",
+                details={
+                    "backend": "opengauss",
+                    "capability": "bm25",
+                    "state": capability["state"],
+                },
+            )
     col_ddls = []
     has_vector = False
+    has_content = False
 
     for field in fields:
         ftype = field.get("FieldType") or field.get("field_type") or field.get("type", "string")
@@ -299,12 +328,21 @@ def _create_collection_table(
             has_vector = True
             continue
         field_name = field.get("FieldName") or field.get("field_name") or field.get("name", "")
+        if field_name == "_ov_content_empty":
+            raise ValueError("_ov_content_empty is an internal field")
         if field_name == "content":
-            continue
+            if ftype != "text":
+                raise ValueError("openGauss content must be a text field")
+            has_content = True
         ddl = _field_to_column_ddl(field)
         if ddl:
             col_ddls.append(ddl)
 
+    if fulltext and not has_content:
+        raise ValueError("openGauss FullText requires a declared content text field")
+    if has_content:
+        # A-compatible databases map empty TEXT to NULL; preserve explicit emptiness.
+        col_ddls.append('"_ov_content_empty" BOOLEAN NOT NULL DEFAULT TRUE')
     if has_vector and dim > 0:
         col_ddls.append(f"vector vector({dim})")
 
@@ -318,8 +356,29 @@ def _create_collection_table(
     """
     cur = conn.cursor()
     try:
+        cur.execute(
+            "SELECT relname FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = current_schema() AND relname IN (%s, %s)",
+            (_index_meta_table_name(name), _bounded_identifier(f"_ov_sparse_{name}")),
+        )
+        if cur.fetchall():
+            raise RuntimeError("Refusing to adopt unowned collection index storage")
         cur.execute(sql)
+        if fulltext:
+            spec = _fulltext_index_spec(name)
+            cur.execute(
+                f"CREATE INDEX {_quote_identifier(spec['name'])} "
+                f'ON {quoted_name} USING bm25 ("content")'
+            )
+            cur.execute(_BM25_INDEX_CATALOG_SQL, (name, spec["name"]))
+            if not _matches_bm25_index(cur.fetchall(), spec):
+                raise FailedPreconditionError(
+                    "Native BM25 index failed physical catalog validation"
+                )
         conn.commit()
+        if fulltext:
+            meta["_fulltext_index"] = spec
     except Exception:
         conn.rollback()
         raise
@@ -341,6 +400,19 @@ def _ensure_meta_table(conn, distributed: bool = False):
     """
     cur = conn.cursor()
     try:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_name = %s",
+            (_META_TABLE,),
+        )
+        if cur.fetchone() is not None:
+            conn.commit()
+            if distributed and _distributed_table_kind(conn, _META_TABLE) not in {
+                "distributed",
+                "reference",
+            }:
+                raise RuntimeError("Existing openGauss metadata table is not distributed")
+            return
         cur.execute(
             f"""
             CREATE TABLE IF NOT EXISTS "{_META_TABLE}" (
@@ -384,7 +456,6 @@ def _save_collection_meta(conn, name: str, meta: Dict[str, Any], distributed: bo
 
 
 def _load_collection_meta(conn, name: str, distributed: bool = False) -> Optional[Dict[str, Any]]:
-    _ensure_meta_table(conn, distributed=distributed)
     cur = conn.cursor()
     try:
         cur.execute(

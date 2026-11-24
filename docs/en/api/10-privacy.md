@@ -1,18 +1,21 @@
 # Privacy Configs
 
-Privacy configs manage sensitive values by `category + target_key` (for example, a skill's `api_key` and `base_url`).
+Privacy configs manage sensitive values in Skills and Sessions (such as `api_key` and `token`) by `category + target_key` in the current user's space. Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
 
-Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
+> You can manage Privacy configs and their versions even when automatic processing is disabled in [User settings](08-admin.md#user-settings).
 
-These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Reads and CLI output contain the stored values; `***` below is an example placeholder, not automatic redaction.
+These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Value-reading endpoints and CLI commands return stored values; tree and field-metadata endpoints omit them. `***` below is an example placeholder, not automatic redaction.
 
 Activating a version changes only the values stored in OpenViking. It does not rotate, revoke, or restore credentials at the external provider.
+
+Mutations of the same `category + target_key` for the same user require the target's write lock. If another operation holds the lock, the endpoint returns HTTP 409 (`CONFLICT`) without waiting for release or automatically retrying the mutation.
 
 ## Endpoint Summary
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/privacy-configs` | List privacy config categories |
+| GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in stored content |
 | GET | `/api/v1/privacy-configs/{category}` | List targets under a category |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get active config (`meta + current`) |
@@ -32,16 +35,16 @@ Activating a version changes only the values stored in OpenViking. It does not r
 
 ## Common Use Cases
 
-- Store sensitive settings for a skill
+- Store sensitive settings for a Skill or Session
 - Rotate keys by writing a new version
 - Roll back to an old version
-- Restore placeholders in skill content at read time
+- Restore values from placeholders when reading Skill or Session content
 
 ---
 
 ## Scan Stored Content
 
-Explicitly scan one persisted file or directory. The default is a dry run and never returns the matched value. With `fix=true`, unambiguous matches are replaced and affected content is refreshed asynchronously.
+Explicitly scan one persisted file or directory. The default is a dry run and never returns the matched value. With `fix=true`, matches are replaced and affected content is refreshed asynchronously.
 
 ```text
 POST /api/v1/privacy-configs/scan
@@ -56,6 +59,7 @@ POST /api/v1/privacy-configs/scan
 ```
 
 `uri` is required. Broad scope-based scans are intentionally unsupported. `node_limit` must be between 1 and 1000. The server also enforces one scan per process, 20 file reads per second, 1 MiB per file, 16 MiB total input, 1,000 replacements per file, at most 32 reference details per matched file, at most 100 repaired files, and a cooperative 60-second scan budget. A second concurrent request receives `RESOURCE_EXHAUSTED`. Repair never waits for semantic/vector refresh work. Responses report skipped files, truncation, the stop reason, and the effective limits. When one value maps to multiple Privacy fields, the result reports `ambiguous` and never chooses a reference arbitrarily.
+By default, a fixed order selects a restorable reference. Set `OPENVIKING_PRIVACY_AMBIGUOUS_STRICT=1` to reject such matching operations.
 
 ---
 
@@ -103,7 +107,8 @@ The server applies the same validation to HTTP, CLI, Embedded, and internal writ
 | Item | Limit |
 |------|------|
 | `category` / `target_key` | Non-empty, at most 255 ASCII characters; only letters, digits, `_`, `-`, `.`, and `@`; `.` and `..` are forbidden and at most one `@` is allowed |
-| Top-level values fields | At most 128 |
+| Session `target_key` | Use the Session ID when it meets the limits above; otherwise use `_` followed by the first 24 hexadecimal characters of its SHA-256 hash (the original Session ID is automatically recorded in `labels.session_id`) |
+| Top-level values fields | At most 1024 for `category=session`; at most 128 for other categories |
 | Field name | Non-empty, at most 255 UTF-8 bytes, no control characters |
 | Individual string | At most 64 KiB UTF-8 |
 | Serialized values | At most 1 MiB |
@@ -137,9 +142,62 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 ```json
 {
   "status": "ok",
-  "result": ["skill"]
+  "result": ["session", "skill"]
 }
 ```
+
+Only categories with stored configs are returned; a Session with no extracted values does not create a privacy config.
+
+---
+
+### list_privacy_tree()
+
+List the current user's categories, targets, active version numbers and field metadata
+in one request. Historical versions and stored values are never returned. Targets
+without a current snapshot are skipped.
+
+**HTTP API**
+
+```text
+GET /api/v1/privacy-configs/tree
+```
+
+The optional `category` query parameter limits the tree to one category. An invalid
+identifier returns `INVALID_ARGUMENT`. An empty store returns `categories: []`;
+a missing filtered category returns that category with `targets: []`.
+
+```bash
+curl "http://localhost:1933/api/v1/privacy-configs/tree?category=credential" \
+  -H "X-API-Key: your-key"
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "owner_user_id": "alice",
+    "categories": [{
+      "category": "credential",
+      "targets": [{
+        "target_key": "github",
+        "version": 3,
+        "fields": [{
+          "field": "pat",
+          "configured": true,
+          "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+        }]
+      }]
+    }]
+  }
+}
+```
+
+`configured` is false for `null` or an empty string; other values, including `false`
+and `0`, are configured. References are bound to the current owner and always
+included in the API response. The CLI shows them in table output only when
+`--references` is set; JSON output preserves all metadata.
 
 ---
 
@@ -519,6 +577,12 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 # Categories and targets
 ov privacy categories
 ov privacy list skill
+ov privacy list session
+
+# Tree of current targets and fields, without values
+ov privacy tree
+ov privacy tree --category credential --references
+ov privacy tree --output json
 
 # Active config (shortcut supported)
 ov privacy get skill byted-viking-search-knowledgebase
@@ -564,10 +628,35 @@ ov privacy scan --uri viking://~/resources/project-a
 ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ```
 
+### Run external commands with Privacy references
+
+`ov privacy run` lets callers or Agents run local external commands (such as `gh` or `curl`) directly with Privacy references (<code v-pre>{{ov_privacy:...}}</code>, obtained via `ov privacy reference` or `ov privacy tree --references`). Before launching the external command, `ov privacy run` resolves references in environment variables or arguments and injects the sensitive values; in the command's `stdout`/`stderr` output, matching sensitive values are replaced back with their corresponding Privacy references in real time.
+
+> Output replacement applies only to the external command's `stdout` and `stderr`, not to files it writes or data it sends over the network.
+
+```bash
+# 1. Pass via environment variable (recommended to keep sensitive values out of argv)
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user
+
+# 2. Load from a file (one NAME={{ov_privacy:...}} entry per line; supports matching quotes and # comments)
+ov privacy run --env-file ./privacy.env -- gh api user
+
+# 3. Embed directly inside an argument of the external command
+ov privacy run -- curl -H 'Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' https://api.example.com
+
+# 4. Invoke sh -c explicitly for shell pipelines or redirections, passing references via --env
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- \
+  sh -c 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.example.com | jq .login'
+```
+
+> In examples 3 and 4 above, the sensitive value still ends up in `curl`'s process arguments (via `ov privacy run` expanding the argument reference in example 3, or `sh` expanding `$GITHUB_TOKEN` in example 4), which may be visible to other local processes, other containers, or the host. Prefer `--env` / `--env-file` so the target program reads environment variables directly (as in examples 1 and 2), and set `OPENVIKING_PRIVACY_RUN_STRICT=1` to reject references in `ov privacy run` command arguments.
+
 ---
 
 ## Related Documentation
 
 - [Skills](04-skills.md) - Skill write/read APIs
+- [Sessions](05-sessions.md) - Session creation and privacy config
+- [Privacy Configs](../concepts/13-privacy.md) - Sensitive value extraction and restore
 - [File System](03-filesystem.md) - `read`/`write`/`ls`
 - [System](07-system.md) - System status and observability

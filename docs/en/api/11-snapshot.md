@@ -1,10 +1,10 @@
 # Snapshots (Multi-Version Management)
 
-Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, `diff` to compare a file between versions, and `restore` to recover saved content. Uncommitted or excluded files are outside the recovery scope; ACLs and vector indexes are not versioned.
+Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, `diff` to compare file contents, `diff-paths` to list changed files, and `restore` to recover saved content. Uncommitted or excluded files are outside the recovery scope; ACLs and vector indexes are not versioned.
 
 Snapshots are powered by [gitoxide](https://github.com/Byron/gitoxide) embedded in the Rust RAGFS layer, maintaining one logical Git repository per `account_id`. Use the snapshot APIs to manage versions; direct edits to the underlying repository are not part of this workflow.
 
-The five core commands:
+The core commands:
 
 | Command | Purpose |
 |---------|---------|
@@ -12,6 +12,7 @@ The five core commands:
 | `log` | Walk commit history starting from the newest |
 | `show` | View a commit's metadata, or read a file's content from that commit |
 | `diff` | Compare one file between two snapshots as a unified diff |
+| `diff-paths` | Page changed source files under selected directories |
 | `restore` | Restore a directory (or the whole account tree) to a past snapshot |
 
 In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/`set`/`delete`) to exclude matching files from `commit`. See [Ignore management](#ignore-management).
@@ -30,7 +31,8 @@ Snapshots use the current ACL at operation time. ACLs are not stored in snapshot
 | Operation | Required permission |
 |-----------|---------------------|
 | `show(path=...)` / `diff` / `log` | `read` |
-| `commit` | `write`; directories recursively check every current descendant and fail as a whole if any node is denied |
+| `diff_paths` | `read` on requested directories and every changed file; any denied descendant rejects the whole query without exposing its URI |
+| `commit` | `read`; directories recursively check every current descendant and fail as a whole if any node is denied |
 | `restore` overwriting a file | `write` on the file |
 | `restore` creating a file | `write` on the parent directory |
 | `restore` deleting a file | `write` on the file |
@@ -60,7 +62,7 @@ Partial commits preserve the previous snapshot outside the requested scope. Afte
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | message | str | Yes | - | Commit message |
-| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` is forwarded as an explicit empty path set (no-op). A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
+| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. USER/ADMIN callers must provide this field; `null` account-wide snapshots are reserved for local ROOT mode. An empty list `[]` selects no files. A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
 | branch | str | No | `main` | Branch to advance |
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
@@ -119,7 +121,7 @@ When a new snapshot is created:
 }
 ```
 
-`changed` is the number of paths added/updated/removed in this commit; `ignored` is the number of candidate paths skipped by the account `.ovgitignore` rules (built-in system pruning is not counted). When the workspace is unchanged relative to the last commit, the result is `noop` and `commit_oid` is the current HEAD (`noop` also returns `ignored` but has no `changed`):
+`changed` is the number of paths added/updated/removed in this commit; `ignored` is the number of candidate paths skipped by the account `.ovgitignore` rules (built-in system pruning is not counted). The first commit on a branch creates a valid snapshot even when no files are selected or all selected files are excluded; it returns `created` with `changed=0`. Empty directories themselves are not recorded. When the workspace is unchanged relative to the last commit, the result is `noop` and `commit_oid` is the current HEAD (`noop` also returns `ignored` but has no `changed`):
 
 ```json
 {
@@ -142,19 +144,33 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| branch | str | No | `main` | Branch to walk |
+| branch | str | No | `main` | Branch or commit ID to start from |
 | limit | int | No | 20 | Max commits to return. The HTTP endpoint accepts values from 1 to 500 |
+| offset | int | No | 0 | Number of matching commits to skip; must be a non-negative integer. For pages of 10, use `offset=10` for the second page |
 | paths | List[str] | No | null | Return only commits that changed any specified `viking://` URI; USER/ADMIN callers must provide it, while local ROOT mode may omit it for account-wide history. At most 32 paths are accepted, and each account-relative path may contain at most 64 components. Pass multiple URIs to HTTP as repeated `paths` query parameters |
 
-Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
+For each supplied `paths` URI, the server compares the tree entry at that exact path with the entry at the same path in `parents[0]`. Merge commits use only the first parent. A commit without parents is compared with an empty tree.
 
-To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
+Path filtering and commit de-duplication happen before `offset` and `limit` are applied. With `paths=[X]`, `offset=10`, and `limit=10`, the result contains matches 11–20 for X. Unrelated commits do not advance the offset; a commit touching multiple requested paths counts once. Once traversal reaches the end of history, an offset beyond the matching commits returns an empty list.
+
+When `paths` is provided, the server can use the optional path history index
+configured by `git.snapshot.log` in `ov.conf`. The index is derived from
+snapshot commits and does not change the response format:
+
+- With a current index, the server queries matching commits directly.
+- With an index behind HEAD, the server scans the newer commits and combines their matches with indexed history. This tail scan has no 1,000-commit cap.
+- When no usable index is available, the legacy filtered scan still inspects at most 1,000 candidate commits, including unrelated commits and matches skipped by `offset`. If the requested page is incomplete and older uninspected history remains, it returns `INVALID_ARGUMENT` without partial results.
+
+Without `paths`, queries are not subject to the 1,000-commit scan limit above.
+
+For pages of 10, omit `offset` for the first page and use `offset=10` for the next page, as shown below. Each request starts from the current branch HEAD; new commits between requests can shift page boundaries.
 
 **Python SDK (HTTP)**
 
 ```python
 history = client.snapshot.log(
     limit=10,
+    offset=10,
     paths=["viking://resources/a.md", "viking://resources/docs"],
 )
 for commit in history:
@@ -165,23 +181,24 @@ for commit in history:
 
 ```typescript
 console.log(
-  await client.gitLog("main", 20, [
+  await client.gitLog("main", 10, [
     "viking://resources/a.md",
     "viking://resources/docs",
-  ]),
+  ], 10),
 );
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&offset={offset}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
 curl --get "http://localhost:1933/api/v1/snapshot/log" \
   --data-urlencode "branch=main" \
   --data-urlencode "limit=10" \
+  --data-urlencode "offset=10" \
   --data-urlencode "paths=viking://resources/a.md" \
   --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
@@ -190,7 +207,7 @@ curl --get "http://localhost:1933/api/v1/snapshot/log" \
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 \
+ov snapshot log --limit 10 --offset 10 \
   --paths viking://resources/a.md,viking://resources/docs \
   -o json
 ```
@@ -275,10 +292,16 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
   -H "X-API-Key: your-key"
 ```
 
-Without `path`, the response is commit metadata JSON. With `path`, the response is a raw byte stream (`Content-Type: application/octet-stream`) plus two headers:
+Without `path`, the response is commit metadata JSON. With `path`, the response is a raw byte stream (`Content-Type: application/octet-stream`) with these headers:
 
 - `X-Snapshot-Oid`: the blob object's OID
-- `X-Snapshot-Size`: the blob size in bytes
+- `X-Snapshot-Size`: the returned body size in bytes
+- `X-Snapshot-Commit-Oid`: the full commit OID resolved from `target_ref`, distinct from the blob OID
+- `X-Snapshot-Time-Seconds`: the resolved commit's `committer.time_seconds`, an integer Unix timestamp in seconds
+
+The timestamp describes the requested snapshot, not the file's last modification or the run's completion time. Branches and tags are resolved once so the body and commit headers refer to the same snapshot. The commit headers also apply to `raw=false`; stripping memory fields only changes the body and its size.
+
+When the commit tree has no entry for the requested file path, the server returns HTTP 404 with `error.code: "NOT_FOUND"`, `error.details.type: "git_blob"`, and `error.details.reason: "path_not_found"`. The boolean `error.details.deleted_file` is `true` when the first parent (`parents[0]`) has a file at that exact path. It is `false` if the first parent has a directory or no entry there, or the commit has no parent. A missing backing object for the requested file has no `path_not_found` reason. Gateways can preserve these distinctions by forwarding the error details.
 
 **CLI**
 
@@ -382,6 +405,61 @@ ov snapshot diff viking://resources/my_project/guide.md \
 ```
 
 `change_type` is `added`, `deleted`, `modified`, or `unchanged`. Each side is limited to 10 MiB and 100,000 lines, and the generated diff is limited to 20 MiB; larger requests return `RESOURCE_EXHAUSTED` rather than a truncated diff.
+
+---
+
+### diff_paths()
+
+List source files added, modified, or deleted under one or more directories between snapshots. Derived summaries (`.abstract.md`, `.overview.md`, `.relations.json`) are excluded. Overlapping directory scopes produce one entry per file, ordered by URI.
+
+| HTTP parameter | Required | Default | Description |
+|----------------|----------|---------|-------------|
+| `paths` | Yes | - | Directory URIs; repeat the query parameter for each directory |
+| `from` | No | null | Base snapshot ref; omit it (SDK `from_ref=None`) to compare against an empty tree and list target files as `added` |
+| `to` | Yes | - | Valid target snapshot ref; cannot be empty or null |
+| `offset` | No | 0 | Non-negative starting position |
+| `limit` | No | 100 | Page size, from 1 to 1000 |
+
+**HTTP API**
+
+```http
+GET /api/v1/snapshot/diff-paths?paths={uri1}&paths={uri2}&from={base}&to={head}&offset=0&limit=100
+```
+
+**CLI**
+
+```bash
+ov snapshot diff-paths \
+  --paths viking://resources/research,viking://resources/notes \
+  --from 3f2a1b9c --to 9a0b1c2d --offset 0 --limit 100 -o json
+```
+
+**Python SDK (HTTP)**
+
+```python
+page = client.snapshot.diff_paths(
+    ["viking://resources/research", "viking://resources/notes"],
+    from_ref="3f2a1b9c", to_ref="9a0b1c2d", offset=0, limit=100,
+)
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "changes": [{"uri": "viking://resources/research/guide.md", "change_type": "modified"}],
+    "offset": 0,
+    "limit": 100,
+    "total": 1,
+    "has_more": false,
+    "next_offset": null
+  }
+}
+```
+
+`change_type` is `added`, `modified`, or `deleted`. While `has_more` is true, query `next_offset` with the same paths and snapshot IDs; only the final page has `next_offset=null`. Pagination limits the response size; the underlying comparison still computes the complete change list. Use [diff()](#diff) or [show()](#show) to read file contents.
 
 ---
 
@@ -522,6 +600,54 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
   }
 }
 ```
+
+---
+
+### Single-file version restore
+
+`POST /api/v1/snapshot/restore` restores historical content at any permitted file path. No Compile configuration or output ownership is required. This mode accepts the following fields and cannot be combined with `project_dir` or `source_commit`:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| path | str | File URI, also used as the historical snapshot path |
+| restore_commit_id | str | Source commit ID, 40 lowercase hexadecimal characters |
+| current_commit_id | str | Optional. Omit to restore unconditionally, or pass the last commit observed for this file on `main`. A mismatch returns `409 CONFLICT` with resource `VERSION_CONFLICT` |
+| dry_run | bool | Optional; checks the request without changing content or creating a snapshot |
+
+```bash
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md --current-commit-id <current_commit_id>
+```
+
+`GET /api/v1/snapshot/versions?uri=<file URI>&limit=20` returns native Git history, newest first:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/wiki/entity/project.md",
+    "versions": [{"oid": "54c71fb7bf134b71a9b7ed604c21f5b412345678", "message": "content write"}],
+    "next_before_snapshot": null
+  }
+}
+```
+
+Each history entry is native commit metadata, including its `oid`; no separate version index, UUID or version number is maintained. `limit` is 1–100, default 20. Pass `next_before_snapshot` as `before_snapshot` to continue after that commit; null marks the end. History does not depend on a Compile run or configuration.
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "viking://resources/wiki/entity/project.md",
+    "restore_commit_id": "0334d9abe4ac4f25a3e59d0b401bb01c12345678",
+    "current_commit_id": "54c71fb7bf134b71a9b7ed604c21f5b412345678"
+  }'
+```
+
+The response contains `uri`, `snapshot_id`, and `result` (`created`, `noop`, or `dry_run`). Changed content produces a forward snapshot and normal index maintenance. Identical content may return the existing snapshot as `noop`. Dry runs do not write content or create a snapshot. The dry-run `snapshot_id` is null when `current_commit_id` is omitted.
+
+When `current_commit_id` is supplied, the last file commit is checked before reading historical content and again under the content write lock. Uncommitted edits also return `409`; omit `current_commit_id` to restore unconditionally. Stale requests return `409`; missing history or paths return `404`. ACL checks and index maintenance still apply. Restore uses the same path and does not follow renames. Neither file nor directory restore writes Compile state or run history; directory restore already produces its own forward commit.
 
 ---
 

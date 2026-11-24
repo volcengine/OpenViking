@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -9,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclAction, AclManager, acl_allows
+from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.viking_vector_index_backend import (
@@ -64,28 +63,22 @@ class _AclConfigReader:
         return SimpleNamespace(enabled=self.enabled)
 
 
-class _FailingAsyncAdapter:
-    async def call(self, method_name, **kwargs):
-        raise RuntimeError(f"{method_name} failed")
+class _FailingAdapter:
+    mode = "local"
+
+    def search_by_random(self, **kwargs):
+        raise RuntimeError("search_by_random failed")
 
 
-class _RecordingAsyncAdapter:
+class _RecordingAdapter:
+    mode = "local"
+
     def __init__(self):
-        self.calls = []
+        self.filter = None
 
-    async def call(self, method_name, **kwargs):
-        self.calls.append((method_name, kwargs))
+    def search_by_random(self, *, filter, **kwargs):
+        self.filter = filter
         return []
-
-
-def _single_account_backend(async_adapter, account_id: str | None):
-    backend = object.__new__(_SingleAccountBackend)
-    backend._bound_account_id = account_id
-    backend._operation_condition = threading.Condition()
-    backend._operations = {}
-    backend._retired = False
-    backend._async_adapter = async_adapter
-    return backend
 
 
 @pytest.mark.asyncio
@@ -100,6 +93,31 @@ async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
     assert await backend.search_by_random(ctx=ctx) == []
     adapter.search_by_random.assert_awaited_once()
     assert adapter.search_by_random.await_args.kwargs["filter"] == _tenant_filter(ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("acl_enabled", [False, True])
+async def test_count_prunes_only_the_visible_root_for_a_required_uri_scope(acl_enabled):
+    ctx = _ctx()
+    adapter = SimpleNamespace(count=AsyncMock(return_value=4))
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = AclManager(backend, _AclConfigReader(acl_enabled))
+    backend._get_backend_for_context = AsyncMock(return_value=adapter)
+    scope = PathScope("uri", "viking://resources/docs", depth=1)
+    request = And([scope, Eq("level", 2)])
+
+    assert await backend.count(filter=request, ctx=ctx) == 4
+    account_filter = Eq("account_id", "acct")
+    expected = (
+        And([account_filter, acl_filter(ctx, AclAction.READ)]) if acl_enabled else account_filter
+    )
+    adapter.count.assert_awaited_once_with(filter=And([request, expected]))
+
+    for unproven in (Eq("level", 2), Or([scope, Eq("level", 2)])):
+        await backend.count(filter=unproven, ctx=ctx)
+        assert adapter.count.await_args.kwargs["filter"] == And(
+            [unproven, _tenant_filter(ctx, acl_enabled=acl_enabled)]
+        )
 
 
 @pytest.mark.asyncio
@@ -151,16 +169,30 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
         assert next_cursor is None
         assert [record["id"] for record in records] == ["alice-memory"]
         assert count == 1
+        own_count = await backend.count(
+            filter=And([PathScope("uri", "viking://user/alice/memories"), Eq("level", 2)]),
+            ctx=ctx,
+        )
+        other_count = await backend.count(
+            filter=PathScope("uri", "viking://user/bob/memories"), ctx=ctx
+        )
+        assert own_count == 1
+        assert other_count == 0
     finally:
         await backend.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("reader_grants", "allowed"), [([], False), (["1:user:reader"], True)])
-async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
-    vector_backend_factory, tmp_path, reader_grants, allowed
+@pytest.mark.parametrize(("mode", "allowed"), [("restricted", False), ("inherit", True)])
+async def test_acl_resolution_preserves_revocation_and_inheritance(
+    vector_backend_factory, tmp_path, mode, allowed
 ):
     reader = RequestContext(user=UserIdentifier("acct", "reader"), role=Role.USER)
+    admin = RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN)
+    parent = "viking://resources/parent"
+    target = f"{parent}/target"
+    leaf = f"{target}/rules.md"
+    grants = ["1:user:reader"]
     backend = vector_backend_factory(
         config=VectorDBBackendConfig(
             backend="local",
@@ -169,6 +201,11 @@ async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
             path=str(tmp_path / "acl_vectors"),
         )
     )
+    search = {
+        "ctx": reader,
+        "query_vector": [1.0, 0.0, 0.0, 0.0],
+        "target_directories": [target],
+    }
     try:
         assert await backend.create_collection(
             "context", CollectionSchemas.context_collection("context", 4)
@@ -184,21 +221,39 @@ async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
                     "level": 2,
                     "updated_at": "2026-01-01T00:00:00Z",
                     "vector": [1.0, 0.0, 0.0, 0.0],
-                    "acl_mode": mode,
+                    "acl_mode": record_mode,
                     "acl_direct_grants": direct,
                     "acl_inherited_grants": inherited,
                 }
-                for record_id, uri, mode, direct, inherited in (
-                    ("dir", "viking://resources/private", "restricted", reader_grants, []),
-                    ("file", "viking://resources/private/rules.md", "inherit", [], reader_grants),
+                for record_id, uri, record_mode, direct, inherited in (
+                    ("parent", parent, "restricted", grants, []),
+                    ("dir", target, mode, grants, grants),
+                    ("file", leaf, "inherit", [], grants),
                 )
             ],
-            ctx=RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN),
+            ctx=admin,
         )
+        assert {row["id"] for row in await backend.search_in_tenant(**search)} == {"dir", "file"}
 
-        acl = await backend.acl_manager.resolve("viking://resources/private/rules.md", reader)
+        await backend.acl_manager.set_acl(target, [], admin)
+        saved = {row["id"]: row for row in await backend.get_strict(["dir", "file"], ctx=admin)}
+        assert saved["dir"]["acl_mode"] == mode
+        assert saved["dir"]["acl_direct_grants"] == ["none"]
+        assert saved["dir"]["acl_inherited_grants"] == grants
+        assert saved["file"]["acl_direct_grants"] == ["none"]
+        assert saved["file"]["acl_inherited_grants"] == (grants if allowed else ["none"])
+        visible = {"dir", "file"} if allowed else set()
+        assert {row["id"] for row in await backend.search_in_tenant(**search)} == visible
 
+        # Resolution must still see a restricted record hidden from this caller.
+        acl = await backend.acl_manager.resolve(leaf, reader)
         assert acl_allows(acl, reader, AclAction.READ) is allowed
+
+        # An ordinary update must not restore revoked access or discard inheritance.
+        updated = {**saved["dir"], "abstract": "updated"}
+        assert await backend.upsert(updated, ctx=admin) == "dir"
+        assert (await backend.get_strict(["dir"], ctx=admin))[0] == updated
+        assert {row["id"] for row in await backend.search_in_tenant(**search)} == visible
     finally:
         await backend.close()
 
@@ -281,7 +336,7 @@ def test_mixed_visible_and_outside_targets_keep_original_tenant_filter():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("acl_enabled", [False, True])
-async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(acl_enabled):
+async def test_keywords_tenant_search_keeps_scope_with_candidate_floor(acl_enabled):
     ctx = _ctx()
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
@@ -297,12 +352,14 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
         extra_filter=Eq("status", "ready"),
         level=[2],
         limit=5,
+        keywords_args={"post_process_input_limit": 3},
     )
 
     kwargs = tenant_backend.search_by_keywords.await_args.kwargs
     assert kwargs["query"] == "OAuth token"
     assert kwargs["mode"] == "bm25"
     assert kwargs["fields"] == ["content"]
+    assert kwargs["advance"] == {"post_process_input_limit": 5}
     assert kwargs["filter"] == _build(
         ctx,
         ["viking://resources/docs"],
@@ -310,14 +367,19 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
         level=[2],
         acl_enabled=acl_enabled,
     )
-    backend._acl_enabled.assert_awaited_once_with(ctx)
-    backend._get_backend_for_context.assert_awaited_once_with(ctx)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_mode", [{}, {"acl_mode": None}, {"acl_mode": "none"}])
+@pytest.mark.parametrize(
+    "legacy_mode,action",
+    [
+        ({}, AclAction.READ),
+        ({"acl_mode": None}, AclAction.WRITE),
+        ({"acl_mode": "none"}, AclAction.MANAGE),
+    ],
+)
 async def test_tenant_search_enforces_visible_roots_and_shared_acl(
-    vector_backend_factory, tmp_path, legacy_mode
+    vector_backend_factory, tmp_path, legacy_mode, action
 ):
     ctx = _ctx()
     own_uri = "viking://user/alice/resources/notes"
@@ -401,6 +463,8 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
             "uri": "viking://resources/foreign.md",
             "account_id": "other",
             "context_type": "resource",
+            "acl_mode": "restricted",
+            "acl_direct_grants": [],
         },
     ]
 
@@ -433,6 +497,30 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
                 ],
                 ctx=record_ctx,
             )
+
+        resource_scope = And([PathScope("uri", "viking://resources"), Eq("level", 2)])
+        assert await backend.count(filter=resource_scope, ctx=ctx) == 4
+
+        # The same ACL predicate supports existence checks for read, write and manage.
+        finance_ctx = RequestContext(user=ctx.user, role=ctx.role, group_ids=("finance",))
+        account_backend = await backend.get_account_backend(ctx.account_id)
+        denied = await account_backend.strict_query(
+            filter=And(
+                [
+                    Eq("account_id", ctx.account_id),
+                    PathScope("uri", "viking://resources", depth=-1),
+                    acl_filter(finance_ctx, action, denied=True),
+                ]
+            ),
+            limit=100,
+            output_fields=["id"],
+        )
+        expected_denied = {"restricted-inherited-shared"}
+        if action != AclAction.READ:
+            expected_denied.update({"direct-shared", "restricted-direct-shared"})
+        if action == AclAction.MANAGE:
+            expected_denied.add("denied-shared")
+        assert {record["id"] for record in denied} == expected_denied
 
         decay = {
             "events_time_decay_protection": "0",
@@ -501,6 +589,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         )
 
         acl_config.enabled = False
+        assert await backend.count(filter=resource_scope, ctx=ctx) == 6
         shared = await backend.search_in_tenant(
             ctx=ctx,
             query_vector=[1.0, 0.0, 0.0, 0.0],
@@ -639,7 +728,7 @@ def test_actor_peer_target_retains_account_and_exact_target_scope():
 
 @pytest.mark.asyncio
 async def test_search_by_random_propagates_adapter_errors():
-    backend = _single_account_backend(_FailingAsyncAdapter(), None)
+    backend = _SingleAccountBackend(VectorDBBackendConfig(), None, _FailingAdapter())
 
     with pytest.raises(RuntimeError, match="search_by_random failed"):
         await backend.search_by_random(filter=Eq("uri", "viking://resources/a.md"))
@@ -647,20 +736,10 @@ async def test_search_by_random_propagates_adapter_errors():
 
 @pytest.mark.asyncio
 async def test_search_by_random_reuses_account_filter_for_raw_dsl():
-    backend = _single_account_backend(_RecordingAsyncAdapter(), "acct")
+    adapter = _RecordingAdapter()
+    backend = _SingleAccountBackend(VectorDBBackendConfig(), "acct", adapter)
     raw_filter = {"op": "must", "field": "uri", "conds": ["viking://resources"]}
 
     await backend.search_by_random(filter=raw_filter)
 
-    assert backend._async_adapter.calls == [
-        (
-            "search_by_random",
-            {
-                "filter": And([Eq("account_id", "acct"), RawDSL(raw_filter)]),
-                "limit": 10,
-                "offset": 0,
-                "output_fields": None,
-                "advance": None,
-            },
-        )
-    ]
+    assert adapter.filter == And([Eq("account_id", "acct"), RawDSL(raw_filter)])

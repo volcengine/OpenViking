@@ -39,6 +39,16 @@
 
    新账号可能还没有 profile 或相关记忆可注入。会话提交时机和完整验证步骤见下方文档。
 
+## 步骤3：开始使用
+
+在 Codex 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 问题 | 处理 |

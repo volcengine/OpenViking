@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import mimetypes
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -133,7 +134,7 @@ class _AnyDocMarkdownRenderer:
                 return f"### Speaker Notes\n\n{inner}"
             return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
         if kind == "code_block":
-            body = (block.text or "").rstrip("\n")
+            body = (block.text or "").removesuffix("\n")
             fence = self._backtick_fence(body, 3)
             return f"{fence}{block.lang or ''}\n{body}\n{fence}"
         if kind == "rule":
@@ -193,7 +194,7 @@ class _AnyDocMarkdownRenderer:
             number = self.note_numbers.get(inline.note_id or "")
             return f"[^{number}]" if number is not None else ""
         if kind == "line_break":
-            return "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
+            return "<br>" if context == "block" else "\n" if context == "table_cell" else " "
         if kind == "math":
             source = self._escape_math_source(inline.text or "", context=context)
             return f"${source}$" if source else ""
@@ -265,22 +266,22 @@ class _AnyDocMarkdownRenderer:
         if not core:
             return text
         if code:
-            flattened = core.replace("\n", " ")
-            fence = self._backtick_fence(flattened, 1)
-            pad = " " if flattened.startswith("`") or flattened.endswith("`") else ""
-            rendered = f"{fence}{pad}{flattened}{pad}{fence}"
+            rendered = self._render_code_span(core.replace("\n", " "), context=context)
         else:
+            use_html = (bold or italic) and any(
+                unicodedata.category(char).startswith(("P", "S")) for char in (core[0], core[-1])
+            )
             opening = ""
             closing = ""
             if strike:
-                opening += "~~"
-                closing = "~~" + closing
+                opening += "<del>" if use_html else "~~"
+                closing = ("</del>" if use_html else "~~") + closing
             if bold:
-                opening += "**"
-                closing = "**" + closing
+                opening += "<strong>" if use_html else "**"
+                closing = ("</strong>" if use_html else "**") + closing
             if italic:
-                opening += "*"
-                closing = "*" + closing
+                opening += "<em>" if use_html else "*"
+                closing = ("</em>" if use_html else "*") + closing
             escaped = self._escape_text(core, context=context, styled=True, in_label=in_label)
             rendered = f"{opening}{escaped}{closing}"
         if underline:
@@ -365,11 +366,9 @@ class _AnyDocMarkdownRenderer:
             relative = Path(saved_path).relative_to(Path(self.storage.media_dir)).as_posix()
         except Exception as exc:
             self.warnings.append(f"Failed to save AnyDoc image asset {reference}: {exc}")
-            logger.warning(
-                "Failed to save anydoc image asset %s from %s",
-                reference,
-                self.resource_name,
-                exc_info=True,
+            logger.info(
+                "AnyDoc image save failed; omitting image error_type=%s degraded=true",
+                type(exc).__name__,
             )
             self.asset_paths[reference] = None
             return None
@@ -378,7 +377,7 @@ class _AnyDocMarkdownRenderer:
         self.asset_paths[reference] = relative
         return relative
 
-    def _render_list(self, list_model: Any) -> str:
+    def _render_list(self, list_model: Any, *, in_table_cell: bool = False) -> str:
         if list_model is None or not list_model.items:
             return ""
         rendered_items: list[str] = []
@@ -386,7 +385,10 @@ class _AnyDocMarkdownRenderer:
         for index, item in enumerate(list_model.items):
             ordinal = int(list_model.start) + index
             marker = self._list_marker(list_model, item, ordinal)
-            body = self._render_blocks(item.blocks)
+            if in_table_cell:
+                body = "\n".join(self._render_cell_parts(item.blocks))
+            else:
+                body = self._render_blocks(item.blocks)
             if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
@@ -445,8 +447,12 @@ class _AnyDocMarkdownRenderer:
     def _render_cell(self, cell: Any | None) -> str:
         if cell is None:
             return ""
+        parts = self._render_cell_parts(cell.blocks)
+        return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())
+
+    def _render_cell_parts(self, blocks: list[Any]) -> list[str]:
         parts: list[str] = []
-        for block in cell.blocks:
+        for block in blocks:
             kind = _kind(block)
             if kind == "heading":
                 text = self._render_inlines(block.content, context="table_cell").strip()
@@ -457,28 +463,26 @@ class _AnyDocMarkdownRenderer:
                 if text.strip():
                     parts.append(text)
             elif kind == "list":
-                text = self._render_list(block.list).replace("\n", " ").strip()
+                text = self._render_list(block.list, in_table_cell=True).replace("\n", " ").strip()
                 if text:
                     parts.append(text)
             elif kind == "table":
                 parts.extend(self._flatten_nested_table(block.table))
             elif kind == "block_quote":
-                text = self._render_blocks(block.blocks).replace("\n", " ").strip()
+                text = " ".join(self._render_cell_parts(block.blocks)).replace("\n", " ").strip()
                 if text:
                     parts.append(text)
             elif kind == "code_block":
                 text = (block.text or "").strip()
                 if text:
-                    fence = self._backtick_fence(text, 1)
-                    pad = " " if text.startswith("`") or text.endswith("`") else ""
-                    parts.append(f"{fence}{pad}{text}{pad}{fence}")
+                    parts.append(self._render_code_span(text, context="table_cell"))
             elif kind == "math":
                 source = self._escape_math_source(block.text or "", context="table_cell")
                 if source:
                     parts.append(f"${source}$")
             elif kind != "rule":
                 raise RuntimeError(f"Unsupported AnyDoc table-cell block kind: {kind}")
-        return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())
+        return parts
 
     def _flatten_nested_table(self, table: Any) -> list[str]:
         lines: list[str] = []
@@ -543,7 +547,12 @@ class _AnyDocMarkdownRenderer:
                     anchors.append(inline.anchor)
         for note in _items(self.document.notes):
             for inline in self._walk_inlines(note.blocks):
-                if _kind(inline) == "anchor" and inline.anchor:
+                kind = _kind(inline)
+                # A note may link to a bookmark defined in the body (issue #7177);
+                # collect those links like body links, not only note anchors.
+                if kind == "link" and inline.target and inline.target.kind == "anchor":
+                    linked.add(inline.target.value)
+                elif kind == "anchor" and inline.anchor:
                     anchors.append(inline.anchor)
 
         resolved: dict[str, _ResolvedAnchor] = {}
@@ -736,6 +745,14 @@ class _AnyDocMarkdownRenderer:
             f"<{escaped}>" if any(char.isspace() or char in "()" for char in escaped) else escaped
         )
 
+    def _render_code_span(self, text: str, *, context: str) -> str:
+        if context == "table_cell":
+            # The table parser removes this escape before parsing the code span.
+            text = text.replace("|", r"\|")
+        fence = self._backtick_fence(text, 1)
+        pad = " " if text.startswith("`") or text.endswith("`") else ""
+        return f"{fence}{pad}{text}{pad}{fence}"
+
     @staticmethod
     def _backtick_fence(text: str, minimum: int) -> str:
         longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
@@ -808,10 +825,10 @@ class _AnyDocMarkdownRenderer:
                 escape = next_char is None and trailing_active
             elif char == "|" and context == "table_cell":
                 escape = True
-            elif char in "#>" and start_of_line:
+            elif char in "#>=" and start_of_line:
                 escape = True
             elif char in "-+" and start_of_line:
-                escape = next_char is None or next_char.isspace()
+                escape = char == "-" or next_char is None or next_char.isspace()
             if escape:
                 output.append("\\")
             output.append(char)

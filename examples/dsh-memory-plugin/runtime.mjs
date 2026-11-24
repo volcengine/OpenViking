@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { stateDir } from "./shared/workspace-identity.mjs";
+import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
@@ -18,11 +22,11 @@ import {
 import { deriveDshSessionId } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
-  constructor(client, config, logger = console, resolveSessionPeer = null) {
+  constructor(client, config, logger = console, resolveSessionConfig = null) {
     this.client = client;
     this.config = config;
     this.logger = logger;
-    this.resolveSessionPeer = resolveSessionPeer;
+    this.resolveSessionConfig = resolveSessionConfig;
     this.states = new Map();
     this.drainTimer = null;
     this.drainRunning = false;
@@ -34,7 +38,8 @@ export class OpenVikingRuntime {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const peer = this.resolveSessionPeer?.(cwd) ?? resolveEffectivePeerId({
+    const resolved = this.resolveSessionConfig?.(cwd);
+    const peer = resolved?.effectivePeer ?? resolveEffectivePeerId({
       cfg: {
         peerId: this.config.explicitPeerId,
         peerSource: this.config.peerSource,
@@ -46,12 +51,13 @@ export class OpenVikingRuntime {
     state = {
       dshSessionId: String(session.id),
       ovSessionId: deriveDshSessionId(session.id),
-      config: { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
+      config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
       profileDelivered: false,
       toolNames: new Map(),
       writes: Promise.resolve(),
+      warnedFailures: new Set(),
       initializationRetryable: false,
       hasPendingWrites: false,
       pendingCreatedAt: 0,
@@ -78,6 +84,7 @@ export class OpenVikingRuntime {
   async initializeState(state) {
     state.initializationRetryable = false;
     const health = await this.client.healthResult();
+    this.reportWriteResult(state, "health", health, "/health");
     if (!health.ok) {
       state.initializationRetryable = isRetryableFailure(health);
       return state;
@@ -90,9 +97,11 @@ export class OpenVikingRuntime {
       !ensured.ok
       && !(ensured.status === 409 && ensured.error?.code === "ALREADY_EXISTS")
     ) {
+      this.reportWriteResult(state, "ensure_session", ensured, "/api/v1/sessions");
       state.initializationRetryable = isRetryableFailure(ensured);
       return state;
     }
+    state.warnedFailures.delete("ensure_session");
     // Replay is a write, so it stays behind the same toggle: a backlog queued
     // while capture was on waits for a session that still writes.
     if (isCaptureEnabled(state.config)) {
@@ -127,16 +136,28 @@ export class OpenVikingRuntime {
     return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
-  async recallMessage(agent, messages) {
+  async recallMessage(agent, messages, signal) {
     const state = await this.initialize(agent);
     if (!state.ready || !isRecallEnabled(state.config)) return null;
     const query = promptText(messages);
     if (!query || query.length < state.config.minQueryLength) return null;
+    if (signal?.aborted) return null;
+    const runCompressor = ["client", "auto"].includes(state.config.recallRewrite)
+      ? createRecallCompressor(agent, state.config, signal) : null;
+    const cacheId = createHash("sha256").update(JSON.stringify([
+      state.config.baseUrl, state.config.account, state.config.user, state.config.apiKey,
+      state.config.peerId, state.ovSessionId, agent.options?.provider,
+      state.config.recallCompressModel || agent.options?.model,
+      state.config.recallCompressThinking,
+    ])).digest("hex");
     const block = await buildRecallBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config,
       query,
       {
+        runCompressor,
+        localCompressorAvailable: Boolean(runCompressor),
+        digestCachePath: join(stateDir(), `dsh-recall-${cacheId}.json`),
         actorPeerId: state.config.peerId,
         legacyPeerId: state.config.legacyPeerId,
         sessionId: state.ovSessionId,
@@ -144,7 +165,7 @@ export class OpenVikingRuntime {
         log: (stage, data) => this.log(stage, data),
       },
     );
-    return block ? pluginMessage(block, { form: "recall" }) : null;
+    return block && !signal?.aborted ? pluginMessage(block, { form: "recall" }) : null;
   }
 
   capture(session, event) {
@@ -172,6 +193,7 @@ export class OpenVikingRuntime {
         payload,
         state.config.peerId,
       );
+      this.reportWriteResult(state, "capture", response, "/api/v1/sessions/{session_id}/messages");
       if (isRetryableFailure(response)) {
         await this.enqueuePendingMessage(state, payload);
       }
@@ -199,7 +221,9 @@ export class OpenVikingRuntime {
         state.ovSessionId,
         state.config.peerId,
       );
-      this.log(boundary ? "compaction_commit" : "commit", {
+      const stage = boundary ? "compaction_commit" : "commit";
+      this.reportWriteResult(state, stage, response, "/api/v1/sessions/{session_id}/commit");
+      this.log(stage, {
         sessionId: state.ovSessionId,
         ok: response.ok,
         trace_id: response.result?.trace_id || response.traceId,
@@ -229,6 +253,7 @@ export class OpenVikingRuntime {
           state.config.peerId,
           { timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000) },
         );
+        this.reportWriteResult(state, "shutdown_commit", response, "/api/v1/sessions/{session_id}/commit");
         this.log("shutdown_commit", {
           sessionId: state.ovSessionId,
           ok: response.ok,
@@ -255,11 +280,41 @@ export class OpenVikingRuntime {
 
   enqueueWrite(state, operation) {
     state.writes = state.writes
-      .then(operation)
-      .catch(error => this.log("write_error", {
-        sessionId: state.ovSessionId,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      .then(async () => {
+        await operation();
+        state.warnedFailures.delete("write_error");
+      })
+      .catch(error => {
+        this.log("write_error", {
+          sessionId: state.ovSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.warnOnce(state, "write_error", {});
+      });
+  }
+
+  reportWriteResult(state, stage, response, path) {
+    if (response.ok) {
+      state.warnedFailures.delete(stage);
+    } else if (!isRetryableFailure(response)) {
+      // Error messages/bodies may echo captured content or credentials. Keep
+      // only a bounded code token and a static endpoint template in warnings.
+      const code = response.error?.code;
+      this.warnOnce(state, stage, {
+        path,
+        status: Number(response.status) || 0,
+        code: typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : undefined,
+      });
+    }
+  }
+
+  warnOnce(state, stage, data) {
+    if (state.warnedFailures.has(stage)) return;
+    state.warnedFailures.add(stage);
+    this.logger?.warn?.(`[openviking:dsh] ${stage} ${JSON.stringify({
+      sessionId: state.ovSessionId,
+      ...data,
+    })}`);
   }
 
   async enqueuePending(state, type, payload) {

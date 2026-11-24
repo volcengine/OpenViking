@@ -19,6 +19,16 @@
 2. 输入 `/viking` 命令，确认显示当前 session 映射和已注册的 `openviking_*` 工具数量。
 3. 新开会话，询问之前提到过的信息，确认召回生效。
 
+## 步骤3：开始使用
+
+在 pi 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 问题 | 处理 |

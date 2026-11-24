@@ -119,7 +119,7 @@ function toLimitedInteger(value: unknown, fallback: number, min: number, max: nu
 
 function inferUriType(uri: string): string {
   if (uri.startsWith("viking://resources") || uri.startsWith("viking://resource")) return "resource";
-  if (uri.startsWith("viking://session/")) return "session";
+  if (/^viking:\/\/(?:user\/[^/]+|~)\/sessions(?:\/|$)/.test(uri)) return "session";
   if (uri.startsWith("viking://user/skills") || uri.startsWith("viking://~/skills") || uri.startsWith("viking://skills")) return "skill";
   if (uri.startsWith("viking://user/") || uri.startsWith("viking://~/")) return "user_memory";
   if (uri.includes("/archive") || uri.includes("/history/")) return "archive";
