@@ -9,7 +9,6 @@ import shlex
 import shutil
 import time
 import uuid
-from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -1212,8 +1211,8 @@ class BotCompileService:
                     *rendered.unchanged,
                 ]
             )
-            manifest = await pipeline.write_coverage(published)
-            counts = Counter(manifest.values())
+            await pipeline.write_coverage(published)
+            counts = (await pipeline.files.get("coverage") or {}).get("counts", {})
             partial = bool(pipeline.failures or conflicts) or any(
                 counts.get(state, 0) for state in ("failed", "pending", "unreferenced", "prepared")
             )

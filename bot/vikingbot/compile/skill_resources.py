@@ -133,16 +133,15 @@ class EvidenceReader(Tool):
         "additionalProperties": False,
     }
 
-    def __init__(self, files, data):
+    def __init__(self, files, data, *, recovery_evidence=None):
         self.files = files
         self.allowed = set()
         self.spans, full = {}, set()
-        self.recovery_evidence = set()
+        self.recovery_evidence = recovery_evidence
         for item in data.get("inputs", []) if isinstance(data, dict) else []:
             payload = item.get("payload", {})
             if "text" in payload and "uri" in payload:
                 self.allowed.add(item["id"])
-                self.recovery_evidence.add(item["id"])
             self.allowed.update(payload.get("source_ranges", []))
             spans = payload.get("evidence_spans", [])
             full.update(set(payload.get("source_ranges", [])) - {s["source_range"] for s in spans})
@@ -203,7 +202,7 @@ class EvidenceReader(Tool):
             raise ValueError("Supply both start_line and end_line, or neither")
         spans = [] if start_line is None else [(start_line, end_line)]
         value = await self.read(source_range, spans, include_image=True)
-        if value["complete"]:
+        if self.recovery_evidence is not None and value["complete"]:
             self.recovery_evidence.add(source_range)
         image = value.pop("image", None)
         text = json.dumps(value, ensure_ascii=False)
