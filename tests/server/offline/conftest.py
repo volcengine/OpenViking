@@ -39,7 +39,6 @@ def offline_config(temp_dir, monkeypatch):
             "agfs": {"backend": "local"},
             "vectordb": {"backend": "local"},
         },
-        "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
         "embedding": {
             "dense": {
                 "provider": "openai",

@@ -283,7 +283,7 @@ async def test_readiness_tracks_startup_and_filesystem_health(
         assert unavailable.json()["status"] == "not_ready"
         assert unavailable.json()["checks"]["agfs"] == {
             "status": "error",
-            "checks": {"filesystem": "error: storage unavailable"},
+            "checks": {"filesystem": "error"},
         }
         assert (await client.get("/health")).status_code == 200
 
