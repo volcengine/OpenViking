@@ -1,10 +1,23 @@
 //! ObjectStore trait - content-addressable storage for Git objects
 
+use std::time::SystemTime;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use gix_hash::ObjectId;
 
 use crate::git::error::ObjectStoreError;
+
+/// Metadata for one loose Git object observed by a GC scan.
+#[derive(Debug, Clone)]
+pub struct ObjectMeta {
+    /// Content hash of the object.
+    pub oid: ObjectId,
+    /// Time the data was written or last freshened.
+    pub modified: SystemTime,
+    /// Stored (compressed) byte count.
+    pub size: u64,
+}
 
 /// Content-addressable storage for Git objects.
 ///
@@ -64,4 +77,67 @@ pub trait ObjectStore: Send + Sync + 'static {
     /// This is an optimization path - implementations should use the cheapest
     /// available method (e.g., `stat` for local, `HEAD` for S3).
     async fn exists(&self, account: &str, oid: &ObjectId) -> Result<bool, ObjectStoreError>;
+
+    /// List loose objects for this account, excluding refs and indexes.
+    async fn list_objects(&self, _account: &str) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
+        Err(ObjectStoreError::Backend("list_objects unsupported".into()))
+    }
+
+    /// Remove the supplied objects idempotently.
+    async fn delete_objects(
+        &self,
+        _account: &str,
+        _oids: &[ObjectId],
+    ) -> Result<(), ObjectStoreError> {
+        Err(ObjectStoreError::Backend(
+            "delete_objects unsupported".into(),
+        ))
+    }
+
+    /// Delete only the generations observed during listing. Production GC never
+    /// issues an unconditional delete based on a possibly stale observation.
+    async fn sweep_objects(
+        &self,
+        _account: &str,
+        _objects: &[ObjectMeta],
+        _cutoff: SystemTime,
+    ) -> Result<Vec<ObjectId>, ObjectStoreError> {
+        Err(ObjectStoreError::Backend(
+            "conditional sweep unsupported".into(),
+        ))
+    }
+
+    /// Freshen a stale object before reusing it in an unpublished commit.
+    async fn touch_if_older_than(
+        &self,
+        _account: &str,
+        _oid: &ObjectId,
+        _threshold: SystemTime,
+    ) -> Result<bool, ObjectStoreError> {
+        Ok(false)
+    }
+
+    /// Write a new object or freshen the existing copy.
+    async fn put_or_touch(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        body: Bytes,
+        threshold: SystemTime,
+    ) -> Result<(), ObjectStoreError> {
+        // put is idempotent. Preserve the caller's disabled-exists-precheck
+        // path for older stores, whose touch implementation is a no-op.
+        self.put(account, oid, body).await?;
+        self.touch_if_older_than(account, oid, threshold).await?;
+        Ok(())
+    }
+
+    /// Remove temporary object files left behind by interrupted writes.
+    async fn cleanup_temp_files(
+        &self,
+        _account: &str,
+        _older_than: SystemTime,
+    ) -> Result<usize, ObjectStoreError> {
+        Ok(0)
+    }
 }

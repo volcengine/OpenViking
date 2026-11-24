@@ -17,19 +17,31 @@ impl GitService {
             return Ok(Vec::new());
         }
 
+        let overlay = self.overlay(&req.account).await?;
         if req.paths.is_some() {
-            if let Some(out) = self.log_with_snapshot_log(&req).await? {
+            if let Some(out) = self.log_with_snapshot_log(&req, &overlay).await? {
                 return Ok(out);
             }
         }
 
-        self.log_with_scan_limit(req, MAX_LOG_COMMITS_SCANNED).await
+        self.scan_log(req, MAX_LOG_COMMITS_SCANNED, &overlay).await
     }
 
+    #[cfg(test)]
     pub(super) async fn log_with_scan_limit(
         &self,
         req: LogRequest,
         max_commits_scanned: usize,
+    ) -> Result<Vec<LogEntry>, GitError> {
+        let overlay = self.overlay(&req.account).await?;
+        self.scan_log(req, max_commits_scanned, &overlay).await
+    }
+
+    async fn scan_log(
+        &self,
+        req: LogRequest,
+        max_commits_scanned: usize,
+        overlay: &OverlayView,
     ) -> Result<Vec<LogEntry>, GitError> {
         debug_assert!(max_commits_scanned > 0);
 
@@ -37,6 +49,7 @@ impl GitService {
             resolve_ref(
                 self.ref_store.as_ref(),
                 self.object_store.as_ref(),
+                overlay,
                 &req.account,
                 &req.branch,
             )
@@ -52,14 +65,26 @@ impl GitService {
             let meta = match next_meta.take() {
                 Some(meta) => meta,
                 None => {
-                    load_commit_meta(self.object_store.as_ref(), &req.account, &commit_oid).await?
+                    load_commit_meta(
+                        self.object_store.as_ref(),
+                        overlay,
+                        &req.account,
+                        &commit_oid,
+                    )
+                    .await?
                 }
             };
             let parent_oid = meta.parents.first().copied();
 
             let parent_meta = match (filtered_paths, parent_oid) {
                 (Some(_), Some(parent_oid)) => Some(
-                    load_commit_meta(self.object_store.as_ref(), &req.account, &parent_oid).await?,
+                    load_commit_meta(
+                        self.object_store.as_ref(),
+                        overlay,
+                        &req.account,
+                        &parent_oid,
+                    )
+                    .await?,
                 ),
                 _ => None,
             };
@@ -109,13 +134,50 @@ impl GitService {
 
 impl GitService {
     /// Try SnapshotLog fast path for filtered log requests.
-    async fn log_with_snapshot_log(
+    pub(super) async fn log_with_snapshot_log(
         &self,
         req: &LogRequest,
+        overlay: &OverlayView,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
         let Some(store) = self.snapshot_log_store.clone() else {
             return Ok(None);
         };
+        let generation = overlay
+            .path_history_root
+            .map(|oid| oid.to_string())
+            .unwrap_or_default();
+        if store
+            .generation(&req.account, &req.branch)
+            .await
+            .ok()
+            .as_ref()
+            != Some(&generation)
+        {
+            self.trigger_snapshot_log_backfill(&req.account, &req.branch);
+            return Ok(None);
+        }
+        let indexed = self
+            .query_snapshot_log(store.as_ref(), req, overlay)
+            .await?;
+        // The same SQL database can be repaired by another process during the query.
+        if store
+            .generation(&req.account, &req.branch)
+            .await
+            .ok()
+            .as_ref()
+            != Some(&generation)
+        {
+            return Ok(None);
+        }
+        Ok(indexed)
+    }
+
+    async fn query_snapshot_log(
+        &self,
+        store: &dyn crate::git::SnapshotLogStore,
+        req: &LogRequest,
+        overlay: &OverlayView,
+    ) -> Result<Option<Vec<LogEntry>>, GitError> {
         let Some(paths) = req.paths.as_ref() else {
             return Ok(None);
         };
@@ -129,6 +191,7 @@ impl GitService {
         let current_head = resolve_ref(
             self.ref_store.as_ref(),
             self.object_store.as_ref(),
+            overlay,
             &req.account,
             &req.branch,
         )
@@ -163,23 +226,24 @@ impl GitService {
 
         if latest_oid == current_head {
             return self
-                .load_snapshot_log_entries(store.as_ref(), req, latest.0, req.offset, req.limit)
+                .load_snapshot_log_entries(store, req, overlay, latest.0, req.offset, req.limit)
                 .await;
         }
 
         match self
-            .scan_snapshot_log_tail(req, current_head, latest_oid)
+            .scan_snapshot_log_tail(req, overlay, current_head, latest_oid)
             .await?
         {
             Some(tail) => {
                 self.trigger_snapshot_log_backfill(&req.account, &req.branch);
-                self.merge_snapshot_log_tail(store.as_ref(), req, latest.0, tail)
+                self.merge_snapshot_log_tail(store, req, overlay, latest.0, tail)
                     .await
             }
             None => {
                 let fresh_head = resolve_ref(
                     self.ref_store.as_ref(),
                     self.object_store.as_ref(),
+                    overlay,
                     &req.account,
                     &req.branch,
                 )
@@ -187,22 +251,18 @@ impl GitService {
                 if fresh_head == latest_oid {
                     return self
                         .load_snapshot_log_entries(
-                            store.as_ref(),
-                            req,
-                            latest.0,
-                            req.offset,
-                            req.limit,
+                            store, req, overlay, latest.0, req.offset, req.limit,
                         )
                         .await;
                 }
                 if fresh_head != current_head {
                     if let Some(tail) = self
-                        .scan_snapshot_log_tail(req, fresh_head, latest_oid)
+                        .scan_snapshot_log_tail(req, overlay, fresh_head, latest_oid)
                         .await?
                     {
                         self.trigger_snapshot_log_backfill(&req.account, &req.branch);
                         return self
-                            .merge_snapshot_log_tail(store.as_ref(), req, latest.0, tail)
+                            .merge_snapshot_log_tail(store, req, overlay, latest.0, tail)
                             .await;
                     }
                 }
@@ -220,6 +280,7 @@ impl GitService {
         &self,
         store: &dyn crate::git::snapshot_log::SnapshotLogStore,
         req: &LogRequest,
+        overlay: &OverlayView,
         latest_id: i64,
         mut tail: Vec<LogEntry>,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
@@ -242,7 +303,14 @@ impl GitService {
         let remaining_limit = req.limit - out.len();
 
         let Some(indexed) = self
-            .load_snapshot_log_entries(store, req, latest_id, remaining_offset, remaining_limit)
+            .load_snapshot_log_entries(
+                store,
+                req,
+                overlay,
+                latest_id,
+                remaining_offset,
+                remaining_limit,
+            )
             .await?
         else {
             return Ok(None);
@@ -264,6 +332,7 @@ impl GitService {
         &self,
         store: &dyn crate::git::snapshot_log::SnapshotLogStore,
         req: &LogRequest,
+        overlay: &OverlayView,
         max_id: i64,
         offset: usize,
         limit: usize,
@@ -296,17 +365,19 @@ impl GitService {
                     return Ok(None);
                 }
             };
-            let meta = match load_commit_meta(self.object_store.as_ref(), &req.account, &oid).await
-            {
-                Ok(meta) => meta,
-                Err(err) => {
-                    warn!(
-                        "snapshot log hit commit is unreadable for {}/{}: {}",
-                        req.account, req.branch, err
-                    );
-                    return Ok(None);
-                }
-            };
+            let meta =
+                match load_commit_meta(self.object_store.as_ref(), overlay, &req.account, &oid)
+                    .await
+                {
+                    Ok(meta) => meta,
+                    Err(err) => {
+                        warn!(
+                            "snapshot log hit commit is unreadable for {}/{}: {}",
+                            req.account, req.branch, err
+                        );
+                        return Ok(None);
+                    }
+                };
             out.push(log_entry_from_meta(oid, meta));
         }
         Ok(Some(out))
@@ -317,6 +388,7 @@ impl GitService {
     async fn scan_snapshot_log_tail(
         &self,
         req: &LogRequest,
+        overlay: &OverlayView,
         head: ObjectId,
         latest_oid: ObjectId,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
@@ -332,13 +404,25 @@ impl GitService {
             let meta = match next_meta.take() {
                 Some(meta) => meta,
                 None => {
-                    load_commit_meta(self.object_store.as_ref(), &req.account, &commit_oid).await?
+                    load_commit_meta(
+                        self.object_store.as_ref(),
+                        overlay,
+                        &req.account,
+                        &commit_oid,
+                    )
+                    .await?
                 }
             };
             let parent_oid = meta.parents.first().copied();
             let parent_meta = match parent_oid {
                 Some(parent_oid) => Some(
-                    load_commit_meta(self.object_store.as_ref(), &req.account, &parent_oid).await?,
+                    load_commit_meta(
+                        self.object_store.as_ref(),
+                        overlay,
+                        &req.account,
+                        &parent_oid,
+                    )
+                    .await?,
                 ),
                 None => None,
             };

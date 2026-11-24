@@ -162,14 +162,26 @@ pub async fn write_object(
     kind: gix_object::Kind,
     data: &[u8],
 ) -> Result<gix_hash::ObjectId, crate::git::error::ObjectStoreError> {
-    let header = gix_object::encode::loose_header(kind, data.len() as u64);
     let oid = gix_object::compute_hash(gix_hash::Kind::Sha1, kind, data);
+    put_hashed_object(store, account, kind, oid, data).await?;
+    Ok(oid)
+}
+
+/// Store data after its caller has already computed the Git object ID.
+pub(crate) async fn put_hashed_object(
+    store: &dyn crate::git::object_store::ObjectStore,
+    account: &str,
+    kind: gix_object::Kind,
+    oid: gix_hash::ObjectId,
+    data: &[u8],
+) -> Result<(), crate::git::error::ObjectStoreError> {
+    let header = gix_object::encode::loose_header(kind, data.len() as u64);
     let mut full = Vec::with_capacity(header.len() + data.len());
     full.extend_from_slice(&header);
     full.extend_from_slice(data);
-    let compressed = zlib_compress(&full)?;
-    store.put(account, &oid, Bytes::from(compressed)).await?;
-    Ok(oid)
+    store
+        .put(account, &oid, Bytes::from(zlib_compress(&full)?))
+        .await
 }
 
 /// Same as [`write_object`], but runs an `exists` precheck before compressing
@@ -187,12 +199,7 @@ pub async fn write_object_if_absent(
     if store.exists(account, &oid).await? {
         return Ok(oid);
     }
-    let header = gix_object::encode::loose_header(kind, data.len() as u64);
-    let mut full = Vec::with_capacity(header.len() + data.len());
-    full.extend_from_slice(&header);
-    full.extend_from_slice(data);
-    let compressed = zlib_compress(&full)?;
-    store.put(account, &oid, Bytes::from(compressed)).await?;
+    put_hashed_object(store, account, kind, oid, data).await?;
     Ok(oid)
 }
 

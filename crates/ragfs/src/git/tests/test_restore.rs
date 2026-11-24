@@ -1246,12 +1246,12 @@
         // way: lookup the oid of agent/skills/unrelated.py in both source and
         // new — they must DIFFER (source had v1, new still has v2).
         let new_tree =
-            load_commit_meta(object_store.as_ref() as &dyn ObjectStore, "acct", &new_oid)
+            load_commit_meta(object_store.as_ref() as &dyn ObjectStore, &OverlayView::empty(), "acct", &new_oid)
                 .await
                 .unwrap()
                 .tree;
         let source_tree = load_commit_meta(
-            object_store.as_ref() as &dyn ObjectStore,
+            object_store.as_ref() as &dyn ObjectStore, &OverlayView::empty(),
             "acct",
             &source_oid,
         )

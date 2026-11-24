@@ -84,9 +84,10 @@ impl GitService {
             Err(RefStoreError::NotFound(_)) => None,
             Err(e) => return Err(e.into()),
         };
+        let overlay = self.overlay(&account).await?;
         let prev_tree: Option<ObjectId> = match prev_head {
             Some(commit_oid) => Some(
-                load_commit_meta(self.object_store.as_ref(), &account, &commit_oid)
+                load_commit_meta(self.object_store.as_ref(), &overlay, &account, &commit_oid)
                     .await?
                     .tree,
             ),
@@ -467,6 +468,7 @@ impl GitService {
         // been changed (to the same size) within the same clock tick as the
         // last commit, and `(size, mtime_ns)` cannot detect it. `None` (backend
         // could not report a write time) forces every entry down the slow path.
+        let writer = self.write_store();
         let index_saved_at_ns: Option<i128> = prev_index.as_ref().and_then(|idx| idx.saved_at_ns);
         for rel_path in candidates {
             let abs = format!("/local/{}/{}", account, rel_path);
@@ -493,39 +495,6 @@ impl GitService {
                     let cached = prev_index
                         .as_ref()
                         .and_then(|idx| idx.entries.get(&rel_path));
-                    let oid = match (cached, stat) {
-                        (Some(entry), Some((size, mtime_ns)))
-                            if entry.size == size
-                                && entry.mtime_ns == mtime_ns
-                                && index_saved_at_ns.is_some_and(|saved| mtime_ns < saved) =>
-                        {
-                            entry.oid
-                        }
-                        _ => {
-                            let bytes = self.vfs.read(&abs, 0, 0).await?;
-                            if self.blob_exists_precheck {
-                                crate::git::util::write_object_if_absent(
-                                    self.object_store.as_ref(),
-                                    &account,
-                                    gix_object::Kind::Blob,
-                                    &bytes,
-                                )
-                                .await?
-                            } else {
-                                crate::git::util::write_object(
-                                    self.object_store.as_ref(),
-                                    &account,
-                                    gix_object::Kind::Blob,
-                                    &bytes,
-                                )
-                                .await?
-                            }
-                        }
-                    };
-
-                    // Skip the upsert if prev_tree already has this exact
-                    // path+oid — re-writing the same blob is not an editor
-                    // change and shouldn't count toward the no-op decision.
                     let prev_entry = match prev_tree {
                         Some(t) => {
                             crate::git::tree_builder::lookup_cached(
@@ -539,6 +508,42 @@ impl GitService {
                         }
                         None => None,
                     };
+                    let oid = match (cached, stat) {
+                        (Some(entry), Some((size, mtime_ns)))
+                            if entry.size == size
+                                && entry.mtime_ns == mtime_ns
+                                && index_saved_at_ns.is_some_and(|saved| mtime_ns < saved) =>
+                        {
+                            entry.oid
+                        }
+                        _ => {
+                            let bytes = self.vfs.read(&abs, 0, 0).await?;
+                            let oid = gix_object::compute_hash(
+                                gix_hash::Kind::Sha1,
+                                gix_object::Kind::Blob,
+                                &bytes,
+                            );
+                            let unchanged = prev_entry.as_ref().is_some_and(|(old, _)| *old == oid);
+                            if !unchanged
+                                && !(self.blob_exists_precheck
+                                    && writer.exists(&account, &oid).await?)
+                            {
+                                crate::git::util::put_hashed_object(
+                                    writer.as_ref(),
+                                    &account,
+                                    gix_object::Kind::Blob,
+                                    oid,
+                                    &bytes,
+                                )
+                                .await?;
+                            }
+                            oid
+                        }
+                    };
+
+                    // Skip the upsert if prev_tree already has this exact
+                    // path+oid — re-writing the same blob is not an editor
+                    // change and shouldn't count toward the no-op decision.
                     let prev_was_tree = prev_entry
                         .as_ref()
                         .map(|(_, mode)| mode.is_tree())
@@ -653,11 +658,12 @@ impl GitService {
         }
 
         // 6. Write the new tree + the commit object.
-        let new_tree = editor.write(self.object_store.as_ref(), &account).await?;
+        let new_tree = editor.write(writer.as_ref(), &account).await?;
         let parents: Vec<ObjectId> = prev_head.iter().copied().collect();
-        let commit_oid = crate::git::commit::write_commit(
-            self.object_store.as_ref(),
+        let (commit_oid, committed_at) = crate::git::commit::write_commit_with_time(
+            writer.as_ref(),
             &account,
+            Some(&branch),
             new_tree,
             parents,
             &author_name,
@@ -682,6 +688,16 @@ impl GitService {
             }
             Err(other) => return Err(other.into()),
         }
+
+        self.try_append_commit_index(
+            &account,
+            &branch,
+            prev_head,
+            commit_oid,
+            new_tree,
+            committed_at,
+        )
+        .await;
 
         if collect_snapshot_log_paths {
             self.try_append_snapshot_log(

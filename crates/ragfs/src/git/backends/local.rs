@@ -1,8 +1,11 @@
 //! Local filesystem backend for Git object and ref storage
 
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -14,7 +17,7 @@ use crate::git::error::{ObjectStoreError, RefStoreError};
 use crate::git::index_store::{
     decode_index, encode_index, systemtime_to_ns, CommitIndex, IndexStore, IndexStoreError,
 };
-use crate::git::object_store::ObjectStore;
+use crate::git::object_store::{ObjectMeta, ObjectStore};
 use crate::git::ref_store::RefStore;
 use crate::git::util::validate_ref_name;
 
@@ -48,6 +51,52 @@ impl LocalObjectStore {
             .join(&hex[..2])
             .join(&hex[2..])
     }
+}
+
+// Run a complete directory traversal in one blocking task. Avoid following
+// symlinks so administrative files cannot enter the loose-object namespace.
+fn visit_object_files(
+    root: &Path,
+    mut visit: impl FnMut(&str, &str, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let shards = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for shard in shards {
+        let shard = shard?;
+        let prefix = shard.file_name();
+        let Some(prefix) = prefix.to_str() else {
+            continue;
+        };
+        if prefix.len() != 2
+            || !prefix.bytes().all(|c| c.is_ascii_hexdigit())
+            || !shard.file_type()?.is_dir()
+        {
+            continue;
+        }
+        for file in fs::read_dir(shard.path())? {
+            let file = file?;
+            if file.file_type()?.is_file() {
+                if let Some(name) = file.file_name().to_str() {
+                    match visit(prefix, name, &file.path()) {
+                        Err(err) if err.kind() == ErrorKind::NotFound => (),
+                        result => result?,
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, ObjectStoreError> + Send + 'static,
+) -> Result<T, ObjectStoreError> {
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|e| ObjectStoreError::Backend(e.to_string()))?
 }
 
 #[async_trait]
@@ -136,6 +185,151 @@ impl ObjectStore for LocalObjectStore {
         Ok(Bytes::from(bytes))
     }
 
+    async fn list_objects(&self, account: &str) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
+        let root = self.base_dir.join(account).join("objects");
+        blocking(move || {
+            let mut objects = Vec::new();
+            visit_object_files(&root, |prefix, name, path| {
+                if name.len() == 38 {
+                    if let Ok(oid) = format!("{prefix}{name}").parse::<ObjectId>() {
+                        let stat = fs::metadata(path)?;
+                        objects.push(ObjectMeta {
+                            oid,
+                            size: stat.len(),
+                            modified: stat.modified()?,
+                        });
+                    }
+                }
+                Ok(())
+            })?;
+            Ok(objects)
+        })
+        .await
+    }
+
+    async fn cleanup_temp_files(
+        &self,
+        account: &str,
+        cutoff: SystemTime,
+    ) -> Result<usize, ObjectStoreError> {
+        let root = self.base_dir.join(account).join("objects");
+        blocking(move || {
+            let mut count = 0;
+            visit_object_files(&root, |_, name, path| {
+                if name.contains(".tmp.") && fs::metadata(path)?.modified()? < cutoff {
+                    fs::remove_file(path)?;
+                    count += 1;
+                }
+                Ok(())
+            })?;
+            Ok(count)
+        })
+        .await
+    }
+
+    async fn touch_if_older_than(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        threshold: SystemTime,
+    ) -> Result<bool, ObjectStoreError> {
+        let path = self.object_path(account, oid);
+        let oid = *oid;
+        blocking(move || {
+            let file = fs::File::options()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .map_err(|e| {
+                    if e.kind() == ErrorKind::NotFound {
+                        ObjectStoreError::NotFound(oid)
+                    } else {
+                        e.into()
+                    }
+                })?;
+            file.lock()?;
+            // A concurrent collector may have unlinked the inode before this lock.
+            if !path.try_exists()? {
+                return Err(ObjectStoreError::NotFound(oid));
+            }
+            if file.metadata()?.modified()? < threshold {
+                file.set_modified(SystemTime::now())?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+        .await
+    }
+
+    async fn put_or_touch(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        body: Bytes,
+        threshold: SystemTime,
+    ) -> Result<(), ObjectStoreError> {
+        match self.touch_if_older_than(account, oid, threshold).await {
+            Ok(_) => Ok(()),
+            Err(ObjectStoreError::NotFound(_)) => self.put(account, oid, body).await,
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn delete_objects(
+        &self,
+        account: &str,
+        oids: &[ObjectId],
+    ) -> Result<(), ObjectStoreError> {
+        let paths: Vec<_> = oids
+            .iter()
+            .map(|oid| self.object_path(account, oid))
+            .collect();
+        blocking(move || {
+            for path in paths {
+                match fs::remove_file(path) {
+                    Err(e) if e.kind() == ErrorKind::NotFound => (),
+                    result => result?,
+                }
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    async fn sweep_objects(
+        &self,
+        account: &str,
+        objects: &[ObjectMeta],
+        cutoff: SystemTime,
+    ) -> Result<Vec<ObjectId>, ObjectStoreError> {
+        let paths: Vec<_> = objects
+            .iter()
+            .map(|m| (m.oid, self.object_path(account, &m.oid)))
+            .collect();
+        blocking(move || {
+            let mut removed = Vec::new();
+            for (oid, path) in paths {
+                let file = match fs::File::open(&path) {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e.into()),
+                };
+                file.lock()?;
+                match fs::metadata(&path) {
+                    Ok(stat) if stat.modified()? < cutoff => {
+                        fs::remove_file(&path)?;
+                        removed.push(oid);
+                    }
+                    Err(e) if e.kind() != ErrorKind::NotFound => return Err(e.into()),
+                    _ => (),
+                }
+            }
+            Ok(removed)
+        })
+        .await
+    }
+
     async fn exists(&self, account: &str, oid: &ObjectId) -> Result<bool, ObjectStoreError> {
         let path = self.object_path(account, oid);
         tokio::fs::try_exists(&path)
@@ -220,23 +414,44 @@ impl RefStore for LocalRefStore {
 
         let path = self.ref_path(account, ref_name);
 
-        // Check current value matches expected
-        let actual = Self::read_ref_opt(&path).await?;
-        if actual != expected {
-            return Err(RefStoreError::Conflict { expected, actual });
-        }
-
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        // Write to temp file then rename for atomicity
-        let tmp_path = path.with_extension("tmp");
-        tokio::fs::write(&tmp_path, format!("{}\n", new.to_hex())).await?;
-        tokio::fs::rename(&tmp_path, &path).await?;
-
-        Ok(())
+        // Coordinate independently constructed services (including other
+        // processes) and keep temporary files out of the ref namespace.
+        let guard_path = self
+            .base_dir
+            .join(account)
+            .join(".ref-locks")
+            .join(ref_name)
+            .join("lock");
+        let tmp_path = guard_path.with_file_name("value.tmp");
+        tokio::task::spawn_blocking(move || {
+            fs::create_dir_all(guard_path.parent().unwrap())?;
+            let guard = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(guard_path)?;
+            guard.lock()?;
+            let actual = match fs::read_to_string(&path) {
+                Ok(content) => Some(
+                    content
+                        .trim()
+                        .parse::<ObjectId>()
+                        .map_err(|e| RefStoreError::Backend(e.to_string()))?,
+                ),
+                Err(e) if e.kind() == ErrorKind::NotFound => None,
+                Err(e) => return Err(e.into()),
+            };
+            if actual != expected {
+                return Err(RefStoreError::Conflict { expected, actual });
+            }
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(&tmp_path, format!("{}\n", new.to_hex()))?;
+            fs::rename(&tmp_path, &path)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| RefStoreError::Backend(e.to_string()))?
     }
 
     async fn list(
@@ -262,7 +477,7 @@ impl RefStore for LocalRefStore {
                             if let Ok(ref_name) = entry_path.strip_prefix(self.base_dir.join(account))
                             {
                                 if let Some(ref_name_str) = ref_name.to_str() {
-                                    if let Ok(Some(oid)) = Self::read_ref_opt(&entry_path).await {
+                                    if let Some(oid) = Self::read_ref_opt(&entry_path).await? {
                                         result.push((ref_name_str.to_string(), oid));
                                     }
                                 }
@@ -271,8 +486,8 @@ impl RefStore for LocalRefStore {
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // Directory doesn't exist - return empty list
-                    break;
+                    // A disappearing directory must not hide other ref directories.
+                    continue;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -374,6 +589,66 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
+    async fn local_gc_primitives_respect_namespace_and_freshening() {
+        use std::time::{Duration, SystemTime};
+        let dir = tempdir().unwrap();
+        let store = LocalObjectStore::new(dir.path());
+        let account = "acct";
+        let oid: ObjectId = "1123456789abcdef0123456789abcdef01234567".parse().unwrap();
+        let missing: ObjectId = "2123456789abcdef0123456789abcdef01234567".parse().unwrap();
+        store
+            .put(account, &oid, Bytes::from_static(b"original"))
+            .await
+            .unwrap();
+        let path = store.object_path(account, &oid);
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        let cutoff = SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let tmp = path.with_extension("tmp.1.2");
+        std::fs::File::create(&tmp)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let fresh_tmp = path.with_extension("tmp.1.3");
+        std::fs::File::create(&fresh_tmp).unwrap();
+        std::fs::create_dir_all(dir.path().join("acct/refs/heads")).unwrap();
+        std::fs::write(dir.path().join("acct/refs/heads/main"), oid.to_string()).unwrap();
+        let objects = store.list_objects(account).await.unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].oid, oid);
+        assert_eq!(objects[0].size, 8);
+        store
+            .put_or_touch(account, &oid, Bytes::from_static(b"duplicate"), cutoff)
+            .await
+            .unwrap();
+        assert!(!store
+            .touch_if_older_than(account, &oid, cutoff)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.get(account, &oid).await.unwrap(),
+            Bytes::from_static(b"original")
+        );
+        assert!(store
+            .sweep_objects(account, &objects, cutoff)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.cleanup_temp_files(account, cutoff).await.unwrap(), 1);
+        assert!(!tmp.exists());
+        assert!(fresh_tmp.exists());
+        store
+            .delete_objects(account, &[oid, missing])
+            .await
+            .unwrap();
+        store.delete_objects(account, &[oid]).await.unwrap();
+        assert!(!store.exists(account, &oid).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn test_local_object_store_put_get_exists() {
         let dir = tempdir().unwrap();
         let store = LocalObjectStore::new(dir.path());
@@ -466,15 +741,14 @@ mod tests {
     #[tokio::test]
     async fn test_local_ref_store_concurrent_cas() {
         let dir = tempdir().unwrap();
-        let store = Arc::new(LocalRefStore::new(dir.path()));
-
         let account = "test-account";
         let ref_name = "refs/heads/main";
 
         // Spawn multiple concurrent cas_update tasks
         let mut handles = Vec::new();
         for i in 0..10 {
-            let store = store.clone();
+            // Independent instances have independent in-memory lock maps.
+            let store = Arc::new(LocalRefStore::new(dir.path()));
             let oid = format!("{:040}", i).parse::<ObjectId>().unwrap();
             handles.push(tokio::spawn(async move {
                 // Each task will try to CAS in a loop until it succeeds

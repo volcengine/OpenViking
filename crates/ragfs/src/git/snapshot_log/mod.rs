@@ -1,5 +1,10 @@
 //! SnapshotLog path history index provider.
 
+mod commit_index;
+pub use commit_index::{CommitIndexRow, CommitIndexStore};
+
+mod repair;
+pub use repair::{PathHistoryRepair, PathHistoryGeneration};
 mod mysql;
 mod sqlite;
 mod store;

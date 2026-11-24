@@ -134,7 +134,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 [dev-dependencies]
 tempfile = "3.12"
 criterion = "0.5"
-tokio = { version = "1.38", features = ["full"] }
+tokio = { version = "1.38", features = ["full", "test-util"] }
 toml = "0.8"
 # Used by the S3/TOS git integration tests (crates/ragfs/tests/git_s3_integration.rs)
 gix-hash = "0.14"

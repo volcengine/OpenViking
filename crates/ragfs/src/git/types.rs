@@ -5,7 +5,7 @@ use gix_hash::ObjectId;
 #[derive(Debug, Clone)]
 pub struct CommitRequest {
     pub account: String,
-    pub branch: String,                 // e.g. "main" — NOT the full "refs/heads/main"
+    pub branch: String, // e.g. "main" — NOT the full "refs/heads/main"
     pub message: String,
     /// Explicit candidate paths (account-relative, e.g. "resources/a.md").
     /// `None` means "enumerate the whole account tree".
@@ -241,4 +241,77 @@ pub struct RestoreWritebackPartial {
     /// `(account-relative path, error message)` for deletes that failed
     /// with a non-`NotFound` error after the ref already advanced.
     pub failed_deletes: Vec<(String, String)>,
+}
+
+/// Plan or apply the atomic removal of historical snapshots from an account.
+#[derive(Clone, Debug)]
+pub struct DeleteRequest {
+    /// Tenant owning the snapshot history.
+    pub account: String,
+    /// Full hexadecimal commit IDs, deduplicated in request order.
+    pub commit_ids: Vec<String>,
+    /// Return the authorization plan before publishing the overlay.
+    pub dry_run: bool,
+    /// Outer None allows internal retries. Some(None) pins an empty overlay.
+    pub expected_overlay_root: Option<Option<ObjectId>>,
+}
+
+/// File changes introduced by one target relative to its effective parent.
+#[derive(Debug)]
+pub struct DeletePlanEntry {
+    /// Commit being removed.
+    pub commit: ObjectId,
+    /// Branch containing this commit.
+    pub branch: String,
+    /// Sorted account-relative file paths used for authorization.
+    pub changed_paths: Vec<String>,
+}
+
+/// The same ancestry changes are returned by preview and execution.
+#[derive(Debug)]
+pub struct DeleteResponse {
+    /// True when the result describes a preview.
+    pub dry_run: bool,
+    /// Target commits in request order.
+    pub deleted: Vec<ObjectId>,
+    /// Retained children and their effective parents after deletion.
+    pub reparented: Vec<(ObjectId, Vec<ObjectId>)>,
+    /// Changes used to authorize each target.
+    pub plan: Vec<DeletePlanEntry>,
+    /// For a preview, the generation to authorize. On success, the published generation.
+    pub overlay_root: Option<ObjectId>,
+    /// Unix timestamp used for the tombstones.
+    pub deleted_at: i64,
+    /// Earliest reclamation time in Unix seconds.
+    pub reclaim_after: i64,
+}
+
+/// Physical object reclamation statistics for one account.
+/// Summary of one account-level physical garbage collection.
+#[derive(Debug, Default)]
+pub struct GcReport {
+    /// Reason collection was skipped, when applicable.
+    /// Reason collection was skipped.
+    pub skipped: Option<String>,
+    /// Loose objects inspected.
+    /// Number of loose objects listed.
+    pub scanned: usize,
+    /// Objects physically removed.
+    /// Number of objects physically removed.
+    pub deleted: usize,
+    /// Compressed bytes reclaimed.
+    /// Compressed bytes reclaimed.
+    pub bytes_freed: u64,
+    /// Expired tombstones removed after their commit objects disappeared.
+    /// Number of expired logical deletion markers removed.
+    pub tombstones_purged: usize,
+    /// The reference set changed during marking.
+    /// A ref moved during the initial mark.
+    pub remarked: bool,
+    /// A verified SQL commit chain contributed mark roots.
+    /// At least one branch used a verified SQL commit chain.
+    pub used_commit_index: bool,
+    /// Wall-clock duration of collection.
+    /// Elapsed duration in milliseconds.
+    pub duration_ms: u64,
 }

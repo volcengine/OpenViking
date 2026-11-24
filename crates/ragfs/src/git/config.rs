@@ -71,9 +71,44 @@ pub struct GitTuningConfig {
 /// Snapshot feature configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitSnapshotConfig {
+    #[serde(default)]
+    /// Physical snapshot reclamation settings.
+    pub gc: GitGcConfig,
     /// Path-filtered log acceleration settings.
     #[serde(default)]
     pub log: GitSnapshotLogConfig,
+}
+
+/// Shortest grace period accepted by any collector.
+pub(crate) const MIN_GC_GRACE_SECONDS: u64 = 600;
+
+/// Physical snapshot GC settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct GitGcConfig {
+    /// Schedule and run physical collection on this node.
+    pub enabled: bool,
+    #[serde(deserialize_with = "parse_gc_grace")]
+    /// Minimum age in seconds for object reclamation.
+    pub grace_seconds: u64,
+}
+impl Default for GitGcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            grace_seconds: 3600,
+        }
+    }
+}
+fn parse_gc_grace<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
+    let seconds = u64::deserialize(de)?;
+    if seconds < MIN_GC_GRACE_SECONDS {
+        Err(serde::de::Error::custom(
+            "git.snapshot.gc.grace_seconds must be at least 600",
+        ))
+    } else {
+        Ok(seconds)
+    }
 }
 
 /// Snapshot path history index configuration.
@@ -135,6 +170,7 @@ impl Default for GitSnapshotConfig {
     fn default() -> Self {
         Self {
             log: GitSnapshotLogConfig::default(),
+            gc: GitGcConfig::default(),
         }
     }
 }

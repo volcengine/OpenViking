@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
+use crate::git::overlay::{load_overlay, OverlayCache, OverlayView};
 use gix_hash::ObjectId;
 use tracing::warn;
 
@@ -36,11 +37,15 @@ use crate::git::{
 };
 
 mod commit;
+mod commit_index;
+mod delete;
 mod diff;
+mod gc;
+mod gc_schedule;
 mod log;
 mod restore;
-mod snapshot_log;
 mod show;
+mod snapshot_log;
 mod validate;
 
 use diff::compute_subtree_diff;
@@ -57,7 +62,15 @@ const MAX_LOG_PATH_DEPTH: usize = 64;
 /// `IndexStore` enables Fast Path 1 — the persistent stat cache that lets
 /// `commit()` skip read+SHA-1 for files whose `(size, mtime_ns)` are
 /// unchanged since the last commit.
+#[derive(Clone)]
 pub struct GitService {
+    gc_enabled: bool,
+    gc_grace: std::time::Duration,
+    scheduled_gc: Arc<Mutex<HashMap<String, tokio::time::Instant>>>,
+    #[cfg(test)]
+    before_sweep_hook:
+        Option<Arc<dyn Fn() -> futures::future::BoxFuture<'static, ()> + Send + Sync>>,
+    overlay_cache: Arc<OverlayCache>,
     /// Working-tree filesystem rooted at `/local/{account}`.
     pub vfs: Arc<dyn FileSystem>,
     /// Backing object store (loose Git objects, content-addressed).
@@ -71,6 +84,9 @@ pub struct GitService {
     /// `exists()` precheck before compressing and putting a blob. Disable to
     /// fall back to an unconditional `write_object`.
     pub blob_exists_precheck: bool,
+    /// Optional SQL history index used for commit lookup and garbage collection.
+    pub commit_index: Option<Arc<dyn crate::git::CommitIndexStore>>,
+    commit_index_backfills: Arc<Mutex<HashMap<(String, String), bool>>>,
     /// Optional SnapshotLog provider for filtered history acceleration.
     pub snapshot_log_store: Option<Arc<dyn crate::git::snapshot_log::SnapshotLogStore>>,
     /// In-process singleflight guard for SnapshotLog backfill tasks.
@@ -78,6 +94,16 @@ pub struct GitService {
 }
 
 impl GitService {
+    pub(crate) async fn overlay(&self, account: &str) -> Result<OverlayView, GitError> {
+        load_overlay(
+            self.object_store.clone(),
+            self.ref_store.as_ref(),
+            account,
+            &self.overlay_cache,
+        )
+        .await
+    }
+
     /// Build a service without Fast Path 1. Equivalent to
     /// [`GitService::with_index`] passing `None`.
     pub fn new(
@@ -90,7 +116,15 @@ impl GitService {
             object_store,
             ref_store,
             index_store: None,
+            overlay_cache: Arc::new(OverlayCache::new(1024)),
+            gc_enabled: true,
+            gc_grace: std::time::Duration::from_secs(3600),
+            scheduled_gc: Default::default(),
+            #[cfg(test)]
+            before_sweep_hook: None,
             blob_exists_precheck: true,
+            commit_index: None,
+            commit_index_backfills: Arc::default(),
             snapshot_log_store: None,
             snapshot_log_backfills: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -110,10 +144,37 @@ impl GitService {
             object_store,
             ref_store,
             index_store,
+            overlay_cache: Arc::new(OverlayCache::new(1024)),
+            gc_enabled: true,
+            gc_grace: std::time::Duration::from_secs(3600),
+            scheduled_gc: Default::default(),
+            #[cfg(test)]
+            before_sweep_hook: None,
             blob_exists_precheck: true,
+            commit_index: None,
+            commit_index_backfills: Arc::default(),
             snapshot_log_store: None,
             snapshot_log_backfills: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Configure physical collection on this node.
+    pub fn with_gc(mut self, enabled: bool, grace: std::time::Duration) -> Self {
+        self.gc_enabled = enabled;
+        self.gc_grace = grace.max(std::time::Duration::from_secs(
+            crate::git::config::MIN_GC_GRACE_SECONDS,
+        ));
+        self
+    }
+
+    pub(crate) fn write_store(&self) -> Arc<dyn ObjectStore> {
+        // A peer may still collect when this node's scheduler is disabled.
+        Arc::new(crate::git::freshen::FreshenObjectStore {
+            inner: self.object_store.clone(),
+            // Peers can run different grace settings during configuration rollouts.
+            // Any peer may sweep at the minimum supported grace.
+            max_age: std::time::Duration::from_secs(crate::git::config::MIN_GC_GRACE_SECONDS / 2),
+        })
     }
 
     /// Toggle Fast Path 3 (`exists()` precheck before blob write). Defaults to
@@ -155,18 +216,24 @@ impl GitService {
 async fn resolve_ref(
     ref_store: &dyn RefStore,
     object_store: &dyn ObjectStore,
+    overlay: &OverlayView,
     account: &str,
     target_ref: &str,
 ) -> Result<ObjectId, GitError> {
     // 1. 40-hex commit OID — ASCII hex (case-insensitive), exactly len 40.
     if target_ref.len() == 40 && target_ref.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return ObjectId::from_hex(target_ref.as_bytes())
-            .map_err(|e| GitError::Other(format!("invalid oid {target_ref}: {e}")));
+        let oid = ObjectId::from_hex(target_ref.as_bytes())
+            .map_err(|e| GitError::Other(format!("invalid oid {target_ref}: {e}")))?;
+        if overlay.deleted_at(&oid).await?.is_some() {
+            return Err(GitError::CommitNotFound(oid));
+        }
+        return Ok(oid);
     }
 
     // 2. Abbreviated OID (4–39 hex chars) — list refs and walk parent chains.
     if target_ref.len() >= 4 && target_ref.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return resolve_abbreviated_oid(ref_store, object_store, account, target_ref).await;
+        return resolve_abbreviated_oid(ref_store, object_store, overlay, account, target_ref)
+            .await;
     }
 
     // 3 & 4. Normalize to full ref path then read.
@@ -182,6 +249,7 @@ async fn resolve_ref(
 /// Decoded commit metadata used by `commit()` (just the tree) and `show()`
 /// (full set). Owned so callers don't have to juggle the raw buffer.
 struct CommitMeta {
+    raw_parents: Vec<ObjectId>,
     tree: ObjectId,
     parents: Vec<ObjectId>,
     author: crate::git::types::Actor,
@@ -192,9 +260,13 @@ struct CommitMeta {
 /// Read a commit object and return its decoded metadata.
 async fn load_commit_meta(
     store: &dyn ObjectStore,
+    overlay: &OverlayView,
     account: &str,
     commit_oid: &ObjectId,
 ) -> Result<CommitMeta, GitError> {
+    if overlay.deleted_at(commit_oid).await?.is_some() {
+        return Err(GitError::CommitNotFound(*commit_oid));
+    }
     let raw = crate::git::util::read_object(store, account, commit_oid).await?;
     let (kind, _, hdr) = crate::git::util::parse_object_header(&raw)?;
     if kind != gix_object::Kind::Commit {
@@ -206,7 +278,11 @@ async fn load_commit_meta(
         .map_err(|e| GitError::Other(format!("commit decode: {e}")))?;
     Ok(CommitMeta {
         tree: parsed.tree(),
-        parents: parsed.parents().collect(),
+        parents: overlay
+            .graft(commit_oid)
+            .await?
+            .unwrap_or_else(|| parsed.parents().collect()),
+        raw_parents: parsed.parents().collect(),
         author: actor_from_signature_ref(&parsed.author),
         committer: actor_from_signature_ref(&parsed.committer),
         message: parsed.message.to_string(),
@@ -227,6 +303,7 @@ async fn load_commit_meta(
 async fn resolve_abbreviated_oid(
     ref_store: &dyn RefStore,
     object_store: &dyn ObjectStore,
+    overlay: &OverlayView,
     account: &str,
     prefix: &str,
 ) -> Result<ObjectId, GitError> {
@@ -239,7 +316,11 @@ async fn resolve_abbreviated_oid(
 
     let refs = ref_store.list(account, "refs/").await?;
     let mut visited: HashSet<ObjectId> = HashSet::new();
-    let mut queue: Vec<ObjectId> = refs.into_iter().map(|(_, oid)| oid).collect();
+    let mut queue: Vec<ObjectId> = refs
+        .into_iter()
+        .filter(|(r, _)| r.starts_with("refs/heads/") || r.starts_with("refs/tags/"))
+        .map(|(_, oid)| oid)
+        .collect();
     let mut matches: Vec<ObjectId> = Vec::new();
 
     while let Some(oid) = queue.pop() {
@@ -259,7 +340,7 @@ async fn resolve_abbreviated_oid(
                 break;
             }
         }
-        let meta = match load_commit_meta(object_store, account, &oid).await {
+        let meta = match load_commit_meta(object_store, overlay, account, &oid).await {
             Ok(m) => m,
             Err(GitError::ObjectStore(ObjectStoreError::NotFound(_))) => continue,
             Err(GitError::Other(_)) => continue, // not a commit (tag etc.) — skip
@@ -307,14 +388,17 @@ fn actor_from_signature_ref(sig: &gix_actor::SignatureRef<'_>) -> crate::git::ty
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     include!("../tests/common.rs");
+    include!("../tests/test_delete.rs");
+    include!("../tests/test_overlay_reads.rs");
     include!("../tests/test_commit.rs");
+    include!("../tests/test_gc.rs");
     include!("../tests/test_show.rs");
     include!("../tests/test_log.rs");
     include!("../tests/test_snapshot_log.rs");
+    include!("../tests/test_commit_index.rs");
     include!("../tests/test_restore.rs");
 }
 

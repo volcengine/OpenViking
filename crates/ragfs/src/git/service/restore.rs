@@ -50,17 +50,20 @@ impl GitService {
         let ref_name = format!("refs/heads/{branch}");
 
         // 1. Resolve both commits.
+        let overlay = self.overlay(account).await?;
         let source_oid = resolve_ref(
             self.ref_store.as_ref(),
             self.object_store.as_ref(),
+            &overlay,
             account,
             source_commit,
         )
         .await?;
         let head_oid = self.ref_store.read(account, &ref_name).await?;
         let source_meta =
-            load_commit_meta(self.object_store.as_ref(), account, &source_oid).await?;
-        let head_meta = load_commit_meta(self.object_store.as_ref(), account, &head_oid).await?;
+            load_commit_meta(self.object_store.as_ref(), &overlay, account, &source_oid).await?;
+        let head_meta =
+            load_commit_meta(self.object_store.as_ref(), &overlay, account, &head_oid).await?;
 
         // 2. Extract subtree from each (or use full tree if project_dir is None).
         //    An allowed missing source represents an empty output baseline.
@@ -168,7 +171,7 @@ impl GitService {
                         .remove(self.object_store.as_ref(), account, project_dir)
                         .await?;
                 }
-                editor.write(self.object_store.as_ref(), account).await?
+                editor.write(self.write_store().as_ref(), account).await?
             }
             None => source_meta.tree,
         };
@@ -181,9 +184,10 @@ impl GitService {
                 None => format!("restore full tree from {}", short),
             }
         });
-        let new_commit_oid = crate::git::commit::write_commit(
-            self.object_store.as_ref(),
+        let (new_commit_oid, committed_at) = crate::git::commit::write_commit_with_time(
+            self.write_store().as_ref(),
             account,
+            Some(&branch),
             new_tree_oid,
             vec![head_oid],
             &req.author_name,
@@ -212,6 +216,16 @@ impl GitService {
             }
             Err(other) => return Err(other.into()),
         }
+
+        self.try_append_commit_index(
+            account,
+            branch,
+            Some(head_oid),
+            new_commit_oid,
+            new_tree_oid,
+            committed_at,
+        )
+        .await;
 
         self.try_append_snapshot_log(
             account,

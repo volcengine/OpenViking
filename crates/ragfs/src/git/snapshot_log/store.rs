@@ -90,7 +90,7 @@ impl SnapshotLogError {
 
 /// Async storage trait used by `GitService`.
 #[async_trait]
-pub trait SnapshotLogStore: Send + Sync {
+pub trait SnapshotLogStore: super::PathHistoryGeneration {
     /// Return provider limits used for safe query/write bypass decisions.
     fn limits(&self) -> SnapshotLogLimits;
 
@@ -108,6 +108,19 @@ pub trait SnapshotLogStore: Send + Sync {
         branch: &str,
         parent_commit_oid: Option<&str>,
         rows: &[SnapshotLogRow],
+    ) -> Result<(), SnapshotLogError> {
+        self.append_rows_at_generation(account, branch, parent_commit_oid, rows, None)
+            .await
+    }
+
+    /// Keep an older backfill from inserting stale path changes after repair.
+    async fn append_rows_at_generation(
+        &self,
+        account: &str,
+        branch: &str,
+        parent_commit_oid: Option<&str>,
+        rows: &[SnapshotLogRow],
+        generation: Option<&str>,
     ) -> Result<(), SnapshotLogError>;
 
     /// Query matching commits for any path, de-duplicated by commit oid.
@@ -123,11 +136,7 @@ pub trait SnapshotLogStore: Send + Sync {
 }
 
 /// Return whether an account and branch fit provider index limits.
-pub fn can_index_account_branch(
-    limits: SnapshotLogLimits,
-    account: &str,
-    branch: &str,
-) -> bool {
+pub fn can_index_account_branch(limits: SnapshotLogLimits, account: &str, branch: &str) -> bool {
     account.len() <= limits.account_bytes && branch.len() <= limits.branch_bytes
 }
 

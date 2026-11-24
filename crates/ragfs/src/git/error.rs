@@ -68,6 +68,19 @@ pub enum RefStoreError {
 /// Top-level Git service error
 #[derive(Debug, Error)]
 pub enum GitError {
+    #[error("snapshot history changed concurrently")]
+    OverlayConflict,
+    #[error("snapshot commit not found: {0}")]
+    CommitNotFound(gix_hash::ObjectId),
+    #[error("invalid commit ID: {0}")]
+    InvalidCommitId(String),
+    #[error("cannot delete {oid}, tip of {ref_name}")]
+    CommitIsRefTip {
+        oid: gix_hash::ObjectId,
+        ref_name: String,
+    },
+    #[error("snapshot commit index unavailable after scanning {scanned} commits")]
+    CommitIndexUnavailable { scanned: usize },
     /// ObjectStore error
     #[error("object store error: {0}")]
     ObjectStore(#[from] ObjectStoreError),

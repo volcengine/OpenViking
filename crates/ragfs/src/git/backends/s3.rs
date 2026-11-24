@@ -1,12 +1,14 @@
 //! S3 storage backend for Git objects and refs
 
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use aws_sdk_s3::config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::config::Region;
 use bytes::Bytes;
+use futures::{stream, StreamExt, TryStreamExt};
 use gix_hash::ObjectId;
 use tokio::io::AsyncReadExt;
 
@@ -14,7 +16,7 @@ use crate::git::error::{ObjectStoreError, RefStoreError};
 use crate::git::index_store::{
     decode_index, encode_index, CommitIndex, IndexStore, IndexStoreError,
 };
-use crate::git::object_store::ObjectStore;
+use crate::git::object_store::{ObjectMeta, ObjectStore};
 use crate::git::ref_store::RefStore;
 use crate::git::util::validate_ref_name;
 
@@ -105,6 +107,168 @@ impl S3ObjectStore {
         let client = Arc::new(aws_sdk_s3::Client::from_conf(s3_config));
 
         Ok(Self::new(client, config.bucket, config.prefix))
+    }
+
+    /// Fetch bucket versioning state. An absent status means it was never enabled.
+    pub async fn bucket_versioning_status(&self) -> Result<Option<String>, ObjectStoreError> {
+        let result = self
+            .client
+            .get_bucket_versioning()
+            .bucket(&self.bucket)
+            .send()
+            .await
+            .map_err(s3_error)?;
+        Ok(result.status().map(|status| status.as_str().to_owned()))
+    }
+
+    async fn head_object(
+        &self,
+        key: &str,
+    ) -> Result<Option<aws_sdk_s3::operation::head_object::HeadObjectOutput>, ObjectStoreError>
+    {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(meta) => Ok(Some(meta)),
+            Err(err)
+                if err
+                    .raw_response()
+                    .is_some_and(|r| r.status().as_u16() == 404) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(s3_error(err)),
+        }
+    }
+
+    // CopyObject preserves a content ETag. A conditional delete alone cannot
+    // distinguish a freshened object from the stale version seen during LIST.
+    // Serialize these two short operations across services using native S3 CAS.
+    // The lease key lives outside objects/ and refs/. An abandoned lease expires.
+    async fn acquire_sweep_lease(
+        &self,
+        account: &str,
+    ) -> Result<(String, String, Instant), ObjectStoreError> {
+        let key = build_ref_key(&self.prefix, account, "locks/sweep");
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let mut etag = None;
+        let mut observed: Option<(String, Instant)> = None;
+        let start = Instant::now();
+        loop {
+            let acquired = Instant::now();
+            let request = self
+                .client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .body(nonce.as_bytes().to_vec().into());
+            let request = match etag.take() {
+                Some(tag) => request.if_match(tag),
+                None => request.if_none_match("*"),
+            };
+            match request.send().await {
+                Ok(resp) => {
+                    return Ok((
+                        key,
+                        resp.e_tag
+                            .ok_or_else(|| s3_error("sweep lease missing ETag"))?,
+                        acquired,
+                    ))
+                }
+                Err(err)
+                    if err
+                        .raw_response()
+                        .is_some_and(|r| matches!(r.status().as_u16(), 409 | 412)) =>
+                {
+                    ()
+                }
+                Err(err) => return Err(s3_error(err)),
+            }
+            if let Some(meta) = self.head_object(&key).await? {
+                // Measure ownership using our monotonic clock. Comparing S3
+                // LastModified against client wall time could steal a live
+                // lease from another writer on a clock-skewed host.
+                let tag = meta
+                    .e_tag
+                    .ok_or_else(|| s3_error("sweep lease missing ETag"))?;
+                match observed.as_ref() {
+                    Some((old, since)) if *old == tag => {
+                        if since.elapsed() > Duration::from_secs(120) {
+                            etag = Some(tag);
+                        }
+                    }
+                    _ => observed = Some((tag, Instant::now())),
+                }
+            }
+            if start.elapsed() > Duration::from_secs(180) {
+                return Err(s3_error("timed out waiting for snapshot sweep lease"));
+            }
+            if etag.is_none() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    async fn with_sweep_lease<T>(
+        &self,
+        account: &str,
+        run: impl AsyncFnOnce(Instant) -> Result<T, ObjectStoreError>,
+    ) -> Result<T, ObjectStoreError> {
+        let (key, tag, acquired) = self.acquire_sweep_lease(account).await?;
+        let deadline = acquired + Duration::from_secs(45);
+        // A timed-out request may have reached S3. Leave the lease in place
+        // until expiry to allow the in-flight mutation to settle.
+        let result = tokio::time::timeout_at(deadline.into(), run(deadline))
+            .await
+            .map_err(|_| s3_error("snapshot sweep lease operation timed out"))?;
+        // An uncertain backend failure can also leave a mutation in flight.
+        if result
+            .as_ref()
+            .is_err_and(|err| !matches!(err, ObjectStoreError::NotFound(_)))
+        {
+            return result;
+        }
+        let release = self
+            .client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .if_match(tag)
+            .send()
+            .await;
+        if let Err(err) = release {
+            tracing::warn!(error=?err, "snapshot sweep lease release failed");
+        }
+        result
+    }
+
+    async fn delete_batch(
+        &self,
+        objects: Vec<aws_sdk_s3::types::ObjectIdentifier>,
+    ) -> Result<(), ObjectStoreError> {
+        let batch = aws_sdk_s3::types::Delete::builder()
+            .set_objects(Some(objects))
+            .build()
+            .map_err(s3_error)?;
+        let result = self
+            .client
+            .delete_objects()
+            .bucket(&self.bucket)
+            .delete(batch)
+            .send()
+            .await
+            .map_err(s3_error)?;
+        for error in result.errors() {
+            if error.code() != Some("NoSuchKey") {
+                return Err(s3_error(error));
+            }
+        }
+        Ok(())
     }
 
     /// Build the full S3 key for a Git object
@@ -247,30 +411,198 @@ impl ObjectStore for S3ObjectStore {
         Ok(Bytes::from(bytes))
     }
 
-    async fn exists(&self, account: &str, oid: &ObjectId) -> Result<bool, ObjectStoreError> {
-        let key = self.object_key(account, oid);
-
-        match self
+    async fn list_objects(&self, account: &str) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
+        let prefix = build_ref_key(&self.prefix, account, "objects/");
+        let mut pages = self
             .client
-            .head_object()
+            .list_objects_v2()
             .bucket(&self.bucket)
-            .key(&key)
-            .send()
-            .await
-        {
-            Ok(_) => Ok(true),
-            Err(err) => {
-                // Check if the error indicates object not found
-                let err_str = format!("{:?}", err);
-                if err_str.to_lowercase().contains("not_found")
-                    || err_str.to_lowercase().contains("404")
-                {
-                    Ok(false)
-                } else {
-                    Err(ObjectStoreError::Backend(format!("S3 head error: {:?}", err)))
-                }
+            .prefix(prefix)
+            .into_paginator()
+            .send();
+        let mut objects = Vec::new();
+        while let Some(page) = pages.next().await {
+            for obj in page.map_err(s3_error)?.contents() {
+                let Some(oid) = obj
+                    .key()
+                    .and_then(|key| parse_object_key(&self.prefix, account, key))
+                else {
+                    continue;
+                };
+                objects.push(ObjectMeta {
+                    oid,
+                    modified: s3_modified(obj.last_modified())?,
+                    size: obj
+                        .size()
+                        .and_then(|size| size.try_into().ok())
+                        .ok_or_else(|| s3_error("missing object size"))?,
+                });
             }
         }
+        Ok(objects)
+    }
+
+    async fn delete_objects(
+        &self,
+        account: &str,
+        oids: &[ObjectId],
+    ) -> Result<(), ObjectStoreError> {
+        for chunk in oids.chunks(1000) {
+            let batch = chunk
+                .iter()
+                .map(|oid| {
+                    aws_sdk_s3::types::ObjectIdentifier::builder()
+                        .key(self.object_key(account, oid))
+                        .build()
+                        .map_err(s3_error)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            self.delete_batch(batch).await?;
+        }
+        Ok(())
+    }
+
+    async fn sweep_objects(
+        &self,
+        account: &str,
+        objects: &[ObjectMeta],
+        cutoff: SystemTime,
+    ) -> Result<Vec<ObjectId>, ObjectStoreError> {
+        let mut removed = Vec::new();
+        for chunk in objects.chunks(250) {
+            let deleted = self
+                .with_sweep_lease(account, async |deadline| {
+                    let oids: Vec<_> = chunk.iter().map(|obj| obj.oid).collect();
+                    let checked: Vec<_> = stream::iter(oids)
+                        .map(|oid| async move {
+                            let key = self.object_key(account, &oid);
+                            let Some(meta) = self.head_object(&key).await? else {
+                                return Ok(None);
+                            };
+                            if s3_modified(meta.last_modified())? >= cutoff {
+                                return Ok(None);
+                            }
+                            let tag = meta.e_tag.ok_or_else(|| s3_error("object missing ETag"))?;
+                            let id = aws_sdk_s3::types::ObjectIdentifier::builder()
+                                .key(key)
+                                .e_tag(tag)
+                                .build()
+                                .map_err(s3_error)?;
+                            Ok::<_, ObjectStoreError>(Some((oid, id)))
+                        })
+                        .buffer_unordered(32)
+                        .try_collect()
+                        .await?;
+                    let (oids, batch): (Vec<_>, Vec<_>) = checked.into_iter().flatten().unzip();
+                    if !batch.is_empty() {
+                        if Instant::now() >= deadline {
+                            return Err(s3_error("snapshot sweep lease expired"));
+                        }
+                        self.delete_batch(batch).await?;
+                    }
+                    Ok(oids)
+                })
+                .await?;
+            removed.extend(deleted);
+        }
+        Ok(removed)
+    }
+
+    async fn touch_if_older_than(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        cutoff: SystemTime,
+    ) -> Result<bool, ObjectStoreError> {
+        let key = self.object_key(account, oid);
+        let meta = self
+            .head_object(&key)
+            .await?
+            .ok_or(ObjectStoreError::NotFound(*oid))?;
+        if s3_modified(meta.last_modified())? >= cutoff {
+            return Ok(false);
+        }
+        self.with_sweep_lease(account, async |deadline| {
+            let meta = self
+                .head_object(&key)
+                .await?
+                .ok_or(ObjectStoreError::NotFound(*oid))?;
+            if s3_modified(meta.last_modified())? >= cutoff {
+                return Ok(false);
+            }
+            let mut source = url::Url::parse("https://s3.invalid").expect("fixed URL");
+            source
+                .path_segments_mut()
+                .expect("fixed base URL")
+                .clear()
+                .push(&self.bucket)
+                .extend(key.split('/'));
+            if Instant::now() >= deadline {
+                return Err(s3_error("snapshot freshening lease expired"));
+            }
+            self.client
+                .copy_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .copy_source(source.path().trim_start_matches('/'))
+                .metadata_directive(aws_sdk_s3::types::MetadataDirective::Replace)
+                .send()
+                .await
+                .map_err(s3_error)?;
+            Ok(true)
+        })
+        .await
+    }
+
+    async fn put_or_touch(
+        &self,
+        account: &str,
+        oid: &ObjectId,
+        body: Bytes,
+        cutoff: SystemTime,
+    ) -> Result<(), ObjectStoreError> {
+        let key = self.object_key(account, oid);
+        for _ in 0..3 {
+            let result = self
+                .client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .if_none_match("*")
+                .body(body.clone().into())
+                .send()
+                .await;
+            match result {
+                Ok(_) => return Ok(()),
+                Err(err)
+                    if err
+                        .raw_response()
+                        .is_some_and(|r| r.status().as_u16() == 412) =>
+                {
+                    match self.touch_if_older_than(account, oid, cutoff).await {
+                        Ok(_) => return Ok(()),
+                        Err(ObjectStoreError::NotFound(_)) => continue,
+                        Err(err) => return Err(err),
+                    }
+                }
+                Err(err)
+                    if err
+                        .raw_response()
+                        .is_some_and(|r| r.status().as_u16() == 409) =>
+                {
+                    continue
+                }
+                Err(err) => return Err(s3_error(err)),
+            }
+        }
+        Err(s3_error("snapshot object changed during conditional write"))
+    }
+
+    async fn exists(&self, account: &str, oid: &ObjectId) -> Result<bool, ObjectStoreError> {
+        Ok(self
+            .head_object(&self.object_key(account, oid))
+            .await?
+            .is_some())
     }
 }
 
@@ -370,17 +702,14 @@ impl S3RefStore {
                 let oid = parse_ref_oid(&content)?;
                 Ok(Some((oid, etag)))
             }
-            Err(err) => {
-                // Check if the error indicates ref not found
-                let err_str = format!("{:?}", err);
-                if err_str.to_lowercase().contains("no_such_key")
-                    || err_str.to_lowercase().contains("404")
-                {
-                    Ok(None)
-                } else {
-                    Err(RefStoreError::Backend(format!("S3 get error: {:?}", err)))
-                }
+            Err(err)
+                if err
+                    .raw_response()
+                    .is_some_and(|response| response.status().as_u16() == 404) =>
+            {
+                Ok(None)
             }
+            Err(err) => Err(RefStoreError::Backend(format!("S3 get ref: {err:?}"))),
         }
     }
 
@@ -534,7 +863,7 @@ impl RefStore for S3RefStore {
                     let ref_name = key.strip_prefix(&base_prefix).unwrap_or(key);
 
                     // Read the ref value (without ETag)
-                    if let Ok(Some((oid, _))) = self.read_ref_opt(account, ref_name).await {
+                    if let Some((oid, _)) = self.read_ref_opt(account, ref_name).await? {
                         result.push((ref_name.to_string(), oid));
                     }
                 }
@@ -688,6 +1017,27 @@ impl IndexStore for S3IndexStore {
     }
 }
 
+fn s3_error(err: impl std::fmt::Debug) -> ObjectStoreError {
+    ObjectStoreError::Backend(format!("S3: {err:?}"))
+}
+fn s3_modified(
+    date: Option<&aws_sdk_s3::primitives::DateTime>,
+) -> Result<SystemTime, ObjectStoreError> {
+    date.cloned()
+        .ok_or_else(|| s3_error("missing LastModified"))?
+        .try_into()
+        .map_err(s3_error)
+}
+
+fn parse_object_key(prefix: &str, account: &str, key: &str) -> Option<ObjectId> {
+    let prefix = build_ref_key(prefix, account, "objects/");
+    let (shard, tail) = key.strip_prefix(&prefix)?.split_once('/')?;
+    if shard.len() != 2 || tail.len() != 38 {
+        return None;
+    }
+    format!("{shard}{tail}").parse().ok()
+}
+
 /// Build the full S3 key for a Git object.
 ///
 /// Layout: `{prefix}/{account}/objects/{aa}/{bb..}` where `aa` is the first two
@@ -761,6 +1111,18 @@ mod tests {
             assert_eq!(
                 build_object_key(prefix, "acct1", &oid),
                 format!("{root}/objects/01/23456789abcdef0123456789abcdef01234567")
+            );
+            assert_eq!(
+                parse_object_key(prefix, "acct1", &build_object_key(prefix, "acct1", &oid)),
+                Some(oid)
+            );
+            assert_eq!(
+                parse_object_key(
+                    prefix,
+                    "acct1",
+                    &build_ref_key(prefix, "acct1", "refs/heads/main")
+                ),
+                None
             );
             assert_eq!(
                 build_ref_key(prefix, "acct1", "refs/heads/main"),

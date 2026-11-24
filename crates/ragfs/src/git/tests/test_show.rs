@@ -262,7 +262,7 @@
         vfs.put("resources/entry/nested.md", b"tracked content");
         let commit = make_commit(&svc, "acct", "main", "first").await;
         let path = "resources/entry/nested.md";
-        let tree = load_commit_meta(object_store.as_ref(), "acct", &commit)
+        let tree = load_commit_meta(object_store.as_ref(), &OverlayView::empty(), "acct", &commit)
             .await
             .unwrap()
             .tree;
@@ -375,7 +375,7 @@
         // First, create a normal commit just to get a real tree OID.
         let seed_oid = make_commit(&svc, "acct", "main", "seed").await;
         let seed_tree =
-            load_commit_meta(object_store.as_ref() as &dyn ObjectStore, "acct", &seed_oid)
+            load_commit_meta(object_store.as_ref() as &dyn ObjectStore, &OverlayView::empty(), "acct", &seed_oid)
                 .await
                 .unwrap()
                 .tree;
