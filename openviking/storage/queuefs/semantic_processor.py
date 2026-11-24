@@ -45,14 +45,17 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker import (
+    get_task_tracker,
+    run_tracked_operation,
+    wait_for_enqueued_work,
+)
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import get_task_context
 from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     body_for_preview,
     parse_abstract_overview,
-    plan_abstract_overview_refresh,
     read_sidecar_if_exists,
 )
 from openviking.storage.errors import (
@@ -69,11 +72,7 @@ from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, S
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-from openviking.storage.queuefs.semantic_queue import (
-    is_semantic_msg_stale,
-    latest_semantic_revision,
-)
+from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_work import SemanticMessageWork, SkillSemanticMessageWork
 from openviking.storage.viking_fs import SyncDiff, get_viking_fs
 from openviking.telemetry import (
@@ -521,10 +520,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 await self._cleanup_local_artifact(msg)
                 return ProcessResult.success()
-            if (
-                not directory_refresh
-                and msg.coalesce_key
-                and await is_semantic_msg_stale(msg, agfs=get_viking_fs()._async_agfs)
+            if msg.coalesce_key and await is_semantic_msg_stale(
+                msg, agfs=get_viking_fs()._async_agfs
             ):
                 live_file_changes = {
                     kind: list(msg.changes.get(kind, []))
@@ -608,21 +605,6 @@ class SemanticProcessor(DequeueHandlerBase):
                         await work.skip()
                         return ProcessResult.success()
 
-                    if directory_refresh and msg.directory_changes:
-                        config = get_openviking_config().semantic
-                        decision = await plan_abstract_overview_refresh(
-                            viking_fs=get_viking_fs(),
-                            dir_uri=msg.uri,
-                            changed_entries=msg.directory_changes,
-                            ctx=current_ctx,
-                            overview_sample_limit=config.overview_sample_limit,
-                            refresh_ratio=config.freshness_refresh_ratio,
-                        )
-                        if decision.action is not FreshnessAction.REFRESH_NOW:
-                            return ProcessResult.success({"skipped": True})
-                        # On requeue after the decision, resume generation without
-                        # adding the same changes to the counter again.
-                        msg.directory_changes = 0
                     if uses_model and self._vlm_resolver is None:
                         raise RuntimeError(
                             "SemanticProcessor requires a VLM resolver for account-owned work"
@@ -759,16 +741,6 @@ class SemanticProcessor(DequeueHandlerBase):
                                 and msg.changes is not None
                                 and msg.aggregate_directory
                             )
-                            # A retried change can arrive behind a newer revision.
-                            # Only work published after this read can supersede
-                            # the directory snapshot about to be generated.
-                            snapshot_revision = (
-                                await latest_semantic_revision(
-                                    msg.coalesce_key, agfs=get_viking_fs()._async_agfs
-                                )
-                                if directory_refresh
-                                else msg.coalesce_version
-                            )
                             executor = SemanticTreeExecutor(
                                 processor=self,
                                 context_type=msg.context_type,
@@ -783,7 +755,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 skip_vectorization=msg.skip_vectorization,
                                 ingest_options=msg.ingest_options,
                                 coalesce_key=msg.coalesce_key,
-                                coalesce_version=snapshot_revision,
+                                coalesce_version=msg.coalesce_version,
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
                                 aggregate_directory=(
@@ -809,7 +781,8 @@ class SemanticProcessor(DequeueHandlerBase):
                                 return ProcessResult.success({"skipped": True})
                             if not executor.stale and defer_directory_refresh:
                                 # The shared directory task reads committed file abstracts.
-                                await work._wait_for_embedding_work(
+                                await wait_for_enqueued_work(
+                                    "Embedding",
                                     stop_waiting=self._embedding_worker_stopped,
                                 )
                                 await enqueue_directory_refresh(

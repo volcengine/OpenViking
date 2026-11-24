@@ -1184,6 +1184,8 @@ class ReindexExecutor:
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
         async def enqueue():
+            if msg.context_type == "memory":
+                return await semantic_queue.enqueue(msg, deduplicate_memory=False)
             return await semantic_queue.enqueue(msg)
 
         if run.lease is None:

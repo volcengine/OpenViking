@@ -77,6 +77,7 @@ from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -739,12 +740,18 @@ class FSService:
                 uri, account_id=ctx.account_id, context_type=context_type
             )
         if refresh_parent_uri and await viking_fs.exists(refresh_parent_uri, ctx=ctx):
-            error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
+            action, error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
             if isinstance(result, dict):
                 result["semantic_root_uri"] = refresh_parent_uri
-                result["semantic_status"] = "failed" if error else "queued"
                 if error:
+                    result["semantic_status"] = "failed"
                     result["semantic_error"] = error
+                elif action is FreshnessAction.REFRESH_NOW:
+                    result["semantic_status"] = "queued"
+                elif action is FreshnessAction.MARK_PENDING:
+                    result["semantic_status"] = "deferred"
+                else:
+                    result["semantic_status"] = "skipped"
         return result
 
     @staticmethod
@@ -930,10 +937,14 @@ class FSService:
             return result
 
         result["semantic_root_uri"] = refresh_parent_uri
-        error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
-        result["semantic_status"] = "failed" if error else "queued"
+        action, error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
         if error:
+            result["semantic_status"] = "failed"
             result["semantic_error"] = error
+        else:
+            result["semantic_status"] = (
+                "queued" if action is FreshnessAction.REFRESH_NOW else "skipped"
+            )
         return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:

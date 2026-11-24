@@ -8,8 +8,12 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.abstract_overview import plan_abstract_overview_refresh
+from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,14 +28,16 @@ async def enqueue_directory_refresh(
     propagate_to_parent: bool = True,
     dashboard_source_type: str = "",
     required: bool = False,
-) -> str | None:
-    """Schedule independent directory work and report any best-effort enqueue error."""
+) -> tuple[FreshnessAction, str | None]:
+    """Record directory changes and schedule a refresh when they reach the threshold."""
     from openviking.storage.queuefs import get_queue_manager
+    from openviking.storage.viking_fs import get_viking_fs
 
     directory_uri = directory_uri.rstrip("/")
+    context_type = context_type_for_uri(directory_uri)
     message = SemanticMsg(
         uri=directory_uri,
-        context_type=context_type_for_uri(directory_uri),
+        context_type=context_type,
         recursive=False,
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
@@ -39,10 +45,15 @@ async def enqueue_directory_refresh(
         peer_id=ctx.user.user_id,
         role=str(ctx.role),
         telemetry_id=get_current_telemetry().telemetry_id,
-        # A request that only generates content cannot supersede indexing work.
-        coalesce_key="" if skip_vectorization else f"directory|{ctx.account_id}|{directory_uri}",
+        coalesce_key=build_semantic_coalesce_key(
+            context_type=context_type,
+            uri=directory_uri,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            peer_id=ctx.user.user_id,
+            directory_only=True,
+        ),
         generation_trigger="directory_refresh",
-        directory_changes=changed_entries,
         skip_vectorization=skip_vectorization,
         propagate_to_parent=propagate_to_parent,
         dashboard_source_type=dashboard_source_type,
@@ -69,6 +80,25 @@ async def enqueue_directory_refresh(
     # The tracker records inline work in the current coroutine's context.
     # Scheduling must leave the producer's inline work intact on return.
     try:
+        config = get_openviking_config().semantic
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=get_viking_fs(),
+                dir_uri=directory_uri,
+                changed_entries=changed_entries,
+                ctx=ctx,
+                overview_sample_limit=config.overview_sample_limit,
+                refresh_ratio=config.freshness_refresh_ratio,
+            )
+        except LockAcquisitionError:
+            logger.info(
+                "Skipping directory freshness update because sidecars are busy uri=%s",
+                safe_uri_for_log(directory_uri),
+                extra={"degraded": True},
+            )
+            return FreshnessAction.NOOP, None
+        if decision.action is not FreshnessAction.REFRESH_NOW:
+            return decision.action, None
         await run_to_completion(dispatch)
     except Exception as exc:
         if required:
@@ -79,5 +109,5 @@ async def enqueue_directory_refresh(
             type(exc).__name__,
             extra={"degraded": True},
         )
-        return str(exc) or type(exc).__name__
-    return None
+        return FreshnessAction.REFRESH_NOW, str(exc) or type(exc).__name__
+    return FreshnessAction.REFRESH_NOW, None

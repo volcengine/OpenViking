@@ -3,6 +3,7 @@
 
 """Service-level tests for content write coordination."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -58,18 +59,23 @@ async def test_write_updates_memory_file_and_parent_overview(
     )
 
     overview_uri = f"{memory_dir}/.overview.md"
-    if overview_failure == "enqueue":
-        manager = get_queue_manager()
-        semantic_queue = manager.get_queue(manager.SEMANTIC)
-        queue_storage_write = semantic_queue._async_agfs.write
+    memory_id = vector_record_id(ctx.account_id, memory_uri, level=2)
+    manager = get_queue_manager()
+    semantic_queue = manager.get_queue(manager.SEMANTIC)
+    queue_storage_write = semantic_queue._async_agfs.write
+    l2_visible_on_refresh_submit = []
 
-        async def reject_overview_enqueue(path, *args, **kwargs):
-            if path == f"{semantic_queue.path}/enqueue_ext":
+    async def observe_overview_enqueue(path, payload, *args, **kwargs):
+        if path == f"{semantic_queue.path}/enqueue" and json.loads(payload)["uri"] == memory_dir:
+            l2_visible_on_refresh_submit.append(
+                await service.vikingdb_manager.exists(memory_id, ctx=ctx)
+            )
+            if overview_failure == "enqueue":
                 raise OSError("semantic queue storage unavailable")
-            return await queue_storage_write(path, *args, **kwargs)
+        return await queue_storage_write(path, payload, *args, **kwargs)
 
-        monkeypatch.setattr(semantic_queue._async_agfs, "write", reject_overview_enqueue)
-    elif overview_failure == "write":
+    monkeypatch.setattr(semantic_queue._async_agfs, "write", observe_overview_enqueue)
+    if overview_failure == "write":
         write_file = service.viking_fs.write_file
 
         async def reject_overview(uri, *args, **kwargs):
@@ -112,8 +118,8 @@ async def test_write_updates_memory_file_and_parent_overview(
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "complete"
     assert result["overview_status"] == ("failed" if overview_failure == "enqueue" else "queued")
+    assert l2_visible_on_refresh_submit == [True]
     await service.resources.wait_processed()
-    memory_id = vector_record_id(ctx.account_id, memory_uri, level=2)
     assert await service.vikingdb_manager.exists(memory_id, ctx=ctx)
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
     assert visible_content(stored, uri=memory_uri) == "Updated preference"

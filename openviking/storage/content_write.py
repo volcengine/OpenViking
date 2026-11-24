@@ -40,6 +40,7 @@ from openviking.service.task_domain import collect_queue_work_errors
 from openviking.service.task_tracker import (
     TaskStatus,
     get_task_tracker,
+    wait_for_enqueued_work,
 )
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
@@ -78,6 +79,7 @@ from openviking.storage.manual_conflicts import resolve_manual_conflicts
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.resource_diff import (
     ContentState,
     IndexState,
@@ -1286,7 +1288,8 @@ class ContentWriteCoordinator:
             )
             embedding_requested |= requested
 
-        if payload.get("refresh_directories", True):
+        if memory_directories and payload.get("refresh_directories", True):
+            await wait_for_enqueued_work("Embedding")
             for directory, count in memory_directories.items():
                 await enqueue_directory_refresh(directory, count, ctx=ctx)
         return resource_files, embedding_requested
@@ -2521,8 +2524,12 @@ class ContentWriteCoordinator:
         )
         overview_status = "skipped"
         if refresh_directory:
-            error = await enqueue_directory_refresh(root_uri, 1, ctx=ctx)
-            overview_status = "failed" if error else "queued"
+            await wait_for_enqueued_work("Embedding")
+            action, error = await enqueue_directory_refresh(root_uri, 1, ctx=ctx)
+            if error:
+                overview_status = "failed"
+            elif action is FreshnessAction.REFRESH_NOW:
+                overview_status = "queued"
         return overview_status, embedding_requested
 
     async def _write_memory_with_refresh(

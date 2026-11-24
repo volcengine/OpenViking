@@ -8,9 +8,8 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from openviking.server.identity import RequestContext
-from openviking.service.task_tracker import get_task_tracker
+from openviking.service.task_tracker import wait_for_enqueued_work
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -68,7 +67,8 @@ class SemanticMessageWork:
     async def finish_processing(self, succeeded: bool) -> None:
         assert self.scope is not None
         if self.msg.lock_handoff is not None or self.msg.generation_trigger == "directory_refresh":
-            await self._wait_for_embedding_work(
+            await wait_for_enqueued_work(
+                "Embedding",
                 stop_waiting=getattr(self.processor, "_embedding_worker_stopped", None),
             )
         if succeeded:
@@ -78,26 +78,13 @@ class SemanticMessageWork:
     def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
         return None
 
-    async def _wait_for_embedding_work(
-        self,
-        *,
-        stop_waiting: Callable[[], bool] | None = None,
-    ) -> None:
-        context = get_task_context()
-        work_ids = get_enqueued_work_ids("Embedding")
-        if context is not None and work_ids:
-            await get_task_tracker().wait_for_work(
-                context.task_id,
-                work_ids,
-                stop_waiting=stop_waiting,
-            )
-
     async def reenqueue(self) -> None:
         async def enqueue(queue, msg):
             if self.scope is not None and self.scope.lock is not None and self.scope._owned:
                 await self.processor._enqueue_semantic_retry(queue, msg, self.scope)
             else:
-                await queue.enqueue(msg)
+                # A retry needs a replacement delivery even inside the memory deduplication window.
+                await queue.enqueue(msg, deduplicate_memory=False)
 
         await self.processor._reenqueue_semantic_msg(self.msg, enqueue=enqueue)
 
@@ -168,7 +155,8 @@ class SkillSemanticMessageWork(SemanticMessageWork):
     async def finish_processing(self, succeeded: bool) -> None:
         async def finish():
             if not self.msg.skip_vectorization:
-                await self._wait_for_embedding_work(
+                await wait_for_enqueued_work(
+                    "Embedding",
                     stop_waiting=self.processor._embedding_worker_stopped,
                 )
             if succeeded:
@@ -196,7 +184,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
                     lambda: self.processor._enqueue_skill_retry(queue, msg, self.scope)
                 )
             else:
-                await run_to_completion(lambda: queue.enqueue(msg))
+                await run_to_completion(lambda: queue.enqueue(msg, deduplicate_memory=False))
 
         # The shared circuit-breaker delay remains interruptible. Only the
         # actual lock handoff and enqueue operation must finish once started.

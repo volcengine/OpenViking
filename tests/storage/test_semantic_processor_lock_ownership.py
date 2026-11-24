@@ -288,6 +288,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
     )
     for module in ("semantic_processor", "semantic_executor", "semantic_lock"):
         monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fs)
     agfs = _FakeAgfs()
     agfs.revision_allocate_async = AsyncMock(return_value=1)
     agfs.revision_publish_async = AsyncMock(return_value=1)
@@ -372,7 +373,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         await asyncio.wait_for(entered_embedding_drain.wait(), 1)
         assert not worker.done()
         assert released == []
-        directory_path = "/queue/Semantic/enqueue_ext"
+        directory_path = "/queue/Semantic/enqueue"
         assert directory_path not in agfs.files
         payload = json.loads(agfs.files["/queue/Embedding/enqueue"])
         metadata = extract_task_metadata(payload)
@@ -392,9 +393,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         )
         assert released == ["message-lock"]
         if context_type == "resource":
-            frame = agfs.files[directory_path]
-            header_length = int.from_bytes(frame[8:12], "big")
-            directory = json.loads(frame[header_length:])
+            directory = json.loads(agfs.files[directory_path])
             assert directory["uri"] == root
             assert directory["coalesce_key"]
             assert directory["lock_handoff"] is None

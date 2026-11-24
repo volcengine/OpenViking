@@ -13,6 +13,10 @@ from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
+from openviking.storage.queuefs.semantic_ops.freshness_policy import (
+    FreshnessAction,
+    FreshnessDecision,
+)
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
 from tests.test_task_tracker import _FakeAgfs
@@ -48,6 +52,7 @@ async def test_worker_without_lock_reenqueues_memory_work(monkeypatch, native_qu
         peer_id="p1",
     )
     await native_queue.enqueue(msg)
+    assert await native_queue.enqueue(msg) == "deduplicated"
     original = await native_queue.dequeue()
     assert original is not None
 
@@ -71,6 +76,17 @@ async def test_write_and_ingest_directory_refreshes_coalesce(monkeypatch, native
         "openviking.storage.queuefs.get_queue_manager",
         lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda *a, **kw: q),
     )
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_ops.directory_refresh.plan_abstract_overview_refresh",
+        AsyncMock(
+            side_effect=[
+                FreshnessDecision(FreshnessAction.MARK_PENDING, 2, 100),
+                FreshnessDecision(FreshnessAction.REFRESH_NOW, 10, 100),
+                FreshnessDecision(FreshnessAction.REFRESH_NOW, 11, 100),
+            ]
+        ),
+    )
     source = SemanticMsg(
         uri=directory_uri,
         context_type="resource",
@@ -83,14 +99,20 @@ async def test_write_and_ingest_directory_refreshes_coalesce(monkeypatch, native
     )
     await q.enqueue(file_work)
     processor = _processor()
-    await enqueue_directory_refresh(directory_uri, 2, ctx=processor._ctx_from_semantic_msg(source))
+    ctx = processor._ctx_from_semantic_msg(source)
+    assert await enqueue_directory_refresh(directory_uri, 2, ctx=ctx) == (
+        FreshnessAction.MARK_PENDING,
+        None,
+    )
+    await q.dequeue()  # File work has its own key.
+    assert await q.dequeue() is None
+
+    await enqueue_directory_refresh(directory_uri, 8, ctx=ctx)
     await processor._enqueue_parent_refresh(
         source, f"{directory_uri}/imported", l0_body_changed=True
     )
-    await q.dequeue()  # File work has its own key.
     first, second = await q.dequeue(), await q.dequeue()
     assert first.coalesce_key == second.coalesce_key != ""
-    assert (first.directory_changes, second.directory_changes) == (2, 1)
     assert first.coalesce_version < second.coalesce_version
     assert await is_semantic_msg_stale(first, agfs=q._async_agfs)
     assert not await is_semantic_msg_stale(second, agfs=q._async_agfs)
