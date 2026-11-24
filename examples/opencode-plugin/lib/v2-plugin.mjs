@@ -286,15 +286,18 @@ export async function captureV2Context(ctx, sessionManager, cursors, sessionID) 
   const cursor = cursors.get(sessionID) ?? await readCursor(ctx, sessionID)
   const cursorIndex = cursor ? messages.findIndex((message) => message?.id === cursor) : -1
   const pending = cursorIndex >= 0 ? messages.slice(cursorIndex + 1) : messages
+  let lastCaptured = cursor
   for (const message of pending) {
-    for (const normalized of contextMessageEvents(sessionID, message)) {
+    const events = contextMessageEvents(sessionID, message)
+    if (events.length === 0) continue
+    for (const normalized of events) {
       await sessionManager.handleEvent(normalized)
     }
+    lastCaptured = message.id
   }
-  const last = messages.at(-1)?.id
-  if (!last) return
-  cursors.set(sessionID, last)
-  if (last !== cursor) await writeCursor(ctx, sessionID, last)
+  if (!lastCaptured) return
+  cursors.set(sessionID, lastCaptured)
+  if (lastCaptured !== cursor) await writeCursor(ctx, sessionID, lastCaptured)
 }
 
 async function readCursor(ctx, sessionID) {
