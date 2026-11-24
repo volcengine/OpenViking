@@ -11,7 +11,7 @@ export const MEMORY_TRIGGERS = [
 ];
 
 const CJK_CHAR_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
-const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const RELEVANT_MEMORIES_BLOCK_RE = /[ \t]*<relevant-memories>[\s\S]*?<\/relevant-memories>[ \t]*/gi;
 const OPENVIKING_CONTEXT_BLOCK_RE = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi;
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
@@ -46,7 +46,7 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
 
 const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
-export function sanitizeUserTextForCapture(text: string): string {
+function stripCaptureNoise(text: string): string {
   // Drop legacy synthetic tool placeholders before they reach memory extraction.
   if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
@@ -56,9 +56,10 @@ export function sanitizeUserTextForCapture(text: string): string {
   if (COMPACTED_SYSTEM_MSG_RE.test(text)) {
     const match = text.match(COMPACTED_SYSTEM_MSG_RE);
     if (match) {
-      return match[1].replace(/\s+/g, " ").trim();
+      text = match[1];
+    } else {
+      return "";
     }
-    return "";
   }
   return text
     .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
@@ -71,8 +72,11 @@ export function sanitizeUserTextForCapture(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
     .replace(SUBAGENT_CONTEXT_RE, "")
     .replace(/\u0000/g, "")
-    .replace(/\s+/g, " ")
     .trim();
+}
+
+export function sanitizeUserTextForCapture(text: string): string {
+  return stripCaptureNoise(text).replace(/\s+/g, " ");
 }
 
 export function stripOpenVikingContextInjection(text: string): string {
@@ -423,8 +427,8 @@ export function extractNewTurnMessages(
     const text = extractPartText(content);
 
     if (text) {
-      // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
-      const cleanedText = sanitizeUserTextForCapture(text);
+      // Keep Markdown structure while removing injected context from the archive.
+      const cleanedText = stripCaptureNoise(text);
       if (cleanedText) {
         // 保持原始 role，assistant 保持 assistant，user 保持 user
         const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";

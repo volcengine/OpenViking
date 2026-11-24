@@ -349,13 +349,24 @@ describe("context-engine lifecycle service seam", () => {
     };
     const diag = vi.fn();
     const rememberSessionAgentId = vi.fn();
+    const message = [
+      "hello world",
+      "",
+      "- first",
+      "  - nested",
+      "",
+      "```python",
+      "if ready:",
+      "    run()",
+      "```",
+    ].join("\n");
 
     await afterTurnOpenVikingSession({
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       messages: [{
         role: "user",
-        content: "hello <relevant-memories>hidden</relevant-memories> world",
+        content: message.replace("hello world", "hello <relevant-memories>hidden</relevant-memories> world"),
         timestamp: 1775037660000,
       }],
       prePromptMessageCount: 0,
@@ -385,7 +396,7 @@ describe("context-engine lifecycle service seam", () => {
     expect(client.addSessionMessage).toHaveBeenCalledWith(
       ovSessionId,
       "user",
-      [{ type: "text", text: "hello world" }],
+      [{ type: "text", text: message }],
       undefined,
       "2026-04-01T10:01:00.000Z",
       undefined,
