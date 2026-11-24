@@ -168,7 +168,10 @@ def test_named_execution_ignores_non_owner_args(owner):
     [
         {"auto_update": False},
         {"update_schedule": None},
-        {"auto_update": True, "update_schedule": {"frequency": "daily", "hour": 10}},
+        {
+            "auto_update": True,
+            "update_schedule": {"frequency": "daily", "timezone": "UTC", "hour": 10},
+        },
     ],
 )
 async def test_execution_reports_misplaced_scheduling_options(client, args):
@@ -835,13 +838,34 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert peak == 8 and [item["latest_snapshot_id"] for item in result["outputs"]] == uris
 
 
-@pytest.mark.parametrize("rule", [{"frequency": "daily", "hour": 10}, {"frequency": "weekly"}])
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"frequency": "daily", "timezone": "UTC", "hour": 10},
+        {"frequency": "weekly", "timezone": "UTC"},
+    ],
+)
 def test_omitted_schedule_fields_spread_across_plans(rule):
     slots = [parse_schedule(rule, ("account", "owner", str(i))) for i in range(100)]
     assert len({slot["minute"] for slot in slots}) > 1
     assert {slot["hour"] for slot in slots} == ({10} if "hour" in rule else set(range(4)))
     if rule["frequency"] == "weekly":
         assert {slot["weekday"] for slot in slots} == set(range(1, 8))
+
+
+@pytest.mark.parametrize(
+    ("rule", "message"),
+    [
+        ({"frequency": "daily"}, "Field required"),
+        (
+            {"frequency": "daily", "timezone": "Mars/Olympus_Mons"},
+            "timezone must be a valid IANA timezone",
+        ),
+    ],
+)
+def test_schedule_requires_valid_iana_timezone(rule, message):
+    with pytest.raises(InvalidArgumentError, match=message):
+        parse_schedule(rule, ("account", "owner", "name"))
 
 
 async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, app, monkeypatch):
@@ -855,7 +879,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         return_value=(executor, {"account_id": ctx.account_id, "user_id": executor.user.user_id})
     )
     service.compile.configure_scheduler(scheduler)
-    rule = {"frequency": "daily", "hour": 10}
+    rule = {"frequency": "daily", "timezone": "America/Los_Angeles", "hour": 10}
     result = await service.compile.create_compile_task(
         CompileCreateRequest.model_validate({**SAVED_INPUTS, "args": {"update_schedule": rule}}),
         ctx=ctx,

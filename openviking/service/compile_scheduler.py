@@ -44,10 +44,19 @@ def _period(schedule: Dict[str, Any]) -> timedelta:
     return timedelta(days=7 if schedule["frequency"] == "weekly" else 1)
 
 
+def _timezone(schedule: Dict[str, Any]) -> ZoneInfo:
+    """Return the saved timezone, retaining Beijing semantics for legacy records."""
+    return ZoneInfo(schedule.get("timezone", TZ.key))
+
+
 def current_slot(schedule: Dict[str, Any], now: datetime) -> datetime:
-    """Most recent Beijing-time trigger of ``schedule`` not after ``now``."""
-    local = now.astimezone(TZ)
-    slot = local.replace(hour=schedule["hour"], minute=schedule["minute"], second=0, microsecond=0)
+    """Most recent local-time trigger of ``schedule`` not after ``now``."""
+    local = now.astimezone(_timezone(schedule))
+    # On a fall-back day, choose the first occurrence of an ambiguous wall time so a
+    # daily schedule still represents one slot per local calendar day.
+    slot = local.replace(
+        hour=schedule["hour"], minute=schedule["minute"], second=0, microsecond=0, fold=0
+    )
     if schedule["frequency"] == "weekly":
         slot -= timedelta(days=(local.isoweekday() - schedule["weekday"]) % 7)
     return slot - _period(schedule) if slot > local else slot

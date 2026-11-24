@@ -40,7 +40,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
     "instruction": "Organize the evidence into a knowledge base.",
     "args": {
       "auto_update": true,
-      "update_schedule": {"frequency": "daily", "hour": 10, "minute": 0}
+      "update_schedule": {"frequency": "daily", "timezone": "Asia/Singapore", "hour": 10, "minute": 0}
     }
   }'
 ```
@@ -57,7 +57,7 @@ Missing or invalid `compile_name` is rejected; the server never generates a fall
 
 Creation synchronously validates inputs, permissions and visible directory tags, creates `to` if needed, and durably enqueues an independent internal tagging Task. It does not wait for directory indexes, embeddings or tag visibility. A file at `to` or failure to durably enqueue the internal task returns an error. A QueueFS consumer prepares the root directory index and applies `compile_target=true`, retrying failures without recursively tagging descendants or replacing existing content, summaries and other tags. If the target path no longer exists, tagging stops for that path without recreating it. Configuration creation does not execute Compile, create a run, or snapshot sources.
 
-Scheduling controls are stored separately from Runtime arguments. A non-null schedule enables updates unless `auto_update=false` is explicit. A schedule requires `frequency` (`daily` or `weekly`) and uses Beijing time (`Asia/Shanghai`).
+Scheduling controls are stored separately from Runtime arguments. A non-null schedule enables updates unless `auto_update=false` is explicit. A schedule requires `frequency` (`daily` or `weekly`) and an IANA `timezone` such as `Asia/Singapore` or `UTC`. Trigger slots use wall-clock time in that timezone, including daylight-saving transitions.
 
 With only the frequency, the server assigns a fixed time between 00:00 and 03:59. Weekly schedules also get a fixed `weekday` (1=Monday through 7=Sunday) when omitted. Supplying only `hour` (0–23) assigns a fixed minute within that hour, so `hour: 10` runs between 10:00 and 10:59. Supplying only `minute` (0–59) sets the hour to zero. Read the configuration's `update_schedule` to see the assigned values.
 
@@ -119,7 +119,7 @@ If a source directory has been deleted or moved, a new execution returns HTTP `4
 ```bash
 ov compile create --compile-name research-summary --from viking://resources/research \
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki \
-  --args '{"auto_update":true,"update_schedule":{"frequency":"daily","hour":10}}'
+  --args '{"auto_update":true,"update_schedule":{"frequency":"daily","timezone":"Asia/Singapore","hour":10}}'
 ov compile --compile-name research-summary
 ```
 

@@ -19,7 +19,13 @@ const config = {
   skill: 'viking://user/alice/skills/compile',
   instruction: 'initial',
   auto_update: true,
-  update_schedule: { frequency: 'weekly', hour: 9, minute: 30, weekday: 2 },
+  update_schedule: {
+    frequency: 'weekly',
+    timezone: 'Asia/Shanghai',
+    hour: 9,
+    minute: 30,
+    weekday: 2,
+  },
 };
 test('compile configuration uses the nearest registered root and preserves draft/schedule across failed saves and locale changes', async () => {
   const uri = `${target}/nested`;
@@ -75,6 +81,7 @@ test('compile configuration uses the nearest registered root and preserves draft
       to: uri,
       update_schedule: {
         frequency: 'weekly',
+        timezone: 'Asia/Shanghai',
         hour: 10,
         minute: 45,
         weekday: 2,

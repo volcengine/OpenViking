@@ -35,9 +35,10 @@ from typing import (
     Union,
 )
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema, with_config
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri
@@ -170,14 +171,15 @@ def execution_signature(record: Mapping[str, Any]) -> str:
 
 @with_config(ConfigDict(extra="forbid"))
 class ScheduleTime(TypedDict, total=False):
-    """Beijing wall-clock time. Omit both parts to assign a minute before 04:00."""
+    """Wall-clock time in a caller-supplied IANA timezone."""
 
+    timezone: Required[Annotated[str, Field(strict=True, min_length=1, max_length=255)]]
     hour: Annotated[int, Field(ge=0, le=23)]
     minute: Annotated[int, Field(ge=0, le=59)]
 
 
 class DailySchedule(ScheduleTime):
-    """Run every day at the same Beijing time."""
+    """Run every day at the same local time."""
 
     frequency: Literal["daily"]
 
@@ -199,6 +201,12 @@ def parse_schedule(value: Any, schedule_key: tuple[str, str, str]) -> dict:
     except ValidationError as exc:
         raise InvalidArgumentError(
             f"Invalid update_schedule: {exc.errors(include_url=False)[0]['msg']}"
+        ) from exc
+    try:
+        ZoneInfo(schedule["timezone"])
+    except (KeyError, ValueError, ZoneInfoNotFoundError) as exc:
+        raise InvalidArgumentError(
+            "Invalid update_schedule: timezone must be a valid IANA timezone"
         ) from exc
     rng = random.Random(json.dumps(schedule_key))
     if schedule["frequency"] == "weekly":
