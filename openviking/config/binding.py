@@ -95,7 +95,10 @@ def _validate_request(patch: dict, is_account: bool, creating: bool) -> None:
 
 
 def _validate_account_vlm_candidate(context: AccountCandidateContext) -> None:
-    if not context.creating:
+    """Validate effective VLM on Account creation and VLM updates."""
+    if not context.creating and (
+        context.changed_sections is None or "vlm" not in context.changed_sections
+    ):
         return
     account = context.new_view.account
     cluster = context.new_view.cluster

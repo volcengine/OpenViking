@@ -645,6 +645,7 @@ Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
 VLM business resolution uses Cluster VLM when an Account has no VLM section.
+Removing the Account VLM section requires a valid Cluster VLM.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
