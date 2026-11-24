@@ -1,12 +1,13 @@
 {
   "schemaVersion": 1,
   "id": "openviking-memory",
-  "version": "0.5.22",
+  "version": "0.5.37",
   "clients": [
     "zcode"
   ],
   "capabilities": [
     "hooks",
-    "mcp"
+    "mcp",
+    "skills"
   ]
 }

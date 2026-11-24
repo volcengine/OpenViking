@@ -9,7 +9,7 @@ your application needs; each package owns its dependencies, tests, and release.
 | Framework | Package | Entry points | Installation |
 | --- | --- | --- | --- |
 | [LangChain / LangGraph](langchain/) | `langchain-openviking` | Retriever, context middleware, history, store, and tools | `pip install "langchain-openviking[langgraph]"` (omit the extra for base LangChain adapters) |
-| [Microsoft Agent Framework](microsoft-agent-framework/) | `openviking-agent-framework` | `OpenVikingContextProvider` | From a checkout: `pip install ./integrations/frameworks/microsoft-agent-framework`; PyPI publication is pending |
+| [Microsoft Agent Framework](microsoft-agent-framework/) | `openviking-ms-agent-framework` | `OpenVikingContextProvider` | Released versions: `pip install openviking-ms-agent-framework`; see [checkout instructions](microsoft-agent-framework/#install-and-try) for unreleased versions |
 
 LangChain and LangGraph share one package. Repository directory names do not
 change the Python imports: use `langchain_openviking` or

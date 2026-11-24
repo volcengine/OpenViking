@@ -52,6 +52,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
         async_client: Any = None,
         url: str | None = None,
         api_key: str | None = None,
+        auth_mode: str | None = None,
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
@@ -84,6 +85,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             async_client=async_client,
             url=url,
             api_key=api_key,
+            auth_mode=auth_mode,
             account=account,
             user=user,
             user_id=user_id,
@@ -185,7 +187,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
     def clear(self) -> None:
         client = self._get_client()
         call_openviking(client, "delete_session", session_id=self.session_id)
-        self._ensure_session(client)
+        call_openviking(client, "create_session", session_id=self.session_id)
         self._acknowledge_context_parts()
 
     async def aclear(self) -> None:
@@ -193,7 +195,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
 
         client = await self._get_async_client()
         await acall_openviking(client, "delete_session", session_id=self.session_id)
-        await self._aensure_session(client)
+        await acall_openviking(client, "create_session", session_id=self.session_id)
         self._acknowledge_context_parts()
 
     def close(self) -> None:
@@ -269,21 +271,23 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             )
 
 
-def context_parts_from_documents(documents: Sequence[Any]) -> list[dict[str, Any]]:
+def context_parts_from_documents(
+    documents: Sequence[Any], *, metadata_prefix: str = "openviking"
+) -> list[dict[str, Any]]:
     """Build OpenViking ContextPart dictionaries from LangChain Documents."""
 
     parts: list[dict[str, Any]] = []
     for doc in documents:
         metadata = getattr(doc, "metadata", {}) or {}
-        uri = metadata.get("openviking_uri") or metadata.get("source") or ""
+        uri = metadata.get(f"{metadata_prefix}_uri") or metadata.get("source") or ""
         if not uri:
             continue
         parts.append(
             {
                 "type": "context",
                 "uri": uri,
-                "context_type": metadata.get("openviking_context_type") or "resource",
-                "abstract": metadata.get("openviking_abstract")
+                "context_type": metadata.get(f"{metadata_prefix}_context_type") or "resource",
+                "abstract": metadata.get(f"{metadata_prefix}_abstract")
                 or getattr(doc, "page_content", "")[:500],
             }
         )

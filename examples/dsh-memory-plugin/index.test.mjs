@@ -197,6 +197,25 @@ test("agent/created (dsh 0.1.7+) runs startup once and pre-step does not re-inje
   });
 });
 
+test("agent/pre-step keeps the downstream decision's other fields when it appends", async () => {
+  const { handlers } = mountPlugin();
+  const agent = startupAgent("dsh-goal-round");
+  await withQuietFetch(async () => {
+    const input = [message("goal round prompt")];
+    // goal-round-driver marks the entry that opens a request series.
+    const decision = await handlers.get("agent/pre-step")({
+      agent,
+      messages: input,
+      signal: new AbortController().signal,
+    }, async () => ({ kind: "enter", messages: input, startsRequestSeries: true }));
+
+    assert.equal(decision.kind, "enter");
+    assert.equal(decision.startsRequestSeries, true);
+    assert.equal(decision.messages[0], input[0]);
+    assert.ok(decision.messages.length > input.length, "the profile block was appended");
+  });
+});
+
 test("dsh 0.1.x: source-less agent/created defers startup to agent/session-start", async () => {
   const { handlers, calls } = mountPlugin();
   const agent = startupAgent("dsh-legacy");
@@ -261,3 +280,20 @@ function response(result, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+test("mcpEnabled false mounts neither the MCP tools nor the skills", () => {
+  const mounted = (input) => {
+    let count = 0;
+    apply({
+      logger: { debug() {} },
+      provide() {},
+      effect: (execute) => { execute(); return async () => {}; },
+      tools: { register() {} },
+      plugin() { count += 1; },
+      on() {},
+    }, { endpoint: "http://127.0.0.1:1933", workspacePeer: false, ...input });
+    return count;
+  };
+  assert.equal(mounted({}), 2);
+  assert.equal(mounted({ mcpEnabled: false }), 0);
+});

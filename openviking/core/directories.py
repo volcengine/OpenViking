@@ -9,7 +9,7 @@ This module defines the preset directory structure that is created on initializa
 
 import asyncio
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
@@ -18,7 +18,11 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.observability.log_safety import safe_uri_for_log
+from openviking.privacy.global_policy import ensure_global_policy_file
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import ensure_agent_file
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.vector_ids import vector_record_id
@@ -26,6 +30,7 @@ from openviking.storage.vector_ids import vector_record_id
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
     from openviking.storage.viking_fs import VikingFS
+    from openviking.system_assets.sync import SystemAssetSynchronizer
 
 from openviking_cli.exceptions import NotFoundError
 
@@ -92,21 +97,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                         overview="Access when handling similar future problems. Cases are specific examples, separate from reusable patterns.",
                     ),
                     DirectoryDefinition(
-                        path="patterns",
-                        abstract="User's pattern memories. Stores reusable methods, workflows, and SOP-like lessons.",
-                        overview="Access when applying accumulated methods to new tasks. Patterns are generalized from cases and interactions.",
-                    ),
-                    DirectoryDefinition(
-                        path="tools",
-                        abstract="User's tool usage memories. Stores tool behavior, parameter experience, and failure modes.",
-                        overview="Access when deciding how to call tools or diagnosing tool failures.",
-                    ),
-                    DirectoryDefinition(
-                        path="skills",
-                        abstract="User's skill execution memories. Stores experience about using configured skills.",
-                        overview="Access when choosing or executing skills. This is memory about skill usage, not the skill definition itself.",
-                    ),
-                    DirectoryDefinition(
                         path="trajectories",
                         abstract="User's execution trajectory records. Stores end-to-end task execution traces when trajectory memory is enabled.",
                         overview="Access when reviewing how a previous task was executed.",
@@ -138,6 +128,13 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 abstract="User skill registry. Uses Claude Skills protocol format, flat storage of callable skill definitions owned by the current User.",
                 overview="Access when the current User or a proxy acting with the current User's API key needs to execute specific tasks. Skills categorized by tags, "
                 "should retrieve relevant skills before executing tasks, select most appropriate skill to execute.",
+            ),
+            DirectoryDefinition(
+                path="tools",
+                abstract="User-private tool configuration for agent capabilities.",
+                overview="Stores tool integration definitions owned by the current User, "
+                "such as MCP server tool catalogs. Shared tools remain under "
+                "viking://agent/tools.",
             ),
             DirectoryDefinition(
                 path="sessions",
@@ -195,9 +192,15 @@ class DirectoryInitializer:
         self,
         vikingdb: "VikingDBManager",
         viking_fs: Optional["VikingFS"] = None,
+        system_asset_synchronizer: Optional["SystemAssetSynchronizer"] = None,
+        user_config_defaults: Optional[UserConfigDefaults] = None,
     ):
         self.vikingdb = vikingdb
         self._viking_fs = viking_fs
+        self._system_asset_synchronizer = system_asset_synchronizer
+        self.user_config_defaults = (
+            user_config_defaults if user_config_defaults is not None else UserConfigDefaults()
+        )
 
     def _get_viking_fs(self) -> "VikingFS":
         if self._viking_fs is not None:
@@ -206,15 +209,26 @@ class DirectoryInitializer:
 
         return get_viking_fs()
 
-    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+    async def initialize_account_workspace(
+        self,
+        ctx: RequestContext,
+        *,
+        sync_system_assets: bool = True,
+        lease_ref: Any = None,
+    ) -> tuple[int, int]:
         """Initialize account and first-user preset directories as one batch."""
+        if sync_system_assets and self._system_asset_synchronizer is not None:
+            await self._system_asset_synchronizer.sync(ctx, lease_ref=lease_ref)
         account_roots, account_children = self._account_directory_targets(ctx)
         user_root, user_children = self._user_directory_targets(ctx)
         created = await self._initialize_directory_trees(
-            (*account_roots, user_root), (*account_children, *user_children)
+            (*account_roots, user_root),
+            (*account_children, *user_children),
+            lease_ref=lease_ref,
         )
+        memory_count = await self._initialize_user_contents(user_root, lease_ref=lease_ref)
         user_count = sum(target.scope == "user" for target in created)
-        return len(created) - user_count, user_count
+        return len(created) - user_count, user_count + memory_count
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared roots and their preset first-level directories.
@@ -223,33 +237,69 @@ class DirectoryInitializer:
         Its concrete metadata belongs to ``viking://user/{user_id}`` and is
         created by ``initialize_user_directories``.
         """
+        if self._system_asset_synchronizer is not None:
+            await self._system_asset_synchronizer.sync(ctx)
         roots, children = self._account_directory_targets(ctx)
         return len(await self._initialize_directory_trees(roots, children))
 
-    async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize the current user's root and first-level entry directories.
-
-        Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
-        are still created lazily when content is written. This keeps a new user
-        root discoverable without materializing the full empty taxonomy.
-        """
+    async def initialize_user_directories(
+        self, ctx: RequestContext, *, lease_ref: Any = None
+    ) -> int:
+        """Provision the user workspace and return the number of directories seeded with summaries."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
-        return len(await self._initialize_directory_trees((user_root,), user_children))
+        created = await self._initialize_directory_trees(
+            (user_root,), user_children, lease_ref=lease_ref
+        )
+        memory_count = await self._initialize_user_contents(user_root, lease_ref=lease_ref)
+        return len(created) + memory_count
+
+    async def _initialize_user_contents(
+        self, user_root: _DirectoryTarget, *, lease_ref: Any = None
+    ) -> int:
+        ctx = user_root.ctx
+        directories = [
+            _DirectoryTarget(
+                uri=f"{user_root.uri}/{parent.path}/{child.path}",
+                parent_uri=f"{user_root.uri}/{parent.path}",
+                definition=child,
+                scope=user_root.scope,
+                ctx=ctx,
+            )
+            for parent in user_root.definition.children
+            for child in parent.children
+        ]
+        # Seed browsing descriptions here. Memory updates index the summaries derived from content.
+        results = await asyncio.gather(
+            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in directories),
+            return_exceptions=True,
+        )
+        created, error = self._partition_directory_results(results)
+        if error is not None:
+            raise error
+        viking_fs = self._get_viking_fs()
+        await ensure_agent_file(viking_fs, ctx, lease_ref=lease_ref)
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(viking_fs, ctx, lease_ref=lease_ref)
+        return len(created)
 
     async def _initialize_directory_trees(
-        self, roots: Sequence[_DirectoryTarget], children: Sequence[_DirectoryTarget]
+        self,
+        roots: Sequence[_DirectoryTarget],
+        children: Sequence[_DirectoryTarget],
+        *,
+        lease_ref: Any = None,
     ) -> list[_DirectoryTarget]:
         """Initialize roots before children and index successful writes as one batch."""
         results = await asyncio.gather(
-            *(self._ensure_agfs_directory(target) for target in roots),
+            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in roots),
             return_exceptions=True,
         )
         created, error = self._partition_directory_results(results)
         if error is None:
             results = await asyncio.gather(
-                *(self._ensure_agfs_directory(target) for target in children),
+                *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in children),
                 return_exceptions=True,
             )
             created_children, error = self._partition_directory_results(results)
@@ -337,7 +387,9 @@ class DirectoryInitializer:
                 created_targets.append(result)
         return created_targets, first_error
 
-    async def _ensure_agfs_directory(self, target: _DirectoryTarget) -> _DirectoryTarget | None:
+    async def _ensure_agfs_directory(
+        self, target: _DirectoryTarget, *, lease_ref: Any = None
+    ) -> _DirectoryTarget | None:
         """Fill missing L0/L1 files, preserving stored text for vector initialization."""
         from openviking_cli.utils.logger import get_logger
 
@@ -345,36 +397,53 @@ class DirectoryInitializer:
         viking_fs = self._get_viking_fs()
         contents = {}
         missing = {}
+        defaults = (
+            ("abstract", target.definition.abstract),
+            ("overview", target.definition.overview),
+        )
+        results = await asyncio.gather(
+            *(
+                viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
+                for name, _ in defaults
+            ),
+            return_exceptions=True,
+        )
         try:
-            for name, default in (
-                ("abstract", target.definition.abstract),
-                ("overview", target.definition.overview),
-            ):
-                try:
-                    raw = await viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
-                except (FileNotFoundError, NotFoundError):
+            for (name, default), raw in zip(defaults, results, strict=True):
+                if isinstance(raw, (FileNotFoundError, NotFoundError)):
                     contents[name] = default
                     missing[name] = contents[name]
+                elif isinstance(raw, BaseException):
+                    raise raw
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:
-            logger.warning(
-                "[VikingFS] Directory %s (account=%s) has invalid L0/L1 metadata; "
-                "preserving existing contents: %s",
-                target.uri,
+            logger.info(
+                "directory metadata invalid; preserving existing contents uri=%s account_id=%s error_type=%s",
+                safe_uri_for_log(target.uri),
                 target.ctx.account_id,
-                exc,
+                type(exc).__name__,
+                extra={
+                    "degraded": True,
+                    "account_id": target.ctx.account_id,
+                    "error_type": type(exc).__name__,
+                },
             )
             return None
         if not missing:
-            logger.debug(f"[VikingFS] Directory {target.uri} already exists")
+            logger.debug("directory metadata already exists uri=%s", safe_uri_for_log(target.uri))
             return None
-        logger.debug(f"[VikingFS] Creating directory: {target.uri} for scope {target.scope}")
+        logger.debug(
+            "creating directory metadata uri=%s scope=%s",
+            safe_uri_for_log(target.uri),
+            target.scope,
+        )
         await viking_fs.write_context(
             uri=target.uri,
             **missing,
             is_leaf=False,
             ctx=target.ctx,
+            lease_ref=lease_ref,
         )
         return replace(target, definition=replace(target.definition, **contents))
 

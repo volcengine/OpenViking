@@ -14,11 +14,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
-from openviking.service.task_work_index import (
-    QueueTaskMetadata,
-    bind_task_context,
-    record_enqueued_work,
-)
+from openviking.service.task_domain import WorkRecoveryMode
+from openviking.service.task_work_index import bind_task_context, record_enqueued_work
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueue
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.queue_manager import QueueManager
@@ -86,10 +83,13 @@ def test_queue_worker_closes_loop_scoped_clients_before_closing_its_loop() -> No
 async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
     transport, monkeypatch, concurrency
 ):
+    from openviking.service.task_store import PersistentTaskStore
+    from openviking.service.task_tracker import TaskTracker
     from openviking.service.task_tracker_concurrency import run_to_completion
     from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
     from openviking.storage.queuefs.semantic_msg import SemanticMsg
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+    from tests.test_task_tracker import _FakeAgfs
 
     msg = SemanticMsg(
         uri="viking://agent/skills/demo",
@@ -99,9 +99,14 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
     )
     started, queued, release = threading.Event(), threading.Event(), threading.Event()
     events = []
-    work_index = None
-    active_work = QueueTaskMetadata("skill-task", "active")
-    queued_work = QueueTaskMetadata("skill-task", "queued")
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    task = await tracker.create(
+        "add_skill", task_id="skill-task", account_id="acc", user_id="alice"
+    )
+    await tracker.start(task.task_id, account_id="acc", user_id="alice")
+    active_work = "active"
+    queued_work = "queued"
 
     class Lease:
         lock = {"lease_ref": "demo"}
@@ -116,11 +121,22 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             pass
 
         async def run(self, uri):
-            assert work_index is not None
-            assert work_index.register("Embedding", active_work)
-            assert work_index.register("Embedding", queued_work)
-            record_enqueued_work("Embedding", active_work.work_id)
-            record_enqueued_work("Embedding", queued_work.work_id)
+            await tracker.register_work(
+                task.task_id,
+                active_work,
+                "Embedding",
+                account_id="acc",
+                user_id="alice",
+            )
+            await tracker.register_work(
+                task.task_id,
+                queued_work,
+                "Embedding",
+                account_id="acc",
+                user_id="alice",
+            )
+            record_enqueued_work("Embedding", active_work)
+            record_enqueued_work("Embedding", queued_work)
             queued.set()
 
         def get_stats(self):
@@ -132,8 +148,12 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             while not release.is_set():
                 await asyncio.sleep(0.01)
             events.append("write-finished")
-            assert work_index is not None
-            work_index.record_result(active_work, "completed")
+            await tracker.mark_work_done(
+                task.task_id,
+                active_work,
+                account_id="acc",
+                user_id="alice",
+            )
 
         await run_to_completion(finish)
         return ProcessResult.success()
@@ -156,7 +176,7 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
 
         async def process_dequeued(self, data):
             if self.name == QueueManager.SEMANTIC:
-                with bind_task_context("skill-task", "", "", enqueued_work=[]):
+                with bind_task_context("skill-task", "acc", "alice", enqueued_work=[]):
                     return await self.handler(data)
             return await self.handler(data)
 
@@ -182,11 +202,6 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
     )
     manager = QueueManager(
         object(), max_concurrent_semantic=concurrency, max_concurrent_embedding=concurrency
-    )
-    work_index = manager._task_work_index
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_work.get_task_tracker",
-        lambda: SimpleNamespace(wait_for_work=work_index.wait_for_work),
     )
     manager._poll_interval = 0.001
     manager.set_vlm_resolver(SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())))
@@ -214,7 +229,7 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
         assert all(not thread.is_alive() for thread in threads)
         assert events.index("write-finished") < events.index("lock-released")
         assert f"ack-{manager.SEMANTIC}" not in events
-        assert work_index.has_work("skill-task")  # Queued vectors await restart.
+        assert await tracker.has_work(task.task_id, account_id="acc", user_id="alice")
     finally:
         release.set()
         if stopping is not None:
@@ -255,44 +270,43 @@ def transport(monkeypatch):
     return client
 
 
-async def test_constructor_middlewares_apply_to_all_queues(transport):
-    calls = []
-
-    class Recorder(QueueMiddleware):
-        async def enqueue(self, ctx, call_next):
-            calls.append(ctx.queue)
-            return await call_next(ctx)
-
-    middlewares = [Recorder()]
-    manager = QueueManager(object(), middlewares=middlewares)
-    middlewares.clear()
-    existing = manager.get_queue("existing", allow_create=True)
-    with bind_task_context("task", "account", "user"):
-        await existing.enqueue({})
-        middlewares.append(Recorder())
-        future = manager.get_queue("future", allow_create=True)
-        await future.enqueue({})
-    assert calls == ["existing", "future"]
-    assert manager._task_work_index.has_work("task")
-    assert transport.write.await_count == 2
-
-
-async def test_init_queue_manager_forwards_constructor_middlewares(transport, monkeypatch):
+async def test_initialized_manager_preserves_middleware_for_each_new_queue(tmp_path, monkeypatch):
     from openviking.storage.queuefs import queue_manager as queue_module
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
 
-    calls = []
-
-    class Recorder(QueueMiddleware):
+    class AddQueueName(QueueMiddleware):
         async def enqueue(self, ctx, call_next):
-            calls.append(ctx.queue)
+            ctx.payload = {"queue": ctx.queue, "body": ctx.payload}
             return await call_next(ctx)
 
+    class Replacement(QueueMiddleware):
+        async def enqueue(self, ctx, call_next):
+            raise AssertionError("mutating the caller's list changed the queue middleware")
+
+    client = create_agfs_client(
+        RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="memory"))
+    )
     monkeypatch.setattr(queue_module, "_instance", None)
-    manager = queue_module.init_queue_manager(object(), middlewares=[Recorder()])
-    assert queue_module.get_queue_manager() is manager
-    await manager.get_queue("Test", allow_create=True).enqueue({})
-    assert calls == ["Test"]
-    transport.write.assert_awaited_once_with("/queue/Test/enqueue", b"{}")
+    try:
+        middlewares = [AddQueueName()]
+        initialized = queue_module.init_queue_manager(client, middlewares=middlewares)
+        manager = queue_module.get_queue_manager()
+        assert manager is initialized
+
+        original = manager.get_queue("original", allow_create=True)
+        middlewares[:] = [Replacement()]
+        future = manager.get_queue("future", allow_create=True)
+
+        for name, queue in [("original", original), ("future", future)]:
+            await queue.enqueue("payload")
+            message = await queue.dequeue_raw()
+            assert message is not None
+            assert json.loads(message["data"]) == {"queue": name, "body": "payload"}
+            await queue.ack(message["id"], message)
+            assert (await queue.get_status()).is_complete
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -334,30 +348,28 @@ async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail
         transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
 
 
-async def test_bootstrap_restores_legacy_messages_into_middleware_index(transport):
+async def test_bootstrap_restores_legacy_messages_into_store(transport):
     manager = QueueManager(object())
-    queue = manager.get_queue("Test", allow_create=True)
+    manager.get_queue("Test", allow_create=True)
     message = {
         "id": "legacy-message",
         "data": json.dumps({"task_id": "task", "account_id": "account", "user_id": "user"}),
     }
     transport.read.return_value = json.dumps([message]).encode()
-    attached = []
+    restored_work = []
 
     class Tracker:
-        def attach_work_index(self, index):
-            attached.append(index)
-            assert index.has_work("task")
+        work_recovery_mode = WorkRecoveryMode.QUEUE_SNAPSHOT
+
+        async def reconcile_delivery(self, task_id, work_id, queue_name, *, account_id, user_id):
+            restored_work.append((task_id, work_id, queue_name, account_id, user_id))
 
         async def restore_work_tasks(self, owners):
             assert owners == {"task": ("account", "user")}
             return ["restored"]
 
     assert await manager.prepare_task_tracking(Tracker()) == ["restored"]
-    assert attached == [manager._task_work_index]
-    await queue.ack("legacy-message", message)
-    assert not attached[0].has_work("task")
-    transport.write.assert_awaited_once_with("/queue/Test/ack", b"legacy-message")
+    assert restored_work == [("task", "queuefs:legacy-message", "Test", "account", "user")]
 
 
 async def test_bootstrap_restores_task_owner_from_cross_user_child_work(transport):
@@ -377,13 +389,17 @@ async def test_bootstrap_restores_task_owner_from_cross_user_child_work(transpor
         ),
     }
     transport.read.return_value = json.dumps([message]).encode()
+    restored_work = []
 
     class Tracker:
-        def attach_work_index(self, index):
-            assert index.has_work("task")
+        work_recovery_mode = WorkRecoveryMode.QUEUE_SNAPSHOT
+
+        async def reconcile_delivery(self, task_id, work_id, queue_name, *, account_id, user_id):
+            restored_work.append((task_id, work_id, queue_name, account_id, user_id))
 
         async def restore_work_tasks(self, owners):
             assert owners == {"task": ("account", "task-owner")}
             return ["restored"]
 
     assert await manager.prepare_task_tracking(Tracker()) == ["restored"]
+    assert restored_work == [("task", "work", "Test", "account", "task-owner")]

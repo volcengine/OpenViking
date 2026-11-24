@@ -69,7 +69,7 @@ class RedisClientHandle:
                     await close()
 
 
-def create_redis_client(raw_params: dict[str, object]) -> RedisClientHandle:
+def create_redis_client(raw_params: dict[str, object], **options: Any) -> RedisClientHandle:
     """Create a redis-py client for standalone, cluster, or Sentinel Redis."""
     try:
         config = RedisCacheConfig.model_validate(raw_params)
@@ -90,6 +90,7 @@ def create_redis_client(raw_params: dict[str, object]) -> RedisClientHandle:
         "username": config.username or None,
         "password": password,
         "max_connections": config.pool_size,
+        **options,
     }
 
     if config.mode == "standalone":
@@ -105,10 +106,12 @@ def create_redis_client(raw_params: dict[str, object]) -> RedisClientHandle:
         )
 
     if config.mode == "cluster":
-        from redis.asyncio.cluster import ClusterNode, RedisCluster
+        from redis.asyncio.cluster import ClusterNode
+
+        from openviking.scheduling.redis_cluster import SeededRedisCluster
 
         return RedisClientHandle(
-            RedisCluster(
+            SeededRedisCluster(
                 startup_nodes=[ClusterNode(host, port) for host, port in _endpoint_parts(config)],
                 db=0,
                 **common,

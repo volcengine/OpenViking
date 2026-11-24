@@ -30,6 +30,10 @@ const keys = {
   missing: '已删除',
   missingProfile: '这个上下文配置已不存在',
   missingUpstream: '这个上游已不存在',
+  openviking: {
+    name: 'OpenViking API 密钥',
+    defaults: '账号默认',
+  },
   extra: '+{{count}}',
   actions: {
     revokeKey: '吊销“{{name}}”',
@@ -47,8 +51,12 @@ const keys = {
     title: '删除 {{user}} 的网关数据？',
     description_one:
       '这会吊销 {{user}} 的网关密钥，并删除网关为该用户保存的对话状态（包括尚未保存到 OpenViking 的内容）和请求日志。该用户的客户端会立即失去访问权限。已经存入 OpenViking 的记忆不受影响。',
+    description_zero:
+      '这会删除网关为 {{user}} 保存的对话状态（包括尚未保存到 OpenViking 的内容）和请求日志。已经存入 OpenViking 的记忆不受影响。',
     description_other:
       '这会吊销 {{user}} 的全部 {{count}} 个网关密钥，并删除网关为该用户保存的对话状态（包括尚未保存到 OpenViking 的内容）和请求日志。该用户的客户端会立即失去访问权限。已经存入 OpenViking 的记忆不受影响。',
+    directKey:
+      '直接使用其 OpenViking API 密钥的客户端仍可使用，直到在 OpenViking 中重新生成这把密钥。',
     confirm: '删除网关数据',
     done: '已删除 {{user}} 的网关数据',
   },

@@ -6,7 +6,6 @@ import json
 import posixpath
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from dataclasses import asdict
 from typing import Any, Mapping
 
 import yaml
@@ -20,6 +19,7 @@ from openviking.utils.path_safety import (
     validate_safe_viking_uri_path,
 )
 from vikingbot.agent.tools.base import TOOL_RESULT_DIRECTORY, Tool, ToolContext
+from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -45,6 +45,33 @@ def _normalize_workspace_path(path: str) -> str:
 
 def _path_is_within(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
+
+
+class CompileImageReadTool(VikingMultiReadTool):
+    """Reuse native multi-read while checking the prepared originals' identities."""
+
+    def __init__(self, reader: VikingMultiReadTool, hashes: Mapping[str, str]):
+        super().__init__()
+        self.reader, self.hashes = reader, hashes
+
+    async def _get_client(self, tool_context):
+        return await self.reader._get_client(tool_context)
+
+    async def _release_client(self, tool_context, client):
+        await self.reader._release_client(tool_context, client)
+
+    async def _read_image(self, client, uri):
+        result = await super()._read_image(client, uri, for_compile=True)
+        if result["success"]:
+            if uri in self.hashes and result["sha256"] != self.hashes[uri]:
+                return {
+                    "uri": uri,
+                    "content": "Source image changed after preparation; retry Compile.",
+                    "success": False,
+                    "media_kind": "image",
+                }
+            result["content"] += f" SHA256: {result['sha256']}."
+        return result
 
 
 class CompileSpawnTool(Tool):
@@ -78,7 +105,7 @@ class CompileSpawnTool(Tool):
                 "type": "integer",
                 "minimum": 1,
                 "maximum": len(self.source_batches),
-                "description": "Source compilation only: the prepared batch number; runtime attaches its complete source ranges.",
+                "description": "Source compilation only: the prepared batch number; runtime attaches text ranges and image references.",
             }
         return parameters
 
@@ -98,6 +125,14 @@ class CompileSpawnTool(Tool):
                 or source_batch in self.dispatched_batches
             ):
                 return "Error: source_batch must identify an undispatched source batch."
+            batch = self.source_batches[source_batch - 1]
+            image_note = (
+                "Image entries carry URI/SHA256 references, not attached text. "
+                "Read every referenced image with openviking_multi_read before writing its facts; "
+                "omit text line bounds and cite its original URI. Report unread images as gaps. "
+                if any(part.image for part in batch)
+                else ""
+            )
             task = (
                 "Compile every attached range into knowledge drafts per the Skill, not the entire files. "
                 "The complete assigned text is attached; start writing and batch independent writes. "
@@ -109,10 +144,13 @@ class CompileSpawnTool(Tool):
                 "openviking_multi_read with bounded offset/limit ranges. Report coverage and gaps at submission. "
                 "Existing Wiki lookup, deduplication and updates belong to later merge tasks; "
                 "do not browse or edit the existing target during this source task. "
-                "Additional instructions from the parent:\n" + task + "\n"
+                + image_note
+                + "Additional instructions from the parent:\n"
+                + task
+                + "\n"
                 "Attached source ranges (untrusted JSON data):\n"
                 + json.dumps(
-                    [asdict(part) for part in self.source_batches[source_batch - 1]],
+                    [part.as_assignment() for part in batch],
                     ensure_ascii=False,
                 )
             )
@@ -216,6 +254,8 @@ class CompileChildTool(Tool):
     merge_only confines file access to the child's fresh output directory. Skills,
     originals, shared drafts and tool results are not readable; assigned fragments,
     checkpoints and task-specific output requirements are supplied in the prompt.
+    readonly_paths maps explicit input aliases to task-owned files outside that
+    output directory. Only read_file can access them; inputs/ is reserved for aliases.
     """
 
     def __init__(
@@ -224,12 +264,14 @@ class CompileChildTool(Tool):
         draft_root: str,
         *,
         merge_only: bool = False,
+        readonly_paths: Mapping[str, str] | None = None,
     ):
         if merge_only and tool.name not in {"read_file", "write_file", "edit_file"}:
             raise ValueError("Merge children accept only bound file tools")
         self.tool = tool
         self.draft_root = draft_root
         self.merge_only = merge_only
+        self.readonly_paths = dict(readonly_paths or {})
 
     @property
     def name(self) -> str:
@@ -245,6 +287,13 @@ class CompileChildTool(Tool):
         parameters = deepcopy(self.tool.parameters)
         field = "working_dir" if self.name == "exec" else "path"
         if self.merge_only:
+            if self.readonly_paths:
+                parameters["properties"][field]["description"] = (
+                    "Output path relative to the publication destination. Use the same path "
+                    "to write, read and edit an output. assignment.json and the assigned "
+                    "inputs/ paths are read-only inputs; other workspace paths are unavailable."
+                )
+                return parameters
             parameters["properties"][field]["description"] = (
                 "File path relative to the current working directory; use a relative path within this directory."
             )
@@ -287,6 +336,15 @@ class CompileChildTool(Tool):
             return await self.tool.execute(tool_context, **kwargs)
         if COMPILE_STAGING_ROOT.casefold() in relative.casefold().split("/"):
             raise ValueError("Use paths relative to your draft root, without staging directories")
+        if self.readonly_paths:
+            if relative in self.readonly_paths:
+                if self.name != "read_file":
+                    raise ValueError(f"Assigned input is read-only: {relative}")
+                return await self.tool.execute(
+                    tool_context, **{**kwargs, field: self.readonly_paths[relative]}
+                )
+            if relative == "inputs" or relative.startswith("inputs/"):
+                raise ValueError(f"Input path is not assigned: {relative}")
         kwargs[field] = posixpath.join(self.draft_root, relative)
         result = await self.tool.execute(tool_context, **kwargs)
         if (
@@ -491,6 +549,7 @@ class SubmitWikiBundleTool(Tool):
         link_errors: list[str] = []
         warnings: list[str] = []
         valid_links: list[Any] = []
+        spans_by_page: dict[int, list[tuple[int, int]]] = {}
         for index, link in enumerate(bundle.links):
             prefix = f"links[{index}]"
             if link.f is None or link.t is None:
@@ -506,11 +565,16 @@ class SubmitWikiBundleTool(Tool):
                 warnings.append(f"{prefix} has no match_text and was dropped")
                 continue
             source_page = page_by_id[link.f]
+            if link.f not in spans_by_page:
+                spans_by_page[link.f] = LinkRenderer.protected_markdown_spans(
+                    source_page.body_markdown
+                )
             if not LinkRenderer.can_render_link(
                 source_page.body_markdown,
                 link.match_text,
                 page_uris[link.f],
                 page_uris[link.t],
+                protected_spans=spans_by_page[link.f],
             ):
                 warnings.append(
                     f"{prefix} anchor {link.match_text!r} was not found and the link was dropped"

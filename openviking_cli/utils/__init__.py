@@ -3,7 +3,6 @@
 """Utility functions and helpers."""
 
 from openviking_cli.utils.async_utils import run_async
-from openviking_cli.utils.llm import StructuredLLM, parse_json_from_response, parse_json_to_model
 from openviking_cli.utils.logger import default_logger, get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -16,3 +15,12 @@ __all__ = [
     "parse_json_to_model",
     "run_async",
 ]
+
+
+def __getattr__(name):
+    # Importing logging must not initialize the application configuration through LLM helpers.
+    if name in {"StructuredLLM", "parse_json_from_response", "parse_json_to_model"}:
+        from openviking_cli.utils import llm
+
+        return getattr(llm, name)
+    raise AttributeError(name)

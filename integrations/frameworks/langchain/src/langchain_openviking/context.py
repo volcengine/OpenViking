@@ -189,6 +189,7 @@ class OpenVikingSessionContextAssembler:
         retriever: OpenVikingRetriever | None = None,
         url: str | None = None,
         api_key: str | None = None,
+        auth_mode: str | None = None,
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
@@ -210,6 +211,7 @@ class OpenVikingSessionContextAssembler:
             async_client=async_client,
             url=url,
             api_key=api_key,
+            auth_mode=auth_mode,
             account=account,
             user=user,
             user_id=user_id,
@@ -223,6 +225,7 @@ class OpenVikingSessionContextAssembler:
             async_client=async_client,
             url=url,
             api_key=api_key,
+            auth_mode=auth_mode,
             account=account,
             user=user,
             user_id=user_id,
@@ -314,7 +317,9 @@ class OpenVikingSessionContextAssembler:
         block = self._format_context_block(session_context, recall_documents)
         return OpenVikingAssembledContext(
             block=block,
-            context_parts=context_parts_from_documents(recall_documents),
+            context_parts=context_parts_from_documents(
+                recall_documents, metadata_prefix=self.retriever.metadata_prefix
+            ),
             session_context=session_context,
             recall_documents=recall_documents,
         )
@@ -637,6 +642,7 @@ def with_openviking_context(
     async_client: Any = None,
     url: str | None = None,
     api_key: str | None = None,
+    auth_mode: str | None = None,
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
@@ -678,6 +684,7 @@ def with_openviking_context(
         async_client=async_client,
         url=url,
         api_key=api_key,
+        auth_mode=auth_mode,
         account=account,
         user=user,
         user_id=user_id,
@@ -698,6 +705,7 @@ def with_openviking_context(
         async_client=async_client,
         url=url,
         api_key=api_key,
+        auth_mode=auth_mode,
         account=account,
         user=user,
         user_id=user_id,
@@ -911,6 +919,9 @@ def _latest_user_text_from_input(input_value: Any, input_messages_key: str | Non
     if isinstance(input_value, str):
         return input_value
     if isinstance(input_value, dict):
+        value = input_value.get(input_messages_key or "messages")
+        if isinstance(value, str):
+            return value.strip()
         for value in input_value.values():
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -918,13 +929,13 @@ def _latest_user_text_from_input(input_value: Any, input_messages_key: str | Non
 
 
 def _input_messages(input_value: Any, input_messages_key: str | None) -> list[Any]:
-    if isinstance(input_value, list):
-        return list(input_value)
     if isinstance(input_value, dict):
         key = input_messages_key or "messages"
-        value = input_value.get(key)
-        if isinstance(value, list):
-            return list(value)
+        input_value = input_value.get(key)
+    if isinstance(input_value, (list, tuple)):
+        return list(input_value)
+    if isinstance(input_value, BaseMessage):
+        return [input_value]
     return []
 
 
@@ -933,13 +944,17 @@ def _inject_system_context(
     context_block: str,
     input_messages_key: str | None,
 ) -> Any:
-    if isinstance(input_value, list):
-        return _merge_system_message(input_value, context_block)
+    if isinstance(input_value, (list, tuple, BaseMessage)):
+        return _merge_system_message(
+            _input_messages(input_value, input_messages_key), context_block
+        )
     if isinstance(input_value, dict):
         key = input_messages_key or "messages"
-        if isinstance(input_value.get(key), list):
+        if isinstance(input_value.get(key), (list, tuple, BaseMessage)):
             updated = dict(input_value)
-            updated[key] = _merge_system_message(input_value[key], context_block)
+            updated[key] = _merge_system_message(
+                _input_messages(input_value, input_messages_key), context_block
+            )
             return updated
         updated = dict(input_value)
         updated["openviking_context"] = context_block
@@ -951,8 +966,12 @@ def _merge_system_message(messages: Sequence[Any], context_block: str) -> list[A
     updated = list(messages)
     for index, message in enumerate(updated):
         if isinstance(message, SystemMessage):
-            content = extract_message_text(message.content)
-            updated[index] = SystemMessage(content=f"{content}\n\n{context_block}".strip())
+            content = (
+                [*deepcopy(message.content), {"type": "text", "text": context_block}]
+                if isinstance(message.content, list)
+                else f"{extract_message_text(message.content)}\n\n{context_block}".strip()
+            )
+            updated[index] = message.model_copy(update={"content": content})
             return updated
     return [SystemMessage(content=context_block), *updated]
 

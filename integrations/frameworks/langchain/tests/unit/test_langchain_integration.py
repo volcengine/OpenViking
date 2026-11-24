@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
+from copy import deepcopy
 from types import MappingProxyType
 from typing import Any
 
@@ -10,10 +13,25 @@ pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    ChatMessage,
+    ChatMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    convert_to_openai_messages,
+)
 from langchain_core.runnables import RunnableLambda
-from langgraph.store.base import PutOp
-from openviking_sdk.errors import InvalidArgumentError
+from langgraph.store.base import InvalidNamespaceError, PutOp, SearchOp
+from openviking_sdk.errors import (
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 import langchain_openviking.client as client_helpers
 from langchain_openviking import (
@@ -23,6 +41,7 @@ from langchain_openviking import (
     OpenVikingContextMiddleware,
     OpenVikingRetriever,
     OpenVikingSessionContextAssembler,
+    OpenVikingSessionRecorder,
     OpenVikingStore,
     create_openviking_tools,
     with_openviking_context,
@@ -32,6 +51,7 @@ from langchain_openviking.client import (
     apply_commit_policy,
     call_openviking,
     ensure_client,
+    get_latest_user_text,
 )
 from langchain_openviking.history import (
     langchain_message_to_openviking,
@@ -125,6 +145,24 @@ def test_retriever_passes_tags_to_retrieval():
     assert client.find_calls[-1]["tags"] == ["env=prod", "team=search"]
 
 
+def test_rule_search_forwards_options_and_preserves_complete_constraints():
+    class RuleClient:
+        def rule_search(self, task_context, options=None):
+            assert task_context == "deploy"
+            assert options == {"rule_probability_threshold": 0}
+            return {"rendered": "完整规则\n" * 17000 + "LAST RULE"}
+
+    for profile in ("retrieval", "agent", "admin"):
+        tools = create_openviking_tools(client=RuleClient(), profile=profile)
+        tool = next(tool for tool in tools if tool.name == "viking_rule_search")
+        assert (
+            tool.invoke({"task_context": "deploy", "rule_probability_threshold": 0})
+            == "完整规则\n" * 17000 + "LAST RULE"
+        )
+        with pytest.raises(ValueError):
+            tool.invoke({"task_context": "deploy", "rule_probability_threshold": 2})
+
+
 def test_create_openviking_tools_exposes_common_viking_primitives():
     client = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "The user likes LangGraph agents."}
@@ -175,6 +213,77 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     health = health_tool.invoke({})
     assert '"backend": "OpenViking"' in health
     assert "VikingDB is internal vector/index storage" in health
+
+
+@pytest.mark.parametrize("role", ["user", "assistant", "system", "tool"])
+@pytest.mark.parametrize("text_format", ["string", "block"])
+def test_viking_store_normalizes_langchain_text_blocks(role: str, text_format: str):
+    content = [
+        {"type": "text", "text": "Remember cobalt deployment."},
+        {"type": "text", "text": "中文确认"},
+    ]
+    messages = {
+        "user": HumanMessage(content=content),
+        "assistant": AIMessage(content=content),
+        "system": SystemMessage(content=content),
+        "tool": ToolMessage(content=content, tool_call_id="call-normal", name="ordinary_tool"),
+    }
+    wire = convert_to_openai_messages([messages[role]], text_format=text_format)
+    client = InMemoryOpenVikingClient()
+    store = create_openviking_tools(client=client, tool_names=["viking_store"])[0]
+
+    result = json.loads(
+        store.invoke({"session_id": "text-blocks", "messages": wire, "commit": False})
+    )
+
+    assert result["messages_added"] == 1
+    stored = client.sessions["text-blocks"][0]
+    assert stored["role"] == ("assistant" if role in {"system", "tool"} else role)
+    part = stored["parts"][0]
+    assert (
+        part["tool_output" if role == "tool" else "text"] == "Remember cobalt deployment.\n中文确认"
+    )
+    if role == "tool":
+        assert part["tool_id"] == "call-normal"
+        assert part["tool_name"] == "ordinary_tool"
+        assert part["tool_status"] == "completed"
+
+
+@pytest.mark.parametrize("content", [None, False, 0])
+def test_viking_store_preserves_scalar_content(content: Any):
+    client = InMemoryOpenVikingClient()
+    store = create_openviking_tools(client=client, tool_names=["viking_store"])[0]
+
+    store.invoke(
+        {
+            "session_id": "scalar",
+            "messages": [{"role": "user", "content": content}],
+            "commit": False,
+        }
+    )
+
+    assert client.sessions["scalar"][0]["parts"] == [{"type": "text", "text": str(content)}]
+
+
+@pytest.mark.parametrize("role", ["user", "system", "tool"])
+def test_viking_store_preserves_native_parts(role: str):
+    client = InMemoryOpenVikingClient()
+    store = create_openviking_tools(client=client, tool_names=["viking_store"])[0]
+    parts = [{"type": "text", "text": "explicit parts control"}]
+
+    store.invoke(
+        {
+            "session_id": "native-parts",
+            "messages": [
+                {"role": role, "content": [{"type": "text", "text": "unused"}], "parts": parts}
+            ],
+            "commit": False,
+        }
+    )
+
+    stored = client.sessions["native-parts"][0]
+    assert stored["role"] == ("assistant" if role in {"system", "tool"} else role)
+    assert stored["parts"] == parts
 
 
 def test_create_openviking_tools_uses_peer_id_only_for_message_attribution():
@@ -712,41 +821,81 @@ def test_in_memory_openviking_client_batch_add_messages_records_messages():
     assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
-def test_chat_message_history_preserves_tool_parts():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "second_query,new_turn,second_output",
+    [
+        ("deployment", True, "deployment notes found."),
+        ("Tokyo", True, "Tokyo notes found."),
+        ("Tokyo", False, "Tokyo notes found."),
+        ("deployment", False, "done"),
+        ("deployment", False, "deployment notes found."),
+        ("deployment", False, None),
+    ],
+)
+async def test_chat_message_history_preserves_tool_parts(
+    asynchronous, second_query, new_turn, second_output
+):
     client = InMemoryOpenVikingClient()
-    history = OpenVikingChatMessageHistory(session_id="history-session", client=client)
-
-    history.add_messages(
-        [
-            HumanMessage(content="Find deployment notes."),
-            AIMessage(
-                content="Searching.",
-                tool_calls=[
-                    {
-                        "id": "call-1",
-                        "name": "viking_find",
-                        "args": {"query": "deployment"},
-                    }
-                ],
-            ),
-            ToolMessage(
-                content="Azure deployment notes found.",
-                tool_call_id="call-1",
-                name="viking_find",
-            ),
-        ]
+    history = OpenVikingChatMessageHistory(
+        session_id="history-session", client=client, async_client=client
     )
+
+    messages = []
+    outputs = ["deployment notes found.", second_output]
+    for index, (query, output) in enumerate(
+        zip(("deployment", second_query), outputs, strict=True)
+    ):
+        if index == 0 or new_turn:
+            messages.append(HumanMessage(content=f"Find {query} notes."))
+        messages.extend(
+            [
+                AIMessage(
+                    content="Searching.",
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "name": "viking_find",
+                            "args": {"query": query},
+                        }
+                    ],
+                ),
+            ]
+        )
+        if output is not None:
+            messages.append(ToolMessage(content=output, tool_call_id="call-1", name="viking_find"))
+    try:
+        if asynchronous:
+            await history.aadd_messages(messages)
+            restored = await history.aget_messages()
+        else:
+            history.add_messages(messages)
+            restored = history.messages
+    finally:
+        await history.aclose()
 
     stored = client.sessions["history-session"]
     assert stored[1]["parts"][1]["type"] == "tool"
-    assert stored[2]["parts"][0]["tool_output"] == "Azure deployment notes found."
+    assert stored[2]["parts"][0]["tool_output"] == "deployment notes found."
 
-    restored = history.messages
+    assert [type(message) for message in restored] == (
+        [HumanMessage, AIMessage, ToolMessage]
+        + ([HumanMessage] if new_turn else [])
+        + [AIMessage]
+        + ([ToolMessage] if second_output is not None else [])
+    )
     restored_ai_messages = [message for message in restored if isinstance(message, AIMessage)]
     restored_tool_messages = [message for message in restored if isinstance(message, ToolMessage)]
-    assert len(restored_ai_messages) == 1
-    assert len(restored_ai_messages[0].tool_calls) == 1
-    assert len(restored_tool_messages) == 1
+    assert [message.tool_calls for message in restored_ai_messages] == [
+        [{"id": "call-1", "name": "viking_find", "args": {"query": query}, "type": "tool_call"}]
+        for query in ("deployment", second_query)
+    ]
+    expected_outputs = [output for output in outputs if output is not None]
+    assert [message.tool_call_id for message in restored_tool_messages] == ["call-1"] * len(
+        expected_outputs
+    )
+    assert [message.content for message in restored_tool_messages] == expected_outputs
 
 
 def test_chat_message_history_writes_peer_id_to_messages():
@@ -770,25 +919,238 @@ def test_chat_message_history_writes_peer_id_to_messages():
     ]
 
 
-def test_openviking_tool_result_restores_without_duplicate_ai_tool_call():
-    restored = openviking_message_to_langchain(
-        {
-            "role": "assistant",
-            "parts": [
-                {
-                    "type": "tool",
-                    "tool_id": "call-1",
-                    "tool_name": "viking_find",
-                    "tool_output": "Azure deployment notes found.",
-                    "tool_status": "completed",
-                }
-            ],
-        }
-    )
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"tool_input": None}, {"tool_input": {"a": 1}, "tool_name": ""}],
+)
+def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
+    message = {
+        "role": "assistant",
+        "parts": [
+            {
+                "type": "tool",
+                "tool_id": "call-1",
+                "tool_name": "viking_find",
+                "tool_output": "Azure deployment notes found.",
+                "tool_status": "completed",
+                **fields,
+            }
+        ],
+    }
+    restored = openviking_message_to_langchain(message)
 
     assert len(restored) == 1
     assert isinstance(restored[0], ToolMessage)
     assert restored[0].tool_call_id == "call-1"
+    client = InMemoryOpenVikingClient()
+    client.add_message("orphan-result", "assistant", parts=message["parts"])
+    history = OpenVikingChatMessageHistory("orphan-result", client=client)
+    try:
+        assert history.messages == []
+    finally:
+        history.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "followup",
+    [
+        "none",
+        "duplicate",
+        "next_turn",
+        "approval",
+        "updated_output",
+        "updated_status",
+        "coalesced_poll",
+    ],
+)
+@pytest.mark.parametrize("tool_input", [{"release": "stable"}, {}])
+@pytest.mark.parametrize("status,output", [("completed", "Friday"), ("error", "")])
+async def test_history_restores_completed_tool_part_with_input(
+    asynchronous, followup, tool_input, status, output
+):
+    client = InMemoryOpenVikingClient()
+    completed = {
+        "type": "tool",
+        "tool_id": "release-2",
+        "tool_name": "read_notes",
+        "tool_input": tool_input,
+        "tool_output": output,
+        "tool_status": status,
+    }
+    initial = deepcopy(completed)
+    if followup == "approval":
+        initial.pop("tool_output")
+        initial["tool_status"] = "pending"
+    following = deepcopy(completed)
+    if followup == "updated_output":
+        following["tool_output"] = f"{output} updated"
+    elif followup == "updated_status":
+        following["tool_status"] = "error" if status == "completed" else "completed"
+    initial_parts = [initial]
+    following_parts = [following]
+    if followup == "coalesced_poll":
+        pending = {**completed, "tool_status": "pending"}
+        pending.pop("tool_output")
+        initial_parts.insert(0, deepcopy(pending))
+        following_parts.insert(0, deepcopy(pending))
+    client.add_message(
+        "combined-tool",
+        "assistant",
+        parts=initial_parts,
+    )
+    if followup != "none":
+        if followup in ("next_turn", "approval"):
+            client.add_message(
+                "combined-tool",
+                "user",
+                content="Approved." if followup == "approval" else "Run the same tool again.",
+            )
+        for _ in range(2 if followup == "approval" else 1):
+            client.add_message("combined-tool", "assistant", parts=deepcopy(following_parts))
+    history = OpenVikingChatMessageHistory(
+        session_id="combined-tool", client=client, async_client=client
+    )
+    stored = deepcopy(client.sessions["combined-tool"])
+    try:
+        messages = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
+
+    expected_types = {
+        "next_turn": [AIMessage, ToolMessage, HumanMessage, AIMessage, ToolMessage],
+        "approval": [AIMessage, HumanMessage, ToolMessage],
+        "updated_output": [AIMessage, ToolMessage, AIMessage, ToolMessage],
+        "updated_status": [AIMessage, ToolMessage, AIMessage, ToolMessage],
+        "coalesced_poll": [AIMessage, ToolMessage, AIMessage, ToolMessage],
+    }.get(followup, [AIMessage, ToolMessage])
+    assert [type(message) for message in messages] == expected_types
+    ai = [message for message in messages if isinstance(message, AIMessage)][-1]
+    tool = messages[-1]
+    assert isinstance(ai, AIMessage)
+    assert ai.tool_calls[0]["id"] == "release-2"
+    assert ai.tool_calls[0]["name"] == "read_notes"
+    assert ai.tool_calls[0]["args"] == tool_input
+    assert isinstance(tool, ToolMessage)
+    assert tool.tool_call_id == "release-2"
+    assert tool.content == following["tool_output"]
+    assert tool.status == ("error" if following["tool_status"] == "error" else "success")
+    assert client.sessions["combined-tool"] == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("tool_input", [{"a": 1}, {}])
+@pytest.mark.parametrize(
+    "layout", ["split", "coalesced", "mixed", "result_only", "approved_result_only"]
+)
+async def test_history_does_not_duplicate_pending_call_for_completed_tool_part(
+    asynchronous, tool_input, layout
+):
+    client = InMemoryOpenVikingClient()
+    approved = layout == "approved_result_only"
+    if approved:
+        layout = "result_only"
+    pending = {
+        "type": "tool",
+        "tool_id": "c1",
+        "tool_name": "read_notes",
+        "tool_input": tool_input,
+        "tool_status": "pending",
+    }
+    completed = {**pending, "tool_status": "completed", "tool_output": "ok"}
+    if layout == "result_only":
+        completed.pop("tool_input")
+    if layout != "coalesced":
+        client.add_message("split-tool", "assistant", parts=[pending])
+    if approved:
+        client.add_message("split-tool", "user", content="Approved.")
+    parts = [pending, completed] if layout == "coalesced" else [completed]
+    if layout in ("mixed", "result_only"):
+        parts.append({"type": "text", "text": "Lookup complete."})
+    if layout == "mixed":
+        parts.append({**completed, "tool_id": "c2"})
+    client.add_message("split-tool", "assistant", parts=parts)
+    history = OpenVikingChatMessageHistory(
+        session_id="split-tool", client=client, async_client=client
+    )
+    stored = deepcopy(client.sessions["split-tool"])
+    try:
+        messages = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
+    expected_types = [AIMessage, ToolMessage] * (2 if layout == "mixed" else 1)
+    if layout == "result_only":
+        expected_types.append(AIMessage)
+    if approved:
+        expected_types.insert(1, HumanMessage)
+    assert [type(message) for message in messages] == expected_types
+    assert [
+        call["id"]
+        for message in messages
+        if isinstance(message, AIMessage)
+        for call in message.tool_calls
+    ] == (["c1", "c2"] if layout == "mixed" else ["c1"])
+    assert [message.tool_call_id for message in messages if isinstance(message, ToolMessage)] == (
+        ["c1", "c2"] if layout == "mixed" else ["c1"]
+    )
+    if layout in ("mixed", "result_only"):
+        assert messages[3 if approved else 2].content == "Lookup complete."
+    assert client.sessions["split-tool"] == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("earlier_result", ["pending", "combined", "result_only"])
+async def test_history_keeps_new_combined_call_when_an_older_call_reuses_its_id(
+    asynchronous, earlier_result
+):
+    client = InMemoryOpenVikingClient()
+    pending = {
+        "type": "tool",
+        "tool_id": "call_0",
+        "tool_name": "weather",
+        "tool_input": {"city": "Paris"},
+        "tool_status": "pending",
+    }
+    client.add_message("overlapping-id", "assistant", parts=[pending])
+    client.add_message("overlapping-id", "user", content="Check Tokyo instead.")
+    if earlier_result != "pending":
+        result = {**pending, "tool_status": "completed", "tool_output": "18C"}
+        if earlier_result == "result_only":
+            result.pop("tool_input")
+        for _ in range(2):
+            client.add_message("overlapping-id", "assistant", parts=deepcopy([result]))
+    client.add_message(
+        "overlapping-id",
+        "assistant",
+        parts=[
+            {
+                **pending,
+                "tool_input": {"city": "Tokyo"},
+                "tool_status": "completed",
+                "tool_output": "22C",
+            }
+        ],
+    )
+    stored = deepcopy(client.sessions["overlapping-id"])
+    history = OpenVikingChatMessageHistory("overlapping-id", client=client, async_client=client)
+    try:
+        messages = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
+    assert [type(message) for message in messages] == (
+        [AIMessage, HumanMessage]
+        + ([] if earlier_result == "pending" else [ToolMessage])
+        + [AIMessage, ToolMessage]
+    )
+    assert messages[0].tool_calls[0]["args"] == {"city": "Paris"}
+    assert messages[-2].tool_calls[0]["args"] == {"city": "Tokyo"}
+    assert [message.content for message in messages if isinstance(message, ToolMessage)] == (
+        ["22C"] if earlier_result == "pending" else ["18C", "22C"]
+    )
+    assert client.sessions["overlapping-id"] == stored
 
 
 def test_empty_human_message_uses_empty_text_part():
@@ -806,10 +1168,82 @@ def test_system_messages_are_never_persisted_to_openviking_history():
     assert payloads == []
 
 
-def test_session_context_assembler_uses_archive_active_messages_and_recall():
-    client = InMemoryOpenVikingClient(
-        {"viking://resources/runbooks/deploy.md": "Azure deployments use OpenViking context."}
-    )
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["history", "ahistory", "recorder", "arecorder"])
+@pytest.mark.parametrize("message_type", [ChatMessage, ChatMessageChunk])
+@pytest.mark.parametrize(
+    "role,expected",
+    [
+        ("user", "user"),
+        ("human", "user"),
+        ("system", None),
+        ("developer", None),
+        ("assistant", "assistant"),
+    ],
+)
+async def test_generic_chat_message_roles_in_session_history(entry, message_type, role, expected):
+    client = InMemoryOpenVikingClient()
+    message = message_type(role=role, content="Role-specific conversation text.")
+    history = OpenVikingChatMessageHistory("chat-roles", client=client, async_client=client)
+    recorder = OpenVikingSessionRecorder(client=client, async_client=client)
+    try:
+        if entry == "history":
+            history.add_messages([message])
+        elif entry == "ahistory":
+            await history.aadd_messages([message])
+        elif entry == "recorder":
+            recorder.record("chat-roles", [message])
+        else:
+            await recorder.arecord("chat-roles", [message])
+        expected_roles = [] if expected is None else [expected]
+        assert [item["role"] for item in client.sessions["chat-roles"]] == expected_roles
+        restored = await history.aget_messages()
+        assert [item.type for item in restored] == [
+            "human" if value == "user" else "ai" for value in expected_roles
+        ]
+        assert [item.content for item in restored] == [message.content] * len(expected_roles)
+    finally:
+        await history.aclose()
+        await recorder.aclose()
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        (ChatMessage(role="user", content="Current question."), "Current question."),
+        (ChatMessage(role="human", content="Current question."), "Current question."),
+        (ChatMessageChunk(role="human", content="Current question."), "Current question."),
+        ({"type": "chat", "role": "human", "content": "Current question."}, "Current question."),
+        ({"type": "chat", "role": "user", "content": "Current question."}, "Current question."),
+        (ChatMessage(role="system", content="Runtime policy."), "Earlier question."),
+        (ChatMessage(role="developer", content="Runtime policy."), "Earlier question."),
+        (ChatMessageChunk(role="developer", content="Runtime policy."), "Earlier question."),
+        ({"type": "chat", "role": "developer", "content": "Runtime policy."}, "Earlier question."),
+        (ChatMessage(role="critic", content="Critique."), "Earlier question."),
+        (HumanMessage(content="Current question.", role="system"), "Current question."),
+        (HumanMessageChunk(content="Current question.", role="system"), "Current question."),
+        (SystemMessageChunk(content="Runtime policy.", role="user"), "Earlier question."),
+        (ChatMessage(role="user", content=""), "Earlier question."),
+    ],
+)
+def test_generic_chat_message_roles_in_recall_query(message, expected):
+    assert get_latest_user_text([HumanMessage(content="Earlier question."), message]) == expected
+
+
+@pytest.mark.parametrize("metadata_prefix", ["openviking", "recall", "", "my_recall"])
+@pytest.mark.parametrize(
+    "uri, context_type",
+    [
+        ("viking://resources/runbooks/deploy.md", "resource"),
+        ("viking://user/default/memories/preferences/deploy.md", "memory"),
+        ("viking://skills/deploy.md", "skill"),
+    ],
+)
+def test_session_context_assembler_uses_archive_active_messages_and_recall(
+    metadata_prefix, uri, context_type
+):
+    content = "Azure deployments use OpenViking context. " * 20
+    client = InMemoryOpenVikingClient({uri: content})
     client.add_message("assembler-session", "user", content="Earlier user turn")
     client.add_message("assembler-session", "assistant", content="Earlier assistant turn")
     client.commit_session("assembler-session", enable_working_memory=True)
@@ -818,7 +1252,9 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assembler = OpenVikingSessionContextAssembler(
         include_session_context=True,
         client=client,
-        target_uri="viking://resources",
+        retriever=OpenVikingRetriever(
+            client=client, target_uri=uri, metadata_prefix=metadata_prefix, search_mode="search"
+        ),
     )
     assembled = assembler.assemble(session_id="assembler-session", query="azure context")
 
@@ -828,7 +1264,23 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assert "Active session messages" in assembled.block
     assert "Active turn" in assembled.block
     assert "Azure deployments" in assembled.block
-    assert assembled.context_parts[0]["type"] == "context"
+    assert assembled.context_parts == [
+        {"type": "context", "uri": uri, "context_type": context_type, "abstract": content[:240]}
+    ]
+    recorder = OpenVikingSessionRecorder(client=client)
+    recorder.record(
+        "assembler-session",
+        [HumanMessage(content="Deployment question"), AIMessage(content="Deployment answer")],
+        context_parts=assembled.context_parts,
+    )
+    assert [
+        part
+        for message in client.sessions["assembler-session"][-2:]
+        for part in message["parts"]
+        if part["type"] == "context"
+    ] == assembled.context_parts
+    asyncio.run(recorder.aclose())
+    asyncio.run(assembler.aclose())
 
 
 def test_session_context_assembler_keeps_peer_id_out_of_recall():
@@ -1112,9 +1564,13 @@ def test_archive_tools_search_and_expand_committed_session():
     assert "Remember cobalt archive detail" in expanded
 
 
-def test_archive_search_without_archive_id_searches_raw_history():
+@pytest.mark.parametrize("query", ["hidden cobalt archive", "C++"])
+def test_archive_search_without_archive_id_searches_raw_history(query):
     client = InMemoryOpenVikingClient()
-    client.add_message("archive-search-session", "user", content="Hidden cobalt archive detail.")
+    client.add_message(
+        "archive-search-session", "user", content="Hidden cobalt archive C++ detail."
+    )
+    client.add_message("archive-search-session", "assistant", content="Unrelated cobalt detail.")
     commit = client.commit_session("archive-search-session")
     assert commit["archive_id"] == "archive_001"
     client.archives["archive-search-session"][0]["overview"] = "compressed summary"
@@ -1124,17 +1580,60 @@ def test_archive_search_without_archive_id_searches_raw_history():
     searched = tools["viking_archive_search"].invoke(
         {
             "session_id": "archive-search-session",
-            "query": "hidden cobalt archive",
+            "query": query,
         }
     )
 
-    assert "Hidden cobalt archive detail" in searched
+    assert "Hidden cobalt archive C++ detail" in searched
+    assert "Unrelated cobalt detail" not in searched
     assert "viking://user/default/sessions/archive-search-session/history" in searched
 
 
 def test_archive_grep_pattern_uses_backend_safe_token_regex():
     assert _archive_grep_pattern("hidden cobalt archive") == "hidden"
     assert "(?=" not in _archive_grep_pattern("hidden cobalt archive")
+
+
+@pytest.mark.parametrize("with_archive_id", [True, False])
+@pytest.mark.parametrize(
+    ("query", "matches"),
+    [
+        ("cobalt archive", True),
+        ("COBALT ARCHIVE", True),
+        ("quartz archive", False),
+        ("部署", True),
+        ("火星", False),
+        ("部署 cobalt", True),
+        ("火星 cobalt", False),
+        ("café", True),
+        ("cafè", False),
+        ("猫", True),
+        ("狗", False),
+        ("猫 cobalt", True),
+        ("狗 cobalt", False),
+        ("x cobalt", True),
+        ("q cobalt", True),  # Preserve the existing short ASCII token filter.
+    ],
+)
+def test_archive_search_preserves_query_terms(with_archive_id, query, matches):
+    client = InMemoryOpenVikingClient(enable_working_memory=True)
+    client.add_message(
+        "query-terms", "user", content="cobalt archive: 部署在月球。café notes. 猫和 x。"
+    )
+    archive_id = client.commit_session("query-terms")["archive_id"]
+    tool = next(
+        tool
+        for tool in create_openviking_tools(client=client)
+        if tool.name == "viking_archive_search"
+    )
+    args = {"session_id": "query-terms", "query": query}
+    if with_archive_id:
+        args["archive_id"] = archive_id
+
+    result = json.loads(tool.invoke(args))
+
+    assert bool(result["matches"]) is matches
+    assert result["count"] == len(result["matches"])
 
 
 def test_commit_policy_commits_when_threshold_is_reached():
@@ -1210,7 +1709,11 @@ def test_chat_message_history_clear_raises_when_delete_fails():
     assert len(client.sessions["clear-session"]) == 1
 
 
-def test_langgraph_store_round_trip_and_semantic_search():
+@pytest.mark.parametrize(
+    "invalid_namespace",
+    [(), ("users", "", "ada"), ("users", 1), ("users", "ada.profile"), ("langgraph", "ada")],
+)
+def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
 
@@ -1241,6 +1744,217 @@ def test_langgraph_store_round_trip_and_semantic_search():
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
+    records = dict(client.records)
+    for value in ({"color": "invalid"}, None):
+        with pytest.raises(InvalidNamespaceError):
+            store.put(invalid_namespace, "preferences", value)
+        assert client.records == records
+        with pytest.raises(InvalidNamespaceError):
+            asyncio.run(store.aput(invalid_namespace, "preferences", value))
+        assert client.records == records
+
+    # A None value is a deletion in LangGraph's BaseStore contract.
+    store.put(("users", "ada"), "profile", None)
+    assert store.get(("users", "ada"), "profile") is None
+    assert "profile" not in {found.key for found in store.search(("users",), limit=5)}
+
+    # Deleting a missing key is idempotent and must not create a record.
+    store.put(("users", "ada"), "absent", None)
+    assert store.get(("users", "ada"), "absent") is None
+
+    store.put(("users", "ada"), "preferences", None)
+    store.put(("users", "ada"), "bad-rank", None)
+    assert store.search(("users",), limit=5) == []
+    assert store.list_namespaces(prefix=("users",)) == []
+
+
+@pytest.mark.parametrize("method", ["put", "aput", "batch", "abatch", "delete", "adelete"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_langgraph_store_none_deletes_through_public_store_methods(
+    method: str, existing: bool
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada", "memories")
+    other_namespace = ("users", "grace", "memories")
+    store.put(other_namespace, "keep", {"text": "independent memory"})
+    if existing:
+        store.put(namespace, "item", {"text": "memory to remove"})
+
+    if method == "put":
+        store.put(namespace, "item", None)
+    elif method == "aput":
+        asyncio.run(store.aput(namespace, "item", None))
+    elif method == "batch":
+        store.batch([PutOp(namespace, "item", None)])
+    elif method == "abatch":
+        asyncio.run(store.abatch([PutOp(namespace, "item", None)]))
+    elif method == "delete":
+        store.delete(namespace, "item")
+    else:
+        asyncio.run(store.adelete(namespace, "item"))
+
+    assert store.get(namespace, "item") is None
+    assert store.search(namespace) == []
+    assert store.search(namespace, query="memory to remove") == []
+    assert store.list_namespaces() == [other_namespace]
+    assert store.get(other_namespace, "keep").value == {"text": "independent memory"}
+
+
+@pytest.mark.parametrize("index", [False, ["text"]])
+@pytest.mark.parametrize("existing", [False, True])
+def test_langgraph_store_put_none_deletes_with_index_overrides(
+    index: bool | list[str], existing: bool
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    if existing:
+        store.put(namespace, "item", {"text": "memory to remove"})
+
+    store.put(namespace, "item", None, index=index)
+
+    assert store.get(namespace, "item") is None
+    assert store.search(namespace) == []
+    assert store.search(namespace, query="memory to remove") == []
+    assert store.list_namespaces() == []
+
+
+@pytest.mark.parametrize("method", ["put", "aput"])
+@pytest.mark.parametrize("value", [{}, {"number": 0}, {"text": "saved memory"}])
+def test_langgraph_store_dictionary_values_remain_stored(method: str, value: dict) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    if method == "put":
+        store.put(namespace, "item", value)
+    else:
+        asyncio.run(store.aput(namespace, "item", value))
+
+    assert store.get(namespace, "item").value == value
+    assert store.search(namespace)[0].value == value
+    assert store.list_namespaces() == [namespace]
+
+
+@pytest.mark.parametrize("method", ["put", "aput"])
+@pytest.mark.parametrize("value", [None, {"text": "replacement"}])
+def test_langgraph_store_unsupported_ttl_still_rejects_before_mutation(
+    method: str, value: dict | None
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    original = {"text": "original memory"}
+    store.put(namespace, "item", original)
+
+    with pytest.raises(NotImplementedError, match="TTL"):
+        if method == "put":
+            store.put(namespace, "item", value, ttl=60)
+        else:
+            asyncio.run(store.aput(namespace, "item", value, ttl=60))
+
+    assert store.get(namespace, "item").value == original
+
+
+def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    namespace = ("filesystem", "user-a")
+    cases = {
+        "profile": "profile",
+        "/docs/readme.md": "!sdocs!sreadme.md",
+        "notes/todo.md": "notes!stodo.md",
+        "/": "!s",
+        "/docs/": "!sdocs!s",
+        "docs//readme.md": "docs!s!sreadme.md",
+        r"docs\readme.md": "docs!breadme.md",
+        "!sAGENTS.md": "%21sAGENTS.md",
+        "!bAGENTS.md": "%21bAGENTS.md",
+        "%2F": "%252F",
+        ".": ".",
+        "..": "..",
+        "中/文": "%E4%B8%AD!s%E6%96%87",
+    }
+
+    for key, encoded in cases.items():
+        policy = "cobalt deployment" if key == "/docs/readme.md" else "amber checklist"
+        store.put(namespace, key, {"key": key, "policy": policy})
+        data_uri = f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
+        index_uri = f"viking://~/memories/langgraph_store/index/filesystem/user-a/{encoded}.md"
+        assert data_uri in client.records
+        assert index_uri in client.records
+
+    assert all("%2F" not in uri for uri in client.records)
+
+    for key in cases:
+        item = store.get(namespace, key)
+        assert item is not None
+        assert item.key == key
+        assert item.value["key"] == key
+
+    assert {item.key for item in store.search(namespace, limit=100)} == set(cases)
+    semantic = store.search(namespace, query="cobalt", limit=5)
+    assert [item.key for item in semantic] == ["/docs/readme.md"]
+    assert store.list_namespaces(prefix=("filesystem",)) == [namespace]
+
+    store.delete(namespace, "/docs/readme.md")
+    assert (
+        "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs!sreadme.md.json"
+    ) not in client.records
+    assert (
+        "viking://~/memories/langgraph_store/index/filesystem/user-a/!sdocs!sreadme.md.md"
+    ) not in client.records
+
+
+def test_langgraph_store_distinguishes_separator_escapes_from_literal_markers():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    namespace = ("filesystem", "user-a")
+    cases = {
+        "/AGENTS.md": "!sAGENTS.md",
+        "!sAGENTS.md": "%21sAGENTS.md",
+        r"\AGENTS.md": "!bAGENTS.md",
+        "!bAGENTS.md": "%21bAGENTS.md",
+    }
+
+    for key in cases:
+        store.put(namespace, key, {"key": key})
+
+    expected_data_uris = {
+        f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
+        for encoded in cases.values()
+    }
+    assert expected_data_uris.issubset(client.records)
+    assert len(expected_data_uris) == len(cases)
+
+    for key in cases:
+        item = store.get(namespace, key)
+        assert item is not None
+        assert item.key == key
+        assert item.value["key"] == key
+
+
+def test_langgraph_store_keeps_namespace_and_key_identity_collision_free():
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    marker = "__openviking_path_key_v1__"
+    path_identity = (("filesystem", "user-a"), "/docs")
+    namespace_identity = (("filesystem", "user-a", marker, "abs"), "docs")
+
+    store.put(*path_identity, {"identity": "path-key"})
+    store.put(*namespace_identity, {"identity": "namespace"})
+
+    path_uri = "viking://~/memories/langgraph_store/data/filesystem/user-a/!sdocs.json"
+    namespace_uri = (
+        "viking://~/memories/langgraph_store/data/filesystem/user-a/"
+        "__openviking_path_key_v1__/abs/docs.json"
+    )
+    assert path_uri in client.records
+    assert namespace_uri in client.records
+    assert path_uri != namespace_uri
+    assert store.get(*path_identity).value["identity"] == "path-key"
+    assert store.get(*namespace_identity).value["identity"] == "namespace"
+    assert store.list_namespaces(prefix=("filesystem",)) == [
+        ("filesystem", "user-a"),
+        ("filesystem", "user-a", marker, "abs"),
+    ]
+
 
 @pytest.mark.parametrize("use_batch", [False, True])
 def test_langgraph_store_accepts_mapping_values(use_batch):
@@ -1260,6 +1974,148 @@ def test_langgraph_store_accepts_mapping_values(use_batch):
     assert original == {"color": "azure", "nested": {"rank": 3}}
 
 
+@pytest.mark.parametrize(
+    ("method", "collection", "deindex"),
+    [
+        (method, collection, False)
+        for method in ("delete", "adelete", "put", "aput", "batch", "abatch")
+        for collection in ("data", "index")
+    ]
+    + [(method, "index", True) for method in ("put", "aput", "batch", "abatch")],
+)
+@pytest.mark.parametrize(
+    "error", [PermissionDeniedError(), UnavailableError(), TimeoutError("removal timed out")]
+)
+async def test_langgraph_store_removal_errors_remain_visible_and_retryable(
+    method, collection, deindex, error
+):
+    class FailingRemoveClient(InMemoryOpenVikingClient):
+        fail = True
+
+        def rm(self, uri, recursive=False):
+            if self.fail and f"/{collection}/" in uri:
+                raise error
+            if uri not in self.records:
+                raise NotFoundError(uri)
+            return super().rm(uri, recursive=recursive)
+
+    client = FailingRemoveClient()
+    store = OpenVikingStore(client=client)
+    namespace, key, value = ("users",), "ada", {"color": "azure"}
+    store.put(namespace, key, value)
+    store.put(("other",), key, {"color": "teal"})
+
+    async def mutate():
+        replacement = value if deindex else None
+        index = False if deindex else None
+        if method == "delete":
+            store.delete(namespace, key)
+        elif method == "adelete":
+            await store.adelete(namespace, key)
+        elif method == "put":
+            store.put(namespace, key, replacement, index=index)
+        elif method == "aput":
+            await store.aput(namespace, key, replacement, index=index)
+        else:
+            ops = [
+                PutOp(namespace, key, replacement, index=index),
+                PutOp(namespace, "later", {"written": True}),
+            ]
+            if method == "batch":
+                store.batch(ops)
+            else:
+                await store.abatch(ops)
+
+    with pytest.raises(type(error)) as caught:
+        await mutate()
+    assert str(caught.value) == str(error)
+    assert getattr(caught.value, "code", None) == getattr(error, "code", None)
+    assert bool(store.get(namespace, key)) is (deindex or collection == "data")
+    assert store.get(namespace, "later") is None
+    assert store.get(("other",), key).value == {"color": "teal"}
+
+    client.fail = False
+    await mutate()
+    assert store.search(namespace, query="azure") == []
+    item = store.get(namespace, key)
+    assert (item.value if item else None) == (value if deindex else None)
+    if method in ("batch", "abatch"):
+        assert store.get(namespace, "later").value == {"written": True}
+
+
+@pytest.mark.parametrize("missing_error", [FileNotFoundError, NotFoundError])
+def test_langgraph_store_removal_keeps_missing_targets_idempotent(missing_error):
+    class StrictRemoveClient(InMemoryOpenVikingClient):
+        def rm(self, uri, recursive=False):
+            if uri not in self.records:
+                raise missing_error(uri)
+            return super().rm(uri, recursive=recursive)
+
+    store = OpenVikingStore(client=StrictRemoveClient())
+    namespace, key, value = ("users",), "ada", {"color": "azure"}
+    store.delete(namespace, key)
+    store.put(namespace, key, value, index=False)
+    assert store.get(namespace, key).value == value
+    store.put(namespace, key, value)
+    assert len(store.search(namespace, query="azure")) == 1
+    store.delete(namespace, key)
+    store.delete(namespace, key)
+    assert store.get(namespace, key) is None
+    assert store.search(namespace, query="azure") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", [None, "doc"])
+@pytest.mark.parametrize(
+    "filter, expected",
+    [
+        ({"metadata": {"color": "blue"}}, ["alpha"]),
+        ({"metadata": {"nested": {"owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"nested": {"rank": {"$gte": 2}}}}, ["alpha"]),
+        ({"metadata": {"detail.region": "eu"}}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}, "memory"]}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}]}, []),
+        ({"metadata": {}}, ["alpha", "beta"]),
+        ({"metadata": {"color": "black"}}, []),
+        ({"metadata.nested.rank": {"gte": 2}}, ["alpha"]),
+        ({"metadata.nested": {"$eq": {"rank": 3, "owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"eq": "blue", "label": "blue"}}, ["scalar"]),
+        ({"metadata": {"$unknown": "blue"}}, ["scalar"]),
+        ({"tags": ["reviewer", "memory"]}, ["scalar"]),
+        ({"kind": "doc"}, ["alpha", "beta", "scalar"]),
+    ],
+)
+async def test_langgraph_store_structured_filters(filter, expected, query):
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    for key, value in {
+        "alpha": {
+            "kind": "doc",
+            "metadata": {
+                "color": "blue",
+                "nested": {"rank": 3, "owner": "ada"},
+                "detail.region": "eu",
+            },
+            "tags": [{"role": "reviewer", "active": True}, "memory"],
+        },
+        "beta": {
+            "kind": "doc",
+            "metadata": {"color": "red", "nested": {"rank": 1, "owner": "bob"}},
+            "tags": [{"role": "reader", "active": True}, "memory"],
+        },
+        "scalar": {"kind": "doc", "metadata": "blue", "tags": ["reviewer", "memory"]},
+    }.items():
+        store.put(("users", "ada"), key, value)
+
+    op = SearchOp(("users",), filter=filter, query=query)
+    results = [
+        store.search(("users",), filter=filter, query=query),
+        await store.asearch(("users",), filter=filter, query=query),
+        store.batch([op])[0],
+        (await store.abatch([op]))[0],
+    ]
+    assert all(sorted(item.key for item in items) == expected for items in results)
+
+
 def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client, actor_peer_id="peer-store")
@@ -1275,6 +2131,71 @@ def test_langgraph_store_rejects_ttl_writes():
 
     with pytest.raises(NotImplementedError, match="TTL is not supported"):
         store.put(("users", "ada"), "temporary", {"note": "expires"}, ttl=60)
+
+
+@pytest.mark.parametrize("use_default", [False, True])
+@pytest.mark.parametrize(
+    ("field", "query", "expected_match"),
+    [
+        ("$", "solstice", True),
+        ("", "solstice", True),
+        ("items[0].text", "pulsar", True),
+        ("items[-1].text", "galaxy", True),
+        ("items[*].text", "galaxy", True),
+        ("nested[*].parts[*].text", "aurora", True),
+        ("metadata.*", "quasar", True),
+        ("{text,metadata.title}", "nebula", True),
+        ("text", "nebula", True),
+        ("metadata.title", "quasar", True),
+        ("absent", "solstice", False),
+        ("literal[0]", "nova", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_langgraph_store_indexes_selected_field_paths(
+    field, query, expected_match, use_default
+):
+    value = {
+        "text": "nebula",
+        "metadata": {"title": "quasar"},
+        "items": [{"text": "pulsar"}, {"text": "galaxy"}],
+        "nested": [{"parts": [{"text": "aurora"}]}],
+        "literal[0]": "nova",
+        "ignored": "solstice",
+    }
+    original = deepcopy(value)
+    for mode in ("put", "aput", "batch", "abatch"):
+        client = InMemoryOpenVikingClient()
+        store = OpenVikingStore(client=client, index=[field] if use_default else None)
+        index = None if use_default else [field]
+        if mode == "put":
+            store.put(("documents",), "note", value, index=index)
+        elif mode == "aput":
+            await store.aput(("documents",), "note", value, index=index)
+        elif mode == "batch":
+            store.batch([PutOp(("documents",), "note", value, index=index)])
+        else:
+            await store.abatch([PutOp(("documents",), "note", value, index=index)])
+
+        assert store.get(("documents",), "note").value == value
+        assert value == original
+        expected_keys = ["note"] if expected_match else []
+        assert [item.key for item in store.search(("documents",), query=query)] == expected_keys
+        filter = {"metadata": {"title": "quasar"}}
+        op = SearchOp(("documents",), query=query, filter=filter)
+        results = [
+            store.search(("documents",), query=query, filter=filter),
+            await store.asearch(("documents",), query=query, filter=filter),
+            store.batch([op])[0],
+            (await store.abatch([op]))[0],
+        ]
+        assert all([item.key for item in items] == expected_keys for items in results)
+        assert (
+            store.search(("documents",), query=query, filter={"metadata": {"title": "absent"}})
+            == []
+        )
+        if field not in {"$", ""}:
+            assert store.search(("documents",), query="solstice") == []
 
 
 def test_langgraph_store_batch_rejects_ttl_writes():
@@ -1301,15 +2222,35 @@ def test_langgraph_store_batch_rejects_ttl_writes():
             "viking://~/memories",
             "viking://user/default/memories",
         ),
+        (
+            "viking://~/peers/support/memories/langgraph_store",
+            "viking://~/peers/support/memories",
+            "viking://user/default/peers/support/memories",
+        ),
+        (
+            "viking://~/peers/support/resources/langgraph_store",
+            "viking://~/peers/support/resources",
+            "viking://user/default/peers/support/resources",
+        ),
+        (
+            "viking://user/default/peers/support/memories/langgraph_store",
+            "viking://user/default/peers/support/memories",
+            "viking://user/default/peers/support/memories",
+        ),
     ],
     ids=[
         "user-memory",
+        "peer-memory",
+        "peer-resource",
+        "explicit-peer-memory",
     ],
 )
+@pytest.mark.parametrize("asynchronous", [False, True])
 def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
     root_uri,
     alias_prefix,
     canonical_prefix,
+    asynchronous,
 ):
     class CanonicalizingClient(InMemoryOpenVikingClient):
         def _canonicalize(self, value):
@@ -1339,11 +2280,30 @@ def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
 
     store.put(("users", "ada"), "preferences", {"color": "azure"})
 
-    semantic = store.search(("users",), query="azure", limit=5)
+    async def read_results():
+        return (
+            await store.aget(("users", "ada"), "preferences"),
+            await store.asearch(("users",)),
+            await store.alist_namespaces(prefix=("users", "*")),
+            await store.asearch(("users",), query="azure", limit=5),
+        )
 
-    assert semantic[0].namespace == ("users", "ada")
-    assert semantic[0].key == "preferences"
-    assert semantic[0].value["color"] == "azure"
+    direct, ordinary, namespaces, semantic = (
+        asyncio.run(read_results())
+        if asynchronous
+        else (
+            store.get(("users", "ada"), "preferences"),
+            store.search(("users",)),
+            store.list_namespaces(prefix=("users", "*")),
+            store.search(("users",), query="azure", limit=5),
+        )
+    )
+    assert direct.value == {"color": "azure"}
+    assert [item.key for item in ordinary] == ["preferences"]
+    assert namespaces == [("users", "ada")]
+    assert [(item.namespace, item.key, item.value) for item in semantic] == [
+        (("users", "ada"), "preferences", {"color": "azure"})
+    ]
 
 
 def test_langgraph_store_ignores_unrelated_canonical_result_uris():
@@ -1362,6 +2322,19 @@ def test_langgraph_store_ignores_unrelated_canonical_result_uris():
         store._parse_index_uri("viking://user/support/memories/other_store/index/users/ada.md")
         is None
     )
+
+    peer_store = OpenVikingStore(
+        client=InMemoryOpenVikingClient(),
+        root_uri="viking://~/peers/support/memories/langgraph_store",
+    )
+    for unrelated_root in (
+        "viking://user/default/peers/other/memories/langgraph_store",
+        "viking://user/default/memories/langgraph_store",
+        "viking://agent/support/memories/langgraph_store",
+        "viking://user/default/peers/support/memories/other_store",
+        "viking://user/default/peers/support/resources/langgraph_store",
+    ):
+        assert peer_store._parse_index_uri(f"{unrelated_root}/index/users/ada.md") is None
 
 
 def test_langgraph_store_waits_for_indexing_by_default():
@@ -1452,7 +2425,9 @@ def test_pending_token_commit_uses_persisted_value_without_session_lookup():
     assert client.get_session_calls == 0
 
 
-def test_langgraph_middleware_injects_recall_and_captures_messages():
+@pytest.mark.parametrize("shape", ["human", "chat", "chat_chunk", "dict"])
+@pytest.mark.parametrize("structured", [False, True])
+def test_langgraph_middleware_injects_recall_and_captures_messages(shape, structured):
     client = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "The user prefers azure deployments."}
     )
@@ -1464,13 +2439,40 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     )
 
     captured_request = {}
+    content = "What deployment color?"
+    if structured:
+        content = [
+            {"type": "text", "text": content},
+            {"type": "image_url", "image_url": {"url": "https://example.com/deployment.png"}},
+        ]
+    values = {
+        "id": "middleware-user-1",
+        "name": "customer",
+        "content": content,
+        "additional_kwargs": {"host_field": {"keep": True}},
+    }
+    if shape == "dict":
+        user = {"role": "user", **values}
+    elif shape == "human":
+        user = HumanMessage(**values)
+    else:
+        message_type = ChatMessage if shape == "chat" else ChatMessageChunk
+        user = message_type(role="user", **values)
+    original = deepcopy(user)
+    system = SystemMessage(
+        id="policy",
+        content=[{"type": "text", "text": "Stable agent policy."}],
+        additional_kwargs={"host_field": {"keep": True}},
+    )
 
     class Request:
-        messages = [HumanMessage(content="What deployment color?")]
-        system_message = None
+        def __init__(self, state=None):
+            self.state = state or {}
+            self.messages = [user]
+            self.system_message = system
 
         def override(self, **overrides):
-            new_request = Request()
+            new_request = Request(self.state)
             new_request.messages = overrides.get("messages", self.messages)
             new_request.system_message = overrides.get("system_message", self.system_message)
             return new_request
@@ -1480,15 +2482,50 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
         return AIMessage(content="ok")
 
     middleware.wrap_model_call(Request(), handler)
-    assert "OpenViking context" in captured_request["request"].system_message.content
-    assert "azure deployments" in captured_request["request"].system_message.content
+    first_request = captured_request["request"]
+    recall_update = middleware.after_model({}, runtime=None)
+    assert recall_update is not None
+    assert first_request.system_message is system
+    injected = first_request.messages[0]
+    injected_values = injected if isinstance(injected, dict) else injected.model_dump()
+    original_values = original if isinstance(original, dict) else original.model_dump()
+    assert "azure deployments" in str(injected_values["content"])
+    assert {k: v for k, v in injected_values.items() if k != "content"} == {
+        k: v for k, v in original_values.items() if k != "content"
+    }
+    if structured:
+        assert injected_values["content"][1:] == content
+    assert user == original
+
+    # A later model call for the same user turn replays the recorded block,
+    # without another search or dropping context parts needed by capture.
+    middleware.wrap_model_call(Request(recall_update), handler)
+    replayed_request = captured_request["request"]
+    assert replayed_request.messages == first_request.messages
+    assert len(client.search_calls) == 1
+
+    # Editing the same message ID requires fresh recall rather than a stale replay.
+    client.records["viking://~/memories/profile.md"] = "Azure deployments must use Singapore."
+    edited_request = Request(recall_update)
+    edited_request.messages = [
+        {**user, "content": "Which azure region?"}
+        if isinstance(user, dict)
+        else user.model_copy(update={"content": "Which azure region?"})
+    ]
+    middleware.wrap_model_call(edited_request, handler)
+    assert len(client.search_calls) == 2
+    edited = captured_request["request"].messages[0]
+    edited_content = edited["content"] if isinstance(edited, dict) else edited.content
+    assert "Singapore" in edited_content
+    assert user == original
 
     middleware.after_agent(
         {
+            **recall_update,
             "messages": [
                 HumanMessage(content="Remember this."),
                 AIMessage(content="I will."),
-            ]
+            ],
         },
         runtime=None,
     )
@@ -1498,6 +2535,227 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     assert len(archived_messages) == 2
     assistant_parts = archived_messages[1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("interrupt_tools", [False, True])
+@pytest.mark.asyncio
+async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
+    asynchronous, streaming, capture, interrupt_tools
+):
+    from langchain.agents import create_agent
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+    from langgraph.checkpoint.memory import InMemorySaver
+    from pydantic import Field
+
+    class RecordingModel(BaseChatModel):
+        requests: list[list[Any]] = Field(default_factory=list)
+        response_count: int = 0
+
+        @property
+        def _llm_type(self):
+            return "recording"
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def _reply(self, messages):
+            self.requests.append(list(messages))
+            self.response_count += 1
+            if messages[-1].type == "tool":
+                return AIMessage(content=f"answer-{self.response_count}")
+            user = next(message for message in reversed(messages) if message.type == "human")
+            return AIMessage(
+                content="Checking the deployment.",
+                tool_calls=[{"id": f"lookup-{user.id}", "name": "lookup_deployment", "args": {}}],
+            )
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            return ChatResult(generations=[ChatGeneration(message=self._reply(messages))])
+
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+            response = self._reply(messages)
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(content=response.content, tool_calls=response.tool_calls)
+            )
+
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            for chunk in self._stream(messages, stop, run_manager, **kwargs):
+                yield chunk
+
+    def lookup_deployment() -> str:
+        """Check the current deployment status."""
+        return "The deployment is ready."
+
+    def request_bytes(messages):
+        wire = convert_to_openai_messages(messages, text_format="block")
+        return json.dumps(wire, ensure_ascii=False, separators=(",", ":")).encode()
+
+    client = InMemoryOpenVikingClient(
+        {"viking://~/memories/profile.md": "The user prefers azure deployments."}
+    )
+    checkpointer = InMemorySaver()
+    config = {"configurable": {"thread_id": "prefix-session"}}
+
+    def build_agent(model, *, pause_before_tools=False):
+        return create_agent(
+            model,
+            tools=[lookup_deployment],
+            system_prompt="Stable agent policy.",
+            middleware=[
+                OpenVikingContextMiddleware(
+                    client=client,
+                    target_uri="viking://~/memories",
+                    capture_on_after_agent=capture,
+                    # Python 3.10 async tasks cannot resolve the graph's config context.
+                    session_id_resolver=lambda _state, _runtime: "prefix-session",
+                )
+            ],
+            checkpointer=checkpointer,
+            interrupt_before=["tools"] if pause_before_tools else None,
+        )
+
+    async def run(agent, text):
+        payload = None if text is None else {"messages": [{"role": "user", "content": text}]}
+        if streaming:
+            events = (
+                [
+                    event
+                    async for event in agent.astream(
+                        payload, config, stream_mode=["messages", "updates"]
+                    )
+                ]
+                if asynchronous
+                else list(agent.stream(payload, config, stream_mode=["messages", "updates"]))
+            )
+            assert any(mode == "updates" for mode, _ in events)
+            # Python 3.10 lacks implicit async callback propagation in LangChain 1.0.
+            if not asynchronous or sys.version_info >= (3, 11):
+                assert any(
+                    mode == "messages" and isinstance(event[0], AIMessageChunk)
+                    for mode, event in events
+                )
+        elif asynchronous:
+            await agent.ainvoke(payload, config)
+        else:
+            agent.invoke(payload, config)
+
+    model = RecordingModel()
+    agent = build_agent(model)
+    for schema in (agent.get_input_schema(), agent.get_output_schema()):
+        assert "openviking_recall_ledger" not in schema.model_json_schema().get("properties", {})
+        assert "openviking_pending_context" not in schema.model_json_schema().get("properties", {})
+    await run(agent, "first azure deployment prompt")
+    client.records["viking://~/memories/profile.md"] = "Azure deployments must use Singapore."
+    if interrupt_tools:
+        agent = build_agent(model, pause_before_tools=True)
+    await run(agent, "second azure deployment prompt")
+    state = agent.get_state(config).values
+
+    assert len(client.search_calls) == 2
+    assert all(message.id for message in state["messages"] if message.type == "human")
+    assert [message.content for message in state["messages"] if message.type == "human"] == [
+        "first azure deployment prompt",
+        "second azure deployment prompt",
+    ]
+    assert sum(len(ledger) for ledger in state["openviking_recall_ledger"].values()) == 2
+    assert len(model.requests) == (3 if interrupt_tools else 4)
+    assert "azure deployments" in model.requests[0][1].content
+    assert "Singapore" in model.requests[2][-1].content
+
+    # A fresh middleware and graph recover the ledger from the same checkpointer.
+    restarted_model = RecordingModel()
+    restarted_agent = build_agent(restarted_model)
+    if interrupt_tools:
+        assert agent.get_state(config).next == ("tools",)
+        await run(restarted_agent, None)
+        assert len(client.search_calls) == 2
+        references = [
+            part
+            for message in client.sessions["prefix-session"]
+            for part in message.get("parts", [])
+            if part["type"] == "context"
+        ]
+        assert len(references) == (2 if capture else 0)
+        if capture:
+            assert references[-1] == {
+                "type": "context",
+                "uri": "viking://~/memories/profile.md",
+                "context_type": "memory",
+                "abstract": "Azure deployments must use Singapore.",
+            }
+    await run(restarted_agent, "third azure deployment prompt")
+    restarted_state = restarted_agent.get_state(config).values
+
+    assert len(client.search_calls) == 3
+    requests = model.requests + restarted_model.requests
+    for previous, current in zip(requests, requests[1:], strict=False):
+        assert request_bytes(current[: len(previous)]) == request_bytes(previous)
+        assert current[0].content == "Stable agent policy."
+    assert sum(len(ledger) for ledger in restarted_state["openviking_recall_ledger"].values()) == 3
+    captured = client.sessions["prefix-session"]
+    if capture:
+        assert len(captured) == 12
+        parts = [part for message in captured for part in message.get("parts", [])]
+        assert not any(
+            "<openviking_context>" in part.get("text", "")
+            for part in parts
+            if part["type"] == "text"
+        )
+        assert len([part for part in parts if part["type"] == "tool"]) == 6
+        assert len([part for part in parts if part["type"] == "context"]) == 3
+        assert [
+            message.content for message in restarted_state["messages"] if message.type == "human"
+        ] == [
+            "first azure deployment prompt",
+            "second azure deployment prompt",
+            "third azure deployment prompt",
+        ]
+        assert not restarted_state.get("openviking_pending_context")
+    else:
+        assert captured == []
+
+
+@pytest.mark.parametrize("has_context", [False, True])
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+def test_langgraph_middleware_discards_recall_when_model_call_fails(has_context, error_type):
+    client = InMemoryOpenVikingClient(
+        {"viking://~/memories/profile.md": "Azure deployments use a stale region."}
+        if has_context
+        else {}
+    )
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda _state, _runtime: "empty-failure-session",
+    )
+
+    class Request:
+        state = {}
+        runtime = None
+        messages = [HumanMessage(id="empty-failure-user", content="Find azure deployments.")]
+        system_message = None
+
+        def override(self, **overrides):
+            request = Request()
+            request.messages = overrides.get("messages", self.messages)
+            return request
+
+    def handler(_request):
+        raise error_type("model failed")
+
+    with pytest.raises(error_type, match="model failed"):
+        middleware.wrap_model_call(Request(), handler)
+
+    assert middleware.after_model({"messages": Request.messages}, runtime=None) is None
+    client.records["viking://~/memories/profile.md"] = "Azure deployments now use Singapore."
+    seen = []
+    middleware.wrap_model_call(Request(), lambda request: seen.append(request))
+    assert len(client.search_calls) == 2
+    assert "Singapore" in seen[0].messages[0].content
 
 
 def test_langgraph_middleware_batches_persistence_before_separate_commit():
@@ -1629,10 +2887,11 @@ def test_langgraph_middleware_does_not_duplicate_active_messages_in_context():
         return AIMessage(content="ok")
 
     middleware.wrap_model_call(Request(), handler)
-    system_content = captured_request["request"].system_message.content
-    assert "Middleware recall uses green context" in system_content
-    assert "OpenViking active duplicate user turn" not in system_content
-    assert "OpenViking active duplicate assistant turn" not in system_content
+    recalled_content = captured_request["request"].messages[0].content
+    assert captured_request["request"].system_message is None
+    assert "Middleware recall uses green context" in recalled_content
+    assert "OpenViking active duplicate user turn" not in recalled_content
+    assert "OpenViking active duplicate assistant turn" not in recalled_content
 
 
 def test_langgraph_middleware_uses_runtime_thread_id():
@@ -1665,7 +2924,8 @@ def test_langgraph_middleware_uses_runtime_thread_id():
         return AIMessage(content="ok")
 
     middleware.wrap_model_call(Request(), handler)
-    assert "Runtime thread users prefer teal" in captured_request["request"].system_message.content
+    assert captured_request["request"].system_message is None
+    assert "Runtime thread users prefer teal" in captured_request["request"].messages[0].content
     assert client.search_calls[-1]["session_id"] == "runtime-thread"
 
     middleware.after_agent(

@@ -166,6 +166,7 @@ async def _run_agent(
         publish_events=False,
         sender_id=sender_id,
         ov_tools_enable=keep_default_tools,
+        stop_tool_names=["done"],
     )
     if messages_output_path is not None:
         messages_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -252,7 +253,12 @@ def main() -> None:
         "If you need to communicate with the user, you MUST call tool `communicate_with_user`."
     )
     instructions.append(
-        "When the task is finished or terminated, call tool `done` first and output an ending content without using any tool calling for the next round to exit."
+        "If the user replies with ###STOP###, do not contact the user again or assume "
+        "any new confirmation. Complete only actions already authorized under the "
+        "policy, then call `done`. Business tools remain available until `done`."
+    )
+    instructions.append(
+        "When the task is finished or terminated, call tool `done` and do not use any more tools."
     )
 
     system_prompt = "\n".join(instructions)
@@ -263,8 +269,16 @@ def main() -> None:
 
     messages_output_path = _derive_messages_path(output_path)
 
-    final_content, final_reasoning_content, tools_used, token_usage, iteration, memory_content = (
-        asyncio.run(
+    termination_reason = "agent_error"
+    try:
+        (
+            final_content,
+            final_reasoning_content,
+            tools_used,
+            token_usage,
+            iteration,
+            memory_content,
+        ) = asyncio.run(
             _run_agent(
                 agent,
                 system_prompt,
@@ -275,7 +289,9 @@ def main() -> None:
                 messages_output_path,
             )
         )
-    )
+        termination_reason = "max_steps" if iteration >= agent.max_iterations else "agent_stop"
+    finally:
+        provider.close(termination_reason=termination_reason)
 
     reward = None
     evaluation_result = None

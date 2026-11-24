@@ -104,6 +104,8 @@ class EmbeddingMsg:
     _task_work_id: str = ""
     queue_enqueued_at: float = 0.0
     failure_requeue_count: int = 0
+    source_type: str = ""
+    dashboard_source_type: str = ""
 
     def __init__(
         self,
@@ -119,8 +121,10 @@ class EmbeddingMsg:
         initial_fields: Optional[Dict[str, Any]] = None,
         queue_enqueued_at: float = 0.0,
         failure_requeue_count: int = 0,
+        source_type: str = "",
         *,
         payload: EmbeddingPayload | None = None,
+        dashboard_source_type: str = "",
     ) -> None:
         self.id = str(uuid4())
         self.telemetry_id = telemetry_id
@@ -128,6 +132,8 @@ class EmbeddingMsg:
         self._task_work_id = _task_work_id
         self.queue_enqueued_at = max(float(queue_enqueued_at or 0.0), 0.0)
         self.failure_requeue_count = max(int(failure_requeue_count or 0), 0)
+        self.source_type = str(source_type or "")
+        self.dashboard_source_type = str(dashboard_source_type or "")
         self.action = IndexAction(action)
         if payload is not None:
             if any(
@@ -236,12 +242,16 @@ class EmbeddingMsg:
         action: IndexAction | str = IndexAction.UPSERT,
         field_patch: FieldPatch | None = None,
         telemetry_id: str = "",
+        source_type: str = "",
+        dashboard_source_type: str = "",
     ) -> "EmbeddingMsg":
         action = IndexAction(action)
         return cls(
             action=action,
             payload=EmbedPayload(message, context_data, field_patch),
             telemetry_id=telemetry_id,
+            source_type=source_type,
+            dashboard_source_type=dashboard_source_type,
         )
 
     @classmethod
@@ -328,7 +338,7 @@ class EmbeddingMsg:
         return dict(self.field_patch.seed_fields) if self.field_patch is not None else {}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "id": self.id,
             "telemetry_id": self.telemetry_id,
             "task_id": self.task_id,
@@ -338,6 +348,11 @@ class EmbeddingMsg:
             "action": self.action.value,
             "payload": self.payload.to_dict(),
         }
+        if self.source_type:
+            data["source_type"] = self.source_type
+        if self.dashboard_source_type:
+            data["dashboard_source_type"] = self.dashboard_source_type
+        return data
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict())
@@ -403,6 +418,7 @@ class EmbeddingMsg:
                 _task_work_id=str(data.get("_task_work_id") or ""),
                 queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
                 failure_requeue_count=data.get("failure_requeue_count", 0),
+                source_type=str(data.get("source_type") or ""),
             )
         else:
             obj = cls(
@@ -418,8 +434,10 @@ class EmbeddingMsg:
                 initial_fields=data.get("initial_fields"),
                 queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
                 failure_requeue_count=data.get("failure_requeue_count", 0),
+                source_type=str(data.get("source_type") or ""),
             )
         obj.id = str(data.get("id") or obj.id)
+        obj.dashboard_source_type = str(data.get("dashboard_source_type") or "")
         return obj
 
     @classmethod

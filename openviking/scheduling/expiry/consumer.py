@@ -68,10 +68,14 @@ class ExpiryConsumer:
         """Traverse every shard from a per-consumer offset."""
         while not stop.is_set():
             start_shard = self._next_shard
+            attempted_shards = 0
+            failed_shards = 0
+            skipped_shards = 0
             for offset in range(self._config.shard_count):
                 if stop.is_set():
                     break
                 shard_id = (start_shard + offset) % self._config.shard_count
+                attempted_shards += 1
                 try:
                     await self._runner.run_if_acquired(
                         OwnerRole.CALLBACK,
@@ -82,7 +86,8 @@ class ExpiryConsumer:
                     )
                 except StoreOperationError as exc:
                     if exc.code == "shard_not_stopped":
-                        logger.warning(
+                        skipped_shards += 1
+                        logger.debug(
                             "expiry consumer skipped unfinished shard execution "
                             "item_type=%s shard_id=%d",
                             self._item_type,
@@ -94,18 +99,47 @@ class ExpiryConsumer:
                             outcome="orphaned",
                         )
                         continue
+                    failed_shards += 1
+                    logger.debug(
+                        "expiry consumer shard failed item_type=%s shard_id=%d error_type=%s error_code=%s",
+                        self._item_type,
+                        shard_id,
+                        type(exc).__name__,
+                        exc.code,
+                    )
                     self._metrics.count(
                         "timer_shard_round",
                         item_type=self._item_type,
                         outcome="failed",
                     )
-                except Exception:
+                except Exception as exc:
+                    failed_shards += 1
+                    logger.debug(
+                        "expiry consumer shard failed item_type=%s shard_id=%d error_type=%s",
+                        self._item_type,
+                        shard_id,
+                        type(exc).__name__,
+                    )
                     self._metrics.count(
                         "timer_shard_round",
                         item_type=self._item_type,
                         outcome="failed",
                     )
             self._next_shard = (start_shard + 1) % self._config.shard_count
+            if failed_shards or skipped_shards:
+                logger.info(
+                    "expiry consumer round degraded item_type=%s total=%d failed=%d skipped=%d",
+                    self._item_type,
+                    attempted_shards,
+                    failed_shards,
+                    skipped_shards,
+                    extra={
+                        "degraded": True,
+                        "total": attempted_shards,
+                        "failed": failed_shards,
+                        "skipped": skipped_shards,
+                    },
+                )
             if not stop.is_set():
                 try:
                     await asyncio.wait_for(stop.wait(), self._config.callback_poll_seconds)
@@ -195,7 +229,7 @@ class ExpiryConsumer:
     ) -> _BucketScan:
         next_poll_at_ms: int | None = None
         started_at_seconds = redis_now_ms // 1000
-        for attempt in range(self._binding.options.max_attempts):
+        for attempt in range(self._binding.options.max_attempts or 1):
             while available > 0:
                 limit = min(self._config.scan_batch_size, available)
                 page = await self._store.read_bucket_page(
@@ -322,6 +356,10 @@ class ExpiryConsumer:
     async def _finish_failed_attempt(
         self, lease: ShardExecution, claim: Claim, reason: str
     ) -> None:
+        if self._binding.options.max_attempts is None:
+            # Leave the durable claim in place. Its timestamp bounds retries,
+            # including after consumer replacement, without an in-memory timer.
+            return
         attempt, _ = decode_claim_score(claim.claim_score)
         if attempt + 1 >= self._binding.options.max_attempts:
             await self._log_exhausted_and_ack(lease, claim, reason)

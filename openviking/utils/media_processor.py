@@ -4,11 +4,13 @@
 
 import time
 from collections.abc import Awaitable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlparse
 
 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
@@ -163,15 +165,17 @@ class UnifiedResourceProcessor:
     async def submit_understanding(self, source: str | Path | LocalResource, **kwargs) -> str:
         return await self._get_parser_router().submit(source, **kwargs)
 
-    async def upload_understanding_file(self, source: str | Path | LocalResource) -> str:
-        return await self._get_parser_router().upload_file(source)
+    async def upload_understanding_file(self, source: str | Path | LocalResource, **kwargs) -> str:
+        return await self._get_parser_router().upload_file(source, **kwargs)
 
     @staticmethod
     def _set_resolved_identity(resource: LocalResource, source_name: Optional[str]) -> None:
         meta = resource.meta
         if resource.path.is_dir():
             extension = ""
-        elif resource.source_type == SourceType.HTTP:
+        elif resource.source_type == SourceType.HTTP or (
+            resource.source_type == SourceType.FEISHU and meta.get("feishu_content_kind") == "file"
+        ):
             extension = str(meta.get("extension") or resource.path.suffix)
         else:
             extension = Path(source_name).suffix if source_name else ""
@@ -297,7 +301,12 @@ class UnifiedResourceProcessor:
             started_at = time.perf_counter()
             status = "ok"
             try:
-                with get_current_telemetry().measure(f"resource.{stage}"):
+                with (
+                    get_current_telemetry().measure(f"resource.{stage}"),
+                    bind_dashboard_token_source_type("document")
+                    if stage == "parse_artifact"
+                    else nullcontext(),
+                ):
                     return await operation
             except Exception:
                 status = "error"
@@ -353,6 +362,41 @@ class UnifiedResourceProcessor:
                 "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
             )
 
+        feishu_access_kwargs = {}
+        if (
+            mode is ParseMode.DEFAULT
+            and prepared_resource is None
+            and not kwargs.get("_feishu_prepared_source")
+            and not kwargs.get("_feishu_resolved_type")
+        ):
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+            from openviking.parse.feishu_import import recursive_wiki
+
+            backend = normalize_parser_backend(kwargs.get("parser_backend"))
+            if (
+                FeishuAccessor._is_feishu_url(source)
+                and FeishuAccessor._parse_feishu_url(source)[0] == "wiki"
+                and not recursive_wiki(kwargs)
+                and backend is not ParserBackend.INTERNAL
+                and (
+                    backend is ParserBackend.UNDERSTANDING
+                    or self._get_parser_router().should_use_understanding_api(source)
+                )
+            ):
+                preflight = await FeishuAccessor().preflight_source(
+                    source,
+                    feishu_access_token=kwargs.get("feishu_access_token"),
+                    feishu_config=kwargs.get("feishu_config"),
+                    **(
+                        {"lark_file": kwargs["lark_file"]}
+                        if kwargs.get("lark_file") is not None
+                        else {}
+                    ),
+                )
+                kwargs["_feishu_resolved_type"] = preflight.doc_type
+                # Reuse this operation's lookup only during source preparation.
+                feishu_access_kwargs["_feishu_resolved_wiki"] = preflight.resolved_wiki
+
         if (
             mode is ParseMode.DEFAULT
             and prepared_resource is None
@@ -388,6 +432,7 @@ class UnifiedResourceProcessor:
                     source,
                     allow_local_path_resolution=allow_local_path_resolution,
                     **({"parse_mode": mode} if mode is ParseMode.NO_SPLIT else {}),
+                    **feishu_access_kwargs,
                     **kwargs,
                 ),
             )

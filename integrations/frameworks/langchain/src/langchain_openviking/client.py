@@ -76,6 +76,7 @@ class OpenVikingConnection:
     extra_headers: dict[str, str] | None = None
     auto_initialize: bool = True
     async_client: Any = None
+    auth_mode: str | None = None
 
     def __deepcopy__(self, memo: dict[int, Any]) -> OpenVikingConnection:
         """Copy configuration while preserving caller-owned client identities."""
@@ -85,6 +86,7 @@ class OpenVikingConnection:
             async_client=self.async_client,
             url=self.url,
             api_key=self.api_key,
+            auth_mode=self.auth_mode,
             account=self.account,
             user=self.user,
             user_id=self.user_id,
@@ -561,6 +563,7 @@ def _create_client_from_connection(connection: OpenVikingConnection) -> Any:
         actor_peer_id=connection.actor_peer_id,
         timeout=connection.timeout,
         extra_headers=connection.extra_headers,
+        **({"auth_mode": connection.auth_mode} if connection.auth_mode is not None else {}),
     )
 
     if connection.auto_initialize and hasattr(client, "initialize"):
@@ -581,6 +584,7 @@ async def _create_async_client_from_connection(connection: OpenVikingConnection)
         actor_peer_id=connection.actor_peer_id,
         timeout=connection.timeout,
         extra_headers=connection.extra_headers,
+        **({"auth_mode": connection.auth_mode} if connection.auth_mode is not None else {}),
     )
 
     try:
@@ -814,7 +818,9 @@ def extract_message_text(content: Any) -> str:
             if isinstance(block, str):
                 chunks.append(block)
             elif isinstance(block, dict):
-                if block.get("type") == "text" and isinstance(block.get("text"), str):
+                if block.get("type") in ("text", "input_text", "output_text") and isinstance(
+                    block.get("text"), str
+                ):
                     chunks.append(block["text"])
                 elif isinstance(block.get("content"), str):
                     chunks.append(block["content"])
@@ -824,15 +830,32 @@ def extract_message_text(content: Any) -> str:
     return str(content)
 
 
+def get_message_role(message: Any) -> str:
+    """Normalize conversation role aliases, preserving typed-message precedence."""
+
+    if isinstance(message, dict):
+        role = message.get("type") or message.get("role")
+    else:
+        role = getattr(message, "type", None) or getattr(message, "role", None)
+    if role in ("chat", "ChatMessageChunk"):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+    if role in ("human", "user", "HumanMessageChunk"):
+        return "user"
+    if role in ("system", "developer", "SystemMessageChunk"):
+        return "system"
+    if role in ("ai", "assistant", "AIMessageChunk"):
+        return "assistant"
+    return str(role or "")
+
+
 def get_latest_user_text(messages: Iterable[Any]) -> str:
     for message in reversed(list(messages)):
-        role = getattr(message, "type", None) or getattr(message, "role", None)
-        if isinstance(message, dict):
-            role = message.get("type") or message.get("role")
-            content = message.get("content")
-        else:
-            content = getattr(message, "content", "")
-        if role in {"human", "user"}:
+        if get_message_role(message) == "user":
+            content = (
+                message.get("content")
+                if isinstance(message, dict)
+                else getattr(message, "content", "")
+            )
             text = extract_message_text(content).strip()
             if text:
                 return text

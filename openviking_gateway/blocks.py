@@ -48,14 +48,31 @@ def block(source, text):
     )
 
 
-def gateway_note(policy, tools):
-    """Opening lines that tell the model what the gateway adds to this history."""
-    if not (policy.recall or tools):
+# Recalled text is the user's own history. Without a provenance boundary a model may
+# cite an internal decision as external evidence or industry practice.
+RECALL_PROVENANCE_NOTE = (
+    "It is this user's own saved history (past conversations, meetings, notes) as recorded "
+    "then: internal context, not an external source or established fact."
+)
+
+
+def gateway_note(policy, tools, soul=False):
+    """Opening lines that tell the model what the gateway adds to this history.
+
+    ``soul`` says the block carries the user's soul.md.
+    """
+    if not (policy.recall or tools or soul):
         return ""
     lines = [
         "The OpenViking Gateway, a proxy between the client and the model, added this "
         "block. The user did not write it, and the client does not show it."
     ]
+    if soul:
+        lines.append(
+            "- The <agent-soul> section below is the soul.md file from the user's OpenViking "
+            "account: their standing instructions for who you are and how you behave. Follow it, "
+            "except where the system prompt or the user in this conversation says otherwise."
+        )
     if policy.recall:
         shown = (
             " The user sees a one-line summary of what was added (counts and names), not the "

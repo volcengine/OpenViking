@@ -51,12 +51,14 @@ const MANAGED_ENV = [
 
 async function startServer() {
   const initializes = [];
+  const requests = [];
   const gate = { health: null };
   const server = createServer((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", async () => {
       const path = (req.url || "").split("?")[0];
+      requests.push(`${req.method} ${path}`);
       if (path === "/mcp") {
         let method = null;
         try {
@@ -81,6 +83,7 @@ async function startServer() {
   return {
     url: `http://127.0.0.1:${port}`,
     initializes,
+    requests,
     gate,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -257,6 +260,27 @@ for (const plugin of [{ mcpEnabled: false }, { bypassSession: true }]) {
       await handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "BASE" }, fakeCtx());
       assert.equal(server.initializes.length, 0);
       await handlers.get("session_shutdown")({}, fakeCtx());
+    });
+  });
+}
+
+for (const plugin of [{ autoCapture: false }, { autoCapture: false, takeoverEnabled: true }]) {
+  test("compaction and shutdown do not write with " + JSON.stringify(plugin), async (t) => {
+    await withExtension(t, async ({ server, shutdown, configPath }) => {
+      await shutdown();
+      await writeFile(configPath, JSON.stringify({ plugin: { pi: { ...plugin, mcpEnabled: false } } }));
+      const { default: extension } = await import(join(EXTENSION_DIR, "index.ts"));
+      const { pi, handlers } = fakePi();
+      await extension(pi);
+      await handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "BASE" }, fakeCtx());
+      server.requests.length = 0;
+      const compaction = await handlers.get("session_before_compact")(
+        { type: "session_before_compact", preparation: { firstKeptEntryId: "entry-1", tokensBefore: 1 } },
+        fakeCtx(),
+      );
+      assert.equal(compaction, undefined, "pi keeps its own compaction");
+      await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, fakeCtx());
+      assert.deepEqual(server.requests.filter((r) => r.startsWith("POST")), []);
     });
   });
 }

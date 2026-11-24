@@ -8,8 +8,7 @@ import json
 from typing import Any, Dict, Optional
 
 from openviking.service.external_task_service import ExternalTaskService
-from openviking.service.task_work_index import TaskWorkRejected
-from openviking.storage.queuefs import QueueManager, get_queue_manager
+from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 
@@ -42,20 +41,16 @@ class ExternalTaskProcessor(DequeueHandlerBase):
             task_id, account_id, user_id = self._parse(data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
-        processed = await self._service.execute(task_id, account_id, user_id)
-        if not processed:
-            # Register a new delivery before the old one is ACKed. Keeping the
-            # task ID preserves cancellation and task-owned work across rotation.
-            try:
-                await get_queue_manager().enqueue(
-                    QueueManager.EXTERNAL_TASK,
-                    {"task_id": task_id, "account_id": account_id, "user_id": user_id},
-                )
-            except TaskWorkRejected:
-                # Cancellation only needs the current delivery to be ACKed.
-                return ProcessResult.cancelled()
-            else:
-                return ProcessResult.requeued()
+        # Escaped execution/persistence errors leave this delivery open for recovery.
+        if not await self._service.execute(task_id, account_id, user_id):
+            return ProcessResult.retry()
+        task = await get_task_tracker().get(task_id, account_id=account_id, user_id=user_id)
+        if task is not None and task.error:
+            return ProcessResult.failed(task.error)
+        if await get_task_tracker().is_cancellation_requested(
+            task_id, account_id=account_id, user_id=user_id
+        ):
+            return ProcessResult.cancelled()
         return ProcessResult.success()
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
@@ -65,6 +60,7 @@ class ExternalTaskProcessor(DequeueHandlerBase):
             task_id, account_id, user_id = self._parse(data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
+        # Cancellation is settled only after provider cleanup has completed.
         await self._service.cancel_recovered(task_id, account_id, user_id)
         return ProcessResult.cancelled()
 

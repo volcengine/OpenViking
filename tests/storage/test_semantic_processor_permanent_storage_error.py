@@ -13,7 +13,9 @@ import pytest
 from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
-from openviking.service.task_work_index import TaskWorkIndex
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskStatus, TaskTracker
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome
@@ -22,6 +24,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import SyncDiff
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from tests.test_task_tracker import _FakeAgfs
 
 
 @pytest.fixture
@@ -104,7 +107,9 @@ async def test_storage_error_finishes_request_and_respects_lock_ownership(
     env.retry_queue.enqueue.assert_not_awaited()
     env.processor._account_breaker(msg.account_id).check()
     if owned:
-        env.pathlock.pathlock_adopt.assert_awaited_once_with(msg.lock_handoff)
+        env.pathlock.pathlock_adopt.assert_awaited_once_with(
+            msg.lock_handoff, fs_ctx={"account_id": msg.account_id}
+        )
         env.pathlock.pathlock_release.assert_awaited_once_with(env.lease)
     else:
         env.pathlock.pathlock_as_borrowed.assert_awaited_once_with(env.lease)
@@ -123,22 +128,33 @@ async def test_queue_acks_failed_semantic_work(semantic_env, monkeypatch, wrappe
     monkeypatch.setattr(
         "openviking.storage.queuefs.named_queue.AsyncAGFSClient", lambda agfs: backend
     )
-    index = TaskWorkIndex()
-    finalize = AsyncMock()
-    index.set_callbacks(
-        finalize_before_ack=finalize, is_cancellation_requested=lambda task_id: False
-    )
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     queue = NamedQueue(
         object(),
         "/queue",
         "Semantic",
         dequeue_handler=env.processor,
-        middlewares=[TaskWorkQueueMiddleware(index)],
+        middlewares=[TaskWorkQueueMiddleware()],
     )
     payload = msg.to_dict()
     if task_owned:
         payload["task_id"] = "ingestion-task"
-    await queue.enqueue(payload)
+        task = await tracker.create(
+            "add_resource",
+            task_id="ingestion-task",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        await tracker.start(
+            task.task_id,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        with bind_task_context(task.task_id, msg.account_id, msg.user_id):
+            await queue.enqueue(payload)
+    else:
+        await queue.enqueue(payload)
     queued_payload = backend.write.call_args.args[1].decode()
     backend.read = AsyncMock(
         side_effect=[
@@ -146,7 +162,14 @@ async def test_queue_acks_failed_semantic_work(semantic_env, monkeypatch, wrappe
             json.dumps({"pending": 0, "processing": 0}).encode(),
         ]
     )
-    assert index.has_work("ingestion-task") is task_owned
+    assert (
+        await tracker.has_work(
+            "ingestion-task",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        is task_owned
+    )
 
     await asyncio.wait_for(queue.dequeue(), timeout=1)
 
@@ -155,13 +178,20 @@ async def test_queue_acks_failed_semantic_work(semantic_env, monkeypatch, wrappe
     assert status.in_progress == status.processed == status.requeue_count == 0
     assert status.error_count == 1
     assert [entry.message for entry in status.errors] == [str(error)]
-    assert not index.has_work("ingestion-task")  # Includes active consumer registration.
-    assert index.failure("ingestion-task") == (str(error) if task_owned else None)
+    assert not await tracker.has_work(
+        "ingestion-task",
+        account_id=msg.account_id,
+        user_id=msg.user_id,
+    )
     if task_owned:
-        finalize.assert_awaited_once()
-        assert finalize.call_args.args[0].task_id == "ingestion-task"
-    else:
-        finalize.assert_not_awaited()
+        failed = await tracker.get(
+            "ingestion-task",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        assert failed is not None
+        assert failed.status is TaskStatus.FAILED
+        assert failed.error == str(error)
     env.retry_queue.enqueue.assert_not_awaited()
     env.pathlock.pathlock_release.assert_awaited_once_with(env.lease)
 
@@ -200,12 +230,27 @@ async def test_lock_error_requeues_without_consuming_failure_budget(semantic_env
     result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
 
     assert result.outcome is ProcessOutcome.REQUEUED
-    env.retry_queue.enqueue.assert_awaited_once()
+    env.retry_queue.enqueue.assert_awaited_once_with(msg, deduplicate_memory=False)
     requeued = env.retry_queue.enqueue.call_args.args[0]
     assert requeued.id == msg.id
     assert requeued.failure_requeue_count == 0
     breaker.check()
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unknown_semantic_error_is_terminal_without_tripping_breaker(semantic_env):
+    env = semantic_env
+    msg = env.message()
+    error = RuntimeError("unexpected semantic invariant violation")
+    env.dag.run.side_effect = error
+
+    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == str(error)
+    env.retry_queue.enqueue.assert_not_awaited()
+    env.processor._account_breaker(msg.account_id).check()
 
 
 @pytest.mark.asyncio

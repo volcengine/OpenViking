@@ -4,9 +4,10 @@
 import json
 
 import httpx
+import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.retrieve import ContextType, MatchedContext
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -195,32 +196,35 @@ async def test_context_and_list_default_limit_is_ten(
     service,
     monkeypatch,
 ):
-    limits = []
+    hits = [
+        _memory(f"viking://user/test_user/memories/events/{i}.md", 0.9 - i * 0.01, f"Entry {i}")
+        for i in range(12)
+    ]
 
-    async def fake_find(**kwargs):
-        limits.append(("context", kwargs["limit"]))
-        return _FakeFindResult()
-
-    async def fake_search(**kwargs):
-        limits.append(("list", kwargs["limit"]))
-        return _FakeFindResult()
+    async def fake_find(*, limit, **kwargs):
+        return FindResult(memories=hits[:limit], resources=[], skills=[])
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.search, "search", fake_search)
+    monkeypatch.setattr(service.search, "search", fake_find)
 
-    context_response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "defaults", "mode": "context"},
+    expected = [hit.uri for hit in hits[:10]]
+    list_response = await client.post("/api/v1/search/search", json={"query": "defaults"})
+    explicit = await client.post(
+        "/api/v1/search/search", json={"query": "defaults", "mode": "list"}
     )
-    list_response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "defaults"},
-    )
+    assert list_response.status_code == 200, list_response.text
+    assert explicit.status_code == 200, explicit.text
+    listed = list_response.json()["result"]
+    assert listed == explicit.json()["result"]
+    assert [hit["uri"] for hit in listed["memories"]] == expected
+    assert "rendered" not in listed
 
-    assert context_response.status_code == 200
-    assert list_response.status_code == 200
-    assert ("context", 10) in limits
-    assert ("list", 10) in limits
+    context = await client.post(
+        "/api/v1/search/search",
+        json={"query": "defaults", "mode": "context", "peer_scope": "actor"},
+    )
+    assert context.status_code == 200, context.text
+    assert [entry["uri"] for entry in context.json()["result"]["entries"]] == expected
 
 
 async def test_context_and_list_parameter_domains_do_not_overlap(client: httpx.AsyncClient):
@@ -269,31 +273,6 @@ async def test_context_mode_degrades_a_retrieval_failure(
 
     assert response.status_code == 200
     assert response.json()["result"]["stats"]["retrieval_errors"]
-
-
-async def test_list_mode_response_is_unchanged(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    hit = _memory("viking://user/test_user/memories/events/a.md", 0.5, "abs")
-
-    async def fake_result(**kwargs):
-        del kwargs
-        return _FakeFindResult([hit])
-
-    monkeypatch.setattr(service.search, "find", fake_result)
-    monkeypatch.setattr(service.search, "search", fake_result)
-
-    default = await client.post("/api/v1/search/search", json={"query": "plain"})
-    explicit = await client.post(
-        "/api/v1/search/search",
-        json={"query": "plain", "mode": "list"},
-    )
-
-    assert default.status_code == 200
-    assert default.json() == explicit.json()
-    assert "rendered" not in default.json()["result"]
 
 
 async def test_context_mode_reads_real_agfs_content_and_sidecars(
@@ -487,12 +466,14 @@ async def test_context_mode_session_materialization_failure_stays_stateless(
     assert not await service.viking_fs.exists(f"{session_uri}/.recall_log.json", ctx=ctx)
 
 
-async def test_context_mode_does_not_materialize_session_when_session_features_are_off(
+@pytest.mark.parametrize("query_expansion", ["off", "auto"])
+async def test_context_mode_without_dedup_does_not_materialize_a_missing_session(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
+    query_expansion,
 ):
-    session_id = "context-with-session-features-off"
+    session_id = "context-without-dedup"
     ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
 
     async def fake_find(**kwargs):
@@ -507,7 +488,7 @@ async def test_context_mode_does_not_materialize_session_when_session_features_a
             "mode": "context",
             "session_id": session_id,
             "dedup_turns": 0,
-            "query_expansion": "off",
+            "query_expansion": query_expansion,
         },
     )
 

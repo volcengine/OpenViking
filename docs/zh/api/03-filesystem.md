@@ -6,19 +6,50 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 读取或写入文件正文见[内容 API](12-content.md)。通过 WebDAV 客户端访问文件见 [WebDAV](20-webdav.md)。
 
+`viking://system` 的文件系统和内容 API 对所有角色开放读取；ROOT 和 ADMIN
+只能修改 `viking://system/memory/memory_templates/custom/` 下的具体资产。
+`builtin/` 内置模板和 `viking://system/compile/example-skills/` 官方示例由服务自动同步，
+API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
+自定义模板也可以通过[模板管理 API](08-admin.md)发布。
+
 ## API 参考
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
 
 ### ls()
 
-列出目录内容。
+列出目录的子节点；URI 指向文件时，将文件自身作为一条记录返回。目录列表不包含请求的目录自身。
+
+| 目标 | `ls` | `ls` 设置 `recursive=true` / `tree` |
+|------|------|-------------------------------------|
+| 目录 URI | 直接子节点 | 后代节点，`rel_path` 相对于目标目录 |
+| 文件 URI | 一条文件记录，不带 `rel_path` | 一条文件记录，`rel_path` 为文件名 |
+
+文件结果沿用目录列表的 `original`、`agent` 和 `simple` 纯 URI 输出格式。
+请求文件摘要或概览时，对应字段为空字符串，不读取父目录摘要。
+文件结果的 `has_more=false`；`offset>=1` 或 tags 不匹配时返回空数组。
+通过 `extra_fields=id,locked` 按需返回 `id` 和 `isLocked`，文件不返回 `count`。
+显式指定隐藏文件时无需设置 `show_all_hidden=true`，存储内部名称仍不暴露。
+目录读取已明确抛出的 `NOT_FOUND`、`PERMISSION_DENIED` 等错误继续传播。
+
+文件目标兼容由文件系统服务提供，作用于 HTTP、SDK、CLI 和 MCP 入口。
+内部 `VikingFS.ls/tree` 保留原有目录接口行为，同步和 OVPack 等操作不增加文件类型探测。
+
+首先尝试目录读取，收到 Not-a-directory 错误后改为读取文件元数据。
+由于部分对象存储后端对文件目标返回空列表，目录读取为空时也会检查目标类型。
+目录读取成功为空、随后元数据确认不存在时，保留原来的空列表结果。
+例如 S3 的非递归 `ls` 对不存在的前缀仍返回 HTTP 200 和空数组。
+元数据查询的权限错误及其他后端错误继续传播；Not-a-directory 后确认目标不存在时，仍返回 `NOT_FOUND`。
+
+对外接口的非空目录列表不增加类型检查请求。普通请求读取到空页且 `offset>0` 时，
+直接返回空列表，不再探测元数据。GLOBAL 和有数据访问范围约束的请求仍保留类型校验，
+因为被授权遍历的容器必须是目录。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | 文件或目录的 Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
@@ -69,6 +100,11 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 列举会保留无权限目录本身，但不会继续展开其内容，搜索结果也不会包含无权读取的
 内容。该行为只适用于共享的
 `viking://resources` 命名空间；个人和 peer 私有命名空间仍按原有规则隐藏。
+
+在大小写不敏感的 `localfs` 上，目录名大小写别名可能影响 `ls`、`tree` 和 `glob`
+看到的内容。例如真实目录是 `viking://resources/bob-private/`，请求
+`viking://resources/BOB-PRIVATE/` 也可能列出同一目录；大小写敏感系统上，别名目录
+不存在时会返回 `NOT_FOUND`。
 
 
 **Python SDK (HTTP)**
@@ -138,6 +174,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
+# 单个文件，仍使用列表响应结构
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  --data-urlencode "uri=viking://resources/project/readme.md" \
+  --data-urlencode "output=original" \
+  -H "X-API-Key: your-key"
+
 # 递归列表
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
@@ -189,6 +231,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
       "uri": "viking://resources/docs/",
+      "access": "read",
       "tags": ["team=search"]
     }
   ],
@@ -196,17 +239,34 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 }
 ```
 
+`ls`、递归列表、`tree` 和 `stat` 的条目均返回 `access`，表示当前请求身份对该 URI 的有效权限。`original` 和 `agent` 输出都包含该字段；`simple=true` 的纯路径列表保持不变。
+
+| access | 含义 |
+|------------|------|
+| `denied` | 无权访问；列表只保留名称占位，不能展开；直接请求 `stat` 仍返回 403 |
+| `container` | 仅可展开目录以访问获授权的子项，不能读取目录自身的内容或修改它 |
+| `read` | 可读 |
+| `write` | 可读、可写 |
+| `manage` | 可读、可写、可管理 |
+
+共享资源合并直接授权、继承授权、用户组和管理员隐式权限。ACL 字段缺失或直接授权为空不会自动变成 `denied`：仍按祖先 ACL 及默认共享规则解析；`restricted` 且无匹配授权时才拒绝普通用户。关闭 ACL 时、或 URI 不属于共享资源时，使用原有身份及目录权限规则，包括系统文件的只读限制，不以是否存在向量记录决定权限。
+
+客户端可以复用列表中的 `access` 控制编辑入口，无需逐项请求 `stat` 或管理员专用的 ACL 接口。`access` 不代表格式可编辑、目录可删除或所有后代均已授权；具体操作仍执行其路径限制与当时的权限检查。底层文件模式 `mode` 不是当前身份的权限。
+
 ---
 
 ### tree()
 
-获取目录树结构。
+获取目录的后代节点；URI 指向文件时，将该文件作为单节点树返回。
+响应仍是扁平节点数组。文件的 `rel_path` 为文件名（如 `readme.md`），
+`level_limit` 不产生额外后代节点。设置 `directories_only=true` 时排除文件，返回空数组。
+文件分页、tags、元数据和错误行为与上面的 `ls` 一致。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | 文件或目录的 Viking URI |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
 | abs_limit | int | 否 | HTTP：256；SDK：128 | 返回的摘要最大长度 |
 | include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
@@ -410,6 +470,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "access": "write",
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   }
@@ -428,6 +489,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": true,
     "isLocked": false,
+    "access": "manage",
     "uri": "viking://resources/docs",
     "count": 42
   }
@@ -438,7 +500,11 @@ ov stat viking://resources/my-project/docs
 
 `id` 字段（仅文件）是 VikingDB 中向量记录的确定性主键，对 level 2（常规文件）记录按 `md5(f"{account_id}:{uri}")` 计算。该值与向量集合 schema 中的 `id` 字段一致，可用于直接交叉引用向量记录而无需额外查询。目录不返回此字段，因为一个目录在多个语义层（L0 abstract、L1 overview）下可能对应多条向量记录，id 不唯一。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，`stat(id)` 都会返回 `NOT_FOUND`，并在原因中提示数据可能尚未索引或已经删除。
 
-`count` 字段（仅目录）包含该目录下的项目（文件和子目录）估计数量（来自向量索引）。
+`count` 字段（仅目录）统计目录 URI 子树下当前调用方可见的 `level=2` 向量记录数。它受异步索引进度和孤儿记录清理影响，不是物理文件系统条目数；`ls`、`tree` 和 `glob` 通过 `extra_fields=count` 按需返回该字段。
+
+**破坏性变更：** `count` 以前包含所有已索引的向量层级；现在只统计当前调用方可见的 `level=2` 记录。
+
+在大小写不敏感的 `localfs` 上，`stat` 也可能通过大小写别名返回真实文件或目录的元数据。例如 `viking://resources/docs/REPORT.md` 可能命中真实的 `viking://resources/docs/report.md`；大小写敏感系统上，别名目标不存在时返回 `NOT_FOUND`。
 
 ---
 
@@ -493,6 +559,7 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+
 ```
 
 **CLI**
@@ -503,6 +570,8 @@ ov attrs get viking://resources/docs/api.md tags
 ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
 ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/guide.md \
+  --tags count+=1 --mode append
 ```
 
 `set-tags` 的目录目标会更新目录语义记录；`recursive=true` 还会更新已有子文件和子目录语义记录。
@@ -545,6 +614,8 @@ ov attrs set-tags viking://resources/docs --tags team=search --mode append --rec
 ```
 
 `attrs.memory` 来自 `MEMORY_FIELDS` 元信息，已去掉正文内容。`attrs.tags` 是 `attrs set-tags` 和搜索过滤使用的显式检索标签。
+
+批量请求接受 1～50 个 URI，会对规范化后的 URI 去重，并按输入顺序返回 `items` 和 `failed`；单项失败不会让整个 HTTP 请求失败。
 
 ---
 
@@ -616,11 +687,13 @@ ov mkdir viking://resources/new-project/ --description "接口文档目录"
 }
 ```
 
+在大小写不敏感的 `localfs` 上，创建仅大小写不同的目录可能命中已有目录。例如已存在 `viking://resources/docs/` 时，`ov mkdir viking://resources/DOCS/` 可能作用到同一个底层目录；大小写敏感系统上二者是不同路径。
+
 ---
 
 ### rm()
 
-删除文件或目录。递归删除目录时会返回删除的项目估计数量。
+删除文件或目录。递归删除按 URI 范围清理向量记录，并向存储后端发起一次递归删除请求，无需在 Python 层遍历文件子树。
 
 `rm` 是幂等操作：删除一个合法但不存在的 URI 仍会成功。
 URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用域时返回 `INVALID_URI`。
@@ -631,6 +704,7 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要删除的 Viking URI |
 | wait | bool | 否 | False | 等待删除后的语义刷新完成 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | recursive | bool | 否 | False | 递归删除目录 |
 
 
@@ -707,9 +781,11 @@ ov rm viking://resources/old.md [--recursive]
 }
 ```
 
-`estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
+`estimated_deleted_count` 表示已提交删除的向量记录数量。一个文件或目录可以对应多条记录，未索引内容不计入数量；该数量不保证向量索引立即可见。CLI 会在输出中显示此数量。
 
-删除 `viking://resources/...` 时，响应可能包含 `memory_cleanup`，表示删除前已清理引用该资源 URI 的用户记忆。
+删除资源后，已有记忆会保留原有内容和 `resource_refs`，HTTP 响应不再包含 `memory_cleanup`。
+
+在大小写不敏感的 `localfs` 上，大小写别名可能影响删除目标。例如真实文件是 `viking://resources/bob-private/private.md`，执行 `ov rm viking://resources/BOB-PRIVATE/private.md` 可能删除同一个文件；大小写敏感系统上，别名目标不存在时该幂等删除仍会成功，但不会删除真实文件。
 
 ---
 
@@ -797,6 +873,8 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；路径锁繁忙时返回 `CONFLICT`；复制或删除目录但未设置 `recursive=true`、对文件执行目录操作、源和目标关系非法或类型冲突时返回 `INVALID_ARGUMENT`（HTTP 400）。
 
+在大小写不敏感的 `localfs` 上，`from_uri` 和 `to_uri` 都可能受大小写别名影响。例如 `ov cp viking://resources/BOB-PRIVATE/private.md viking://resources/archive/copy.md` 可能从真实的 `bob-private/private.md` 复制；`to_uri` 仅大小写不同也可能覆盖已有目标。大小写敏感系统上，大小写不同的源不存在时返回 `NOT_FOUND`，大小写不同的目标按独立路径处理。
+
 ---
 
 ### mv()
@@ -873,6 +951,8 @@ ov mv viking://resources/old-name/ viking://resources/new-name/
   }
 }
 ```
+
+在大小写不敏感的 `localfs` 上，`from_uri` 和 `to_uri` 都可能受大小写别名影响。例如 `ov mv viking://resources/BOB-PRIVATE/private.md viking://resources/archive/private.md` 可能移动真实的 `bob-private/private.md`；`to_uri` 仅大小写不同也可能覆盖或合并已有目标。大小写敏感系统上，大小写不同的源不存在时返回 `NOT_FOUND`，大小写不同的目标按独立路径处理。
 
 <a id="grep"></a><a id="glob"></a>
 

@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.acl import AclUpdate
 from openviking.storage.context_update_plan import ContextUpdatePlan, execute_content_tree_actions
@@ -159,9 +160,9 @@ async def enqueue_direct_index_actions(
             or enqueued_any
         )
     logger.debug(
-        "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
+        "%s root=%s action_counts=%s action_count=%d",
         log_correlation(),
-        actions[0].uri if actions else "",
+        safe_uri_for_log(str(actions[0].uri if actions else "")),
         dict(action_counts),
         len(actions),
     )
@@ -219,6 +220,7 @@ async def commit_and_enqueue_plan(
     plan: ContextUpdatePlan,
     *,
     ctx: RequestContext,
+    semantic_lock_handoff: dict[str, Any] | None = None,
     inline_store: Any = None,
     inline_ref: Any = None,
     target: Any = None,
@@ -270,6 +272,7 @@ async def commit_and_enqueue_plan(
         refresh_result = await summarizer.refresh_file_parent(
             file_uri=plan.file_refresh.file_uri,
             ctx=ctx,
+            lock_handoff=semantic_lock_handoff,
             ingest_options=IngestOptions.from_value(ingest_options),
             created=file_created,
             file_md5=plan.file_refresh.md5,
