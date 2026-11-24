@@ -137,12 +137,12 @@ class EvidenceReader(Tool):
         self.files = files
         self.allowed = set()
         self.spans, full = {}, set()
-        self.complete_reads = set()
+        self.recovery_evidence = set()
         for item in data.get("inputs", []) if isinstance(data, dict) else []:
             payload = item.get("payload", {})
             if "text" in payload and "uri" in payload:
                 self.allowed.add(item["id"])
-                self.complete_reads.add(item["id"])
+                self.recovery_evidence.add(item["id"])
             self.allowed.update(payload.get("source_ranges", []))
             spans = payload.get("evidence_spans", [])
             full.update(set(payload.get("source_ranges", [])) - {s["source_range"] for s in spans})
@@ -204,7 +204,7 @@ class EvidenceReader(Tool):
         spans = [] if start_line is None else [(start_line, end_line)]
         value = await self.read(source_range, spans, include_image=True)
         if value["complete"]:
-            self.complete_reads.add(source_range)
+            self.recovery_evidence.add(source_range)
         image = value.pop("image", None)
         text = json.dumps(value, ensure_ascii=False)
         if image:
