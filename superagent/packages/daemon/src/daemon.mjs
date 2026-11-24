@@ -31,7 +31,7 @@ import { InstanceLock } from './lock.mjs';
 import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 import { approvalNote } from './actions/approval.mjs';
-import { resolveCardAction, settledChoiceCard } from './card-messages.mjs';
+import { CARD_LOCKED, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { LARK_MESSAGE_EVENT_KINDS, resolveLarkMessageEvent } from './lark-message-events.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
@@ -570,12 +570,16 @@ export class PersonalAgentDaemon {
     });
     // The refresh button on a /tasks card redraws that card in place. Should
     // Lark refuse (the message is too old to edit), the answer goes as a reply.
+    // A card still locked after the Lark connector's tries is being clicked
+    // again: that click's own refresh redraws it, and no card is sent.
     if (outcome.card && refreshesCard(event)) {
       try {
         await this.connectors.updateCard(event.parentId, outcome.card);
         return;
       } catch (error) {
-        this.logger.warn('command_card_refresh_failed', { command: label, error: safeError(error) });
+        const locked = CARD_LOCKED.test(safeError(error));
+        this.logger.warn('command_card_refresh_failed', { command: label, locked, error: safeError(error) });
+        if (locked) return;
       }
     }
     // A command may answer with a card too (/tasks); the text goes where it cannot.

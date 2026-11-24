@@ -702,12 +702,21 @@ describe('/tasks card refresh', () => {
     assert.deepEqual(replies, []);
   });
 
-  it('answers as a new card when Lark refuses the redraw, and a task picked always does', async () => {
+  it('answers as a new card when Lark refuses the redraw, unless the card is locked, and a task picked always does', async () => {
     const refused = setup({ updateCard: async () => { throw new Error('message too old to edit'); } });
     await refused.daemon.handleSlashCommand({ name: 'tasks', arg: '' }, refused.event({ superagent_command: '/tasks', arg: '', refresh: true }), { seq: 1 });
     assert.deepEqual(refused.updates, ['om_card123456789']);
     assert.equal(refused.replies.length, 1);
     assert.equal(refused.replies[0].card.header.title.content, '后台任务');
+
+    // Still locked after the connector's tries: the card is being clicked
+    // again, and that click's own refresh redraws it.
+    const locked = setup({ updateCard: async () => {
+      throw new Error('lark-cli update answered card failed: Failed to create card content, ext=ErrCode: 11310; ErrMsg: card action is lock; ');
+    } });
+    await locked.daemon.handleSlashCommand({ name: 'tasks', arg: '' }, locked.event({ superagent_command: '/tasks', arg: '', refresh: true }), { seq: 1 });
+    assert.deepEqual(locked.updates, ['om_card123456789']);
+    assert.deepEqual(locked.replies, []);
 
     const picked = setup({ updateCard: async () => ({ sent: true }) });
     await picked.daemon.handleSlashCommand({ name: 'tasks', arg: '' }, picked.event({ superagent_command: '/tasks' }), { seq: 1 });

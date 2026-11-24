@@ -4,6 +4,10 @@
 import { choiceCard } from './actions/content.mjs';
 import { normalizeEvent } from './event.mjs';
 
+// Lark locks a card while a click on it waits for its callback to be answered
+// (lark-cli answers within 3 s): an edit made then fails with this code.
+export const CARD_LOCKED = /ErrCode: 11310\b/;
+
 export function migrateCardMessages(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS lark_cards (
     message_id TEXT PRIMARY KEY,
