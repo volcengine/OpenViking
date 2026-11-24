@@ -135,15 +135,15 @@ Local Item queries apply the request filters to members that belong to an Item. 
 
 Item mode does not load the session named by `session_id`, perform intent analysis/query planning or reranking, or pre-read target abstracts, overviews, or content. Complete root metadata from the engine requires no additional UUID lookup. Filter-only Item queries do not initialize an embedder; semantic queries still need query vectors. Member authorization and grouping queries still run.
 
-Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. Item grouping with `search_type="keywords"` is currently unsupported and returns `501 UNIMPLEMENTED`. A configured storage backend without these interfaces returns `501 UNIMPLEMENTED` rather than emulating grouping in OpenViking.
+Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. Keyword Item queries use the backend's ordinary keyword-search capability: VikingDB uses native BM25 grouping without embeddings; the local engine's native keyword search remains unavailable. A configured storage backend without the required Item interfaces returns `501 UNIMPLEMENTED`.
 
 ### VikingDB integration
 
 `VikingDBCollection` maps Catalog declaration management to existing record APIs and semantic Item queries to the platform `group_by` API. It reads `item_id`, `item_score`, `item_uri`, and root-owned `item_attrs` from `result.groups`. OV does not call engine UDFs directly or aggregate ordinary TopK results. It applies `score_threshold` to aggregate scores while preserving platform group order.
 
-Pre-create a collection with the standard OV fields, `ShardBy="account_id"`, a `path`-typed `uri`, a `list<string>` `item_uuids` mounted on `uri`, and an ordinary, non-inherited `list<string>` `item_attrs`. Modes cannot be changed per find/search request, and OV does not reconfigure existing collections. Declaration management supports shadow and union. The platform `group_by` contract currently requires union. Shadow grouping and filter-only Item queries return `501 UNIMPLEMENTED`.
+Pre-create a collection with the standard OV fields, `ShardBy="account_id"`, a `path`-typed `uri`, a `list<string>` `item_uuids` mounted on `uri`, and an ordinary, non-inherited `list<string>` `item_attrs`; include both Item fields in the scalar index. Modes cannot be changed per find/search request, and OV does not reconfigure existing collections. Declaration management supports shadow and union. The platform `group_by` contract currently requires union, so VikingDB shadow grouping remains unavailable. Filter-only Item queries enumerate all scalar-result pages, deduplicate effective Item identities, and read each declaration root's own metadata. Their scores are zero, similarity thresholds are ignored, and ties are ordered by UUID string before the global Item limit is applied.
 
-Ordinary queries add no Item probes or storage calls. VikingDB search and aggregate requests on account-sharded collections send the account ID as a `partition` string and retain account and permission filters. Point operations use `partition_by`. Without attribute predicates, an Item query makes one grouping request, with no UUID lookup or member-content read. Attribute predicates query only account-scoped declarations and translate each root-attribute condition into an effective-UUID condition for platform filtering and scoring. Negative predicates may require all declarations in that account. The current platform contract omits candidate totals and truncation, so OV omits `item_extra_info` and does not request unused member fields.
+Ordinary queries add no Item probes or storage calls. VikingDB search and aggregate requests on account-sharded collections send the account ID as a `partition` string and retain account and permission filters. Point operations use `partition_by`. Semantic and keyword Item queries make one grouping request, with no UUID lookup or member-content read. OV forwards `item_attrs` predicates as ordinary `list<string>` conditions, preserving the filter tree; the engine selects matching members and returns each group's own attributes. The current platform contract omits candidate totals and truncation, so OV omits `item_extra_info` and does not request unused member fields. Filter-only enumeration costs grow with the number of matching members.
 
 ## Retrieval Pipeline
 
@@ -531,7 +531,7 @@ Semantic retrieval with optional session-aware query planning.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| query | str | No | "" | Search query string; may be omitted for image queries or for Item queries with a filter |
+| query | str | No | "" | Search query string; may be omitted for image queries or list queries with a filter, including Item queries |
 | image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | search_type | `"semantic"` \| `"keywords"` | No | `"semantic"` | Retrieval type. `semantic` uses embeddings and vector recall; `keywords` uses BM25 keyword recall |
 | mode | `"list"` \| `"context"` | No | `"list"` | Return ranked hits or assembled context. CLI `--mode` maps to this field; context-specific parameters are described below |
@@ -556,6 +556,8 @@ Semantic retrieval with optional session-aware query planning.
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 In Item mode, `level` filters member tiers. See [Item Search](#item-search-preview) for root result fields and incompatible options.
+
+In list mode, an empty or whitespace-only query with a filter uses the same filter-only retrieval as `find()`: scores are zero, similarity thresholds are ignored, and no embedding or session query planning runs. A filter can also come from `tags`, `context_type`, or time shortcuts. Without a query, image, or filter, both endpoints return 400.
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query and a remote VikingDB backend with a full-text index. `args` accepts engine tuning options for `search_type="keywords"` in `mode="list"`. Keyword queries reject image input.
 

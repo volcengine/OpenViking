@@ -135,15 +135,15 @@ HTTP／SDK 响应沿用 `memories`、`resources`、`skills` 和 `total`，不新
 
 Item 模式不加载 `session_id` 对应的会话，不做意图分析、query planning 或 rerank，也不预读目标摘要、概述和正文。引擎返回完整根元数据时，不额外查询 UUID。纯过滤 Item 查询不初始化 embedder；语义查询仍需生成查询向量。成员权限检查和分组查询仍正常执行。
 
-Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。当前不支持 `search_type="keywords"` 的 Item 分组，此组合返回 `501 UNIMPLEMENTED`。配置的存储后端如果尚未支持这些接口，会返回 `501 UNIMPLEMENTED`，OpenViking 不会在服务层模拟聚合结果。
+Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。关键词 Item 查询复用后端普通关键词检索能力：VikingDB 直接使用 BM25 分组，不调用 Embedding；开源引擎的原生关键词检索仍未实现。配置的存储后端如果缺少所需 Item 接口，会返回 `501 UNIMPLEMENTED`。
 
 ### VikingDB 接入
 
 `VikingDBCollection` 将 Catalog 声明管理映射到既有记录 API，将语义 Item 检索映射到平台 `group_by`，读取 `result.groups` 中的 `item_id`、`item_score`、`item_uri` 和根自身 `item_attrs`。OV 不直接调用引擎 UDF，也不聚合普通 TopK 结果。按聚合分应用 `score_threshold`，不改变平台组顺序。
 
-预建 collection 时使用 `ShardBy="account_id"`，并包含 OV 标准字段。其中 `uri` 类型为 `path`，`item_uuids` 为挂载到 `uri` 的 `list<string>`，`item_attrs` 为普通、不继承的 `list<string>`。字段模式不能通过 find／search 按请求切换，也不会由 OV 自动修改旧 collection。声明管理支持 shadow／union。当前平台 `group_by` 协议仅接受 union，shadow 分组及纯过滤 Item 查询返回 `501 UNIMPLEMENTED`。
+预建 collection 时使用 `ShardBy="account_id"`，并包含 OV 标准字段。其中 `uri` 类型为 `path`，`item_uuids` 为挂载到 `uri` 的 `list<string>`，`item_attrs` 为普通、不继承的 `list<string>`；两个 Item 字段都需要加入 scalar index。字段模式不能通过 find／search 按请求切换，OV 不自动修改旧 collection。声明管理支持 shadow／union；当前平台 `group_by` 协议仅接受 union，因此 VikingDB shadow 分组仍不可用。纯过滤 Item 查询完整枚举 scalar 结果各页，按有效 Item 身份去重并读取每个声明根自己的元数据；分数固定为 0，忽略相似度阈值，同分按 UUID 字符串升序排列后应用全局 Item limit。
 
-普通查询不增加 Item 探测或存储请求。对按账号分片的 collection，VikingDB 检索和聚合请求用 `partition` 传账号 ID 字符串，并保留账号和权限过滤。点操作使用 `partition_by`。无 `item_attrs` 条件时，Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。带属性条件时，仅查询该 account 的声明，将每个根属性条件转换为有效 UUID 条件，再交给平台过滤和计分。否定条件可能需要读取该 account 的全部声明。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。
+普通查询不增加 Item 探测或存储请求。对按账号分片的 collection，VikingDB 检索和聚合请求用 `partition` 传账号 ID 字符串，并保留账号和权限过滤。点操作使用 `partition_by`。语义和关键词 Item 查询只发一次分组请求，不回查根 UUID、不读取成员正文。OV 将 `item_attrs` 条件作为普通 `list<string>` 条件透传，保留过滤树，由引擎筛选成员并返回每组自身的属性。平台尚未提供候选总数和截断信息，因此当前不返回 `item_extra_info`，也不请求未使用的成员字段。纯过滤完整枚举的代价随匹配成员数量增加。
 
 ## 检索流程
 
@@ -531,7 +531,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| query | str | 否 | "" | 搜索查询字符串；图片查询，或 Item 模式下提供过滤条件时可省略 |
+| query | str | 否 | "" | 搜索查询字符串；图片查询，或提供过滤条件的 list 查询（含 Item）可省略 |
 | image_url | str 或 list[str] | 否 | None | 单个图片 URI 或有序图片 URI 数组，每项支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | search_type | `"semantic"` \| `"keywords"` | 否 | `"semantic"` | 检索类型。`semantic` 使用 Embedding 和向量召回；`keywords` 使用 BM25 关键词召回 |
 | mode | `"list"` \| `"context"` | 否 | `"list"` | 返回排序命中列表或组装好的上下文。CLI `--mode` 会映射到这个字段；context 专用参数见下文 |
@@ -556,6 +556,8 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
 Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search-preview)。
+
+list 模式下，空或仅含空白的 query 加过滤条件，会复用 `find()` 的纯过滤检索：分数为 0，忽略相似度阈值，不调用 Embedding 和会话 query planning。过滤条件也可由 `tags`、`context_type` 或时间快捷参数生成。query、图片和过滤条件都为空时，两个接口均返回 400。
 
 `search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query 和配置了全文索引的远程 VikingDB。`args` 在 `search_type="keywords"` 且 `mode="list"` 时接收引擎调参选项。关键词查询拒绝图片输入。
 
