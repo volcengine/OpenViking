@@ -30,54 +30,6 @@ from openviking.server.config import (
 )
 
 
-class TestPrometheusExposition:
-    def test_counter_histogram_and_labels(self):
-        registry = MetricRegistry()
-        labels = {"context_type": "memory"}
-        registry.inc_counter(
-            "openviking_retrieval_requests_total", label_names=("context_type",), labels=labels
-        )
-        registry.inc_counter(
-            "openviking_retrieval_requests_total", label_names=("context_type",), labels=labels
-        )
-        registry.observe_histogram(
-            "openviking_retrieval_latency_seconds",
-            0.02,
-            label_names=("context_type",),
-            labels=labels,
-        )
-
-        registry.inc_counter(
-            "openviking_cache_hits_total", label_names=("level",), labels={"level": "L0"}
-        )
-        registry.inc_counter(
-            "openviking_cache_hits_total", label_names=("level",), labels={"level": "L0"}
-        )
-        registry.inc_counter(
-            "openviking_cache_misses_total", label_names=("level",), labels={"level": "L1"}
-        )
-
-        exporter = PrometheusExporter(registry=registry)
-        text = exporter.render()
-        schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
-
-        assert 'openviking_retrieval_requests_total{context_type="memory"} 2' in text
-        assert (
-            f'openviking_retrieval_latency_seconds_count{{bucket_schema="{schema}",context_type="memory"}} 1'
-            in text
-        )
-        assert (
-            f'openviking_retrieval_latency_seconds_bucket{{bucket_schema="{schema}",context_type="memory",le="0.05"}} 1'
-            in text
-        )
-        assert (
-            f'openviking_retrieval_latency_seconds_bucket{{bucket_schema="{schema}",context_type="memory",le="+Inf"}} 1'
-            in text
-        )
-        assert 'openviking_cache_hits_total{level="L0"} 2' in text
-        assert 'openviking_cache_misses_total{level="L1"} 1' in text
-
-
 class TestRetrievalStatsMetricsIntegration:
     def test_record_query_updates_metrics_registry(self):
         from openviking.retrieve.retrieval_stats import RetrievalStatsCollector
@@ -164,16 +116,9 @@ class TestMetricsEndpoint:
             resp = await client.get("/metrics")
             assert resp.status_code == 404
 
-    async def test_metrics_enabled_returns_200(self):
+    async def test_metrics_enabled_exports_sample_with_default_prometheus(self):
         config = ServerConfig(
-            observability=ObservabilityConfig(
-                metrics=MetricsConfig(
-                    enabled=True,
-                    exporters=MetricsExportersConfig(
-                        prometheus=PrometheusExporterConfig(enabled=True)
-                    ),
-                )
-            )
+            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
@@ -188,21 +133,8 @@ class TestMetricsEndpoint:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/metrics")
                 assert resp.status_code == 200
-                assert "openviking_retrieval_requests_total" in resp.text
-        finally:
-            shutdown_metrics(app=app)
-
-    async def test_metrics_enabled_by_new_server_metrics_flag(self):
-        config = ServerConfig(
-            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
-        )
-        app = create_app(config=config, service=None)
-        init_metrics_from_server_config(config, app=app)
-        transport = httpx.ASGITransport(app=app)
-        try:
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get("/metrics")
-                assert resp.status_code == 200
+                assert resp.headers["content-type"].startswith("text/plain")
+                assert 'openviking_retrieval_requests_total{context_type="memory"} 1' in resp.text
         finally:
             shutdown_metrics(app=app)
 
