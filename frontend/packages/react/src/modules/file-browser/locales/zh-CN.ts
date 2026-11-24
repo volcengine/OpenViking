@@ -43,7 +43,7 @@ const messages = {
   searchConfirmScopes: '确认',
   searchScopesUnsupported: '当前范围不支持按目录筛选',
   searchLevels: '内容',
-  searchLevelLabels: ['L0 摘要', 'L1 总览', 'L2 全文'],
+  searchLevelLabels: ['L0 摘要', 'L1 概览', 'L2 全文'],
   searchTime: '时间',
   searchCreatedAt: '按创建时间',
   searchUpdatedAt: '按更新时间',
@@ -77,16 +77,16 @@ const messages = {
   viewSwitch: '切换视图',
   resizeTree: '调整目录树大小',
   l0Summary: 'L0 摘要',
-  l1Overview: 'L1 总览',
+  l1Overview: 'L1 概览',
   emptyL0Summary: '暂无 L0 摘要',
-  emptyL1Overview: '暂无 L1 总览',
+  emptyL1Overview: '暂无 L1 概览',
   summaryEmpty: '暂无生成内容',
   summaryFailed: '摘要加载失败。',
 } satisfies Required<ShellLabels>;
 
 export default messages;
 
-export const emptySummaries = { l0: '暂无 L0 摘要', l1: '暂无 L1 总览' };
+export const emptySummaries = { l0: '暂无 L0 摘要', l1: '暂无 L1 概览' };
 
 export const stackedEmpty = '从上方选中一个文件预览';
 

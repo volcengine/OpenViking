@@ -5,7 +5,7 @@
 ## 何时使用
 
 - 需要在应用里预览 Markdown、代码、JSON、表格、PDF、Office 文档、图片和音视频，并保留路径、页签和操作区时。
-- 需要在同一块区域里切换文件、目录摘要（L0 摘要、L1 总览）和宿主自己的内容（看板、图谱）时：三者分别对应 `file`、`directory`、`content` 三种页签。
+- 需要在同一块区域里切换文件、目录摘要（L0 摘要、L1 概览）和宿主自己的内容（看板、图谱）时：三者分别对应 `file`、`directory`、`content` 三种页签。
 - 需要自己决定数据来源、保存方式和导航时：组件不发起请求，也不需要 `OpenVikingProvider`。使用 [FileBrowser](../modules/file-browser) 时预览已经内置，不需要单独接入。
 
 ## 引入
@@ -176,7 +176,7 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewDirectoryTab
 
-目录的多级摘要，例如 L0 摘要与 L1 总览，包含 `FilePreviewTabBase` 的全部字段。摘要只读，没有 `editing`。
+目录的多级摘要，例如 L0 摘要与 L1 概览，包含 `FilePreviewTabBase` 的全部字段。摘要只读，没有 `editing`。
 
 | 参数                | 说明                                                           | 类型                                                                   | 默认值  |
 | ------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- | ------- |
@@ -333,40 +333,44 @@ import '@openviking/react/components/file-preview/style.css';
 
 所有字段都是可选的 `string`，省略的字段使用当前语言的默认文案。
 
-| 参数                   | 说明                                                                   | 类型     | 默认值                         |
-| ---------------------- | ---------------------------------------------------------------------- | -------- | ------------------------------ |
-| previewImage           | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`                   |
-| closePreview           | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`                   |
-| showHiddenPath         | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'`         |
-| copyPath               | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`                   |
-| copied                 | 路径复制成功的反馈                                                     | `string` | `'节点路径已复制'`             |
-| copyFailed             | 路径复制失败的反馈                                                     | `string` | `'复制失败'`                   |
-| moreActions            | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`                   |
-| actionFailed           | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`                   |
-| previewMode            | 视图切换里「预览」的文字                                               | `string` | `'预览'`                       |
-| sourceMode             | 视图切换里「源码」的文字                                               | `string` | `'源码'`                       |
-| viewSwitch             | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`                   |
-| edit                   | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`                       |
-| editFile               | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`                   |
-| save                   | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`                   |
-| editorLoadFailed       | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`             |
-| highlightFailed        | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`           |
-| editor                 | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`                   |
-| leaveEditing           | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`                   |
-| retry                  | 重试按钮的文字                                                         | `string` | `'重试'`                       |
-| loadFailed             | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`               |
-| saveFailed             | 保存失败的提示                                                         | `string` | `'保存失败'`                   |
-| versionNoteTitle       | 版本备注弹窗标题                                                       | `string` | `'填写版本备注'`               |
-| versionNoteLabel       | 版本备注输入框标签                                                     | `string` | `'描述'`                       |
-| versionNotePlaceholder | 版本备注输入框占位文案                                                 | `string` | `'给当前版本写句说明'`         |
-| versionNoteCancel      | 关闭备注弹窗并保留草稿                                                 | `string` | `'取消'`                       |
-| versionNoteConfirm     | 确认版本备注                                                           | `string` | `'确定'`                       |
-| versionNotCreated      | 正文已保存但未创建版本时的提示                                         | `string` | `'正文已保存，未创建新版本。'` |
-| unsupported            | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`           |
-| loading                | 加载提示                                                               | `string` | `'加载中…'`                    |
-| fileEmpty              | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`                 |
-| noContent              | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`             |
-| truncated              | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`             |
+| 参数                   | 说明                                                                   | 类型     | 默认值                                   |
+| ---------------------- | ---------------------------------------------------------------------- | -------- | ---------------------------------------- |
+| previewImage           | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`                             |
+| closePreview           | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`                             |
+| showHiddenPath         | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'`                   |
+| copyPath               | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`                             |
+| copied                 | 路径复制成功的反馈                                                     | `string` | `'节点路径已复制'`                       |
+| copyFailed             | 路径复制失败的反馈                                                     | `string` | `'复制失败'`                             |
+| moreActions            | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`                             |
+| actionFailed           | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`                             |
+| previewMode            | 视图切换里「预览」的文字                                               | `string` | `'预览'`                                 |
+| sourceMode             | 视图切换里「源码」的文字                                               | `string` | `'源码'`                                 |
+| viewSwitch             | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`                             |
+| edit                   | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`                                 |
+| editFile               | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`                             |
+| save                   | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`                             |
+| editorLoadFailed       | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`                       |
+| highlightFailed        | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`                     |
+| editor                 | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`                             |
+| leaveEditing           | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`                             |
+| retry                  | 重试按钮的文字                                                         | `string` | `'重试'`                                 |
+| loadFailed             | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`                         |
+| saveFailed             | 保存失败的提示                                                         | `string` | `'保存失败'`                             |
+| discardTitle           | 放弃改动确认框的标题                                                   | `string` | `'放弃未保存的改动？'`                   |
+| discardDescription     | 说明离开后的结果                                                       | `string` | `'离开后，当前文件的未保存改动将丢失。'` |
+| keepEditing            | 保留当前草稿                                                           | `string` | `'继续编辑'`                             |
+| discardDraft           | 放弃草稿并继续                                                         | `string` | `'放弃并离开'`                           |
+| versionNoteTitle       | 版本备注弹窗标题                                                       | `string` | `'填写版本备注'`                         |
+| versionNoteLabel       | 版本备注输入框标签                                                     | `string` | `'描述'`                                 |
+| versionNotePlaceholder | 版本备注输入框占位文案                                                 | `string` | `'给当前版本写句说明'`                   |
+| versionNoteCancel      | 关闭备注弹窗并保留草稿                                                 | `string` | `'取消'`                                 |
+| versionNoteConfirm     | 确认版本备注                                                           | `string` | `'确定'`                                 |
+| versionNotCreated      | 正文已保存但未创建版本时的提示                                         | `string` | `'正文已保存，未创建新版本。'`           |
+| unsupported            | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`                     |
+| loading                | 加载提示                                                               | `string` | `'加载中…'`                              |
+| fileEmpty              | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`                           |
+| noContent              | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`                       |
+| truncated              | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`                       |
 
 #### 视频预览文案
 
@@ -383,11 +387,14 @@ import '@openviking/react/components/file-preview/style.css';
 
 通过 `ref` 取得，用于命令式切换页签和访问 FileViewer。
 
-| 参数            | 说明                                                                                                            | 类型                         | 默认值 |
-| --------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------ |
-| setActiveTab    | 切换到指定页签，页签不存在、被禁用、已是当前页签或正在保存时返回 `false`                                        | `(key: string) => boolean`   | -      |
-| getActiveTab    | 返回当前页签的 `key`                                                                                            | `() => string`               | -      |
-| getViewerHandle | 返回当前文件页签的 FileViewer 句柄，用于翻页、搜索和缩放，当前不是文件页签、是图片或视频、尚未就绪时返回 `null` | `() => ViewerHandle \| null` | -      |
+| 参数            | 说明                                                                                                            | 类型                                | 默认值 |
+| --------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------ |
+| setActiveTab    | 切换到指定页签，页签不存在、被禁用、已是当前页签、正在保存或等待放弃确认时返回 `false`                          | `(key: string) => boolean`          | -      |
+| confirmLeave    | 询问是否放弃已修改的草稿。没有未保存的改动时返回 `true`，正在保存或已有待处理确认时返回 `false`                 | `() => boolean \| Promise<boolean>` | -      |
+| getActiveTab    | 返回当前页签的 `key`                                                                                            | `() => string`                      | -      |
+| getViewerHandle | 返回当前文件页签的 FileViewer 句柄，用于翻页、搜索和缩放，当前不是文件页签、是图片或视频、尚未就绪时返回 `null` | `() => ViewerHandle \| null`        | -      |
+
+用户确认放弃草稿后，`setActiveTab` 继续切换页签。宿主可在改变受控页签或离开页面前调用 `await previewRef.current?.confirmLeave()`，返回 `true` 后继续。
 
 ### 其他类型
 

@@ -1,3 +1,4 @@
+import { afterLeaving } from './use-file-preview-leave.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { mediaKind } from './file-preview-media.js';
 import { useCallback } from 'react';
@@ -33,6 +34,7 @@ export function useFilePreviewActionsContext({
   setViewMode,
   editing,
   operations,
+  confirmLeave,
 }: {
   activeTab: FilePreviewTab;
   fileTab?: FilePreviewFileTab;
@@ -45,6 +47,7 @@ export function useFilePreviewActionsContext({
   setViewMode: (mode: FilePreviewViewMode) => void;
   editing: Editing;
   operations: Operations;
+  confirmLeave: () => boolean | Promise<boolean>;
 }): FilePreviewPanelActions {
   const track = useTrack();
   const selectView = (mode: FilePreviewViewMode) => {
@@ -81,9 +84,11 @@ export function useFilePreviewActionsContext({
   // switches to source, and leaving without switching back would strand the user on
   // the source view instead of the preview they came from.
   const cancelEditing = useCallback(() => {
-    editing.discard(activeTab);
-    setViewMode('preview');
-  }, [activeTab, editing, setViewMode]);
+    afterLeaving(confirmLeave(), () => {
+      editing.discard(activeTab);
+      setViewMode('preview');
+    });
+  }, [activeTab, confirmLeave, editing, setViewMode]);
 
   // 复制路径按路径判断，不按页签类型：目录与文件都有路径行，两者都需要它。
   // Copy-path is decided by the path, not the tab kind: both a directory and a

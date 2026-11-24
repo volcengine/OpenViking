@@ -356,6 +356,10 @@ Every field is an optional `string`; omitted fields use the default text of the 
 | retry                  | Text of the Retry button                                                                                             | `string` | `'Retry'`                                                  |
 | loadFailed             | Message when reading the file fails; also used when reading for edit fails                                           | `string` | `'Failed to load the file'`                                |
 | saveFailed             | Message when saving fails                                                                                            | `string` | `'Failed to save'`                                         |
+| discardTitle           | Discard confirmation title                                                                                           | `string` | `'Discard unsaved changes?'`                               |
+| discardDescription     | Explains what leaving discards                                                                                       | `string` | `'Changes to this file will be lost if you leave.'`        |
+| keepEditing            | Keeps the draft open                                                                                                 | `string` | `'Keep editing'`                                           |
+| discardDraft           | Discards the draft and continues                                                                                     | `string` | `'Discard and leave'`                                      |
 | versionNoteTitle       | Version note dialog title                                                                                            | `string` | `'Add a version note'`                                     |
 | versionNoteLabel       | Version note field label                                                                                             | `string` | `'Description'`                                            |
 | versionNotePlaceholder | Version note placeholder                                                                                             | `string` | `'Describe this version'`                                  |
@@ -383,11 +387,14 @@ Every field is an optional `string`; omitted fields use the default text of the 
 
 Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 
-| Property        | Description                                                                                                                                                                      | Type                         | Default |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------- |
-| setActiveTab    | Switches to the given tab; returns `false` when the tab does not exist, is disabled, is already active, or a save is running                                                     | `(key: string) => boolean`   | -       |
-| getActiveTab    | Returns the `key` of the active tab                                                                                                                                              | `() => string`               | -       |
-| getViewerHandle | Returns the FileViewer handle of the active file tab for paging, search and zoom; `null` when the active tab is not a file tab, is an image or video, or FileViewer is not ready | `() => ViewerHandle \| null` | -       |
+| Property        | Description                                                                                                                                                                      | Type                                | Default |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------- |
+| setActiveTab    | Switches to the given tab. Returns `false` if the tab is missing, disabled or already active, if a save is running, or while a discard decision is pending                       | `(key: string) => boolean`          | -       |
+| confirmLeave    | Asks whether to discard a modified draft. Returns `true` when there are no unsaved changes and `false` during a save or confirmation already in progress                         | `() => boolean \| Promise<boolean>` | -       |
+| getActiveTab    | Returns the `key` of the active tab                                                                                                                                              | `() => string`                      | -       |
+| getViewerHandle | Returns the FileViewer handle of the active file tab for paging, search and zoom; `null` when the active tab is not a file tab, is an image or video, or FileViewer is not ready | `() => ViewerHandle \| null`        | -       |
+
+If the user confirms discarding a draft, `setActiveTab` resumes the switch. Before changing a controlled tab or leaving the page, a host can call `await previewRef.current?.confirmLeave()` and proceed on `true`.
 
 ### Other types
 

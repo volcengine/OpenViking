@@ -40,7 +40,7 @@ test('system directories show no content without summary tabs or requests', asyn
       (item) => item.textContent.trim(),
     );
   try {
-    assert.deepEqual(levels(), ['L0 摘要', 'L1 总览']);
+    assert.deepEqual(levels(), ['L0 摘要', 'L1 概览']);
     for (const uri of [SYSTEM, COMPILE, EXAMPLES]) {
       await view.render(render(uri));
       assert.deepEqual(levels(), []);

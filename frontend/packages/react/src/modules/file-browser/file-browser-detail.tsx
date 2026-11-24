@@ -2,11 +2,12 @@ import type { Locale } from '../../shared/locale.js';
 import {
   FilePreview,
   type FilePreviewTab,
+  type FilePreviewHandle,
   type FilePreviewActionSource,
   type FilePreviewToolbarOptions,
   type FilePreviewHeaderSlots,
 } from '../../components/file-preview/index.js';
-import { useCallback, useRef, type ReactNode } from 'react';
+import { useCallback, useRef, type ReactNode, type RefObject } from 'react';
 import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
 import { dashboardKey } from './dashboard-model.js';
 import { isEditableText } from './preview-policy.js';
@@ -15,6 +16,7 @@ import { openPreviewLink } from './preview-links.js';
 import type { FileBrowserLabels } from './types.js';
 
 export interface FileBrowserDetailProps {
+  previewRef: RefObject<FilePreviewHandle | null>;
   tabs: readonly FilePreviewTab[];
   activeKey: string | null;
   locale: Locale;
@@ -32,6 +34,7 @@ export interface FileBrowserDetailProps {
 }
 
 export function FileBrowserDetail({
+  previewRef,
   tabs,
   activeKey,
   locale,
@@ -76,6 +79,7 @@ export function FileBrowserDetail({
     <div className="ov-file-browser__detail">
       <FilePreviewEditContext.Provider value={{ editFile, onFileReady }}>
         <FilePreview
+          ref={previewRef}
           tabs={
             decorateTabs(
               tabs,

@@ -1,10 +1,9 @@
-import { useTrack } from '../../shared/analytics/use-track.js';
 import { useRenderErrors } from './file-preview-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { FilePreviewCommandProvider } from './file-preview-command-state.js';
 import { mediaKind } from './file-preview-media.js';
 import { useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
+import { forwardRef, useState } from 'react';
 
 import { mergeLabels } from '../../shared/locale.js';
 import { FilePreviewPanels } from './file-preview-panels.js';
@@ -18,6 +17,8 @@ import { useFilePreviewActionsContext } from './use-file-preview-actions-context
 import { useFilePreviewIds } from './use-file-preview-ids.js';
 import { useDirectoryLevel } from './use-directory-level.js';
 import { useFilePreviewEditing } from './use-file-preview-editing.js';
+import { useFilePreviewLeave } from './use-file-preview-leave.js';
+import { useFilePreviewNavigation } from './use-file-preview-navigation.js';
 import type {
   FilePreviewComponent,
   FilePreviewContentTab,
@@ -53,7 +54,6 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
   },
   ref,
 ) {
-  const track = useTrack();
   const locale = useLocale(localeProp);
   const text = resolveFilePreviewLabels(locale, labels);
   const [internalKey, setInternalKey] = useState(
@@ -91,67 +91,32 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
   const actions = useFilePreviewActions();
 
   const tabText = mergeLabels<typeof text>(text, activeTab.labels);
+  const leave = useFilePreviewLeave(
+    identity,
+    editing.dirty,
+    editing.saving || editing.versionNoteOpen,
+    tabText,
+  );
   const fileTab = activeTab.kind === 'file' ? activeTab : undefined;
   const directoryTab = activeTab.kind === 'directory' ? activeTab : undefined;
   const contentTab: FilePreviewContentTab | undefined =
     fileTab || directoryTab ? undefined : (activeTab as FilePreviewContentTab);
   // 文件页签恒显示 URI 行——路径、复制、视图切换与编辑都在那一行。
 
-  const switchTab = useCallback(
-    (key: string) => {
-      if (editing.saving) return false;
-      // 只有「请求的 key 就是目标」才算已在该页签。当前页签被移除时 `currentKey`
-      // 仍指向它、`activeTab` 已回落到 `tabs[0]`，此时点 `tabs[0]` 必须放行让宿主
-      // 同步 `activeKey`，否则正文显示 B 而页签栏无选中项，无法修正。
-      // Only "requested key is the target" counts as already there; a stale
-      // `currentKey` must not block selecting the tab that actually renders.
-      if (key === currentKey && key === activeTab.key) return false;
-      const target = tabs.find((tab) => tab.key === key);
-      if (!target || target.disabled) return false;
-      // 请求的 key 过期、但目标就是当前实际渲染的页签时，只是把宿主的
-      // `activeKey` 同步到有效值，并没有离开这个页签——不能丢弃它的编辑态，
-      // 否则用户在 B 上编辑、点一下已选中的 B 就会丢掉草稿。
-      //
-      // When the requested key is stale but the target is the tab that already
-      // renders, this only syncs the host's `activeKey`; the user never left the
-      // tab, so its editing state must survive — otherwise editing B and clicking
-      // the already-selected B would drop the draft.
-      const syncingOnly = target.key === activeTab.key;
-      if (!syncingOnly) {
-        editing.discard(activeTab);
-        setViewMode('preview');
-        // 视图模式属于上一个页签的格式，切换后等新格式上报再决定是否显示切换。
-        setViewModes([]);
-        viewerHandle.current = null;
-      }
-      track('file_preview_tab_change');
-      if (activeKey === undefined) setInternalKey(key);
-      onActiveKeyChange?.(key);
-      return true;
-    },
-    [
-      track,
-      activeKey,
-      activeTab,
-      currentKey,
-      editing,
-      onActiveKeyChange,
-      tabs,
-      setViewMode,
-      setViewModes,
-      viewerHandle,
-    ],
-  );
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      setActiveTab: switchTab,
-      getActiveTab: () => activeTab.key,
-      getViewerHandle: () => (fileTab ? viewerHandle.current : null),
-    }),
-    [activeTab.key, fileTab, switchTab, viewerHandle],
-  );
+  const navigation = useFilePreviewNavigation(ref, {
+    tabs,
+    activeTab,
+    currentKey,
+    levelKey,
+    selectLevel,
+    editing,
+    onSelect: activeKey === undefined ? setInternalKey : undefined,
+    onActiveKeyChange,
+    setViewMode,
+    setViewModes,
+    viewerHandle,
+    confirmLeave: leave.confirm,
+  });
 
   // 只有该格式同时声明了预览与源码才可切换：图片、音视频、PDF 没有源码视图。
   // Switchable only when the adapter declares both; images, media and PDFs have
@@ -199,11 +164,13 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
     setViewMode,
     editing,
     operations: actions,
+    confirmLeave: leave.confirm,
   });
 
   return (
     <div
       {...rest}
+      ref={leave.triggerRef}
       className={['ov-file-preview', className].filter(Boolean).join(' ')}
     >
       <FilePreviewTabRow
@@ -213,7 +180,7 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
         editing={editing.loadingEdit || editing.editing || editing.editFailed}
         tabId={tabId}
         panelId={panelId}
-        onSelect={(key) => void switchTab(key)}
+        onSelect={navigation.selectTab}
       />
       <ErrorBoundary
         message={useRenderErrors(locale).content}
@@ -233,14 +200,7 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
             panelProps={panelProps}
             panelClass="ov-file-preview__panel"
             levelKey={levelKey}
-            onLevelChange={(key) => {
-              if (editing.saving || editing.loadingEdit || key === levelKey)
-                return;
-              // Controlled requests may be declined; reset only when the rendered level changes.
-              if (fileTab?.activeLevelKey === undefined)
-                editing.discard(activeTab);
-              selectLevel(key);
-            }}
+            onLevelChange={navigation.selectLevel}
             text={tabText}
             locale={locale}
             actions={actions}
@@ -255,6 +215,7 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
           />
         </FilePreviewCommandProvider>
       </ErrorBoundary>
+      {leave.dialog}
     </div>
   );
 });

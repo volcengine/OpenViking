@@ -553,13 +553,15 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
  */
 export interface FilePreviewHandle {
   /**
-   * 切到指定 key 的页签。该页签不存在或被禁用时返回 `false`。
+   * 切到指定 key 的页签。等待放弃草稿确认时返回 `false`，确认后继续切换。
    * Switches to the tab with the given key. Returns `false` when the tab does not
-   * exist or is disabled.
+   * exist, is disabled, or awaits discard confirmation. A confirmed discard resumes the switch.
    */
   setActiveTab: (key: string) => boolean;
   /** 取当前激活页签的 key。Returns the key of the active tab. */
   getActiveTab: () => string;
+  /** Ask before leaving a dirty draft. Returns false while a save is pending. */
+  confirmLeave: () => boolean | Promise<boolean>;
   /**
    * 取当前文件页签的底座句柄，用于翻页、搜索、缩放等命令式操作。
    * 当前页签不是文件页签、或底座尚未就绪时返回 `null`。

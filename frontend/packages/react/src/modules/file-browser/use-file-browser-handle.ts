@@ -25,6 +25,7 @@ export function useFileBrowserHandle(
   controlledUri: string | undefined,
   reportedUri: RefObject<string | undefined>,
   choosePackFile: FileBrowserHandle['choosePackFile'],
+  confirmLeave: FileBrowserHandle['confirmLeave'],
   restoreSelection: boolean,
 ) {
   const treeRef = useRef<FileTreeHandle>(null);
@@ -32,7 +33,14 @@ export function useFileBrowserHandle(
   const active = useRef<ScrollRequest | null>(null);
   const [scroll, setScroll] = useState<ScrollRequest | null>(null);
   const { openResource: open, reveal, cancelReveal } = browser.actions;
-  const { rows, currentUri, selectedId, identifyUri, isReady } = browser;
+  const {
+    rows,
+    currentUri,
+    selectedId,
+    identifyUri,
+    isReady,
+    confirmNavigation,
+  } = browser;
   const previousUri = useRef(controlledUri);
   const pendingUri = useRef(restoreSelection ? controlledUri : undefined);
   const preserveInitialExpansion = useRef(restoreSelection);
@@ -66,18 +74,22 @@ export function useFileBrowserHandle(
     [cancelScroll],
   );
   const openResource = useCallback<FileBrowserHandle['openResource']>(
-    (uri, options) =>
-      navigate(
+    async (uri, options) => {
+      const decision = confirmNavigation(uri);
+      if (decision !== true && !(await decision)) return false;
+      return navigate(
         resolveResourceNavigation(uri).uri,
         () => open(uri, options),
         options?.reveal !== false,
-      ),
-    [navigate, open],
+      );
+    },
+    [confirmNavigation, navigate, open],
   );
-  useImperativeHandle(ref, () => ({ openResource, choosePackFile }), [
-    openResource,
-    choosePackFile,
-  ]);
+  useImperativeHandle(
+    ref,
+    () => ({ openResource, choosePackFile, confirmLeave }),
+    [openResource, choosePackFile, confirmLeave],
+  );
   // Sync the tree with a selection committed by an external owner. The host
   // can change the prop without a FileBrowser event. A newer selection or
   // scope supersedes the outstanding navigation and scroll.

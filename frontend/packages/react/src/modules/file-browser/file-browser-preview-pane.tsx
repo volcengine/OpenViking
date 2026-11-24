@@ -5,8 +5,11 @@ import {
   type ResolvedLabels,
 } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
-import type { FilePreviewActions } from '../../components/file-preview/index.js';
-import { useRef } from 'react';
+import type {
+  FilePreviewActions,
+  FilePreviewHandle,
+} from '../../components/file-preview/index.js';
+import { useRef, type RefObject } from 'react';
 import { useOvClient } from '../../client/provider.js';
 import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 import { previewActionContext } from './file-browser-preview-action-source.js';
@@ -28,6 +31,7 @@ import type {
 
 function FileBrowserPreviewPaneContent({
   browser,
+  previewRef,
   permissions,
   rootUri,
   locale,
@@ -39,6 +43,7 @@ function FileBrowserPreviewPaneContent({
   requestOptions,
 }: {
   browser: FileBrowserApi;
+  previewRef: RefObject<FilePreviewHandle | null>;
   permissions: ReturnType<typeof useFileBrowserAcl>;
   rootUri: string;
   locale: Locale;
@@ -109,6 +114,7 @@ function FileBrowserPreviewPaneContent({
     <div ref={ref} className="ov-file-browser__preview-pane">
       {previewTabs?.length ? (
         <FileBrowserDetail
+          previewRef={previewRef}
           tabs={previewTabs}
           activeKey={previewKey}
           locale={locale}
@@ -127,7 +133,11 @@ function FileBrowserPreviewPaneContent({
           previewSlots={slots}
           canEditConflict={canWrite && previewActions?.edit !== false}
           onActiveKeyChange={browser.actions.setPreviewKey}
-          onOpenUri={browser.actions.openResource}
+          onOpenUri={async (target) => {
+            const decision = browser.confirmNavigation(target);
+            if (decision !== true && !(await decision)) return false;
+            return browser.actions.openResource(target);
+          }}
           onSave={() => {
             if (browser.previewDashboard?.kind === 'wiki')
               browser.refreshWikiConflicts();

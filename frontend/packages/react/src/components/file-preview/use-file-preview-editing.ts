@@ -41,6 +41,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     resolve: (note: string | undefined) => void;
   }>(undefined);
   const [draft, setDraft] = useState('');
+  const original = useRef('');
   const [editorDetails, setEditorDetails] = useState<
     Pick<FilePreviewEditorDocument, 'annotations' | 'readOnlySuffix'> & {
       initialAnnotation?: string;
@@ -125,6 +126,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     loading.current = false;
     setLoadingEdit(false);
     if (document) {
+      original.current = document.content.replace(/\r\n?/g, '\n');
       setDraft(document.content);
       setEditorDetails({
         annotations: document.annotations,
@@ -204,6 +206,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
 
   return {
     editing,
+    dirty: editing && draft.replace(/\r\n?/g, '\n') !== original.current,
     loadingEdit,
     editFailed,
     saving,

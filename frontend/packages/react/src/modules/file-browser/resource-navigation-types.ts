@@ -11,6 +11,8 @@ export interface FileBrowserOpenResourceOptions {
 }
 
 export interface FileBrowserHandle {
+  /** Ask before leaving the current preview with an unsaved edit. */
+  confirmLeave: () => boolean | Promise<boolean>;
   /** Open the OVPack import dialog at a URI and return the confirmed local file. */
   choosePackFile: (
     uri: string,
@@ -18,7 +20,7 @@ export interface FileBrowserHandle {
   ) => Promise<File | undefined>;
   /**
    * Open a preview and optionally reveal its tree row. Returns false when the row
-   * is missing, inaccessible, outside the root, or navigation was superseded.
+   * is missing, inaccessible, outside the root, navigation was superseded, or the user keeps editing.
    * Listings needed to locate the row and required alias lookups reject on failure.
    * In controlled mode the host must accept onUriChange.
    * Links to .abstract.md or .overview.md open their parent at L0 or L1.

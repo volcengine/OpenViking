@@ -9,13 +9,15 @@ import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
 import { useFileBrowserTreeActions } from './use-file-browser-tree-actions.js';
+import { useFileBrowserResourceActions } from './use-file-browser-resource-actions.js';
 import { useStableCallback } from './use-stable-callback.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
-  FileBrowserActions,
   FileBrowserApi,
   UseFileBrowserOptions,
 } from './file-browser-state-types.js';
+
+const allowLeave = () => true;
 
 /**
  * 文件浏览模块的目录与预览联动：目录行展开树，文件行打开预览。
@@ -41,6 +43,7 @@ export function useFileBrowser({
   currentUri,
   requestOptions,
   onUriChange,
+  confirmLeave = allowLeave,
   onSelect,
   ...expansionOptions
 }: UseFileBrowserOptions): FileBrowserApi {
@@ -119,19 +122,22 @@ export function useFileBrowser({
   // commit would re-run the effect and cancel the previous request, turning one
   // selection into an endless reload. Refs carry the latest notification and tree
   // operations while the callback identity stays fixed.
-  const { open: openTree, toggleExpand, cancelReveal } = tree;
+  const { open: openTree, cancelReveal } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
-  const notifySelect = useRef(onSelect);
-  notifySelect.current = onSelect;
+  const confirmNavigation = useStableCallback((target: string) =>
+    target === activeUri ? true : confirmLeave(),
+  );
   const openParent = useStableCallback(async (uri: string) => {
+    const leave = confirmNavigation(uri);
+    if (leave !== true && !(await leave)) return;
     cancelReveal();
     setPendingUri(uri);
     notifyUriChange.current(uri);
     await openTree(uri);
   });
 
-  const { rows, openPath, reveal } = tree;
+  const { rows, openPath } = tree;
   const openResource = useMemo(
     () => async (resource: string) => {
       const uri = requestUri(resource);
@@ -189,87 +195,28 @@ export function useFileBrowser({
     ...boards.previewOptions,
   });
 
-  const { open: openDashboard, close: closeDashboard } = boards;
-  const navigateResource = useMemo<FileBrowserActions['openResource']>(
-    () => async (resource, options) => {
-      const uri = requestUri(resource);
-      cancelReveal();
-      closeDashboard();
+  const actions = useFileBrowserResourceActions({
+    activeUri,
+    boards,
+    tree,
+    treeActions,
+    requestUri,
+    openResource,
+    confirmLeave,
+    setActiveKey,
+    selectUri: (uri) => {
       setPendingUri(uri);
       notifyUriChange.current(uri);
-      return options?.reveal === false ? true : reveal(uri);
     },
-    [cancelReveal, closeDashboard, reveal, requestUri],
-  );
-  const actions = useMemo<FileBrowserActions>(
-    () => ({
-      // 目录与文件都上报当前资源：控制台里点目录既展开也选中，右侧显示该目录的
-      // 摘要。只展开不上报会让树上看不出选中了哪一行。
-      //
-      // 先选中再等子节点：首次展开要发请求，若等它回来才上报，用户在此期间点了
-      // 别的资源，这个旧回调会把选中改回目录。选中属于点击那一刻的意图，不该被
-      // 一次迟到的列表请求覆盖。
-      //
-      // Both directories and files report the current resource: in the console a
-      // directory click expands it and selects it, with its summary on the right.
-      // Expanding without reporting would leave no visible selection in the tree.
-      //
-      // Select first, then wait for the children: a first expansion issues a request,
-      // and reporting only after it returns would let this late callback overwrite a
-      // resource the user picked in the meantime. The selection belongs to the moment
-      // of the click, not to a listing that arrives afterwards.
-      select: (row) => {
-        if (row.disabled || row.selectable === false) return Promise.resolve();
-        cancelReveal();
-        closeDashboard();
-        setPendingUri(row.uri);
-        notifyUriChange.current(row.uri);
-        notifySelect.current?.(row);
-        if (row.type === 'directory') void openTree(row.uri);
-        return Promise.resolve();
-      },
-      toggleExpand,
-      ...treeActions,
-      openUri: openResource,
-      openResource: navigateResource,
-      reveal,
-      cancelReveal,
-      openDashboard,
-      setPreviewKey: (key: string) => {
-        if (activeUri && key === dashboardKey(activeUri))
-          openDashboard(activeUri);
-        else {
-          closeDashboard();
-          setActiveKey(key);
-        }
-      },
-    }),
-    // 依赖收窄到具体的操作函数，不依赖整个 `tree`：后者每次展开都换新引用，
-    // 会让 `actions` 跟着变，进而把 `FileTree` 的 `operations` 也换掉。
-    //
-    // Narrow the dependencies to the operations themselves rather than the whole
-    // `tree`: the latter gets a new identity on every expansion, which would
-    // replace `actions` and with it the `operations` handed to `FileTree`.
-    [
-      setActiveKey,
-      navigateResource,
-      cancelReveal,
-      openTree,
-      toggleExpand,
-      treeActions,
-      openDashboard,
-      closeDashboard,
-      openResource,
-      reveal,
-      activeUri,
-    ],
-  );
+    onSelect,
+  });
 
   const previewError = blocked
     ? new Error(text[blocked === 'denied' ? 'accessDenied' : 'traverseOnly'])
     : preview.error;
   return {
     rows,
+    confirmNavigation,
     selectedId: useMemo(
       () => findSelectedRowId(rows, activeUri, identifyUri),
       [rows, activeUri, identifyUri],

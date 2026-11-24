@@ -1,4 +1,4 @@
-import { waitForEditor } from './helpers/preview-editor-dom.mjs';
+import { setEditor, waitForEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mount } from './helpers/module-dom.mjs';
@@ -114,6 +114,30 @@ test('controlled requests preserve drafts until the host accepts a different lev
     await act(async () => state.actions().startEditing());
     await waitForEditor(state.view.container);
     assert.equal(state.editor()?.textContent, 'unsaved draft');
+  } finally {
+    await state.view.unmount();
+  }
+});
+
+test('a changed draft survives declining a level change and is discarded on confirmation', async () => {
+  const state = await setup();
+  try {
+    await setEditor(state.editor(), 'changed draft');
+    await state.clickLevel('L1');
+    const dialog = () => document.querySelector('[role="dialog"]');
+    const action = (name) =>
+      [...dialog().querySelectorAll('button')].find(
+        (button) => button.textContent === name,
+      );
+    assert.equal(state.editor()?.textContent, 'changed draft');
+    assert.deepEqual(state.requests, []);
+    await act(async () => action('Keep editing').click());
+    assert.equal(state.editor()?.textContent, 'changed draft');
+    await state.clickLevel('L1');
+    await act(async () => action('Discard and leave').click());
+    assert.equal(state.editor() === null, true);
+    assert.deepEqual(state.canceled, ['changed draft']);
+    assert.deepEqual(state.requests, ['L1']);
   } finally {
     await state.view.unmount();
   }

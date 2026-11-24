@@ -1,7 +1,8 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useMemo } from 'react';
+import { forwardRef, useCallback, useMemo, useRef } from 'react';
 
+import type { FilePreviewHandle } from '../../components/file-preview/index.js';
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
@@ -84,7 +85,13 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     () => resolvePaneLabels(labels, locale),
     [labels, locale],
   );
+  const previewRef = useRef<FilePreviewHandle>(null);
+  const confirmLeave = useCallback(
+    () => previewRef.current?.confirmLeave() ?? true,
+    [],
+  );
   const browser = useFileBrowser({
+    confirmLeave,
     rootUri,
     hideDeniedEntries,
     locale,
@@ -125,6 +132,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     uri,
     reportedUri,
     pack.choosePackFile,
+    confirmLeave,
     defaultExpansionSnapshot !== undefined || defaultExpandedUris !== undefined,
   );
 
@@ -178,6 +186,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         )}
 
         <FileBrowserPreviewPane
+          previewRef={previewRef}
           browser={browser}
           permissions={permissions}
           rootUri={rootUri}

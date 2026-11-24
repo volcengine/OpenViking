@@ -34,6 +34,10 @@ export interface FilePreviewLabels {
   loadFailed?: string;
   /** 保存失败时的提示。Message shown when saving failed. */
   saveFailed?: string;
+  discardTitle?: string;
+  discardDescription?: string;
+  keepEditing?: string;
+  discardDraft?: string;
   versionNoteTitle?: string;
   versionNoteLabel?: string;
   versionNotePlaceholder?: string;

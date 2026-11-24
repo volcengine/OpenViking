@@ -18,6 +18,7 @@ import type { WikiSaveFeedback } from './use-wiki-save-feedback.js';
 
 /** View data and operations for the composed FileBrowser. */
 export interface FileBrowserApi {
+  confirmNavigation: (uri: string) => boolean | Promise<boolean>;
   treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
   previewMonitoring?: Workflow<'file_browser_preview_load'>;
   wikiSaveFeedback?: WikiSaveFeedback;
@@ -144,5 +145,6 @@ export interface UseFileBrowserOptions {
   currentUri: string | null;
   requestOptions?: OvRequestOptions;
   onUriChange: (uri: string | null) => void;
+  confirmLeave?: () => boolean | Promise<boolean>;
   onSelect?: (row: FileTreeEntryRow) => void;
 }

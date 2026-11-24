@@ -181,11 +181,11 @@ test('native directory summary placeholders show level-specific Chinese empty st
     ];
     assert.deepEqual(
       levels.map((level) => level.textContent),
-      ['L0 摘要', 'L1 总览'],
+      ['L0 摘要', 'L1 概览'],
     );
     for (const [index, emptyTitle] of [
       '暂无 L0 摘要',
-      '暂无 L1 总览',
+      '暂无 L1 概览',
     ].entries()) {
       await click(levels[index]);
       const panel = view.container.querySelector(
