@@ -1,6 +1,7 @@
 #include "openviking_cache_provider_v1.h"
 
 #include <stdatomic.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -302,6 +303,25 @@ static int32_t fixture_hset(
     return OV_CACHE_STATUS_OK;
 }
 
+/* Verify a V1 HSETNX batch and return its inserted field count. */
+static int32_t fixture_hsetnx(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    const OvCacheFieldValueV1 *entries,
+    size_t entries_len,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    if (entries_len != 1 ||
+        !fixture_has_field(entries, entries_len, "checkpoint", "first")) {
+        return OV_CACHE_STATUS_INVALID_ARGUMENT;
+    }
+    *added = 1;
+    return OV_CACHE_STATUS_OK;
+}
+
 /* Verify a V1 ZADD batch and return its inserted member count. */
 static int32_t fixture_zadd(
     void *provider,
@@ -319,6 +339,66 @@ static int32_t fixture_zadd(
         return OV_CACHE_STATUS_INVALID_ARGUMENT;
     }
     *added = 2;
+    return OV_CACHE_STATUS_OK;
+}
+
+/* Verify a conditional V1 ZADD batch and return its inserted member count. */
+static int32_t fixture_zadd_conditional(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheZaddOptionsV1 options,
+    const OvCacheScoredMemberV1 *entries,
+    size_t entries_len,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    if (options.condition != OV_CACHE_ZADD_CONDITION_NX ||
+        entries_len != 1 ||
+        !fixture_has_scored_member(entries, entries_len, 8.0, "new")) {
+        return OV_CACHE_STATUS_INVALID_ARGUMENT;
+    }
+    *added = 1;
+    return OV_CACHE_STATUS_OK;
+}
+
+/* Return ordered V1 ZMSCORE values, including one missing member. */
+static int32_t fixture_zmscore(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    const OvCacheByteSliceV1 *members,
+    size_t members_len,
+    OvCacheOwnedOptionalScoreArrayV1 *output,
+    OvCacheOwnedBufferV1 *error) {
+    (void)provider;
+    (void)key;
+    (void)error;
+    if (members_len != 2 ||
+        !fixture_slice_equals(members[0], "three") ||
+        !fixture_slice_equals(members[1], "missing")) {
+        return OV_CACHE_STATUS_INVALID_ARGUMENT;
+    }
+    output->items = (OvCacheOptionalScoreV1 *)fixture_host->alloc(
+        2 * sizeof(OvCacheOptionalScoreV1),
+        OV_CACHE_ALIGNOF(OvCacheOptionalScoreV1));
+    if (output->items == NULL) {
+        return OV_CACHE_STATUS_INTERNAL;
+    }
+    output->len = 2;
+    output->items[0].score = 3.5;
+    output->items[0].present = 1;
+    output->items[1].score = 0.0;
+    output->items[1].present = 0;
+#ifdef OV_FIXTURE_BAD_ZMSCORE_LENGTH
+    output->len = 1;
+#endif
+#ifdef OV_FIXTURE_BAD_ZMSCORE_PRESENT
+    output->items[1].present = 2;
+#endif
+#ifdef OV_FIXTURE_BAD_ZMSCORE_NAN
+    output->items[0].score = NAN;
+#endif
     return OV_CACHE_STATUS_OK;
 }
 
@@ -414,7 +494,10 @@ static const OvCacheProviderApiV1 FIXTURE_API = {
     .expire = fixture_expire,
     .hget = fixture_hget,
     .hset = fixture_hset,
+    .hsetnx = fixture_hsetnx,
     .zadd = fixture_zadd,
+    .zadd_conditional = fixture_zadd_conditional,
+    .zmscore = fixture_zmscore,
     .zscan = fixture_zscan,
     .zrem = fixture_zrem,
     .execute_script = fixture_execute_script,

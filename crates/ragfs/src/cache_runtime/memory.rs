@@ -4,7 +4,7 @@ use super::provider::{CacheOperation, CacheProvider};
 use super::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
     ListMoveRequest, ScoredMember, ScoreRange, ScriptRequest, ScriptResult, ScriptValue,
-    SetCondition, SetOptions, SetResult,
+    SetCondition, SetOptions, SetResult, ZAddCondition, ZAddOptions,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -564,6 +564,25 @@ impl CacheProvider for MemoryMockProvider {
         Ok(added)
     }
 
+    async fn hsetnx(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        self.ensure_open()?;
+        if values.is_empty() {
+            return Ok(0);
+        }
+        self.purge_expired_key(key).await;
+        self.remove_non_hash_values(key).await;
+        let mut hashes = self.hashes.write().await;
+        let hash = hashes.entry(key.to_string()).or_default();
+        let mut added = 0;
+        for (field, value) in values {
+            if !hash.contains_key(&field) {
+                hash.insert(field, value);
+                added += 1;
+            }
+        }
+        Ok(added)
+    }
+
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         self.ensure_open()?;
         Ok(self
@@ -596,6 +615,15 @@ impl CacheProvider for MemoryMockProvider {
     }
 
     async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
+        self.zadd_with_options(key, entries, ZAddOptions::default()).await
+    }
+
+    async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
         self.ensure_open()?;
         if entries.iter().any(|entry| entry.score.is_nan()) {
             return Err(CacheError::InvalidArgument(
@@ -611,10 +639,30 @@ impl CacheProvider for MemoryMockProvider {
         let zset = zsets.entry(key.to_string()).or_default();
         let mut added = 0;
         for entry in entries {
-            added += u64::from(!zset.contains_key(&entry.member));
-            zset.insert(entry.member, entry.score);
+            match zset.get(&entry.member).copied() {
+                None => {
+                    zset.insert(entry.member, entry.score);
+                    added += 1;
+                }
+                Some(_) if options.condition == ZAddCondition::Nx => {}
+                Some(score) if options.condition == ZAddCondition::Gt && entry.score <= score => {}
+                Some(_) => {
+                    zset.insert(entry.member, entry.score);
+                }
+            }
         }
         Ok(added)
+    }
+
+    async fn zmscore(&self, key: &str, members: &[String]) -> CacheResult<Vec<Option<f64>>> {
+        self.ensure_open()?;
+        self.purge_expired_key(key).await;
+        let zsets = self.zsets.read().await;
+        let zset = zsets.get(key);
+        Ok(members
+            .iter()
+            .map(|member| zset.and_then(|values| values.get(member)).copied())
+            .collect())
     }
 
     async fn zscan_match(&self, key: &str, pattern: &str, _count: u32) -> CacheResult<Vec<String>> {

@@ -12,6 +12,25 @@ pub struct ScoredMember {
     pub score: f64,
 }
 
+/// Conditional behavior for Redis ZADD.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ZAddCondition {
+    /// Always add or update the member.
+    #[default]
+    None,
+    /// Add only members that do not already exist.
+    Nx,
+    /// Update an existing member only when its score increases.
+    Gt,
+}
+
+/// Options applied to Redis-style ZADD operations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ZAddOptions {
+    /// Optional existence or score condition.
+    pub condition: ZAddCondition,
+}
+
 /// Score bounds and pagination for one sorted-set range query.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScoreRange {

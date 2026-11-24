@@ -262,11 +262,19 @@ class OpenVikingService:
         server_config = get_server_config()
         if server_config is not None:
             account_store = server_config.account_store
+            ttl_adapter = getattr(server_config, "ttl_adapter", None)
         elif config_file is not None:
             server = load_json_config(config_file).get("server")
             account_store = server.get("account_store") if isinstance(server, dict) else None
+            if isinstance(server, dict) and server.get("ttl_adapter") is not None:
+                from openviking.server.config import TTLAdapterConfig
+
+                ttl_adapter = TTLAdapterConfig.model_validate(server["ttl_adapter"])
+            else:
+                ttl_adapter = None
         else:
             account_store = None
+            ttl_adapter = None
         provider = (
             account_store.get("provider")
             if isinstance(account_store, dict)
@@ -283,6 +291,8 @@ class OpenVikingService:
             required_cache_instances["Redis MySQL Account Store"] = (
                 RedisMySQLAccountStore.cache_instance_from_params(params)
             )
+        if ttl_adapter is not None and ttl_adapter.enabled:
+            required_cache_instances["Directory TTL"] = ttl_adapter.cache.instance
 
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(
             self._config,
@@ -453,6 +463,12 @@ class OpenVikingService:
         """Get VikingFS instance."""
         return self._viking_fs
 
+    def cache_runtime(self, instance: str) -> Any:
+        """Return the initialized named RAGFS CacheRuntime."""
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized")
+        return self._agfs_client.cache_runtime(instance)
+
     @property
     def vikingdb_manager(self) -> Optional[VikingDBManager]:
         """Get VikingDBManager instance."""
@@ -579,7 +595,13 @@ class OpenVikingService:
                 manager.get_user_group_ids if manager is not None else None,
             )
         if self._server_config is not None:
-            self._ttl_adapter = build_ttl_adapter(self._server_config.ttl_adapter)
+            ttl_config = self._server_config.ttl_adapter
+            cache_runtime = (
+                self.cache_runtime(ttl_config.cache.instance)
+                if ttl_config is not None and ttl_config.enabled
+                else None
+            )
+            self._ttl_adapter = build_ttl_adapter(ttl_config, cache_runtime=cache_runtime)
             set_ttl_adapter(self._ttl_adapter)
             if self._ttl_adapter is not None:
                 self._ttl_adapter.bind_runtime(self, manager)

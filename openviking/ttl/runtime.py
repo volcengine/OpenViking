@@ -15,7 +15,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from itertools import islice
 from random import uniform
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Sequence
 from urllib.parse import quote
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -29,6 +29,7 @@ from openviking.config.ttl import (
 )
 from openviking.core.namespace import uri_parts
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.pyagfs.protocols import CacheRuntimeHandleProtocol
 from openviking.scheduling.expiry.api import (
     TTL_ITEM_TYPE,
     CallbackRequest,
@@ -44,7 +45,6 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 from openviking.storage.abstract_overview import ABSTRACT_OVERVIEW_FILENAMES
 from openviking.ttl.adapter import TTLBackfillRequest, TTLRecycleRequest, TTLRecycleResult
-from openviking.ttl.redis import DirectoryTTLRedisConfig, create_directory_ttl_redis_client
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -112,6 +112,18 @@ return {redis.call('HGET', KEYS[1], 'roots') or '',
         tostring(redis.call('SISMEMBER', KEYS[3], 'initial')), encoded,
         redis.call('HGET', KEYS[1], 'discover') or '0'}
 """
+COMPLETE_INITIAL = """
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SREM', KEYS[2], ARGV[2])
+return 1
+"""
+TTL_SCRIPTS = {
+    "ttl.v1.complete_initial": COMPLETE_INITIAL,
+    "ttl.v1.initial": INITIAL,
+    "ttl.v1.read_initial": READ_INITIAL,
+    "ttl.v1.remove": REMOVE,
+    "ttl.v1.reset": RESET,
+}
 
 
 def directory(uri: str) -> TTLDirectory | None:
@@ -151,12 +163,17 @@ def next_check_ms(resource_id: str, now_ms: int) -> int:
     return due if due > now_ms else due + hour
 
 
+def _script_text(value: bytes | str | int) -> str:
+    """Convert CacheRuntime script scalar output to text."""
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
 class DirectoryTTL:
     def __init__(
         self,
         *,
         resource_id: str,
-        redis: dict[str, Any] | None = None,
+        cache_runtime: CacheRuntimeHandleProtocol,
         writer: bool = True,
         timezone_name: str | None = None,
         batch_size: int = 256,
@@ -169,7 +186,9 @@ class DirectoryTTL:
         if not resource_id or not 1 <= batch_size <= 512 or stat_rate <= 0 or batch_interval < 0:
             raise ValueError("invalid TTL resource or rate limits")
         self.resource_id = resource_id
-        self.redis_config = DirectoryTTLRedisConfig.model_validate(redis or {})
+        self.cache_runtime = cache_runtime
+        for script_id, redis_lua in TTL_SCRIPTS.items():
+            cache_runtime.register_script(script_id, redis_lua)
         self.writer = writer
         # With no override, naive date timestamps use the writer's existing
         # local timezone, just like its date-directory generation fallback.
@@ -178,7 +197,6 @@ class DirectoryTTL:
         self.batch_interval = batch_interval
         self.delete_interval, self.read_timeout = delete_interval, read_timeout
         self.retry_limit = retry_limit
-        self.redis = None
         self._task = None
         self._registration_task = None
         self._started = False
@@ -264,14 +282,15 @@ class DirectoryTTL:
                         self._user_policies.pop(key, None)
                 if self._scheduler is not None:
                     await self._scheduler.unregister(self._identity(account))
-                redis = await self.client()
                 prefix = self.prefix(account)
-                await redis.unlink(
-                    *(prefix + kind for kind in TTLIndexType),
-                    *(
-                        prefix + "backfill:" + name
-                        for name in ("initial", "initial:done", "pending", "reset_required")
-                    ),
+                await self.cache_runtime.unlink(
+                    [
+                        *(prefix + kind for kind in TTLIndexType),
+                        *(
+                            prefix + "backfill:" + name
+                            for name in ("initial", "initial:done", "pending", "reset_required")
+                        ),
+                    ]
                 )
         finally:
             self._stop_scan.discard(account)
@@ -371,12 +390,11 @@ class DirectoryTTL:
     async def _register_reset_intent(self, account: str, scopes: Sequence[str]) -> None:
         try:
             if scopes:
-                redis = await self.client()
-                pipe = redis.pipeline(transaction=False)
                 token = uuid4().hex
-                for scope in scopes:
-                    pipe.hsetnx(self.prefix(account) + "backfill:reset_required", scope, token)
-                await pipe.execute()
+                await self.cache_runtime.hsetnx(
+                    self.prefix(account) + "backfill:reset_required",
+                    {scope: token.encode() for scope in scopes},
+                )
             if not await self._schedule(account):
                 raise NotFoundError(account, "account")
         except Exception as exc:
@@ -385,22 +403,26 @@ class DirectoryTTL:
     async def read_initial(self, account_id: str) -> dict:
         prefix = self.prefix(account_id) + "backfill:"
         try:
-            redis = await self.client()
-            values = await redis.eval(
-                READ_INITIAL,
-                4,
-                prefix + "initial",
-                prefix + "initial:done",
-                prefix + "pending",
-                prefix + "reset_required",
+            values = await self.cache_runtime.execute_script(
+                "ttl.v1.read_initial",
+                [
+                    prefix + "initial",
+                    prefix + "initial:done",
+                    prefix + "pending",
+                    prefix + "reset_required",
+                ],
+                [],
             )
+            if not isinstance(values, list) or len(values) != 6:
+                raise ValueError("invalid TTL initial state script result")
+            roots, checkpoint, done, pending, intents, discover = map(_script_text, values)
             return {
-                "roots": values[0],
-                "checkpoint": values[1],
-                "done": values[2] == "1",
-                "pending": values[3] == "1",
-                "reset_required": json.loads(values[4]),
-                "discover": values[5] == "1",
+                "roots": roots,
+                "checkpoint": checkpoint,
+                "done": done == "1",
+                "pending": pending == "1",
+                "reset_required": json.loads(intents),
+                "discover": discover == "1",
             }
         except Exception as exc:
             raise UnavailableError("TTL initial state query unavailable") from exc
@@ -541,19 +563,6 @@ class DirectoryTTL:
     def base(self, item: TTLDirectory) -> int:
         return int(datetime(*map(int, item[3]), tzinfo=self.zone).timestamp() * 1000)
 
-    async def client(self):
-        # No connection or ping at startup or on a disabled-account path.
-        if self.redis is None:
-            from redis.backoff import NoBackoff
-            from redis.retry import Retry
-
-            if not self.redis_config.endpoints:
-                raise UnavailableError("TTL Redis is not configured")
-            self.redis = create_directory_ttl_redis_client(
-                self.redis_config, retry=Retry(NoBackoff(), 0)
-            )
-        return self.redis
-
     async def start_reporting(self) -> None:
         self._dispatcher.bind_current_loop()
         self._closed = False
@@ -592,10 +601,6 @@ class DirectoryTTL:
                     type(exc).__name__,
                     extra={"queue_depth": len(self._retry), "error_type": type(exc).__name__},
                 )
-        async with self._recycle_lock:
-            if self.redis:
-                await self.redis.aclose()
-                self.redis = None
 
     async def on_post_write(self, uri: str, ctx: RequestContext | None, written_at_ms: int) -> None:
         if not self.writer or ctx is None:
@@ -632,11 +637,14 @@ class DirectoryTTL:
 
     async def _register(self, key, base):
         account, kind, uri = key
-        redis = await self.client()
-        await redis.zadd(
+        await self.cache_runtime.zadd(
             self.prefix(account) + kind,
-            {uri: base},
-            **({"gt": True} if kind == "sessions" else {"nx": True}),
+            [(float(base), uri)],
+            **(
+                {"only_if_greater": True}
+                if kind == "sessions"
+                else {"only_if_not_exists": True}
+            ),
         )
 
     async def _retry_writes(self, *, closing=False):
@@ -657,11 +665,14 @@ class DirectoryTTL:
                         and (await self.policy(account, uri, pair)).enabled
                     }
                     if active:
-                        redis = await self.client()
-                        await redis.zadd(
+                        await self.cache_runtime.zadd(
                             self.prefix(account) + kind,
-                            active,
-                            **({"gt": True} if kind == "sessions" else {"nx": True}),
+                            [(float(base), uri) for uri, base in active.items()],
+                            **(
+                                {"only_if_greater": True}
+                                if kind == "sessions"
+                                else {"only_if_not_exists": True}
+                            ),
                         )
                 if active:
                     await self._schedule(account)
@@ -753,26 +764,28 @@ class DirectoryTTL:
             async with self._locks.setdefault(account, asyncio.Lock()):
                 async with self._recycle_lock if reset else nullcontext():
                     prefix = self.prefix(account) + "backfill:"
-                    redis = await self.client()
                     checkpoint = json.dumps({"root": 0, "stack": []}, separators=(",", ":"))
                     try:
-                        result = await redis.eval(
-                            RESET if reset else INITIAL,
-                            4,
-                            prefix + "initial",
-                            prefix + "initial:done",
-                            prefix + "pending",
-                            prefix + "reset_required",
-                            json.dumps(roots, separators=(",", ":")),
-                            checkpoint,
-                            json.dumps(active_intents, separators=(",", ":")),
-                            "1" if needs_discovery else "0",
+                        result = await self.cache_runtime.execute_script(
+                            "ttl.v1.reset" if reset else "ttl.v1.initial",
+                            [
+                                prefix + "initial",
+                                prefix + "initial:done",
+                                prefix + "pending",
+                                prefix + "reset_required",
+                            ],
+                            [
+                                json.dumps(roots, separators=(",", ":")).encode(),
+                                checkpoint.encode(),
+                                json.dumps(active_intents, separators=(",", ":")).encode(),
+                                b"1" if needs_discovery else b"0",
+                            ],
                         )
                     except Exception as exc:
                         raise UnavailableError(
                             "TTL initial registration failed; query state before retry"
                         ) from exc
-                    if not result:
+                    if result == 0:
                         raise ConflictError("initial roots changed; reset is required")
                     if result == 2:
                         return
@@ -873,17 +886,21 @@ class DirectoryTTL:
         return sorted(e["uri"].rstrip("/") for e in entries if e.get("isDir"))
 
     async def _scan(self, account):
-        redis = await self.client()
+        cache = self.cache_runtime
         prefix = self.prefix(account) + "backfill:"
-        if not await redis.sismember(prefix + "pending", "initial"):
+        if not await cache.sismember(prefix + "pending", b"initial"):
             self._pending.discard(account)
             return
-        if await redis.get(prefix + "initial:done") == "1":
-            await redis.srem(prefix + "pending", "initial")
+        if await cache.get(prefix + "initial:done") == b"1":
+            await cache.execute_script(
+                "ttl.v1.complete_initial",
+                [prefix + "initial:done", prefix + "pending"],
+                [b"1", b"initial"],
+            )
             self._pending.discard(account)
             return
-        state = await redis.hgetall(prefix + "initial")
-        if state.get("discover") == "1":
+        state = await cache.hgetall(prefix + "initial")
+        if state.get("discover") == b"1":
             return  # Scope discovery belongs to the scheduled maintenance round.
         if not state.get("roots") or not state.get("checkpoint"):
             raise FailedPreconditionError("pending initial has incomplete state")
@@ -902,10 +919,9 @@ class DirectoryTTL:
                 checkpoint["root"] += 1
                 checkpoint["stack"] = []
                 listings.clear()
-                await redis.hset(
+                await cache.hset(
                     prefix + "initial",
-                    "checkpoint",
-                    json.dumps(checkpoint, separators=(",", ":")),
+                    {"checkpoint": json.dumps(checkpoint, separators=(",", ":")).encode()},
                 )
                 continue
             stack = checkpoint["stack"]
@@ -921,10 +937,9 @@ class DirectoryTTL:
                 stack.pop()
                 if not stack:
                     checkpoint["root"] += 1
-                await redis.hset(
+                await cache.hset(
                     prefix + "initial",
-                    "checkpoint",
-                    json.dumps(checkpoint, separators=(",", ":")),
+                    {"checkpoint": json.dumps(checkpoint, separators=(",", ":")).encode()},
                 )
                 continue
             # Stop at Session or valid date directories. Never list their contents.
@@ -940,7 +955,7 @@ class DirectoryTTL:
             if items:
                 await asyncio.sleep(self.batch_interval)
                 index = self.prefix(account) + items[0][1][0]
-                scores = await redis.zmscore(index, [u for u, _ in items])
+                scores = await cache.zmscore(index, [u for u, _ in items])
                 additions = {}
                 for (uri, item), score in zip(items, scores, strict=True):
                     if score is not None:
@@ -957,18 +972,24 @@ class DirectoryTTL:
                     else:
                         additions[uri] = self.base(item)
                 if additions:
-                    await redis.zadd(index, additions, nx=True)
+                    await cache.zadd(
+                        index,
+                        [(float(base), uri) for uri, base in additions.items()],
+                        only_if_not_exists=True,
+                    )
             # A failed/unknown ZADD must never advance the persisted checkpoint.
             frame["last"] = batch[-1]
-            await redis.hset(
+            await cache.hset(
                 prefix + "initial",
-                "checkpoint",
-                json.dumps(checkpoint, separators=(",", ":")),
+                {"checkpoint": json.dumps(checkpoint, separators=(",", ":")).encode()},
             )
         if self._closed or account in self._stop_scan:
             return
-        await redis.set(prefix + "initial:done", "1")
-        await redis.srem(prefix + "pending", "initial")
+        await cache.execute_script(
+            "ttl.v1.complete_initial",
+            [prefix + "initial:done", prefix + "pending"],
+            [b"1", b"initial"],
+        )
         self._pending.discard(account)
         logger.info("ttl initial completed account_id=%s", account)
 
@@ -1002,8 +1023,7 @@ class DirectoryTTL:
         if sessions:
             try:
                 async with asyncio.timeout(self.read_timeout):
-                    redis = await self.client()
-                    scores = await redis.zmscore(
+                    scores = await self.cache_runtime.zmscore(
                         self.prefix(ctx.account_id) + "sessions", list(sessions)
                     )
                 for entries, score in zip(sessions.values(), scores, strict=True):
@@ -1052,13 +1072,13 @@ class DirectoryTTL:
         counts = {"scanned": 0, "deleted": 0, "skipped": 0, "failed": 0}
         account = request.account_id
         async with self._recycle_lock:
-            redis = await self.client()
+            cache = self.cache_runtime
             prefix = self.prefix(account)
-            if await redis.get(prefix + "backfill:initial:done") != "1":
+            if await cache.get(prefix + "backfill:initial:done") != b"1":
                 return TTLRecycleResult()
             cutoff = request.max_base_time_ms
             if cutoff is None:
-                if not await redis.exists(*(prefix + kind for kind in TTLIndexType)):
+                if not any([await cache.zcard(prefix + kind) for kind in TTLIndexType]):
                     return TTLRecycleResult()
                 cutoff = await self._recycle_cutoff(account)
                 if cutoff is None:
@@ -1068,17 +1088,16 @@ class DirectoryTTL:
                 offset = 0
                 while not self._closed:
                     await asyncio.sleep(self.batch_interval)
-                    candidates = await redis.zrangebyscore(
+                    candidates = await cache.zrangebyscore(
                         prefix + kind,
-                        "-inf",
+                        float("-inf"),
                         cutoff,
-                        start=offset,
-                        num=min(request.limit, self.batch_size),
-                        withscores=True,
+                        min(request.limit, self.batch_size),
+                        offset=offset,
                     )
                     if not candidates:
                         break
-                    if await redis.get(prefix + "backfill:initial:done") != "1":
+                    if await cache.get(prefix + "backfill:initial:done") != b"1":
                         return TTLRecycleResult(**counts)
                     removed = 0
                     for uri, score in candidates:
@@ -1149,8 +1168,10 @@ class DirectoryTTL:
         agfs = self.fs._async_agfs
         lease = await agfs.pathlock_acquire_tree(path)
         try:
-            redis = await self.client()
-            if await redis.get(self.prefix(account) + "backfill:initial:done") != "1":
+            if (
+                await self.cache_runtime.get(self.prefix(account) + "backfill:initial:done")
+                != b"1"
+            ):
                 return False, 0
             policy = await self.policy(account, item[1])
             if not policy.enabled:
@@ -1170,7 +1191,11 @@ class DirectoryTTL:
             except Exception as exc:
                 if not is_not_found_error(exc):
                     raise
-            removed = await redis.eval(REMOVE, 1, self.prefix(account) + item[0], uri, str(score))
+            removed = await self.cache_runtime.execute_script(
+                "ttl.v1.remove",
+                [self.prefix(account) + item[0]],
+                [uri.encode(), str(score).encode()],
+            )
             return True, int(removed)
         finally:
             await agfs.pathlock_release(lease)

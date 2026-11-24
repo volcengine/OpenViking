@@ -64,8 +64,13 @@ async def exercise(handle):
     assert await handle.hset('hash', {'field': b'value', 'state': b'ready'}) == 2
     assert await handle.hget('hash', 'field') == b'value'
     assert await handle.hgetall('hash') == {'field': b'value', 'state': b'ready'}
+    assert await handle.hsetnx('hash', {'field': b'ignored', 'checkpoint': b'first'}) == 1
+    assert await handle.hget('hash', 'field') == b'value'
     assert await handle.sismember('members', b'member')
     assert await handle.zadd('scores', [(1.0, 'member'), (2.0, 'later')]) == 2
+    assert await handle.zadd('scores', [(0.0, 'member')], only_if_greater=True) == 0
+    assert await handle.zadd('scores', [(3.0, 'member')], only_if_not_exists=True) == 0
+    assert await handle.zmscore('scores', ['member', 'missing']) == [1.0, None]
     assert await handle.zrangebyscore(
         'scores', 0.0, 2.0, 10, max_exclusive=True
     ) == [('member', 1.0)]

@@ -44,6 +44,9 @@ extern "C" {
 
 #define OV_CACHE_SET_APPLIED 0u
 #define OV_CACHE_SET_CONDITION_NOT_MET 1u
+#define OV_CACHE_ZADD_CONDITION_NONE 0u
+#define OV_CACHE_ZADD_CONDITION_NX 1u
+#define OV_CACHE_ZADD_CONDITION_GT 2u
 
 #define OV_CACHE_LIST_BEFORE 0u
 #define OV_CACHE_LIST_AFTER 1u
@@ -117,6 +120,16 @@ typedef struct {
 } OvCacheOwnedScoredMemberArrayV1;
 
 typedef struct {
+    double score;
+    uint8_t present;
+} OvCacheOptionalScoreV1;
+
+typedef struct {
+    OvCacheOptionalScoreV1 *items;
+    size_t len;
+} OvCacheOwnedOptionalScoreArrayV1;
+
+typedef struct {
     double min;
     uint8_t min_exclusive;
     double max;
@@ -131,6 +144,10 @@ typedef struct {
     uint32_t condition;
     uint8_t keep_ttl;
 } OvCacheSetOptionsV1;
+
+typedef struct {
+    uint32_t condition;
+} OvCacheZaddOptionsV1;
 
 typedef struct OvCacheScriptValueV1 OvCacheScriptValueV1;
 
@@ -271,6 +288,8 @@ typedef int32_t (*OvCacheProviderHsetV1)(
     uint64_t *added,
     OvCacheOwnedBufferV1 *error);
 
+typedef OvCacheProviderHsetV1 OvCacheProviderHsetnxV1;
+
 typedef int32_t (*OvCacheProviderSismemberV1)(
     void *provider,
     OvCacheByteSliceV1 key,
@@ -296,6 +315,23 @@ typedef int32_t (*OvCacheProviderZaddV1)(
     const OvCacheScoredMemberV1 *entries,
     size_t entries_len,
     uint64_t *added,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZaddConditionalV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheZaddOptionsV1 options,
+    const OvCacheScoredMemberV1 *entries,
+    size_t entries_len,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZmscoreV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    const OvCacheByteSliceV1 *members,
+    size_t members_len,
+    OvCacheOwnedOptionalScoreArrayV1 *output,
     OvCacheOwnedBufferV1 *error);
 
 typedef int32_t (*OvCacheProviderZscanV1)(
@@ -460,6 +496,9 @@ typedef struct {
     OvCacheProviderHgetallV1 hgetall;
     OvCacheProviderZcardV1 zcard;
     OvCacheProviderServerTimeForKeyV1 server_time_for_key;
+    OvCacheProviderHsetnxV1 hsetnx;
+    OvCacheProviderZaddConditionalV1 zadd_conditional;
+    OvCacheProviderZmscoreV1 zmscore;
 } OvCacheProviderApiV1;
 
 /* The only symbol resolved by DynamicProvider. */

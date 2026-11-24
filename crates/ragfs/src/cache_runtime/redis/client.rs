@@ -3,12 +3,13 @@ use super::RedisProviderConfig;
 use crate::cache_runtime::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
     ListMoveRequest, ScoredMember, ScoreRange, ScriptValue, SetCondition, SetOptions, SetResult,
+    ZAddCondition, ZAddOptions,
 };
 use bytes::Bytes;
 use fred::error::{Error as FredError, ErrorKind};
 use fred::interfaces::{HashesInterface, SortedSetsInterface};
 use fred::prelude::*;
-use fred::types::sorted_sets::{ZRange, ZRangeKind};
+use fred::types::sorted_sets::{Ordering as FredZAddOrdering, ZRange, ZRangeKind};
 use fred::types::scan::Scanner;
 use fred::types::{
     config::{ClusterDiscoveryPolicy, Server, TlsConfig, TlsConnector, TlsHostMapping},
@@ -253,6 +254,22 @@ impl RedisClient {
         self.execute("HSET", self.client.hset(key, values)).await
     }
 
+    /// Store only missing hash fields through the shared Redis command guard.
+    pub(super) async fn hsetnx(
+        &self,
+        key: &str,
+        values: HashMap<String, Bytes>,
+    ) -> CacheResult<u64> {
+        let mut added = 0;
+        for (field, value) in values {
+            let applied: bool =
+                self.execute("HSETNX", self.client.hsetnx(key, field, value))
+                    .await?;
+            added += u64::from(applied);
+        }
+        Ok(added)
+    }
+
     pub(super) async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         self.execute("SISMEMBER", self.client.sismember(key, member))
             .await
@@ -290,6 +307,51 @@ impl RedisClient {
                 .zadd(key, None, None, false, false, values),
         )
         .await
+    }
+
+    /// Add sorted-set members with one Redis existence or score condition.
+    pub(super) async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
+        if entries.iter().any(|entry| entry.score.is_nan()) {
+            return Err(CacheError::InvalidArgument(
+                "sorted-set score cannot be NaN".into(),
+            ));
+        }
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let (set_options, ordering) = match options.condition {
+            ZAddCondition::None => (None, None),
+            ZAddCondition::Nx => (Some(FredSetOptions::NX), None),
+            ZAddCondition::Gt => (None, Some(FredZAddOrdering::GreaterThan)),
+        };
+        let values = entries
+            .into_iter()
+            .map(|entry| (entry.score, entry.member))
+            .collect::<Vec<_>>();
+        self.execute(
+            "ZADD",
+            self.client
+                .zadd(key, set_options, ordering, false, false, values),
+        )
+        .await
+    }
+
+    /// Read multiple sorted-set scores through the shared Redis command guard.
+    pub(super) async fn zmscore(
+        &self,
+        key: &str,
+        members: &[String],
+    ) -> CacheResult<Vec<Option<f64>>> {
+        if members.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.execute("ZMSCORE", self.client.zmscore(key, members.to_vec()))
+            .await
     }
 
     pub(super) async fn zscan_match(

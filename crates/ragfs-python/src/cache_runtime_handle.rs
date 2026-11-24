@@ -7,7 +7,7 @@ use pyo3::types::{PyBytes, PyList};
 use ragfs::cache_runtime::{
     CacheError, CacheResult, CacheRuntime, Expiration, ListDirection, ListInsertPosition,
     ListInsertRequest, ListMoveRequest, ScriptRequest, ScriptValue, SetCondition, SetOptions,
-    SetResult, ScoredMember, ScoreRange,
+    SetResult, ScoredMember, ScoreRange, ZAddCondition, ZAddOptions,
 };
 use std::collections::HashMap;
 use std::future::Future;
@@ -64,6 +64,24 @@ fn set_options(
             SetCondition::None
         },
         keep_ttl,
+    })
+}
+
+/// Build ZADD options from the public Python keyword arguments.
+fn zadd_options(if_not_exists: bool, if_greater: bool) -> PyResult<ZAddOptions> {
+    if if_not_exists && if_greater {
+        return Err(PyValueError::new_err(
+            "only_if_not_exists and only_if_greater are mutually exclusive",
+        ));
+    }
+    Ok(ZAddOptions {
+        condition: if if_not_exists {
+            ZAddCondition::Nx
+        } else if if_greater {
+            ZAddCondition::Gt
+        } else {
+            ZAddCondition::None
+        },
     })
 }
 
@@ -344,6 +362,21 @@ impl PyCacheRuntimeHandle {
         self.future(py, async move { runtime.hset(&key, values).await })
     }
 
+    /// Store only hash fields that do not already exist.
+    fn hsetnx<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        values: HashMap<String, Vec<u8>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let values = values
+            .into_iter()
+            .map(|(field, value)| (field, Bytes::from(value)))
+            .collect();
+        self.future(py, async move { runtime.hsetnx(&key, values).await })
+    }
+
     /// Return whether member belongs to the set at key.
     fn sismember<'py>(
         &self,
@@ -372,19 +405,36 @@ impl PyCacheRuntimeHandle {
         self.future(py, async move { runtime.scard(&key).await })
     }
 
-    /// Add or update sorted-set members and return the number newly added.
+    /// Add sorted-set members and return the number newly added.
+    #[pyo3(signature = (key, entries, *, only_if_not_exists=false, only_if_greater=false))]
     fn zadd<'py>(
         &self,
         py: Python<'py>,
         key: String,
         entries: Vec<(f64, String)>,
+        only_if_not_exists: bool,
+        only_if_greater: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let options = zadd_options(only_if_not_exists, only_if_greater)?;
         let runtime = Arc::clone(&self.runtime);
         let entries = entries
             .into_iter()
             .map(|(score, member)| ScoredMember { member, score })
             .collect();
-        self.future(py, async move { runtime.zadd(&key, entries).await })
+        self.future(py, async move {
+            runtime.zadd_with_options(&key, entries, options).await
+        })
+    }
+
+    /// Read multiple sorted-set scores while preserving member order.
+    fn zmscore<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        members: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        self.future(py, async move { runtime.zmscore(&key, &members).await })
     }
 
     /// Return sorted-set members matching pattern.

@@ -2,6 +2,7 @@ use bytes::Bytes;
 use libloading::{Library, Symbol};
 use ragfs::cache_runtime::{
     CacheError, CacheRuntime, DynamicProviderConfig, ScoredMember, ScoreRange,
+    ZAddCondition, ZAddOptions,
 };
 use ragfs::core::{
     build_configured_stack, CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig,
@@ -77,6 +78,16 @@ async fn v1_dynamic_provider_forwards_new_cache_runtime_operations() {
     );
     assert_eq!(
         runtime
+            .hsetnx(
+                "metadata",
+                HashMap::from([("checkpoint".to_string(), Bytes::from_static(b"first"))]),
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
             .zadd(
                 "scores",
                 vec![
@@ -93,6 +104,32 @@ async fn v1_dynamic_provider_forwards_new_cache_runtime_operations() {
             .await
             .unwrap(),
         2
+    );
+    assert_eq!(
+        runtime
+            .zadd_with_options(
+                "scores",
+                vec![ScoredMember {
+                    score: 8.0,
+                    member: "new".to_string(),
+                }],
+                ZAddOptions {
+                    condition: ZAddCondition::Nx,
+                },
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zmscore(
+                "scores",
+                &["three".to_string(), "missing".to_string()],
+            )
+            .await
+            .unwrap(),
+        vec![Some(3.5), None]
     );
     assert_eq!(
         runtime
@@ -127,6 +164,27 @@ async fn v1_dynamic_provider_forwards_new_cache_runtime_operations() {
     );
 
     runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn dynamic_provider_rejects_malformed_zmscore_output() {
+    for library in [
+        bad_zmscore_length_fixture_library(),
+        bad_zmscore_presence_fixture_library(),
+        bad_zmscore_nan_fixture_library(),
+    ] {
+        let runtime = CacheRuntime::dynamic(config(library)).await.unwrap();
+        let error = runtime
+            .zmscore(
+                "scores",
+                &["three".to_string(), "missing".to_string()],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, CacheError::InvalidData(_)));
+        runtime.close().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -267,6 +325,22 @@ fn no_unlink_fixture_library() -> &'static PathBuf {
 fn no_zrangebyscore_fixture_library() -> &'static PathBuf {
     static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
     LIBRARY.get_or_init(|| compile_fixture("no-zrangebyscore", &["OV_FIXTURE_NO_ZRANGEBYSCORE"]))
+}
+
+fn bad_zmscore_length_fixture_library() -> &'static PathBuf {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY.get_or_init(|| compile_fixture("bad-zmscore-length", &["OV_FIXTURE_BAD_ZMSCORE_LENGTH"]))
+}
+
+fn bad_zmscore_presence_fixture_library() -> &'static PathBuf {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY
+        .get_or_init(|| compile_fixture("bad-zmscore-presence", &["OV_FIXTURE_BAD_ZMSCORE_PRESENT"]))
+}
+
+fn bad_zmscore_nan_fixture_library() -> &'static PathBuf {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY.get_or_init(|| compile_fixture("bad-zmscore-nan", &["OV_FIXTURE_BAD_ZMSCORE_NAN"]))
 }
 
 fn compile_fixture(name: &str, defines: &[&str]) -> PathBuf {

@@ -81,6 +81,9 @@ class CacheRuntimeHandleProtocol(Protocol):
     def hset(self, key: str, values: dict[str, bytes]) -> Awaitable[int]:
         """Store hash fields and return the number of newly added fields."""
 
+    def hsetnx(self, key: str, values: dict[str, bytes]) -> Awaitable[int]:
+        """Store only previously absent hash fields and return their count."""
+
     def sismember(self, key: str, member: bytes) -> Awaitable[bool]:
         """Return whether member belongs to the set at key."""
 
@@ -90,8 +93,18 @@ class CacheRuntimeHandleProtocol(Protocol):
     def scard(self, key: str) -> Awaitable[int]:
         """Return the cardinality of the set at key."""
 
-    def zadd(self, key: str, entries: list[tuple[float, str]]) -> Awaitable[int]:
-        """Add or update sorted-set members and return the number newly added."""
+    def zadd(
+        self,
+        key: str,
+        entries: list[tuple[float, str]],
+        *,
+        only_if_not_exists: bool = False,
+        only_if_greater: bool = False,
+    ) -> Awaitable[int]:
+        """Add sorted-set members and return the number newly added."""
+
+    def zmscore(self, key: str, members: list[str]) -> Awaitable[list[float | None]]:
+        """Return sorted-set scores for members in the provided order."""
 
     def zscan_match(self, key: str, pattern: str, count: int) -> Awaitable[list[str]]:
         """Return sorted-set members matching pattern."""

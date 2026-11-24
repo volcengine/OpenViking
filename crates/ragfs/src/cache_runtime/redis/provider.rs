@@ -2,7 +2,7 @@ use super::{RedisClient, RedisProviderConfig};
 use crate::cache_runtime::provider::CacheProvider;
 use crate::cache_runtime::{
     CacheResult, ListInsertRequest, ListMoveRequest, ScriptRegistry, ScriptRequest, ScriptResult,
-    ScoredMember, ScoreRange, SetOptions, SetResult,
+    ScoredMember, ScoreRange, SetOptions, SetResult, ZAddOptions,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -82,6 +82,10 @@ impl CacheProvider for RedisProvider {
         self.client.hset(key, values).await
     }
 
+    async fn hsetnx(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        self.client.hsetnx(key, values).await
+    }
+
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         self.client.sismember(key, member).await
     }
@@ -96,6 +100,19 @@ impl CacheProvider for RedisProvider {
 
     async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
         self.client.zadd(key, entries).await
+    }
+
+    async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
+        self.client.zadd_with_options(key, entries, options).await
+    }
+
+    async fn zmscore(&self, key: &str, members: &[String]) -> CacheResult<Vec<Option<f64>>> {
+        self.client.zmscore(key, members).await
     }
 
     async fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>> {

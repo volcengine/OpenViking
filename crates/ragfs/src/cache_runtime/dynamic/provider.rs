@@ -5,7 +5,7 @@ use crate::cache_runtime::provider::{CacheOperation, CacheProvider};
 use crate::cache_runtime::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
     ListMoveRequest, ScoredMember, ScoreRange, ScriptRegistry, ScriptRequest, ScriptResult,
-    ScriptValue, SetCondition, SetOptions, SetResult,
+    ScriptValue, SetCondition, SetOptions, SetResult, ZAddCondition, ZAddOptions,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -228,7 +228,10 @@ impl DynamicState {
             CacheOperation::Hget => self.api.hget.is_some(),
             CacheOperation::Hgetall => self.api.hgetall.is_some(),
             CacheOperation::Hset => self.api.hset.is_some(),
+            CacheOperation::Hsetnx => self.api.hsetnx.is_some(),
             CacheOperation::Zadd => self.api.zadd.is_some(),
+            CacheOperation::ZaddConditional => self.api.zadd_conditional.is_some(),
+            CacheOperation::Zmscore => self.api.zmscore.is_some(),
             CacheOperation::ZrangeByScore => self.api.zrangebyscore.is_some(),
             CacheOperation::Zcard => self.api.zcard.is_some(),
             CacheOperation::ServerTimeForKey => self.api.server_time_for_key.is_some(),
@@ -654,6 +657,40 @@ impl CacheProvider for DynamicProvider {
         .await
     }
 
+    async fn hsetnx(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        if values.is_empty() {
+            return Ok(0);
+        }
+        let key = key.to_string();
+        self.call("hsetnx", move |state| {
+            state.with_call("hsetnx", |api, handle| {
+                let callback = required(api.hsetnx, CacheOperation::Hsetnx)?;
+                let entries = values
+                    .iter()
+                    .map(|(field, value)| FieldValueV1 {
+                        field: ByteSliceV1::from_slice(field.as_bytes()),
+                        value: ByteSliceV1::from_slice(value),
+                    })
+                    .collect::<Vec<_>>();
+                let mut added = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        entries.as_ptr(),
+                        entries.len(),
+                        &mut added,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "hsetnx")?;
+                Ok(added)
+            })
+        })
+        .await
+    }
+
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         let key = key.to_string();
         let member = member.to_vec();
@@ -744,6 +781,96 @@ impl CacheProvider for DynamicProvider {
                 };
                 status_result(status, error, "zadd")?;
                 Ok(added)
+            })
+        })
+        .await
+    }
+
+    async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        if entries.iter().any(|entry| entry.score.is_nan()) {
+            return Err(CacheError::InvalidArgument(
+                "zadd scores must not be NaN".to_string(),
+            ));
+        }
+        let options = zadd_options(options);
+        let key = key.to_string();
+        self.call("zadd_conditional", move |state| {
+            state.with_call("zadd_conditional", |api, handle| {
+                let callback =
+                    required(api.zadd_conditional, CacheOperation::ZaddConditional)?;
+                let raw_entries = entries
+                    .iter()
+                    .map(|entry| ScoredMemberV1 {
+                        score: entry.score,
+                        member: ByteSliceV1::from_slice(entry.member.as_bytes()),
+                    })
+                    .collect::<Vec<_>>();
+                let mut added = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        options,
+                        raw_entries.as_ptr(),
+                        raw_entries.len(),
+                        &mut added,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "zadd_conditional")?;
+                Ok(added)
+            })
+        })
+        .await
+    }
+
+    async fn zmscore(&self, key: &str, members: &[String]) -> CacheResult<Vec<Option<f64>>> {
+        if members.is_empty() {
+            return Ok(Vec::new());
+        }
+        let key = key.to_string();
+        let members = members.to_vec();
+        self.call("zmscore", move |state| {
+            state.with_call("zmscore", |api, handle| {
+                let callback = required(api.zmscore, CacheOperation::Zmscore)?;
+                let raw_members = string_slices(&members);
+                let mut output = OwnedOptionalScoreArrayV1::default();
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        raw_members.as_ptr(),
+                        raw_members.len(),
+                        &mut output,
+                        &mut error,
+                    )
+                };
+                let values = take_output(
+                    status,
+                    error,
+                    "zmscore",
+                    output,
+                    take_optional_score_array,
+                    discard_optional_score_array,
+                )?;
+                if values.len() != members.len() {
+                    return Err(CacheError::InvalidData(format!(
+                        "dynamic provider zmscore returned {} scores for {} members",
+                        values.len(),
+                        members.len()
+                    )));
+                }
+                Ok(values)
             })
         })
         .await
@@ -1223,6 +1350,17 @@ fn set_options(options: SetOptions) -> CacheResult<SetOptionsV1> {
     })
 }
 
+/// Convert public conditional ZADD options to the Dynamic provider ABI shape.
+fn zadd_options(options: ZAddOptions) -> ZAddOptionsV1 {
+    ZAddOptionsV1 {
+        condition: match options.condition {
+            ZAddCondition::None => ZADD_CONDITION_NONE,
+            ZAddCondition::Nx => ZADD_CONDITION_NX,
+            ZAddCondition::Gt => ZADD_CONDITION_GT,
+        },
+    }
+}
+
 fn direction(direction: ListDirection) -> u32 {
     match direction {
         ListDirection::Left => LIST_LEFT,
@@ -1634,6 +1772,41 @@ fn take_optional_buffer_array(
     Ok(values)
 }
 
+/// Decode a Dynamic provider ZMSCORE result while validating optional score flags.
+fn take_optional_score_array(
+    array: OwnedOptionalScoreArrayV1,
+) -> CacheResult<Vec<Option<f64>>> {
+    let mut budget = DecodeBudget::default();
+    if array.len == 0 {
+        if array.items.is_null() {
+            return Ok(Vec::new());
+        }
+        release_registered(array.items.cast::<u8>());
+        return Err(invalid_output(
+            "dynamic provider returned a non-null empty optional score array",
+        ));
+    }
+    if array.items.is_null() {
+        return Err(invalid_output(
+            "dynamic provider returned a null optional score array",
+        ));
+    }
+    let items = take_raw_array(array.items, array.len, "optional score array", &mut budget)?;
+    items
+        .into_iter()
+        .map(|item| match item.present {
+            0 => Ok(None),
+            1 if item.score.is_nan() => Err(invalid_output(
+                "dynamic provider zmscore returned a NaN score",
+            )),
+            1 => Ok(Some(item.score)),
+            other => Err(invalid_output(format!(
+                "dynamic provider returned invalid optional score flag {other}"
+            ))),
+        })
+        .collect()
+}
+
 fn take_script_value(value: ScriptValueV1) -> CacheResult<ScriptValue> {
     let mut budget = DecodeBudget::default();
     take_script_value_with_budget(value, 0, &mut budget)
@@ -1920,6 +2093,25 @@ fn discard_optional_buffer_array(array: OptionalOwnedBufferArrayV1) {
             }
         }
         Err(_) => release_registered(array.items.cast::<u8>()),
+    }
+}
+
+/// Release a ZMSCORE array returned alongside an ABI error status.
+fn discard_optional_score_array(array: OwnedOptionalScoreArrayV1) {
+    if array.items.is_null() || array.len == 0 || array.len > MAX_ARRAY_ITEMS {
+        release_registered(array.items.cast::<u8>());
+        return;
+    }
+    let mut budget = DecodeBudget::default();
+    if take_raw_array(
+        array.items,
+        array.len,
+        "discarded optional score array",
+        &mut budget,
+    )
+    .is_err()
+    {
+        release_registered(array.items.cast::<u8>());
     }
 }
 

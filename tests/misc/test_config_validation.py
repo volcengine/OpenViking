@@ -1847,6 +1847,54 @@ def test_expiry_uses_named_redis_runtime_without_cachefs(tmp_path):
     assert binding.to_binding_dict()["cache"]["runtime_enabled"] is True
 
 
+def test_directory_ttl_required_runtime_enables_binding_without_cachefs(tmp_path):
+    """Enable CacheRuntime when Directory TTL is the only cache consumer."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path), "agfs": {}},
+            "cache": {
+                "instances": {
+                    "default": {"provider": "redis", "params": {}},
+                    "ttl": {"provider": "redis", "params": {}},
+                }
+            },
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(
+        config,
+        required_cache_instances={"Directory TTL": "ttl"},
+    )
+
+    assert binding.to_binding_dict()["cache"]["runtime_enabled"] is True
+
+
+def test_directory_ttl_rejects_non_redis_required_runtime(tmp_path):
+    """Reject a dynamic Runtime selected for Redis-scripted Directory TTL."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path), "agfs": {}},
+            "cache": {
+                "instances": {
+                    "default": {"provider": "redis", "params": {}},
+                    "ttl": {
+                        "provider": "dynamic",
+                        "params": {"library": "/tmp/openviking-cache-provider.dylib"},
+                    },
+                }
+            },
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(
+        config,
+        required_cache_instances={"Directory TTL": "ttl"},
+    )
+
+    with pytest.raises(ValueError, match="Directory TTL requires cache instance 'ttl'"):
+        binding.to_binding_dict()
+
+
 def test_expiry_rejects_legacy_redis_configuration():
     with pytest.raises(ValueError, match="redis"):
         OpenVikingConfig.from_dict({"expiry": {"redis": {"endpoints": ["redis://localhost:6379"]}}})

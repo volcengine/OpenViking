@@ -21,10 +21,13 @@ pub(crate) enum CacheOperation {
     Hget,
     Hgetall,
     Hset,
+    Hsetnx,
     Sismember,
     Smembers,
     Scard,
     Zadd,
+    ZaddConditional,
+    Zmscore,
     Zscan,
     ZrangeByScore,
     Zcard,
@@ -59,10 +62,13 @@ impl CacheOperation {
             Self::Hget => "hget",
             Self::Hgetall => "hgetall",
             Self::Hset => "hset",
+            Self::Hsetnx => "hsetnx",
             Self::Sismember => "sismember",
             Self::Smembers => "smembers",
             Self::Scard => "scard",
             Self::Zadd => "zadd",
+            Self::ZaddConditional => "zadd_conditional",
+            Self::Zmscore => "zmscore",
             Self::Zscan => "zscan",
             Self::ZrangeByScore => "zrangebyscore",
             Self::Zcard => "zcard",
@@ -109,11 +115,36 @@ pub(crate) trait CacheProvider: Send + Sync {
     }
     /// Store fields and return the number of newly added fields.
     async fn hset(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64>;
+    /// Store only fields that do not already exist.
+    async fn hsetnx(&self, _key: &str, _values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        Err(CacheError::UnsupportedOperation("hsetnx".into()))
+    }
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool>;
     async fn smembers(&self, key: &str) -> CacheResult<Vec<Bytes>>;
     async fn scard(&self, key: &str) -> CacheResult<u64>;
     /// Add or update sorted-set members.
     async fn zadd(&self, key: &str, entries: Vec<super::ScoredMember>) -> CacheResult<u64>;
+    /// Add sorted-set members subject to a shared condition.
+    async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<super::ScoredMember>,
+        options: super::ZAddOptions,
+    ) -> CacheResult<u64> {
+        if options.condition == super::ZAddCondition::None {
+            self.zadd(key, entries).await
+        } else {
+            Err(CacheError::UnsupportedOperation("zadd_conditional".into()))
+        }
+    }
+    /// Read multiple sorted-set scores while preserving member order.
+    async fn zmscore(
+        &self,
+        _key: &str,
+        _members: &[String],
+    ) -> CacheResult<Vec<Option<f64>>> {
+        Err(CacheError::UnsupportedOperation("zmscore".into()))
+    }
     /// Return sorted-set members matching one Redis glob pattern.
     async fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>>;
     /// Return sorted-set members within one score range.

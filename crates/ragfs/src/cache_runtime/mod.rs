@@ -12,7 +12,7 @@ mod script;
 
 pub use api::{
     Expiration, ListDirection, ListInsertPosition, ListInsertRequest, ListMoveRequest,
-    ScoredMember, ScoreRange, SetCondition, SetOptions, SetResult,
+    ScoredMember, ScoreRange, SetCondition, SetOptions, SetResult, ZAddCondition, ZAddOptions,
 };
 pub use dynamic::DynamicProviderConfig;
 pub use error::{CacheError, CacheResult};
@@ -277,6 +277,12 @@ impl CacheRuntime {
         self.provider.hset(key, values).await
     }
 
+    /// Store only hash fields that do not already exist.
+    pub async fn hsetnx(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.hsetnx(key, values).await
+    }
+
     /// Check whether a set contains one member.
     pub async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         self.ensure_open()?;
@@ -299,6 +305,27 @@ impl CacheRuntime {
     pub async fn zadd(&self, key: &str, entries: Vec<ScoredMember>) -> CacheResult<u64> {
         self.ensure_open()?;
         self.provider.zadd(key, entries).await
+    }
+
+    /// Add sorted-set members subject to one condition.
+    pub async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.zadd_with_options(key, entries, options).await
+    }
+
+    /// Read multiple sorted-set scores while preserving member order.
+    pub async fn zmscore(
+        &self,
+        key: &str,
+        members: &[String],
+    ) -> CacheResult<Vec<Option<f64>>> {
+        self.ensure_open()?;
+        self.provider.zmscore(key, members).await
     }
 
     /// Return sorted-set members matching one Redis glob pattern.
@@ -558,6 +585,14 @@ impl SyncCacheRuntimeFacade {
             .run(async move { runtime.hset(&key, values).await })
     }
 
+    /// Store only hash fields that do not already exist.
+    pub fn hsetnx(&self, key: &str, values: HashMap<String, Bytes>) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        self.executor
+            .run(async move { runtime.hsetnx(&key, values).await })
+    }
+
     /// Check whether a set contains one member.
     pub fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         let runtime = Arc::clone(&self.runtime);
@@ -588,6 +623,28 @@ impl SyncCacheRuntimeFacade {
         let key = key.to_string();
         self.executor
             .run(async move { runtime.zadd(&key, entries).await })
+    }
+
+    /// Add sorted-set members subject to one condition.
+    pub fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        self.executor
+            .run(async move { runtime.zadd_with_options(&key, entries, options).await })
+    }
+
+    /// Read multiple sorted-set scores while preserving member order.
+    pub fn zmscore(&self, key: &str, members: &[String]) -> CacheResult<Vec<Option<f64>>> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        let members = members.to_vec();
+        self.executor
+            .run(async move { runtime.zmscore(&key, &members).await })
     }
 
     /// Return sorted-set members matching one Redis glob pattern.
