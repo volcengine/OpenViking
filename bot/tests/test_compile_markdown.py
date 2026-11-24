@@ -714,6 +714,14 @@ async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(
     assert "selection-rules.md" in pipeline.warnings[0]
     assert "mapping values are not allowed here (line 4, column 13)" in pipeline.warnings[0]
 
+    await pipeline.write_coverage(bundle.created)
+    recorded = (await pipeline.files.get("coverage"))["inputs"]["viking://resources/source/a.md"]
+    assert recorded["status"] == "prepared"
+    assert recorded["outputs"] == [
+        {"uri": pipeline.target + "/valid.md", "delivered": True},
+        {"uri": pipeline.target + "/selection-rules.md", "delivered": False, "rejected": True},
+    ]
+
     pipeline.warnings.clear()
     empty_bundle = await finalize.run(
         pipeline,
