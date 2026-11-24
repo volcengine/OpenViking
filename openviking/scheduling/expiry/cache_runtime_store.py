@@ -373,7 +373,7 @@ class CacheRuntimeExpiryStore:
         after_score: int | None,
         after_member: str | None,
         limit: int,
-    ) -> tuple[tuple[tuple[str, int], ...], tuple[int, str] | None]:
+    ) -> tuple[tuple[tuple[str, int], ...], tuple[str, int] | None]:
         """Read the first scored page directly and later pages through Lua."""
         if type(limit) is not int or not 1 <= limit <= 4096:
             raise StoreOperationError("invalid_integer", "Timer page limit is invalid")
