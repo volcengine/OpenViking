@@ -229,6 +229,8 @@ print(result)
 
 `add_resource` handles file upload for local paths automatically.
 
+Directory uploads stop if a directory cannot be listed. The SDK propagates the scan error before uploading and removes the unfinished ZIP, keeping the source files intact.
+
 ```python
 from openviking_sdk import SyncHTTPClient
 
