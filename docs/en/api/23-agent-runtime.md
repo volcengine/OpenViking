@@ -202,6 +202,11 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 
 No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Execution plans and necessary recovery checkpoints remain private Task state; public configuration, runs and tasks never expose execution credentials.
 
+VikingBot reports `result.completion_status: "partial"` when known source, worker or write
+failures remain after execution. Confirmed output is retained, and a named Compile keeps
+its previous source baseline so unchanged missed inputs remain eligible for the next run.
+The marker is omitted otherwise; its absence does not prove semantic coverage or successful indexing.
+
 The only Compile business files are:
 
 ```text
@@ -215,7 +220,7 @@ Configurations are stored in account and user directories. Public APIs locate co
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
-Successful Compile finalization publishes output snapshots. The incremental baseline advances when the target diff reports at least one file added, modified, or deleted. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+Successful Compile finalization publishes output snapshots. A complete delivery with at least one target file added, modified, or deleted advances the incremental baseline. Incremental recovery after partial delivery can also advance the baseline with zero target changes when it accounts for every added or modified source and verifies its read contents against the frozen source snapshot. A zero-change run with unverified sources, deletions, or full scans retains the baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
 
 ### Check Compile availability
 
