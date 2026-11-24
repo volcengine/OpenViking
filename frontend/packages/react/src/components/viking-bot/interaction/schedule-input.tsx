@@ -8,7 +8,7 @@ import {
   SelectOption,
 } from '../../../shared/primitives/select/index.js';
 import { ScheduleTimeInput } from './schedule-time-input.js';
-import type { FormError } from './form-value.js';
+import { defaultScheduleTime, type FormError } from './form-value.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { InteractionLabels } from './labels.js';
 import type {
@@ -39,7 +39,7 @@ export function ScheduleInput({
 }) {
   const id = useId();
   const previous = useRef({
-    time: value.mode === 'none' ? '09:00' : value.time,
+    time: value.mode === 'none' ? '' : value.time,
     weekday: value.mode === 'weekly' ? value.weekday : 1,
   });
   const change = (next: VikingBotScheduleValue) => {
@@ -50,13 +50,12 @@ export function ScheduleInput({
     if (disabled) return;
     if (value.mode !== 'none') previous.current.time = value.time;
     if (value.mode === 'weekly') previous.current.weekday = value.weekday;
-    const { time, weekday } = previous.current;
+    if (mode === 'none') return change({ mode });
+    const time = previous.current.time || defaultScheduleTime();
     change(
-      mode === 'none'
-        ? { mode }
-        : mode === 'daily'
-          ? { mode, time }
-          : { mode, time, weekday },
+      mode === 'daily'
+        ? { mode, time }
+        : { mode, time, weekday: previous.current.weekday },
     );
   };
   const modes = [

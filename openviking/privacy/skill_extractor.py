@@ -2,12 +2,26 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Extract sensitive values from skill content."""
 
+from __future__ import annotations
+
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from openviking.config.vlm import VLMHandle
-from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
+from openviking.privacy.rules import PrivacyMatch, is_sensitive_value
+from openviking.privacy.sanitizer import (
+    DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
+    DEFAULT_SANITIZER_MAX_REPLACEMENTS,
+)
+from openviking.privacy.skill_placeholder import build_placeholder
 from openviking.prompts import render_prompt
+from openviking.pyagfs import get_privacy_matcher_class
+from openviking_cli.exceptions import ResourceExhaustedError
 from openviking_cli.utils.llm import parse_json_from_response
+
+if TYPE_CHECKING:
+    from openviking.server.user_config import ResolvedPrivacyConfig
 
 
 @dataclass
@@ -25,6 +39,7 @@ async def extract_skill_privacy_values(
     skill_description: str,
     content: str,
     vlm: VLMHandle,
+    settings: ResolvedPrivacyConfig | None = None,
 ) -> SkillPrivacyExtractionResult:
     if vlm is None:
         raise ValueError("Skill privacy extraction requires an explicitly resolved VLM")
@@ -44,16 +59,44 @@ async def extract_skill_privacy_values(
         raw_values = data.get("values", {})
         if isinstance(raw_values, dict):
             values = {
-                str(key): "" if value is None else str(value)
+                str(key): value
                 for key, value in raw_values.items()
                 if str(key).strip()
+                and isinstance(value, str)
+                and is_sensitive_value(value, settings=settings)
             }
 
-    placeholder_result = placeholderize_skill_content_with_blocks(content, skill_name, values)
+    fields = {}
+    for name, value in values.items():
+        fields.setdefault(value, name)
+    chunks: list[str] = []
+    replaced: dict[str, str] = {}
+    cursor = 0
+    for match in find_skill_privacy_matches(content, fields):
+        value = content[match.start : match.end]
+        name = fields[value]
+        chunks.extend((content[cursor : match.start], build_placeholder(skill_name, name)))
+        replaced[name] = value
+        cursor = match.end
+    chunks.append(content[cursor:])
     return SkillPrivacyExtractionResult(
-        values=placeholder_result.replaced_values,
+        values=replaced,
         original_content=content,
-        sanitized_content=placeholder_result.sanitized_content,
-        original_content_blocks=placeholder_result.original_content_blocks,
-        replacement_content_blocks=placeholder_result.replacement_content_blocks,
+        sanitized_content="".join(chunks),
+        original_content_blocks=list(replaced.values()),
+        replacement_content_blocks=[build_placeholder(skill_name, name) for name in replaced],
     )
+
+
+def find_skill_privacy_matches(content: str, values: Iterable[str]) -> list[PrivacyMatch]:
+    """Locate selected literal values using the shared bounded matcher."""
+    matcher = get_privacy_matcher_class()({value: ["vlm"] for value in values})
+    try:
+        matches, _, exceeded = matcher.find_limited(
+            content, DEFAULT_SANITIZER_MAX_REPLACEMENTS, DEFAULT_SANITIZER_MAX_CONTENT_BYTES
+        )
+    except OverflowError:
+        raise ResourceExhaustedError("Content exceeds the Privacy extractor size limit") from None
+    if exceeded:
+        raise ResourceExhaustedError("Content exceeds the Privacy extractor match limit")
+    return [PrivacyMatch(*match) for match in matches]

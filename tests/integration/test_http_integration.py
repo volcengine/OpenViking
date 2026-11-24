@@ -8,6 +8,7 @@ defined in ``conftest.py``.
 
 import pytest
 import pytest_asyncio
+from openviking_sdk import SyncHTTPClient
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import NotFoundError
@@ -60,19 +61,6 @@ class TestHTTPClientIntegration:
     async def test_tree(self, client):
         """Test tree operation."""
         result = await client.tree("viking://")
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_observer_vikingdb(self, client):
-        """Test observer vikingdb status."""
-        result = await client._get_vikingdb_status()
-        assert result is not None
-        assert "is_healthy" in result
-
-    @pytest.mark.asyncio
-    async def test_observer_queue(self, client):
-        """Test observer queue status."""
-        result = await client._get_queue_status()
         assert result is not None
 
 
@@ -140,11 +128,23 @@ class TestAsyncHTTPClientIntegration:
         result = await client.ls("viking://")
         assert isinstance(result, list)
 
-    @pytest.mark.asyncio
-    async def test_observer_access(self, client):
-        """Test observer access."""
-        observer = client.observer
-        assert observer is not None
+    def test_observer_access(self, server_url):
+        client = SyncHTTPClient(url=server_url)
+        client.initialize()
+        try:
+            queue = client.queue_status(format="json")
+            vikingdb = client.vikingdb_status(format="json")
+            system = client.get_status(format="json")
+        finally:
+            client.close()
+
+        assert queue["name"] == "queue" and "pending" in queue["status"]["summary"]
+        assert vikingdb["name"] == "vikingdb" and vikingdb["status"]["backend"] == "local"
+        assert system["components"]["queue"]["name"] == queue["name"]
+        assert system["components"]["vikingdb"]["name"] == vikingdb["name"]
+        assert system["is_healthy"] == all(
+            component["is_healthy"] for component in system["components"].values()
+        )
 
     @pytest.mark.asyncio
     async def test_session_via_client(self, client):

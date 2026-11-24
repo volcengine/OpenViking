@@ -129,13 +129,10 @@ class ConnectorClient:
             payload.update({key: value for key, value in extra_params.items() if key != "api_key"})
 
         # Log shape only: param_config values and auth_config may carry source credentials.
-        logger.info(
-            "[ConnectorClient] doc/add: add_type=%s to=%s include_child=%s param_config_keys=%s "
-            "has_auth_config=%s has_stream_states=%s",
-            add_type,
-            to,
+        logger.debug(
+            "Connector submission prepared include_child=%s param_config_count=%d has_auth_config=%s has_stream_states=%s",
             include_child,
-            sorted(param_config or {}),
+            len(param_config or {}),
             bool(auth_config),
             stream_states is not None,
         )

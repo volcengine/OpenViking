@@ -5,48 +5,27 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
+from datetime import datetime, timezone
 
 import pytest
 
 from openviking.usage_reporter.file_log_sink import FileLogUsageSink
+from openviking.usage_reporter.models import UsageEvent
 
 
-class FakeUsageEvent:
-    def __init__(
-        self,
-        *,
-        event_id: str = "ue_recall",
-        event_type: str = "memory.recalled",
-        session_id: str = "session-1",
-        account_id: str = "default",
-        resource_uri: str = ("viking://user/default/memories/experiences/生成请假邮件通用模版.md"),
-    ) -> None:
-        self._record = {
-            "schema_version": "v1",
-            "event_id": event_id,
-            "event_type": event_type,
-            "account_id": account_id,
-            "user_id": "default",
-            "session_id": session_id,
-            "task_id": "task-1",
-            "occurred_at": "2026-08-05T19:30:00+08:00",
-            "resource_uri": resource_uri,
-            "resource_type": "experience",
-            "evidence": {
-                "archive_uri": ("viking://user/user-1/sessions/session-1/history/archive_001"),
-                "message_id": "msg-1",
-                "tool_call_id": "call-1",
-                "tool_name": "find",
-            },
-            "attributes": {"note": "contains spaces\tand tabs"},
-        }
-
-    def to_dict(self) -> dict[str, object]:
-        return dict(self._record)
-
-
-def _parse_line(line: str) -> dict[str, object]:
-    return json.loads(line)
+@pytest.fixture
+def recall_event():
+    return UsageEvent(
+        event_type="memory.recalled",
+        resource_uri="viking://user/default/memories/experiences/请假=delivered.md",
+        resource_type="experience",
+        account_id="default",
+        user_id="default",
+        session_id="session-1",
+        occurred_at="2026-08-05T19:30:00+08:00",
+        event_id="ue_recall",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -55,107 +34,52 @@ def _resource_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_writes_usage_event_record(tmp_path):
+async def test_file_log_sink_writes_usage_event_record(tmp_path, monkeypatch, recall_event):
     log_path = tmp_path / "dedicated" / "usage.log"
+    other_path = tmp_path / "custom.log"
+    monkeypatch.setenv("CUSTOM_RESOURCE_ID", "ov-other")
     sink = FileLogUsageSink(path=log_path)
-
+    other_sink = FileLogUsageSink(path=other_path, resource_id_env="CUSTOM_RESOURCE_ID")
+    injection = replace(recall_event, event_type="memory.injected", event_id="ue_inject")
     try:
-        await sink.write(events=[FakeUsageEvent()])
+        await sink.write(events=[recall_event, injection])
+        await other_sink.write(events=[recall_event])
     finally:
         sink.close()
+        other_sink.close()
 
-    lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    assert _parse_line(lines[0]) == {
+    tenant = f"account_id:default;user_id:default;resource_uri:{recall_event.resource_uri}"
+    recall = {
         "event_time": "2026-08-05 11:30:00",
-        "tenant_id": (
-            "resource_id:ov-test;account_id:default;user_id:default;resource_uri:"
-            "viking://user/default/memories/experiences/生成请假邮件通用模版.md"
-        ),
+        "tenant_id": f"resource_id:ov-test;{tenant}",
         "event_name": "experience.recall.count",
         "object_id": "ue_recall",
         "count": 1,
         "tags": {"resource_type": "experience"},
     }
+    assert [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()] == [
+        recall,
+        recall | {"event_name": "experience.inject.count", "object_id": "ue_inject"},
+    ]
+    assert json.loads(other_path.read_text(encoding="utf-8")) == recall | {
+        "tenant_id": f"resource_id:ov-other;{tenant}",
+    }
 
 
 @pytest.mark.asyncio
-async def test_file_log_sink_maps_injection_event_name(tmp_path):
-    log_path = tmp_path / "usage.log"
-    sink = FileLogUsageSink(path=log_path)
-
-    try:
-        await sink.write(events=[FakeUsageEvent(event_type="memory.injected")])
-    finally:
-        sink.close()
-
-    record = _parse_line(log_path.read_text(encoding="utf-8").strip())
-    assert record["event_name"] == "experience.inject.count"
-
-
-@pytest.mark.asyncio
-async def test_file_log_sink_preserves_tenant_id_values(tmp_path):
-    log_path = tmp_path / "usage.log"
-    sink = FileLogUsageSink(path=log_path)
-
-    try:
-        await sink.write(
-            events=[
-                FakeUsageEvent(
-                    resource_uri=("viking://user/user-1/memories/experiences/exchange=delivered.md")
-                )
-            ]
-        )
-    finally:
-        sink.close()
-
-    record = _parse_line(log_path.read_text(encoding="utf-8").strip())
-    assert record["tenant_id"] == (
-        "resource_id:ov-test;account_id:default;user_id:default;resource_uri:"
-        "viking://user/user-1/memories/experiences/exchange=delivered.md"
-    )
-
-
-@pytest.mark.asyncio
-async def test_file_log_sink_uses_tenant_and_object_as_deduplication_key(tmp_path, monkeypatch):
-    event = FakeUsageEvent(event_id="ue_same_event")
-
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-first")
-    first = FileLogUsageSink(path=tmp_path / "first.log")
-    monkeypatch.setenv("OV_RESOURCE_ID", "ov-second")
-    second = FileLogUsageSink(path=tmp_path / "second.log")
-    try:
-        await first.write(events=[event])
-        await second.write(events=[event])
-    finally:
-        first.close()
-        second.close()
-
-    first_record = _parse_line((tmp_path / "first.log").read_text(encoding="utf-8").strip())
-    second_record = _parse_line((tmp_path / "second.log").read_text(encoding="utf-8").strip())
-
-    assert first_record["object_id"] == second_record["object_id"] == "ue_same_event"
-    assert first_record["tenant_id"] != second_record["tenant_id"]
-    assert (first_record["tenant_id"], first_record["object_id"]) != (
-        second_record["tenant_id"],
-        second_record["object_id"],
-    )
-
-
-@pytest.mark.asyncio
-async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path):
+async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path, recall_event):
     log_path = tmp_path / "usage.log"
     first = FileLogUsageSink(path=log_path)
     second = FileLogUsageSink(path=log_path)
 
     try:
-        await first.write(events=[FakeUsageEvent(event_id="ue_first_before")])
-        await second.write(events=[FakeUsageEvent(event_id="ue_second_before")])
+        await first.write(events=[replace(recall_event, event_id="ue_first_before")])
+        await second.write(events=[replace(recall_event, event_id="ue_second_before")])
 
         first._handler.rolloverAt = 0
         second._handler.rolloverAt = 0
-        await first.write(events=[FakeUsageEvent(event_id="ue_first_after")])
-        await second.write(events=[FakeUsageEvent(event_id="ue_second_after")])
+        await first.write(events=[replace(recall_event, event_id="ue_first_after")])
+        await second.write(events=[replace(recall_event, event_id="ue_second_after")])
     finally:
         first.close()
         second.close()
@@ -163,7 +87,7 @@ async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path):
     object_ids = []
     for path in tmp_path.glob("usage.log*"):
         for line in path.read_text(encoding="utf-8").splitlines():
-            object_ids.append(_parse_line(line)["object_id"])
+            object_ids.append(json.loads(line)["object_id"])
     assert sorted(object_ids) == [
         "ue_first_after",
         "ue_first_before",
@@ -173,44 +97,33 @@ async def test_file_log_sink_preserves_records_when_workers_roll_over(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_closed_handle_preserves_overdue_rollover_deadline(tmp_path):
+async def test_closed_handle_preserves_overdue_rollover_deadline(tmp_path, recall_event):
     log_path = tmp_path / "usage.log"
-    sink = FileLogUsageSink(path=log_path)
+    sink = FileLogUsageSink(path=log_path, backup_count=1)
+    deadline = int(time.time()) - 1
+    archived = [
+        tmp_path / f"usage.log.{datetime.fromtimestamp(at, timezone.utc):%Y-%m-%d_%H}"
+        for at in (deadline - 7200, deadline - 3600)
+    ]
 
     try:
-        await sink.write(events=[FakeUsageEvent(event_id="ue_before")])
-        sink._handler.stream.close()
-        sink._handler.stream = None
-        sink._handler.rolloverAt = int(time.time()) - 1
+        await sink.write(events=[replace(recall_event, event_id="ue_before")])
+        if sink._handler.stream is not None:
+            sink._handler.stream.close()
+            sink._handler.stream = None
+        sink._handler.rolloverAt = deadline - 3600
+        await sink.write(events=[replace(recall_event, event_id="ue_after")])
+        assert json.loads(archived[0].read_text(encoding="utf-8"))["object_id"] == "ue_before"
+        assert json.loads(log_path.read_text(encoding="utf-8"))["object_id"] == "ue_after"
 
-        await sink.write(events=[FakeUsageEvent(event_id="ue_after")])
+        sink._handler.rolloverAt = deadline
+        await sink.write(events=[replace(recall_event, event_id="ue_current")])
     finally:
         sink.close()
 
-    log_files = list(tmp_path.glob("usage.log*"))
-    assert len(log_files) == 2
-    object_ids = []
-    for path in log_files:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            object_ids.append(_parse_line(line)["object_id"])
-    assert sorted(object_ids) == ["ue_after", "ue_before"]
-
-
-def test_file_log_sink_uses_hourly_utc_rotation(tmp_path):
-    sink = FileLogUsageSink(
-        path=tmp_path / "usage.log",
-        rotation_interval_hours=1,
-        backup_count=168,
-    )
-
-    try:
-        assert sink._handler.when == "H"
-        assert sink._handler.interval == 60 * 60
-        assert sink._handler.backupCount == 168
-        assert sink._handler.utc is True
-        assert sink._handler.suffix == "%Y-%m-%d_%H"
-    finally:
-        sink.close()
+    assert sorted(tmp_path.glob("usage.log*")) == [log_path, archived[1]]
+    assert json.loads(archived[1].read_text(encoding="utf-8"))["object_id"] == "ue_after"
+    assert json.loads(log_path.read_text(encoding="utf-8"))["object_id"] == "ue_current"
 
 
 @pytest.mark.parametrize(
@@ -238,7 +151,7 @@ def test_file_log_sink_validates_config(kwargs, message):
 
 @pytest.mark.asyncio
 async def test_account_resource_id_source_attributes_each_event_to_its_account(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, recall_event
 ):
     monkeypatch.delenv("OV_RESOURCE_ID")
     log_path = tmp_path / "usage.log"
@@ -248,14 +161,14 @@ async def test_account_resource_id_source_attributes_each_event_to_its_account(
     try:
         await sink.write(
             events=[
-                FakeUsageEvent(event_id="ue_a", account_id="res-a", resource_uri=uri),
-                FakeUsageEvent(event_id="ue_b", account_id="res-b", resource_uri=uri),
+                replace(recall_event, event_id="ue_a", account_id="res-a", resource_uri=uri),
+                replace(recall_event, event_id="ue_b", account_id="res-b", resource_uri=uri),
             ]
         )
     finally:
         sink.close()
 
-    records = [_parse_line(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    records = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     assert [(record["object_id"], record["tenant_id"]) for record in records] == [
         ("ue_a", f"resource_id:res-a;account_id:res-a;user_id:default;resource_uri:{uri}"),
         ("ue_b", f"resource_id:res-b;account_id:res-b;user_id:default;resource_uri:{uri}"),
@@ -263,21 +176,23 @@ async def test_account_resource_id_source_attributes_each_event_to_its_account(
 
 
 @pytest.mark.asyncio
-async def test_account_resource_id_source_rejects_batch_without_account(tmp_path):
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"account_id": " "}, "account_id is required"),
+        ({"event_type": "memory.unknown"}, "unsupported usage event type"),
+        ({"event_id": " "}, "event_id is required"),
+    ],
+    ids=["missing-account", "unsupported-event", "blank-id"],
+)
+async def test_file_log_sink_rejects_invalid_batch(tmp_path, recall_event, changes, message):
     log_path = tmp_path / "usage.log"
     sink = FileLogUsageSink(path=log_path, resource_id_source="account")
-
     try:
-        with pytest.raises(ValueError, match="account_id is required"):
-            await sink.write(
-                events=[
-                    FakeUsageEvent(event_id="ue_a", account_id="res-a"),
-                    FakeUsageEvent(event_id="ue_missing", account_id=" "),
-                ]
-            )
+        with pytest.raises(ValueError, match=message):
+            await sink.write(events=[recall_event, replace(recall_event, **changes)])
     finally:
         sink.close()
-
     assert not log_path.exists() or log_path.read_text(encoding="utf-8") == ""
 
 
@@ -286,37 +201,3 @@ def test_file_log_sink_requires_resource_id(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="OV_RESOURCE_ID is required"):
         FileLogUsageSink(path=tmp_path / "usage.log")
-
-
-def test_file_log_sink_reads_configured_resource_id_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("CUSTOM_RESOURCE_ID", "ov-custom")
-    sink = FileLogUsageSink(
-        path=tmp_path / "usage.log",
-        resource_id_env="CUSTOM_RESOURCE_ID",
-    )
-    try:
-        assert sink._resource_id == "ov-custom"
-    finally:
-        sink.close()
-
-
-@pytest.mark.asyncio
-async def test_file_log_sink_rejects_unsupported_event(tmp_path):
-    sink = FileLogUsageSink(path=tmp_path / "usage.log")
-
-    try:
-        with pytest.raises(ValueError, match="unsupported usage event type"):
-            await sink.write(events=[FakeUsageEvent(event_type="memory.unknown")])
-    finally:
-        sink.close()
-
-
-@pytest.mark.asyncio
-async def test_file_log_sink_requires_event_id(tmp_path):
-    sink = FileLogUsageSink(path=tmp_path / "usage.log")
-
-    try:
-        with pytest.raises(ValueError, match="event_id is required"):
-            await sink.write(events=[FakeUsageEvent(event_id="")])
-    finally:
-        sink.close()

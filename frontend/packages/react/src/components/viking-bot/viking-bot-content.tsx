@@ -1,10 +1,11 @@
 import { VikingBotRegion } from './viking-bot-region.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useRef } from 'react';
+import { useViewActive } from '../../shared/view-activity.js';
 import { resolveVikingBotLabels } from './labels.js';
 import { renderHeaderContent } from './header-content.js';
 import { useBotAnalytics } from './use-bot-analytics.js';
-import { VikingBotWelcome } from './welcome.js';
+import { VikingBotEmptyState } from './welcome.js';
 import { QuickInputScope, useQuickInput } from './use-quick-input.js';
 import type { VikingBotQuickInput } from './capabilities.js';
 import type { VikingBotComposerRef } from './types.js';
@@ -12,6 +13,7 @@ import type { VikingBotProps } from './types.js';
 import { VikingBotComposer } from './lazy-composer.js';
 import { VikingBotInteraction } from './interaction/index.js';
 import { VikingBotMessageList } from './viking-bot-message-list.js';
+import { withSessionDebugContext } from './message-debug.js';
 
 /**
  * 完整对话区。消息列表、输入区与待确认交互都可被宿主替换：
@@ -37,6 +39,7 @@ export function VikingBotContent({
   emptyState,
   header,
   sessions,
+  debugContext,
   headerActions,
   locale: localeProp,
   quickInputs,
@@ -61,10 +64,10 @@ export function VikingBotContent({
   labels: overrides,
   ...rest
 }: VikingBotProps) {
+  const active = useViewActive();
   const analytics = useBotAnalytics(onSend);
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
-  const hasMessages = messages.length > 0;
   const disabledReason = isAvailable
     ? undefined
     : (unavailableMessage ?? labels.unavailable);
@@ -131,30 +134,27 @@ export function VikingBotContent({
           <VikingBotRegion name="body" resetKey={listKey}>
             {messageList !== undefined ? (
               messageList
-            ) : !hasMessages && !streaming ? (
-              <div
-                className={`ov-viking-bot__empty${emptyState === undefined ? ' ov-viking-bot__empty--welcome' : ''}`}
-              >
-                {emptyState === undefined ? (
-                  <VikingBotWelcome
-                    labels={labels}
-                    // 内置输入区上方常驻快捷输入；只有宿主自带输入区时欢迎页才保留一份。
-                    // The built-in composer always shows the quick inputs; the welcome
-                    // keeps its own copy only when the host supplies the composer.
-                    quickInputs={hasDefaultComposer ? undefined : quickInputs}
-                    onSelect={selectQuickInput}
-                    disabled={
-                      isSending ||
-                      !isAvailable ||
-                      (!onDraftChange && !onQuickInputSelect)
-                    }
-                  />
-                ) : (
-                  emptyState
-                )}
-              </div>
+            ) : !messages.length && !streaming ? (
+              <VikingBotEmptyState
+                content={emptyState}
+                labels={labels}
+                // 内置输入区上方常驻快捷输入；只有宿主自带输入区时欢迎页才保留一份。
+                // The built-in composer always shows the quick inputs; the welcome
+                // keeps its own copy only when the host supplies the composer.
+                quickInputs={hasDefaultComposer ? undefined : quickInputs}
+                onSelect={selectQuickInput}
+                disabled={
+                  isSending ||
+                  !isAvailable ||
+                  (!onDraftChange && !onQuickInputSelect)
+                }
+              />
             ) : (
               <VikingBotMessageList
+                debugContext={withSessionDebugContext(
+                  debugContext,
+                  sessions?.currentId,
+                )}
                 locale={locale}
                 messages={messages}
                 streaming={streaming}
@@ -170,39 +170,43 @@ export function VikingBotContent({
             <VikingBotRegion name="footer">{footer}</VikingBotRegion>
           ) : null}
           <VikingBotRegion resetKey={listKey}>
-            {interaction
-              ? (interactionSlot ?? (
-                  <VikingBotInteraction
-                    {...interaction}
-                    locale={interaction.locale ?? locale}
-                  />
-                ))
-              : (composer ??
-                // 省略 draft 表示只读会话，此时不渲染默认输入区。
-                (draft !== undefined ? (
-                  <VikingBotComposer
-                    locale={locale}
-                    ref={inputRef}
-                    value={draft}
-                    attachments={attachments}
-                    accept={accept}
-                    disabled={!isAvailable}
-                    disabledReason={disabledReason}
-                    isSending={isSending}
-                    canSendWhileStreaming={canSendWhileStreaming}
-                    isSubmitting={isSubmitting}
-                    references={references}
-                    quickInputs={quickInputs}
-                    onQuickInputSelect={selectQuickInput}
-                    onValueChange={onDraftChange && updateDraft}
-                    onFilesAdded={onFilesAdded}
-                    onAttachmentRemove={onAttachmentRemove}
-                    onOpenUri={onOpenUri}
-                    onSend={analytics.send}
-                    onCancel={onCancel}
-                    labels={overrides}
-                  />
-                ) : null))}
+            {interaction ? (
+              interactionSlot != null ? (
+                active && interactionSlot
+              ) : (
+                <VikingBotInteraction
+                  {...interaction}
+                  locale={interaction.locale ?? locale}
+                />
+              )
+            ) : (
+              (composer ??
+              // 省略 draft 表示只读会话，此时不渲染默认输入区。
+              (draft !== undefined ? (
+                <VikingBotComposer
+                  locale={locale}
+                  ref={inputRef}
+                  value={draft}
+                  attachments={attachments}
+                  accept={accept}
+                  disabled={!isAvailable || !active}
+                  disabledReason={disabledReason}
+                  isSending={isSending}
+                  canSendWhileStreaming={canSendWhileStreaming}
+                  isSubmitting={isSubmitting}
+                  references={references}
+                  quickInputs={quickInputs}
+                  onQuickInputSelect={selectQuickInput}
+                  onValueChange={onDraftChange && updateDraft}
+                  onFilesAdded={onFilesAdded}
+                  onAttachmentRemove={onAttachmentRemove}
+                  onOpenUri={onOpenUri}
+                  onSend={analytics.send}
+                  onCancel={onCancel}
+                  labels={overrides}
+                />
+              ) : null))
+            )}
           </VikingBotRegion>
         </div>
       </LocaleProvider>

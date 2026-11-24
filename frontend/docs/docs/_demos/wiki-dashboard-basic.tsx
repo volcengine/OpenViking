@@ -19,8 +19,8 @@ export default function WikiDashboardBasic() {
         file: 'Wiki 文件',
         empty: '无冲突示例',
         show: '显示冲突',
-        hidePath: '隐藏文档路径',
-        showPath: '显示文档路径',
+        hideOpenFile: '隐藏打开文件图标',
+        showOpenFile: '显示打开文件图标',
         showActions: '显示宿主操作',
         hideActions: '隐藏宿主操作',
         edit: '模拟编辑冲突',
@@ -35,8 +35,8 @@ export default function WikiDashboardBasic() {
         file: 'Wiki file',
         empty: 'No-conflict example',
         show: 'Show conflicts',
-        hidePath: 'Hide document path',
-        showPath: 'Show document path',
+        hideOpenFile: 'Hide open-file icon',
+        showOpenFile: 'Show open-file icon',
         showActions: 'Show host actions',
         hideActions: 'Hide host actions',
         edit: 'Simulate conflict editing',
@@ -46,7 +46,7 @@ export default function WikiDashboardBasic() {
       };
   const [uri, setUri] = useState(DEMO_WIKI);
   const [empty, setEmpty] = useState(false);
-  const [showPath, setShowPath] = useState(true);
+  const [showOpenFile, setShowOpenFile] = useState(true);
   const [openedPath, setOpenedPath] = useState('');
   const [showActions, setShowActions] = useState(true);
   const [selectedAction, setSelectedAction] = useState('');
@@ -67,7 +67,7 @@ export default function WikiDashboardBasic() {
             ? { conflicts: [] }
             : {
                 ...wikiViewData,
-                path: showPath ? wikiViewData.path : undefined,
+                path: showOpenFile ? wikiViewData.path : undefined,
               },
           defineActions: showActions
             ? (conflict) => [
@@ -127,9 +127,9 @@ export default function WikiDashboardBasic() {
               size="small"
               type="default"
               htmlType="button"
-              onClick={() => setShowPath(!showPath)}
+              onClick={() => setShowOpenFile(!showOpenFile)}
             >
-              {showPath ? text.hidePath : text.showPath}
+              {showOpenFile ? text.hideOpenFile : text.showOpenFile}
             </Button>{' '}
             <Button
               size="small"

@@ -18,6 +18,7 @@ from heapq import nlargest
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from openviking.concurrency import AsyncSemaphore
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.resource.watch_pagination import WatchPageQuery
 from openviking.resource.watch_storage import (
     WATCH_TASK_STORAGE_BAK_URI,
@@ -107,7 +108,7 @@ class FileWatchStore(WatchStore):
                 return
             await self._load()
             self._initialized = True
-            logger.info("[FileWatchStore] Initialized with %d tasks", len(self._rows))
+            logger.info("Initialized with %d tasks", len(self._rows))
 
     async def close(self) -> None:
         return None
@@ -127,7 +128,7 @@ class FileWatchStore(WatchStore):
         except NotFoundError:
             return None
         except Exception as exc:
-            logger.warning("[FileWatchStore] Failed to read %s: %s", uri, exc)
+            logger.info("Failed to read %s: %s", safe_uri_for_log(str(uri)), type(exc).__name__)
             return None
         if not content or not content.strip():
             return None
@@ -136,15 +137,18 @@ class FileWatchStore(WatchStore):
             if not isinstance(data, dict):
                 raise ValueError("storage must be a JSON object")
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning("[FileWatchStore] Invalid %s JSON: %s", uri, exc)
+            logger.info("Invalid %s JSON: %s", safe_uri_for_log(str(uri)), type(exc).__name__)
             return None
         return data
 
     async def _load(self) -> None:
         data = await self._read(self.STORAGE_URI)
         recovered = data is None and (data := await self._read(self.STORAGE_BAK_URI)) is not None
+        if recovered:
+            logger.info("Watch store recovered from backup")
         normalized = recovered
         rows: dict[str, _Row] = {}
+        skipped_tasks = 0
         for item in (data or {}).get("tasks", []):
             try:
                 if item.get("deleted"):
@@ -161,8 +165,11 @@ class FileWatchStore(WatchStore):
                     normalized = True
                 row = _Row.from_storage_dict(item)
             except Exception as exc:
+                skipped_tasks += 1
                 task_id = item.get("task_id") if isinstance(item, dict) else None
-                logger.warning("[FileWatchStore] Failed to load task %s: %s", task_id, exc)
+                logger.debug(
+                    "Failed to load task %s: %s", short_hash(str(task_id)), type(exc).__name__
+                )
                 continue
             task = row.task
             if not task.is_active:
@@ -177,6 +184,8 @@ class FileWatchStore(WatchStore):
                 task.next_execution_time = task.calculate_next_execution_time()
                 normalized = True
             rows[task.task_id] = row
+        if skipped_tasks:
+            logger.info("Watch store load incomplete skipped=%d degraded=true", skipped_tasks)
         if normalized:
             await self._save(rows)
         self._rows = {}
@@ -217,10 +226,16 @@ class FileWatchStore(WatchStore):
                         await self._fs.rm(bak_uri, ctx=ctx, auto_pathlock=False)
                 except Exception as exc:
                     # Rename can replace the backup even if its removal failed.
-                    logger.warning("[FileWatchStore] Failed to remove %s backup: %s", bak_uri, exc)
+                    logger.info(
+                        "Failed to remove %s backup: %s",
+                        safe_uri_for_log(str(bak_uri)),
+                        type(exc).__name__,
+                    )
                 await self._rename(uri, bak_uri)
         except Exception as exc:
-            logger.warning("[FileWatchStore] Failed to rotate %s backup: %s", uri, exc)
+            logger.info(
+                "Failed to rotate %s backup: %s", safe_uri_for_log(str(uri)), type(exc).__name__
+            )
         await self._rename(tmp_uri, uri)
 
     async def _rename(self, old_uri: str, new_uri: str) -> None:

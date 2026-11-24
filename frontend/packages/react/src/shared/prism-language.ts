@@ -118,7 +118,7 @@ const dependencies: Record<string, string[]> = {
   jsx: ['markup', 'javascript'],
   tsx: ['jsx', 'typescript'],
   typescript: ['javascript'],
-  markdown: ['markup'],
+  markdown: ['markup', 'yaml'],
   less: ['css'],
   scss: ['css'],
   objectivec: ['c'],
@@ -170,11 +170,24 @@ export async function loadPrismLanguage(
   )
     await loaders[language]!();
   const grammar = Prism.languages[language];
-  return Object.hasOwn(Prism.languages, language) &&
-    grammar &&
-    typeof grammar === 'object'
-    ? grammar
-    : undefined;
+  if (
+    !Object.hasOwn(Prism.languages, language) ||
+    !grammar ||
+    typeof grammar !== 'object'
+  )
+    return;
+
+  // Markdown captures the nested YAML grammar when registered. Fill the missing
+  // slot in place if FileViewer registered Markdown before YAML was available.
+  if (language === 'markdown' && 'front-matter-block' in grammar) {
+    const block = grammar['front-matter-block'];
+    const rules = 'inside' in block ? block.inside : undefined;
+    if (rules && 'front-matter' in rules) {
+      const frontMatter = rules['front-matter'];
+      if ('inside' in frontMatter) frontMatter.inside ??= Prism.languages.yaml;
+    }
+  }
+  return grammar;
 }
 
 export { Prism };

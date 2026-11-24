@@ -10,6 +10,8 @@ import {
   act,
   ok,
   settle,
+  button,
+  click,
 } from './helpers/preview-native-dom.mjs';
 
 test('compile required-field validation uses one Toast without making a write request', async () => {
@@ -25,8 +27,11 @@ test('compile required-field validation uses one Toast without making a write re
   const view = await mount(tree(fetch, target));
   try {
     await openAction('Compile configuration');
+    await click(document.querySelector('[aria-label="Update schedule"]'));
+    const edit = () =>
+      document.querySelector('.ov-compile-config [role="dialog"]');
     await act(async () =>
-      workflow()
+      edit()
         .querySelector('form')
         .dispatchEvent(
           new window.Event('submit', { bubbles: true, cancelable: true }),
@@ -46,7 +51,8 @@ test('compile required-field validation uses one Toast without making a write re
       Boolean(document.querySelector('.ov-notification--error')),
       false,
     );
-    assert.equal(workflow().querySelector('input').value, '');
+    assert.equal(edit().querySelector('input:checked').value, 'none');
+    await click(button('Cancel', edit()));
   } finally {
     await view.unmount();
   }

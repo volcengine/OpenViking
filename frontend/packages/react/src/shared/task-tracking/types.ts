@@ -32,8 +32,12 @@ export interface TaskSource {
   owners: number;
 }
 
+export type TaskOrigin = 'command' | 'memory-commit' | 'tool';
+
 export interface TrackedTask extends TaskSnapshot {
   key: string;
+  /** All producers that reference this scope/task pair share one query. */
+  origins: readonly TaskOrigin[];
 }
 
 export const isTaskTerminal = (status?: TaskStatus) =>

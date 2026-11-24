@@ -22,6 +22,7 @@ function WikiDashboardContent(props: WikiDashboardProps) {
     locale: localeProp,
     onOpenUri,
     onOpenDashboard,
+    onEditConflict,
     defineActions,
     labels,
     loading,
@@ -100,6 +101,7 @@ function WikiDashboardContent(props: WikiDashboardProps) {
                 conflict={conflict}
                 path={data?.path}
                 labels={t}
+                onEditConflict={onEditConflict}
                 onOpenUri={
                   onOpenUri
                     ? () => {
@@ -144,6 +146,7 @@ function WikiDashboardContent(props: WikiDashboardProps) {
           </ul>
         ) : (
           <DashboardState
+            illustration="documents"
             state={{ loading, error, onRetry }}
             empty={t.empty}
             loading={t.loading}

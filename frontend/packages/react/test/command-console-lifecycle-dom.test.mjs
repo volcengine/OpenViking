@@ -132,7 +132,7 @@ test('failed clipboard writes keep the copy action and do not report success', a
   }
 });
 
-test('literal resource punctuation survives code, quoted arguments and callback activation', async () => {
+test('literal resource punctuation survives output links while editor text stays plain', async () => {
   for (const name of ['a;b.md', 'a,b.md', 'a(b).md', 'a[b].md', 'a.md.']) {
     const uri = `viking://resources/${name}`;
     const opened = [];
@@ -149,12 +149,16 @@ test('literal resource punctuation survives code, quoted arguments and callback 
     });
     try {
       const links = [...view.container.querySelectorAll('a')];
-      assert.equal(links.length, 4);
+      assert.equal(links.length, 3);
       for (const link of links) {
         assert.equal(link.getAttribute('href'), uri);
         await click(link);
       }
-      assert.deepEqual(opened, Array(4).fill(uri));
+      assert.deepEqual(opened, Array(3).fill(uri));
+      assert.equal(
+        view.container.querySelector('.ov-command-console__input-mirror a'),
+        null,
+      );
       assert.equal(view.input.value, value);
     } finally {
       await view.dispose();

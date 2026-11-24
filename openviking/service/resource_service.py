@@ -28,7 +28,7 @@ from openviking.connector.auth import (
     validate_feishu_auth_args,
 )
 from openviking.core.namespace import classify_uri, is_content_root_uri
-from openviking.observability.http_error_context import sanitize_public_http_error
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.network import (
@@ -323,19 +323,11 @@ class ResourceService:
         if not execution_task_id or self._watch_manager is None:
             return
         applied = await self._watch_manager.settle(task_id, execution_task_id)
-        sanitized_error = (
-            sanitize_public_http_error(code="WATCH_EXECUTION_FAILED", message=error).message
-            if error
-            else None
-        )
         logger.info(
-            "[ResourceService] Watch first round recorded: watch_task_id=%s status=%s "
-            "execution_task_id=%s applied=%s%s",
-            task_id,
-            status,
-            execution_task_id,
+            "Watch execution recorded applied=%s%s",
             applied,
-            f" error={sanitized_error}" if sanitized_error else "",
+            " error=[REDACTED]" if error else "",
+            extra={"task_id": task_id, "task_status": status, "target_id": execution_task_id},
         )
 
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -512,8 +504,28 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(
-                        f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
+                    log_failure = (
+                        logger.info
+                        if isinstance(e, OpenVikingError)
+                        and e.code
+                        in {
+                            "INVALID_ARGUMENT",
+                            "NOT_FOUND",
+                            "PERMISSION_DENIED",
+                            "UNAUTHENTICATED",
+                            "FAILED_PRECONDITION",
+                            "ALREADY_EXISTS",
+                            "CONFLICT",
+                            "RESOURCE_EXHAUSTED",
+                        }
+                        else logger.error
+                    )
+                    log_failure(
+                        "Watch task creation failed",
+                        extra={
+                            "target_id": safe_uri_for_log(watch_to),
+                            "error_type": type(e).__name__,
+                        },
                     )
                     raise
             elif to:
@@ -522,7 +534,10 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
+                    logger.info(
+                        "Watch task cancellation skipped after failure",
+                        extra={"target_id": safe_uri_for_log(to), "error_type": type(e).__name__},
+                    )
 
     async def _normalize_add_resource_args(
         self,
@@ -736,10 +751,9 @@ class ResourceService:
             )
             return True
         except Exception as exc:
-            logger.warning(
-                "[ResourceService] Failed to clean empty reserved target %s: %s",
-                root_uri,
-                exc,
+            logger.info(
+                "Empty reserved target cleanup failed; retaining target",
+                extra={"target_id": safe_uri_for_log(root_uri), "error_type": type(exc).__name__},
             )
             return False
 
@@ -2594,7 +2608,10 @@ class ResourceService:
             )
             result["memory_linking"] = link_result
         except Exception as exc:
-            logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
+            logger.info(
+                "Resource ingestion completed without reason memory linking",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
     @staticmethod
@@ -2680,7 +2697,10 @@ class ResourceService:
             initial_run_id=initial_run_id,
             lease_ref=lease_ref,
         )
-        logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
+        logger.info(
+            "Watch task created",
+            extra={"task_id": task.task_id, "target_id": safe_uri_for_log(to_uri)},
+        )
         return task
 
     async def _handle_watch_task_cancellation(self, to_uri: str, ctx: RequestContext) -> None:
@@ -2703,8 +2723,9 @@ class ResourceService:
             role=str(ctx.role),
         )
         if existing_task and ConnectorDelegate.is_watch_auth_state(existing_task.auth_state):
-            logger.info(
-                f"[ResourceService] Skip deactivating Connector watch task {existing_task.task_id} for {to_uri}"
+            logger.debug(
+                "Connector watch task deactivation skipped",
+                extra={"task_id": existing_task.task_id, "target_id": safe_uri_for_log(to_uri)},
             )
             return
         if existing_task:
@@ -2717,7 +2738,8 @@ class ResourceService:
                 invalidate_source_checkpoint=True,
             )
             logger.info(
-                f"[ResourceService] Deactivated watch task {existing_task.task_id} for {to_uri}"
+                "Watch task deactivated",
+                extra={"task_id": existing_task.task_id, "target_id": safe_uri_for_log(to_uri)},
             )
 
     async def add_skill(
@@ -2733,6 +2755,8 @@ class ResourceService:
         source_metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+        before_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -2806,6 +2830,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                     else:
                         result = await self._skill_processor.process_skill(
@@ -2819,6 +2845,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                 if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                     result["root_uri"] = result["uri"]
@@ -2953,20 +2981,36 @@ class ResourceService:
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
-    async def wait_processed(self) -> Dict[str, Any]:
+    async def wait_processed(self, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
 
         Returns:
             Queue status
         """
         qm = get_queue_manager()
-        status = await qm.wait_complete()
+        if ctx is None:
+            status = await qm.wait_complete()
+        else:
+            from openviking.service.task_tracker import get_task_tracker
+            from openviking_cli.exceptions import UnavailableError
+
+            tracker = get_task_tracker()
+            try:
+                while await tracker.has_work(account_id=ctx.account_id, exclude_inline=True):
+                    await asyncio.sleep(5)
+                status = await qm.check_status(account_id=ctx.account_id)
+            except Exception as exc:
+                logger.exception("Account wait task-store query failed")
+                raise UnavailableError("task store", "account wait query failed") from exc
         return {
             name: {
                 "processed": s.processed,
                 "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
-                "errors": [{"message": e.message} for e in s.errors],
+                "errors": [
+                    {"message": e.message if ctx is None else "Queue processing error"}
+                    for e in s.errors
+                ],
             }
             for name, s in status.items()
         }

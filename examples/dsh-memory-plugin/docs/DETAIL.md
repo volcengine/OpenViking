@@ -43,6 +43,8 @@ To check the install from a terminal (with Desktop quit):
 "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop ls
 ```
 
+If something is off, ask the agent to run the `ov-memory-doctor` skill, or run `node ~/.dsh/profiles/desktop/node_modules/@openviking/dsh-memory-plugin/scripts/ov-memory-doctor.mjs`. It checks the install, the configuration, and the server connection, and lists a fix for every problem it finds.
+
 ## Good to know
 
 - **No settings page.** Configure the plugin through `ovcli.conf` or `OPENVIKING_*` variables. Behavior options can also go in `~/.dsh/profiles/desktop/cordis.patch.yml` under `openviking-memory-runtime`. The recovery dialog's "Disable third-party plugins, back up profile patch, and restart" resets the profile's plugins and moves that file aside, so keep lasting settings in `ovcli.conf`, and enable the plugin again afterwards.

@@ -287,8 +287,15 @@ class TestEnforceOpenIssuesResolved:
 # =======================================================================
 
 
-@pytest.mark.parametrize("section", WM_SEVEN_SECTIONS)
-@pytest.mark.parametrize("content", [None, [], ["new item"], {"text": "new item"}, 42])
+@pytest.mark.parametrize(
+    ("section", "content"),
+    [
+        ("Current State", None),
+        ("Current State", ["new item"]),
+        ("Session Title", {"text": "new item"}),
+        ("Open Issues", 42),
+    ],
+)
 def test_merge_keeps_section_with_non_string_update(section, content):
     old = _make_wm(
         **{

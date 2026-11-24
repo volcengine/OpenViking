@@ -1,21 +1,23 @@
 import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
-import type { ReactNode } from 'react';
-import type { CommandConsoleRecord } from '../../components/command-console/index.js';
+import type { ReactNode, RefObject } from 'react';
 import { ConsoleIcon } from '../../icons/console-icons.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { ConsoleHistory } from './console-history.js';
-import type { ConsoleMode } from './types.js';
+import type { ConsoleHistoryEntry, ConsoleMode } from './types.js';
 import type { consoleLabels } from './labels.js';
+import { useConsoleFocusRecovery } from './use-console-focus-recovery.js';
 
 export function ConsoleToolbar({
   mode,
   modes,
   panelId,
+  commandPanelRef,
+  commandInputRef,
   locale,
   labels,
-  records,
+  history,
   isExecuting,
   onModeChange,
   onClear,
@@ -26,9 +28,11 @@ export function ConsoleToolbar({
   mode: ConsoleMode;
   modes: readonly ConsoleMode[];
   panelId: string;
+  commandPanelRef: RefObject<HTMLDivElement | null>;
+  commandInputRef: RefObject<HTMLTextAreaElement | null>;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
-  records: readonly CommandConsoleRecord[];
+  history: readonly ConsoleHistoryEntry[];
   isExecuting: boolean;
   onModeChange: (mode: ConsoleMode) => void;
   onClear: () => void;
@@ -37,10 +41,15 @@ export function ConsoleToolbar({
   conversationActions?: ReactNode;
 }) {
   const [sessionVersion, setSessionVersion] = useState(0);
+  const modeControlsRef = useConsoleFocusRecovery(
+    commandPanelRef,
+    commandInputRef,
+  );
   return (
     <div className="ov-console__toolbar">
       {modes.length > 1 ? (
         <div
+          ref={modeControlsRef}
           className="ov-console__modes"
           role="group"
           aria-label={labels.mode}
@@ -69,7 +78,7 @@ export function ConsoleToolbar({
         <div className="ov-console__actions">
           <ConsoleHistory
             key={sessionVersion}
-            records={records}
+            history={history}
             isExecuting={isExecuting}
             locale={locale}
             labels={labels}

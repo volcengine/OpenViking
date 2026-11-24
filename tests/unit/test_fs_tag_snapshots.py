@@ -76,8 +76,16 @@ async def test_native_versions_page_without_global_metadata_access(snapshot_serv
     vfs.show.assert_not_awaited()
 
 
-@pytest.mark.parametrize("state,count", [("unfixed", 1), ("fixed", 0), (None, 0)])
-@pytest.mark.parametrize("stale", ["none", "commit", "content"])
+@pytest.mark.parametrize(
+    "stale,state,count",
+    [
+        pytest.param("none", "unfixed", 1, id="restore-unfixed"),
+        pytest.param("none", "fixed", 0, id="restore-fixed"),
+        pytest.param("none", None, 0, id="restore-without-history"),
+        pytest.param("commit", None, 0, id="stale-commit"),
+        pytest.param("content", None, 0, id="stale-content"),
+    ],
+)
 async def test_file_restore_rechecks_commit_under_content_lock(
     snapshot_service, stale, state, count
 ):

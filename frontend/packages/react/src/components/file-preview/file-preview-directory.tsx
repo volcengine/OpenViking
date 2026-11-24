@@ -1,6 +1,7 @@
 import { levelToFileTab } from './file-preview-source.js';
 import type { Locale } from '../../shared/locale.js';
-import { useState } from 'react';
+import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
+import { useId, useState } from 'react';
 
 import type {
   ViewerHandle,
@@ -17,7 +18,7 @@ import {
 } from './file-preview-transition.js';
 import { LoadingState } from './file-preview-state.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
-import { useLevelIndicator } from './use-level-indicator.js';
+import { TabList } from '../../shared/primitives/tabs/tab-list.js';
 import type {
   FilePreviewDirectoryTab,
   FilePreviewLabels,
@@ -50,6 +51,7 @@ export interface FilePreviewDirectoryBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
+  onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   onCancelEditing: () => void;
 }
 
@@ -69,6 +71,7 @@ export function FilePreviewDirectoryBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
+  onLinkClick,
   onCancelEditing,
 }: FilePreviewDirectoryBodyProps) {
   // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
@@ -80,48 +83,10 @@ export function FilePreviewDirectoryBody({
   const activeKey = tab.activeLevelKey ?? internalKey;
   const fileTab =
     levelToFileTab(tab, activeKey) ?? levelToFileTab(tab, tab.levels[0].key);
-  const { ref: tabsRef, indicator } = useLevelIndicator(
-    '[aria-selected="true"]',
-    activeKey,
-    tab.levels.length,
-  );
-
+  const tabsId = useId();
   const changeLevel = (key: string) => {
     if (tab.activeLevelKey === undefined) setInternalKey(key);
     tab.onActiveLevelChange?.(key);
-  };
-
-  // 层级切换同样用 roving tabindex：未选中的一级 `tabIndex=-1`，只有方向键能
-  // 把焦点移过去。缺了它，键盘用户 Tab 到当前层级后就直接进入正文，永远切不到
-  // 另一级摘要——与页签行上的问题完全一样。
-  //
-  // Level switching uses a roving tabindex too: unselected levels are `tabIndex=-1`
-  // and only the arrow keys reach them. Without it a keyboard user tabs to the
-  // current level and straight into the body, never reaching the other summary
-  // level — exactly the problem the tab row already solves.
-  const onLevelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
-    if (!keys.includes(event.key)) return;
-    const buttons = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        '[role="tab"]:not(:disabled)',
-      ),
-    );
-    if (buttons.length === 0) return;
-    const current = buttons.indexOf(event.target as HTMLButtonElement);
-    const next =
-      event.key === 'Home'
-        ? 0
-        : event.key === 'End'
-          ? buttons.length - 1
-          : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) %
-            buttons.length;
-    const target = buttons[next];
-    if (!target) return;
-    event.preventDefault();
-    target.focus();
-    const key = tab.levels[next]?.key;
-    if (key !== undefined) changeLevel(key);
   };
 
   // 层级 key 对不上时 `levelToFileTab` 会返回 undefined；此时不渲染标题行与
@@ -165,38 +130,24 @@ export function FilePreviewDirectoryBody({
       {/* 同级视图切换：下划线页签，位于标题行与正文之间。 */}
       {/* Sibling switching: underlined tabs between the header and the body. */}
       {tab.levels.length > 1 ? (
-        <div
+        <TabList
+          id={tabsId}
+          label={text.viewSwitch}
+          items={tab.levels}
+          activeKey={activeKey}
           className="ov-file-preview__levels"
-          role="tablist"
-          ref={tabsRef}
-          tabIndex={-1}
-          onKeyDown={onLevelKeyDown}
-        >
-          {tab.levels.map((level) => (
-            <button
-              key={level.key}
-              type="button"
-              role="tab"
-              aria-selected={level.key === activeKey}
-              tabIndex={level.key === activeKey ? 0 : -1}
-              className="ov-file-preview__level"
-              data-active={level.key === activeKey || undefined}
-              onClick={() => changeLevel(level.key)}
-            >
-              {level.label}
-            </button>
-          ))}
-          <span
-            aria-hidden="true"
-            className="ov-file-preview__level-indicator"
-            style={{
-              transform: `translateX(${indicator.left}px)`,
-              width: indicator.width,
-            }}
-          />
-        </div>
+          tabClassName="ov-file-preview__level"
+          indicatorClassName="ov-file-preview__level-indicator"
+          onChange={changeLevel}
+        />
       ) : null}
-      <div className="ov-file-preview__body">
+      <div
+        className="ov-file-preview__body"
+        role={tab.levels.length > 1 ? 'tabpanel' : undefined}
+        aria-labelledby={
+          tab.levels.length > 1 ? `${tabsId}-${activeKey}` : undefined
+        }
+      >
         <FilePreviewTransition
           identity={fileTab.key}
           tab={fileTab}
@@ -216,6 +167,8 @@ export function FilePreviewDirectoryBody({
               onViewModeChange={onViewModeChange}
               onHandleChange={onHandleChange}
               onViewModesChange={onViewModesChange}
+              onLinkClick={onLinkClick}
+              directoryLinks={tab.operations?.openUri ? 'resources' : 'anchors'}
               onCancelEditing={onCancelEditing}
               onStateChange={(state) =>
                 layer.onProbeStatus(probeStatusOf(state))

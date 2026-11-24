@@ -29,6 +29,7 @@ class Message:
         Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     ] = None
     source_message_ids: Optional[List[str]] = None
+    interrupted: bool = False
 
     @property
     def content(self) -> str:
@@ -94,6 +95,8 @@ class Message:
             data["message_kind"] = self.message_kind
         if self.source_message_ids is not None:
             data["source_message_ids"] = list(self.source_message_ids)
+        if self.role == "assistant" and self.interrupted:
+            data["interrupted"] = True
         return data
 
     def _part_to_dict(self, part: Part) -> dict:
@@ -193,6 +196,7 @@ class Message:
             created_at=data.get("created_at"),
             turn_id=data.get("turn_id"),
             message_kind=data.get("message_kind"),
+            interrupted=data.get("role") == "assistant" and data.get("interrupted") is True,
             source_message_ids=(
                 list(data.get("source_message_ids"))
                 if isinstance(data.get("source_message_ids"), list)

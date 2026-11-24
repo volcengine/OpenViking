@@ -15,8 +15,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
@@ -71,7 +73,6 @@ _PARSE_ARTIFACT_INTERNAL_NAMES = frozenset(
         ".artifact_manifest.json",
     }
 )
-_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
@@ -146,9 +147,11 @@ class ResourceProcessor:
         """Rewrite text in a temporary parse artifact before planning or persistence."""
         if self._privacy_sanitizer is None:
             return
+        settings = await self._privacy_sanitizer.settings_for_uri(target_root_uri, ctx)
+        if settings is None:
+            return
         from openviking.parse.output import read_artifact_manifest, write_artifact_manifest
         from openviking.utils.content_hash import content_md5
-        from openviking_cli.exceptions import InvalidArgumentError
 
         base = (doc_rel or "").strip("/")
         prefix = f"{base}/" if base else ""
@@ -167,21 +170,12 @@ class ResourceProcessor:
                 if not relative
                 else f"{target_root_uri.rstrip('/')}/{relative}"
             )
-            result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
-            if result.ambiguous_references:
-                raise InvalidArgumentError(
-                    "Resource content contains a Privacy value mapped to multiple fields; "
-                    "insert the intended owner-bound reference explicitly",
-                    details={
-                        "uri": uri,
-                        "candidate_references": [
-                            list(candidates) for candidates in result.ambiguous_references
-                        ],
-                    },
-                )
-            if result.content == content:
+            protected = await self._privacy_sanitizer.sanitize_for_write(
+                content, ctx=ctx, uri=uri, settings=settings
+            )
+            if protected == content:
                 return
-            final_bytes = result.content.encode("utf-8")
+            final_bytes = protected.encode("utf-8")
             await store.write_bytes(artifact_ref, artifact_path, final_bytes)
             manifest[artifact_path] = content_md5(final_bytes)
             changed = True
@@ -546,11 +540,9 @@ class ResourceProcessor:
             n_files, n_dirs, _ = count_tree_entry_kinds(rnfv.new.entries)
             f_files, f_dirs, _ = count_tree_entry_kinds(rnfv.formal.entries)
             logger.debug(
-                "[RNFVSnapshot] %s target=%s artifact_backend=%s root_is_file=%s "
-                "target_preexisting=%s n_files=%d n_dirs=%d f_files=%d f_dirs=%d "
-                "v_records=%d v_levels=%s",
+                "resource snapshot %s target=%s artifact_backend=%s root_is_file=%s target_preexisting=%s new_files=%d new_dirs=%d existing_files=%d existing_dirs=%d vector_records=%d vector_levels=%s",
                 log_correlation(),
-                root_uri,
+                safe_uri_for_log(root_uri),
                 artifact_backend,
                 root_is_file,
                 target_preexisting,
@@ -617,13 +609,13 @@ class ResourceProcessor:
                 duration_seconds=time.perf_counter() - content_commit_started_at,
                 account_id=ctx.account_id,
             )
-            logger.exception(
-                "[ContentTreeCommitFailed] %s target=%s artifact_backend=%s actions=%d error=%s",
+            logger.debug(
+                "content tree commit failed %s target=%s artifact_backend=%s actions=%d error_type=%s",
                 log_correlation(),
-                root_uri,
+                safe_uri_for_log(root_uri),
                 artifact_backend,
                 len(context_plan.content_tree_actions),
-                exc,
+                type(exc).__name__,
             )
             raise
         ResourceIngestionEventDataSource.record_stage(
@@ -651,12 +643,11 @@ class ResourceProcessor:
     def _log_content_tree_commit(
         *, root_uri: str, artifact_backend: str, actions: Any, duration_ms: float
     ) -> None:
-        log = logger.info if actions else logger.debug
-        log(
-            "[ContentTreeCommit] %s target=%s artifact_backend=%s uploaded_files=%d "
+        logger.debug(
+            "content tree committed %s target=%s artifact_backend=%s uploaded_files=%d "
             "created_dirs=%d deleted_paths=%d replaced_kinds=%d duration_ms=%.3f",
             log_correlation(),
-            root_uri,
+            safe_uri_for_log(root_uri),
             artifact_backend,
             sum(action.new_kind == "file" for action in actions),
             sum(action.new_kind == "directory" for action in actions),
@@ -675,11 +666,9 @@ class ResourceProcessor:
         semantic = Counter(entry.semantic_action.value for entry in entries)
         slots = Counter(slot.action.value for entry in entries for slot in entry.index_slots)
         logger.debug(
-            "[ContextUpdatePlan] %s root=%s content=%s semantic=%s direct_index=%s "
-            "index_slots=%s "
-            "semantic_entries=%d execution_roots=%d",
+            "context update planned %s root=%s content=%s semantic=%s direct_index=%s index_slots=%s semantic_entries=%d execution_roots=%d",
             log_correlation(),
-            plan.root_uri,
+            safe_uri_for_log(plan.root_uri),
             dict(content),
             dict(semantic),
             dict(direct),
@@ -699,17 +688,17 @@ class ResourceProcessor:
         created_dirs = sum(action.new_kind == "directory" for action in content_actions)
         if is_initial:
             logger.debug(
-                "[add_resource] %s initial import committed root=%s files=%d dirs=%d",
+                "initial import committed %s root=%s files=%d directories=%d",
                 log_correlation(),
-                root_uri,
+                safe_uri_for_log(root_uri),
                 uploaded_files,
                 created_dirs,
             )
             return
         logger.debug(
-            "[add_resource] %s incremental diff committed root=%s states=%s uploaded=%d",
+            "incremental import committed %s root=%s states=%s uploaded=%d",
             log_correlation(),
-            root_uri,
+            safe_uri_for_log(root_uri),
             dict(states),
             uploaded_files,
         )
@@ -963,10 +952,10 @@ class ResourceProcessor:
                             parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
                         )
                     except Exception as exc:
-                        logger.warning(
-                            "[ResourceProcessor] Failed to clean empty directory temp %s: %s",
-                            parse_result.temp_dir_path,
-                            exc,
+                        logger.info(
+                            "empty directory artifact cleanup failed path=%s error_type=%s",
+                            safe_path_for_log(str(parse_result.temp_dir_path)),
+                            type(exc).__name__,
                         )
                     return result
 
@@ -978,10 +967,10 @@ class ResourceProcessor:
                             parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
                         )
                     except Exception as exc:
-                        logger.warning(
-                            "[ResourceProcessor] Failed to clean incomplete directory temp %s: %s",
-                            parse_result.temp_dir_path,
-                            exc,
+                        logger.info(
+                            "incomplete directory artifact cleanup failed path=%s error_type=%s",
+                            safe_path_for_log(str(parse_result.temp_dir_path)),
+                            type(exc).__name__,
                         )
                     return result
 
@@ -1014,11 +1003,11 @@ class ResourceProcessor:
                 if isinstance(error_meta, dict) and error_meta.get("response_id"):
                     error_message += f" (response_id={error_meta['response_id']})"
                 result["errors"].append(error_message)
-                logger.error(f"[ResourceProcessor] Parse error: {e}")
+                logger.error(
+                    "resource parsing failed error_code=PROCESSING_ERROR error_type=%s",
+                    type(e).__name__,
+                )
                 telemetry.set_error("resource_processor.parse_artifact", "PROCESSING_ERROR", str(e))
-                import traceback
-
-                traceback.print_exc()
                 return result
 
             # parse_result contains:
@@ -1213,10 +1202,10 @@ class ResourceProcessor:
                 try:
                     await artifact_store.cleanup(artifact_ref)
                 except Exception as exc:
-                    logger.warning(
-                        "[ResourceProcessor] Failed to clean committed parse artifact %s: %s",
-                        artifact_ref.root,
-                        exc,
+                    logger.info(
+                        "committed artifact cleanup failed path=%s error_type=%s",
+                        safe_path_for_log(str(artifact_ref.root)),
+                        type(exc).__name__,
                     )
                 artifact_ref = None
             prepared_artifact_ref = artifact_ref.to_dict() if artifact_ref is not None else None
@@ -1437,7 +1426,11 @@ class ResourceProcessor:
                         ):
                             await cleanup_artifact_if_owned()
                     except Exception as exc:
-                        logger.error("Semantic enqueue failed: %s", exc)
+                        (logger.debug if semantic_plan is not None else logger.info)(
+                            "semantic enqueue failed error_type=%s degraded=%s",
+                            type(exc).__name__,
+                            semantic_plan is None,
+                        )
                         if semantic_plan is not None:
                             raise
                         result["warnings"] = [f"Semantic enqueue failed: {exc}"]
@@ -1764,9 +1757,9 @@ class ResourceProcessor:
             )
             completed_actions += len(enqueued_levels)
         logger.debug(
-            "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
+            "direct index actions completed %s root=%s action_counts=%s total=%d",
             log_correlation(),
-            actions[0].uri if actions else "",
+            safe_uri_for_log(actions[0].uri) if actions else "",
             dict(action_counts),
             len(actions),
         )
@@ -1845,14 +1838,7 @@ class ResourceProcessor:
                     continue
                 files.append((entry_uri, str(name), parent.uri))
 
-        config = get_openviking_config().queue_workers.add_resource
-        concurrency = max(
-            1,
-            min(
-                int(config.file_vectorization_concurrency),
-                _MAX_FILE_VECTORIZATION_CONCURRENCY,
-            ),
-        )
+        concurrency = FILE_TASK_CONCURRENCY
 
         async def vectorize(entry_uri: str, name: str, parent_uri: str) -> None:
             file_content = None
@@ -2005,7 +1991,9 @@ class ResourceProcessor:
             )
             return await acquire(path, timeout_secs=timeout)
         except LockAcquisitionError as exc:
-            logger.warning(f"[ResourceProcessor] Failed to acquire resource lock on {path}")
+            logger.info(
+                "resource lock busy; rejecting import path=%s", safe_path_for_log(str(path))
+            )
             raise ResourceBusyError(
                 f"Resource is busy: {uri or path}",
                 uri=uri or path,

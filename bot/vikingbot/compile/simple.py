@@ -13,6 +13,7 @@ from openviking.utils.path_safety import (
 )
 from openviking_cli.exceptions import OpenVikingError
 from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.compile import CompileImageReadTool
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingGrepTool,
@@ -21,7 +22,10 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import CompileFailure, CompileResult
-from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.renderer import (
+    validate_declared_okf_markdown,
+    validate_relative_file_path,
+)
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
@@ -30,6 +34,8 @@ Read individual source URIs directly. For incremental compilation, fully scan fu
 page through the snapshot diff for diff_dirs. Read added/modified sources and update affected
 target content for deleted sources.
 Use small pages and bounded reads so you can inspect complete results.
+For an image source, call openviking_multi_read with its URI and inspect the returned image
+before writing findings or marking its contents unreadable. Listing shows only metadata.
 When a tool fails, use its error to correct the arguments, retry or choose another tool.
 Write completed text files as you go, using paths relative to to. Read relevant existing files
 before changing them and preserve unrelated content. Separate dependent writes into different
@@ -77,6 +83,9 @@ class CompileWriteTool(Tool):
                 old = None
             if old is not None and classify_uri(uri).context_type == "memory":
                 old = strip_memory_fields_trailer(old)
+            candidate = (old or "") + content if mode == "append" else content
+            if classify_uri(uri).context_type == "resource":
+                validate_declared_okf_markdown(uri, candidate.encode("utf-8"))
             if old is not None and (content == old if mode == "replace" else not content):
                 outcome = "unchanged"
             else:
@@ -197,7 +206,10 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     registry = ToolRegistry(config=loop.config)
     roots = [*sources, request.skill, request.to]
     for reader in (VikingListTool, VikingMultiReadTool, VikingGlobTool, VikingGrepTool):
-        registry.register(CompileReadTool(reader(config=loop.config, client=client), roots))
+        tool = reader(config=loop.config, client=client)
+        if isinstance(tool, VikingMultiReadTool):
+            tool = CompileImageReadTool(tool, {})
+        registry.register(CompileReadTool(tool, roots))
     if changes:
         assignment.update({k: changes[k] for k in ("base", "head", "full_dirs", "diff_dirs")})
         if changes["diff_dirs"]:
@@ -234,12 +246,16 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     count = len(result.created) + len(result.updated)
     result.page_count = len(writer.outcomes)
     inspected_source = False
+    write_error = ""
     for call in calls:
+        name = call["tool_name"]
         if not call["execute_success"]:
-            result.warnings.append(str(call["result"])[:300])
+            warning = str(call["result"])[:300]
+            result.warnings.append(warning)
+            if name == writer.name and not write_error:
+                write_error = warning
             continue
         args = call["resolved_args"]
-        name = call["tool_name"]
         resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
         for resource in resources:
             if name == CompileDiffTool.name or (
@@ -271,7 +287,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     elif not writer.outcomes and not (incremental and inspected_source):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
-            "No output or verified incremental no-change result.",
+            write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
     return result

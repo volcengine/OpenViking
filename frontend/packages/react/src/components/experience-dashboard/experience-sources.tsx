@@ -1,55 +1,78 @@
+import { ExperienceQueryState } from './experience-state.js';
+import { experienceTime } from './experience-time.js';
 import { ExperienceTrajectories } from './experience-trajectories.js';
 import type {
   ExperienceDashboardLabels,
+  ExperienceDashboardState,
+  ExperienceSourceGroup,
   ExperienceTrajectory,
 } from './types.js';
 
-/**
- * 「来源追溯」页签：按生成该经验的提交分组，每组默认展开，组内是该次提交涉及的
- * 轨迹时间线。
- *
- * 火山版的分组来自提交记录，这里的契约只给出一组扁平数据（`sources`），因此只
- * 保留一组，折叠交互与视觉规则与火山版一致。
- *
- * The "source trace" tab groups the source trajectories by the commit that produced
- * the experience, each group expanded by default.
- *
- * The console's groups come from commit records; this component's contract supplies
- * one flat list (`sources`), so a single group remains, with the console's
- * disclosure and styling.
- */
 export function ExperienceSources({
-  items,
-  total,
+  items = [],
+  groups,
+  state,
   labels: t,
   locale = 'en-US',
   onOpenUri,
+  onOpenTrajectory,
 }: {
-  items: readonly ExperienceTrajectory[];
-  total?: number;
+  items?: readonly ExperienceTrajectory[];
+  groups?: readonly ExperienceSourceGroup[];
+  state?: ExperienceDashboardState;
   labels: ExperienceDashboardLabels;
   locale?: 'en-US' | 'zh-CN';
   onOpenUri?: (uri: string) => void;
+  onOpenTrajectory?: (
+    trajectory: ExperienceTrajectory,
+    trigger: HTMLButtonElement,
+  ) => void;
 }) {
-  return (
-    <details className="ov-experience-dashboard__source-group" open>
+  if ((groups?.length ?? items.length) === 0)
+    return (
+      <ExperienceQueryState
+        state={state}
+        rows={4}
+        empty={t.emptySource}
+        loading={t.loading}
+        failed={t.failed}
+        retry={t.retry}
+      />
+    );
+  const entries = groups ?? [
+    { id: 'latest', updatedAt: '', trajectories: items },
+  ];
+  return entries.map(({ id, updatedAt, trajectories }, index) => (
+    <details key={id} className="ov-experience-dashboard__source-group" open>
       <summary>
         <span className="ov-experience-dashboard__source-title">
-          <strong>{t.latest}</strong>
+          <strong>
+            {index === 0 ? (
+              t.latest
+            ) : (
+              <>
+                {t.updated}{' '}
+                <time dateTime={updatedAt}>
+                  {experienceTime(updatedAt, locale)}
+                </time>
+              </>
+            )}
+          </strong>
           <ChevronToggle />
         </span>
         <span className="ov-experience-dashboard__source-count">
-          {t.sourceCount.replace('{count}', String(total ?? items.length))}
+          {t.sourceCount.replace('{count}', String(trajectories.length))}
         </span>
       </summary>
       <ExperienceTrajectories
-        items={items}
+        items={trajectories}
         labels={t}
         locale={locale}
         onOpenUri={onOpenUri}
+        onOpenTrajectory={onOpenTrajectory}
       />
     </details>
-  );
+  ));
 }
 
 /**

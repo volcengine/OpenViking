@@ -132,12 +132,12 @@ class TestExtraHeadersViaFactory:
     @pytest.mark.asyncio
     @patch("openviking.models.embedder.openai_embedders.openai.AsyncOpenAI")
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    async def test_factory_uses_configured_provider_for_slow_call_logging(
+    async def test_slow_call_logging_uses_info_and_safe_fields(
         self,
         mock_openai_class,
         mock_async_openai_class,
     ):
-        """Slow-call warnings should log the configured provider, not the transport client mode."""
+        """Slow calls use INFO and safe timing fields without dumping model configuration."""
         mock_openai_class.return_value = _make_mock_client()
 
         async_response = MagicMock(
@@ -157,7 +157,7 @@ class TestExtraHeadersViaFactory:
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
 
         with (
-            patch("openviking.models.embedder.openai_embedders.logger.warning") as mock_warning,
+            patch("openviking.models.embedder.openai_embedders.logger") as mock_logger,
             patch(
                 "openviking.models.embedder.base.time.monotonic",
                 side_effect=[0.0, 0.0, 0.0, 3.2],
@@ -165,10 +165,16 @@ class TestExtraHeadersViaFactory:
         ):
             await embedder.embed_async("hello")
 
-        mock_warning.assert_called_once()
-        call_args = mock_warning.call_args.args
+        mock_logger.info.assert_called_once()
+        mock_logger.warning.assert_not_called()
+        call_args = mock_logger.info.call_args.args
         assert call_args[1] == "OpenAI async embedding"
-        assert call_args[2] == "ollama"
+        assert call_args[2:] == (0.0, 3200.0)
+        assert mock_logger.info.call_args.kwargs["extra"] == {
+            "operation": "OpenAI async embedding",
+            "duration_ms": 3200.0,
+        }
+        assert "nomic-embed-text" not in str(mock_logger.mock_calls)
 
 
 class TestEmbeddingModelConfigExtraHeaders:

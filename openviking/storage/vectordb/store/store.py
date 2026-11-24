@@ -63,25 +63,6 @@ class OpType(Enum):
     DEL = 1  # Delete operation
 
 
-class Op:
-    """Represents a single storage operation.
-
-    Used for batch processing of storage operations.
-    """
-
-    def __init__(self, op_type: OpType, key: str, data: Any):
-        """Initialize a storage operation.
-
-        Args:
-            op_type (OpType): Type of operation (PUT or DEL).
-            key: The key for this operation.
-            data: The data for this operation (relevant for PUT operations).
-        """
-        self.op_type = op_type
-        self.key = key
-        self.data = data
-
-
 class BatchOp:
     """Represents a batch of storage operations on a specific table.
 
@@ -237,19 +218,6 @@ class IMutiTableStore(ABC):
 
         Returns:
             List[Tuple[str, bytes]]: List of (key, value) tuples from the beginning to the ending key.
-
-        Raises:
-            NotImplementedError: If not implemented by subclass.
-        """
-        pass
-
-    @abstractmethod
-    def exec_sequence(self, op: List[Op], table_name: str):
-        """Execute a sequence of operations on a specific table.
-
-        Args:
-            op (List[Op]): List of operations to execute in order.
-            table_name (str): Name of the table to operate on.
 
         Raises:
             NotImplementedError: If not implemented by subclass.

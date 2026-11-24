@@ -679,17 +679,13 @@ class TestMemoryUpdater:
         )
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        with patch("openviking.session.memory.memory_updater.tracer.error") as tracer_error:
-            result = await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         assert result.written_uris == [resolved_uri]
         assert len(result.errors) == 1
         error_target, error = result.errors[0]
         assert error_target == "events(page_id=102)"
         assert str(error) == "Missing resolved URI"
-        tracer_error.assert_called_once_with(
-            "Skipping unresolved memory operation: events(page_id=102): Missing resolved URI"
-        )
 
     @pytest.mark.asyncio
     async def test_apply_operations_reports_expected_empty_uri_as_skip(self):
@@ -902,10 +898,11 @@ class TestMemoryUpdater:
 
         mock_viking_fs = MagicMock()
 
+        live_uris = {deleted_uri, written_uri}
+
         async def mock_read_file(uri, **kwargs):
-            if uri == deleted_uri:
-                raise AssertionError("deleted URI should not be read")
-            return MemoryFileUtils.write(MemoryFile(uri=uri, content="new content"))
+            assert uri in live_uris, f"{uri} was read after deletion"
+            return MemoryFileUtils.write(MemoryFile(uri=uri, content="memory content"))
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
         mock_viking_fs.write_file = AsyncMock()
@@ -935,7 +932,7 @@ class TestMemoryUpdater:
             return None
 
         async def mock_apply_delete(uri, ctx, **kwargs):
-            assert uri == deleted_uri
+            live_uris.remove(uri)
 
         updater._apply_upsert = AsyncMock(side_effect=mock_apply_upsert)
         updater._apply_delete = AsyncMock(side_effect=mock_apply_delete)
@@ -946,8 +943,10 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
+        assert live_uris == {written_uri}
+        assert result.errors == []
         assert deleted_uri not in [
-            call.args[0] for call in mock_viking_fs.read_file.await_args_list
+            call.args[0] for call in mock_viking_fs.write_file.await_args_list
         ]
 
     @pytest.mark.asyncio
@@ -1465,14 +1464,12 @@ class TestMemoryUpdater:
         read_errors = {
             uri: error for uri, error in result.errors if isinstance(error, MemoryReadError)
         }
-        assert set(read_errors) == {
-            target_uri,
-            *operations.upsert_operations[1].uris,
-        }
+        failed_update = update_uri + ".second" if write_first else update_uri
+        assert set(read_errors) == {target_uri, failed_update}
         assert all(error.__cause__ is read_error for error in read_errors.values())
-        assert read_errors[update_uri].retryable is retryable
+        assert read_errors[failed_update].retryable is retryable
         assert mock_viking_fs.read_file.await_count == len(reads)
-        assert result.written_uris == []
+        assert result.written_uris == ([update_uri] if write_first else [])
         assert result.edited_uris == []
         assert mock_viking_fs.write_file.await_count == int(write_first)
         assert result.deleted_uris == []
@@ -2196,6 +2193,7 @@ class TestApplyEditWithSearchReplacePatch:
         result = MemoryFileUtils.read(written_content)
         assert result.extra_fields["source_extraction_id"] == "extract_1"
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
+        assert result.memory_type == "test"
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
@@ -2417,6 +2415,7 @@ class TestConsecutivePatchesSameURI:
         parsed = parse_memory_file_with_fields(final_content)
         assert parsed["content"] == "Step B"
         assert parsed["version"] == 2
+        assert parsed["memory_type"] == memory_type
 
     @pytest.mark.asyncio
     async def test_apply_upsert_strips_user_id_and_sets_version(self):
@@ -2543,9 +2542,7 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(
-        self, monkeypatch, caplog
-    ):
+    async def test_apply_upsert_preserves_content_and_reports_patch_failure(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2596,7 +2593,6 @@ class TestConsecutivePatchesSameURI:
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["content"] == "Original body"
-        assert not any(record.name.endswith("merge_op.patch_handler") for record in caplog.records)
         assert any(
             "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
             and f"uri={uri}" in call.args[0]

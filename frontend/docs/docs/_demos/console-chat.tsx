@@ -1,9 +1,13 @@
 import { Select, SelectOption } from '#demo-controls';
 import { useMemo, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
+import { OpenVikingProvider } from '@openviking/react/client';
 import { Console } from '@openviking/react/modules/console';
 import '@openviking/react/modules/console/style.css';
 import { botDemoService } from '#bot-demo-service';
+import { consoleTransport } from '#console-transport';
+
+const transport = consoleTransport();
 
 export default function ConsoleChat() {
   const [edition, setEdition] = useState<'native' | 'commercial'>('native');
@@ -29,13 +33,15 @@ export default function ConsoleChat() {
           </SelectOption>
         </Select>
       </label>
-      <div style={{ height: 640 }}>
-        <Console
-          locale={zh ? 'zh-CN' : 'en-US'}
-          scopeKey={edition}
-          chatOptions={{ service }}
-        />
-      </div>
+      <OpenVikingProvider fetch={transport}>
+        <div style={{ height: 640 }}>
+          <Console
+            locale={zh ? 'zh-CN' : 'en-US'}
+            scopeKey={edition}
+            chatOptions={{ service }}
+          />
+        </div>
+      </OpenVikingProvider>
     </>
   );
 }

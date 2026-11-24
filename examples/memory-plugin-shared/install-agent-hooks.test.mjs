@@ -35,6 +35,8 @@ function hookCommands(value, out = []) {
   return out;
 }
 
+const HOST_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search", "ov-memory-doctor"];
+
 function writeJson(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -54,6 +56,23 @@ function runInstaller(home, args, extraEnv = {}, script = installer) {
     },
     encoding: "utf8",
   });
+}
+
+// What the installed doctor, given no client name, makes of its own install.
+function doctorInstall(home, script, extraEnv = {}) {
+  const run = spawnSync(process.execPath, [script, "--offline", "--json"], {
+    cwd: home,
+    // Only node on PATH, so the `<client> --version` probe starts no real host.
+    env: { ...process.env, HOME: home, PATH: dirname(process.execPath), ...extraEnv },
+    encoding: "utf8",
+  });
+  const report = JSON.parse(run.stdout);
+  const findings = report.sections.find((section) => section.title === "Plugin install").findings;
+  return {
+    client: report.resolved.client,
+    problems: findings.filter((finding) => ["fail", "warn"].includes(finding.level)).map((finding) => finding.title),
+    notes: findings.filter((finding) => finding.level === "info").map((finding) => finding.title),
+  };
 }
 
 function runInstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
@@ -143,8 +162,10 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     assert.deepEqual(manifest.hooks.map((hook) => hook.event), [
       "SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact", "SessionEnd", "Interrupt",
     ]);
-    assert.equal(manifest.hooks[0].env.OPENVIKING_PENDING_REPLAY_LIMIT, "2");
     assert.match(manifest.mcpServers.openviking.args[0], /agent-integrations\/kimicode\/servers\/mcp-proxy\.mjs$/);
+    // Kimi Code discovers no skills directory by default; the manifest names it.
+    assert.equal(manifest.skills, "./skills/");
+    for (const skill of HOST_SKILLS) assert.ok(existsSync(join(root, "skills", skill, "SKILL.md")), skill);
     assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
     assert.ok(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
     assert.equal(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "install")), false);
@@ -157,6 +178,25 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     const registry = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
     assert.deepEqual(registry.plugins.map((plugin) => plugin.id).sort(), ["openviking-memory", "third-party"]);
     assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "kimicode", "lib", "install", "kimicode-plugin.mjs")));
+    const kimiDoctor = join(root, "agent-integrations", "kimicode", "scripts", "ov-memory-doctor.mjs");
+    const kimiReport = doctorInstall(home, kimiDoctor);
+    assert.equal(kimiReport.client, "kimicode");
+    assert.deepEqual(kimiReport.problems, []);
+    writeJson(join(home, ".kimi-code", "plugins", "installed.json"), {
+      ...registry,
+      plugins: registry.plugins.map((plugin) => (plugin.id === "openviking-memory" ? { ...plugin, enabled: false } : plugin)),
+    });
+    assert.deepEqual(doctorInstall(home, kimiDoctor).problems, ["Kimi Code has not loaded this plugin"]);
+    // An upgrade keeps that choice and says so.
+    const upgraded = runInstaller(home, [
+      "--harness", "kimicode", "--source", "dev", "--lang", "en",
+      "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    ]);
+    assert.equal(upgraded.status, 0, `${upgraded.stdout}\n${upgraded.stderr}`);
+    assert.match(`${upgraded.stdout}${upgraded.stderr}`, /kimicode: the plugin is switched off in Kimi Code and stays off/);
+    const kept = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
+    assert.equal(kept.plugins.find((plugin) => plugin.id === "openviking-memory").enabled, false);
+    writeJson(join(home, ".kimi-code", "plugins", "installed.json"), registry);
 
     const removed = runInstaller(home, ["--harness", "kimicode", "--uninstall", "--yes"]);
     assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
@@ -233,8 +273,21 @@ exit 0
     const installAt = commands.indexOf("plugins install openviking-memory@openviking -s user");
     assert.ok(removeAt !== -1 && removeAt < addAt && addAt < installAt, commands.join("\n"));
 
+    const qoderDoctor = join(root, "agent-integrations", "qoder", "scripts", "ov-memory-doctor.mjs");
+    const doctorEnv = { QODER_CONFIG_DIR: qoderHome };
+    assert.deepEqual(doctorInstall(home, qoderDoctor, doctorEnv).problems, ["Qoder CLI has not loaded this plugin"]);
     const cached = join(qoderHome, "plugins", "cache", "openviking", "openviking-memory", plugin.version);
     mkdirSync(cached, { recursive: true });
+    const qoderReport = doctorInstall(home, qoderDoctor, doctorEnv);
+    assert.equal(qoderReport.client, "qoder");
+    assert.deepEqual(qoderReport.problems, []);
+    // Qoder marks the cached copy on uninstall instead of deleting it.
+    writeFileSync(join(cached, ".orphaned_at"), "1");
+    assert.deepEqual(doctorInstall(home, qoderDoctor, doctorEnv).problems, ["Qoder CLI has not loaded this plugin"]);
+    rmSync(join(cached, ".orphaned_at"));
+    writeJson(join(qoderHome, "settings.json"), { enabledPlugins: { "openviking-memory@openviking": false } });
+    assert.deepEqual(doctorInstall(home, qoderDoctor, doctorEnv).problems, ["Qoder CLI has not loaded this plugin"]);
+    rmSync(join(qoderHome, "settings.json"));
     writeFileSync(cliLog, "");
     const removed = runInstaller(home, ["--harness", "qoder", "--uninstall", "--yes"], env);
     assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
@@ -756,6 +809,17 @@ for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.doesNotMatch(result.stdout, new RegExp(`^!!\\s+${client}:`, "mu"), result.stdout);
       assert.ok(existsSync(join(home, ".openviking", "agent-integrations", client, "scripts", "hook.mjs")));
+      const skills = join(home, `.${client}`, "skills");
+      for (const skill of HOST_SKILLS) assert.ok(existsSync(join(skills, skill, "SKILL.md")), skill);
+      const report = doctorInstall(home, join(home, ".openviking", "agent-integrations", client, "scripts", "ov-memory-doctor.mjs"));
+      assert.equal(report.client, client);
+      assert.deepEqual(report.problems, []);
+
+      // A skill the user edited is theirs: uninstall removes only the untouched copies.
+      writeFileSync(join(skills, "openviking-skills", "SKILL.md"), "Edited by the user.\n");
+      runUninstall(home, client);
+      assert.equal(readFileSync(join(skills, "openviking-skills", "SKILL.md"), "utf8"), "Edited by the user.\n");
+      assert.equal(existsSync(join(skills, "openviking-memory")), false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -777,8 +841,11 @@ test("validation fails a hook host whose files are missing or whose hook does no
     for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
       const result = validate(client);
       assert.equal(result.status, 0, `${client}: ${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, new RegExp(`${client}: hooks and MCP are configured`));
+      assert.match(result.stdout, new RegExp(`${client}: hooks, MCP and skills are configured`));
     }
+
+    rmSync(join(home, ".trae-cn", "skills", "openviking-rule-search"), { recursive: true });
+    assert.equal(validate("trae-cn").status, 1);
 
     rmSync(join(home, ".cursor", "skills", "openviking-skills"), { recursive: true });
     const incomplete = validate("cursor");
@@ -902,15 +969,32 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
 
     const hooks = JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8"));
     assert.deepEqual(Object.keys(hooks), ["openviking-memory"]);
-    assert.deepEqual(Object.keys(hooks["openviking-memory"]), ["SessionStart", "PreInvocation", "Stop"]);
+    assert.deepEqual(Object.keys(hooks["openviking-memory"]), ["SessionStart", "PreInvocation", "PreToolUse", "Stop"]);
     assert.equal(JSON.parse(readFileSync(join(pluginDir, "plugin.json"), "utf8")).name, "openviking-memory");
     const commands = hookCommands(hooks);
-    assert.equal(commands.length, 3);
+    assert.equal(commands.length, 4);
     for (const command of commands) {
       assert.match(command, /OPENVIKING_INTEGRATION_ID='openviking-memory'/);
-      assert.ok(command.includes(join(runtime, "scripts", "hook.mjs")), command);
+      assert.ok(command.includes(join(runtime, "scripts")), command);
       assert.doesNotMatch(command, /__OPENVIKING_/);
     }
+    // The guard is grouped under a matcher, and its rendered command denies a
+    // file tool aimed at a viking:// URI.
+    const guard = hooks["openviking-memory"].PreToolUse[0];
+    assert.equal(guard.matcher, "*");
+    const denied = spawnSync("sh", ["-c", guard.hooks[0].command], {
+      env: { ...process.env, HOME: home },
+      input: JSON.stringify({ toolCall: { name: "read_file", args: { Path: "viking://user/default/memories/profile.md" } } }),
+      encoding: "utf8",
+    });
+    assert.equal(JSON.parse(denied.stdout).decision, "deny", denied.stderr);
+
+    const mcp = JSON.parse(readFileSync(join(pluginDir, "mcp_config.json"), "utf8")).mcpServers.openviking;
+    assert.equal(mcp.args[0], join(runtime, "servers", "mcp-proxy.mjs"));
+    assert.ok(existsSync(mcp.command), mcp.command);
+    assert.equal(mcp.env.OPENVIKING_HOOK_SOURCE, "antigravity");
+    for (const skill of HOST_SKILLS) assert.ok(existsSync(join(pluginDir, "skills", skill, "SKILL.md")), skill);
+    assert.deepEqual(JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).capabilities, ["hooks", "mcp", "skills"]);
     const sessionStart = spawnSync("sh", ["-c", hooks["openviking-memory"].SessionStart[0].command], {
       env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
       input: "{}",
@@ -918,6 +1002,9 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
     });
     assert.equal(sessionStart.status, 0, sessionStart.stderr);
     assert.equal(JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).client, "antigravity");
+    const report = doctorInstall(home, join(runtime, "scripts", "ov-memory-doctor.mjs"));
+    assert.equal(report.client, "antigravity");
+    assert.deepEqual(report.problems, []);
     // One host's installation carries no other host's configuration.
     assert.equal(existsSync(join(runtime, "hosts", "cursor")), false);
 
@@ -958,6 +1045,32 @@ test("Antigravity installs and validates under a home path containing an apostro
     assert.equal(existsSync(pluginDir), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity adds no second MCP server beside one the user configured", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-mcp-"));
+  const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
+  const userMcp = join(home, ".gemini", "config", "mcp_config.json");
+  // The manual steps the docs used to give named no key for the server.
+  const own = '{\n  // my server\n  "mcpServers": { "OpenViking": { "url": "https://ov.example/mcp" } }\n}\n';
+  try {
+    mkdirSync(dirname(userMcp), { recursive: true });
+    writeFileSync(userMcp, own);
+    const install = runInstaller(home, [
+      "--harness", "antigravity", "--source", "dev", "--lang", "en",
+      "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    ]);
+    assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
+    assert.match(install.stdout, /Kept the openviking MCP server you already configured/);
+    assert.equal(existsSync(join(pluginDir, "mcp_config.json")), false);
+    assert.ok(existsSync(join(pluginDir, "skills", "openviking-memory", "SKILL.md")));
+    assert.equal(readFileSync(userMcp, "utf8"), own);
+    const report = doctorInstall(home, join(home, ".openviking", "agent-integrations", "antigravity", "scripts", "ov-memory-doctor.mjs"));
+    assert.deepEqual(report.problems, []);
+    assert.ok(report.notes.some((note) => note.startsWith("the installer wrote no MCP server")), report.notes.join("\n"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

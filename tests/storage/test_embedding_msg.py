@@ -13,51 +13,6 @@ from openviking.storage.queuefs.embedding_msg import (
 )
 
 
-def test_embedding_msg_roundtrip_preserves_task_identity_and_queue_time():
-    msg = EmbeddingMsg(
-        "hello",
-        {"uri": "viking://user/default/skills/demo", "account_id": "default"},
-        telemetry_id="telemetry-1",
-        task_id="task-1",
-        _task_work_id="work-1",
-        queue_enqueued_at=123.456,
-    )
-
-    restored = EmbeddingMsg.from_dict(msg.to_dict())
-
-    assert restored.id == msg.id
-    assert restored.task_id == "task-1"
-    assert restored._task_work_id == "work-1"
-    assert restored.queue_enqueued_at == 123.456
-
-
-def test_embedding_msg_roundtrip_preserves_failure_requeue_count():
-    msg = EmbeddingMsg(
-        "hello",
-        {"uri": "viking://resources/demo", "account_id": "default"},
-        failure_requeue_count=1,
-    )
-
-    restored = EmbeddingMsg.from_dict(msg.to_dict())
-    legacy = msg.to_dict()
-    legacy.pop("failure_requeue_count")
-
-    assert restored.failure_requeue_count == 1
-    assert EmbeddingMsg.from_dict(legacy).failure_requeue_count == 0
-
-
-def test_embedding_msg_roundtrip_preserves_ingestion_source_type():
-    msg = EmbeddingMsg.for_embed(
-        message="hello",
-        context_data={"uri": "viking://resources/demo", "account_id": "default"},
-        source_type="repository",
-    )
-
-    restored = EmbeddingMsg.from_json(msg.to_json())
-
-    assert restored.source_type == "repository"
-
-
 def test_legacy_embedding_msg_without_account_id_is_rejected():
     with pytest.raises(ValueError, match="account_id"):
         EmbeddingMsg.from_dict(
@@ -66,71 +21,6 @@ def test_legacy_embedding_msg_without_account_id_is_rejected():
                 "context_data": {"uri": "viking://resources/demo"},
             }
         )
-
-
-def test_embedding_msg_accepts_noop_index_action_roundtrip():
-    msg = EmbeddingMsg(
-        None,
-        {"uri": "viking://resources/demo", "account_id": "default"},
-        action=IndexAction.NONE,
-    )
-
-    restored = EmbeddingMsg.from_json(msg.to_json())
-
-    assert restored.action is IndexAction.NONE
-    assert restored.message is None
-
-
-def test_embedding_update_fields_roundtrip():
-    msg = EmbeddingMsg.for_update_fields(
-        record_id="record-1",
-        fields={
-            "md5": "new-md5",
-            "updated_at": "2026-09-13T00:00:00Z",
-            "search_tags": ["scope=new"],
-        },
-        context_data={
-            "uri": "viking://resources/demo/a.py",
-            "account_id": "account-a",
-            "level": 2,
-        },
-        field_modes={"search_tags": "append"},
-        initial_fields={
-            "uri": "viking://resources/demo/a.py",
-            "account_id": "account-a",
-            "level": 2,
-            "vector": [0.1, 0.2],
-        },
-    )
-
-    restored = EmbeddingMsg.from_json(msg.to_json())
-
-    assert restored.action is IndexAction.UPDATE_FIELDS
-    assert restored.record_ids == ["record-1"]
-    assert restored.update_fields == {
-        "md5": "new-md5",
-        "updated_at": "2026-09-13T00:00:00Z",
-        "search_tags": ["scope=new"],
-    }
-    assert restored.message is None
-    assert restored.field_modes == {"search_tags": "append"}
-    assert restored.initial_fields["vector"] == [0.1, 0.2]
-
-
-def test_embedding_delete_roundtrip():
-    msg = EmbeddingMsg.for_delete(
-        record_ids=["record-1", "record-2"],
-        context_data={
-            "uri": "viking://resources/demo",
-            "account_id": "account-a",
-        },
-    )
-
-    restored = EmbeddingMsg.from_json(msg.to_json())
-
-    assert restored.action is IndexAction.DELETE
-    assert restored.record_ids == ["record-1", "record-2"]
-    assert restored.message is None
 
 
 def test_embedding_update_fields_rejects_vector_fields():
@@ -177,47 +67,83 @@ def test_field_patch_roundtrip_and_resolution():
     assert restored.resolve({"context_type": "memory", "search_tags": []})["search_tags"] == []
 
 
+_CONTEXT = {
+    "uri": "viking://resources/demo/a.py",
+    "account_id": "account-a",
+    "level": 2,
+}
+_PATCH = FieldPatch(
+    values={"md5": "new-md5", "search_tags": ["scope=new"]},
+    modes={"search_tags": "append"},
+    seed_fields={"vector": [0.1, 0.2]},
+)
+
+
 @pytest.mark.parametrize(
-    ("message", "payload_type"),
+    ("message", "payload_type", "expected_payload"),
     [
-        (
-            EmbeddingMsg.for_embed(
-                message="body",
-                context_data={"uri": "viking://resources/demo/a.py", "account_id": "default"},
-            ),
+        pytest.param(
+            EmbeddingMsg.for_embed(message="body", context_data=_CONTEXT, source_type="repository"),
             EmbedPayload,
+            {"type": "embed", "context_data": _CONTEXT, "message": "body"},
+            id="upsert-with-content-and-source",
         ),
-        (
+        pytest.param(
             EmbeddingMsg.for_update_fields(
-                record_id="record-1",
-                field_patch=FieldPatch(values={"md5": "new-md5"}),
-                context_data={"uri": "viking://resources/demo/a.py", "account_id": "default"},
+                record_id="record-1", field_patch=_PATCH, context_data=_CONTEXT
             ),
             UpdateFieldsPayload,
+            {
+                "type": "update_fields",
+                "context_data": _CONTEXT,
+                "record_id": "record-1",
+                "field_patch": {
+                    "values": {"md5": "new-md5", "search_tags": ["scope=new"]},
+                    "modes": {"search_tags": "append"},
+                    "seed_fields": {"vector": [0.1, 0.2]},
+                },
+            },
+            id="partial-update-with-modes-and-seed",
         ),
-        (
-            EmbeddingMsg.for_delete(
-                record_ids=["record-1"],
-                context_data={"uri": "viking://resources/demo/a.py", "account_id": "default"},
-            ),
+        pytest.param(
+            EmbeddingMsg.for_delete(record_ids=["record-1", "record-2"], context_data=_CONTEXT),
             DeletePayload,
+            {"type": "delete", "context_data": _CONTEXT, "record_ids": ["record-1", "record-2"]},
+            id="batch-delete-without-model-input",
         ),
-        (
-            EmbeddingMsg.noop(
-                context_data={"uri": "viking://resources/demo", "account_id": "default"}
-            ),
+        pytest.param(
+            EmbeddingMsg.noop(context_data=_CONTEXT),
             NoopPayload,
+            {"type": "noop", "context_data": _CONTEXT},
+            id="noop-without-model-input",
         ),
     ],
 )
-def test_embedding_msg_roundtrip_uses_action_specific_payload(message, payload_type):
-    serialized = message.to_dict()
+def test_embedding_msg_roundtrip_uses_action_specific_payload(
+    message, payload_type, expected_payload
+):
+    message.telemetry_id = "telemetry-1"
+    message.task_id = "task-1"
+    message._task_work_id = "work-1"
+    message.queue_enqueued_at = 123.456
+    message.failure_requeue_count = 1
 
-    assert "payload" in serialized
-    assert "message" not in serialized
-    restored = EmbeddingMsg.from_dict(serialized)
+    restored = EmbeddingMsg.from_json(message.to_json())
+    serialized = restored.to_dict()
+
+    assert (restored.id, restored.action) == (message.id, message.action)
+    assert (restored.telemetry_id, restored.task_id, restored._task_work_id) == (
+        "telemetry-1",
+        "task-1",
+        "work-1",
+    )
+    assert restored.queue_enqueued_at == 123.456
+    assert restored.failure_requeue_count == 1
     assert isinstance(restored.payload, payload_type)
-    assert restored.to_dict() == serialized
+    assert serialized["payload"] == expected_payload
+    assert restored.source_type == ("repository" if payload_type is EmbedPayload else "")
+    assert "message" not in serialized
+    assert "record_ids" not in serialized
 
 
 def test_embed_payload_rejects_patch_for_upsert():
@@ -311,6 +237,7 @@ def test_legacy_upsert_discards_historically_ignored_fields():
     assert restored.action is IndexAction.UPSERT
     assert restored.record_ids == []
     assert restored.field_patch is None
+    assert restored.failure_requeue_count == 0
     serialized = restored.to_dict()
     assert "record_ids" not in serialized
     assert "update_fields" not in serialized

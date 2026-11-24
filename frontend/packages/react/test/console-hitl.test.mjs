@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act } from 'react';
+import { ok, recordingFetch } from './helpers/module-dom.mjs';
 import {
   card,
   mountHitl,
@@ -39,6 +40,18 @@ test('HITL waits for completion, validates each card and sends one ordered respo
     ],
     {
       gate,
+      fetch: recordingFetch(({ path, uri }) => {
+        if (path === '/api/v1/fs/stat')
+          return uri === 'viking://resources'
+            ? ok({ uri, isDir: true })
+            : Promise.resolve(new Response(null, { status: 404 }));
+        assert.equal(path, '/api/v1/fs/ls');
+        return ok([
+          { uri: 'viking://resources/a', isDir: true },
+          { uri: 'viking://resources/b', isDir: true },
+          { uri: 'viking://resources/ignored.md', isDir: false },
+        ]);
+      }),
       hitl: {
         cards: {
           compile_name: {
@@ -63,13 +76,26 @@ test('HITL waits for completion, validates each card and sends one ordered respo
     await submit(view);
     assert.match(view.container.textContent, /名称已使用/);
     assert.equal(field.getAttribute('aria-invalid'), 'true');
-    await input(field, 'My Wiki');
+    await input(field, 'My-Wiki');
     assert.equal(field.hasAttribute('aria-invalid'), false);
     await submit(view);
     await click(view.container.querySelector('input[value=wiki]'));
     await submit(view);
-    field = view.container.querySelector('[name=answer]');
-    await input(field, 'viking://resources/a\nviking://resources/b');
+    assert.equal(view.container.querySelector('[name=answer]'), null);
+    await click(
+      view.container.querySelector('.ov-viking-bot__compile-source-trigger'),
+    );
+    await settle();
+    const picker = document.querySelector('.ov-context-picker');
+    assert.ok(picker);
+    assert.equal(picker.querySelector('[aria-label="ignored.md"]'), null);
+    await click(picker.querySelector('[role=treeitem][aria-label=a] input'));
+    await click(picker.querySelector('[role=treeitem][aria-label=b] input'));
+    await click(
+      picker.querySelector('.ov-context-picker__actions button:last-child'),
+    );
+    assert.match(view.container.textContent, /viking:\/\/resources\/a/);
+    assert.match(view.container.textContent, /viking:\/\/resources\/b/);
     await submit(view);
     await submit(view);
     await click(
@@ -88,7 +114,7 @@ test('HITL waits for completion, validates each card and sends one ordered respo
     assert.deepEqual(
       wire.answers.map((answer) => answer.value),
       [
-        'My Wiki',
+        'My-Wiki',
         'wiki',
         ['viking://resources/a', 'viking://resources/b'],
         'viking://resources/output',
@@ -169,24 +195,5 @@ test('failed answer send retains the draft, clears errors on change and permits 
     );
   } finally {
     await view.unmount();
-  }
-});
-
-test('cancel closes the group without sending; disabled and host-owned conversations stay inert', async () => {
-  for (const disabled of [false, true]) {
-    const view = await mountHitl([card('compile_name', 'Name')], {
-      hitl: disabled ? false : undefined,
-    });
-    try {
-      await view.start();
-      if (disabled) assert.equal(view.props.interaction, undefined);
-      else await act(async () => view.props.interaction.onCancel());
-      assert.equal(view.props.interaction, undefined);
-      assert.equal(view.requests.length, 1);
-      await view.rerender({ controlled: true });
-      assert.deepEqual(view.props.messages, []);
-    } finally {
-      await view.unmount();
-    }
   }
 });

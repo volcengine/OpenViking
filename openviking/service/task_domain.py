@@ -279,8 +279,11 @@ class TaskRecord:
         }
 
     def has_compile_dependency_failure(self) -> bool:
-        """Only a local Runtime 424 decision takes precedence over a Compile cancellation."""
-        return self.task_type == "compile" and self.meta.get("compile_runtime_http_status") == 424
+        """A checkpointed Runtime failure takes precedence over a Compile cancellation."""
+        return self.task_type == "compile" and self.meta.get("compile_runtime_http_status") in (
+            404,
+            424,
+        )
 
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_TASK_STATUSES
@@ -446,8 +449,13 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     works = list(works)
     if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
         return False
+    rollback_failed = (
+        task.task_type == "compile"
+        and isinstance(task.result, dict)
+        and task.result.get("rollback_incomplete") is True
+    )
     if task.status == TaskStatus.CANCELLING and not (
-        task.error and task.has_compile_dependency_failure()
+        task.error and (task.has_compile_dependency_failure() or rollback_failed)
     ):
         task.status = TaskStatus.CANCELLED
     else:

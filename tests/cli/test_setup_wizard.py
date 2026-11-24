@@ -12,7 +12,6 @@ from openviking_cli.setup_wizard import (
     _CUSTOM_SETUP,
     _DEFAULT_KIMI_MODEL,
     _GO_BACK,
-    _SKIP_VLM,
     BYTEPLUS_PLANS,
     CLOUD_PROVIDERS,
     EMBEDDING_PRESETS,
@@ -700,13 +699,13 @@ class TestVolcenginePlans:
             ),
             patch(
                 "openviking_cli.setup_wizard._prompt_cloud_vlm",
-                return_value=(_SKIP_VLM, None),
+                return_value=({"provider": "volcengine", "model": "m"}, None),
             ) as mock_vlm,
             patch("builtins.print"),
         ):
             config, _ = _wizard_two_step()
 
-        assert "vlm" not in config
+        assert config["vlm"]["model"] == "m"
         assert (
             mock_vlm.call_args.kwargs.get("plan_seed")
             == "https://ark.cn-beijing.volces.com/api/coding/v3"
@@ -1608,25 +1607,6 @@ class TestTwoStepWizard:
         # Ollama state from the embedding step survives a non-Ollama VLM step.
         assert ollama_running is True
 
-    def test_skip_vlm_produces_embedding_only_config(self):
-        dense = {"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}
-        with (
-            patch(
-                "openviking_cli.setup_wizard._prompt_embedding_flow",
-                return_value=(dense, None),
-            ),
-            patch(
-                "openviking_cli.setup_wizard._prompt_cloud_vlm",
-                return_value=(_SKIP_VLM, None),
-            ),
-            patch("builtins.print"),
-        ):
-            config, _ = _wizard_two_step()
-
-        assert config is not None
-        assert config["embedding"]["dense"] == dense
-        assert "vlm" not in config
-
     def test_embedding_key_offered_for_vlm_reuse(self):
         dense = {
             "provider": "volcengine",
@@ -1648,7 +1628,7 @@ class TestTwoStepWizard:
             _wizard_two_step()
 
         mock_vlm.assert_called_once_with(
-            allow_skip=True, reuse_key=("volcengine", "ve-key"), allow_back=True, plan_seed=None
+            reuse_key=("volcengine", "ve-key"), allow_back=True, plan_seed=None
         )
 
     def test_cancel_in_vlm_step_cancels_setup(self):
@@ -1754,7 +1734,7 @@ class TestBackNavigation:
             ),
             patch(
                 "openviking_cli.setup_wizard._prompt_cloud_vlm",
-                side_effect=[(_GO_BACK, None), (_SKIP_VLM, None)],
+                side_effect=[(_GO_BACK, None), ({"provider": "volcengine", "model": "m"}, None)],
             ),
             patch("builtins.print"),
         ):

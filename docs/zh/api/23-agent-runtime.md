@@ -4,7 +4,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 
 ## Compile 配置与执行
 
-`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由 1–64 位 ASCII 字母、数字、下划线或连字符组成，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
+`compile_name` 由调用者提供，标识持久配置及其成功增量基线。名称由汉字、ASCII 字母、数字、下划线或连字符组成，纯 ASCII 名称最多 64 个字符，含汉字的名称总长最多 32 个字符，首字符不能是连字符，区分大小写，在同一 account 的同一用户内唯一；不同用户或不同 account 可以使用相同名称。空白字符直接拒绝，不会自动去除。`task_id` 标识一次已受理的执行，使用 `cmp_` 前缀。同一个配置可以多次执行；多个配置可以指向同一个 `to`，各自维护独立基线和历史。
 
 普通 Compile 在创建或更新配置、手动或定时提交新执行时，统一校验规范化后的目录 URI：
 
@@ -165,12 +165,14 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 | HTTP API | 结果 |
 |----------|------|
-| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度、创建与执行时间 |
 | `POST /api/v1/compile/config/update` | 按请求体 `compile_name` 替换配置 |
 | `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`；按配置名称的字典序划分页，每页内部按 `last_run_time` 倒序排列（null 置后） |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | 本次执行冻结的 run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |
+
+运行历史查询按当前账号和用户限定范围。runs 目录不存在时返回空列表；指定 run 不存在时，详情和产出接口返回 404。
 
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 固定为本次 run 的产出快照；`latest_snapshot_id` 为查询时该文件最近变更的 commit，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 404。仅查询本页产出的文件历史，查询失败直接报错。
 
@@ -180,12 +182,12 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
-两个调用时间都使用 Unix 秒：
+创建与执行时间使用 Unix 秒。
 
-- `task_first_create_time`：第一次成功受理的执行 task 的 `created_at`；未执行时为 null，首次设置后不变。
-- `last_run_time`：最近一次成功受理的新 task 的 `created_at`。后续失败或取消不回退，幂等重放不刷新。
+- `task_first_create_time` 记录 `POST /api/v1/compile/create` 保存配置的时间，保存后保持固定。
+- `last_run_time` 记录最近一次成功受理的新 task 的 `created_at`。首次受理前为 null。后续失败或取消不回退，幂等重放不刷新。
 
-手动与定时提交均更新这些时间。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
+手动与定时提交均更新 `last_run_time`。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
 
 run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、`finished_at`、`params`、`result`、`error`、`meta`。`params` 是本次受理时的完整公开输入及调度配置；`result` 包含 `created`、`updated`、`deleted` 数量。`meta` 仅包含：
 
@@ -207,13 +209,13 @@ Compile 业务文件仅有：
 /local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
 ```
 
-`configuration_directory` 为名称 ASCII 字节的小写十六进制编码（`compile_name.encode("ascii").hex()`），不添加前缀，保证存储系统不区分大小写时，不同大小写的名称仍相互独立。公开 API 接收和返回原始 `compile_name`，不使用目录编码。
+纯 ASCII 名称的小写十六进制编码用作 `configuration_directory`。含汉字的名称使用 `u-` 加上名称 UTF-8 字节的小写 Base32 编码作为目录名，省略末尾的填充符 `=`。两种目录格式在不区分大小写的存储上都能区分名称大小写。
 
 配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 成功收尾时发布产物快照。目标目录的统计中只要有文件新增、修改或删除，就推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
 ### 检查 Compile 可用性
 
