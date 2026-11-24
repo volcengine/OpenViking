@@ -155,6 +155,26 @@ def declare(collection, uri, item_uuid, *, scope="a", **kwargs):
     return call(collection, "declare_item", scope, uri=uri, item_uuids=[item_uuid], **kwargs)
 
 
+def test_omitted_new_item_attrs_do_not_use_the_engine_column_default(collection, monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.vikingdb_catalog._INDEX_WAIT_SECONDS", 0
+    )
+    original = collection.client.do_req
+
+    def apply_column_default(method, path, *, req_body):
+        body = deepcopy(req_body)
+        if path.endswith("/upsert"):
+            for row in body["data"]:
+                if row.get("item_attrs") is None:
+                    row["item_attrs"] = ["default"]
+        return original(method, path, req_body=body)
+
+    monkeypatch.setattr(collection.client, "do_req", apply_column_default)
+    first = declare(collection, "/user/owner/skills/test", "uuid-skill")
+    assert first["item_attrs"] == []
+    assert declare(collection, "/user/owner/skills/test", "unused-retry") == first
+
+
 def test_declarations_are_stable_and_separate_from_semantic_upserts(collection):
     first = declare(collection, "/resources/A", "uuid-a", item_attrs=["kind=case"])
     retry = declare(collection, "/resources/A", "unused-retry-uuid")

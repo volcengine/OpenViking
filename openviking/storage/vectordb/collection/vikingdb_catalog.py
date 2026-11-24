@@ -418,7 +418,7 @@ class VikingDBCatalog:
                 if attrs is not None and attrs != sorted(own.get("item_attrs") or []):
                     raise ValueError("item_attrs cannot change after an Item is declared")
             else:
-                own = {**own, "item_uuids": ids, "item_attrs": attrs}
+                own = {**own, "item_uuids": ids, "item_attrs": attrs if attrs is not None else []}
                 self._write([own])
             self._wait_visible(scope, {uri: own})
             return {
