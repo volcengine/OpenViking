@@ -36,6 +36,10 @@ class VolcengineConfig(BaseModel):
             "Used together with `api_key` for data-plane-only access."
         ),
     )
+    collection_meta: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Pre-created collection schema supplied by the provisioning service",
+    )
 
 
 class VikingDBConfig(BaseModel):

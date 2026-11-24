@@ -11,6 +11,9 @@ from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+    VolcengineApiKeyCollection,
+)
 
 
 def matches(row, condition):
@@ -115,8 +118,8 @@ class RecordAPI:
         raise AssertionError(path)
 
 
-@pytest.fixture
-def collection():
+@pytest.fixture(params=["private", "api_key"])
+def collection(request):
     meta = CollectionSchemas.context_collection("context", 2)
     meta.update(ProjectName="project", ShardBy="account_id")
     meta["Fields"].extend(
@@ -130,8 +133,16 @@ def collection():
             {"FieldName": "item_attrs", "FieldType": "list<string>"},
         ]
     )
-    coll = VikingDBCollection("https://unused.invalid", meta_data=meta, index_name="catalog-index")
-    coll.client = RecordAPI()
+    api = RecordAPI()
+    if request.param == "api_key":
+        meta["IndexName"] = "catalog-index"
+        coll = VolcengineApiKeyCollection("test-key", host="unused.invalid", meta_data=meta)
+        coll.data_client = api
+    else:
+        coll = VikingDBCollection(
+            "https://unused.invalid", meta_data=meta, index_name="catalog-index"
+        )
+    coll.client = api
     return coll
 
 

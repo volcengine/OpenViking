@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from openviking.observability.log_safety import safe_path_for_log
@@ -23,10 +24,12 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
 from openviking.utils.search_filters import VALID_TIME_FIELDS
 from openviking_cli.utils.logger import get_logger
 
+from .vikingdb_item_collection import VikingDBItemCollectionMixin
+
 logger = get_logger(__name__)
 
 
-class VolcengineApiKeyCollection(ICollection):
+class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
     """VikingDB data-plane collection implementation using Bearer API key."""
 
     def __init__(
@@ -42,10 +45,11 @@ class VolcengineApiKeyCollection(ICollection):
         if not resolved_host:
             raise ValueError("host or region is required for Volcengine API key data-plane access")
         self.data_client = ClientForDataApiWithApiKey(api_key, resolved_host)
-        self.meta_data = meta_data if meta_data is not None else {}
+        self.meta_data = deepcopy(meta_data) if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
         self.index_name = self.meta_data.get("IndexName", "default")
+        self._initialize_item_collection(self.index_name)
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> ConnectionError:
@@ -172,10 +176,11 @@ class VolcengineApiKeyCollection(ICollection):
             normalized["op"] = "time_range"
         return normalized
 
-    def _data_post(self, path: str, data: Dict[str, Any]):
+    def _data_post(self, path: str, data: Dict[str, Any], *, include_catalog: bool = False):
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
+        safe_data = self._prepare_data_request(path, safe_data, include_catalog=include_catalog)
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
@@ -257,6 +262,8 @@ class VolcengineApiKeyCollection(ICollection):
         )
 
     def get_meta_data(self, *, raise_on_error: bool = False):
+        if self.meta_data.get("Fields"):
+            return deepcopy(self.meta_data)
         from openviking.storage.collection_schemas import CollectionSchemas
 
         schema = CollectionSchemas.context_collection(
@@ -328,31 +335,39 @@ class VolcengineApiKeyCollection(ICollection):
         }
         return self._data_post(path, data)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/update"
         data = {
             **self._base_data_payload(),
             "data": data_list,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None:
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
-    def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
+    def fetch_data(
+        self, primary_keys: List[Any], *, partition_by: str | None = None
+    ) -> FetchDataInCollectionResult:
         path = "/api/vikingdb/data/fetch_in_collection"
         data = {
             **self._base_data_payload(),
             "ids": primary_keys,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None:
+            data["partition_by"] = partition_by
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/delete"
         data = {
             **self._base_data_payload(),
             "ids": primary_keys,
         }
+        if partition_by is not None:
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
     def delete_all_data(self):

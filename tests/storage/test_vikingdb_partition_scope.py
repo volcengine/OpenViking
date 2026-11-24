@@ -74,6 +74,21 @@ def test_partitioned_point_operations_without_scope_fail_before_io():
     assert collection.client.calls == []
 
 
+def test_partitioned_update_uses_scope_without_updating_the_shard_field():
+    collection = VikingDBCollection(
+        "https://unused.invalid",
+        meta_data={"CollectionName": "context", "ShardBy": "account_id"},
+    )
+    collection.client = Client()
+    row = {"id": "record", "account_id": "a", "content": "updated"}
+    collection.update_data([row], partition_by="a")
+    assert collection.client.calls[0][1]["data"] == [{"id": "record", "content": "updated"}]
+    assert row["account_id"] == "a"
+    with pytest.raises(ValueError, match="cannot change"):
+        collection.update_data([row], partition_by="b")
+    assert len(collection.client.calls) == 1
+
+
 @pytest.mark.parametrize("shard_key", ["ShardBy", "PartitionBy"])
 @pytest.mark.parametrize("operation", ["search", "aggregate"])
 def test_ordinary_partitioned_query_adds_routing_without_an_extra_request(shard_key, operation):
