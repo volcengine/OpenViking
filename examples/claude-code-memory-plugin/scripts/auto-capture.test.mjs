@@ -627,6 +627,66 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
   }
 });
 
+test("a later Stop reads the transcript from the saved cursor, not from the start", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-cursor-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const line = (role, content) => JSON.stringify({ type: role, message: { role, content } });
+  const earlier = [
+    line("user", "第一个问题：端口是多少？"),
+    line("assistant", "端口是 1933。"),
+  ];
+  const lastQuestion = [
+    line("user", "第二个问题：超时是多少？"),
+    line("assistant", "超时为 30 秒。"),
+  ];
+  const added = [
+    line("user", "第三个问题：重试几次？"),
+    line("assistant", "重试 3 次。"),
+  ];
+  const batches = [];
+  try {
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+      } else if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+      } else {
+        writeJson(res, { status: "ok", result: {} });
+      }
+    }, async (baseUrl) => {
+      const input = { session_id: "cursor", transcript_path: transcriptPath, cwd: root };
+      const statePath = join(root, "openviking-cc-capture-state", "cursor.json");
+      const head = Buffer.byteLength(`${earlier.join("\n")}\n`, "utf-8");
+
+      await writeFile(transcriptPath, `${[...earlier, ...lastQuestion].join("\n")}\n`);
+      await runAutoCapture(input, hookEnv(root, baseUrl));
+      const afterFirst = JSON.parse(await readFile(statePath, "utf-8"));
+      assert.equal(afterFirst.capturedTurnCount, 4);
+      // The cursor rests on the last user turn, with the turns before it counted.
+      assert.equal(afterFirst.transcriptCursor.offset, head);
+      assert.equal(afterFirst.transcriptCursor.turnCount, 2);
+
+      // Were the next Stop to parse the head again, it would count no turns
+      // there, find its capture cursor at the end, and send nothing.
+      await writeFile(transcriptPath, `${"x".repeat(head - 1)}\n${[...lastQuestion, ...added].join("\n")}\n`);
+      await runAutoCapture(input, hookEnv(root, baseUrl));
+      const afterSecond = JSON.parse(await readFile(statePath, "utf-8"));
+      assert.equal(afterSecond.capturedTurnCount, 6);
+      assert.equal(afterSecond.transcriptCursor.turnCount, 4);
+    });
+    const texts = (batch) => batch.messages.flatMap(
+      (message) => message.parts.filter((p) => p.type === "text").map((p) => p.text),
+    );
+    assert.equal(batches.length, 2);
+    assert.equal(batches[0].messages.length, 4);
+    assert.deepEqual(texts(batches[1]), ["第三个问题：重试几次？", "重试 3 次。"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function captureFinalAnswer(root, transcriptPath, input) {
   const batches = [];
   await withMockOpenViking(async (req, res) => {

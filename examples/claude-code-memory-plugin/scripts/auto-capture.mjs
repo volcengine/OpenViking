@@ -13,7 +13,9 @@
  * This preserves cross-turn context for the memory extractor, produces archives
  * naturally, and lets resume / PreCompact / SessionEnd reuse the same session.
  *
- * Incremental tracking: state file per CC session_id records capturedTurnCount.
+ * Incremental tracking: state file per CC session_id records capturedTurnCount,
+ * and transcriptCursor — the byte offset the next read of the transcript may
+ * start at, so a Stop reads what the turn appended rather than the whole file.
  *
  * Ported from openclaw-plugin/ context-engine.ts + text-utils.ts
  * (MEMORY_TRIGGERS / extractNewTurnMessages).
@@ -24,7 +26,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
+import { readCaptureTurns, sanitizeCapturedText } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -81,6 +83,16 @@ async function saveState(sessionId, state) {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(stateFilePath(sessionId), JSON.stringify(state));
   } catch { /* best effort */ }
+}
+
+// The state once every turn the scan saw is accounted for.
+function advancedState(state, scan) {
+  const { transcriptCursor: _stale, ...rest } = state;
+  return {
+    ...rest,
+    capturedTurnCount: scan.totalTurns,
+    ...(scan.cursor ? { transcriptCursor: scan.cursor } : {}),
+  };
 }
 
 async function reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state) {
@@ -233,29 +245,29 @@ async function main({ cfg, input, cwd }) {
     return;
   }
 
-  let transcriptContent;
+  const state = await loadState(sessionId);
+  await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
+
+  // Only the bytes past the saved cursor are read; `scan.turns` is the tail of
+  // the transcript from index `scan.firstIndex`, which the cursor never passes.
+  let scan;
   try {
-    transcriptContent = await readFile(transcriptPath, "utf-8");
+    scan = await readCaptureTurns(transcriptPath, cfg, {
+      capturedTurnCount: state.capturedTurnCount,
+      cursor: state.transcriptCursor,
+    });
   } catch (err) {
     logError("transcript_read", err);
     return;
   }
 
-  if (!transcriptContent.trim()) {
-    log("skip", { stage: "transcript_read", reason: "empty transcript" });
-    return;
-  }
-
-  const messages = parseTranscript(transcriptContent);
-  const allTurns = extractCaptureTurns(messages, cfg);
-  if (allTurns.length === 0) {
+  if (scan.totalTurns === 0) {
     log("skip", { stage: "transcript_parse", reason: "no user/assistant turns found" });
     return;
   }
 
-  const state = await loadState(sessionId);
-  await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
-  const newTurns = allTurns.slice(state.capturedTurnCount);
+  const allTurns = scan.turns;
+  const newTurns = allTurns.slice(Math.max(0, state.capturedTurnCount - scan.firstIndex));
   // Claude Code writes the transcript asynchronously, so at Stop it may not
   // hold the final answer yet. Taking it from the payload is left out of the
   // cursor: should the transcript catch up later, the answer goes out twice
@@ -270,7 +282,8 @@ async function main({ cfg, input, cwd }) {
     ? newTurns
     : newTurns.filter(turn => turn.role === "user");
   log("transcript_parse", {
-    totalTurns: allTurns.length,
+    totalTurns: scan.totalTurns,
+    readFromByte: scan.readFrom,
     previouslyCaptured: state.capturedTurnCount,
     newTurns: newTurns.length,
     captureTurns: captureTurns.length,
@@ -283,11 +296,8 @@ async function main({ cfg, input, cwd }) {
   }
 
   if (captureTurns.length === 0) {
-    await saveState(sessionId, {
-      ...state,
-      capturedTurnCount: allTurns.length,
-    });
-    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "assistant_only_increment" });
+    await saveState(sessionId, advancedState(state, scan));
+    log("state_update", { newCapturedTurnCount: scan.totalTurns, reason: "assistant_only_increment" });
     return;
   }
 
@@ -305,10 +315,7 @@ async function main({ cfg, input, cwd }) {
   const combined = formatTurnsAsText(captureTurns);
   if (!sanitizeCapturedText(combined)) {
     log("skip", { stage: "batch_empty" });
-    await saveState(sessionId, {
-      ...state,
-      capturedTurnCount: allTurns.length,
-    });
+    await saveState(sessionId, advancedState(state, scan));
     return;
   }
 
@@ -320,10 +327,7 @@ async function main({ cfg, input, cwd }) {
     );
     if (!hasTrigger) {
       log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
-      await saveState(sessionId, {
-        ...state,
-        capturedTurnCount: allTurns.length,
-      });
+      await saveState(sessionId, advancedState(state, scan));
       return;
     }
   }
@@ -358,11 +362,8 @@ async function main({ cfg, input, cwd }) {
       logError("pending_enqueue", "some turns failed to enqueue; state not advanced");
       return;
     }
-    await saveState(sessionId, {
-      ...state,
-      capturedTurnCount: allTurns.length,
-    });
-    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
+    await saveState(sessionId, advancedState(state, scan));
+    log("state_update", { newCapturedTurnCount: scan.totalTurns, reason: "pending_queued" });
     writeJsonState("last-capture.json", {
       turns_captured: 0,
       turns_queued: result.queued,
@@ -416,11 +417,8 @@ async function main({ cfg, input, cwd }) {
   // A missing live-message file is recoverable after the server is fixed, so
   // retain the cursor for that failure. Other non-retryable 4xx responses keep
   // the historical terminal behavior instead of retrying invalid payloads.
-  await saveState(sessionId, {
-    ...state,
-    capturedTurnCount: allTurns.length,
-  });
-  log("state_update", { newCapturedTurnCount: allTurns.length });
+  await saveState(sessionId, advancedState(state, scan));
+  log("state_update", { newCapturedTurnCount: scan.totalTurns });
 
   // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn).
   // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
