@@ -1169,8 +1169,6 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 
 是否有远程解析服务在场，由 `PDFConfig.remote_enabled` 判定，它是从 provider 列表的角度表达的，而不是绑定某一个具体服务；因此新增 provider 时无需重新修改 `auto`、预检或本页。`mineru_enabled` 仍是 MinerU 这个 provider 自身的判定。
 
-为避免一个已降级的批次变得明显更慢，`auto` 不会无目的地重试：
-
 `auto` 依次尝试每个已配置的远程 provider，并使用第一个成功的。某个 provider 抛出异常时只记录日志并尝试下一个，因此任何远程失败（`404`、`405`、`429`、超时、`5xx`）都会使该文档降级为本地解析，而不会使导入失败。实际走的路径记录在
 `pdf_strategy_effective`，因此静默失效的远程解析在之后仍可见。
 
