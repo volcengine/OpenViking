@@ -244,17 +244,18 @@ class Pipeline:
                     raise
                 logger.exception("Compile diagnostic write failed; preserving the execution error")
 
-    async def write_coverage(self, published=()):
-        """Track assignment provenance and acknowledged output URIs without claiming semantic coverage."""
+    async def write_coverage(self, published=None):
+        """Record source states; only supplied write results can mark outputs incomplete."""
         manifest = await self.files.get("inputs") or {}
         final = await self.files.get("finalize") or {}
-        published = set(published)
+        published = set(published) if published is not None else None
         inputs = {}
         for source_id, metadata in self.evidence.items():
             item = inputs.setdefault(metadata["uri"], {"ranges": {}, "outputs": []})
             item["ranges"][source_id] = self.status[source_id]
         rejected = final.get("rejected", {})
-        published.difference_update(safe_join_viking_uri(self.target, path) for path in rejected)
+        if published is not None:
+            published.difference_update(safe_join_viking_uri(self.target, path) for path in rejected)
         references = {
             path: output["source_refs"] for path, output in final.get("outputs", {}).items()
         }
@@ -267,12 +268,11 @@ class Pipeline:
             state = next(
                 (s for s in ("failed", "pending", "unreferenced") if s in states), "prepared"
             )
-            if (
-                state == "prepared"
-                and item["outputs"]
-                and all(output in published for output in item["outputs"])
-            ):
-                state = "published"
+            if state == "prepared" and published is not None:
+                if not item["outputs"]:
+                    state = "unreferenced"
+                elif any(output not in published for output in item["outputs"]):
+                    state = "failed"
             manifest[uri] = item["status"] = state
         await self.files.put("inputs", manifest)
         await self.files.put(

@@ -441,7 +441,7 @@ async def test_failed_routes_keep_completed_drafts_through_finalization(
         f"# Fact {i}" in "\n".join(op["content"] for op in bundle.operations) for i in range(3)
     )
     await pipeline.write_coverage([op["uri"] for op in bundle.operations])
-    assert (await pipeline.files.get("coverage"))["counts"] == {"published": 3}
+    assert (await pipeline.files.get("coverage"))["counts"] == {"prepared": 3}
 
 
 async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):

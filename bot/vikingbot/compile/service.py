@@ -1214,7 +1214,7 @@ class BotCompileService:
             await pipeline.write_coverage(published)
             counts = (await pipeline.files.get("coverage") or {}).get("counts", {})
             partial = bool(pipeline.failures or conflicts) or any(
-                counts.get(state, 0) for state in ("failed", "pending", "unreferenced", "prepared")
+                counts.get(state, 0) for state in ("failed", "pending", "unreferenced")
             )
             recovery_proof = None
             if (
@@ -1222,7 +1222,7 @@ class BotCompileService:
                 and not partial
                 and not pipeline.warnings
                 and not rendered.operations
-                and counts.get("published") == len(ordered)
+                and counts.get("prepared") == len(ordered)
                 and pipeline.evidence.keys() <= pipeline.recovery_evidence
             ):
                 recovery_proof = await verify_recovery_sources(
