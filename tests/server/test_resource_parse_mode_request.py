@@ -3,15 +3,12 @@
 
 """Request-boundary coverage for add_resource parse modes."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server import mcp_endpoint
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers import resources as resources_router
-from openviking.server.routers.resources import AddResourceRequest
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_api_resources import _wait_task_terminal
 
@@ -39,16 +36,11 @@ async def test_add_resource_route_forwards_no_split_mode(client, upload_temp_dir
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("public_resource_dns")
-async def test_add_resource_route_forwards_connector_auth_config(monkeypatch: pytest.MonkeyPatch):
+async def test_add_resource_route_forwards_connector_auth_config(client, service, monkeypatch):
     add_resource = AsyncMock(
         return_value={"status": "success", "root_uri": "viking://resources/docs"}
     )
-    service = SimpleNamespace(resources=SimpleNamespace(add_resource=add_resource))
-    monkeypatch.setattr(resources_router, "get_service", lambda: service)
-    ctx = RequestContext(
-        user=UserIdentifier("test_account", "test_user"),
-        role=Role.USER,
-    )
+    monkeypatch.setattr(service.resources, "add_resource", add_resource)
     reference = {
         "openviking_credential_ref": {
             "account_id": "test_account",
@@ -61,19 +53,18 @@ async def test_add_resource_route_forwards_connector_auth_config(monkeypatch: py
         }
     }
 
-    # The managed credential channel is accepted despite extra="forbid" and is
-    # forwarded verbatim to the service layer.
-    await resources_router.add_resource(
-        SimpleNamespace(headers={}),
-        AddResourceRequest(
-            path="https://alidocs.dingtalk.com/i/nodes/NODE1",
-            add_type="dingtalk",
-            to="viking://resources/docs",
-            args={"binding_version": 3},
-            connector_auth_config=reference,
-        ),
-        ctx,
+    response = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": "https://alidocs.dingtalk.com/i/nodes/NODE1",
+            "add_type": "dingtalk",
+            "to": "viking://resources/docs",
+            "args": {"binding_version": 3},
+            "connector_auth_config": reference,
+        },
     )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["root_uri"] == "viking://resources/docs"
 
     assert add_resource.await_args.kwargs["connector_auth_config"] == reference
 

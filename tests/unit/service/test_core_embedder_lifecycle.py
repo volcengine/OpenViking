@@ -86,14 +86,18 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     )
 
     pending = asyncio.create_task(provider.embed("account-a", "query", is_query=True))
-    await started.wait()
-    closing = asyncio.create_task(service.close())
+    closing = None
     try:
+        await asyncio.wait_for(started.wait(), 2)
+        closing = asyncio.create_task(service.close())
         waiting_for_storage = asyncio.create_task(storage_closing.wait())
         try:
-            await asyncio.wait((closing, waiting_for_storage), return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait_for(
+                asyncio.wait((closing, waiting_for_storage), return_when=asyncio.FIRST_COMPLETED),
+                2,
+            )
             if closing.done():
-                await closing
+                await asyncio.wait_for(closing, 2)
         finally:
             waiting_for_storage.cancel()
             await asyncio.gather(waiting_for_storage, return_exceptions=True)
@@ -101,11 +105,12 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
         assert "embedder" not in events
         pending.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await pending
-        await closing
+            await asyncio.wait_for(pending, 2)
+        await asyncio.wait_for(closing, 2)
     finally:
         pending.cancel()
-        await asyncio.gather(pending, closing, return_exceptions=True)
+        tasks = (pending,) if closing is None else (pending, closing)
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 3)
 
     assert events == [
         "background",

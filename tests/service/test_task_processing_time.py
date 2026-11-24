@@ -11,10 +11,12 @@ from openviking.service.task_domain import WorkRecord, processing_seconds
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.service.task_work_index import bind_task_context
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import (
     SemanticTreeExecutor,
     SemanticTreeScheduler,
 )
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from tests.test_task_tracker import _FakeAgfs
 
 OWNER = {"account_id": "account", "user_id": "user"}
@@ -100,23 +102,29 @@ async def test_saturated_dag_scheduler_counts_claimed_handler_time(monkeypatch):
         finally:
             await tracker.mark_work_done(name, "worker", **OWNER)
 
-    first = asyncio.create_task(coordinate("a"))
-    await entered["a"].wait()
-    second = asyncio.create_task(coordinate("b"))
-    await queued.wait()
-    now[0] = 20
-    assert (await tracker.get("a", **OWNER)).processing_seconds == 20
-    assert (await tracker.get("b", **OWNER)).processing_seconds == 20
-    release["a"].set()
-    await entered["b"].wait()
-    now[0] = 25
-    assert (await tracker.get("b", **OWNER)).processing_seconds == 25
-    release["b"].set()
-    await asyncio.gather(first, second)
-    assert (await tracker.get("b", **OWNER)).processing_seconds == 25
-    for worker in list(scheduler._workers):
-        worker.cancel()
-    await asyncio.gather(*scheduler._workers, return_exceptions=True)
+    handlers = [asyncio.create_task(coordinate("a"))]
+    try:
+        await asyncio.wait_for(entered["a"].wait(), 2)
+        handlers.append(asyncio.create_task(coordinate("b")))
+        await asyncio.wait_for(queued.wait(), 2)
+        assert not entered["b"].is_set()
+        now[0] = 20
+        assert (await tracker.get("a", **OWNER)).processing_seconds == 20
+        assert (await tracker.get("b", **OWNER)).processing_seconds == 20
+        release["a"].set()
+        await asyncio.wait_for(entered["b"].wait(), 2)
+        now[0] = 25
+        assert (await tracker.get("b", **OWNER)).processing_seconds == 25
+        release["b"].set()
+        await asyncio.wait_for(asyncio.gather(*handlers), 2)
+        assert (await tracker.get("b", **OWNER)).processing_seconds == 25
+    finally:
+        for event in release.values():
+            event.set()
+        workers = list(scheduler._workers)
+        for task in [*handlers, *workers]:
+            task.cancel()
+        await asyncio.gather(*handlers, *workers, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -127,30 +135,47 @@ async def test_downstream_work_wait_remains_worker_occupied_time(monkeypatch):
     await _create_work(tracker, "task", "coordinator")
     await tracker.register_work("task", "embedding", "Embedding", **OWNER)
 
+    entered = asyncio.Event()
+
+    def keep_waiting():
+        entered.set()
+        return False
+
     now[0] = 3
-    waiter = asyncio.create_task(tracker.wait_for_work("task", ["embedding"], **OWNER))
-    await asyncio.sleep(0.01)
-    now[0] = 20
-    assert (await tracker.get("task", **OWNER)).processing_seconds == 20
-    await tracker.mark_work_done("task", "embedding", **OWNER)
-    await waiter
-    now[0] = 22
-    assert (await tracker.get("task", **OWNER)).processing_seconds == 22
-    await tracker.mark_work_done("task", "coordinator", **OWNER)
+    waiter = asyncio.create_task(
+        tracker.wait_for_work("task", ["embedding"], timeout=2, stop_waiting=keep_waiting, **OWNER)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert not waiter.done()
+        now[0] = 20
+        assert (await tracker.get("task", **OWNER)).processing_seconds == 20
+        await tracker.mark_work_done("task", "embedding", **OWNER)
+        await asyncio.wait_for(waiter, 1)
+        now[0] = 22
+        await tracker.mark_work_done("task", "coordinator", **OWNER)
+        assert (await tracker.get("task", **OWNER)).processing_seconds == 22
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("custom_enqueue", [False, True])
-async def test_semantic_retry_cooldown_counts_full_worker_occupied_time(
-    monkeypatch, custom_enqueue
-):
+@pytest.mark.parametrize("context_type", ["resource", "skill"])
+async def test_semantic_retry_cooldown_counts_full_worker_occupied_time(monkeypatch, context_type):
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
     now = [0.0]
     monkeypatch.setattr("openviking.service.task_store.time.time", lambda: now[0])
     tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
     await _create_work(tracker, "task")
-    message = SimpleNamespace(uri="viking://resources/retry-test", account_id="account")
+    message = SemanticMsg(
+        uri="viking://agent/skills/retry-test"
+        if context_type == "skill"
+        else "viking://resources/retry-test",
+        context_type=context_type,
+        **OWNER,
+    )
     enqueued = []
 
     async def sleep(delay):
@@ -158,30 +183,27 @@ async def test_semantic_retry_cooldown_counts_full_worker_occupied_time(
         now[0] += delay
         assert (await tracker.get("task", **OWNER)).processing_seconds == 33
 
-    async def enqueue(msg):
-        assert msg is message
+    async def enqueue(msg, *, deduplicate_memory):
+        assert deduplicate_memory is False
         now[0] += 2
-        enqueued.append(msg)
+        enqueued.append(msg.id)
 
     queue = SimpleNamespace(enqueue=enqueue)
-
-    async def custom(queue_arg, msg):
-        assert queue_arg is queue
-        await enqueue(msg)
 
     monkeypatch.setattr(asyncio, "sleep", sleep)
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
         lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
     )
-    processor = SimpleNamespace(
-        _account_breaker=lambda _account_id: SimpleNamespace(retry_after=30)
-    )
+    processor = SemanticProcessor()
+    breaker = processor._account_breaker(OWNER["account_id"])
+    for _ in range(5):
+        breaker.record_failure(TimeoutError("model timed out"))
     now[0] = 3
-    await SemanticProcessor._reenqueue_semantic_msg(
-        processor, message, enqueue=custom if custom_enqueue else None
-    )
-    assert enqueued == [message]
+    with bind_task_context("task", **OWNER):
+        result = await processor.on_dequeue(message.to_dict())
+    assert result.outcome is ProcessOutcome.REQUEUED
+    assert enqueued == [message.id]
     assert (await tracker.get("task", **OWNER)).processing_seconds == 35
 
     await tracker.mark_work_requeued("task", "worker", **OWNER)

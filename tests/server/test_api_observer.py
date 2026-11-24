@@ -9,34 +9,45 @@ from unittest.mock import AsyncMock
 import httpx
 
 from openviking.service.debug_service import ComponentStatus
+from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs.named_queue import QueueStatus
 
 
-async def test_observer_queue(client: httpx.AsyncClient):
-    """GET /api/v1/observer/queue should return queue status."""
-    resp = await client.get("/api/v1/observer/queue")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    result = body["result"]
-    assert "name" in result
-    assert "is_healthy" in result
-    assert "has_errors" in result
-    assert "status" in result
+async def test_observer_queue_exposes_table_and_counters(client: httpx.AsyncClient, monkeypatch):
+    semantic = QueueStatus(pending=2, processed=5, error_count=1)
+    embedding = QueueStatus(in_progress=1, processed=8, requeue_count=3)
 
+    async def statuses():
+        return {"Semantic": semantic, "Embedding": embedding}
 
-async def test_observer_queue_structured(client: httpx.AsyncClient):
-    """GET /api/v1/observer/queue?format=json should return structured status."""
-    resp = await client.get("/api/v1/observer/queue", params={"format": "json"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    result = body["result"]
-    assert "status" in result
-    assert isinstance(result["status"], dict)
-    assert "queues" in result["status"]
-    assert isinstance(result["status"]["queues"], list)
-    assert "summary" in result["status"]
-    assert isinstance(result["status"]["summary"], dict)
+    monkeypatch.setattr(get_queue_manager(), "check_status", statuses)
+    table = await client.get("/api/v1/observer/queue")
+    structured = await client.get("/api/v1/observer/queue", params={"format": "json"})
+    assert table.status_code == structured.status_code == 200
+    table_status = table.json()["result"]["status"]
+    assert "Semantic" in table_status and "Embedding" in table_status
+    result = structured.json()["result"]
+    assert result["name"] == "queue"
+    assert result["is_healthy"] is False and result["has_errors"] is True
+    queues = [queue for queue in result["status"]["queues"] if queue["queue"] != "Semantic-Nodes"]
+    assert {"Semantic", "Embedding"} <= {queue["queue"] for queue in queues}
+    summary = result["status"]["summary"]
+    assert summary == {key: sum(queue[key] for queue in queues) for key in summary}
+    assert summary == {
+        "pending": 2,
+        "in_progress": 1,
+        "processed": 13,
+        "requeued": 3,
+        "errors": 1,
+        "total": 16,
+    }
+    semantic.pending = 0
+    embedding.in_progress = 0
+    idle = await client.get("/api/v1/observer/queue", params={"format": "json"})
+    assert idle.status_code == 200, idle.text
+    idle_result = idle.json()["result"]
+    assert idle_result["is_healthy"] is True and idle_result["has_errors"] is False
+    assert idle_result["status"]["summary"]["errors"] == 1
 
 
 async def test_observer_vikingdb(client: httpx.AsyncClient, service):
