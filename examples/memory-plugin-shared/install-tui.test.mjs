@@ -978,9 +978,11 @@ printf '<%s>\\n' "$CRED_KEY"
 });
 
 test("an explicit installer key can be saved despite an unpaired environment key", (t) => {
-  for (const [variable, previous] of [
+  for (const [variable, previous, envUrl, envBaseUrl] of [
     ["OPENVIKING_API_KEY", null],
     ["OPENVIKING_BEARER_TOKEN", { url: "https://previous.example/openviking", api_key: "previous-key" }],
+    ["OPENVIKING_API_KEY", null, " \t ", "\n"],
+    ["OPENVIKING_BEARER_TOKEN", { url: "https://previous.example/openviking", api_key: "previous-key" }, "\t"],
   ]) {
     const home = makeTempHome(t);
     const file = join(home, "ovcli.conf");
@@ -990,8 +992,8 @@ json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking rep
 `, {
       HOME: home,
       OPENVIKING_CONFIG_FILE: undefined,
-      OPENVIKING_URL: undefined,
-      OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_URL: envUrl,
+      OPENVIKING_BASE_URL: envBaseUrl,
       OPENVIKING_API_KEY: undefined,
       OPENVIKING_BEARER_TOKEN: undefined,
       [variable]: "environment-key",
@@ -1006,23 +1008,58 @@ json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking rep
 });
 
 test("an unpaired environment key is not used to save a different endpoint without a new key", (t) => {
-  const home = makeTempHome(t);
-  const file = join(home, "ovcli.conf");
-  const previous = { url: "https://previous.example/openviking", api_key: "previous-key" };
-  writeFileSync(file, JSON.stringify(previous));
-  const result = runInstallerPrelude(`
+  for (const env of [
+    { OPENVIKING_API_KEY: "environment-key" },
+    { OPENVIKING_API_KEY: "environment-key", OPENVIKING_URL: " \t " },
+    { OPENVIKING_BEARER_TOKEN: "environment-key", OPENVIKING_BASE_URL: "\n" },
+    { OPENVIKING_API_KEY: "environment-key", OPENVIKING_BEARER_TOKEN: " ", OPENVIKING_URL: " ", OPENVIKING_BASE_URL: "\t" },
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const previous = { url: "https://previous.example/openviking", api_key: "previous-key" };
+    writeFileSync(file, JSON.stringify(previous));
+    const result = runInstallerPrelude(`
 json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
 `, {
-    HOME: home,
-    OPENVIKING_CONFIG_FILE: undefined,
-    OPENVIKING_URL: undefined,
-    OPENVIKING_BASE_URL: undefined,
-    OPENVIKING_API_KEY: "environment-key",
-    OPENVIKING_BEARER_TOKEN: undefined,
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /could reuse a key from another server/);
-  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+      HOME: home,
+      OPENVIKING_CONFIG_FILE: undefined,
+      OPENVIKING_URL: undefined,
+      OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined,
+      OPENVIKING_BEARER_TOKEN: undefined,
+      ...env,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /could reuse a key from another server/);
+    assert.doesNotMatch(result.stderr, /environment-key|previous-key/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+  }
+});
+
+test("blank environment values follow the client credential defaults", (t) => {
+  for (const env of [
+    { OPENVIKING_API_KEY: " \t ", OPENVIKING_BEARER_TOKEN: "\n" },
+    { OPENVIKING_API_KEY: "environment-key", OPENVIKING_URL: " ", OPENVIKING_BASE_URL: "https://previous.example/openviking" },
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, {
+      HOME: home,
+      OPENVIKING_CONFIG_FILE: undefined,
+      OPENVIKING_URL: undefined,
+      OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined,
+      OPENVIKING_BEARER_TOKEN: undefined,
+      ...env,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /could reuse a key|can override the saved API key/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+      url: "https://byteplus.example/openviking", api_key: "",
+    });
+  }
 });
 
 test("keeping a saved key with an implicit URL does not pin or probe a new endpoint", (t) => {

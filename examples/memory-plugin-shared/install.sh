@@ -731,8 +731,8 @@ if (url && endpoint(c.url) !== endpoint(url)) {
   const legacyHost = typeof server.host === "string" ? server.host.replace("0.0.0.0", "127.0.0.1") : "127.0.0.1";
   const legacyUrl = server.url || `http://${legacyHost}:${server.port || 1933}`;
   const legacyKey = server.root_api_key || legacy.api_key || Object.values(legacy).some(section => section?.apiKey);
-  const envKey = process.env.OPENVIKING_BEARER_TOKEN || process.env.OPENVIKING_API_KEY;
-  const envUrl = process.env.OPENVIKING_URL || process.env.OPENVIKING_BASE_URL;
+  const envKey = process.env.OPENVIKING_BEARER_TOKEN?.trim() || process.env.OPENVIKING_API_KEY?.trim();
+  const envUrl = process.env.OPENVIKING_URL?.trim() || process.env.OPENVIKING_BASE_URL?.trim();
   const hasNewKey = apiKey && apiKey.trim() && apiKey !== "__OPENVIKING_KEEP__";
   if (!hasNewKey && ((legacyKey && endpoint(legacyUrl) !== endpoint(url)) || (envKey && !envUrl))) {
     console.error(process.env.OVCLI_LANG === "zh"
