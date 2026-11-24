@@ -49,6 +49,23 @@ def patch_httpx(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v1_health_is_ready(patch_httpx):
+    def handler(url):
+        if url == f"{ENDPOINT}/v1/health":
+            return _FakeResponse(
+                payload={
+                    "status": "ok",
+                    "version": "4.0.12",
+                    "features": {"output_formats": ["zip"]},
+                }
+            )
+        return _FakeResponse(status_code=404, payload={"detail": "Not Found"})
+
+    patch_httpx(handler)
+    await wait_for_mineru_ready(ENDPOINT, timeout=0.05)
+
+
+@pytest.mark.asyncio
 async def test_ready_immediately(patch_httpx):
     patch_httpx(lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "healthy"}))
 
@@ -61,6 +78,8 @@ async def test_ready_after_unhealthy(patch_httpx):
     calls = {"count": 0}
 
     def handler(url):
+        if url != HEALTH_URL:
+            return _FakeResponse(status_code=404, payload={"detail": "Not Found"})
         calls["count"] += 1
         if calls["count"] == 1:
             return _FakeResponse(status_code=503, payload={"status": "starting"})
@@ -74,9 +93,7 @@ async def test_ready_after_unhealthy(patch_httpx):
 
 @pytest.mark.asyncio
 async def test_timeout_raises(patch_httpx):
-    patch_httpx(
-        lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "unhealthy"})
-    )
+    patch_httpx(lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "unhealthy"}))
 
     with pytest.raises(RuntimeError) as exc_info:
         await wait_for_mineru_ready(ENDPOINT, timeout=0.05)

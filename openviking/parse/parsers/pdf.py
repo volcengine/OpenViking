@@ -21,13 +21,13 @@ import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from pdfminer.pdfparser import PDFSyntaxError
 from pdfminer.pdftypes import resolve1
 from pdfminer.psparser import LIT, PSEOF
 
-from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -36,6 +36,8 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.mineru import parse_mineru_v1
+from openviking.service.mineru_preflight import mineru_base_url, wait_for_mineru_ready
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
@@ -757,55 +759,62 @@ class PDFParser(BaseParser):
         if not self.config.mineru_endpoint:
             raise ValueError("MinerU endpoint not configured")
 
-        # mineru_endpoint is a base URL; append /file_parse unless it already ends with it
-        base = self.config.mineru_endpoint.rstrip("/")
-        url = base if base.endswith("/file_parse") else f"{base}/file_parse"
+        base = mineru_base_url(self.config.mineru_endpoint)
+        mode = self.config.mineru_api_mode
+        health: dict[str, Any] = {}
+        if mode != "legacy":
+            mode, health = await wait_for_mineru_ready(
+                self.config.mineru_endpoint, api_mode=mode, headers=self.config.mineru_headers
+            )
 
-        meta = {
+        meta: Dict[str, Any] = {
             "strategy": "mineru",
             "endpoint": self.config.mineru_endpoint,
-            "api_version": None,
+            "api_version": health.get("version"),
         }
 
+        images: Mapping[str, bytes | str]
         try:
-            async with httpx.AsyncClient(timeout=self.config.mineru_timeout) as client:
-                # Prepare file upload
-                with open(pdf_path, "rb") as f:
-                    files = {"files": (pdf_path.name, f, "application/pdf")}
-
-                    # Prepare Form fields
-                    data: Dict[str, Any] = dict(self.config.mineru_bodys or {})
-
-                    # MinerU must return extracted images for the markdown refs.
-                    data["return_images"] = True
-
-                    # Make API request
-                    logger.debug("Calling MinerU API endpoint=%s", safe_uri_for_log(url))
-                    response = await client.post(
-                        url,
-                        files=files,
-                        data=data,
+            async with httpx.AsyncClient(
+                timeout=self.config.mineru_timeout, headers=self.config.mineru_headers
+            ) as client:
+                if mode == "v1":
+                    self.config.validate_mineru_v1()
+                    markdown_content, images, meta["task_id"] = await asyncio.wait_for(
+                        parse_mineru_v1(
+                            client, base.removesuffix("/v1"), pdf_path, self.config, health
+                        ),
+                        timeout=self.config.mineru_timeout,
                     )
+                else:
+                    url = f"{base}/file_parse"
+                    data = dict(self.config.mineru_bodys or {}, return_images=True)
+                    with pdf_path.open("rb") as source:
+                        response = await client.post(
+                            url,
+                            files={"files": (pdf_path.name, source, "application/pdf")},
+                            data=data,
+                        )
                     response.raise_for_status()
-
-            # Parse response
-            result = response.json()
-            if result.get("status") != "completed":
-                raise ValueError(f"MinerU task not completed: {result.get('status')}")
-
-            results = result.get("results") or {}
-            file_result = results.get(pdf_path.name) or next(iter(results.values()), {})
-            markdown_content = file_result.get("md_content") or ""
-
-            # Extract metadata from response
-            meta["api_version"] = result.get("version")
-            meta["backend"] = result.get("backend")
-            meta["task_id"] = result.get("task_id")
-            started_at, completed_at = result.get("started_at"), result.get("completed_at")
-            if started_at and completed_at:
-                meta["processing_time"] = (
-                    parse_iso_datetime(completed_at) - parse_iso_datetime(started_at)
-                ).total_seconds()
+                    result: dict[str, Any] = response.json()
+                    if result.get("status") != "completed":
+                        raise ValueError(f"MinerU task not completed: {result.get('status')}")
+                    results = result.get("results") or {}
+                    file_result: dict[str, Any] = results.get(pdf_path.name) or next(
+                        iter(results.values()), {}
+                    )
+                    markdown_content = file_result.get("md_content") or ""
+                    images = file_result.get("images") or {}
+                    meta.update(
+                        api_version=result.get("version"),
+                        backend=result.get("backend"),
+                        task_id=result.get("task_id"),
+                    )
+                    started_at, completed_at = result.get("started_at"), result.get("completed_at")
+                    if started_at and completed_at:
+                        meta["processing_time"] = (
+                            parse_iso_datetime(completed_at) - parse_iso_datetime(started_at)
+                        ).total_seconds()
 
             if not markdown_content:
                 logger.info(
@@ -822,15 +831,16 @@ class PDFParser(BaseParser):
             if resource_name is None:
                 resource_name = pdf_path.stem
 
-            # MinerU embeds images as base64 data-URLs, referenced from markdown
-            # as `images/<filename>`; save them into the media store and rewrite
-            # the references to the stored relative paths.
+            # Persist images and rewrite their Markdown references to stored paths.
             repl: Dict[str, str] = {}
             media_dir = storage.media_dir
-            for img_name, data_url in (file_result.get("images") or {}).items():
+            for img_name, image in images.items():
                 try:
-                    # data URL form: "data:image/jpeg;base64,<b64>"
-                    image_bytes = base64.b64decode(data_url.split(",", 1)[-1])
+                    image_bytes = (
+                        base64.b64decode(image.split(",", 1)[-1])
+                        if isinstance(image, str)
+                        else image
+                    )
                     img_path = Path(img_name)
                     image_path = storage.save_image(
                         resource_name,
@@ -846,7 +856,7 @@ class PDFParser(BaseParser):
                         type(img_err).__name__,
                     )
 
-            failed_images = len(file_result.get("images") or {}) - len(repl)
+            failed_images = len(images) - len(repl)
             if failed_images:
                 logger.info(
                     "MinerU image extraction incomplete failed=%d degraded=true", failed_images

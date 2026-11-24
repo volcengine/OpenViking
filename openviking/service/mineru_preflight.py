@@ -1,68 +1,67 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-Startup preflight for the MinerU API.
-
-Polls the MinerU ``/health`` endpoint so that endpoint misconfiguration, a
-stopped service, or a protocol incompatibility is surfaced at service
-initialization instead of on the first PDF import.
-"""
+"""Health discovery shared by MinerU startup and PDF parsing."""
 
 import asyncio
 import time
+from typing import Any
 
 import httpx
 
-HEALTH_TIMEOUT = 5.0          # Total polling timeout in seconds.
-HEALTH_POLL_INTERVAL = 0.2    # Delay between polls in seconds.
-HEALTH_REQUEST_TIMEOUT = 0.5  # Per-request timeout in seconds.
+HEALTH_TIMEOUT = 5.0
+HEALTH_POLL_INTERVAL = 0.2
+HEALTH_REQUEST_TIMEOUT = 0.5
 
 
-async def wait_for_mineru_ready(endpoint: str, timeout: float = HEALTH_TIMEOUT) -> None:
-    """
-    Poll the MinerU ``/health`` endpoint until it reports ready.
+def mineru_base_url(endpoint: str) -> str:
+    """Normalize a base URL or an explicitly configured parsing URL."""
+    return endpoint.rstrip("/").removesuffix("/file_parse")
 
-    A healthy response is HTTP 200 with a JSON object carrying a non-empty
-    ``protocol_version`` and ``status == "healthy"``.
 
-    Args:
-        endpoint: MinerU base URL (e.g. ``http://127.0.0.1:8000``).
-        timeout: Total time to poll before giving up, in seconds.
-
-    Raises:
-        RuntimeError: If the endpoint does not report ready within ``timeout``
-            seconds. The message includes the health URL and the last error.
-    """
-    health_url = f"{endpoint.rstrip('/')}/health"
+async def wait_for_mineru_ready(
+    endpoint: str,
+    timeout: float = HEALTH_TIMEOUT,
+    *,
+    api_mode: str = "auto",
+    headers: dict[str, str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Return the healthy API mode and its health response."""
+    base_url = mineru_base_url(endpoint)
+    urls = {"v1": f"{base_url.removesuffix('/v1')}/v1/health", "legacy": f"{base_url}/health"}
+    modes = ("v1", "legacy") if api_mode == "auto" else (api_mode,)
     deadline = time.monotonic() + timeout
-    last_error = "no response"
+    errors = dict.fromkeys(modes, "no response")
 
-    async with httpx.AsyncClient(timeout=HEALTH_REQUEST_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HEALTH_REQUEST_TIMEOUT, headers=headers) as client:
         while time.monotonic() < deadline:
-            try:
-                response = await client.get(health_url)
-                payload = response.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                last_error = str(exc) or exc.__class__.__name__
-            else:
-                if isinstance(payload, dict):
-                    protocol = payload.get("protocol_version")
-                    status = payload.get("status")
+            for mode in modes:
+                try:
+                    remaining = max(0, deadline - time.monotonic())
+                    response = await asyncio.wait_for(client.get(urls[mode]), remaining)
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError, asyncio.TimeoutError) as exc:
+                    errors[mode] = str(exc) or exc.__class__.__name__
+                    continue
+
+                if not isinstance(payload, dict):
+                    payload = {}
+                status = payload.get("status")
+                if mode == "v1":
+                    capability = bool(payload.get("version")) or isinstance(
+                        payload.get("features"), dict
+                    )
+                    ready = capability and status in ("ok", "healthy")
                 else:
-                    protocol = status = None
+                    ready = bool(payload.get("protocol_version")) and status == "healthy"
+                if response.status_code == 200 and ready:
+                    return mode, payload
 
-                if response.status_code == 200 and protocol and status == "healthy":
-                    return
+                errors[mode] = f"HTTP {response.status_code}, status={status!r}"
 
-                last_error = (
-                    f"unexpected response: HTTP {response.status_code}, "
-                    f"protocol_version={protocol!r}, status={status!r}"
-                )
+            await asyncio.sleep(min(HEALTH_POLL_INTERVAL, max(0, deadline - time.monotonic())))
 
-            await asyncio.sleep(HEALTH_POLL_INTERVAL)
-
+    attempts = ", ".join(f"{mode} {urls[mode]} ({errors[mode]})" for mode in modes)
     raise RuntimeError(
-        f"MinerU startup preflight failed for {health_url} after {timeout}s. "
-        f"Last error: {last_error}. "
-        "Start a compatible mineru-api service or correct pdf.mineru_endpoint."
+        f"MinerU startup preflight failed after {timeout}s. Probes: {attempts}. "
+        "Start a compatible MinerU service or correct pdf.mineru_endpoint."
     )

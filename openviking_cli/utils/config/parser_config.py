@@ -8,7 +8,7 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
@@ -141,7 +141,7 @@ class PDFConfig(ParserConfig):
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
         mineru_timeout: MinerU request timeout in seconds
-        mineru_bodys: Additional MinerU API multipart form fields
+        mineru_bodys: Additional legacy MinerU API multipart form fields
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
@@ -158,6 +158,23 @@ class PDFConfig(ParserConfig):
 
     # Image extraction configuration
     image_resolution: int = 300  # Rendering DPI for extracted image regions
+
+    mineru_api_mode: str = "auto"
+    mineru_token: Optional[str] = field(default=None, repr=False)
+    mineru_tier: Optional[str] = None
+    mineru_ocr_mode: str = "auto"
+    mineru_output_formats: list[str] = field(default_factory=lambda: ["zip"])
+
+    @property
+    def mineru_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.mineru_token}"} if self.mineru_token else {}
+
+    def validate_mineru_v1(self) -> None:
+        if self.mineru_bodys:
+            raise ValueError(
+                "mineru_bodys is only supported by legacy MinerU. "
+                "Use mineru_tier, mineru_ocr_mode and mineru_output_formats for V1."
+            )
 
     def validate(self) -> None:
         """
@@ -181,6 +198,23 @@ class PDFConfig(ParserConfig):
 
         if self.mineru_timeout <= 0:
             raise ValueError("mineru_timeout must be positive")
+
+        if self.mineru_api_mode not in ("auto", "v1", "legacy"):
+            raise ValueError("mineru_api_mode must be 'auto', 'v1', or 'legacy'")
+        if self.mineru_tier not in (None, "flash", "basic", "standard", "advanced"):
+            raise ValueError("mineru_tier must be 'flash', 'basic', 'standard', or 'advanced'")
+        if self.mineru_ocr_mode not in ("auto", "txt", "ocr"):
+            raise ValueError("mineru_ocr_mode must be 'auto', 'txt', or 'ocr'")
+        if (
+            not isinstance(self.mineru_output_formats, list)
+            or not self.mineru_output_formats
+            or any(fmt not in ("markdown", "zip") for fmt in self.mineru_output_formats)
+        ):
+            raise ValueError(
+                "mineru_output_formats must be a non-empty list of 'markdown' or 'zip'"
+            )
+        if self.mineru_api_mode == "v1":
+            self.validate_mineru_v1()
 
         if self.heading_detection not in ("bookmarks", "font", "auto", "none"):
             raise ValueError(f"Invalid heading_detection: {self.heading_detection}")

@@ -1128,14 +1128,12 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 ```json
 {
   "pdf": {
-    "strategy": "auto",
+    "strategy": "mineru",
     "mineru_endpoint": "http://127.0.0.1:8000",
+    "mineru_api_mode": "v1",
     "mineru_timeout": 300.0,
-    "mineru_bodys": {
-      "backend": "hybrid-auto-engine",
-      "lang_list": ["ch"],
-      "parse_method": "auto"
-    }
+    "mineru_ocr_mode": "auto",
+    "mineru_output_formats": ["zip"]
   }
 }
 ```
@@ -1144,10 +1142,22 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 |------|------|------|
 | `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
-| `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
-| `mineru_bodys` | dict | MinerU API multipart form 参数 |
+| `mineru_timeout` | float | 解析超时秒数（默认 `300.0`） |
+| `mineru_api_mode` | str | API 协议：`auto`（默认，优先探测 V1）、`v1` 或 `legacy` |
+| `mineru_token` | str | 自托管端点启用认证时使用的可选 Bearer 令牌 |
+| `mineru_tier` | str | V1 档位：`flash`、`basic`、`standard` 或 `advanced`，省略时由服务端选择 |
+| `mineru_ocr_mode` | str | V1 OCR 模式：`auto`（默认）、`txt` 或 `ocr` |
+| `mineru_output_formats` | list[str] | V1 输出：`["zip"]`（默认，Markdown 和图片）或 `["markdown"]`（仅文本） |
+| `mineru_bodys` | dict | 旧版 MinerU 的额外 multipart 表单字段 |
 
-**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+**自托管 MinerU 兼容性**
+
+- **V1** 探测 `GET /v1/health`。支持提供同步端点 `POST /v1/file_parse` 的 MinerU 4.0 部署，例如 4.0.12。健康响应包含 `task_output_formats` 的 MinerU 4.1–4.2 服务和路由器使用 `/v1/tasks`，并以 ZIP 提供 `default` 产物。选择 `"zip"` 时，OpenViking 会导入其中的图片。请配置 MinerU 主 API 或路由器的基础 URL。[MinerU 4.1 迁移指南](https://opendatalab.github.io/MinerU/zh/reference/migration_4_1/)
+- **Legacy** 支持 2.x/3.x 的 `mineru-api`，要求 `GET /health` 返回 `status: "healthy"` 和 `protocol_version`，并且 `POST /file_parse` 返回内联 JSON。若需继续使用 3.x，请安装 `mineru[core]>=3.4,<4` 并运行 `mineru-api`。
+
+迁移到 V1 时请移除 `mineru_bodys`。使用 `mineru_tier` 选择档位以替代 `backend`，通过 `mineru_output_formats` 选择是否包含图片，并用 `mineru_ocr_mode` 控制 OCR。旧字段 `formula_enable`、`table_enable` 和 `lang_list` 在 V1 中没有对应项。
+
+若需对所有 PDF 使用 MinerU，请设置 `strategy: "mineru"`。`strategy: "auto"` 在本地解析失败时调用 MinerU。`mineru_api_mode` 仅用于选择远程协议。
 
 ### 外部解析 API（`parser_api`） {#parser-api}
 
