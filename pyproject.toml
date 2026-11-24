@@ -279,6 +279,7 @@ openviking = [
     "observability/usage_audit/sql/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
+    "resource/github_radar/prompts/*.md",
 ]
 vikingbot = [
     "**/*.mjs",
