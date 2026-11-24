@@ -8,6 +8,24 @@ import { normalizeEvent } from './event.mjs';
 // (lark-cli answers within 3 s): an edit made then fails with this code.
 export const CARD_LOCKED = /ErrCode: 11310\b/;
 
+// Edit a card the daemon sent. An edit Lark refuses for the lock is made
+// again a second later, up to four tries; any other refusal, or the lock
+// still there at the last try, is thrown. `superseded` says a newer edit of
+// the card is coming: the lock is then not waited out ({ superseded: true }).
+export async function editCard(connectors, messageId, card, { superseded = () => false, tries = 4, waitMs = 1000 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await connectors.updateCard(messageId, card);
+      return { tries: attempt, superseded: false };
+    } catch (error) {
+      if (!CARD_LOCKED.test(String(error?.message ?? error)) || attempt >= tries) throw error;
+    }
+    if (superseded()) return { tries: attempt, superseded: true };
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    if (superseded()) return { tries: attempt, superseded: true };
+  }
+}
+
 export function migrateCardMessages(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS lark_cards (
     message_id TEXT PRIMARY KEY,

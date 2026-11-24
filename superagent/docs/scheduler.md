@@ -617,12 +617,16 @@ its results (one per round, plus any a newer addition superseded) and its
 runtime moves; the text says the same. Both cards end with when they were
 drawn and a 刷新 button: it runs the `/tasks` (or `/tasks t12`) that drew the
 card, as a card callback under the same rules, and redraws that card in place
-rather than send a new one. Lark locks a card while a click on it awaits its
-answer, and refuses an edit meanwhile (ErrCode 11310): the Lark connector makes
-the edit again a second later, up to four tries. A card still locked is being
-clicked again, and that click redraws it; should Lark refuse the edit for any
-other reason (a message too old to change), the answer goes as a new card. The
-owner stops a task with
+rather than send a new one, off the queue the Core takes messages in: waiting
+on Lark holds up no message. Lark locks a card while a click on it awaits its
+answer, and refuses an edit meanwhile (ErrCode 11310): the Core makes the edit
+again a second later, up to four tries, for every card it edits. Only the
+newest press on a card is drawn: a press made while the card is being drawn
+takes the place of any still waiting, and the drawing stops waiting out the
+lock. A card still locked at the last try is being pressed again, and nothing
+is sent; should Lark refuse the edit for any other reason (a message too old to
+change), the answer goes as a new card. Each press logs what became of it
+(`command_card_refresh`). The owner stops a task with
 `/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort). The Core answers these without the model.

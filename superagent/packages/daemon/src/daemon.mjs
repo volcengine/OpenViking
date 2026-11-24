@@ -31,7 +31,7 @@ import { InstanceLock } from './lock.mjs';
 import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 import { approvalNote } from './actions/approval.mjs';
-import { CARD_LOCKED, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
+import { CARD_LOCKED, editCard, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { LARK_MESSAGE_EVENT_KINDS, resolveLarkMessageEvent } from './lark-message-events.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
@@ -89,6 +89,10 @@ export class PersonalAgentDaemon {
     this.startedAt = Date.now();
     this.ready = false;
     this.shuttingDown = false;
+    // The /tasks cards being redrawn by their refresh button (refreshCard).
+    this.cardRefreshes = new Map();
+    // How long a card edit Lark refused for the lock waits to try again (editCard).
+    this.cardEditWaitMs = 1000;
     this.shutdownPromise = null;
     this.maintenanceTimer = null;
     this.runId = randomUUID();
@@ -425,7 +429,7 @@ export class PersonalAgentDaemon {
         onInboundChat: (chatId) => this.chatNames.schedule(chatId),
         afterEvent: (event) => {
           const card = settledChoiceCard(event);
-          if (card) return this.connectors.updateCard(event.parentId, card);
+          if (card) return editCard(this.connectors, event.parentId, card, { waitMs: this.cardEditWaitMs });
         },
         isOwner: (event) => this.connectors.isOwner(event),
         mentionTarget: (event) => this.connectors.mentionTarget(event),
@@ -539,6 +543,15 @@ export class PersonalAgentDaemon {
       text: `slash command ${String(event.content).trim()}`,
       dedupeKey: `command:${event.messageId}`,
     });
+    // A press of a /tasks card's refresh button is answered off this queue.
+    if (refreshesCard(event)) {
+      void this.refreshCard({ command, event, inbound, label, at: Date.now() });
+      return;
+    }
+    await this.replyCommand(await this.runCommand(command, event, inbound, label), event, inbound);
+  }
+
+  async runCommand(command, event, inbound, label) {
     let outcome;
     try {
       outcome = await executeCommand(command, this.agentRuntime, {
@@ -568,21 +581,11 @@ export class PersonalAgentDaemon {
       inboundSeq: inbound?.seq,
       metadata: { chatType: event.chatType },
     });
-    // The refresh button on a /tasks card redraws that card in place. Should
-    // Lark refuse (the message is too old to edit), the answer goes as a reply.
-    // A card still locked after the Lark connector's tries is being clicked
-    // again: that click's own refresh redraws it, and no card is sent.
-    if (outcome.card && refreshesCard(event)) {
-      try {
-        await this.connectors.updateCard(event.parentId, outcome.card);
-        return;
-      } catch (error) {
-        const locked = CARD_LOCKED.test(safeError(error));
-        this.logger.warn('command_card_refresh_failed', { command: label, locked, error: safeError(error) });
-        if (locked) return;
-      }
-    }
-    // A command may answer with a card too (/tasks); the text goes where it cannot.
+    return outcome;
+  }
+
+  // A command may answer with a card too (/tasks); the text goes where it cannot.
+  async replyCommand(outcome, event, inbound) {
     const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply', { card: outcome.card ?? null });
     if (!sent.ok) {
       this.recordSystemActivity('command.reply_failed', {
@@ -592,6 +595,60 @@ export class PersonalAgentDaemon {
         inboundSeq: inbound?.seq,
       });
     }
+  }
+
+  // The refresh button on a /tasks card redraws that card in place, off the
+  // ingress queue: waiting out Lark's lock on the card (editCard) never holds
+  // up a message. Only the newest press on a card is drawn. A press made while
+  // the card is being drawn takes the place of any still waiting, and the
+  // drawing stops waiting out the lock, since a newer press will draw the card.
+  refreshCard(press) {
+    const cardId = press.event.parentId;
+    const drawing = this.cardRefreshes.get(cardId);
+    if (drawing) {
+      if (drawing.next) this.logRefresh(drawing.next, 'replaced');
+      drawing.next = press;
+      return drawing.done;
+    }
+    const state = { next: press };
+    this.cardRefreshes.set(cardId, state);
+    state.done = (async () => {
+      while (state.next && !this.shuttingDown) {
+        const current = state.next;
+        state.next = null;
+        await this.drawRefresh(current, () => state.next !== null)
+          .catch((error) => this.logRefresh(current, 'failed', { error: safeError(error) }));
+      }
+    })().finally(() => this.cardRefreshes.delete(cardId));
+    return state.done;
+  }
+
+  // One press: the command runs now, so the card shows the tasks as they are
+  // when it is drawn. A card still locked at the last try is being pressed
+  // again, and nothing is sent; refused for another reason (a message too old
+  // to edit), or answered without a card, the answer goes as a reply.
+  async drawRefresh(press, superseded) {
+    const { command, event, inbound, label } = press;
+    const outcome = await this.runCommand(command, event, inbound, label);
+    if (!outcome.card) {
+      await this.replyCommand(outcome, event, inbound);
+      return this.logRefresh(press, 'replied');
+    }
+    try {
+      const edit = await editCard(this.connectors, event.parentId, outcome.card, { superseded, waitMs: this.cardEditWaitMs });
+      this.logRefresh(press, edit.superseded ? 'superseded' : 'redrawn', { tries: edit.tries });
+    } catch (error) {
+      const locked = CARD_LOCKED.test(safeError(error));
+      this.logRefresh(press, locked ? 'locked' : 'refused', { error: safeError(error) });
+      if (!locked) await this.replyCommand(outcome, event, inbound);
+    }
+  }
+
+  // What became of each press, and how long after it: redrawn, superseded or
+  // replaced by a newer press, still locked, refused (then replied), replied.
+  logRefresh(press, outcome, fields = {}) {
+    const level = ['redrawn', 'superseded', 'replaced', 'replied'].includes(outcome) ? 'info' : 'warn';
+    this.logger[level]('command_card_refresh', { command: press.label, outcome, ms: Date.now() - press.at, ...fields });
   }
 
   // The model and effort the router last had on a runtime, which it takes
@@ -630,7 +687,7 @@ export class PersonalAgentDaemon {
         status: result.stale || result.steps.some((step) => !step.ok) ? 'FAILED' : 'OK', conversationKey: event.conversationKey,
       });
     }
-    if (card) await this.connectors.updateCard(event.parentId, card);
+    if (card) await editCard(this.connectors, event.parentId, card, { waitMs: this.cardEditWaitMs });
   }
 
   runMaintenance() {

@@ -32,38 +32,6 @@ it('updates an answered card using bot message patch without callback credential
   assert.equal(calls.length, 1);
 });
 
-it('edits a card again while a click on it holds it locked, and gives up after four tries', async () => {
-  // What lark-cli prints when Lark refuses the edit of a card being clicked.
-  const LOCKED = JSON.stringify({ ok: false, identity: 'bot', error: { type: 'api', code: 230099,
-    message: 'Failed to create card content, ext=ErrCode: 11310; ErrMsg: card action is lock; ' } }, null, 2);
-  const client = (outcomes) => {
-    const calls = [];
-    const lark = new LarkClient({ profile: 'test-profile', larkCliBin: '/fake/lark-cli', projectDir: '/tmp', sendTimeoutMs: 5000 }, {
-      async run() {
-        calls.push(Date.now());
-        const outcome = outcomes[calls.length - 1] ?? 'ok';
-        return outcome === 'ok' ? { code: 0, stdout: JSON.stringify({ ok: true, data: {} }), stderr: '' }
-          : { code: 1, stdout: '', stderr: outcome };
-      },
-    }, quietLogger);
-    lark.cardLockRetryMs = 0;
-    return { lark, calls };
-  };
-  const card = { elements: [] };
-
-  const unlocked = client([LOCKED, LOCKED]);
-  assert.deepEqual(await unlocked.lark.updateCard('om_locked1234567', card), { ok: true, data: {} });
-  assert.equal(unlocked.calls.length, 3);
-
-  const stuck = client([LOCKED, LOCKED, LOCKED, LOCKED, LOCKED]);
-  await assert.rejects(stuck.lark.updateCard('om_locked1234567', card), /ErrCode: 11310/);
-  assert.equal(stuck.calls.length, 4);
-
-  const old = client(['message too old to edit']);
-  await assert.rejects(old.lark.updateCard('om_locked1234567', card), /too old/);
-  assert.equal(old.calls.length, 1, 'any other refusal is final');
-});
-
 it('gives a Lark video send its cover extraction time on top of the send timeout', () => {
   const lark = new ConnectorProcess('lark', { sendTimeoutMs: 5000 }, null, quietLogger);
   Object.assign(lark, { child: {}, checked: true, request: (_operation, _payload, timeoutMs) => timeoutMs });

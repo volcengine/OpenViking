@@ -12,7 +12,6 @@ import { sanitizeNonArkChildEnv, terminateProcessTree } from './process-utils.mj
 import { MEETING_EVENT_TYPES } from './meeting/index.mjs';
 import { prepareLarkMediaDirectory } from './lark-media.mjs';
 import { MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, replaceCardImages, validImageKey } from './card-images.mjs';
-import { CARD_LOCKED } from './card-messages.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 import { isLarkVideo, videoCover } from './lark-video.mjs';
 import { LarkImageCache } from './lark-image-cache.mjs';
@@ -145,8 +144,6 @@ export class LarkClient {
     this.selfId = null;
     this.selfName = null;
     this.names = new Map(); // open_id -> { name, atMs }
-    // How long a card edit waits for a lock on the card to go (updateCard).
-    this.cardLockRetryMs = 1000;
   }
 
   async preflight() {
@@ -673,24 +670,13 @@ export class LarkClient {
   }
 
   // Reflect a settled choice without depending on the short-lived callback token.
-  // A click on the card locks it until lark-cli answers the click (within 3 s),
-  // and an edit made meanwhile is refused (CARD_LOCKED): it is made again a
-  // moment later, up to four tries.
   async updateCard(messageId, card) {
     if (this.config.dryRun) return { sent: false, dryRun: true };
-    const args = [
+    return this.runJson([
       '--profile', this.profile, 'im', 'messages', 'patch', '--as', 'bot',
       '--message-id', messageId, '--data', JSON.stringify({ content: JSON.stringify(card) }),
       '--format', 'json',
-    ];
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        return await this.runJson(args, 'update answered card', this.config.sendTimeoutMs);
-      } catch (error) {
-        if (attempt >= 4 || !CARD_LOCKED.test(error.message)) throw error;
-        await new Promise((resolve) => setTimeout(resolve, this.cardLockRetryMs));
-      }
-    }
+    ], 'update answered card', this.config.sendTimeoutMs);
   }
 
   // Chat member roster fetch for name<->open_id resolution. Returns the parsed
