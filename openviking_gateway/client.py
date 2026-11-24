@@ -19,6 +19,7 @@ from .cache import TTLCache
 # unless the body sets peer_scope "actor". Tool calls carry it only under "actor". Without a
 # peer there is nothing to narrow to, so "actor" sends what "all" does.
 PEER_HEADER = "X-OpenViking-Actor-Peer"
+PEER_MEMORY_HEADER = "X-OpenViking-Peer-Allow-User-Memory"
 # OpenViking's bounds for a session's automatic commits.
 MIN_IDLE_SECONDS = 300
 MAX_COMMIT_TOKENS = 1_000_000
@@ -53,8 +54,11 @@ def without_deadline():
         CALL.reset(bound)
 
 
-def peer_header(peer):
-    return {PEER_HEADER: peer} if peer else {}
+def peer_header(peer, peer_memory_only=False):
+    headers = {PEER_HEADER: peer} if peer else {}
+    if peer_memory_only:
+        headers[PEER_MEMORY_HEADER] = "false"
+    return headers
 
 
 def call_headers():
@@ -175,7 +179,9 @@ class VikingClient:
             raise failure
         raise failure from cause
 
-    async def request(self, method, path, key, body=None, timeout=30, peer=None):
+    async def request(
+        self, method, path, key, body=None, timeout=30, peer=None, *, peer_memory_only=False
+    ):
         """``peer`` is the actor peer for recall; OpenViking's session routes ignore it."""
         with self.guarded((aiohttp.ClientError, ValueError)):
             async with self.http.request(
@@ -185,7 +191,7 @@ class VikingClient:
                 headers={
                     "X-API-Key": key,
                     "Accept-Encoding": "identity",
-                    **peer_header(peer),
+                    **peer_header(peer, peer_memory_only),
                     **call_headers(),
                 },
                 timeout=aiohttp.ClientTimeout(total=timeout),
@@ -259,6 +265,7 @@ class VikingClient:
             },
             timeout=self.budget(policy.recall_timeout),
             peer=peer,
+            **({"peer_memory_only": True} if not policy.peer_allow_user_memory else {}),
         )
 
     async def write(self, key, session, messages):
@@ -304,6 +311,11 @@ class VikingClient:
                     "session_id": session,
                     "auto_commit_policy": commits,
                     **({"memory_policy": memory_policy} if memory_policy else {}),
+                    **(
+                        {"peer_allow_user_memory": False}
+                        if not policy.peer_allow_user_memory
+                        else {}
+                    ),
                 },
             )
         except VikingError as error:
@@ -359,7 +371,9 @@ class VikingClient:
             raise VikingError("openviking_unavailable")
         return await self.tools_cache.get("tools/list", load)
 
-    async def mcp(self, method, key, params=None, timeout=120, peer=None):
+    async def mcp(
+        self, method, key, params=None, timeout=120, peer=None, *, peer_memory_only=False
+    ):
         """Stateless Streamable HTTP MCP; accept both JSON and SSE responses."""
         from .protocols import SSEDecoder
 
@@ -371,7 +385,7 @@ class VikingClient:
                     "Accept": "application/json, text/event-stream",
                     "MCP-Protocol-Version": "2025-06-18",
                     "Accept-Encoding": "identity",
-                    **peer_header(peer),
+                    **peer_header(peer, peer_memory_only),
                     **call_headers(),
                 },
                 json={

@@ -96,3 +96,22 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
     assert [entry["origin"] for entry in entries] == ["actor_peer", "self"]
     assert all(not call["target_uri"].endswith("/peers") for call in calls)
     assert all(not uri.endswith("/other.md") for uri, _ in read_calls)
+
+    peer_only = {**headers, "X-OpenViking-Peer-Allow-User-Memory": "false"}
+    calls.clear()
+    read_calls.clear()
+    response = await client.post("/api/v1/search/recall", headers=peer_only, json=payload)
+    assert response.status_code == 200, response.text
+    assert [entry["origin"] for entry in response.json()["result"]["entries"]] == ["actor_peer"]
+    assert all("/peers/current/" in call["target_uri"] for call in calls)
+    assert all("/peers/current/" in uri for uri, _ in read_calls)
+
+    session = await client.post("/api/v1/sessions", json={"peer_allow_user_memory": False})
+    assert session.status_code == 200, session.text
+    session_id = session.json()["result"]["session_id"]
+    saved = await client.get(f"/api/v1/sessions/{session_id}")
+    assert saved.json()["result"]["memory_policy"] == {
+        "self": {"enabled": False},
+        "peer": {"enabled": True},
+        "working_memory": {"enabled": False},
+    }

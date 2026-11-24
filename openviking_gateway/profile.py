@@ -213,7 +213,7 @@ async def ls_dir(fetch, uri):
     return sorted(entries, key=lambda entry: entry["name"])
 
 
-async def build_profile(viking, key, policy, tools):
+async def build_profile(viking, key, policy, tools, *, peer_root=None, peer=None):
     names = {tool["function"]["name"] for tool in tools}
     # The budget covers the profile and the catalogs; the soul is added whole.
     budget = policy.profile_max_tokens
@@ -240,6 +240,7 @@ async def build_profile(viking, key, policy, tools):
                     path + ("?" + urlencode(params) if params else ""),
                     key,
                     timeout=max(0.001, deadline - asyncio.get_running_loop().time()),
+                    **({"peer": peer, "peer_memory_only": True} if peer_root else {}),
                 )
                 if not isinstance(result, type(default)):
                     raise ValueError("invalid profile response")
@@ -257,8 +258,10 @@ async def build_profile(viking, key, policy, tools):
             return default
 
     async def memories():
-        space = await resolve_user_space(fetch)
-        root = f"viking://user/{space}/memories"
+        root = peer_root
+        if root is None:
+            space = await resolve_user_space(fetch)
+            root = f"viking://user/{space}/memories"
         paths, requests = [], []
         for path, wanted in (("soul.md", policy.soul), ("profile.md", profiled)):
             if wanted:
@@ -272,7 +275,7 @@ async def build_profile(viking, key, policy, tools):
         return root, dict(zip(paths, values, strict=True))
 
     async def skills():
-        if not catalog or budget < 4:
+        if peer_root or not catalog or budget < 4:
             return ""
         result = await fetch("/api/v1/skills", {"node_limit": 200}, {})
         return format_skill_catalog(skill_groups(result), budget // 4)

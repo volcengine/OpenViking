@@ -119,6 +119,11 @@ async def _build_request_context(
 ) -> RequestContext:
     plugin = _get_plugin(request)
     plugin.get_request_context_checks(request.url.path, identity)
+    peer_memory = request.headers.get("X-OpenViking-Peer-Allow-User-Memory", "true").lower()
+    if peer_memory not in {"true", "false"}:
+        raise InvalidArgumentError("X-OpenViking-Peer-Allow-User-Memory must be true or false.")
+    if peer_memory == "false" and actor_peer_id in (None, "", "__self"):
+        raise InvalidArgumentError("Peer-only memory requires an actor peer.")
     account_id = identity.account_id or "default"
     user_id = identity.user_id or "default"
     has_auth_groups = (
@@ -141,6 +146,7 @@ async def _build_request_context(
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
+        peer_allow_user_memory=peer_memory == "true",
     )
     manager = getattr(request.app.state, "api_key_manager", None)
     deletion = None

@@ -330,6 +330,14 @@ def _mcp_error_results(*, structured_output: bool = True):
         @wraps(func)
         async def wire_handler(*args, **kwargs):
             try:
+                ctx = _mcp_ctx.get()
+                if (
+                    ctx is not None
+                    and not ctx.peer_allow_user_memory
+                    and registered_tool.name
+                    not in {"find", "search", "read", "ls", "list", "write"}
+                ):
+                    raise PermissionDeniedError("Tool is unavailable in peer-only memory scope.")
                 result = await func(*args, **kwargs)
             except OpenVikingError as exc:
                 result = _mcp_failure(exc)

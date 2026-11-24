@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from openviking.core.peer_id import normalize_peer_id
 from openviking.observability.log_safety import short_hash
 
-from .client import PEER_HEADER
+from .client import PEER_HEADER, VikingError
 from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .observe import GatewayError, RequestRecord, degrade, elapsed_ms, error_code
@@ -234,6 +234,7 @@ def context_override(policy, header):
         raise context_error(validation_detail(error))
     # Tool access only narrows: the header cannot offer a tool the profile withholds.
     merged.gateway_tools = merged.gateway_tools and saved.gateway_tools
+    merged.peer_allow_user_memory = merged.peer_allow_user_memory and saved.peer_allow_user_memory
     merged.disabled_tools = list(dict.fromkeys([*saved.disabled_tools, *merged.disabled_tools]))
     return {**policy, **merged.model_dump()}, sorted(override)
 
@@ -352,6 +353,7 @@ class ProxyRequest:
         self.protocol = PATH_PROTOCOL.get(self.path)
         self.prepared = None
         self.peer = None
+        self.policy = None
         self.record = record or RequestRecord(app, request)
         # The record under construction: what the request writes however it ends.
         self.metrics = self.record.metrics
@@ -444,6 +446,30 @@ class ProxyRequest:
             self.policy, self.metrics["context_override"] = context_override(self.policy, header)
         # Like the context header, a peer is checked on every request, enhanced or not.
         self.peer = request_peer(self.request.headers, self.credential)
+        if self.policy and not self.policy.get("peer_allow_user_memory", True):
+            if self.peer in (None, "", "__self"):
+                raise context_error(
+                    "Peer-only memory requires an actor peer", reason="peer_memory_requires_actor"
+                )
+            identity = await self.app.state.viking.identify(self.credential["openviking_key"])
+            if identity.get("supports_peer_memory_only") is not True:
+                raise VikingError("openviking_peer_memory_unsupported")
+            if self.path.startswith("/v1/responses/") and self.path != "/v1/responses/compact":
+                raise GatewayError("response_unknown", "Unknown response for this key")
+            if self.path in {"/v1/responses", "/v1/responses/compact"}:
+                history = self.body.get("input") if isinstance(self.body, dict) else None
+                if isinstance(history, list) and any(
+                    isinstance(item, dict) and item.get("type") == "item_reference"
+                    for item in history
+                ):
+                    raise context_error("Peer-only memory requires explicit input items")
+                if self.path.endswith("/compact") and (
+                    history is None
+                    or any(
+                        self.body.get(field) for field in ("previous_response_id", "conversation")
+                    )
+                ):
+                    raise context_error("Peer-only memory requires explicit history for compaction")
         if self.peer:
             self.metrics["peer"] = self.peer
         self.upstreams = binding.upstreams
@@ -490,6 +516,13 @@ class ProxyRequest:
 
     async def prepare(self):
         if (
+            self.protocol == "responses"
+            and isinstance(self.body, dict)
+            and self.policy
+            and not self.policy.get("peer_allow_user_memory", True)
+        ):
+            self.body = {**self.body, "store": False}
+        if (
             self.protocol
             and self.body
             and tool_protocol(self.protocol).enhanced_supported(self.body)
@@ -516,6 +549,9 @@ class ProxyRequest:
         elif self.raw and self.body is None:
             degrade(self.metrics, "unsafe_json")
         check_coding_plan(self.upstream)
+        if self.protocol and self.policy and not self.policy.get("peer_allow_user_memory", True):
+            if not self.prepared:
+                raise HTTPException(503, "Peer-only memory requires a prepared request")
         if self.body:
             self.body = await self.outgoing(self.body, self.upstream, self.prepared)
             if self.prepared:
@@ -530,6 +566,12 @@ class ProxyRequest:
     async def outgoing(self, body, upstream, prepared):
         """Vendor fields and the model alias, for the client request and its summary."""
         body = await apply_vendor(body, upstream, prepared, self.store)
+        if (
+            self.protocol == "responses"
+            and self.policy
+            and not self.policy.get("peer_allow_user_memory", True)
+        ):
+            body = {**body, "store": False}
         mapped = upstream.get("aliases", {}).get(self.model)
         return {**body, "model": mapped} if mapped else body
 

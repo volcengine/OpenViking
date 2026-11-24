@@ -315,6 +315,7 @@ class RequestContext:
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
     data_access: DataAccessScope | None = field(default=None, repr=False)
+    peer_allow_user_memory: bool = True
 
     def __post_init__(self) -> None:
         self.role = Role.parse(self.role)

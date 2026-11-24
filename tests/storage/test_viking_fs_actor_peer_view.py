@@ -217,6 +217,20 @@ async def test_actor_peer_view_blocks_read_stat_and_write_to_other_peer(fs, acto
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role", [Role.USER, Role.ROOT])
+async def test_peer_only_context_limits_reads_and_writes_to_peer_memory(fs, actor_ctx, role):
+    restricted = replace(actor_ctx, role=role, peer_allow_user_memory=False)
+    shared = "viking://user/support_bot/memories/profile.md"
+    other = _other_peer_uri()
+    assert await fs.read_file(_actor_peer_uri(), ctx=restricted) == "wang"
+    for uri in (shared, other):
+        with pytest.raises(PermissionDeniedError):
+            await fs.read_file(uri, ctx=restricted)
+        with pytest.raises(PermissionDeniedError):
+            await fs.write_file(uri, "blocked", ctx=restricted)
+
+
+@pytest.mark.asyncio
 async def test_actor_peer_view_stat_does_not_count_hidden_peer_roots(actor_ctx):
     vector_store = _CountingVectorStore()
     fs = VikingFS(agfs=_MemoryAGFS(), vector_store=vector_store)

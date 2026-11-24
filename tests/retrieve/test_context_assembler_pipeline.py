@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from collections import Counter
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1059,6 +1060,37 @@ def _bucket_service(hits_by_target, finds=None):
     )
 
 
+async def test_actor_recall_excludes_shared_user_memory_subtree():
+    parent = f"{USER_ROOT}/memories"
+    own = f"{USER_ROOT}/peers/current/memories/events/own.md"
+    other = f"{USER_ROOT}/peers/other/memories/events/other.md"
+    other_scan = f"{USER_ROOT}/peers"
+    calls = []
+    service = _bucket_service(
+        {
+            f"{parent}/events": [_hit(f"{parent}/events/shared.md", 0.99)],
+            own.rsplit("/", 1)[0]: [_hit(own, 0.9)],
+            other_scan: [_hit(other, 1.0)],
+        },
+        finds=calls,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="sentinel",
+            quotas={"events": 3},
+            exclude_uris=[parent],
+            peer_scope="actor",
+        ),
+    )
+    assert calls
+    assert all(call["target_uri"] != other_scan for call in calls)
+    assert [entry.uri for entry in result.entries] == [own]
+    assert "shared.md" not in result.rendered
+    assert "other.md" not in result.rendered
+
+
 async def test_preset_scope_directories_are_not_served():
     project = "viking://resources/proj"
     doc = f"{USER_ROOT}/resources/doc.md"
@@ -1230,6 +1262,47 @@ FLAT_HITS = [
     _hit(f"{PREFERENCES}/{name}.md", score, f"text {name}")
     for name, score in (("a", 0.9), ("b", 0.8), ("c", 0.7), ("d", 0.6))
 ]
+
+
+async def test_actor_scope_filters_other_peer_hits_from_flat_find():
+    parent = f"{USER_ROOT}/memories"
+    own = f"{USER_ROOT}/peers/current/memories/events/own.md"
+    other = f"{USER_ROOT}/peers/other/memories/events/other.md"
+    result = await assemble_context(
+        service=_flat_service(
+            [
+                _hit(other, 0.99),
+                _hit(f"{parent}/events/shared.md", 0.98),
+                _hit(own, 0.9),
+            ]
+        ),
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="warehouse drill",
+            peer_scope="actor",
+            exclude_uris=[parent],
+            max_tokens=2048,
+        ),
+    )
+    assert [entry.uri for entry in result.entries] == [own]
+
+
+async def test_peer_only_backend_limits_flat_search_and_rejects_shared_hits():
+    parent = f"{USER_ROOT}/memories"
+    peer_root = f"{USER_ROOT}/peers/current/memories"
+    own = f"{peer_root}/events/own.md"
+    other = f"{USER_ROOT}/peers/other/memories/events/other.md"
+    calls = []
+    result = await assemble_context(
+        service=_flat_service(
+            [_hit(other, 0.99), _hit(f"{parent}/events/shared.md", 0.98), _hit(own, 0.9)],
+            finds=calls,
+        ),
+        ctx=replace(_ctx(), peer_allow_user_memory=False),
+        params=AssembleParams(query="warehouse drill", peer_scope="all"),
+    )
+    assert [call["target_uri"] for call in calls] == [peer_root]
+    assert [entry.uri for entry in result.entries] == [own]
 
 
 async def _assemble_flat(service, **overrides):

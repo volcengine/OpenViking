@@ -7,6 +7,8 @@ from typing import List, Optional, Union
 
 from openviking.core.namespace import (
     AGENT_SKILLS_ROOT,
+    actor_peer_memory_root,
+    allows_peer_memory_uri,
     canonical_user_root,
     is_hidden_by_actor_peer_view,
     uri_parts,
@@ -31,6 +33,10 @@ def resolve_retrieval_targets(
 ) -> ResolvedRetrievalTargets:
     """Resolve search/find target directories."""
     target_uris = _dedupe_target_uris(target_uri)
+    if not ctx.peer_allow_user_memory and any(
+        not allows_peer_memory_uri(uri, ctx) for uri in target_uris
+    ):
+        raise PermissionDeniedError("Target is outside the actor peer's memory.")
 
     if not target_uris:
         return ResolvedRetrievalTargets(
@@ -54,7 +60,11 @@ def default_target_directories(
     context_type: Optional[ContextType] = None,
 ) -> List[str]:
     """Return default retrieval directories for a user context."""
-    if not ctx or ctx.role == Role.ROOT:
+    if not ctx:
+        return []
+    if not ctx.peer_allow_user_memory:
+        return [actor_peer_memory_root(ctx)] if ctx.actor_peer_id else []
+    if ctx.role == Role.ROOT:
         return []
 
     user_root = canonical_user_root(ctx)

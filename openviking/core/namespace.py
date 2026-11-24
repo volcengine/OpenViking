@@ -186,7 +186,23 @@ def is_session_uri(uri: str) -> bool:
 AGENT_SKILLS_ROOT = "viking://agent/skills"
 
 
+def actor_peer_memory_root(ctx: RequestContext) -> str:
+    return f"{canonical_user_root(ctx)}/peers/{ctx.actor_peer_id}/memories"
+
+
+def allows_peer_memory_uri(uri: str, ctx: RequestContext) -> bool:
+    if ctx.peer_allow_user_memory:
+        return True
+    if not ctx.actor_peer_id:
+        return False
+    parts = uri_parts(uri)
+    root = uri_parts(actor_peer_memory_root(ctx))
+    return parts[: len(root)] == root
+
+
 def visible_roots(ctx: RequestContext) -> list[str]:
+    if not ctx.peer_allow_user_memory:
+        return [actor_peer_memory_root(ctx)] if ctx.actor_peer_id else []
     return [
         "viking://resources",
         "viking://agent",
@@ -315,6 +331,8 @@ def resolve_current_user_uri(uri: str, ctx: RequestContext) -> str:
 
 
 def is_accessible(uri: str, ctx: RequestContext) -> bool:
+    if not allows_peer_memory_uri(uri, ctx):
+        return False
     if getattr(ctx.role, "value", ctx.role) == "root":
         return True
 
@@ -396,6 +414,7 @@ def content_owner_context_for_uri(uri: str, ctx: RequestContext) -> RequestConte
         from_oauth=ctx.from_oauth,
         api_key=ctx.api_key,
         bypass_acl=ctx.bypass_acl,
+        peer_allow_user_memory=ctx.peer_allow_user_memory,
     )
 
 

@@ -178,6 +178,7 @@ class CreateSessionRequest(BaseModel):
 
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
+    peer_allow_user_memory: bool = True
     auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
     telemetry: TelemetryRequest = False
@@ -314,12 +315,20 @@ async def create_session(
         auto_commit_policy_payload = request.auto_commit_policy.model_dump(exclude_none=True)
 
     event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
+    memory_policy = request.memory_policy
+    if not request.peer_allow_user_memory:
+        memory_policy = {
+            **(memory_policy or {}),
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+            "working_memory": {"enabled": False},
+        }
 
     async def _create() -> dict[str, Any]:
         session = await service.sessions.create(
             _ctx,
             request.session_id,
-            memory_policy=request.memory_policy,
+            memory_policy=memory_policy,
             auto_commit_policy=auto_commit_policy_payload,
             update_auto_commit_policy=update_auto_commit_policy,
             event_tags=event_tags,

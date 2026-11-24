@@ -4,7 +4,8 @@
 Tests for MemoryIsolationHandler.
 """
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,6 +17,7 @@ from openviking.session.memory.memory_isolation_handler import (
     MemoryIsolationHandler,
 )
 from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -50,6 +52,32 @@ def create_mock_extract_context(messages):
     mock_ctx = MagicMock()
     mock_ctx.messages = messages
     return mock_ctx
+
+
+async def test_peer_only_extraction_cannot_read_shared_or_other_peer_memory():
+    ctx = create_ctx()
+    provider = object.__new__(SessionExtractContextProvider)
+    provider._ctx = ctx
+    provider._isolation_handler = MemoryIsolationHandler(
+        ctx, create_mock_extract_context([]), allow_self=False, allowed_peer_ids={"trial-a"}
+    )
+    tool = SimpleNamespace(execute=AsyncMock(return_value={"content": "own memory"}))
+    provider.create_tool_context = MagicMock()
+    module = "openviking.session.memory.session_extract_context_provider"
+    with patch(f"{module}.get_tool", return_value=tool):
+        for uri in (
+            "viking://~/memories/profile.md",
+            "viking://user/user_a/peers/trial-b/memories/events/note.md",
+        ):
+            assert await provider.read_file(uri) is None
+            result = await provider.execute_tool(
+                SimpleNamespace(name="read", arguments={"uri": uri})
+            )
+            assert "error" in result
+        tool.execute.assert_not_awaited()
+        own = "viking://user/user_a/peers/trial-a/memories/events/note.md"
+        assert (await provider.read_file(own))["content"] == "own memory"
+        tool.execute.assert_awaited_once()
 
 
 class TestGetReadScope:

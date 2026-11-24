@@ -52,7 +52,12 @@ async def health_check(request: Request):
     """Health check endpoint (no authentication required)."""
     from openviking import __version__
 
-    result = {"status": "ok", "healthy": True, "version": __version__}
+    result = {
+        "status": "ok",
+        "healthy": True,
+        "version": __version__,
+        "supports_peer_memory_only": True,
+    }
 
     try:
         config = getattr(request.app.state, "config", None)

@@ -57,6 +57,7 @@ from .vendors import parameter_fingerprint
 from .windows import remind, status_line
 
 logger = logging.getLogger(__name__)
+PEER_MEMORY_SESSION = "peer-memory-"
 # State keys for unsigned thinking the gateway relayed, by digest of its text.
 THINKING = "thinking:"
 
@@ -193,7 +194,7 @@ class MemoryKernel:
             for m in messages
         ], sorted(known)
 
-    async def identity(self, scope, messages, protocol, headers):
+    async def identity(self, scope, messages, protocol, headers, peer_memory_prefix=""):
         """Resolve the session and the sessions whose replies the history contains.
 
         Replies are matched in the chain flavour ``completed`` records them in. A
@@ -201,6 +202,8 @@ class MemoryKernel:
         latest reply it contains, or starts a new one when two sessions produced it.
         """
         sid = session_id(headers)
+        if sid and peer_memory_prefix:
+            sid = peer_memory_prefix + sid
         adapter = tool_protocol(protocol)
 
         def chains():
@@ -218,11 +221,28 @@ class MemoryKernel:
             a for a, m in zip(body_chain, messages, strict=True) if a and adapter.is_reply(m)
         ]
         owners = await self.store.replay.replies(scope, endpoints) if endpoints else {}
+        # Resolve replies only among sessions with the same memory boundary.
+        owners = {
+            anchor: {
+                owner
+                for owner in sessions
+                if (
+                    owner.startswith(peer_memory_prefix)
+                    if peer_memory_prefix
+                    else not owner.startswith(PEER_MEMORY_SESSION)
+                )
+            }
+            for anchor, sessions in owners.items()
+        }
         anonymous = sid is None
         source = "header"
         if anonymous:
-            latest = next((owners[a] for a in reversed(endpoints) if a in owners), set())
-            sid = next(iter(latest)) if len(latest) == 1 else "anonymous-" + uuid.uuid4().hex
+            latest = next((owners[a] for a in reversed(endpoints) if owners.get(a)), set())
+            sid = (
+                next(iter(latest))
+                if len(latest) == 1
+                else peer_memory_prefix + "anonymous-" + uuid.uuid4().hex
+            )
             source = "reply_match" if len(latest) == 1 else "new"
         # A reply two sessions produced, such as a greeting, proves no inheritance.
         ancestors = sorted({next(iter(o)) for o in owners.values() if len(o) == 1} - {sid})
@@ -254,11 +274,17 @@ class MemoryKernel:
         # matches, captures or forwards it, as replies were recorded without it.
         sent = adapter.strip_lead(sent)
         scope = digest(credential["account"] + "\0" + credential["user_id"] + "\0" + protocol)
+        peer_memory_prefix = ""
+        if not policy.get("peer_allow_user_memory", True):
+            if peer in (None, "", "__self"):
+                raise VikingError("peer_memory_requires_actor", 400)
+            # Keep user-wide lifecycle management while separating replay by peer.
+            peer_memory_prefix = PEER_MEMORY_SESSION + digest(peer)[:32] + "-"
         # Anchors, capture and recall read the history as the gateway relayed it;
         # the upstream still gets exactly what the client sent.
         messages, thinking = await self.sent_history(scope, sent, protocol)
         sid, anonymous, chain, body_chain, ancestors, source = await self.identity(
-            scope, messages, protocol, headers
+            scope, messages, protocol, headers, peer_memory_prefix
         )
         as_text = (
             {a for a, m, s in zip(body_chain, messages, sent, strict=True) if m != s}
@@ -568,6 +594,9 @@ class MemoryKernel:
                 )
             )
         )
+        peer_root = None
+        if not policy.peer_allow_user_memory:
+            peer_root = f"viking://user/{credential['user_id']}/peers/{request.peer}/memories"
         budget = min(policy.max_tokens, policy.session_max_tokens - used)
         query = clean_text(unwrap_client(text_content(request.messages[request.anchor])))[
             : policy.query_max_chars
@@ -636,7 +665,14 @@ class MemoryKernel:
                 noted = True
                 return block("gateway-session-start", gateway_note(policy, tools)), []
             noted = bool(tools)
-            profile = await build_profile(self.viking, credential["openviking_key"], policy, tools)
+            profile = await build_profile(
+                self.viking,
+                credential["openviking_key"],
+                policy,
+                tools,
+                peer_root=peer_root,
+                peer=request.peer,
+            )
             request.metrics["profile_reason"] = profile["reason"]
             # After client-side compaction, the capture document still names the earlier sessions.
             hint = history_hint(

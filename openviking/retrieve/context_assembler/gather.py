@@ -13,7 +13,12 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from openviking.core.directories import preset_directory_uris
-from openviking.core.namespace import AGENT_SKILLS_ROOT, canonical_user_root
+from openviking.core.namespace import (
+    AGENT_SKILLS_ROOT,
+    actor_peer_memory_root,
+    allows_peer_memory_uri,
+    canonical_user_root,
+)
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
 from openviking.retrieve.context_assembler.params import (
@@ -93,6 +98,8 @@ def _extract(result: Any, bucket: str) -> List[Any]:
 
 
 def memory_target_roots(ctx: RequestContext) -> List[str]:
+    if not ctx.peer_allow_user_memory:
+        return [actor_peer_memory_root(ctx)] if ctx.actor_peer_id else []
     user_root = canonical_user_root(ctx)
     targets = [f"{user_root}/memories"]
     if ctx.actor_peer_id:
@@ -231,7 +238,7 @@ async def gather_candidates(
     With a ``reranker``, the merged candidate pool is rescored against
     ``rerank_query`` in one call before quotas, backfill and the flat cut run.
     """
-    peer_scope = "actor" if peer_scope == "actor" else "all"
+    peer_scope = "actor" if peer_scope == "actor" or not ctx.peer_allow_user_memory else "all"
     user_root = canonical_user_root(ctx)
     open_ctx = replace(ctx, actor_peer_id=None)
     penalties = penalties or {}
@@ -256,6 +263,8 @@ async def gather_candidates(
             if not uri:
                 continue
             base_uri, is_directory = strip_level_suffix(uri)
+            if not allows_peer_memory_uri(base_uri, ctx):
+                continue
             if base_uri.endswith("/profile.md") or base_uri in preset_dirs:
                 continue
             category = category_for(item, bucket)
@@ -282,6 +291,10 @@ async def gather_candidates(
                 excluded_count += 1
                 continue
             origin = origin_for_uri(base_uri, ctx.actor_peer_id, user_root)
+            # A broad or stale index result can still include a different peer.
+            # Enforce actor scope before any candidate body is read or rendered.
+            if peer_scope == "actor" and origin == "other_peer":
+                continue
             score = _score(item)
             penalty = penalties.get(category, 0.0) if origin == "other_peer" else 0.0
             built.append(
@@ -334,6 +347,8 @@ async def gather_candidates(
         )
 
     async def gather_bucket(bucket: str, quota: int, width: int) -> List[Candidate]:
+        if not ctx.peer_allow_user_memory and bucket not in MEMORY_CATEGORIES:
+            return []
         targets = category_targets(bucket, ctx)
         context_type = {
             "resources": ContextType.RESOURCE,
@@ -427,7 +442,7 @@ async def gather_candidates(
             _find(
                 query=query,
                 find_ctx=ctx,
-                target_uri="",
+                target_uri=actor_peer_memory_root(ctx) if not ctx.peer_allow_user_memory else "",
                 find_limit=_overfetch(width),
             )
             for query in planned

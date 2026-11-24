@@ -220,6 +220,11 @@ async def gateway_backend():
                     "role": "root" if key == "root" else "admin" if key == "admin-key" else "user",
                     "account_id": "other" if key == "other" else "tenant",
                     "user_id": "bob" if key == "bob-key" else "alice",
+                    **(
+                        {"supports_peer_memory_only": True}
+                        if override.get("supports_peer_memory_only")
+                        else {}
+                    ),
                 }
             )
         if request.path == "/api/v1/admin/accounts":

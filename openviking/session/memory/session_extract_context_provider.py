@@ -9,6 +9,7 @@ Session Extract Context Provider - 会话提取 Provider 实现
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
@@ -35,6 +36,7 @@ from openviking.session.memory.vision_message_normalizer import (
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -416,13 +418,30 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
 
-    def create_tool_context(self, default_search_uris=[]):
+    def _peer_memory_roots(self) -> tuple[str, ...] | None:
+        handler = self._isolation_handler
+        if handler is None or handler.allow_self:
+            return None
+        user = self._ctx.user.user_id
+        return tuple(
+            f"viking://user/{peer_user_space(user, peer)}/memories"
+            for peer in sorted(handler.allowed_peer_ids)
+        )
+
+    def _peer_memory_uri(self, uri: str, roots: tuple[str, ...]) -> bool:
+        try:
+            uri = validate_request_viking_uri(uri, self._ctx).rstrip("/")
+        except InvalidURIError:
+            return False
+        return any(uri == root or uri.startswith(root + "/") for root in roots)
+
+    def create_tool_context(self, default_search_uris=None):
         extract_context = self.get_extract_context()
         tool_ctx = ToolContext(
             viking_fs=self._viking_fs,
             request_ctx=self._ctx,
             transaction_handle=self._transaction_handle,
-            default_search_uris=default_search_uris,
+            default_search_uris=default_search_uris or [],
             read_file_contents=self._read_file_contents,
             page_id_map=extract_context.page_id_map,
         )
@@ -437,6 +456,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     async def read_file(self, uri: str) -> Optional[Dict]:
         """Read a file via MemoryReadTool (auto-registers page_id, fills read_file_contents)."""
+        roots = self._peer_memory_roots()
+        if roots is not None and not self._peer_memory_uri(uri, roots):
+            return None
         read_tool = get_tool("read")
         if not read_tool:
             return None
@@ -464,6 +486,15 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         search_tool = get_tool("search")
         if not search_tool:
             return []
+        roots = self._peer_memory_roots()
+        if roots is not None:
+            search_uris = [
+                uri
+                for uri in (search_uris if search_uris is not None else roots)
+                if self._peer_memory_uri(uri, roots)
+            ]
+            if not search_uris:
+                return []
         try:
             result = await search_tool.execute(
                 viking_fs=self._viking_fs,
@@ -471,11 +502,16 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 query=query,
                 limit=limit,
             )
-            if isinstance(result, list):
-                return [m.get("uri", "") for m in result if m.get("uri")]
-            elif isinstance(result, dict) and "memories" in result:
-                return [m.get("uri", "") for m in result.get("memories", []) if m.get("uri")]
-            return []
+            hits = (
+                result
+                if isinstance(result, list)
+                else (result.get("memories", []) if isinstance(result, dict) else [])
+            )
+            return [
+                uri
+                for hit in hits
+                if (uri := hit.get("uri")) and (roots is None or self._peer_memory_uri(uri, roots))
+            ]
         except Exception as e:
             logger.info(
                 "memory operation failed stage=%s error_type=%s",
@@ -626,6 +662,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         self,
         tool_call,
     ) -> Any:
+        roots = self._peer_memory_roots()
+        if roots is not None and (
+            tool_call.name != "read"
+            or not self._peer_memory_uri(tool_call.arguments.get("uri"), roots)
+        ):
+            return {"error": "Memory read is outside the allowed peer scope"}
         tool = get_tool(tool_call.name)
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}

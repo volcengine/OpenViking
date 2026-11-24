@@ -494,6 +494,8 @@ class SessionCompressorV3:
         event_search_tags: Optional[List[str]] = None,
         peer_memory_enabled: bool = True,
     ):
+        # Agent evolution and its training-case fast path write shared agent state.
+        agent_evolution_enabled = agent_evolution_enabled and allow_self_memory
         if not agent_evolution_enabled:
             effective_types = (
                 set(get_default_registry().list_names(include_disabled=False))

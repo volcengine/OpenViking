@@ -11,11 +11,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
-    is_accessible as namespace_is_accessible,
-)
-from openviking.core.namespace import (
+    allows_peer_memory_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
+)
+from openviking.core.namespace import (
+    is_accessible as namespace_is_accessible,
 )
 from openviking.core.namespace_policy import (
     is_system_compile_global_uri,
@@ -253,6 +254,8 @@ class _AccessMixin:
         )
 
     def _access_decision(self, uri: str, ctx: RequestContext) -> AccessDecision:
+        if not allows_peer_memory_uri(uri, ctx):
+            return AccessDecision.DENIED
         parts = self._safe_uri_parts(uri)
         if ctx.data_access is not None and parts[:1] == ["user"]:
             return ctx.data_access.decide(uri)
@@ -326,7 +329,9 @@ class _AccessMixin:
 
         remaining: List[str] = []
         for uri in valid:
-            if is_system_uri(uri):
+            if not allows_peer_memory_uri(uri, real_ctx):
+                result[uri] = None
+            elif is_system_uri(uri):
                 result[uri] = next(
                     (
                         level
@@ -1030,6 +1035,8 @@ class _AccessMixin:
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
+        if not allows_peer_memory_uri(uri, ctx):
+            return False
         parts = self._safe_uri_parts(uri)
         if is_system_uri(uri):
             return self._system_permission_allows(uri, ctx, AclAction.READ)

@@ -45,6 +45,8 @@ class Policy(BaseModel):
     query_max_chars: int = Field(default=8000, ge=3, le=32000)
     # "actor" keeps recall and OpenViking tools to the user's own and the request peer's memories.
     recall_peer_scope: Literal["all", "actor"] = "all"
+    # With a peer, False confines recall, profile reads, tools and extraction to peer memory.
+    peer_allow_user_memory: bool = True
     # Start each turn's reply with a summary of what OpenViking injected; the model never sees it.
     show_recall: bool = False
     commit_tokens: int = Field(default=20000, ge=1, le=JSON_INT_MAX)

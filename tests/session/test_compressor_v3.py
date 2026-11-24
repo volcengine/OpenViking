@@ -362,7 +362,13 @@ async def test_v3_skill_only_extraction_submits_gradients_without_agent_memories
 
 
 @pytest.mark.asyncio
-async def test_v3_skips_agent_training_when_execution_memory_types_are_filtered(monkeypatch):
+@pytest.mark.parametrize(
+    ("allow_self_memory", "allowed_types"),
+    [(True, {"cases", "profile"}), (False, {"cases", "trajectories", "profile"})],
+)
+async def test_v3_skips_agent_training_when_execution_memory_is_restricted(
+    monkeypatch, allow_self_memory, allowed_types
+):
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_viking_fs",
         lambda: SimpleNamespace(),
@@ -382,11 +388,16 @@ async def test_v3_skips_agent_training_when_execution_memory_types_are_filtered(
     await compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
-        allowed_memory_types={"cases", "profile"},
+        allowed_memory_types=allowed_types,
         agent_evolution_enabled=True,
+        allow_self_memory=allow_self_memory,
     )
 
     compressor.train_from_extracted_cases.assert_not_awaited()
+    if not allow_self_memory:
+        assert compressor._extract_user_memories.await_args.kwargs["allowed_memory_types"] == {
+            "profile"
+        }
 
 
 @pytest.mark.asyncio
