@@ -3996,7 +3996,7 @@ onboarding_url() {
 }
 
 print_next_steps() {
-  local label updates rerun uninstall doctor client remove line
+  local label updates rerun uninstall doctor client remove line next
   rerun="$(t 're-run this installer' '重新运行本安装脚本')"
   uninstall="$INSTALL_COMMAND --uninstall --yes --harness"
   heading "$(t 'Done' '完成')"
@@ -4030,9 +4030,13 @@ EOF
         updates="$(t "automatic; $label upgrades the marketplace when it starts" "自动；$label 启动时升级 marketplace")"
       fi
       # Codex has only `plugin remove`, TraeCode CLI only `plugin uninstall`.
-      remove=remove
-      case "$(bin_basename "$CODEX_BIN")" in trae-cli|traecli|traex) remove=uninstall ;; esac
-      next_steps "$label" "$(t "restart $label" "重启 $label")" "$updates" \
+      remove=remove next="$(t "restart $label" "重启 $label")"
+      case "$(bin_basename "$CODEX_BIN")" in
+        trae-cli|traecli|traex) remove=uninstall ;;
+        # Recall and capture stay off until the user trusts the plugin's hooks.
+        codex) next="$(t "trust OpenViking's hooks in Codex Settings → Hooks, then restart Codex" "在 Codex 的设置 → Hooks 里信任 OpenViking 的 hooks，然后重启 Codex")" ;;
+      esac
+      next_steps "$label" "$next" "$updates" \
         "$(t "run the \$ov-memory-doctor skill in a session" "在会话中运行 \$ov-memory-doctor skill")" \
         "$CODEX_BIN plugin $remove $PLUGIN_ID && $CODEX_BIN plugin marketplace remove $MARKETPLACE_NAME"
     done <<EOF
