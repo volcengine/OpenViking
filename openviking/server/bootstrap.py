@@ -45,6 +45,7 @@ from openviking_cli.utils.logger import configure_server_logging, configure_uvic
 class BotProcess:
     process: subprocess.Popen
     log_file: Optional[object] = None
+    lifeline: Optional[int] = None
 
 
 @dataclass
@@ -685,8 +686,13 @@ def _start_vikingbot_gateway(
     startup_directory = tempfile.TemporaryDirectory(prefix="vikingbot-startup-")
     status_path = Path(startup_directory.name) / "status.json"
     process = None
+    lifeline_read = lifeline_write = None
     # Start vikingbot gateway process
     try:
+        if os.name != "nt":
+            # The child watches the read end; the kernel closes our write end however we die,
+            # so a SIGKILLed server cannot orphan the gateway (start_new_session hides signals).
+            lifeline_read, lifeline_write = os.pipe()
         # Set environment to ensure it uses the same Python environment
         env = os.environ.copy()
         env["VIKINGBOT_STARTUP_STATUS"] = str(status_path)
@@ -694,6 +700,8 @@ def _start_vikingbot_gateway(
         if cli_config_path is not None:
             env[OPENVIKING_CLI_CONFIG_ENV] = cli_config_path
         env["VIKINGBOT_WITH_OPENVIKING_SERVER"] = "1"
+        if lifeline_read is not None:
+            env["VIKINGBOT_LIFELINE_FD"] = str(lifeline_read)
         if managed_server_url:
             env["VIKINGBOT_MANAGED_OV_SERVER_URL"] = managed_server_url
 
@@ -707,13 +715,16 @@ def _start_vikingbot_gateway(
             # Avoid Ctrl+C cancelling child cleanup before its sandbox is released.
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            pass_fds=() if lifeline_read is None else (lifeline_read,),
         )
 
         _wait_for_bot_ready(process, status_path)
 
         print(f"Vikingbot gateway started (PID: {process.pid})", flush=True)
 
-        return BotProcess(process=process, log_file=log_file)
+        bot_process = BotProcess(process=process, log_file=log_file, lifeline=lifeline_write)
+        lifeline_write = None
+        return bot_process
 
     except BaseException as e:
         if process is not None and process.poll() is None:
@@ -733,6 +744,9 @@ def _start_vikingbot_gateway(
         return None
     finally:
         startup_directory.cleanup()
+        for fd in (lifeline_read, lifeline_write):
+            if fd is not None:
+                os.close(fd)
 
 
 def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
@@ -756,6 +770,9 @@ def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
     except Exception as e:
         print(f"Error stopping vikingbot gateway ({type(e).__name__}).", flush=True)
     finally:
+        if bot_process.lifeline is not None:
+            os.close(bot_process.lifeline)
+            bot_process.lifeline = None
         # Close the log file if it exists
         if bot_process.log_file is not None:
             try:

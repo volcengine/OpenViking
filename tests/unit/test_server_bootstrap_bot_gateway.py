@@ -3,6 +3,7 @@
 
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -155,6 +156,14 @@ def test_start_vikingbot_gateway_passes_managed_server_runtime(monkeypatch):
     assert process is not None
     assert captured["env"]["VIKINGBOT_WITH_OPENVIKING_SERVER"] == "1"
     assert captured["env"]["VIKINGBOT_MANAGED_OV_SERVER_URL"] == "http://127.0.0.1:1940"
+    if os.name != "nt":
+        # The child gets only the read end; the server keeps the sole writer.
+        read_end = int(captured["env"]["VIKINGBOT_LIFELINE_FD"])
+        assert captured["process_options"]["pass_fds"] == (read_end,)
+        with pytest.raises(OSError):
+            os.fstat(read_end)  # closed in the server once handed over
+        assert not os.get_inheritable(process.lifeline)
+        os.close(process.lifeline)
 
 
 def test_start_vikingbot_gateway_allows_slow_module_probe(monkeypatch):
