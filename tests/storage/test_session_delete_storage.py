@@ -325,7 +325,7 @@ async def test_default_rm_still_cleans_vector_records(
 
 
 @pytest.mark.parametrize("allowed", [False, True])
-async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
+async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed, monkeypatch):
     backend = _RealAclMemoryTransferBackend(
         [
             _record(
@@ -348,7 +348,7 @@ async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, all
     storage.fs.vector_store = backend
     storage.fs.acl_manager = backend.acl_manager
     service = FSService(viking_fs=storage.fs)
-    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
+    monkeypatch.setattr("openviking.service.fs_service.enqueue_directory_refresh", AsyncMock())
 
     if allowed:
         # Direct deletion still checks the child; FSService authorizes the subtree at its root.

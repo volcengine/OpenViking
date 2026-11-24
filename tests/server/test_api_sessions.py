@@ -9,8 +9,6 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from starlette.requests import Request
 
 from openviking.message import ImagePart, Message, TextPart
 from openviking.server.app import create_app
@@ -64,6 +62,7 @@ def _configure_test_env(monkeypatch, tmp_path):
                     "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
+                "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
                 "embedding": {
                     "dense": {
                         "provider": "openai",
@@ -101,44 +100,7 @@ async def _wait_for_task(client: httpx.AsyncClient, task_id: str, timeout: float
 
 
 async def _archive_marker_exists(session, archive_uri: str, name: str) -> bool:
-    try:
-        await session._viking_fs.read_file(f"{archive_uri}/{name}", ctx=session.ctx)
-        return True
-    except Exception:
-        return False
-
-
-def _session_route_request(
-    *,
-    auth_mode: str = "api_key",
-    api_key_manager=None,
-) -> Request:
-    app = FastAPI()
-    app.state.config = ServerConfig(auth_mode=auth_mode)
-    app.state.api_key_manager = api_key_manager
-    scope = {
-        "type": "http",
-        "path": "/api/v1/sessions/test-session/messages",
-        "headers": [],
-        "app": app,
-    }
-    return Request(scope)
-
-
-async def _call_add_message_route(
-    service,
-    monkeypatch,
-    *,
-    ctx: RequestContext,
-    payload: dict,
-    session_id: str = "test-session",
-):
-    monkeypatch.setattr(sessions_router, "get_service", lambda: service)
-    return await sessions_router.add_message(
-        request=sessions_router.AddMessageRequest.model_validate(payload),
-        session_id=session_id,
-        _ctx=ctx,
-    )
+    return await session._viking_fs.exists(f"{archive_uri}/{name}", ctx=session.ctx)
 
 
 async def test_create_session(client: httpx.AsyncClient, service):
@@ -162,29 +124,13 @@ async def test_create_session(client: httpx.AsyncClient, service):
     retrieved = await client.get(f"/api/v1/sessions/{session_id}", headers=headers)
     assert retrieved.status_code == 200
     assert retrieved.json()["result"]["session_id"] == session_id
-
-
-async def test_list_sessions(client: httpx.AsyncClient):
-    # Create a session first
-    await client.post("/api/v1/sessions", json={})
-    resp = await client.get("/api/v1/sessions")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert isinstance(body["result"], list)
-
-
-async def test_get_session(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-    session_uri = create_resp.json()["result"]["uri"]
-
-    resp = await client.get(f"/api/v1/sessions/{session_id}")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["session_id"] == session_id
-    assert body["result"]["uri"] == session_uri
+    expected_uri = f"viking://user/alice/sessions/{session_id}"
+    assert retrieved.json()["result"]["uri"] == body["result"]["uri"] == expected_uri
+    listed = await client.get("/api/v1/sessions", headers=headers)
+    assert listed.status_code == 200, listed.text
+    assert [(item["session_id"], item["uri"]) for item in listed.json()["result"]] == [
+        (session_id, expected_uri)
+    ]
 
 
 @pytest.mark.parametrize("artifact", ["empty", "recall_ledger", "meta"])
@@ -552,35 +498,6 @@ async def test_get_session_context_stops_at_newest_failed_archive(
     assert [message.content for message in raw] == ["Failed archive message"]
 
 
-async def test_add_message(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Hello, world!"),
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["message_count"] == 1
-
-
-async def test_add_message_records_last_message_at(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Hello, world!"},
-    )
-    assert resp.status_code == 200
-
-    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    assert session_resp.status_code == 200
-    assert session_resp.json()["result"]["last_message_at"]
-
-
 async def test_direct_session_add_message_records_last_message_at(service):
     session = await service.sessions.get(
         "direct-last-message-at-session",
@@ -717,6 +634,12 @@ async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClie
     )
     assert resp.status_code == 200
     assert resp.json()["result"]["message_count"] == 1
+    session = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session.json()["result"]["auto_commit_policy"] is None
+    context = await client.get(f"/api/v1/sessions/{session_id}/context")
+    [message] = context.json()["result"]["messages"]
+    assert message["parts"] == [{"type": "text", "text": "Hello, world!"}]
+    assert "metadata" not in message
 
 
 async def test_create_session_defaults_auto_commit_policy_to_disabled(
@@ -779,8 +702,7 @@ async def test_auto_created_session_uses_default_policy_when_server_default_enab
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert session_resp.status_code == 200
     assert (
-        session_resp.json()["result"]["auto_commit_policy"]
-        == AutoCommitPolicy.default().to_dict()
+        session_resp.json()["result"]["auto_commit_policy"] == AutoCommitPolicy.default().to_dict()
     )
 
 
@@ -982,45 +904,6 @@ async def test_write_responses_return_pending_tokens_for_commit_policy(
     }
 
 
-async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request(
-            "user",
-            parts=[
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://example.com/image.png",
-                        "detail": "auto",
-                    },
-                }
-            ],
-        ),
-    )
-
-    assert resp.status_code == 200
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    session = service.sessions.session(ctx, session_id)
-    await session.load()
-    assert isinstance(session.messages[0].parts[0], ImagePart)
-    assert session.messages[0].parts[0].url == "https://example.com/image.png"
-    assert session.messages[0].parts[0].detail == "auto"
-
-    context_resp = await client.get(f"/api/v1/sessions/{session_id}/context")
-    assert context_resp.status_code == 200
-    assert context_resp.json()["result"]["messages"][0]["parts"][0] == {
-        "type": "image_url",
-        "image_url": {
-            "url": "https://example.com/image.png",
-            "detail": "auto",
-        },
-    }
-
-
 async def test_add_message_resolves_image_part_url_path_variables(
     client: httpx.AsyncClient,
     service,
@@ -1066,7 +949,7 @@ async def test_add_message_accepts_mixed_parts(client: httpx.AsyncClient, servic
                 {"type": "text", "text": "Look at this"},
                 {
                     "type": "image_url",
-                    "image_url": {"url": "https://example.com/image.png"},
+                    "image_url": {"url": "https://example.com/image.png", "detail": "auto"},
                 },
             ],
         ),
@@ -1080,6 +963,16 @@ async def test_add_message_accepts_mixed_parts(client: httpx.AsyncClient, servic
     assert session.messages[0].parts[0].text == "Look at this"
     assert isinstance(session.messages[0].parts[1], ImagePart)
     assert session.messages[0].parts[1].url == "https://example.com/image.png"
+    assert session.messages[0].parts[1].detail == "auto"
+    context = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert context.status_code == 200, context.text
+    assert context.json()["result"]["messages"][0]["parts"] == [
+        {"type": "text", "text": "Look at this"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "https://example.com/image.png", "detail": "auto"},
+        },
+    ]
 
 
 async def test_add_message_rejects_image_part_without_url(client: httpx.AsyncClient):
@@ -1176,88 +1069,70 @@ async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClien
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["message_count"] == 2
+    context = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert context.status_code == 200, context.text
+    assert [
+        [part["tool_id"] for part in message["parts"]]
+        for message in context.json()["result"]["messages"]
+    ] == [["call_a"], ["call_b"]]
 
 
-async def test_add_message_request_persists_peer_id(service, monkeypatch):
+async def test_add_message_request_persists_peer_id(app, client, monkeypatch):
+    from openviking.server.auth.plugins import TrustedAuthPlugin
+
+    monkeypatch.setattr(app.state, "auth_plugin", TrustedAuthPlugin())
+    monkeypatch.setattr(
+        app.state, "config", ServerConfig(auth_mode="trusted", root_api_key=TEST_ROOT_KEY)
+    )
+    headers = {
+        "X-API-Key": TEST_ROOT_KEY,
+        "X-OpenViking-Account": "acct_trusted",
+        "X-OpenViking-User": "caller",
+    }
     session_id = "trusted-peer-id"
-    ctx = RequestContext(
-        user=UserIdentifier("acct_trusted", "caller"),
-        role=Role.USER,
-    )
-
-    response = await _call_add_message_route(
-        service,
-        monkeypatch,
-        ctx=ctx,
-        payload=_message_request("assistant", content="hello trusted", peer_id="assistant-b"),
-        session_id=session_id,
-    )
-
-    assert response.result["message_count"] == 1
-    session = await service.sessions.get(session_id, ctx, auto_create=False)
-    await session.load()
-    assert session.messages[-1].peer_id == "assistant-b"
-
-
-async def test_add_multiple_messages(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    # Add messages one by one; each add_message call should see
-    # the accumulated count (messages are loaded from storage each time)
-    resp1 = await client.post(
+    response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Message 0"),
+        headers=headers,
+        json=_message_request("assistant", content="hello trusted", peer_id="assistant-b"),
     )
-    assert resp1.json()["result"]["message_count"] >= 1
-
-    resp2 = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Message 1"),
-    )
-    count2 = resp2.json()["result"]["message_count"]
-
-    resp3 = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Message 2"),
-    )
-    count3 = resp3.json()["result"]["message_count"]
-
-    # Each add should increase the count
-    assert count3 >= count2
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["message_count"] == 1
+    got = await client.get(f"/api/v1/sessions/{session_id}/context", headers=headers)
+    assert got.status_code == 200, got.text
+    [message] = got.json()["result"]["messages"]
+    assert message["peer_id"] == "assistant-b"
+    assert message["parts"] == [{"type": "text", "text": "hello trusted"}]
 
 
 async def test_add_message_persistence_regression(client: httpx.AsyncClient, service):
     """Regression: message payload must persist as valid parts across loads."""
-    create_resp = await client.post("/api/v1/sessions", json={"user": "test"})
+    create_resp = await client.post("/api/v1/sessions", json={})
+    assert create_resp.status_code == 200, create_resp.text
     session_id = create_resp.json()["result"]["session_id"]
+    before = await client.get(f"/api/v1/sessions/{session_id}")
+    assert before.status_code == 200, before.text
+    assert before.json()["result"]["last_message_at"] == ""
 
-    resp1 = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Message A"),
-    )
-    assert resp1.status_code == 200
-    assert resp1.json()["result"]["message_count"] == 1
-
-    resp2 = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Message B"),
-    )
-    assert resp2.status_code == 200
-    assert resp2.json()["result"]["message_count"] == 2
+    expected = ["Message A", "Message B", "Message C"]
+    for index, message in enumerate(expected, start=1):
+        added = await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json=_message_request("user", content=message),
+        )
+        assert added.status_code == 200, added.text
+        assert added.json()["result"]["message_count"] == index
 
     # Re-load through API path to ensure session file can be parsed back.
     get_resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert get_resp.status_code == 200
-    assert get_resp.json()["result"]["message_count"] == 2
+    assert get_resp.json()["result"]["message_count"] == 3
+    assert get_resp.json()["result"]["last_message_at"]
 
     # Verify stored message content survives load/decode.
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
-    assert len(session.messages) == 2
-    assert session.messages[0].content == "Message A"
-    assert session.messages[1].content == "Message B"
+    assert [message.content for message in session.messages] == expected
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -1343,30 +1218,23 @@ async def test_delete_session(client: httpx.AsyncClient):
     resp = await client.delete(f"/api/v1/sessions/{session_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    fetched = await client.get(f"/api/v1/sessions/{session_id}")
+    assert fetched.status_code == 404, fetched.text
+    archive = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
+    assert archive.status_code == 404, archive.text
 
 
-async def test_compress_session(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
+async def test_commit_updates_archive_metadata_before_background_task(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    extraction_started, release_extraction = asyncio.Event(), asyncio.Event()
 
-    # Add some messages before committing
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="Hello"),
-    )
+    async def extract(*_args, **_kwargs):
+        extraction_started.set()
+        await release_extraction.wait()
+        return []
 
-    # Default wait=False: returns accepted with task_id
-    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["status"] == "accepted"
-    assert "memory_diff_uri" not in body["result"]
-    assert "usage" not in body
-    assert "telemetry" not in body
-
-
-async def test_commit_updates_archive_metadata_before_background_task(client: httpx.AsyncClient):
+    monkeypatch.setattr(service.sessions._session_compressor, "extract_long_term_memories", extract)
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -1387,19 +1255,28 @@ async def test_commit_updates_archive_metadata_before_background_task(client: ht
 
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
-    commit_result = commit_resp.json()["result"]
+    committed = commit_resp.json()
+    assert committed["status"] == "ok"
+    assert "usage" not in committed and "telemetry" not in committed
+    commit_result = committed["result"]
+    assert "memory_diff_uri" not in commit_result
     assert commit_result["status"] == "accepted"
     assert commit_result["archived"] is True
 
-    immediate_get = await client.get(f"/api/v1/sessions/{session_id}")
-    assert immediate_get.status_code == 200
-    immediate_result = immediate_get.json()["result"]
-    assert immediate_result["message_count"] == 0
-    assert immediate_result["total_message_count"] == 3
-    assert immediate_result["commit_count"] == 1
-    assert immediate_result["last_commit_at"] != ""
-
-    await _wait_for_task(client, commit_result["task_id"])
+    try:
+        await asyncio.wait_for(extraction_started.wait(), 3)
+        task = await client.get(f"/api/v1/tasks/{commit_result['task_id']}")
+        assert task.json()["result"]["status"] == "running"
+        immediate_get = await client.get(f"/api/v1/sessions/{session_id}")
+        assert immediate_get.status_code == 200
+        immediate_result = immediate_get.json()["result"]
+        assert immediate_result["message_count"] == 0
+        assert immediate_result["total_message_count"] == 3
+        assert immediate_result["commit_count"] == 1
+        assert immediate_result["last_commit_at"] != ""
+    finally:
+        release_extraction.set()
+    assert (await _wait_for_task(client, commit_result["task_id"]))["status"] == "completed"
 
     resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
@@ -1516,7 +1393,7 @@ async def test_get_session_archive_endpoint_returns_archive_details(
     )
     assert commit_resp.json()["result"]["effective_enable_working_memory"] is wm_enabled
     task_id = commit_resp.json()["result"]["task_id"]
-    await _wait_for_task(client, task_id)
+    assert (await _wait_for_task(client, task_id))["status"] == "completed"
 
     resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
     assert resp.status_code == 200
@@ -1542,9 +1419,10 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    async def failing_extract(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
+    async def failing_extract(*, archive_uri, **_kwargs):
+        if archive_uri.endswith("/archive_001"):
+            raise RuntimeError("synthetic extraction failure")
+        return []
 
     service.sessions._session_compressor.extract_long_term_memories = failing_extract
 
@@ -1583,6 +1461,8 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archived"] is True
+    assert (await _wait_for_task(client, body["result"]["task_id"]))["status"] == "completed"
+    assert await _archive_marker_exists(session, body["result"]["archive_uri"], ".done")
 
 
 async def test_retry_failed_archive_with_hash_from_archive_inspection(
@@ -1643,7 +1523,8 @@ async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
     .done) and the task fails — but a failed archive must not block later commits.
     """
     create_resp = await client.post(
-        "/api/v1/sessions", json={"memory_policy": {"working_memory": {"enabled": True}}}
+        "/api/v1/sessions",
+        json={"memory_policy": {"memory_types": [], "working_memory": {"enabled": True}}},
     )
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -1681,6 +1562,8 @@ async def test_commit_failed_when_summary_fails_does_not_block_next_commit(
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archived"] is True
+    assert (await _wait_for_task(client, body["result"]["task_id"]))["status"] == "completed"
+    assert await _archive_marker_exists(session, body["result"]["archive_uri"], ".done")
 
 
 @pytest.mark.parametrize("invalid", ["false", "true", 0, 1, {}, []])

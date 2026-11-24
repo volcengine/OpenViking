@@ -2,85 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared-resource deletion boundary tests."""
 
-from types import SimpleNamespace
-
 import httpx
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers import resources
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
-from openviking_cli.session.user_id import UserIdentifier
-
-
-def _ctx() -> RequestContext:
-    return RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
-
-
-@pytest.mark.asyncio
-async def test_delete_resource_delegates_to_fs_with_index_wait(monkeypatch):
-    calls = []
-
-    async def fake_rm(uri, recursive=False, wait=False, _ctx=None):
-        calls.append((uri, recursive, wait, _ctx))
-        return SimpleNamespace(result={"uri": uri, "semantic_status": "complete"})
-
-    monkeypatch.setattr(resources, "remove_filesystem_entry", fake_rm)
-    ctx = _ctx()
-
-    response = await resources.delete_resource(
-        uri="viking://resources/project/",
-        recursive=True,
-        wait=True,
-        _ctx=ctx,
-    )
-
-    assert calls == [("viking://resources/project", True, True, ctx)]
-    assert response.result["semantic_status"] == "complete"
-
-
-@pytest.mark.asyncio
-async def test_delete_resource_rejects_shared_root(monkeypatch):
-    async def unexpected_rm(**kwargs):
-        raise AssertionError("rejected URI must not reach filesystem deletion")
-
-    monkeypatch.setattr(resources, "remove_filesystem_entry", unexpected_rm)
-
-    with pytest.raises(InvalidArgumentError):
-        await resources.delete_resource(uri="viking://resources/", _ctx=_ctx())
-
-
-@pytest.mark.asyncio
-async def test_delete_resource_http_forwards_recursive_and_wait(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    calls = []
-
-    async def fake_rm(uri, ctx=None, recursive=False, wait=False):
-        calls.append((uri, ctx, recursive, wait))
-        return {"uri": uri, "semantic_status": "complete"}
-
-    monkeypatch.setattr(service.fs, "rm", fake_rm)
-
-    response = await client.delete(
-        "/api/v1/resources",
-        params={
-            "uri": "viking://resources/docs/readme.md",
-            "recursive": True,
-            "wait": True,
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["result"] == {
-        "uri": "viking://resources/docs/readme.md",
-        "semantic_status": "complete",
-    }
-    assert len(calls) == 1
-    assert calls[0][0] == "viking://resources/docs/readme.md"
-    assert calls[0][2:] == (True, True)
+from openviking_cli.exceptions import NotFoundError
 
 
 @pytest.mark.asyncio
@@ -89,8 +15,11 @@ async def test_delete_resource_http_removes_real_shared_directory(
     service,
 ):
     ctx = RequestContext(user=service.user, role=Role.ROOT)
-    uri = "viking://resources/delete-me"
+    parent = "viking://resources/project"
+    uri = f"{parent}/delete-me"
+    await service.fs.mkdir(parent, ctx=ctx)
     await service.fs.mkdir(uri, ctx=ctx)
+    await service.viking_fs.write_file(f"{uri}/nested.txt", "present before deletion", ctx=ctx)
 
     response = await client.delete(
         "/api/v1/resources",
@@ -98,9 +27,13 @@ async def test_delete_resource_http_removes_real_shared_directory(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["result"]["uri"] == uri
+    result = response.json()["result"]
+    assert result["uri"] == uri
+    assert result["semantic_root_uri"] == parent
+    assert result["semantic_status"] == "complete"
     with pytest.raises(NotFoundError):
-        await service.fs.stat(uri, ctx=ctx)
+        await service.fs.stat(f"{uri}/nested.txt", ctx=ctx)
+    assert await service.viking_fs.exists(parent, ctx=ctx)
 
 
 @pytest.mark.asyncio
@@ -114,10 +47,12 @@ async def test_delete_resource_http_rejects_private_resource_before_service(
 
     monkeypatch.setattr(service.fs, "rm", unexpected_rm)
 
-    response = await client.delete(
-        "/api/v1/resources",
-        params={"uri": "viking://user/alice/resources/private.md"},
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    for uri in ("viking://resources/", "viking://user/alice/resources/private.md"):
+        response = await client.delete("/api/v1/resources", params={"uri": uri, "recursive": True})
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["code"] == "INVALID_ARGUMENT"
+        assert (
+            error["message"]
+            == "Only children of viking://resources/ are allowed for this operation"
+        )

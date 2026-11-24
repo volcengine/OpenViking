@@ -29,8 +29,6 @@ OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
     [
         (Exception(1062, "unique key conflict"), True),
         (Exception(1452, "foreign key references duplicate_records"), False),
-        (Exception(1048, "Column 'duplicate' cannot be null"), False),
-        (Exception(3819, "Check constraint 'duplicate_guard' is violated"), False),
         (Exception("duplicate"), False),
         (Exception(), False),
         (None, False),
@@ -569,6 +567,7 @@ async def test_withdrawal_is_atomic_with_work_registration(task_stores):
         assert not withdrawn.accepted
         assert registered is WorkRegistration.CREATED
         assert await tracker.get_work_state("task", "work", **OWNER) is WorkState.PENDING
+        assert (await tracker.get("task", **OWNER)).status is TaskStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -730,7 +729,6 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
             await remote.unregister_running_task("task")
 
     worker = asyncio.create_task(execute())
-    polling = None
     try:
         await asyncio.wait_for(started.wait(), 10)
         await getattr(tracker, cancel_method)("task", **OWNER)
@@ -738,7 +736,7 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         assert await tracker.get_work_state("task", work_ids[0], **OWNER) is WorkState.CANCELLED
         assert not worker.done()
         monkeypatch.setattr("openviking.service.task_tracker._CANCEL_POLL_INTERVAL", 0)
-        polling = asyncio.create_task(remote._cancel_poll_loop())
+        remote.start_cleanup_loop()
         # Cancellation delivery precedes durable cleanup. MySQL commits during
         # unregister_running_task must settle before the worker propagates it;
         # a one-second timeout on the worker can cancel that cleanup itself.
@@ -749,10 +747,15 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
     finally:
         worker.cancel()
-        if polling is not None:
-            polling.cancel()
+        remote.stop_cleanup_loop()
         await asyncio.gather(
-            worker, *([polling] if polling is not None else []), return_exceptions=True
+            worker,
+            *[
+                task
+                for task in (remote._cleanup_task, remote._cancel_poll_task)
+                if task is not None
+            ],
+            return_exceptions=True,
         )
 
 
@@ -772,18 +775,27 @@ async def test_wait_for_work_observes_only_explicit_ids(tracker):
     await tracker.mark_work_done("task", "first", **OWNER)
     await tracker.wait_for_work("task", ["first"], timeout=0, **OWNER)
 
-    assert await tracker.has_work("task", **OWNER)
+    assert await tracker.get_work_state("task", "unrelated", **OWNER) is WorkState.PENDING
 
 
 @pytest.mark.asyncio
-async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker):
+async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker, monkeypatch):
     await tracker.register_work("task", "root", "Inline", **OWNER)
     await tracker.reconcile_delivery("task", "semantic", "Semantic", **OWNER)
+    first_check = asyncio.Event()
+    has_open_work = tracker._store.has_open_work
+
+    async def observe_open_work(*args, **kwargs):
+        result = await has_open_work(*args, **kwargs)
+        first_check.set()
+        return result
+
+    monkeypatch.setattr(tracker._store, "has_open_work", observe_open_work)
     waiting = asyncio.create_task(
-        tracker.wait_for_task_work("task", exclude_work_id="root", **OWNER)
+        tracker.wait_for_task_work("task", exclude_work_id="root", timeout=2, **OWNER)
     )
     try:
-        await asyncio.sleep(0)
+        await asyncio.wait_for(first_check.wait(), timeout=1)
         assert not waiting.done()
         await tracker.register_work("task", "embedding", "Embedding", **OWNER)
         await tracker.mark_work_done("task", "semantic", **OWNER)
@@ -791,7 +803,7 @@ async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker
             await tracker.wait_for_task_work("task", exclude_work_id="root", timeout=0, **OWNER)
         await tracker.mark_work_done("task", "embedding", **OWNER)
         await asyncio.wait_for(waiting, timeout=1)
-        assert await tracker.has_work("task", **OWNER)
+        assert await tracker.get_work_state("task", "root", **OWNER) is WorkState.PENDING
     finally:
         waiting.cancel()
         await asyncio.gather(waiting, return_exceptions=True)

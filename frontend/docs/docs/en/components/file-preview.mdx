@@ -437,7 +437,7 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 
 ### Path and breadcrumb
 
-- Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name.
+- Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name. A first-level directory has no ancestor, so the scheme appears on the trailing level instead and `viking://user` reads `viking://user`.
 - URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation uses the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
 - No path: without `source.path` the breadcrumb shows only the file name and there is no copy-path button.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.

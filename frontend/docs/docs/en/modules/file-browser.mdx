@@ -165,7 +165,7 @@ Each flag defaults to showing the action when the current resource supports it. 
 | edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                            | `boolean` | `true`  |
 | copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories       | `boolean` | `true`  |
 | download    | The Download action, which saves the original content of a file; shown for files only                                                                                                 | `boolean` | `true`  |
-| history     | The Version history action; shown for Wiki outputs, Wiki directories and non-resource text files                                                                                      | `boolean` | `true`  |
+| history     | The Version history action; shown for experience files and Wiki nodes (Wiki directories included), never for other files                                                              | `boolean` | `true`  |
 | configure   | The Compile configuration action; shown only on the root directory of a Wiki compile target, and still viewable when read-only                                                        | `boolean` | `true`  |
 | importPack  | The Import .ovpack action; shown only for writable directories under `viking://user` (including `viking://~`) or `viking://resources`                                                 | `boolean` | `true`  |
 | exportPack  | The Export .ovpack action; shown only for directories under `viking://user` (including `viking://~`) or `viking://resources`, except internal control files such as `.relations.json` | `boolean` | `true`  |
@@ -365,16 +365,6 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | configurationEmpty | Message when the current user has no configuration for this directory | `string`                     | `'No compilation configuration is available for this directory in your user scope.'` |
 | historyEmpty       | Message shown when there is no version history                        | `string`                     | `'No version history yet'`                                                           |
 | historyLimit       | Message shown when the history reaches the 500-entry limit            | `string`                     | `'Showing up to 500 recent snapshots.'`                                              |
-| snapshotPrompt     | Title of the post-save snapshot choice                                | `string`                     | `'Keep a snapshot?'`                                                                 |
-| snapshotChoice     | Explanation of the post-save snapshot choice                          | `string`                     | `'The file is saved. Would you like to keep a snapshot in version history?'`         |
-| keepSnapshot       | Button that opens the snapshot description                            | `string`                     | `'Keep a snapshot'`                                                                  |
-| skipSnapshot       | Button that skips snapshot creation                                   | `string`                     | `'Skip'`                                                                             |
-| snapshotFileSaved  | Reminder shown with the snapshot description                          | `string`                     | `'The file is saved. Describe this snapshot before saving it.'`                      |
-| done               | Button that closes the snapshot result                                | `string`                     | `'Done'`                                                                             |
-| snapshotNote       | Label for the snapshot note field                                     | `string`                     | `'Describe this snapshot'`                                                           |
-| saveSnapshot       | Button that saves a snapshot                                          | `string`                     | `'Save snapshot'`                                                                    |
-| snapshotSaved      | Message shown after a snapshot is saved                               | `string`                     | `'Snapshot saved.'`                                                                  |
-| snapshotUnchanged  | Message shown when the file has no changes to snapshot                | `string`                     | `'The file has no changes to snapshot.'`                                             |
 | version            | Text before the version number of a Wiki file                         | `string`                     | `'Version'`                                                                          |
 | importFile         | Label of the file field in the import dialog                          | `string`                     | `'Package file'`                                                                     |
 | importHint         | Hint in the import dialog                                             | `string`                     | `'Choose an .ovpack package to import into this directory.'`                         |
@@ -583,9 +573,8 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
 - Copying content, downloading, exporting, viewing version history and viewing the compile configuration remain available regardless of `readOnly` and ACL settings.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
-- After an editable non-resource text file saves, choose **Keep a snapshot** or **Skip**. Keeping it opens a required description field; **Save snapshot** sends `POST /api/v1/snapshot/commit`. Skipping or cancelling leaves the file saved. Failures keep the description for retry, and unchanged content shows a separate result. Wiki compile files retain their automatic versions.
-- The history dialog also lets you describe and save a non-resource text file snapshot. It captures the server’s current file at submission time; intervening writes may be included.
-- Wiki directories let users select a descendant file, preview historical content, compare two versions, and restore a single file through `POST /api/v1/snapshot/restore`. History pages native Git commits through `GET /api/v1/snapshot/versions` with `before_snapshot`, displays committer time, and reads content with the selected commit ID and current file path. Legacy version indexes remain supported; services without the versions endpoint fall back to the latest 500 entries from `GET /api/v1/snapshot/log`. The first version supports an added-file diff. Turn off Show changes to read the full document. A version that deletes the file can show the removed lines in Show changes. With Show changes off, that version shows a deletion notice instead of an empty document.
+- The history entry appears only on experience files and Wiki nodes. Ordinary resource files and server-managed configuration such as `settings/user_config.json` never show it.
+- Wiki directories let users select a descendant file, preview historical content, compare two versions, and restore a single file through `POST /api/v1/snapshot/restore`. History pages native Git commits through `GET /api/v1/snapshot/versions` with `before_snapshot`, displays committer time, and reads content with the selected commit ID and current file path. Legacy version indexes remain supported; services without the versions endpoint fall back to the latest 500 entries from `GET /api/v1/snapshot/log`. The first version supports an added-file diff. Turn off Show changes to read the full document. A version that deletes the file can show the removed lines in Show changes. With Show changes off, that version shows a deletion notice instead of an empty document. Versions come from Wiki compilation or an edit save; the UI offers no manual snapshot entry.
 - Gateways can provide history through `GET /api/v1/snapshot/log` and historical content through `GET /api/v1/snapshot/show`. Both deletion confirmation paths require an HTTP 404 from `/show` with `error.code` set to `"NOT_FOUND"`, `error.details.type` set to `"git_blob"`, and a string `error.details.resource` (the requested file URI in the native response).
 - Within `error.details`, `reason: "path_not_found"` and `deleted_file: true` confirm that the path is missing in the selected commit and the first parent has a file at that exact path. `deleted_file: false` leaves the read error in place.
 - For a matching 404 with no `error.details.deleted_file`, the legacy fallback accepts an omitted `error.details.reason` or `"path_not_found"`. FileBrowser queries `/log` from the selected commit (`branch`) with the file URI (`paths`). If the selected commit matches, it uses `GET /api/v1/snapshot/diff` to confirm a `deleted` change from `parents[0]` to the selected commit. The `/log` filter compares the exact tree entry against `parents[0]`, including for merge commits. A different `reason` or a non-boolean `deleted_file` leaves the read error in place.
@@ -659,12 +648,16 @@ Pass `experienceDashboardSlots.sections` to customize the built-in dashboard whi
 
 ### Tree width
 
-- When the container is narrower than 521px, the tree and preview stack and the horizontal resizer is hidden.
-
 - A draggable divider sits between the tree and the preview: drag it, or focus it and press the left and right arrow keys (16px each). Its accessible name comes from `labels.resizeTree`.
-- The tree is 352px wide by default and at least 200px. Its maximum is the smaller of 520px and the container width minus 321px (the preview keeps at least 320px, plus a 1px divider), so in a narrow column the tree shrinks instead of crowding out the preview.
+- The default tree width is 352px in Chinese and 500px in English. In the side-by-side layout, the tree is at least 200px wide. Its maximum is the smaller of 520px and the container width minus 321px, leaving at least 321px for the preview and divider.
 - The width applies to the current instance only and is not written to `localStorage`; whether to remember it is up to your app.
 - The current width is written as the CSS variable `--ov-file-browser-tree-width` in the root element's inline style. You can read it, but overriding it has no effect.
+
+### Tree height
+
+- When the container is narrower than 521px, the tree and preview stack. The tree starts at 40% of the container height, subject to the divider's limits.
+- Drag the divider up or down, or focus it and press the up and down arrow keys (16px each). The tree keeps at least 160px and the preview keeps at least 240px while resizing.
+- At a container height of 401px or less, the divider becomes a static line and the tree uses the 40% split. Each instance remembers its adjusted width and height separately.
 
 ## Analytics
 

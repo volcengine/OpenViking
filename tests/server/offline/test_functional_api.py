@@ -228,6 +228,11 @@ async def test_copy_directory_requires_recursive_and_copies_tree(client):
     await write(client, source + "/nested/child.md", "Recursive copy child.")
     refused = await client.post("/api/v1/fs/cp", json={"from_uri": source, "to_uri": target})
     assert refused.status_code == 400, refused.text
+    error = refused.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert error["message"] == f"Cannot copy directory without --recursive: {source}"
+    missing = await client.get("/api/v1/fs/stat", params={"uri": target})
+    assert missing.status_code == 404, missing.text
     result(await client.post("/api/v1/system/wait", json={}))
     copied = result(
         await client.post(

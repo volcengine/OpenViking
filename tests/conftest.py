@@ -190,6 +190,7 @@ def public_resource_dns(monkeypatch):
         if host in {
             "example.com",
             "example.org",
+            "github.com",
             "example.feishu.cn",
             "example.larkoffice.com",
             "alidocs.dingtalk.com",
