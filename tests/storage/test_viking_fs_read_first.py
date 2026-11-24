@@ -118,3 +118,47 @@ async def test_read_error_is_still_mapped(monkeypatch):
 
     with pytest.raises(NotFoundError):
         await fs.read_file(uri, ctx=_ctx())
+
+
+class _DirectoryReadError(Exception):
+    """Stands in for the LocalFS plugin error raised when reading a directory."""
+
+
+@pytest.mark.asyncio
+async def test_directory_backend_error_keeps_error_contract(monkeypatch):
+    """LocalFS raises on a directory read instead of returning empty bytes."""
+    fs, fake = _make_fs()
+    uri = "viking://resources/folder"
+    fake.dirs.add(_path(fs, uri))
+
+    async def _raise_on_read(*args, **kwargs):
+        raise _DirectoryReadError("is a directory")
+
+    fake.read = _raise_on_read
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+
+    with pytest.raises(InvalidArgumentError) as excinfo:
+        await fs.read_file(uri, ctx=_ctx())
+    assert excinfo.value.details == {
+        "resource": uri,
+        "expected": "file",
+        "actual": "directory",
+    }
+    assert "List it first, then read a file URI" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_non_directory_read_error_is_not_masked(monkeypatch):
+    fs, fake = _make_fs()
+    uri = "viking://resources/broken.txt"
+    fake.files[_path(fs, uri)] = b"ok"
+
+    async def _boom(*args, **kwargs):
+        raise OSError("backend exploded")
+
+    fake.read = _boom
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+
+    with pytest.raises(OSError, match="backend exploded"):
+        await fs.read_file(uri, ctx=_ctx())
+

@@ -2099,24 +2099,32 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # AGFS read returns empty bytes for non-existent files instead of
-        # raising, so only probe with stat when the read came back empty.
+        # raising, so the stat probe only runs when the read came back empty.
+        # Some backends raise instead of returning empty bytes when the path is
+        # a directory (LocalFS surfaces the plugin error), so a failed read is
+        # resolved through the same probe to keep the directory error contract.
+        read_error: Optional[Exception] = None
         try:
             content = await self._async_agfs.read(path)
-            if isinstance(content, bytes):
-                raw = content
-            elif content is not None and hasattr(content, "content"):
-                raw = content.content
-            else:
-                raw = b""
         except Exception as exc:
             if is_not_found_error(exc):
                 raise NotFoundError(uri, "file") from exc
-            raise
+            content = None
+            read_error = exc
+
+        if isinstance(content, bytes):
+            raw = content
+        elif content is not None and hasattr(content, "content"):
+            raw = content.content
+        else:
+            raw = b""
 
         if not raw:
             try:
                 stat = await self._async_agfs.stat(path)
             except Exception as exc:
+                if read_error is not None:
+                    raise read_error
                 if is_not_found_error(exc):
                     raise NotFoundError(uri, "file") from exc
                 raise
@@ -2125,7 +2133,9 @@ class _OpsMixin:
                     f"Directory URI is not readable as a file: {uri}. "
                     "List it first, then read a file URI.",
                     details={"resource": uri, "expected": "file", "actual": "directory"},
-                )
+                ) from read_error
+            if read_error is not None:
+                raise read_error
 
         text = self._decode_bytes(raw)
 
