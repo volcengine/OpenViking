@@ -119,8 +119,11 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
   const timeoutMs = Math.max(5000, Number(cfg.recallCompressTimeoutMs || 30000));
 
   return async (prompt) => {
+    // Without --no-session-persistence every recall leaves a throwaway
+    // transcript in ~/.claude/projects/<cwd>, flooding the user's session list.
     const args = [
       "-p",
+      "--no-session-persistence",
       "--model", model,
       "--effort", effort,
       "--strict-mcp-config",
