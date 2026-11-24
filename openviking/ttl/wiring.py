@@ -31,7 +31,7 @@ _adapter: Optional["TTLAdapter"] = None
 def build_ttl_adapter(
     config: Optional["TTLAdapterConfig"],
     *,
-    cache_runtime: "CacheRuntimeHandleProtocol | None" = None,
+    cache_runtime: CacheRuntimeHandleProtocol | None = None,
 ) -> Optional["TTLAdapter"]:
     """Create the built-in CacheRuntime TTL implementation when enabled."""
     if config is None or not config.enabled:
