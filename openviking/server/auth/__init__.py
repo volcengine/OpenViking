@@ -295,7 +295,7 @@ async def get_upload_request_context(
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
         try:
-            consumed = upload_token_store.consume(token)
+            consumed = await upload_token_store.aconsume(token)
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_upload = consumed
@@ -325,7 +325,7 @@ async def get_download_request_context(
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
         try:
-            consumed = download_token_store.consume(token)
+            consumed = await download_token_store.aconsume(token)
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_download_uri = consumed.uri
