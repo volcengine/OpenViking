@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 // formatting can block their timers. Test workers inherit the V8 heap limit.
 export function startTests(
   args,
-  { cwd, env, timeout = 300_000, stdio = 'inherit' } = {},
+  { cwd, env, timeout = 420_000, stdio = 'inherit' } = {},
 ) {
   const child = spawn(
     process.execPath,

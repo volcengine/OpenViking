@@ -91,12 +91,14 @@ test('FileBrowser marks only shared resources and labels an expanded empty folde
   const shared = 'viking://resources';
   const user = 'viking://user/alice';
   const personal = `${user}/resources`;
+  const personalArchive = `${user}/archive`;
   const agent = 'viking://agent';
   const endpoints = `${agent}/endpoints`;
+  const agentLogs = `${agent}/logs`;
   const listing = new Map([
     ['viking://', [shared, user, agent]],
-    [user, [personal]],
-    [agent, [endpoints]],
+    [user, [personal, personalArchive]],
+    [agent, [endpoints, agentLogs]],
   ]);
   const host = await mount(
     createElement(

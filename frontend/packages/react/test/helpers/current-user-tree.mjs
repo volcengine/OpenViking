@@ -24,6 +24,7 @@ export function backend(intercept) {
       if (call.uri === ROOT) return ok([directory(USER)]);
       if (call.uri.replace(/\/+$/, '') === USER)
         return ok([directory(ALICE), directory(BOB)]);
+      if (call.uri.endsWith('/resources')) return ok([]);
       return ok([directory(`${call.uri}/resources`)]);
     }
     return ok('');

@@ -1,5 +1,733 @@
 # @openviking/react
 
+## 0.3.0
+
+### Minor Changes
+
+<!-- release-note:en-US -->
+
+- 8769c9e: Add `slots.activationIntro` to replace or hide the activation introduction while preserving Console's Enable, Retry and status controls. Add `labels.activationTitle` and `labels.activationDescription` for custom text, with empty strings hiding the respective text. Existing media and default presentation remain compatible, and presentation changes do not restart activation checks or reset the draft.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 新增 `slots.activationIntro`，可替换或隐藏启用页介绍，保留 Console 管理的启用、重试和状态。通过 `labels.activationTitle` 和 `labels.activationDescription` 覆盖文案，空字符串隐藏相应文案。现有媒体和默认展示保持兼容，展示配置变化不会重新查询启用状态或重置草稿。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a5b2007: Add a responsive Console skeleton for hosts that need to resolve available modes before rendering the Console.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a5b2007: 为需要先确认可用模式的接入方提供响应式 Console 骨架屏。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- fc16795: Add `getOpenVikingDirectoryTourSteps(locale)` with complete English and Chinese directory explanations, and align the built-in memories, sessions and experiences illustrations. Remove copied step text from the demo. The default card no longer shows a close button; set `showCloseButton` and provide `onClose` to restore it. Escape and custom-content close actions still use `onClose`. Consumers should remove old text and illustration overrides to use the updated preset.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- fc16795: 新增 `getOpenVikingDirectoryTourSteps(locale)`，提供完整的中英文目录说明，并更新内置的用户记忆、轨迹记录和 Agent 经验插图。示例改为直接使用预设文案。默认卡片不再显示关闭按钮；如需恢复，请设置 `showCloseButton` 并提供 `onClose`。Escape 和自定义内容的关闭动作仍通过 `onClose` 处理。消费者需移除旧文案和插图覆盖，才能使用更新后的预设。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Make VikingBot message dates keyboard-accessible copy actions for diagnostic JSON. Assistant dates copy message metadata; user dates copy metadata for the currently loaded messages. Add optional typed diagnostic identifiers to VikingBot and VikingBotMessageList, automatically include the current Console session ID, and report clipboard success or failure without fetching or exporting additional data.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 支持单击消息日期或使用键盘复制 VikingBot 排查 JSON：助手日期复制消息元数据，用户日期复制当前已加载消息的元数据。VikingBot 和 VikingBotMessageList 可接收明确类型的可选排查标识，Console 自动带入当前会话 ID，并反馈剪贴板复制成功或失败，不新增取数或后台导出。
+
+<!-- /release-note:zh-CN -->
+
+### Patch Changes
+
+<!-- release-note:en-US -->
+
+- 7115f1f: Recheck node permissions before opening ACL management and close the panel when access is revoked. Temporary load failures remain retryable.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 7115f1f: 打开节点权限管理前重新校验权限，权限被撤销时关闭弹窗并刷新权限状态；临时加载失败仍可重试。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 3e3fd93: Keep the ACL principal search placeholder consistent when opening and closing the picker.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 3e3fd93: 保持 ACL 用户和用户组搜索框展开、关闭时的占位文案一致。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 15845c2: Show the Agent connection copy action as a primary button and correct the MCP and SDK icons.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 15845c2: 将 Agent 接入复制操作显示为主按钮，并修正 MCP 与 SDK 图标。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Reduce developer integration icons to 16px in the list and 24px in the detail header. Extend the AgentConnect background to fill taller containers and keep its lower glow at the bottom.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 将自定义接入方式的列表图标缩小至 16px、详情图标缩小至 24px。AgentConnect 背景铺满更高的容器，底部渐变随面板高度延伸。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- ced8e8e: Keep the AgentConnect navigation visible while scrolling long desktop setup guides, with an independently scrollable agent list in short viewports. Preserve the horizontal navigation on narrow screens.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- ced8e8e: 桌面端滚动较长的接入指南时保持 AgentConnect 导航可见，并在较矮视口中独立滚动 Agent 列表；窄屏继续使用横向导航。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 22f4ff6: Align the terminal quick-action labels and chip styling with the Volcano Engine console.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 22f4ff6: 将终端快捷命令的文案与标签样式对齐火山引擎控制台。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- bb770d1: - Show legacy percent-encoded directory scopes as readable text while preserving their original resource identity.
+  - Keep generated resource-name segments literal instead of pre-encoding ordinary Chinese names.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- bb770d1: - 将历史百分号编码的目录范围显示为可读文本，同时保留原始资源标识。
+  - 生成 Viking URI 建议时让资源名称保持原文，不再预编码普通中文名称。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 474b402: Render Viking resource URIs as plain text while editing commands, while keeping links in command results interactive.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 474b402: 命令编辑时将 Viking 资源 URI 渲染为普通文本，同时保留命令结果中的链接交互。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 2b1018a: Keep terminal JSON and code output on its original lines, using keyboard-accessible horizontal scrolling in narrow containers instead of wrapping values onto separate lines.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 2b1018a: 终端 JSON 与代码输出保持原始行结构，窄容器下改用支持键盘操作的横向滚动，避免把字段值单独折到下一行。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 826d51c: Tighten command-help spacing and align command names with descriptions in a compact two-column layout for faster scanning.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 826d51c: 收紧命令帮助的间距，并将命令名称与说明按紧凑双列对齐，提升扫读效率。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8a19e6b: Show short command names and summaries in `ov help`, without changing the full syntax shown in parameter help. Pressing Tab now completes an exact slash command before falling back to the first fuzzy match.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8a19e6b: `ov help` 只列出简短的命令名称和摘要，完整语法仍可在参数帮助中查看。按 Tab 补全时会优先采用精确匹配的斜杠命令，再回退到首个模糊匹配项。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8d68b16: Replace the terminal empty state's `compile` shortcut with `compile create`, so the quick-start action opens the compile configuration flow directly.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8d68b16: 将终端空态中的 `compile` 快捷入口替换为 `compile create`，点击快速体验时直接进入编译配置创建流程。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 77278d7: Preserve user IDs containing `@` in suggested personal destinations for compilation.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 77278d7: 修复编译个人目录建议中带 `@` 的用户 ID 被转义的问题。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- ce0a168: Include built-in system Skills in the VikingBot compile Skill picker search.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- ce0a168: VikingBot 的编译 Skill 选择弹窗支持搜索系统内置 Skill。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- ee71998: Console accepts a host-resolved VikingBot startup state, so hosts can finish their checks before showing the final tabs and panels.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- ee71998: Console 支持接收宿主已解析的 VikingBot 初始状态，宿主完成检查后可直接展示对应的标签页和面板。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 478fefc: Keep the VikingBot tab visible with compact loading while activation eligibility or runtime status is checked. Hide the tab only when eligibility is explicitly false, keep failed checks retryable in the Bot panel, and preserve the user's command-mode selection when activation becomes ready.
+
+  Use compact loading for every eligibility/status read and the enabling indicator only while `start` is pending. Show error text once in a notification, keep Retry on the card, and announce lifecycle changes through a persistent live status without repeating errors.
+
+  Preserve a failure notification's dismissed state across Bot/CLI switches until a new failure. Transfer focus from a focused Enable or Retry button to the stable Bot panel before the operation, leaving it there on failure. When eligibility removes Bot controls, transfer focus only from the removed mode switch or Bot panel to the built-in CLI editor, with a panel fallback and no change to external focus. Add optional `CommandConsole.inputRef` for its actual textarea, keeping focus on Console's own editor even with complete Consoles nested in slots.
+
+  Mount the live status region empty and announce only while visible. Supported visibility signals repeat the current state without a new request when a host-hidden Console becomes visible: ancestor attributes (including `data-state`), box-size changes when `ResizeObserver` is available, window or visual viewport resizing, and the start, end, or cancellation of ancestor CSS transitions and animations. For other CSS visibility changes without these signals, hosts should synchronize explicit state such as `hidden`.
+
+  When the scope's request signal is cancelled, keep the Bot tab with a static cancellation message instead of loading or an ineffective retry button. Check again after the host replaces the aborted signal with a fresh, non-aborted signal or removes it; changing only `scopeKey` does not restore a cancelled signal.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 478fefc: 检查启用资格或运行状态时保留 VikingBot 标签页并显示轻量加载提示，仅在资格明确为 false 时隐藏标签页。检查失败时在 Bot 面板保留重试入口，启用就绪后保留用户选择的命令模式。
+
+  所有资格和状态读取都显示轻量加载提示，仅在 `start` 等待返回时显示启用中。错误原文仅在通知中显示一次，卡片保留重试入口，常驻状态播报只报告流程状态变化，不重复播报错误。
+
+  同一次失败的通知关闭状态跨 Bot/CLI 切换保留，只有新失败才可重新展示。启用或重试时，若操作按钮持有焦点，先移到稳定的 Bot 面板，失败时留在 Bot。资格否定移除 Bot 控件时，仅当焦点在被移除的模式切换组或 Bot 面板内才交给内置 CLI 编辑器，无法聚焦时回退面板，不抢占外部焦点。新增 `CommandConsole.inputRef` 可选属性，提供真实 textarea 引用，插槽嵌入完整 Console 时仍准确定位当前 Console 自己的编辑器。
+
+  状态区域先空挂载、可见时发布公告。在支持的显隐信号使 Console 恢复可见时，会重播当前状态，不发起新请求。这些信号包括祖先属性变化（含 `data-state`）、`ResizeObserver` 可用时的盒子尺寸变化、窗口或可视视口尺寸变化，以及祖先 CSS 过渡和动画的开始、结束或取消。其他未产生上述信号的 CSS 显隐变化，宿主应同步 `hidden` 等显式状态。
+
+  作用域的请求 signal 取消后，保留 Bot 标签页并显示静态取消提示，替代加载状态和无法生效的重试按钮。宿主换用未取消的新 signal 或移除已取消的 signal 后重新检查；仅修改 `scopeKey` 不会恢复已取消的 signal。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a5dd663: Show tracked Terminal tasks from `add-resource`, `add-skill`, `add-memory`, `session commit` and `compile` in their command records without separate task notifications, preserving original output and deduplicated links to final results. Tasks also referenced by VikingBot retain their notifications.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a5dd663: 终端追踪的 `add-resource`、`add-skill`、`add-memory`、`session commit` 和 `compile` 任务在命令记录中展示状态，不再单独弹出任务通知，同时保留原始输出和去重后的最终结果链接。同时被 VikingBot 引用的任务保留通知。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 7f3a141: Allow Console hosts to open their local upload page from `ov add-resource` so users can choose files or folders and configure the import.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 7f3a141: 支持宿主在执行 `ov add-resource` 时打开本地上传页，让用户选择文件或文件夹并配置导入。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Allow empty additional instructions in the built-in VikingBot clarification flow, including when a prefilled instruction is cleared. Keep names and source, target and skill selections required, and submit the optional instruction as an empty string.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: VikingBot 内置澄清流程的补充要求可留空，清空预填指令后也能提交，并以空字符串传递答案；名称、来源、输出目录和 Skill 的必填校验保持不变。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- af1c240: Keep shortcuts above the terminal input after commands have been run. Selecting a shortcut fills and focuses the input without executing the command.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- af1c240: 执行命令后，终端输入框上方继续显示快捷命令。点击快捷命令会填入命令并聚焦输入框，等待用户提交。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- effca0d: Preserve regex escapes such as `\d` in double-quoted Console `grep` patterns so digit searches match the intended text.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- effca0d: 保留 Console `grep` 双引号模式中的 `\d` 等正则转义，使数字检索按输入的规则匹配。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 4e0d95c: Show background tasks and grep matches as lists in the Web Console. Grep results link to their files and display line numbers and any requested context.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 4e0d95c: Web Console 以列表展示后台任务和 grep 命中结果。grep 结果支持打开文件，并显示行号和请求的上下文。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a52b5d4: Add `OpenVikingProvider.userRootMode="current"` so directory trees display the resolved current user without listing every user. Load the user's contents when expanded, inherit the mode through nested Providers, and keep native listings when no user identity is available. Changing the mode cancels navigation started in the previous mode.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a52b5d4: 新增 `OpenVikingProvider.userRootMode="current"`，目录树直接展示已解析的当前用户，展开具体用户目录时再加载内容，避免枚举全部用户。嵌套 Provider 继承此模式，缺少用户身份时仍使用原生目录请求。切换模式会取消旧模式下发起的目录定位。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- cfc32d6: Hide the ovpack export action for individual files, which the server does not support. Directory ovpack exports and regular file downloads remain available.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- cfc32d6: 隐藏内核不支持的单文件 ovpack 导出入口，保留目录 ovpack 导出和普通文件下载。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 15845c2: Open resource links from directory summaries and overviews in the file browser, including literal directory names containing `#` or `%` and targets with queries or fragments. Keep directory external links native, preserve explicit HTML heading IDs for local anchors without a host callback, and preserve file-tab `openUri` navigation.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 15845c2: 支持在文件浏览器中打开目录摘要和总览内含查询参数或锚点的资源链接，正确处理目录名中的字面 `#` 和 `%`。目录外链保留浏览器原生交互，显式 HTML 标题 ID 可供同文档锚点定位，无需宿主回调，并保留文件页签的 `openUri` 接管行为。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 15845c2: Add matching dark illustrations for all six built-in DirectoryTour steps and switch them with the host's dark theme.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 15845c2: 为 DirectoryTour 的六个内置步骤补充对应暗色插图，并随宿主暗色主题切换。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 5949a04: Distinguish compile dashboard actions in blue from experience dashboard actions in green, retaining conflict and unknown-status colors.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 5949a04: 目录树中的 compile 看板入口使用蓝色，经验看板入口保留绿色，并保留冲突和状态未知的提示颜色。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- e6dc971: Start a controlled file or directory preview while the root tree is still loading, so direct links no longer serialize independent tree and preview requests.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- e6dc971: 受控文件或目录预览不再等待根目录树加载完成，直达链接会并行请求目录树与预览内容。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- db91788: Show a success toast after saving node permissions instead of leaving the success message inside the permissions dialog.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- db91788: 节点权限保存成功后显示 Toast 提示，不再将成功文案留在权限弹窗内。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 2cae68e: Show stopping inherited node permissions in a separate confirmation dialog while keeping the permission list open. Cancelling leaves permissions unchanged.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 2cae68e: 停止继承节点权限时显示独立确认弹窗，并保留底层权限列表；取消后不修改权限。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- f5066cf: Add the optional `FileBrowser.hideDeniedEntries` setting to hide inaccessible tree entries while keeping traversal-only directories, pagination and permission checks. The default continues to show denied entries as disabled.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- f5066cf: 新增可选的 `FileBrowser.hideDeniedEntries` 配置，隐藏目录树中无权访问的节点，同时保留可穿透目录、分页和权限检查。默认仍显示禁用的无权限节点。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 50c83b5: Restore folders using the latest saved open or close operation after alias identity recovery, preserve ordered pending edits across mounts, and retire obsolete directory subscriptions after a spelling change.
+
+  Preserve a pending reopen when a refreshed listing changes only the trailing slash of a directory URI.
+
+  Resume saved descendants on later pages after home identity resolves, and keep suspended account transitions from changing the expansion state of the committed tree.
+
+  Rebuild saved-path groups when identity resolves during restoration, and persist manual edits before pending pages finish without dropping unresolved descendants.
+
+  Keep an earlier pending resource reveal from reopening a folder after a later manual tree toggle.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 50c83b5: 别名身份恢复后按最新保存的展开或折叠操作恢复目录，跨挂载保留待确认操作的顺序，并在 URI 写法切换后释放过期目录订阅。
+
+  目录列表刷新时仅改变 URI 尾部斜杠，仍保留待确认的重新展开操作。
+
+  主目录身份确认后自动恢复后续页的已保存子目录，并防止挂起的账号切换影响当前已显示目录树的展开状态。
+
+  身份在恢复中途确认时重新分组已保存路径；分页尚未完成时立即保存手动操作，同时保留待恢复的子目录。
+
+  手动展开或折叠目录后，先前尚未完成的资源定位不会再将目录重新展开。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 72d8e48: Show raw resource names in the FileBrowser sidebar tree, including percent escapes already present in stored paths.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 72d8e48: FileBrowser 左侧目录树按原样展示资源名称，包括存储路径中已有的百分号编码。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 000f076: Refresh the active resource's permission label and edit action when the file tree is refreshed, including grants changed elsewhere. Outdated permission responses from earlier refreshes cannot overwrite the latest result.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 000f076: 刷新目录树时同步重新查询当前资源权限，使外部授权变更可更新权限标签和编辑入口。旧刷新请求的响应不会覆盖最新权限。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 50c83b5: Decode URI-derived names once for preview tabs, search labels and FilePreview breadcrumbs, while the FileBrowser sidebar tree keeps raw resource names, including stored percent escapes. Keep original URIs for requests, selection and navigation; preserve explicit host labels and literal filesystem paths. Malformed escapes remain readable without throwing.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 50c83b5: 预览页签、搜索名称和 FilePreview 面包屑从 URI 派生名称时仅解码一次，FileBrowser 左侧目录树保留资源原始名称，包括存储路径中的百分号编码。请求、选择和导航保留原始 URI，宿主显式文案与普通文件路径保持原样；无效编码按原文显示，不抛出异常。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 15845c2: Align search result spacing and selection colors, show localized active filter counts, and keep date calendars visible above dialogs with month and year navigation.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 15845c2: 统一搜索结果间距和选中颜色，本地化显示生效的筛选条件数量，修复日期弹层裁切和对话框层级并补全年月切换。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- b8ec376: Copy readable Unicode Viking paths while preserving reserved escapes, clear submitted references immediately for new messages and after acceptance for in-flight follow-ups, and show preview icons as soon as the resource type is known.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- b8ec376: 复制路径时显示可读文字并保留保留字符的转义。发送新消息时立即移除已提交的引用，流式追问经确认后再移除。预览在资源类型确认后立即展示图标。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 6a0fd46: Show formatted line numbers in ordinary JSON previews and keep nested fold state when a parent is collapsed and reopened.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 6a0fd46: 普通 JSON 预览按格式化后的内容显示连续行号，并在父节点折叠后重新展开时保留各子节点自身的折叠状态。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 51fe2b7: Pause automatic transcript scrolling while the mouse is over the transcript. Playback and transcript highlighting continue, and scrolling resumes when the mouse leaves.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 51fe2b7: 鼠标悬停在视频转录文稿上时，暂停文稿自动滚动。视频继续播放，当前句继续高亮，鼠标移开后恢复自动跟随。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- cca553a: Show an AI-generated label beside file preview metadata for summaries, Wiki Compile outputs with file metadata, memory documents, identity.md and soul.md.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- cca553a: 在摘要、带文件元数据的 Wiki 编译产物、记忆文档及 identity.md、soul.md 的预览底部元信息旁展示 AI 生成标识。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- ced8e8e: Use consistent path-copy feedback in file, directory and history previews. Show a success bubble above the copy button with a green checkmark, remove inline copied text, and keep clipboard failures distinct from success.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- ced8e8e: 统一文件、目录与历史预览的路径复制反馈。成功后在按钮上方显示带绿色勾号的提示气泡，移除行内已复制文案，并保留剪贴板复制失败的错误提示。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Restore the search directory picker with an expandable selection tree, inherited and partial checks, and explicit confirm/cancel actions. Preserve supported roots and single-directory modes. Keep the active retrieval description synchronized with the mode menu.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 搜索目录选择器支持展开目录树、继承选中和半选状态，通过确认或取消应用选择草稿，保留支持的目录范围和单目录模式限制。当前检索方式的说明与切换菜单同步。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 4a0e0fb: Selecting a root directory in advanced search removes its subdirectories from the selected filters and the search request.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 4a0e0fb: 在高级搜索中勾选根目录时，从筛选项和搜索请求中移除已选的下级目录。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 909ac00: Show readable Chinese directory names in search scope tooltips without changing resource URIs. Clarify Grep regular expression syntax and show localized guidance for invalid patterns, with the original server error available under Error details.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 909ac00: 搜索范围的目录悬浮提示显示可读的中文名称，并保留原始资源 URI。明确 Grep 正则表达式语法，无效表达式显示本地化说明，错误详情中保留服务端原始错误。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Keep session conversation previews when messages contain native image or context references. Show their original fields as readable text, including image URLs and detail, context URIs, types and abstracts, without loading images or opening resources. Unknown or malformed parts retain the JSON fallback.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 会话消息包含原生图片或上下文引用时继续展示对话气泡，以可读文本保留图片 URL、detail、引用 URI、类型和摘要等原始字段，不自动加载图片或打开资源。未知或畸形 part 仍回退普通 JSON 预览。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Render fully readable session `messages.jsonl` previews as role-labelled conversation bubbles with timestamps and message IDs. Preserve original JSONL source mode, file admission limits, and normal JSON previews for other or unsupported records.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 将完整可读的会话 `messages.jsonl` 预览展示为带角色、时间和消息 ID 的对话气泡；保留原始 JSONL 源码模式和文件准入限制，其他文件或不支持的记录继续使用普通 JSON 预览。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 33eb54b: Simplify the default Create Wiki shortcut prompt in the Console and its interactive example, and center shortcut icons alongside their labels.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 33eb54b: 将控制台创建 Wiki 快捷入口的默认文案简化为「将选中目录中的文件整理成 Wiki。」，并同步交互示例；统一快捷入口图标与文字的垂直对齐。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- caf0f21: Shorten the Console Wiki shortcut label from "Create Wiki" to "Wiki".
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- caf0f21: 将 Console 的「创建 Wiki」快捷入口文案简化为「Wiki」。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- aa885b9: Expand a FileBrowser directory's single-child directory chain after a user opens it. Stop at branching, files, incomplete pages, errors, or denied access; ignore stale expansion after a fold or scope change.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- aa885b9: 用户展开 FileBrowser 目录后，自动逐层展开唯一子目录；遇到分支、文件、未完成分页、错误或无权限时停止，折叠及切换作用域后不再继续旧展开。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- e1233b3: Keep file previews visible when a restored directory tree confirms the resource type already returned by the server.
+
+  Read Markdown before optional Wiki attributes resolve. Reuse directory timestamps and briefly cache ordinary memory previews within the current request scope.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- e1233b3: 恢复目录树时，如果目录列表确认了服务端已返回的资源类型，保留已显示的文件预览，避免重复读取。
+
+  Markdown 正文优先读取，Wiki 属性在后台加载。复用目录列表的更新时间，并在当前请求作用域内短时缓存普通记忆正文。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 5cf9388: Explain the configured attachment limit when hovering the disabled VikingBot add-file button. Removing an attachment restores the normal hint and file picker, keeping an open tooltip anchored to the button.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 5cf9388: VikingBot 的添加文件按钮达到附件上限后，悬停显示配置的数量限制；移除附件后恢复普通提示和文件选择，已打开的提示始终贴近按钮。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 217b663: Keep VikingBot's add-file and reference icons neutral when hovered or pressed, including after sending finishes and the controls become available again.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 217b663: VikingBot 的添加文件和引用图标在悬停、按下时保持中性色，包括发送结束后按钮恢复可用的状态。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 4a0e0fb: Use the disabled text color for the VikingBot attachment and reference buttons while they are disabled.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 4a0e0fb: VikingBot 的添加资源和引用按钮在禁用时使用禁用文字色。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 8769c9e: Copy diagnostic metadata from the original assistant message that supplies a merged reply's displayed timestamp. Keep message IDs paired with their own timestamps while preserving stable display rows, message actions and streaming boundaries.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 8769c9e: 合并助手回复的日期排查信息改为使用提供展示时间的原始消息，确保消息 ID 与其时间成对，同时保留稳定展示行、消息动作和流式分组边界。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 593ce7f: Show readable directory names in VikingBot output directory suggestions and confirmations, and improve the text contrast of shortcut buttons.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 593ce7f: 在 VikingBot 输出目录建议和确认回执中显示可读的目录名，并提高快捷按钮的文字对比度。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 6f0db1f: Restore the VikingBot session submission status when reopening conversation history and show a green check when submission completes.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 6f0db1f: 重新打开 VikingBot 会话历史时恢复提交状态，并在提交完成后显示绿色勾选图标。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 6a0fd46: Describe the VikingBot session action as extracting long-term memory in every state.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 6a0fd46: 将 VikingBot 会话动作统一表述为抽取长期记忆，并明确完成状态。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 6454707: Clarify weekly compilation schedules as recurring updates, such as “Every Thursday 02:33”.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 6454707: 编译配置中的每周更新时间显示为“每周四 02:33”等周期文案。
+
+<!-- /release-note:zh-CN -->
+
 ## 0.2.0
 
 ### Minor Changes
