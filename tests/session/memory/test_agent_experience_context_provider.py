@@ -174,6 +174,36 @@ def _history_provider(records, *, case_memory_type="cases", case_signature="retu
 
 
 @pytest.mark.asyncio
+async def test_experience_prefetch_ignores_non_string_case_references():
+    root = "viking://user/user_1/memories"
+    case_uri = f"{root}/cases/returns.md"
+    provider = _history_provider(
+        [
+            ("legacy", "failure", "Valid legacy execution.", {"case_uris": None}),
+            (
+                "mixed",
+                "success",
+                "Execution linked to the current Case.",
+                {"case_uris": [{"uri": case_uri}, case_uri]},
+            ),
+            (
+                "invalid",
+                "failure",
+                "Structured data is not a Case URI.",
+                {"case_uris": [{"uri": case_uri}]},
+            ),
+        ]
+    )
+
+    await provider.prefetch()
+
+    assert provider.history_uris == [
+        f"{root}/trajectories/mixed.md",
+        f"{root}/trajectories/legacy.md",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("case_memory_type", "case_signature", "valid_case"),
     [

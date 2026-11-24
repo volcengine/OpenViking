@@ -171,7 +171,8 @@ Do not call tools. Follow the output contract below.
             fields = trajectory.extra_fields
             linked_cases = fields.get("case_uris")
             if linked_cases is not None and (
-                not isinstance(linked_cases, list) or not case_uris.intersection(linked_cases)
+                not isinstance(linked_cases, list)
+                or not case_uris.intersection(uri for uri in linked_cases if isinstance(uri, str))
             ):
                 continue
             archive = str(fields.get("source_archive_uri") or "").rstrip("/")
