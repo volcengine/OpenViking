@@ -24,6 +24,12 @@ endpoints, including `/health` and `/ready`; see
 Configure shared storage, stores, queues, locks, and credentials separately.
 Serverless mode does not make local backends distributed.
 
+Serverless currently supports only `server.auth_mode: api_key`; `dev` and
+`trusted` are unsupported. Business Accounts must be provisioned through the
+account creation API with VLM, Embedding, and VectorDB settings. Dev mode uses
+request-supplied or default identities, while trusted mode can register identities
+automatically; neither path ensures business resources are configured at account creation.
+
 ```json
 {
   "runtime_mode": "serverless",

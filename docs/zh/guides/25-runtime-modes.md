@@ -20,6 +20,10 @@
 
 共享存储、账户/任务存储、队列、锁和凭证需另行配置；`serverless` 不会让本地后端自动支持分布式部署。
 
+Serverless 模式暂时仅支持 `server.auth_mode: api_key`，不支持 `dev` 和 `trusted`。
+业务 Account 必须通过创建账户接口同时提供 VLM、Embedding 和 VectorDB 配置；`dev` 直接使用请求指定的
+或默认身份，`trusted` 可自动登记身份，这两条路径都不能保证在创建账户时配置业务资源。
+
 ```json
 {
   "runtime_mode": "serverless",
