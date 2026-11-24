@@ -238,16 +238,17 @@ export class OpenVikingRuntime {
       return;
     }
     state.catalogBuiltAt = Date.now();
-    const inner = built.block || `<${CATALOG_TAG}>\n${EMPTY_CATALOG_LINE}\n</${CATALOG_TAG}>`;
-    state.catalog = {
-      content: [
-        '<openviking-context source="catalog">',
-        inner,
-        "</openviking-context>",
-      ].join("\n"),
-      digest: createHash("sha256").update(inner).digest("hex"),
-      count: built.count,
-    };
+    // "No skills" is decided by the count, not by an empty block: a budget too
+    // small to render even one line also yields an empty block, and retracting
+    // there would tell the model its skills are gone when they are not.
+    if (built.count === 0) {
+      state.catalog = catalogMessageFor(`<${CATALOG_TAG}>\n${EMPTY_CATALOG_LINE}\n</${CATALOG_TAG}>`, 0);
+      return;
+    }
+    // Too small to list anything: omit the catalog, the way it was omitted
+    // before the model ever saw one, and keep whatever it already has.
+    if (!built.block) return;
+    state.catalog = catalogMessageFor(built.block, built.count);
   }
 
   async recallMessage(agent, messages, signal) {
@@ -575,6 +576,19 @@ export class OpenVikingRuntime {
   log(stage, data) {
     this.logger?.debug?.(`[openviking:dsh] ${stage} ${JSON.stringify(data)}`);
   }
+}
+
+/** One catalog message: the model-facing envelope plus the digest that identifies it. */
+function catalogMessageFor(inner, count) {
+  return {
+    content: [
+      '<openviking-context source="catalog">',
+      inner,
+      "</openviking-context>",
+    ].join("\n"),
+    digest: createHash("sha256").update(inner).digest("hex"),
+    count,
+  };
 }
 
 function hasDeliveredProfile(agent, batch) {

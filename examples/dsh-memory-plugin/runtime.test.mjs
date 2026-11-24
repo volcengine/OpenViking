@@ -484,6 +484,40 @@ test("removing the last skill retracts the visible catalog", async () => {
   assert.equal(again.source.count, 1);
 });
 
+test("a budget too small to render the catalog never reads as \"no skills\"", async () => {
+  const names = ["skill-a"];
+  const runtime = new OpenVikingRuntime(
+    skillServer(names),
+    catalogConfig({ skillCatalogRefreshMs: 0 }),
+    { debug() {} },
+  );
+  const session = sessionWithHistory("catalog-tiny-budget");
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  session.append(await runtime.catalogMessage({ session }));
+
+  // The skills are still there, they just do not fit any more: the model keeps
+  // the catalog it has instead of being told its skills are gone.
+  state.config.skillCatalogTokenBudget = 1;
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  assert.equal(
+    session.deriveMessages().filter(isCatalog).length,
+    1,
+    "no retraction replaces a catalog that is merely unrenderable",
+  );
+
+  const fresh = new OpenVikingRuntime(
+    skillServer(["skill-a"]),
+    catalogConfig({ skillCatalogTokenBudget: 1 }),
+    { debug() {} },
+  );
+  const empty = sessionWithHistory("catalog-tiny-budget-fresh");
+  fresh.stateFor(empty).ready = true;
+  assert.equal(await fresh.catalogMessage({ session: empty }), null, "nothing is claimed either way");
+});
+
 test("a session that has no skills is told nothing", async () => {
   const runtime = new OpenVikingRuntime(skillServer([]), catalogConfig(), { debug() {} });
   const session = sessionWithHistory("catalog-none");
@@ -870,6 +904,8 @@ test("thrown writes warn without exposing exception text and the write chain con
   assert.equal(warnings.length, 2);
   assert.ok(warnings.every(message => message.includes("write_error") && !message.includes("private message")));
 });
+
+const isCatalog = message => message?.source?.form === "catalog";
 
 function sessionWithHistory(id) {
   let derived = [];
