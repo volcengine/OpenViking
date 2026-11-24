@@ -204,7 +204,7 @@ for (const match of clientSource.matchAll(/^  (?:async )?([A-Za-z][A-Za-z0-9]*)\
 const errors = []
 let httpExamples = 0
 let typescriptCalls = 0
-const curlUrlPattern = String.raw`["']?https?:\/\/[^/\s"']+(\/[A-Za-z0-9_{}<>?=&./:-]+)`
+const curlUrlPattern = String.raw`["']?https?:\/\/[^/\s"']+(\/[A-Za-z0-9_{}<>?=&./:%+-]+)`
 const detailCoverage = new Map(locales.map((locale) => [locale, new Set()]))
 
 function findRoute(method, documentedPath) {
@@ -266,12 +266,7 @@ function curlReferences(source) {
       (item) => item[1]
     )
     if (queryNames.length) {
-      const existingNames = new Set(
-        (documentedPath.split('?')[1] ?? '')
-          .split('&')
-          .filter(Boolean)
-          .map((item) => item.split('=')[0])
-      )
+      const existingNames = new Set(new URLSearchParams(documentedPath.split('?')[1] ?? '').keys())
       const missing = queryNames.filter((name) => !existingNames.has(name))
       if (missing.length) {
         documentedPath += `${documentedPath.includes('?') ? '&' : '?'}${missing
@@ -327,12 +322,7 @@ for (const file of apiDocs) {
         }
       }
     }
-    const queryNames = new Set(
-      (documentedPath.split('?')[1] ?? '')
-        .split('&')
-        .filter(Boolean)
-        .map((item) => item.split('=')[0])
-    )
+    const queryNames = new Set(new URLSearchParams(documentedPath.split('?')[1] ?? '').keys())
     for (const name of queryNames) {
       if (!contract.query.has(name) && !middlewareQueryParameters.has(name)) {
         errors.push(`${relative}: ${route} has unknown query parameter ${name}`)
