@@ -7,6 +7,7 @@ import sys
 from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.core.namespace_policy import ensure_mcp_catalog_access
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
@@ -97,6 +98,7 @@ class _SnapshotMixin:
         for item in diff["to_write"]:
             tree_path = f"{tree_dir}/{item['path']}".strip("/")
             uri = self._tree_path_to_uri(tree_path)
+            ensure_mcp_catalog_access(uri, ctx, include_descendants=True)
             try:
                 await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
             except Exception as exc:
@@ -117,6 +119,8 @@ class _SnapshotMixin:
                 action=AclAction.WRITE,
             )
         if delete_targets:
+            for uri in delete_targets:
+                ensure_mcp_catalog_access(uri, ctx, include_descendants=True)
             await self._ensure_access_many(
                 list(dict.fromkeys(delete_targets)),
                 ctx,

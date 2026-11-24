@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
     uri_parts,
 )
+from openviking.core.namespace_policy import ensure_mcp_catalog_access
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
 from openviking.observability.reporting.facts import emit_file_change, file_exists_before
 from openviking.pyagfs.exceptions import (
@@ -283,6 +284,9 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        ensure_mcp_catalog_access(
+            target_uri, self._ctx_or_default(ctx), include_descendants=recursive
+        )
 
         async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
@@ -648,6 +652,7 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         canonical_uri = uri
+        ensure_mcp_catalog_access(canonical_uri, real_ctx, include_descendants=recursive)
         if is_watch_task_control_uri(canonical_uri):
             raise PermissionDeniedError(
                 "Copying watch-task control state is not allowed",
@@ -798,6 +803,7 @@ class _OpsMixin:
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         self._validate_transfer_paths(old_path, new_path)
+        ensure_mcp_catalog_access(old_uri, guard_ctx, include_descendants=True)
 
         # Verify source exists and determine type before locking.
         try:

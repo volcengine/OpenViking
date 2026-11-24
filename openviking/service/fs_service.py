@@ -28,6 +28,7 @@ from openviking.core.namespace import (
 )
 from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
+    ensure_mcp_catalog_access,
     namespace_policy_for_uri,
 )
 from openviking.core.path_variables import resolve_path_variables
@@ -1277,6 +1278,8 @@ class FSService:
         Compile target migration on move. Service-level guards run before locking.
         """
         viking_fs = self._ensure_initialized()
+        ensure_mcp_catalog_access(from_uri, ctx, include_descendants=recursive)
+        ensure_mcp_catalog_access(to_uri, ctx)
         source_path = viking_fs._uri_to_path(from_uri, ctx=ctx)
         target_path = viking_fs._uri_to_path(to_uri, ctx=ctx)
         viking_fs._validate_transfer_paths(source_path, target_path)

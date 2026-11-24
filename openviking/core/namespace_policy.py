@@ -4,10 +4,17 @@
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 from openviking.core import namespace_constants as _namespace_constants
 from openviking.core.namespace import uri_parts
+from openviking_cli.exceptions import PermissionDeniedError
 
+if TYPE_CHECKING:
+    from openviking.server.identity import RequestContext
+
+MCP_SHARED_TOOLS_ROOT = "viking://agent/tools"
 SYSTEM_ROOT_URI = _namespace_constants.SYSTEM_ROOT_URI
 SYSTEM_COMPILE_ROOT = _namespace_constants.SYSTEM_COMPILE_ROOT
 SYSTEM_COMPILE_GLOBAL_ROOT = _namespace_constants.SYSTEM_COMPILE_GLOBAL_ROOT
@@ -51,6 +58,48 @@ def _is_same_or_descendant(uri: str, root_uri: str) -> bool:
     parts = uri_parts(uri)
     root_parts = uri_parts(root_uri)
     return parts[: len(root_parts)] == root_parts
+
+
+def _decoded_parts(uri: str) -> list[str]:
+    """Decode per-segment so encoded catalog segments cannot evade the check."""
+    return [unquote(part) for part in uri_parts(uri)]
+
+
+def _mcp_catalog_parts(parts: list[str]) -> list[str]:
+    if parts[:1] == ["user"] and len(parts) >= 2:
+        return ["user", parts[1], "tools"]
+    return uri_parts(MCP_SHARED_TOOLS_ROOT)
+
+
+def _expand_home_alias(parts: list[str], ctx: "RequestContext | None") -> list[str]:
+    if parts[:1] != ["~"]:
+        return parts
+    if ctx is None:
+        return ["~", "tools"]
+    return ["user", ctx.user.user_id, *parts[1:]]
+
+
+def is_mcp_catalog_uri(uri: str, ctx: "RequestContext | None" = None) -> bool:
+    parts = _expand_home_alias(_decoded_parts(uri), ctx)
+    if parts[:2] == ["~", "tools"]:
+        return True
+    root = _mcp_catalog_parts(parts)
+    return parts[: len(root)] == root
+
+
+def ensure_mcp_catalog_access(
+    uri: str, ctx: "RequestContext", *, include_descendants: bool = False
+) -> None:
+    """Keep ordinary file mutations and transfers out of managed MCP catalogs."""
+    parts = _expand_home_alias(_decoded_parts(uri), ctx)
+    root = _mcp_catalog_parts(parts)
+    inside = parts[: len(root)] == root
+    covers = include_descendants and (root[: len(parts)] == parts or parts == ["user"])
+    catalog_root = "viking://" + "/".join(root)
+    if inside and getattr(ctx, "_mcp_catalog_write_root", None) == catalog_root:
+        return
+    if inside or covers:
+        raise PermissionDeniedError("Use MCP management to change tool catalogs", resource=uri)
 
 
 def is_system_uri(uri: str) -> bool:

@@ -25,6 +25,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, InitializeResult, Tool
 
 from openviking.core.namespace import canonical_user_root
+from openviking.core.namespace_policy import MCP_SHARED_TOOLS_ROOT
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
@@ -45,7 +46,6 @@ _TOOL_URI_RE = re.compile(
     r"(?P<server>[A-Za-z0-9_-]{1,64})/"
     r"(?P<tool>[A-Za-z0-9_.-]{1,128})\.json$"
 )
-_AGENT_TOOLS_ROOT = "viking://agent/tools"
 _REGISTRY_VERSION = 1
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _MOUNT_SCHEMA = """
@@ -203,7 +203,7 @@ class MCPService:
 
     @classmethod
     def _tools_roots(cls, ctx: RequestContext) -> tuple[str, str]:
-        return cls._user_tools_root(ctx), _AGENT_TOOLS_ROOT
+        return cls._user_tools_root(ctx), MCP_SHARED_TOOLS_ROOT
 
     @classmethod
     def _resolve_tools_root(
@@ -231,7 +231,7 @@ class MCPService:
 
     @classmethod
     def _registry_path_for_root(cls, ctx: RequestContext, tools_root: str) -> str:
-        if tools_root == _AGENT_TOOLS_ROOT:
+        if tools_root == MCP_SHARED_TOOLS_ROOT:
             return cls._registry_path(ctx.account_id)
         return cls._registry_path(ctx.account_id, ctx.user.user_id)
 
@@ -263,7 +263,7 @@ class MCPService:
     async def _load(
         self,
         ctx: RequestContext,
-        tools_root: str = _AGENT_TOOLS_ROOT,
+        tools_root: str = MCP_SHARED_TOOLS_ROOT,
     ) -> dict[str, Any]:
         registry = await self._read_document(self._registry_path_for_root(ctx, tools_root))
         for server in registry["servers"].values():
@@ -425,10 +425,11 @@ class MCPService:
         removed_names: set[str],
         ctx: RequestContext,
         *,
-        tools_root: str = _AGENT_TOOLS_ROOT,
+        tools_root: str = MCP_SHARED_TOOLS_ROOT,
         wait: bool = True,
     ) -> dict[str, Any] | None:
         server_root = f"{tools_root}/{server_name}"
+        ctx = replace(ctx, _mcp_catalog_write_root=tools_root)
         await self._ensure_directory(tools_root, ctx)
         await self._ensure_directory(server_root, ctx)
 
@@ -462,7 +463,7 @@ class MCPService:
         self,
         server_name: str,
         ctx: RequestContext,
-        tools_root: str = _AGENT_TOOLS_ROOT,
+        tools_root: str = MCP_SHARED_TOOLS_ROOT,
     ) -> list[str]:
         root = f"{tools_root}/{server_name}"
         uris: list[str] = []
@@ -496,7 +497,7 @@ class MCPService:
         self,
         server_name: str,
         ctx: RequestContext,
-        tools_root: str = _AGENT_TOOLS_ROOT,
+        tools_root: str = MCP_SHARED_TOOLS_ROOT,
     ) -> set[str]:
         prefix = f"{tools_root}/{server_name}/"
         return {
@@ -509,7 +510,7 @@ class MCPService:
         self,
         server_name: str,
         ctx: RequestContext,
-        tools_root: str = _AGENT_TOOLS_ROOT,
+        tools_root: str = MCP_SHARED_TOOLS_ROOT,
     ) -> list[dict[str, Any]]:
         uris = await self._catalog_uris(server_name, ctx, tools_root)
         contents = await asyncio.gather(*(self._service.fs.read(uri, ctx=ctx) for uri in uris))
@@ -610,7 +611,7 @@ class MCPService:
         server_name: str,
         current_tools: dict[str, dict[str, Any]],
         ctx: RequestContext,
-        tools_root: str = _AGENT_TOOLS_ROOT,
+        tools_root: str = MCP_SHARED_TOOLS_ROOT,
     ) -> list[dict[str, Any]]:
         connection = await self._open_mount_database(ctx)
         try:
@@ -804,7 +805,7 @@ class MCPService:
                 raise NotFoundError(name, "MCP server")
             await self._service.fs.rm(
                 f"{tools_root}/{name}",
-                ctx=ctx,
+                ctx=replace(ctx, _mcp_catalog_write_root=tools_root),
                 recursive=True,
                 wait=True,
             )

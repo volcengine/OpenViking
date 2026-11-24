@@ -315,6 +315,8 @@ class RequestContext:
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
     data_access: DataAccessScope | None = field(default=None, repr=False)
+    # Issued by MCPService for catalog mutations and never restored from requests or tasks.
+    _mcp_catalog_write_root: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.role = Role.parse(self.role)

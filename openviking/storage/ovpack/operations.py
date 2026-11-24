@@ -15,6 +15,7 @@ from openviking.core.namespace import (
     is_session_uri,
     relative_uri_path,
 )
+from openviking.core.namespace_policy import ensure_mcp_catalog_access, is_mcp_catalog_uri
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
@@ -316,6 +317,10 @@ async def import_ovpack(
 
         target_exists = await viking_fs._ensure_destination_access(root_uri, ctx)
         import_ctx = replace(ctx, bypass_acl=True)
+        # Authorize the archive before deleting an old root or staging any member.
+        for _, _, kind, rel_path in members:
+            if kind not in {"manifest", "internal"}:
+                ensure_mcp_catalog_access(join_uri(root_uri, rel_path), ctx)
         existing_roots = [root_uri] if target_exists else []
         if existing_roots:
             if conflict_action == "skip":
@@ -423,7 +428,9 @@ async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]
             scoped_entry = dict(entry)
             scoped_entry["rel_path"] = f"{scope}/{rel_path}"
             scoped_entry["uri"] = join_uri(scope_uri, rel_path)
-            if is_watch_task_control_uri(scoped_entry["uri"]):
+            if is_watch_task_control_uri(scoped_entry["uri"]) or is_mcp_catalog_uri(
+                scoped_entry["uri"]
+            ):
                 continue
             entries.append(scoped_entry)
     return entries
@@ -731,7 +738,21 @@ async def restore_ovpack(
         ]
         content_members.sort(key=lambda member: (member[2] != "directory", member[3].count("/")))
 
+        # Legacy backups may include catalog files without their server registry.
+        catalog_paths = set()
+        for _, _, kind, rel_path in content_members:
+            target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entries[rel_path])
+            if is_mcp_catalog_uri(target_uri):
+                catalog_paths.add(rel_path)
+            elif kind != "directory":
+                ensure_mcp_catalog_access(target_uri, ctx, include_descendants=True)
+        manifest_entries = {
+            path: entry for path, entry in manifest_entries.items() if path not in catalog_paths
+        }
+
         for _, safe_zip_path, kind, rel_path in content_members:
+            if rel_path in catalog_paths:
+                continue
             manifest_entry = manifest_entries[rel_path]
             target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entry)
             if target_uri == "viking://user":

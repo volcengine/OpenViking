@@ -18,6 +18,7 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.core.namespace_policy import MCP_SHARED_TOOLS_ROOT
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.global_policy import ensure_global_policy_file
 from openviking.server.config import UserConfigDefaults
@@ -441,11 +442,15 @@ class DirectoryInitializer:
             safe_uri_for_log(target.uri),
             target.scope,
         )
+        ctx = target.ctx
+        # Preset creation seeds summaries for the two catalog roots.
+        if target.uri in (MCP_SHARED_TOOLS_ROOT, f"{canonical_user_root(ctx)}/tools"):
+            ctx = replace(ctx, _mcp_catalog_write_root=target.uri)
         await viking_fs.write_context(
             uri=target.uri,
             **missing,
             is_leaf=False,
-            ctx=target.ctx,
+            ctx=ctx,
             lease_ref=lease_ref,
         )
         return replace(target, definition=replace(target.definition, **contents))

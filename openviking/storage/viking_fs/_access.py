@@ -18,6 +18,7 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
 )
 from openviking.core.namespace_policy import (
+    ensure_mcp_catalog_access,
     is_system_compile_global_uri,
     is_system_custom_asset_uri,
     is_system_uri,
@@ -375,6 +376,7 @@ class _AccessMixin:
 
     async def _ensure_destination_access(self, uri: str, ctx: Optional[RequestContext]) -> bool:
         """Authorize copy/move/import destinations and return whether the target exists."""
+        ensure_mcp_catalog_access(uri, self._ctx_or_default(ctx))
         try:
             stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
         except Exception as exc:
@@ -452,6 +454,7 @@ class _AccessMixin:
                     "Temp root is read-only for non-root users",
                     resource=uri,
                 )
+            ensure_mcp_catalog_access(uri, real_ctx)
 
     async def _ensure_descendant_access(
         self, uri: str, ctx: Optional[RequestContext], *, action: AclAction

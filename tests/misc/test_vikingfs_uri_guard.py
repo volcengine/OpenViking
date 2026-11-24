@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.core.namespace_policy import (
+    ensure_mcp_catalog_access,
+    is_mcp_catalog_uri,
+)
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
@@ -42,6 +46,40 @@ def _user_ctx(
 
 class TestVikingFSURITraversalGuard:
     """Traversal-style URI components should be rejected before any AGFS I/O."""
+
+    @pytest.mark.parametrize(
+        ("uri", "managed"),
+        [
+            ("viking://agent/tools", True),
+            ("viking://agent/tools/", True),
+            ("viking://agent//tools/weather/current.json", True),
+            ("viking://agent/%74ools/weather/current.json", True),
+            ("viking://~/tools/weather/current.json", True),
+            ("viking://user/alice/tools/weather/current.json", True),
+            ("viking://agent/tools-archive/weather/current.json", False),
+            ("viking://user/alice/tools-archive/weather/current.json", False),
+            ("viking://user/alice/notes/readme.md", False),
+        ],
+    )
+    def test_mcp_catalog_uri_matching(self, uri: str, managed: bool) -> None:
+        assert is_mcp_catalog_uri(uri, _user_ctx()) is managed
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "viking://agent/tools/weather/current.json",
+            "viking://agent/%74ools/weather/current.json",
+            "viking://~/tools/weather/current.json",
+        ],
+    )
+    def test_managed_catalog_mutations_are_rejected(self, uri: str) -> None:
+        with pytest.raises(PermissionDeniedError, match="Use MCP management"):
+            ensure_mcp_catalog_access(uri, _user_ctx())
+
+    def test_managed_catalog_internal_write_root_is_allowed(self) -> None:
+        ctx = _user_ctx()
+        ctx._mcp_catalog_write_root = "viking://user/alice/tools"
+        ensure_mcp_catalog_access("viking://user/alice/tools/weather/current.json", ctx)
 
     @pytest.mark.parametrize(
         ("base_path", "match_file", "expected"),
@@ -159,7 +197,7 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
-    @pytest.mark.parametrize("uri", ["viking://user/alice", "viking://resources"])
+    @pytest.mark.parametrize("uri", ["viking://resources"])
     @pytest.mark.asyncio
     async def test_rm_allows_maintenance_scope_roots_for_root(self, uri: str) -> None:
         fs = _make_viking_fs()
@@ -169,6 +207,16 @@ class TestVikingFSURITraversalGuard:
             await fs.rm(uri, recursive=True)
 
         fs.agfs.stat.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rm_rejects_user_root_covering_managed_catalog(self) -> None:
+        fs = _make_viking_fs()
+
+        with pytest.raises(PermissionDeniedError, match="Use MCP management"):
+            await fs.rm("viking://user/alice", recursive=True)
+
+        fs.agfs.stat.assert_not_called()
+        fs.agfs.rm.assert_not_called()
 
     @pytest.mark.parametrize(
         "uri",
