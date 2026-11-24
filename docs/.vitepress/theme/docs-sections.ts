@@ -225,7 +225,6 @@ export const sections: DocSection[] = [
       g('Deploy a service', '部署服务', [
         p('guides/00-overview'),
         p('guides/03-deployment'),
-        p('guides/25-runtime-modes'),
         p('getting-started/04-setup-for-agent'),
         p('guides/01-configuration'),
         p('guides/02-volcengine-purchase-guide')

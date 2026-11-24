@@ -172,7 +172,7 @@ async def test_openviking_error_handler(client: httpx.AsyncClient):
     assert body["error"]["code"] is not None
 
 
-@pytest.mark.parametrize("roles", [["queue_worker"], ["scheduler"], ["queue_worker", "scheduler"]])
+@pytest.mark.parametrize("roles", [["queue_worker"], ["scheduler"]])
 async def test_non_api_route_access(roles):
     app = create_app(config=ServerConfig(roles=roles))
     async with httpx.AsyncClient(
@@ -214,13 +214,33 @@ async def test_lifespan_retains_account_store_when_service_close_cancelled(monke
     service.release_storage.assert_not_called()
 
 
-@pytest.mark.parametrize("roles", [["api"], ["queue_worker"], ["scheduler"]])
-async def test_readiness_tracks_startup_and_filesystem_health(monkeypatch, roles):
-    service = SimpleNamespace(_initialized=False, embedding_provider=object())
+@pytest.mark.parametrize(
+    "roles, enable_default_resources, explicit_cluster_resources",
+    [
+        (["api"], True, False),
+        (["api"], False, False),
+        (["queue_worker"], False, True),
+        (["scheduler"], False, False),
+    ],
+)
+async def test_readiness_tracks_startup_and_filesystem_health(
+    monkeypatch, enable_default_resources, explicit_cluster_resources, roles
+):
     filesystem = SimpleNamespace(
         ls=AsyncMock(return_value=[]),
+        agfs=SimpleNamespace(ls=Mock(return_value=[])),
         _get_vector_store=lambda: SimpleNamespace(health_check=AsyncMock(return_value=True)),
     )
+    values = {"enable_default_resources": enable_default_resources}
+    if explicit_cluster_resources:
+        values["storage"] = {"vectordb": {"backend": "local"}}
+    config = OpenVikingConfig.from_dict(values)
+    service = SimpleNamespace(
+        _initialized=False,
+        _config=config,
+        embedding_provider=object(),
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
     monkeypatch.setattr("openviking.server.dependencies._service", service)
     monkeypatch.setattr("openviking.server.routers.system.get_viking_fs", lambda: filesystem)
     monkeypatch.setattr(
@@ -249,12 +269,15 @@ async def test_readiness_tracks_startup_and_filesystem_health(monkeypatch, roles
                 "agfs": {"status": "ok", "checks": {"filesystem": "ok"}},
                 "api_key_manager": "not_configured",
                 "embedding": "ok",
-                "ollama": "not_configured",
-                "vectordb": "ok",
+                **({"ollama": "not_configured"} if enable_default_resources else {}),
+                "vectordb": "ok" if config.storage.vectordb is not None else "not_configured",
             },
         }
 
-        filesystem.ls.side_effect = OSError("storage unavailable")
+        if enable_default_resources:
+            filesystem.ls.side_effect = OSError("storage unavailable")
+        else:
+            filesystem.agfs.ls.side_effect = OSError("storage unavailable")
         unavailable = await client.get("/ready")
         assert unavailable.status_code == 503
         assert unavailable.json()["status"] == "not_ready"

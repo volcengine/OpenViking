@@ -443,7 +443,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 | `openviking_service_readiness` | Gauge | 可含 `valid` | 服务主 readiness |
 | `openviking_api_key_manager_readiness` | Gauge | 可含 `valid` | API Key Manager readiness |
 | `openviking_storage_readiness` | Gauge | `probe, valid` | 存储探针，例如 `agfs` |
-| `openviking_model_provider_readiness` | Gauge | `provider, valid` | 仅 dedicated：VLM 客户端能否按配置创建；不发实际模型请求 |
+| `openviking_model_provider_readiness` | Gauge | `provider, valid` | VLM 客户端能否按配置创建；不发实际模型请求 |
 | `openviking_async_system_readiness` | Gauge | `probe, valid` | 异步系统 readiness |
 | `openviking_retrieval_backend_readiness` | Gauge | `probe, valid` | 检索后端 readiness |
 | `openviking_encryption_component_health` | Gauge | `valid` | 加密组件总体健康 |
@@ -506,7 +506,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - `embedding`
 - `rerank`
 
-Serverless 跳过全局向量、检索后端和模型 provider 探针。`openviking_model_provider_readiness=1` 只检查客户端创建，不验证凭证、额度或远端推理。模型调用次数、token、错误和耗时指标在两种模式下均保留。
+全局向量和检索探针要求配置 Cluster VectorDB；模型 provider 探针要求配置 Cluster VLM。`openviking_model_provider_readiness=1` 只检查客户端创建，不验证凭证、额度或远端推理。
 
 ## 配置示例
 

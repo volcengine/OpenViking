@@ -15,7 +15,11 @@ openviking-server init
 openviking-server doctor
 ```
 
-OpenViking 启动时需要 Embedding 和 VLM。未指定 Embedding 模型时使用内置的本地默认模型。`openviking-server init` 会引导你配置这两种模型。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+向导配置 Embedding 和 VLM。API 型 Provider 需要填写凭证；`OpenAI Codex` 支持导入已有鉴权或登录。
+
+`enable_default_resources` 默认为 `true`，补齐缺省的本地 Embedding/VectorDB，并预置默认 Account 目录。`false` 关闭这些默认行为，显式 Cluster 资源仍生效。系统文件按 `reconcile_system_assets_on_startup` 同步。
+
+`dev` 和 `trusted` 要求 Cluster VLM、Embedding、VectorDB 配置完整合法。关闭默认资源后，`api_key` 可在没有 Cluster 资源时启动，由 ROOT 在 [Account 创建配置](../api/08-admin.md#account-configuration-接口参考)中提供资源。`api_key` 和 `trusted` 仅在 Cluster 资源合法时自动创建默认 Account 记录。
 
 ## 快速开始
 

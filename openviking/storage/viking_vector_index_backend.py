@@ -1249,16 +1249,10 @@ class VikingVectorIndexBackend:
     def __init__(
         self,
         config: Optional[VectorDBBackendConfig],
-        *,
-        runtime_mode: str = "dedicated",
     ):
-        if config is None and runtime_mode != "serverless":
-            raise ValueError("VectorDB backend config is required")
-
         init_cpp_logging()
 
-        self._runtime_mode = runtime_mode
-        self._config = config if runtime_mode == "dedicated" else None
+        self._config = config
         self._backend_type = self._config.backend if self._config else None
         self.vector_dim = self._config.dimension if self._config else 0
         self.distance_metric = self._config.distance_metric if self._config else None
@@ -1304,7 +1298,7 @@ class VikingVectorIndexBackend:
     def _require_shared_backend(self) -> None:
         if self._config is None:
             raise ValueError(
-                "Serverless vector operations require an account_id and account vector settings; "
+                "Vector operations require an account_id and account vector settings; "
                 "no cluster default backend is available"
             )
 

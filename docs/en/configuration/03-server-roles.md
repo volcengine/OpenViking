@@ -12,34 +12,30 @@ openviking-server --config ov.conf --roles scheduler
 | Role | Runs |
 | --- | --- |
 | `api` | Business HTTP / MCP; Studio, OAuth, and Gateway when configured |
-| `queue_worker` | QueueManager consumers, Expiry consumer, TTL maintenance |
-| `scheduler` | Enabled Watch, Compile, Session idle, and rule-cleanup scans; managed Expiry publisher |
+| `queue_worker` | Queue tasks and expiry cleanup |
+| `scheduler` | Enabled Watch, Compile, Session idle, and rule-cleanup scans; expiry publishing |
 
-All roles use `openviking-server` and Uvicorn; `--workers` sets the process count,
-with the same roles in every worker. Every node registers `/health`, `/ready`,
+`--workers` sets the process count, with the same roles in every worker.
+Every node registers `/health`, `/ready`,
 and the authenticated `/api/v1/system/status`, `/api/v1/system/wait`,
 `/api/v1/system/consistency`; `/metrics` is enabled through its configuration.
-Non-API nodes register no other routes and do not start MCP.
-Route business traffic to API nodes; `--with-bot` requires `api`.
+Other routes and MCP require `api`; `--with-bot` also requires `api`.
 
-- Split-role deployments are unsupported with OAuth or embedded Gateway (`gateway.enabled: true`). Run all three roles together in the same OpenViking process, as configured by default, and do not deploy separate workers for that instance. Otherwise, account or user deletion may leave OAuth grants or Gateway data behind.
-- For Skill Compile, the built-in VikingBot started by `--with-bot` requires `api` and `queue_worker` in the same process. If the roles run separately, configure `compile_api.base_url` on both to point to a Compile Runtime they can reach.
+- OAuth and embedded Gateway (`gateway.enabled: true`) require all roles in the same process to keep Account/User deletion complete.
+- Skill Compile with the built-in VikingBot requires `api` and `queue_worker` in the same process. For separate roles, configure `compile_api.base_url` on both to reach a shared Compile Runtime.
 
 Startup prepares storage and account capabilities, recovers tasks, then activates roles.
-SIGINT/SIGTERM stops producers, drains consumers and writes, then closes dependencies.
-Failed draining retains required dependencies. Non-API shutdown scripts must await
-signal-driven cleanup; `/api/v1/tasks` remains unavailable on these nodes.
+SIGINT/SIGTERM stops producers, drains consumers and writes, then closes dependencies;
+failed draining retains dependencies. Shutdown scripts must wait for cleanup.
 
-Configuration/account refresh, Task maintenance, and expiry registration run on
-each node as configured, independently of the scheduler role.
+Configuration refresh, Task maintenance, and expiry registration run on each node as configured.
 
 With `scheduler` and Redis expiry enabled, the parent manages an Expiry publisher.
 `expiry.publisher_separate_process=false` runs it inside the service process.
 
-Core embedding requires `initialize()`, dependency wiring, `recover()`, then
-`start_background()`; HTTP SDK initialization is unchanged. An injected service
-must have inactive execution and caller-owned storage. Active app sharing and
-close/restart are unsupported; enter and exit the host lifespan in the same task.
+Embedded Core usage follows `initialize()` → dependency wiring → `recover()` → `start_background()`.
+`create_app(service=...)` accepts an inactive service; the caller owns its storage.
+One service supports one host lifespan, entered and exited in the same task.
 
-Multiple processes require shared stores; local storage retains its exclusivity lock.
-Schedulers use each module's coordination, with no common leader for all scans.
+Multiple processes require shared stores; local storage uses an exclusive lock.
+Schedulers coordinate per module, without a common leader for all scans.

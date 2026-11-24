@@ -18,7 +18,7 @@ def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
         service_name="openviking",
-        runtime_mode="dedicated",
+        enable_default_resources=True,
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
@@ -169,6 +169,7 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     from openviking.server import runtime as runtime_module
     from openviking.server.config import ServerConfig
     from openviking.server.mcp_endpoint import mcp
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
     from openviking_cli.utils.config.vlm_config import VLMConfig
     from openviking_gateway.client import VikingClient
 
@@ -181,6 +182,8 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         "get_openviking_config",
         lambda: openviking_config(gateway_config, encryption),
     )
+    cluster = OpenVikingConfig(vlm=VLMConfig(model="gpt", provider="openai", api_key="secret"))
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: cluster)
     monkeypatch.setattr(global_api, "init_metrics_from_server_config", lambda *args, **kwargs: None)
     monkeypatch.setattr(global_api, "shutdown_metrics_async", AsyncMock())
     monkeypatch.setattr(usage_audit, "init_usage_audit_from_server_config", AsyncMock())
@@ -194,7 +197,9 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     )
     service = SimpleNamespace(
         _initialized=False,
-        _config=SimpleNamespace(reconcile_system_assets_on_startup=False),
+        _config=SimpleNamespace(
+            reconcile_system_assets_on_startup=False, enable_default_resources=True
+        ),
         configure_runtime=Mock(),
         initialize=AsyncMock(),
         recover=AsyncMock(),

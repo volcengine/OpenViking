@@ -43,8 +43,6 @@ class VikingDBManager(VikingVectorIndexBackend):
         self,
         vectordb_config: VectorDBBackendConfig | None,
         queue_manager: Optional[QueueManager] = None,
-        *,
-        runtime_mode: str = "dedicated",
     ):
         """
         Initialize VikingDB Manager.
@@ -54,7 +52,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             queue_manager: QueueManager instance.
         """
         # Initialize the base VikingVectorIndexBackend without queue management
-        super().__init__(config=vectordb_config, runtime_mode=runtime_mode)
+        super().__init__(config=vectordb_config)
 
         # Queue management specific attributes
         self._queue_manager = queue_manager

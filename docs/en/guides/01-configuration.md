@@ -15,7 +15,11 @@ openviking-server init
 openviking-server doctor
 ```
 
-OpenViking requires both an Embedding model and a VLM to start. The default local Embedding model is available when no Embedding model is specified. `openviking-server init` prompts for both models. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
+The wizard configures Embedding and VLM. API-based providers require credentials; `OpenAI Codex` supports importing existing authentication or logging in.
+
+`enable_default_resources` defaults to `true`, supplying omitted local Embedding/VectorDB resources and preset directories for the default Account. `false` disables these defaults; explicit Cluster resources remain available. System files follow `reconcile_system_assets_on_startup`.
+
+`dev` and `trusted` require valid Cluster VLM, Embedding, and VectorDB. With defaults disabled, `api_key` can start without Cluster resources; ROOT supplies them through [Account creation settings](../api/08-admin.md#account-configuration-reference). `api_key` and `trusted` create a default Account record only when Cluster resources are valid.
 
 ## Configuration File
 

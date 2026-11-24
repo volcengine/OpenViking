@@ -1805,8 +1805,12 @@ async def test_account_memory_templates_reset_removes_legacy_before_current(
     assert path + ".backup" not in fs.agfs._files
 
 
+@pytest.mark.parametrize("cluster_resources", [True, False])
 async def test_create_account(
-    admin_client: httpx.AsyncClient, admin_service: OpenVikingService, monkeypatch
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    monkeypatch,
+    cluster_resources,
 ):
     """ROOT provisioning applies account settings before initializing storage."""
     settings = {
@@ -1822,6 +1826,23 @@ async def test_create_account(
             "vikingdb": {"host": "https://account.invalid"},
         },
     }
+    original_cluster = get_openviking_config()
+    if not cluster_resources:
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        values = original_cluster.to_dict()
+        values.update(enable_default_resources=False, embedding={}, vlm={})
+        values["storage"]["vectordb"] = None
+        await admin_service.runtime_config_manager.replace_base_config(
+            OpenVikingConfig.from_dict(values)
+        )
+        credential = {"provider": "openai", "api_key": "account-key"}
+        settings["vlm"] = {"model": "account-vlm", "credentials": [credential]}
+        settings["embedding"]["dense"] = {
+            "model": "account-embedding",
+            "dimension": 1024,
+            "credentials": [credential],
+        }
     adapter = Mock(mode="vikingdb", USE_CONTENT_FIELD=True)
     adapter.get.return_value = []
     adapter.get_collection.return_value.get_meta_data.return_value = {
@@ -1904,6 +1925,8 @@ async def test_create_account(
     assert invalid.status_code == 400, invalid.text
     stored = await admin_client.get(url, headers=root_headers())
     assert stored.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
+    if not cluster_resources:
+        await admin_service.runtime_config_manager.replace_base_config(original_cluster)
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
-from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -648,8 +648,6 @@ class EmbeddingConfig(BaseModel):
     Environment variables are mapped to these configurations.
     """
 
-    _allow_empty: bool = PrivateAttr(default=False)
-
     dense: Optional[EmbeddingModelConfig] = Field(default=None)
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
@@ -697,7 +695,7 @@ class EmbeddingConfig(BaseModel):
         if not isinstance(data, dict):
             return data
 
-        if (info.context or {}).get("runtime_mode") == "serverless":
+        if (info.context or {}).get("enable_default_resources") is False:
             return data
         if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
             data = dict(data)
@@ -708,19 +706,8 @@ class EmbeddingConfig(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def validate_config(self, info: ValidationInfo):
+    def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if (info.context or {}).get("runtime_mode") == "serverless":
-            self._allow_empty = True
-        if (
-            not self.dense
-            and not self.sparse
-            and not self.hybrid
-            and not self._allow_empty
-        ):
-            raise ValueError(
-                "At least one embedding configuration (dense, sparse, or hybrid) is required"
-            )
         if self.text_source == "summary_only":
             logger.info(
                 "embedding.text_source=summary_only is deprecated; use summary_first instead. Files without a summary still fall back to content for vectorization."
@@ -1161,7 +1148,7 @@ class EmbeddingConfig(BaseModel):
             return self.dense.get_effective_dimension()
         if self.sparse:
             return self.sparse.get_effective_dimension()
-        return 0 if self._allow_empty else 2048
+        return 0
 
     @staticmethod
     def _require_provider(provider: Optional[str]) -> str:

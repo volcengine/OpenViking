@@ -453,7 +453,7 @@ For `/metrics` endpoint behavior and scrape usage, see [Metrics API](../api/09-m
 | `openviking_service_readiness` | Gauge | may include `valid` | main service readiness |
 | `openviking_api_key_manager_readiness` | Gauge | may include `valid` | API key manager readiness |
 | `openviking_storage_readiness` | Gauge | `probe, valid` | storage probe, for example `agfs` |
-| `openviking_model_provider_readiness` | Gauge | `provider, valid` | dedicated only: whether a VLM client can be created from configuration; no model request is sent |
+| `openviking_model_provider_readiness` | Gauge | `provider, valid` | whether a VLM client can be created from configuration; no model request is sent |
 | `openviking_async_system_readiness` | Gauge | `probe, valid` | async system readiness |
 | `openviking_retrieval_backend_readiness` | Gauge | `probe, valid` | retrieval backend readiness |
 | `openviking_encryption_component_health` | Gauge | `valid` | overall encryption component health |
@@ -516,7 +516,7 @@ Possible `model_type` values include:
 - `embedding`
 - `rerank`
 
-Serverless mode skips global vector, retrieval-backend, and model-provider probes. `openviking_model_provider_readiness=1` checks client construction, not credentials, quota, or remote inference. Model-call counts, tokens, errors, and latency metrics remain available in both modes.
+Global vector and retrieval probes require Cluster VectorDB; the model-provider probe requires Cluster VLM. `openviking_model_provider_readiness=1` checks client construction, not credentials, quota, or remote inference.
 
 ## Configuration Example
 

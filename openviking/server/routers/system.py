@@ -119,13 +119,13 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
-    serverless = (
-        getattr(getattr(service, "_config", None), "runtime_mode", "dedicated") == "serverless"
-    )
+    config = getattr(service, "_config", None)
+    initialize_default = getattr(config, "enable_default_resources", True)
+    cluster_vectors = getattr(getattr(config, "storage", None), "vectordb", None)
 
     # 1. AGFS: probe filesystem access
     try:
-        if serverless:
+        if not initialize_default:
             # This node probe has no Account context; check the shared mount.
             await AsyncAGFSClient(get_viking_fs().agfs).ls("/local")
             checks["agfs"] = {"status": "ok", "checks": {"filesystem": "ok"}}
@@ -137,7 +137,7 @@ async def readiness_check(request: Request):
 
     # 2. VectorDB: health_check()
     try:
-        if serverless:
+        if cluster_vectors is None:
             # Business collections are resolved by Account, not by this probe.
             checks["vectordb"] = "not_configured"
         else:
@@ -173,8 +173,12 @@ async def readiness_check(request: Request):
         logger.debug("Embedding readiness check failed", exc_info=True)
         checks["embedding"] = "error"
 
-    # Dedicated instances retain the cluster model connectivity probe.
-    if not serverless:
+    # Probe explicitly configured Cluster models regardless of default-resource policy.
+    embedding = getattr(config, "embedding", None)
+    vlm = getattr(config, "vlm", None)
+    if (vlm is not None and vlm.model) or any(
+        getattr(embedding, mode, None) is not None for mode in ("dense", "sparse", "hybrid")
+    ):
         try:
             from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
             from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config

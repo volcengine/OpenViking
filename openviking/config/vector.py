@@ -111,16 +111,23 @@ def resolve_effective_embedding(cluster: EmbeddingConfig, account: Any) -> Embed
                     "model", independent.get("model")
                 )
                 EmbeddingModelConfig.model_validate(independent)
-    return EmbeddingConfig.model_validate(_overlay(base, override))
+    values = _overlay(base, override)
+    if not any(values.get(mode) for mode in MODEL_SECTIONS):
+        raise ValueError(
+            "Account requires an embedding model in settings.embedding or cluster embedding"
+        )
+    return EmbeddingConfig.model_validate(values)
 
 
 def resolve_effective_vectordb(
-    cluster: VectorDBBackendConfig, account: Any
+    cluster: VectorDBBackendConfig | None, account: Any
 ) -> VectorDBBackendConfig:
     """Keep index defaults; an Account owns its complete connection and auth."""
     if isinstance(account, dict):
         account = AccountVectorDBConfig.model_validate(account)
-    base = cluster.model_dump(by_alias=True)
+    if cluster is None and account is None:
+        raise ValueError("Account requires settings.vectordb or cluster storage.vectordb")
+    base = cluster.model_dump(by_alias=True) if cluster is not None else {}
     override = _account_values(account)
     if "project_name" in override:
         override["project"] = override.pop("project_name")
@@ -192,30 +199,10 @@ class AccountVectorConfigResolver:
 
 
 def resolve_account_vector_settings(account: Any, cluster: Any) -> VectorRuntimeSettings:
-    # Account and Cluster remain independent publications. Choosing Cluster
-    # when an Account section is absent is vector-domain behavior, not generic
-    # RuntimeField fallback. This path also keeps pre-materialization Account
-    # documents working; new Account provisioning should snapshot defaults into
-    # Account-owned settings instead of adding further runtime Cluster coupling.
-    if cluster.runtime_mode == "serverless":
-        if account.embedding is None or not any(
-            getattr(account.embedding, mode) is not None for mode in MODEL_SECTIONS
-        ):
-            raise ValueError("Serverless account requires its own embedding model settings")
-        if account.vectordb is None:
-            raise ValueError("Serverless account requires its own vectordb settings")
-        # Only ordinary execution defaults are shared. All model sections and
-        # the complete vector backend identity belong to this account.
-        defaults = cluster.embedding.model_dump(exclude=set(MODEL_SECTIONS))
-        embedding = EmbeddingConfig.model_validate(
-            _overlay(defaults, _account_values(account.embedding))
-        )
-        vectordb = VectorDBBackendConfig.model_validate(_account_values(account.vectordb))
-    else:
-        embedding = resolve_effective_embedding(cluster.embedding, account.embedding)
-        vectordb = resolve_effective_vectordb(cluster.storage.vectordb, account.vectordb)
-        if account.vectordb is None:
-            vectordb = validate_vector_settings(cluster.embedding, vectordb)
+    embedding = resolve_effective_embedding(cluster.embedding, account.embedding)
+    vectordb = resolve_effective_vectordb(cluster.storage.vectordb, account.vectordb)
+    if account.vectordb is None and cluster.embedding.dimension > 0:
+        vectordb = validate_vector_settings(cluster.embedding, vectordb)
     vectordb = validate_vector_settings(embedding, vectordb)
     identity = {}
     for mode in MODEL_SECTIONS:
@@ -252,12 +239,12 @@ def vector_settings_from_view(view) -> VectorRuntimeSettings:
 
 def validate_account_vector_candidate(context: AccountCandidateContext) -> None:
     """Check the effective pair and preserve an existing Account's vector contract."""
-    if (
-        context.new_view.cluster.runtime_mode == "serverless"
-        and context.new_view.account.embedding is None
-        and context.new_view.account.vectordb is None
+    if not context.creating and not any(
+        getattr(view.account, section) is not None
+        for view in (context.new_view, context.old_view)
+        if view is not None
+        for section in ("embedding", "vectordb")
     ):
-        # Internal file identities have no business vector configuration.
         return
     after = vector_settings_from_view(context.new_view).embedding
     if context.creating or context.old_view is None:

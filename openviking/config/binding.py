@@ -17,6 +17,7 @@ from openviking.config.assembly import build_config_source, resolve_config_sourc
 from openviking.config.manager import (
     AccountCandidateContext,
     AccountCandidateValidator,
+    AccountConfigView,
     RuntimeConfigManager,
 )
 from openviking.config.merge import apply_three_state_patch
@@ -55,8 +56,6 @@ def _build_cluster(old: OpenVikingConfig, override: dict) -> OpenVikingConfig:
     stored override may contain top-level fields from a newer binary, so that
     runtime-only rebuild intentionally ignores those fields.
     """
-    if override and "runtime_mode" in override:
-        raise ValueError("runtime_mode is startup-only and cannot be set in dynamic configuration")
     runtime_override = filter_runtime_fields(OpenVikingConfig, override or {})
     merged = apply_three_state_patch(
         old.model_dump(by_alias=True, exclude_unset=True),
@@ -95,19 +94,35 @@ def _validate_request(patch: dict, is_account: bool, creating: bool) -> None:
     validate_patch(model, patch, creating=creating)
 
 
-def _validate_serverless_account(context: AccountCandidateContext) -> None:
-    if context.new_view.cluster.runtime_mode != "serverless":
+def _validate_account_vlm_candidate(context: AccountCandidateContext) -> None:
+    if not context.creating:
         return
     account = context.new_view.account
-    sections = ("vlm", "embedding", "vectordb")
-    has_business_settings = any(getattr(account, section) is not None for section in sections)
-    had_business_settings = context.old_view is not None and any(
-        getattr(context.old_view.account, section) is not None for section in sections
+    cluster = context.new_view.cluster
+    vlm = account.vlm.to_vlm_config(cluster.vlm) if account.vlm is not None else cluster.vlm
+    if not vlm.model or not vlm.is_available():
+        raise ValueError("Account requires a valid VLM in settings.vlm or cluster vlm")
+
+
+def validate_cluster_resources(config: OpenVikingConfig) -> None:
+    """Validate automatic Account creation using only Cluster resources."""
+    context = AccountCandidateContext(
+        new_view=AccountConfigView(AccountConfig(), config),
+        old_view=None,
+        changed_sections=None,
+        creating=True,
     )
-    if context.creating or has_business_settings or had_business_settings:
-        missing = [section for section in sections if getattr(account, section) is None]
-        if missing:
-            raise ValueError("Serverless account requires settings." + ", settings.".join(missing))
+    _validate_account_vlm_candidate(context)
+    validate_account_vector_candidate(context)
+
+
+def has_valid_cluster_resources(config: OpenVikingConfig) -> bool:
+    """Whether startup may create a default Account record."""
+    try:
+        validate_cluster_resources(config)
+    except ValueError:
+        return False
+    return True
 
 
 def build_runtime_config_manager(
@@ -153,12 +168,12 @@ def manager_over_source(
         validate_request=_validate_request,
         account_candidate_validators=[
             AccountCandidateValidator(
-                sections=frozenset({"vlm", "embedding", "vectordb"}),
-                validate=_validate_serverless_account,
+                sections=frozenset({"vlm"}),
+                validate=_validate_account_vlm_candidate,
             ),
             AccountCandidateValidator(
                 sections=frozenset({"embedding", "vectordb"}),
                 validate=validate_account_vector_candidate,
-            )
+            ),
         ],
     )

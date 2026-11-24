@@ -12,6 +12,7 @@ from typing import Optional
 
 from fastapi import Request
 
+from openviking.config.binding import has_valid_cluster_resources, validate_cluster_resources
 from openviking.core.identifiers import (
     validate_account_id,
     validate_identifier_length,
@@ -25,6 +26,7 @@ from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 _TRUSTED_ROLE_HEADER = "X-OpenViking-Role"
 _TRUSTED_GROUPS_HEADER = "X-OpenViking-Groups"
@@ -244,7 +246,7 @@ class TrustedAuthPlugin(AuthPlugin):
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
             account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
-            bootstrap_default_account=getattr(app.state, "runtime_mode", "dedicated") == "dedicated",
+            bootstrap_default_account=has_valid_cluster_resources(get_openviking_config()),
             issue_user_keys=False,
         )
         await manager.load()
@@ -303,6 +305,10 @@ class TrustedAuthPlugin(AuthPlugin):
         self._pending_count = 0
         self._in_flight = batch
         try:
+            for account_id in batch:
+                if await self._api_key_manager.get_account(account_id) is None:
+                    validate_cluster_resources(get_openviking_config())
+                    break
             await self._api_key_manager.ensure_trusted_identities(batch)
         except BaseException as exc:
             pending_after_failure = self._pending

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -60,7 +60,8 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
     """In-memory I/O boundary for exercising the real transfer methods."""
 
     def __init__(self, records: list[dict[str, Any]]) -> None:
-        super().__init__(None, runtime_mode="serverless")
+        with patch("openviking.storage.viking_vector_index_backend.init_cpp_logging"):
+            super().__init__(None)
         self.records = {str(record["id"]): dict(record) for record in records}
         self.upsert_calls = 0
         self.fail_upsert_at: int | None = None

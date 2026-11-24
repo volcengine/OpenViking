@@ -20,12 +20,14 @@ async def initialize_auth_plugin(
     app: FastAPI, service: OpenVikingService, config: ServerConfig
 ) -> None:
     """Keep request authentication and its private resources in the auth plugin."""
+    from openviking.config.binding import validate_cluster_resources
     from openviking.server.auth.plugins import (
         ApiKeyAuthPlugin,
         DevAuthPlugin,
         TrustedAuthPlugin,
     )
     from openviking.server.auth.registry import get_registry
+    from openviking_cli.utils.config import get_openviking_config
 
     registry = get_registry()
     for plugin_cls in (DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin):
@@ -35,6 +37,14 @@ async def initialize_auth_plugin(
     plugin_cls = registry.get(mode)
     if plugin_cls is None:
         raise RuntimeError(f"Unknown auth_mode: {mode}")
+    if mode in {"dev", "trusted"}:
+        try:
+            validate_cluster_resources(get_openviking_config())
+        except ValueError as error:
+            raise ValueError(
+                f"server.auth_mode='{mode}' requires valid Cluster VLM, Embedding, "
+                f"and VectorDB configuration: {error}"
+            ) from error
     app.state.auth_plugin = plugin_cls()
     await app.state.auth_plugin.initialize(app, service, config)
     logger.info("Auth plugin initialized: %s", mode)
@@ -152,7 +162,11 @@ class ServerRuntime:
         if manager is not None and service._config.reconcile_system_assets_on_startup:
             count = await service.reconcile_system_assets(manager)
             logger.info("Reconciled system assets for %d active accounts", count)
-        if gateway is not None and config.get_effective_auth_mode() == "dev":
+        if (
+            gateway is not None
+            and config.get_effective_auth_mode() == "dev"
+            and service._config.enable_default_resources
+        ):
             from openviking_gateway.app import seed_defaults
 
             await seed_defaults(gateway, "default")

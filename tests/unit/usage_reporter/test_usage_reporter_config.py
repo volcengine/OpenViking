@@ -3,14 +3,11 @@
 
 import json
 import sys
-from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from openviking.server.config import ServerConfig, UsageReporterConfig
-from openviking.service.core import OpenVikingService
-from openviking.service.session_service import SessionService
-from openviking.usage_reporter import FileLogUsageSink, UsageContext, UsageEvent, UsageReporter
+from openviking.server.config import UsageReporterConfig
+from openviking.usage_reporter import FileLogUsageSink, UsageContext, UsageEvent
 from openviking.usage_reporter.config import build_usage_reporter
 
 
@@ -105,25 +102,3 @@ def test_builtin_file_log_sink_is_built_from_config(tmp_path, monkeypatch):
     assert isinstance(reporter.sinks[0], FileLogUsageSink)
     assert reporter.sinks[0].path == log_path
     reporter.sinks[0].close()
-
-
-async def test_service_configures_and_closes_usage_reporter(monkeypatch):
-    reporter = AsyncMock(spec=UsageReporter)
-    monkeypatch.setattr(
-        "openviking.usage_reporter.config.build_usage_reporter",
-        lambda config: reporter,
-    )
-    service = OpenVikingService.__new__(OpenVikingService)
-    service._initialized = False
-    service._background_prepared = False
-    service._server_config = None
-    service._directory_initializer = None
-    service._session_service = Mock(spec=SessionService)
-    service.configure_runtime(ServerConfig.model_validate({}))
-    await service.release_runtime()
-
-    reporter.close.assert_awaited_once()
-    assert service._session_service.set_usage_reporter.call_args_list == [
-        call(reporter),
-        call(None),
-    ]

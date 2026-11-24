@@ -564,10 +564,6 @@ For example, this `events` PUT body shows only the event name and summary, witho
 ROOT can manage Cluster configuration and any Account configuration. ADMIN can
 manage only its own Account layer.
 
-Serverless business Accounts require complete `vlm`, `embedding`, and `vectordb`
-settings, with no Cluster business-identity fallback. See
-[Runtime Modes](../guides/25-runtime-modes.md) for the creation example.
-
 ```http
 GET /api/v1/admin/configuration
 PATCH /api/v1/admin/configuration
@@ -621,8 +617,8 @@ version, text source and input token limit are create-only. Provider fields outs
 fusion/video settings and metadata override are not on the Account API surface.
 Every change validates the effective Embedding/VectorDB pair before persistence.
 
-In dedicated mode, an explicit `embedding: {}` declares no Account model mode or
-runtime policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+An explicit `embedding: {}` declares no Account model mode or runtime policy.
+As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
@@ -648,13 +644,12 @@ is absent it uses the complete Cluster section; once present, `app_id`,
 Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
-In dedicated mode, VLM business resolution uses Cluster VLM when an Account has
-no VLM section.
+VLM business resolution uses Cluster VLM when an Account has no VLM section.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
-omitting or resetting it uses Cluster `timeout`. In dedicated mode, Query Planner
-precedence is Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
+omitting or resetting it uses Cluster `timeout`. Query Planner precedence is
+Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
 These are VLM business rules, not generic configuration inheritance.
 
 The PATCH is validated structurally before the merged configuration is built:
@@ -1209,7 +1204,7 @@ Create a new workspace with its first admin user.
 - File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
-- `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
+- Creation requires valid effective VLM, Embedding, and VectorDB settings, using Account values or Cluster fallback. Validation checks configuration without model requests or remote provisioning; failure leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 - `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.

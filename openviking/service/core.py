@@ -246,7 +246,6 @@ class OpenVikingService:
         self._vikingdb_manager = VikingDBManager(
             vectordb_config=config.vectordb,
             queue_manager=self._queue_manager,
-            runtime_mode=self._config.runtime_mode,
         )
         self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
@@ -418,9 +417,7 @@ class OpenVikingService:
             return
 
         storage = self._config.storage
-        if getattr(self._config, "runtime_mode", "dedicated") == "serverless":
-            return
-        if storage.vectordb.backend not in {"local", "cuvs"}:
+        if storage.vectordb is None or storage.vectordb.backend not in {"local", "cuvs"}:
             return
 
         if not storage.skip_process_lock:
@@ -626,15 +623,17 @@ class OpenVikingService:
         # Initialize VikingFS and VikingDB with recorder if enabled
         enable_recorder = os.environ.get(OPENVIKING_ENABLE_RECORDER_ENV, "").lower() == "true"
 
+        await self._init_runtime_config_manager()
+
         # Create context collection
         if self._vikingdb_manager is None:
             raise RuntimeError("VikingDBManager not initialized")
-        if self._config.runtime_mode == "dedicated":
+        if self._config.storage.vectordb is not None and any(
+            getattr(self._config.embedding, mode) is not None
+            for mode in ("dense", "sparse", "hybrid")
+        ):
             await init_context_collection(self._vikingdb_manager)
 
-        if self._agfs_client is None:
-            raise RuntimeError("AGFS client not initialized")
-        await self._init_runtime_config_manager()
         if self._vlm_resolver is None:
             raise RuntimeError("VLM resolver not initialized")
         self._viking_fs = init_viking_fs(
@@ -672,7 +671,7 @@ class OpenVikingService:
             user_config_defaults=self.user_config_defaults,
         )
         self._directory_initializer = directory_initializer
-        if self._config.runtime_mode == "dedicated":
+        if self._config.enable_default_resources:
             default_ctx = RequestContext(user=self._user, role=Role.ROOT)
             # The vector collection can be pre-created externally. Existing resource
             # metadata distinguishes a workspace restart from initial provisioning.
@@ -681,7 +680,10 @@ class OpenVikingService:
             )
             source_type = "create_collection" if new_workspace else "workspace_init"
             with bind_dashboard_token_source_type(source_type):
-                account_count, user_count = await directory_initializer.initialize_account_workspace(
+                (
+                    account_count,
+                    user_count,
+                ) = await directory_initializer.initialize_account_workspace(
                     default_ctx,
                     sync_system_assets=False,
                 )
@@ -955,7 +957,10 @@ class OpenVikingService:
 
     async def reconcile_default_system_assets(self) -> None:
         """Persist packaged files under the system asset lock."""
-        if self._config.reconcile_system_assets_on_startup:
+        if (
+            self._config.enable_default_resources
+            and self._config.reconcile_system_assets_on_startup
+        ):
             await self._system_asset_synchronizer.sync(
                 RequestContext(user=self._user, role=Role.ROOT)
             )
