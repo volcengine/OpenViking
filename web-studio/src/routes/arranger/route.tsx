@@ -96,7 +96,6 @@ import {
   loadLiveMounts,
   mountLiveContext,
   mutateOrdinaryResource,
-  parseLiveContextMetadata,
   readTextDocument,
   saveText,
   statResource,
@@ -113,6 +112,7 @@ import type {
 import { initialSchemaArguments, validateSchemaArguments } from './-lib/schema'
 import type { SchemaFormObject } from './-lib/schema'
 import {
+  defaultCopyTargetUri,
   isWithinRoot,
   joinVikingUri,
   LIVE_CONTEXT_EXTENSION,
@@ -1244,8 +1244,8 @@ function ActionDialog({
     action.kind === 'rename' ? action.source?.name || '' : '',
   )
   const [target, setTarget] = useState(
-    action.kind === 'copy'
-      ? joinVikingUri(defaultParent, action.source?.name || '')
+    action.kind === 'copy' && action.source
+      ? defaultCopyTargetUri(action.source.uri, action.source.isDir)
       : action.kind === 'move' && action.source
         ? parentVikingUri(action.source.uri)
         : defaultParent,
@@ -1439,30 +1439,12 @@ function ActionDialog({
         await onComplete(uri)
         return
       }
-      const mount = liveIndex.mounts.get(action.source.uri)
-      if (mount) {
-        const document = await readTextDocument(mount.node_uri)
-        const metadata = parseLiveContextMetadata(document.content) || {}
-        const completeMount = { ...mount, ...metadata }
-        await mountLiveContext({
-          arguments: completeMount.arguments,
-          description: completeMount.description,
-          node_uri: normalizeVikingUri(target),
-          tags: completeMount.tags,
-          timeout_seconds: completeMount.timeout_seconds || 60,
-          title:
-            completeMount.title || nameFromVikingUri(completeMount.node_uri),
-          tool_uri: completeMount.tool_uri,
-        })
-      } else {
-        await mutateOrdinaryResource({
-          kind: action.kind,
-          liveIndex,
-          rootUri,
-          source: action.source,
-          target: normalizeVikingUri(target),
-        })
-      }
+      await relocateResource({
+        kind: 'copy',
+        rootUri,
+        source: action.source,
+        target: normalizeVikingUri(target),
+      })
       await onComplete(normalizeVikingUri(target))
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))

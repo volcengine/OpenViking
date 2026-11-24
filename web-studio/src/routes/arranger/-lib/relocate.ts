@@ -3,6 +3,7 @@ import { normalizeOvClientError } from '#/shared/api/ov-client'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 import {
+  copyResource,
   createDirectory,
   listDirectory,
   loadLiveMounts,
@@ -29,14 +30,53 @@ export class RelocationError extends Error {
     target: string,
     completed: number,
     detail: unknown,
+    kind: 'copy' | 'move' = 'move',
   ) {
     super(
-      i18n.t('arranger:errors.relocationFailed', {
+      i18n.t(
+        kind === 'copy'
+          ? 'arranger:errors.copyFailed'
+          : 'arranger:errors.relocationFailed',
+        {
+          source,
+          target,
+          completed,
+          detail: normalizeOvClientError(detail).message,
+        },
+      ),
+      { cause: detail },
+    )
+  }
+}
+
+async function moveLiveContext(
+  source: string,
+  mount: MountInput,
+): Promise<void> {
+  await mountLiveContext(mount)
+  try {
+    await unmountLiveContext(source)
+  } catch (error) {
+    try {
+      await unmountLiveContext(mount.node_uri)
+    } catch (rollbackError) {
+      throw new Error(
+        i18n.t('arranger:errors.liveContextRollbackFailed', {
+          source,
+          target: mount.node_uri,
+          detail: normalizeOvClientError(error).message,
+          rollbackDetail: normalizeOvClientError(rollbackError).message,
+        }),
+        { cause: error },
+      )
+    }
+    throw new Error(
+      i18n.t('arranger:errors.liveContextMoveRolledBack', {
         source,
-        target,
-        completed,
-        detail: normalizeOvClientError(detail).message,
+        target: mount.node_uri,
+        detail: normalizeOvClientError(error).message,
       }),
+      { cause: error },
     )
   }
 }
@@ -72,11 +112,13 @@ async function children(uri: string): Promise<VikingFsEntry[]> {
 
 /** Preflight the entire subtree before making any changes; never retry writes. */
 export async function relocateResource(options: {
+  kind?: 'copy' | 'move'
   mount?: MountInput
   rootUri: string
   source: VikingFsEntry
   target: string
 }): Promise<string> {
+  const kind = options.kind ?? 'move'
   const root = normalizeVikingUri(options.rootUri)
   const source = normalizeVikingUri(options.source.uri)
   const target = normalizeVikingUri(options.target)
@@ -84,7 +126,7 @@ export async function relocateResource(options: {
     throw new Error(i18n.t('arranger:validation.destinationOutsideRoot'))
   }
   // Same-path requests are harmless, including normalized trailing slashes.
-  if (source === target && source !== root) return target
+  if (kind === 'move' && source === target && source !== root) return target
   assertMutationBoundary(source, target, root)
   const index = await loadLiveMounts(root)
   if (!index.complete) {
@@ -166,13 +208,19 @@ export async function relocateResource(options: {
       current = file.entry.uri
       if (file.mount) {
         await assertAbsent(file.mount.node_uri)
-        await mountLiveContext(file.mount)
-        await unmountLiveContext(current)
+        if (kind === 'copy') {
+          await mountLiveContext(file.mount)
+        } else {
+          await moveLiveContext(current, file.mount)
+        }
+      } else if (kind === 'copy') {
+        await copyResource(current, destination(current), false)
       } else {
         await moveResource(current, destination(current))
       }
       completed += 1
     }
+    if (kind === 'copy') return target
     for (const directory of [...directories].reverse()) {
       current = directory.uri
       // Existing APIs cannot make the empty check and removal atomic.
@@ -184,7 +232,13 @@ export async function relocateResource(options: {
       await removeResource(current, true)
     }
   } catch (error) {
-    throw new RelocationError(current, destination(current), completed, error)
+    throw new RelocationError(
+      current,
+      destination(current),
+      completed,
+      error,
+      kind,
+    )
   }
   return target
 }

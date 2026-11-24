@@ -66,6 +66,19 @@ export function nameFromVikingUri(uri: string): string {
   return normalizeVikingUri(uri).split('/').pop() || ''
 }
 
+export function defaultCopyTargetUri(
+  sourceUri: string,
+  isDirectory: boolean,
+): string {
+  const name = nameFromVikingUri(sourceUri)
+  const extensionIndex = isDirectory ? -1 : name.lastIndexOf('.')
+  const copyName =
+    extensionIndex > 0
+      ? `${name.slice(0, extensionIndex)}-copy${name.slice(extensionIndex)}`
+      : `${name}-copy`
+  return joinVikingUri(parentVikingUri(sourceUri), copyName)
+}
+
 export function mcpServerNameFromToolUri(uri: string): string | null {
   try {
     const match =

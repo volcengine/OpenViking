@@ -161,6 +161,12 @@ const arranger = {
     mcpToolCatalog: 'MCP 工具目录',
   },
   errors: {
+    copyFailed:
+      '复制在 {{source}} → {{target}} 处停止，已复制 {{completed}} 个文件：{{detail}}。部分变更可能已生效，请刷新并检查目标内容后再操作。',
+    liveContextMoveRolledBack:
+      '卸载源节点 {{source}} 失败：{{detail}}。已卸载目标节点 {{target}}，回滚本次节点移动。',
+    liveContextRollbackFailed:
+      '卸载源节点 {{source}} 失败：{{detail}}；回滚卸载目标节点 {{target}} 也失败：{{rollbackDetail}}。请检查两处挂载状态。',
     directoryChanged: '移动期间源目录新增了内容：{{uri}}，已停止清理。',
     destinationExists: '目标位置已存在资源：{{uri}}',
     destinationParentNotDirectory: '目标父路径必须是已有目录。',

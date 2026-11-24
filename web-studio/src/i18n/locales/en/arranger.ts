@@ -168,6 +168,12 @@ const arranger = {
     mcpToolCatalog: 'MCP tool catalog',
   },
   errors: {
+    copyFailed:
+      'Copy stopped at {{source}} → {{target}} after copying {{completed}} files: {{detail}}. Changes may have been applied. Refresh and inspect the destination before trying again.',
+    liveContextMoveRolledBack:
+      'Unmounting source node {{source}} failed: {{detail}}. Destination node {{target}} was unmounted to roll back this node move.',
+    liveContextRollbackFailed:
+      'Unmounting source node {{source}} failed: {{detail}}; rollback unmount of destination node {{target}} also failed: {{rollbackDetail}}. Check the mount state at both locations.',
     directoryChanged:
       'The source directory gained content during the move: {{uri}}. Cleanup stopped.',
     destinationExists: 'The destination already exists: {{uri}}',
