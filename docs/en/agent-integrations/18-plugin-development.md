@@ -209,6 +209,8 @@ Ordinary module imports must not read stdin, spawn processes, access the network
 
 Use `buildProfileBlock()` for profiles and `buildRecallBlock()` / `buildRecallBlockDetailed()` for per-turn recall. Hosts may supply compressors, presentation, and statistics, but must not reimplement retrieval targets, ranking, token budgets, or server compatibility fallbacks. A status line should consume shared results and the final injected content, rather than issue another recall to calculate counts.
 
+Shared context/peer downgrade memos use the full resolved server URL, including its base path; pass the resolved config to recall and doctor so both select the same cache. Old global memos have no URL ownership and remain untouched while URL-specific probes start cold. Explicit cache paths and low-level calls without a URL retain their path contracts; same-URL upgrades still use the six-hour expiry.
+
 The session-start skill catalog (`<available-skills>`) is part of `buildProfileBlock()`. Callers pass their resolved plugin config as its fourth argument, and the config's `skillCatalog` and `skillCatalogTokenBudget` knobs switch and size the block. Do not call `GET /api/v1/skills` or format a skill list in an adapter. A host that omits the argument gets the profile block without the catalog.
 
 Automatic recall must carry the correct session and peer, and honor input filters, bypass, and switches. Keep empty results empty instead of injecting a server's no-relevant-memory sentinel. Compression failure may fall back to the existing uncompressed result, but must not invent a digest. Compressed `viking://` URIs must remain readable. Capture must distinguish the user's input, recalled context, and host wrappers so injected old memories are not captured again.
