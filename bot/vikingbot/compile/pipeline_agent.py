@@ -113,9 +113,9 @@ def agent_runner(loop, session_key, connection, limits):
             registry.register(
                 CompileChildTool(tool, output_root, merge_only=True, readonly_paths=readonly_paths)
             )
-        evidence = EvidenceReader(model.files, data)
-        if evidence.allowed:
-            registry.register(evidence)
+        reader = EvidenceReader(model.files, data)
+        if reader.allowed:
+            registry.register(reader)
         registry.register(runtime.resources)
         registry.register(TargetReader(runtime))
         search = runtime.tools.get("openviking_search")
@@ -163,7 +163,7 @@ def agent_runner(loop, session_key, connection, limits):
         if final is None:
             raise ValueError("Compile worker exhausted its tool rounds before completion")
         if (runtime.changes or {}).get("recovery_sources"):
-            runtime.recovery_evidence.update(evidence.recovery_evidence)
+            runtime.recovery_evidence.update(reader.recovery_evidence)
         return output_root
 
     return run
