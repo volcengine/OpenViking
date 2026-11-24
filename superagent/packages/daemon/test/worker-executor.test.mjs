@@ -116,6 +116,30 @@ describe('WorkerExecutor', () => {
     assert.match(policy, /A shell command without a `timeout` of its own is stopped after 5 minutes, and none runs longer than 60/);
   });
 
+  it('reads the owner\'s and the requester\'s preferences for every turn into its policy, and runs on without them', async (t) => {
+    const { dir, config, task } = setup(t);
+    config.piBin = fakeCli(dir, 'pi', [{ type: 'agent_settled' }]);
+    const asked = [];
+    let preferences = { owner: '## 例子\n- 解释技术概念时举一个例子', requester: '## 称呼\n- 叫我老刘' };
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'pi', model: null, effort: null }),
+      preferences: async (current) => { asked.push(current.id); if (preferences instanceof Error) throw preferences; return preferences; } });
+    const policyOf = (index) => {
+      const call = calls(dir, 'pi')[index];
+      return fs.readFileSync(call.argv[call.argv.indexOf('--append-system-prompt') + 1], 'utf8');
+    };
+    await executor.start({ task: task(), prompt: '[task t1] 解释下 BM25', authority: 'worker-token' }).done;
+    assert.match(policyOf(0), /\n## Standing preferences\n[\s\S]*<memory who="owner" type="preferences">\n### 例子\n- 解释技术概念时举一个例子\n<\/memory>\n<memory who="requester" type="preferences">\n### 称呼\n- 叫我老刘\n<\/memory>/);
+    preferences = { owner: '## 例子\n- 例子要能跑', requester: null };
+    await executor.start({ task: task({ turns: 2 }), prompt: 'Continue', authority: 'worker-token' }).done;
+    assert.match(policyOf(1), /- 例子要能跑/);
+    assert.doesNotMatch(policyOf(1), /叫我老刘|who="requester"/);
+    preferences = new Error('OpenViking down');
+    const result = await executor.start({ task: task({ turns: 3 }), prompt: 'Continue', authority: 'worker-token' }).done;
+    assert.equal(result.error, null);
+    assert.doesNotMatch(policyOf(2), /## Standing preferences/);
+    assert.deepEqual(asked, ['t1', 't1', 't1']);
+  });
+
   it('starts a task that follows a Pi task from a copy of that task\'s session, unless it is gone or too large', async (t) => {
     const { dir, config, task } = setup(t);
     config.piBin = fakeCli(dir, 'pi', [{ type: 'agent_settled' }]);

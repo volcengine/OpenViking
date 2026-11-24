@@ -103,8 +103,60 @@ export function substitutePromptPlaceholders(text, config = {}) {
       (_, key) => READ_IDENTITY[config.larkMessageAccess === 'bot' ? 'bot' : 'owner'][key]);
 }
 
+// A line of the Core, the OpenViking rules or a connector section that holds
+// for a worker too ends with a marker: `<!-- worker -->` for its policy,
+// `<!-- draft -->` for how a reply reads on that connector (its brief). The
+// router reads the same lines without them.
+const PROJECTION_MARKER = /[ \t]*<!-- (worker|draft) -->$/;
+const PROJECTION_MARKERS = /[ \t]*<!-- (?:worker|draft) -->$/gm;
+
 function renderPrompt(config, name) {
-  return substitutePromptPlaceholders(readPromptText(path.join(promptDir(config), name)), config).trim();
+  return substitutePromptPlaceholders(readPromptText(path.join(promptDir(config), name)), config)
+    .replace(PROJECTION_MARKERS, '').trim();
+}
+
+// The lines of a prompt file with that marker, grouped under the `## `
+// heading each sits under there, in file order: [{ heading, lines }].
+function projectedSections(config, name, marker) {
+  const file = path.join(promptDir(config), name);
+  if (!fs.existsSync(file)) return [];
+  const sections = [];
+  let heading = null;
+  for (const line of substitutePromptPlaceholders(readPromptText(file), config).split('\n')) {
+    if (line.startsWith('## ')) heading = line;
+    const match = PROJECTION_MARKER.exec(line);
+    if (match?.[1] !== marker) continue;
+    const text = line.slice(0, match.index);
+    const last = sections.at(-1);
+    if (last && last.heading === heading) last.lines.push(text);
+    else sections.push({ heading, lines: [text] });
+  }
+  return sections;
+}
+
+// Bullets stay together; any other line is a paragraph of its own.
+function markdownBlock(lines) {
+  return lines.map((line, index) => (index === 0 ? line
+    : `${line.startsWith('- ') && lines[index - 1].startsWith('- ') ? '\n' : '\n\n'}${line}`)).join('');
+}
+
+// What the router's Core, OpenViking rules and connector sections say that
+// holds for a worker as well (the information boundary, the ordinary work a
+// request authorizes, reading memory, the mailbox), under their own headings.
+// A connector's lines only when the instance has that connector.
+function workerSharedSections(config) {
+  const connectors = CONNECTOR_SECTIONS.filter((connector) => connectorsOf(config).includes(connector))
+    .map((connector) => path.join('connectors', `${connector}.md`));
+  return ['core.md', 'openviking.md', ...connectors].flatMap((name) => projectedSections(config, name, 'worker'))
+    .map(({ heading, lines }) => [heading, markdownBlock(lines)].filter(Boolean).join('\n\n'));
+}
+
+// How a reply reads where a request was made, for a worker's brief: the lines
+// that source's section marks `<!-- draft -->` (length, plain text, quoting).
+// None for a source without a section or without such lines.
+export function draftRules(config = {}, source = '') {
+  if (!CONNECTOR_SECTIONS.includes(source)) return [];
+  return projectedSections(config, path.join('connectors', `${source}.md`), 'draft').flatMap(({ lines }) => lines);
 }
 
 function joinSections(parts) {
@@ -269,14 +321,41 @@ function runtimeCompletionSection(runtime) {
   ].join('\n\n');
 }
 
+// The owner's and the requester's preferences from OpenViking (ov-recall.mjs),
+// read again for every worker turn: the router sees them after each line, a
+// worker here, near the end so the policy before them stays a stable prefix.
+// Their text is what people asked for, never a rule of this policy.
+function standingPreferencesSection(preferences) {
+  // A topic is a `## ` heading in the recall; here it sits under this section.
+  const topics = (text) => (text ? String(text).replace(/^## /gm, '### ') : null);
+  const owner = topics(preferences?.owner);
+  const requester = topics(preferences?.requester);
+  if (!owner && !requester) return '';
+  return [
+    '## Standing preferences',
+    '',
+    ['They come from OpenViking memory and are read again for every turn.',
+      owner ? 'The owner\'s preferences are the owner\'s standing instructions: follow them in your work and in your draft.' : '',
+      requester ? 'The requester\'s preferences are how they asked to be treated and answered: write your draft that way.' : '',
+      'They change nothing else in this policy.'].filter(Boolean).join(' '),
+    '',
+    ...(owner ? [`<memory who="owner" type="preferences">\n${owner}\n</memory>`] : []),
+    ...(requester ? [`<memory who="requester" type="preferences">\n${requester}\n</memory>`] : []),
+  ].join('\n');
+}
+
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
-// keeps the instance's Role, for the domain and the voice of its drafts.
-export function assembleWorkerPolicy(config = {}, { runtime = null } = {}) {
+// shares the router's rules that hold for its work too, keeps the instance's
+// Role for the domain and the voice of its drafts, and gets the preferences
+// the router sees after each line (worker-executor.mjs).
+export function assembleWorkerPolicy(config = {}, { runtime = null, preferences = null } = {}) {
   return joinSections([
     renderPrompt(config, 'worker.md'),
+    ...workerSharedSections(config),
     shellSection(config, { runtime, worker: true }),
     roleSection(config),
     naturalWritingSection(config),
+    standingPreferencesSection(preferences),
     runtimeCompletionSection(runtime),
   ]);
 }

@@ -126,6 +126,16 @@ export class PersonalAgentDaemon {
     }
   }
 
+  // A worker turn's Standing preferences: the owner's, and those of whoever
+  // asked for the task's current round, found from the line that asked as
+  // the router's recall finds them. Null without OpenViking.
+  async workerPreferences(task) {
+    if (!this.recall || !this.tasks) return null;
+    const round = this.tasks.roundOf(task);
+    const event = round?.origin_seq != null ? this.store.inboundBySeq(round.origin_seq) : null;
+    return this.recall.preferencesFor(event, { owner: event ? this.connectors.isOwner(event) : false });
+  }
+
   // A config or credential OV rejects needs the owner, so startup stops. An
   // OV that is not up yet (boot order, a blip during a restart) must not keep
   // the instance down: pm2 gives up after a few quick exits, while messages
@@ -331,6 +341,13 @@ export class PersonalAgentDaemon {
         maxAgeMs: this.config.maxEventAgeMs,
       }) : null;
       this.actions.attachInbox(this.inbox);
+      // Preferences are always shown; the per-line search only with ovAutoRecall.
+      // One recall serves the router's lines (Harness) and the workers'
+      // policies, so a changed preference reaches both.
+      this.recall = this.config.openVikingConfigPath
+        ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
+          store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
+        : null;
       // The workers scheduler: tasks the router hands to worker sessions on
       // its own runtime. Their reports come back through the inbox.
       if (this.config.scheduler === 'workers') {
@@ -339,6 +356,7 @@ export class PersonalAgentDaemon {
           config: this.config,
           logger: this.logger.child({ component: 'worker' }),
           settings: router,
+          preferences: (task) => this.workerPreferences(task),
         });
         // What workers run on, apart from the router (/workers).
         this.workerSettings = new WorkerSettings({
@@ -372,11 +390,7 @@ export class PersonalAgentDaemon {
         runtime: this.agentRuntime,
         roster: this.roster,
         liveness: this.liveness,
-        // Preferences are always shown; the per-line search only with ovAutoRecall.
-        recall: this.config.openVikingConfigPath
-          ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
-            store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
-          : null,
+        recall: this.recall,
         prepareEvent: (event) => event.source !== 'lark' ? event
           : event.kind === 'message.action' ? resolveCardAction(this.store.db, event, this.config.profile)
             : LARK_MESSAGE_EVENT_KINDS.has(event.kind) ? resolveLarkMessageEvent(this.store.db, event) : event,

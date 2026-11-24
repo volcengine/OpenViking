@@ -340,10 +340,24 @@ its own directory first, and never over a whole home directory, `/`, or the
 OpenViking SuperAgent installation and data. Its working directory is its task
 directory, but nothing else confines it.
 
-A worker's policy is `agent/worker.md` plus the instance Role. Its first input
-is the brief: the original input lines, who asked and where, the router's note
-and its directory. Its Core tools are `task_check` (lines routed to it since it
-last looked), `task_report` and the reads (chat and thread history, search,
+A worker's policy is `agent/worker.md`, the router's rules that hold for its
+work too, its shell rules, the instance Role, the writing rules, and its
+Standing preferences. The shared rules are lines of `core.md`, `openviking.md`
+and the instance's connector sections that end with `<!-- worker -->` (the
+information boundary, the ordinary work a request authorizes, reading
+OpenViking, the mailbox), under the headings they sit under there; the router
+reads the same lines without the marker. Standing preferences are the owner's
+and the current round's requester's, read from OpenViking for every turn as
+the router's recall reads them after a line (`OVRecall.preferencesFor`); a
+turn goes on without them when OpenViking is slow or down.
+
+Its first input is the brief: the original input lines, who asked and where,
+how a reply reads there (the origin connector's lines marked
+`<!-- draft -->`: plain text, length, quoting), the router's note, the task it
+follows, the requester's earlier tasks in that chat (in a direct chat, all of
+theirs), and its directory. Its Core tools are `task_check` (lines routed to it
+since it last looked), `task_report`, `task_list` (only what its requester asked
+for, scoped like that list) and the reads (chat and thread history, search,
 media, mail, OpenViking reads); never a delivery, a decision, a timer or a
 memory write. Its authority token is valid for its turn only.
 
@@ -513,7 +527,13 @@ draft:
 `round=` appears once a task has had more than one round; the origin is that
 round's. Worker text is quoted (`| `), so it cannot pass for an input line. The router
 receives the full stored draft (up to the 20,000-character reporting limit)
-and relays it with `reply_message` to the origin `msg=`.
+and relays it with `reply_message` to the origin `msg=`, as written: the worker
+wrote it with the same preferences, writing rules and channel limits, and what
+happened since reaches the worker as input. The router adds only the line a
+`working=1` report asks for, joins reports answered in one place, sends a draft
+the channel refuses for its length as a file, and holds back one that would
+break the information boundary (the requester hears it waits for the owner's
+check, and the owner gets the draft with `notify_owner`).
 
 Ending a task and selecting its final report for delivery are committed together
 in SQLite (`task_report_deliveries`). The inbox row, report's delivery timestamp

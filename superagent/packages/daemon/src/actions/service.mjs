@@ -78,7 +78,7 @@ const HANDLERS = {
 // tools and reads. Never a delivery, a decision, a timer or a memory write:
 // the router is the only outlet.
 const WORKER_TOOLS = new Set([
-  'task_check', 'task_report', 'task_handback', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
+  'task_check', 'task_report', 'task_handback', 'task_list', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
   'list_thread_messages', 'get_message_media', 'read_email', 'read_meeting_note', 'read_openviking_session_context',
   'get_time', 'openviking_find', 'openviking_search', 'openviking_read', 'openviking_list',
 ]);
@@ -297,8 +297,14 @@ export class ActionService {
     return { text: `${task.id} is ${task.status}.`, data: { task_id: task.id, status: task.status } };
   }
 
-  async taskList(input) {
+  async taskList(input, caller = {}) {
     const tasks = this.requireTasks();
+    // A worker looks up what its requester asked for, where a progress
+    // question from them would (tasks.requesterScope), and nothing else.
+    if (caller.task) {
+      const lines = tasks.listForWorker(caller.task, { taskId: input.task_id ?? null, query: input.query ?? '' });
+      return { text: lines.length ? lines.join('\n') : 'No such task asked for by your requester here.', data: { count: lines.length } };
+    }
     let requester = null;
     if (input.for_event) {
       const found = this.inputEvents(input.for_event);
