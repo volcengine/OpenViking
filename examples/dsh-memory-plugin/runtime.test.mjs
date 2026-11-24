@@ -508,6 +508,15 @@ test("a budget too small to render the catalog never reads as \"no skills\"", as
     "no retraction replaces a catalog that is merely unrenderable",
   );
 
+  // The retraction is fixed text rather than a listing, so the same budget
+  // still announces an actually emptied list.
+  names.length = 0;
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
+  const retraction = await runtime.catalogMessage({ session });
+  assert.match(retraction?.content?.[0]?.text || "", /No OpenViking skills are currently available/);
+  assert.equal(retraction.source.count, 0);
+
   const fresh = new OpenVikingRuntime(
     skillServer(["skill-a"]),
     catalogConfig({ skillCatalogTokenBudget: 1 }),
