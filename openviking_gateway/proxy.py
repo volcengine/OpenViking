@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from openviking.core.peer_id import normalize_peer_id
 from openviking.observability.log_safety import short_hash
 
-from .client import PEER_HEADER, VikingError
+from .client import PEER_HEADER
 from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .observe import GatewayError, RequestRecord, degrade, elapsed_ms, error_code
@@ -451,9 +451,6 @@ class ProxyRequest:
                 raise context_error(
                     "Peer-only memory requires an actor peer", reason="peer_memory_requires_actor"
                 )
-            identity = await self.app.state.viking.identify(self.credential["openviking_key"])
-            if identity.get("supports_peer_memory_only") is not True:
-                raise VikingError("openviking_peer_memory_unsupported")
             if self.path.startswith("/v1/responses/") and self.path != "/v1/responses/compact":
                 raise GatewayError("response_unknown", "Unknown response for this key")
             if self.path in {"/v1/responses", "/v1/responses/compact"}:

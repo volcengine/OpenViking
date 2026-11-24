@@ -14,11 +14,6 @@ def memory_root(user, peer):
     return f"viking://user/{user}/peers/{peer}/memories"
 
 
-def enable_peer_memory_backend(app):
-    app.state.test_backend["supports_peer_memory_only"] = True
-    app.state.viking.identities.clear()
-
-
 def peer_headers(key, peer):
     return {
         "Authorization": "Bearer " + key["key"],
@@ -30,7 +25,6 @@ def peer_headers(key, peer):
 
 async def test_peer_only_profile_keeps_read_and_write_in_the_peer(running_gateway):
     app, client, _, key, seen, writes = running_gateway
-    enable_peer_memory_backend(app)
     recalls, profiles, policies, session_peers = {}, set(), {}, {}
 
     async def backend(request):
@@ -100,18 +94,6 @@ async def test_peer_only_profile_keeps_read_and_write_in_the_peer(running_gatewa
     } == {"trial-a", "trial-b"}
 
 
-async def test_peer_only_profile_rejects_an_older_backend(running_gateway):
-    _, client, _, key, seen, _ = running_gateway
-    reply = await client.post(
-        "/v1/chat/completions",
-        headers=peer_headers(key, "trial-a"),
-        json={"model": "model", "messages": [{"role": "user", "content": "Recall deployment"}]},
-    )
-    assert reply.status_code == 503
-    assert reply.json()["reason"] == "openviking_peer_memory_unsupported"
-    assert not seen
-
-
 def test_profile_restriction_cannot_be_relaxed_by_client():
     policy, _ = context_override(
         {"peer_allow_user_memory": False}, '{"peer_allow_user_memory":true}'
@@ -121,7 +103,6 @@ def test_profile_restriction_cannot_be_relaxed_by_client():
 
 async def test_peer_only_requests_disable_stored_provider_responses(running_gateway):
     app, client, _, key, seen, _ = running_gateway
-    enable_peer_memory_backend(app)
     headers = peer_headers(key, "trial-a")
     reply = await client.post(
         "/v1/responses",
@@ -156,7 +137,6 @@ async def test_peer_only_requests_disable_stored_provider_responses(running_gate
 
 async def test_restricted_session_does_not_replay_user_memory(running_gateway):
     app, client, _, key, seen, _ = running_gateway
-    enable_peer_memory_backend(app)
 
     async def backend(request):
         if request.path == "/api/v1/search/search":

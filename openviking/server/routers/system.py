@@ -56,7 +56,6 @@ async def health_check(request: Request):
         "status": "ok",
         "healthy": True,
         "version": __version__,
-        "supports_peer_memory_only": True,
     }
 
     try:

@@ -41,7 +41,6 @@ REASONS = {
     "openviking_rate_limited": Reason(429, "openviking", "quota_or_order"),
     "openviking_error": Reason(0, "openviking", "openviking_unavailable"),
     "openviking_version_mismatch": Reason(503, "openviking", "openviking_unavailable"),
-    "openviking_peer_memory_unsupported": Reason(503, "openviking", "config_error"),
     "openviking_unavailable": Reason(503, "openviking", "openviking_unavailable"),
     "openviking_timeout": Reason(503, "openviking", "openviking_unavailable"),
     "body_too_large": Reason(413, "gateway", "config_error"),
@@ -84,7 +83,6 @@ VIKING_REASONS = {
     "openviking_http_429": "openviking_rate_limited",
 }
 VIKING_DETAILS = {
-    "openviking_peer_memory_unsupported": "This OpenViking server does not support peer-only memory.",
     "openviking_unavailable": "OpenViking is unreachable.",
     "openviking_unreachable": "OpenViking is unreachable.",
     "openviking_http_401": "OpenViking rejected the API key.",
