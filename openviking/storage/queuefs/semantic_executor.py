@@ -1267,7 +1267,6 @@ class SemanticTreeExecutor:
         file_name = file_path.split("/")[-1]
         directory_only = self._generation_trigger == "parent_refresh"
         need_vectorize = not directory_only
-        semantic_succeeded = True
         file_content = None
         try:
             summary_dict = None
@@ -1347,7 +1346,6 @@ class SemanticTreeExecutor:
             )
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
-            semantic_succeeded = False
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
@@ -1362,9 +1360,13 @@ class SemanticTreeExecutor:
         entry = self._plan_entries_by_uri.get(file_path.rstrip("/"))
         slot = entry.slot(2) if isinstance(entry, SemanticTreeEntry) else None
         if isinstance(entry, SemanticTreeEntry):
+            # A failed file summary must not drop the file's L2 vector. The file
+            # body remains a valid embedding source: CONTENT mode embeds the body
+            # directly and SUMMARY_WHEN_AVAILABLE falls back to it when no
+            # summary exists. The failed summary is still accounted above via
+            # _record_summary_failure / _record_skill_failure.
             need_vectorize = bool(
-                semantic_succeeded
-                and slot is not None
+                slot is not None
                 and slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
             )
         if need_vectorize and not self._skip_vectorization:
