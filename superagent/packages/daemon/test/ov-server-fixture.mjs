@@ -31,7 +31,7 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
   const state = {
     files: new Map(), uploads: new Map(), tasks: new Map(), requests: [], down: false, slowParse: new Set(slowParse),
     errors: new Map(), searchResult: { memories: [], resources: [], skills: [], total: 0 },
-    listings: new Map(), sessions: new Map(),
+    listings: new Map(), sessions: new Map(), skills: [],
   };
   let next = 0;
   const server = http.createServer(async (request, response) => {
@@ -114,6 +114,18 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
         state.tasks.get(id).landed = true;
       }
       return reply(200, { status: 'success', task_id: id, root_uri: root });
+    }
+    if (route === 'POST /api/v1/skills') {
+      const upload = state.uploads.get(body.temp_file_id);
+      if (body.temp_file_id && !upload) return reply(400, 'unknown upload');
+      const names = body.skills?.length ? body.skills
+        : [upload?.name?.replace(/\.(?:zip|skill)$/i, '') || 'installed-skill'];
+      const installed = names.map((name) => ({
+        root_uri: `viking://user/${user}/skills/${name}`,
+        task_id: `task-${next += 1}`,
+      }));
+      state.skills.push(...installed.map((item) => ({ ...body, ...item })));
+      return reply(200, installed.length === 1 ? installed[0] : { installed, total: installed.length });
     }
     if (request.method === 'GET' && url.pathname.startsWith('/api/v1/tasks/')) {
       const task = state.tasks.get(decodeURIComponent(url.pathname.slice('/api/v1/tasks/'.length)));

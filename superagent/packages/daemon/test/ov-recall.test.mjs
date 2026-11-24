@@ -26,7 +26,7 @@ function configFile(t) {
 // An OV that answers context searches, directory listings and reads, and
 // records them. `files` maps a viking:// uri to its text; a directory lists
 // the files and directories directly under it.
-function fakeOV({ entries = [], files = {}, times = {}, delayMs = 0, fail = false } = {}) {
+function fakeOV({ entries = [], skills = [], files = {}, times = {}, delayMs = 0, fail = false } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     const call = { url, headers: init.headers, body: init.body ? JSON.parse(init.body) : null };
@@ -55,6 +55,9 @@ function fakeOV({ entries = [], files = {}, times = {}, delayMs = 0, fail = fals
       const limit = Number(new URL(url).searchParams.get('node_limit') ?? 1000);
       const all = [...children].map(([child, isDir]) => ({ uri: child, isDir, ...(times[child] ? { modTime: times[child] } : {}) }));
       return Response.json({ status: 'ok', result: all.slice(offset, offset + limit), has_more: offset + limit < all.length });
+    }
+    if (url.includes('/api/v1/skills/find')) {
+      return Response.json({ status: 'ok', result: { skills, total: skills.length } });
     }
     return Response.json({ status: 'ok', result: { entries, rendered: '', stats: {} } });
   };
@@ -148,6 +151,49 @@ test('the owner\'s own line shows the owner\'s preferences once; the line search
   assert.equal(ov.calls.some(({ url }) => url.includes('/search/')), false, 'no search without ovAutoRecall');
 });
 
+test('every non-empty line receives up to eight sorted OpenViking Skill summaries', async (t) => {
+  names(t);
+  const skills = [
+    { name: 'zeta', description: 'Last by name', root_uri: 'viking://user/owner.asd/skills/zeta' },
+    { name: 'alpha', description: 'First by name', root_uri: 'viking://user/owner.asd/skills/alpha' },
+  ];
+  const ov = fakeOV({ skills });
+  const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger });
+  const block = await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-skills', content: '处理 PDF' }), { owner: true });
+  const request = ov.calls.find(({ url }) => url.endsWith('/api/v1/skills/find'));
+  assert.deepEqual(request.body, { query: '处理 PDF', limit: 8 });
+  assert.match(block, /<available_skills>/);
+  assert.ok(block.indexOf('alpha: First by name') < block.indexOf('zeta: Last by name'));
+  assert.match(block, /viking:\/\/user\/owner\.asd\/skills\/alpha\/SKILL\.md/);
+  assert.equal(block.match(/<available_skills>/g).length, 1);
+  assert.doesNotMatch(block, /# Instructions|<memory/);
+
+  await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-short', content: '查' }), { owner: true });
+  assert.deepEqual(ov.calls.at(-1).body, { query: '查', limit: 8 });
+});
+
+test('Skill summaries are description-truncated and bounded without blocking the line', async (t) => {
+  const skills = Array.from({ length: 8 }, (_, index) => ({
+    name: `skill-${index}`,
+    description: `${index}-${'很长'.repeat(300)}`,
+    root_uri: `viking://user/owner.asd/skills/skill-${index}`,
+  }));
+  const ov = fakeOV({ skills });
+  const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger });
+  const block = await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-many', content: '执行任务' }), { owner: true });
+  const available = block.slice(block.indexOf('<available_skills>'), block.indexOf('</available_skills>') + '</available_skills>'.length);
+  assert.ok(available.length <= 1_600, `Skill block is ${available.length} characters`);
+  assert.match(available, /more Skill\(s\) not shown/);
+
+  const broken = fakeOV({ fail: true });
+  const failOpen = new OVRecall({ configPath: configFile(t), fetchImpl: broken.fetchImpl, logger });
+  assert.doesNotMatch(await failOpen.forEvent(chatEvent({ content: '执行任务' })), /<memory/);
+  const empty = fakeOV({ skills });
+  const noQuery = new OVRecall({ configPath: configFile(t), fetchImpl: empty.fetchImpl, logger });
+  assert.equal(await noQuery.forEvent(chatEvent({ content: ' ' })), '');
+  assert.equal(empty.calls.some(({ url }) => url.includes('/skills/find')), false);
+});
+
 test('a mail sender is found by address, whatever its case; reads are kept a while and dropped when a preference changes', async (t) => {
   const tree = withAlias(files());
   const ov = fakeOV({ files: tree });
@@ -160,7 +206,8 @@ test('a mail sender is found by address, whatever its case; reads are kept a whi
   assert.match(await recall.forEvent(carol), /who="owner"/);
   const before = ov.calls.length;
   assert.doesNotMatch(await recall.forEvent(carol), /who="sender"/);
-  assert.equal(ov.calls.length, before, 'nothing is asked for again at once');
+  assert.equal(ov.calls.length, before + 1, 'only per-turn Skill discovery runs again');
+  assert.match(ov.calls.at(-1).url, /\/api\/v1\/skills\/find$/);
   // openviking_remember stored one: the next line shows it.
   for (const uri of [`${ROOT}/preferences/${personDirectory(carol)}/称呼.md`]) {
     tree[uri] = '- 叫她 Carol';

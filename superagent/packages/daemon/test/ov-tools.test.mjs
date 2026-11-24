@@ -231,6 +231,61 @@ describe('OpenViking tool client', () => {
     assert.equal(added.data.root_uri, 'viking://user/owner/resources/reports/report.md');
   });
 
+  it('adds inline and Git Skills through the Skills API', async (t) => {
+    const ov = await fakeOV(t);
+    const tools = client(ov);
+    const inline = await tools.addSkill({
+      data: '---\nname: inline-skill\ndescription: Inline example\n---\n# Instructions',
+    });
+    assert.deepEqual(requests(ov, 'POST /api/v1/skills').at(-1).body, {
+      data: '---\nname: inline-skill\ndescription: Inline example\n---\n# Instructions',
+      wait: false,
+    });
+    assert.equal(inline.data.root_uri, 'viking://user/owner/skills/installed-skill');
+
+    const installed = await tools.addSkill({
+      git_url: 'https://github.com/example/agent-skills.git',
+      skills: ['review-pr', 'docs'],
+    });
+    assert.deepEqual(requests(ov, 'POST /api/v1/skills').at(-1).body, {
+      data: 'https://github.com/example/agent-skills.git',
+      skills: ['review-pr', 'docs'],
+      wait: false,
+    });
+    assert.deepEqual(installed.data.root_uris, [
+      'viking://user/owner/skills/review-pr',
+      'viking://user/owner/skills/docs',
+    ]);
+    assert.match(installed.text, /2 Skills accepted/);
+  });
+
+  it('uploads a workspace Skill package before installing it', async (t) => {
+    const ov = await fakeOV(t);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(directory, 'report.skill'), 'PK fake skill archive');
+    const added = await client(ov).addSkill({
+      file_path: 'report.skill',
+      workspace: directory,
+    });
+    const upload = requests(ov, 'POST /api/v1/resources/temp_upload').at(-1);
+    assert.equal(upload.body, null);
+    assert.equal(ov.state.uploads.get(requests(ov, 'POST /api/v1/skills').at(-1).body.temp_file_id).name, 'report.skill');
+    assert.deepEqual(requests(ov, 'POST /api/v1/skills').at(-1).body.wait, false);
+    assert.equal(added.data.root_uri, 'viking://user/owner/skills/report');
+  });
+
+  it('rejects ambiguous or invalid add_skill sources before calling OpenViking', async (t) => {
+    const ov = await fakeOV(t);
+    const tools = client(ov);
+    await assert.rejects(() => tools.addSkill({}), /exactly one of data, git_url or file_path/);
+    await assert.rejects(() => tools.addSkill({ data: 'x', git_url: 'https://github.com/example/repo.git' }),
+      /exactly one of data, git_url or file_path/);
+    await assert.rejects(() => tools.addSkill({ git_url: 'ftp://example.com/not-git' }), /Git repository/);
+    await assert.rejects(() => tools.addSkill({ file_path: '../escape.skill', workspace: '/tmp' }), /file_path/);
+    assert.equal(requests(ov, 'POST /api/v1/skills').length, 0);
+  });
+
   it('rejects add_resource input that is not exactly one URL or one workspace file', async (t) => {
     const ov = await fakeOV(t);
     const one = client(ov);

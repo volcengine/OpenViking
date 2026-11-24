@@ -558,6 +558,23 @@ export const TOOLS = [
     annotations: WRITE,
   },
   {
+    name: 'openviking_add_skill',
+    openviking: true,
+    title: 'Add an OpenViking Skill',
+    description: 'Install one Skill into your private OpenViking Skill root. Pass exactly one source: full SKILL.md text, a supported Git repository URL, or a workspace .zip/.skill package. OpenViking validates and indexes the package; use the returned root URI to read it after processing.',
+    inputSchema: schema({
+      data: { type: 'string', minLength: 1, maxLength: 100_000, description: 'Full SKILL.md text, including YAML frontmatter.' },
+      git_url: { type: 'string', maxLength: 4096, pattern: '^https?://\\S+$', description: 'Supported Git repository or subdirectory URL.' },
+      file_path: { type: 'string', minLength: 1, maxLength: 1024, description: 'Workspace-relative .zip or .skill package path.' },
+      skills: {
+        type: 'array', minItems: 1, maxItems: 50,
+        items: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' },
+        description: 'Optional Skill names to select from a multi-Skill Git repository or package.',
+      },
+    }),
+    annotations: WRITE,
+  },
+  {
     // A person's preference, written by the Core into the directory of the
     // person who sent decision_id (ov-person.mjs): the model picks the topic
     // and words, never whose it is.

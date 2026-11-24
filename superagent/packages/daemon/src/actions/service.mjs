@@ -70,6 +70,7 @@ const HANDLERS = {
   openviking_read: 'openvikingRead',
   openviking_list: 'openvikingList',
   openviking_add_resource: 'openvikingAddResource',
+  openviking_add_skill: 'openvikingAddSkill',
   openviking_remember: 'openvikingRemember',
   openviking_write: 'openvikingWrite',
 };
@@ -1898,6 +1899,15 @@ export class ActionService {
   async openvikingAddResource(input, caller) {
     caller.trace.invoked = true;
     return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
+  }
+
+  async openvikingAddSkill(input, caller) {
+    const sources = [input.data, input.git_url, input.file_path].filter((value) => String(value ?? '').trim());
+    if (sources.length !== 1) {
+      throw blocked('invalid_input', 'Pass exactly one of data, git_url or file_path');
+    }
+    caller.trace.invoked = true;
+    return await this.ovToolClient().addSkill({ ...input, workspace: this.config.workspace });
   }
 
   // A preference of the person who sent the input decision_id names, kept in

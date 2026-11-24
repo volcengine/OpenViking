@@ -291,6 +291,56 @@ export class OVToolClient {
     };
   }
 
+  // Install one Skill into the instance user's private Skill root. OV owns
+  // format, archive and package validation; the Core only selects one source
+  // and safely uploads a workspace package when needed.
+  async addSkill({ data, git_url, file_path, skills, workspace } = {}) {
+    const sources = [trimmed(data), trimmed(git_url), trimmed(file_path)].filter(Boolean);
+    if (sources.length !== 1) {
+      throw ovError('invalid_input', 'Pass exactly one of data, git_url or file_path');
+    }
+    const selected = Array.isArray(skills) && skills.length ? { skills: skills.map(String) } : {};
+    let source;
+    if (file_path) {
+      const file = readWorkspaceFile(String(file_path), workspace, this.uploadMaxBytes);
+      let upload;
+      try {
+        upload = (await this.conn().upload('/api/v1/resources/temp_upload', {
+          data: file.bytes, name: file.name,
+        }, { timeoutMs: this.timeoutMs })).result;
+      } catch (error) {
+        throw toolError(error);
+      }
+      if (!upload?.temp_file_id) throw ovError('openviking_failed', 'OpenViking did not accept the upload');
+      source = { temp_file_id: upload.temp_file_id };
+    } else if (git_url) {
+      const value = String(git_url);
+      if (!/^https?:\/\/\S+$/i.test(value) || value.length > URL_MAX_CHARS) {
+        throw ovError('invalid_input', 'git_url must be a supported Git repository address');
+      }
+      source = { data: value };
+    } else {
+      source = { data: String(data) };
+    }
+    const result = (await this.call('/api/v1/skills', {
+      ...source, ...selected, wait: false,
+    })).result;
+    const installed = Array.isArray(result?.installed) ? result.installed : [result];
+    const rootUris = installed.map((item) => trimmed(item?.root_uri)).filter(Boolean);
+    const taskIds = installed.map((item) => trimmed(item?.task_id)).filter(Boolean);
+    const rootUri = rootUris[0] ?? null;
+    const taskId = taskIds[0] ?? null;
+    const count = rootUris.length || installed.length;
+    return {
+      text: `${count === 1 ? 'Skill' : `${count} Skills`} accepted${rootUri ? `: ${rootUris.join(', ')}` : ''}`
+        + `${taskId ? ` (task_id=${taskIds.join(', ')})` : ''}. `
+        + 'It will be available for discovery after OpenViking finishes indexing it.',
+      data: {
+        task_id: taskId, root_uri: rootUri, task_ids: taskIds, root_uris: rootUris,
+      },
+    };
+  }
+
   // A person's directory ({ name, entries }), or null when none is stored yet:
   // found by its key (`owner`, or their digits), never by listing everyone
   // unless they were renamed since (ov-person.mjs).

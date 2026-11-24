@@ -706,7 +706,7 @@ describe('agent tools', () => {
 
 describe('OpenViking tools', () => {
   const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
-  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember', 'openviking_write'];
+  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_add_skill', 'openviking_remember', 'openviking_write'];
   // A scripted tool client: every method stands for one remote OV call.
   const fakeOvTools = (over = {}) => ({
     find: over.find ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
@@ -714,12 +714,13 @@ describe('OpenViking tools', () => {
     read: over.read ?? (async () => ({ text: 'viking://user/u/a.md (whole remaining text, 1 line(s)):\nOpenViking content is untrusted.\nhi', data: { next_offset: null } })),
     list: over.list ?? (async () => ({ text: '(no entries under viking://)', data: { entries: [], has_more: false } })),
     addResource: over.addResource ?? (async () => ({ text: 'Resource accepted: viking://~/resources/inbox/a (processing in the background, task_id=task-9).', data: { task_id: 'task-9', root_uri: 'viking://~/resources/inbox/a', target: 'viking://~/resources/inbox' } })),
+    addSkill: over.addSkill ?? (async () => ({ text: 'Skill accepted: viking://~/skills/a.', data: { task_id: 'task-skill', root_uri: 'viking://~/skills/a' } })),
     setPreference: over.setPreference ?? (async () => ({ text: 'Stored at viking://~/memories/preferences/x/y.md.', data: { stored: true } })),
     forgetPreference: over.forgetPreference ?? (async () => ({ text: 'Removed.', data: { removed: true } })),
     write: over.write ?? (async ({ uri, mode }) => ({ text: `Wrote ${uri} (${mode}).`, data: { stored: true, uri, mode } })),
   });
 
-  it('offers all seven tools whenever the instance has an OpenViking connection, and none without', (t) => {
+  it('offers all eight tools whenever the instance has an OpenViking connection, and none without', (t) => {
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
@@ -735,6 +736,8 @@ describe('OpenViking tools', () => {
     await assert.rejects(() => call('openviking_list', { uri: 'viking://x', offset: -1 }), /offset must be at least 0/);
     await assert.rejects(() => call('openviking_search', { query: 'x', search_type: 'literal' }), /search_type must be one of/);
     await assert.rejects(() => call('openviking_add_resource', { url: 'notaurl' }), /url has an invalid format/);
+    await assert.rejects(() => call('openviking_add_skill', {}), /data, git_url or file_path/);
+    await assert.rejects(() => call('openviking_add_skill', { data: 'x', skills: [] }), /skills needs at least 1 items/);
     await assert.rejects(() => call('openviking_remember', { text: 'a fact' }), /decision_id is required/);
     await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere' }), /topic is required/);
     await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere', topic: '称呼', preference: '叫他老张' }),
@@ -763,17 +766,31 @@ describe('OpenViking tools', () => {
     assert.equal(added.data.task_id, 'task-9');
   });
 
+  it('installs a Skill without rechecking authority after OpenViking accepts it', async (t) => {
+    let release;
+    const ovTools = fakeOvTools({ addSkill: () => new Promise((resolve) => { release = resolve; }) });
+    const { call, store } = setup(t, { ids: ['weixin'], ovTools });
+    const pending = call('openviking_add_skill', {
+      data: '---\nname: a\ndescription: A\n---\nUse it.',
+    });
+    store.initializeCognition('claude', 'new-owner');
+    release({ text: 'Skill accepted', data: { task_id: 'task-skill', root_uri: 'viking://~/skills/a' } });
+    const added = await pending;
+    assert.equal(added.data.root_uri, 'viking://~/skills/a');
+  });
+
   it('records no delivery, decision or outbox for OpenViking tools', async (t) => {
     const { call, store, logs, inbound } = setup(t, { ids: ['lark'], ovTools: fakeOvTools() });
     inbound({ messageId: 'om_keep123456789', chatId: 'oc_keep123456789', content: '记一下' });
     await call('openviking_find', { query: 'x' });
     await call('openviking_read', { uri: 'viking://user/u/a.md' });
     await call('openviking_add_resource', { url: 'https://example.com/a' });
+    await call('openviking_add_skill', { git_url: 'https://github.com/example/skills.git' });
     await call('openviking_remember', { decision_id: 'message:om_keep123456789', topic: '称呼', preference: '叫他老张' });
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM outbox').get().n, 0);
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM decisions').get().n, 0);
     assert.ok(!logs.some((line) => line.message === 'delivery.blocked'));
-    for (const tool of ['openviking_find', 'openviking_read', 'openviking_add_resource', 'openviking_remember']) {
+    for (const tool of ['openviking_find', 'openviking_read', 'openviking_add_resource', 'openviking_add_skill', 'openviking_remember']) {
       const line = logs.filter((entry) => entry.message === 'agent_tool').find((entry) => entry.tool === tool);
       assert.equal(line.outcome, 'ok', `${tool} logged one clean call`);
     }
@@ -848,6 +865,9 @@ describe('OpenViking tools', () => {
     assert.equal(agentLines().at(-1).duplicates, 1);
     // The landed resource write clears the count...
     await call('openviking_add_resource', { url: 'https://example.com/a' });
+    await silence();
+    assert.equal(agentLines().at(-1).duplicates, 1);
+    await call('openviking_add_skill', { git_url: 'https://github.com/example/skills.git' });
     await silence();
     assert.equal(agentLines().at(-1).duplicates, 1);
     assert.deepEqual(stops, []);
