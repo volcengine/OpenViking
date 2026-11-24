@@ -142,12 +142,15 @@ def _history_provider(records, *, case_memory_type="cases", case_signature="retu
         uri = name if name.startswith("viking://") else f"{root}/trajectories/{name}.md"
         links.append({"to_uri": uri, "created_at": f"2026-10-28T00:{index:02}:00Z"})
         if content is not None:
+            extra_fields = {"outcome": outcome, "case_uris": [case_uri], **extra}
+            if extra_fields.pop("_omit_case_uris", False):
+                extra_fields.pop("case_uris", None)
             files[uri] = MemoryFileUtils.write(
                 MemoryFile(
                     uri=uri,
                     memory_type="trajectories",
                     content=content,
-                    extra_fields={"outcome": outcome, "case_uris": [case_uri], **extra},
+                    extra_fields=extra_fields,
                 )
             )
     files[case_uri] = MemoryFileUtils.write(
@@ -267,3 +270,45 @@ async def test_experience_history_falls_back_to_recent_records_and_bounds_reads(
         for idx in range(count - 1, max(-1, count - 3), -1)
     ]
     assert provider._viking_fs.read_file.await_count == 1 + min(count, 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_refs", "omit_case_metadata", "include_newer"),
+    [
+        ([{"uri": "viking://user/user_1/memories/cases/returns.md"}, 7], False, False),
+        (
+            [
+                {"uri": "viking://user/user_1/memories/cases/returns.md"},
+                "viking://user/user_1/memories/cases/returns.md",
+            ],
+            False,
+            True,
+        ),
+        (["viking://user/user_1/memories/cases/returns.md"], False, True),
+        (None, True, True),
+    ],
+    ids=["malformed-only", "mixed-values", "valid-reference", "legacy-no-metadata"],
+)
+async def test_experience_history_filters_malformed_case_refs_and_continues(
+    case_refs, omit_case_metadata, include_newer
+):
+    newer_extra = {"_omit_case_uris": True} if omit_case_metadata else {"case_uris": case_refs}
+    provider = _history_provider(
+        [
+            ("older", "success", "Older matching execution.", {}),
+            (
+                "newer",
+                "failure",
+                "Newer execution with Case references.",
+                newer_extra,
+            ),
+        ]
+    )
+
+    await provider.prefetch()
+
+    older_uri = "viking://user/user_1/memories/trajectories/older.md"
+    newer_uri = "viking://user/user_1/memories/trajectories/newer.md"
+    assert older_uri in provider.history_uris
+    assert (newer_uri in provider.history_uris) is include_newer
