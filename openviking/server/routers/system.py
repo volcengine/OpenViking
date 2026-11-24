@@ -131,8 +131,9 @@ async def readiness_check(request: Request):
             checks["agfs"] = {"status": "ok", "checks": {"filesystem": "ok"}}
         else:
             checks["agfs"] = await _probe_agfs_readiness()
-    except Exception as e:
-        checks["agfs"] = {"status": "error", "checks": {"filesystem": f"error: {e}"}}
+    except Exception:
+        logger.debug("AGFS readiness check failed", exc_info=True)
+        checks["agfs"] = {"status": "error", "checks": {"filesystem": "error"}}
 
     # 2. VectorDB: health_check()
     try:
@@ -147,8 +148,9 @@ async def readiness_check(request: Request):
                 checks["vectordb"] = "ok" if healthy else "unhealthy"
             else:
                 checks["vectordb"] = "not_configured"
-    except Exception as e:
-        checks["vectordb"] = f"error: {e}"
+    except Exception:
+        logger.debug("VectorDB readiness check failed", exc_info=True)
+        checks["vectordb"] = "error"
 
     # 3. APIKeyManager: check if loaded
     try:
@@ -157,8 +159,9 @@ async def readiness_check(request: Request):
             checks["api_key_manager"] = "ok"
         else:
             checks["api_key_manager"] = "not_configured"
-    except Exception as e:
-        checks["api_key_manager"] = f"error: {e}"
+    except Exception:
+        logger.debug("API key manager readiness check failed", exc_info=True)
+        checks["api_key_manager"] = "error"
 
     # 4. Embedding: the provider is initialized by the service startup path.
     # There is no Account context on an unauthenticated readiness probe, so do
@@ -166,8 +169,9 @@ async def readiness_check(request: Request):
     try:
         embedding_provider = getattr(service, "embedding_provider", None)
         checks["embedding"] = "ok" if embedding_provider is not None else "not_initialized"
-    except Exception as e:
-        checks["embedding"] = f"error: {e}"
+    except Exception:
+        logger.debug("Embedding readiness check failed", exc_info=True)
+        checks["embedding"] = "error"
 
     # Dedicated instances retain the cluster model connectivity probe.
     if not serverless:
@@ -181,11 +185,12 @@ async def readiness_check(request: Request):
                 if check_ollama_running(ollama_host, ollama_port):
                     checks["ollama"] = "ok"
                 else:
-                    checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
+                    checks["ollama"] = "unreachable"
             else:
                 checks["ollama"] = "not_configured"
-        except Exception as e:
-            checks["ollama"] = f"error: {e}"
+        except Exception:
+            logger.debug("Ollama readiness check failed", exc_info=True)
+            checks["ollama"] = "error"
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503

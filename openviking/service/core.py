@@ -6,6 +6,8 @@ OpenViking Service Core.
 Main service class that composes all sub-services and manages infrastructure lifecycle.
 """
 
+from __future__ import annotations
+
 import asyncio
 import inspect
 import os
@@ -20,7 +22,6 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
-from openviking.server.config import ServerConfig, UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -83,6 +84,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry.runtime import ExpiryRuntime
+    from openviking.server.config import ServerConfig, UserConfigDefaults
     from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.ttl.adapter import TTLAdapter
 
@@ -105,6 +107,8 @@ class OpenVikingService:
             path: Local storage path (overrides ov.conf storage path).
             user: Username for session management.
         """
+        from openviking.server.config import UserConfigDefaults
+
         # Initialize config from ov.conf
         config = initialize_openviking_config(
             user=user,

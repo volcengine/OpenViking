@@ -20,10 +20,8 @@ from pydantic import (
     model_validator,
 )
 
-# Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
-from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
@@ -758,6 +756,7 @@ def validate_server_config(config: ServerConfig) -> None:
     # If a non-built-in plugin has already claimed a built-in mode name,
     # log a security warning and forcefully override it.
     from openviking.server.auth.plugins import ApiKeyAuthPlugin, DevAuthPlugin, TrustedAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     registry = get_registry()
     _BUILTIN_PLUGINS = {

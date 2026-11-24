@@ -60,6 +60,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
     """In-memory I/O boundary for exercising the real transfer methods."""
 
     def __init__(self, records: list[dict[str, Any]]) -> None:
+        super().__init__(None, runtime_mode="serverless")
         self.records = {str(record["id"]): dict(record) for record in records}
         self.upsert_calls = 0
         self.fail_upsert_at: int | None = None
@@ -73,7 +74,6 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         self.filter_calls = []
         self.query_calls = []
         self.scroll_output_fields = []
-        self.acl_manager = None
 
     @property
     def mode(self) -> str:
