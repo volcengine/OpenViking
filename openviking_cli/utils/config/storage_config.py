@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -21,15 +21,16 @@ class TaskStoreConfig(BaseModel):
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode="after")
-    def normalize_provider(self):
-        self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, provider: str) -> str:
+        provider = provider.strip().lower()
+        if provider not in {"file", "mysql", "postgres", "sqlite"}:
             raise ValueError(
                 "storage.task_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
-                f"got {self.provider!r}"
+                f"got {provider!r}"
             )
-        return self
+        return provider
 
 
 class WatchStoreConfig(BaseModel):
@@ -161,27 +162,29 @@ class StorageConfig(BaseModel):
 
     def build_task_tracker(self, agfs: Any, *, service_name: str | None = None):
         """Build the persistent TaskTracker from storage config."""
-        from openviking.service.task_store import TaskWorkStore
+        from openviking.service.task_store import PersistentTaskStore, TaskWorkStore
         from openviking.service.task_tracker import TaskTracker
 
+        provider = self.task_store.provider
+        if "provider" not in self.task_store.model_fields_set:
+            provider = "file" if PersistentTaskStore.has_task_store(agfs) else "sqlite"
+
         store: TaskWorkStore
-        if self.task_store.provider == "mysql":
+        if provider == "mysql":
             from openviking.service.task_store_mysql import MySQLTaskWorkStore
 
             store = MySQLTaskWorkStore(params=self.task_store.params, service_name=service_name)
-        elif self.task_store.provider == "postgres":
+        elif provider == "postgres":
             from openviking.service.task_store_postgres import PostgresTaskWorkStore
 
             store = PostgresTaskWorkStore(params=self.task_store.params, service_name=service_name)
-        elif self.task_store.provider == "sqlite":
+        elif provider == "sqlite":
             from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
 
             params = dict(self.task_store.params)
             params.setdefault("path", str(Path(self.workspace) / "task_store" / "tasks.db"))
             store = SQLiteTaskWorkStore(params=params, service_name=service_name)
         else:
-            from openviking.service.task_store import PersistentTaskStore
-
             store = PersistentTaskStore(agfs)
         return TaskTracker(store=store)
 
