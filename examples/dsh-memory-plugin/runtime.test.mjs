@@ -402,16 +402,94 @@ test("a skill added mid-session replaces the visible catalog", async () => {
     { debug() {} },
   );
   const session = sessionWithHistory("catalog-refresh");
-  runtime.stateFor(session).ready = true;
+  const state = runtime.stateFor(session);
+  state.ready = true;
   const first = await runtime.catalogMessage({ session });
   session.append(first);
 
   names.push("new-skill");
+  // A catalog is already in front of the model, so the refresh runs behind it
+  // and the change lands on the next step.
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
   const updated = await runtime.catalogMessage({ session });
   assert.match(updated?.content?.[0]?.text || "", /new-skill/);
   assert.notEqual(updated.source.digest, first.source.digest);
   assert.equal(updated.source.count, 2);
   session.append(updated);
+  assert.equal(await runtime.catalogMessage({ session }), null);
+});
+
+test("removing a skill sends the catalog back to the remaining set", async () => {
+  const names = ["skill-a"];
+  const runtime = new OpenVikingRuntime(
+    skillServer(names),
+    catalogConfig({ skillCatalogRefreshMs: 0 }),
+    { debug() {} },
+  );
+  const session = sessionWithHistory("catalog-remove");
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  const justA = await runtime.catalogMessage({ session });
+  session.append(justA);
+
+  names.push("skill-b");
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
+  const both = await runtime.catalogMessage({ session });
+  assert.match(both.content[0].text, /skill-b/);
+  session.append(both);
+
+  // Back to A: the newest catalog says A+B, and an older A is still in the
+  // history. Comparing against any message with A's digest would read this as
+  // delivered and leave B listed.
+  names.pop();
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
+  const backToA = await runtime.catalogMessage({ session });
+  assert.equal(backToA?.source?.digest, justA.source.digest);
+  assert.doesNotMatch(backToA.content[0].text, /skill-b/);
+  session.append(backToA);
+  assert.equal(await runtime.catalogMessage({ session }), null);
+});
+
+test("removing the last skill retracts the visible catalog", async () => {
+  const names = ["skill-a"];
+  const runtime = new OpenVikingRuntime(
+    skillServer(names),
+    catalogConfig({ skillCatalogRefreshMs: 0 }),
+    { debug() {} },
+  );
+  const session = sessionWithHistory("catalog-retract");
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  session.append(await runtime.catalogMessage({ session }));
+
+  names.length = 0;
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
+  const retraction = await runtime.catalogMessage({ session });
+  assert.match(retraction?.content?.[0]?.text || "", /No OpenViking skills are currently available/);
+  assert.doesNotMatch(retraction.content[0].text, /skill-a/);
+  assert.equal(retraction.source.count, 0);
+  session.append(retraction);
+  assert.equal(await runtime.catalogMessage({ session }), null, "the retraction is not repeated");
+
+  // A skill created again replaces the retraction like any other catalog.
+  names.push("skill-c");
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  await state.catalogRefresh;
+  const again = await runtime.catalogMessage({ session });
+  assert.match(again?.content?.[0]?.text || "", /skill-c/);
+  assert.equal(again.source.count, 1);
+});
+
+test("a session that has no skills is told nothing", async () => {
+  const runtime = new OpenVikingRuntime(skillServer([]), catalogConfig(), { debug() {} });
+  const session = sessionWithHistory("catalog-none");
+  runtime.stateFor(session).ready = true;
+
+  assert.equal(await runtime.catalogMessage({ session }), null);
   assert.equal(await runtime.catalogMessage({ session }), null);
 });
 
@@ -437,6 +515,35 @@ test("a server with no skills is cached like any other answer", async () => {
   assert.equal(await runtime.catalogMessage({ session }), null);
   assert.equal(await runtime.catalogMessage({ session }), null);
   assert.equal(calls.filter(path => path.startsWith("/api/v1/skills")).length, 1);
+});
+
+test("a due refresh does not hold up a step that already shows a catalog", async () => {
+  const names = ["ov-skills"];
+  const server = skillServer(names);
+  const plainFetch = server.fetchJSON;
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  server.fetchJSON = async (path) => {
+    if (server.blocked) await gate;
+    return plainFetch(path);
+  };
+  const runtime = new OpenVikingRuntime(server, catalogConfig({ skillCatalogRefreshMs: 0 }), { debug() {} });
+  const session = sessionWithHistory("catalog-nonblocking");
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  session.append(await runtime.catalogMessage({ session }));
+
+  // The interval has passed and the endpoint is slow: the step must not wait
+  // for it while the model still has the previous catalog.
+  server.blocked = true;
+  names.push("later-skill");
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  release();
+  await state.catalogRefresh;
+  const updated = await runtime.catalogMessage({ session });
+  assert.match(updated?.content?.[0]?.text || "", /later-skill/);
 });
 
 test("a failed skills read never erases the catalog the model already has", async () => {

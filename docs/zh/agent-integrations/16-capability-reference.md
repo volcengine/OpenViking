@@ -269,7 +269,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 预算与限制：
 
 - `profileTokenBudget`（默认 10,000 token）覆盖 profile 和记忆索引，profile 占一半：先放用户 profile，peer profile 使用剩余部分，剩余不足 200 token 时只放一行指向其 URI 的提示。两个根目录分摊索引预算。profile 超长时保留前 8 行和结尾；清单超长时以 `... +N more` 结尾。token 估算中，CJK 字符按 1.5 token 计，其他文本按每 4 个字符 1 token 计。
-- `skillCatalogTokenBudget`（默认 1,200 token，DSH 默认 2,400，`OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）是 skill 清单的独立预算。`skillCatalog`（`OPENVIKING_SKILL_CATALOG`）或把预算设为 0 都会关闭清单。DSH 还会按 `skillCatalogRefreshMs`（默认 300,000，`OPENVIKING_SKILL_CATALOG_REFRESH_MS`）重新读取清单，内容变化或被压缩丢掉时单独重发一条 `<openviking-skills>` 消息。
+- `skillCatalogTokenBudget`（默认 1,200 token，DSH 默认 2,400，`OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）是 skill 清单的独立预算。`skillCatalog`（`OPENVIKING_SKILL_CATALOG`）或把预算设为 0 都会关闭清单。DSH 还会按 `skillCatalogRefreshMs`（默认 300,000，`OPENVIKING_SKILL_CATALOG_REFRESH_MS`）重新读取清单，内容变化（含删除到空）、或被压缩丢掉时单独重发一条 `<openviking-skills>` 消息；已有可见清单时这次读取在后台进行。
 - 清单来自一次 `GET /api/v1/skills` 请求。用户自己的 skill 排在前面，与用户 skill 同名的账户 skill 不再列出。每条描述截到约 40 token。描述放不下时只列名称；名称也放不下时以 `... +N more` 结尾，或缩成一行数量。服务端没有该接口时不注入清单。
 - `sessionStartMaxBytes` 按 UTF-8 字节限制整个块：Claude Code 和 Codex 为 9,500，因为这两个宿主会把超过约 10,000 字符的 hook 输出存成文件，只显示预览；ZCode 为 20,000，因为它会丢弃超过 32 KB 的输出；其他集成不设上限。超出上限时，先去掉记忆索引，再去掉 skill 清单。
 

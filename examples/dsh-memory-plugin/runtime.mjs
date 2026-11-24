@@ -29,6 +29,12 @@ const CATALOG_TAG = "openviking-skills";
 const CATALOG_USAGE_LINE =
   "  This complete catalog of OpenViking skills replaces every earlier <openviking-skills> list in this session. These skills live in OpenViking, not in local files, and are separate from the host's own skill list; before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.";
 const DEFAULT_CATALOG_REFRESH_MS = 300000;
+// A server that reports no skills at all has to say so: staying quiet would
+// leave the last catalog the model saw standing, names included, after every
+// one of those skills was deleted. The text is constant, so its digest is too:
+// the model is told once, and a later catalog replaces it like any other.
+const EMPTY_CATALOG_LINE =
+  "  No OpenViking skills are currently available. Any earlier <openviking-skills> list in this session is out of date; use the OpenViking skill search to look for one.";
 
 export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionConfig = null) {
@@ -65,6 +71,7 @@ export class OpenVikingRuntime {
       profileBlock: "",
       catalog: null,
       catalogBuiltAt: 0,
+      catalogRefresh: null,
       toolNames: new Map(),
       writes: Promise.resolve(),
       warnedFailures: new Set(),
@@ -159,17 +166,24 @@ export class OpenVikingRuntime {
    * Deliver the OpenViking skill catalog as its own message.
    *
    * The catalog is the model's only index of the user's skills, so it must
-   * outlive a compaction and follow changes: when the visible catalog is gone
+   * outlive a compaction and follow changes: when the visible catalog is gone,
    * or its digest differs from the one just built, this sends a complete
-   * replacement. The digest rides in the message source, which the session log
+   * replacement — including the "no skills" replacement, because dropping a
+   * skill is a change and silence would leave the deleted name in front of the
+   * model. The digest rides in the message source, which the session log
    * keeps, so a restart re-derives the same answer instead of re-injecting.
    */
   async catalogMessage(agent, batch = []) {
     const state = await this.initialize(agent);
     if (!state.ready || !isSkillCatalogEnabled(state.config)) return null;
-    const catalog = await this.ensureCatalog(state);
-    if (!catalog?.content) return null;
-    if (hasDeliveredCatalog(agent, catalog.digest, batch)) return null;
+    const shown = latestCatalogMessage(agent, batch);
+    // With a catalog already in front of the model, a due refresh runs behind
+    // it: the step may use the list it has instead of waiting on the skills
+    // endpoint, and a change lands on a later step.
+    const catalog = await this.ensureCatalog(state, { wait: shown === undefined });
+    if (!catalog) return null;
+    if (catalog.count === 0 && shown === undefined) return null;
+    if (shown?.source?.digest === catalog.digest) return null;
     return pluginMessage(catalog.content, {
       form: CATALOG_FORM,
       digest: catalog.digest,
@@ -181,35 +195,51 @@ export class OpenVikingRuntime {
    * Build the catalog at most once per refresh interval. A skill created in a
    * long-lived session reaches the model on the next interval, and an
    * unchanged catalog costs one request per interval rather than one per step.
+   *
+   * `wait: false` returns the catalog in hand while a single refresh runs in
+   * the background; the caller that has no catalog to show must wait.
    */
-  async ensureCatalog(state) {
+  async ensureCatalog(state, { wait = true } = {}) {
     const refreshMs = Number(state.config.skillCatalogRefreshMs);
     const interval = Number.isFinite(refreshMs) && refreshMs >= 0
       ? refreshMs
       : DEFAULT_CATALOG_REFRESH_MS;
-    if (state.catalogBuiltAt && Date.now() - state.catalogBuiltAt < interval) return state.catalog;
+    const due = !state.catalogBuiltAt || Date.now() - state.catalogBuiltAt >= interval;
+    if (!due) return state.catalog;
+    state.catalogRefresh ??= this.refreshCatalog(state).finally(() => {
+      state.catalogRefresh = null;
+    });
+    if (!wait) return state.catalog;
+    await state.catalogRefresh;
+    return state.catalog;
+  }
+
+  async refreshCatalog(state) {
     const built = await buildSkillCatalog(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.skillCatalogTokenBudget,
       state.config.peerId,
       { tag: CATALOG_TAG, usageLine: CATALOG_USAGE_LINE },
     );
+    // A failed read keeps the last good catalog: an unreachable server is not
+    // the same answer as "this user has no skills". Without one there is
+    // nothing to keep, so the next step retries instead of waiting out an
+    // interval; with one, the retry waits.
+    if (!built) {
+      state.catalogBuiltAt = state.catalog ? Date.now() : 0;
+      return;
+    }
     state.catalogBuiltAt = Date.now();
-    // A failed read keeps the last good catalog: sending an empty one would
-    // tell the model its skills are gone.
-    if (!built) return state.catalog;
-    state.catalog = built.block
-      ? {
-          content: [
-            '<openviking-context source="catalog">',
-            built.block,
-            "</openviking-context>",
-          ].join("\n"),
-          digest: createHash("sha256").update(built.block).digest("hex"),
-          count: built.count,
-        }
-      : null;
-    return state.catalog;
+    const inner = built.block || `<${CATALOG_TAG}>\n${EMPTY_CATALOG_LINE}\n</${CATALOG_TAG}>`;
+    state.catalog = {
+      content: [
+        '<openviking-context source="catalog">',
+        inner,
+        "</openviking-context>",
+      ].join("\n"),
+      digest: createHash("sha256").update(inner).digest("hex"),
+      count: built.count,
+    };
   }
 
   async recallMessage(agent, messages, signal) {
@@ -545,11 +575,20 @@ function hasDeliveredProfile(agent, batch) {
     || Boolean(lastVisiblePluginMessage(agent.session, isStartupProfile));
 }
 
-function hasDeliveredCatalog(agent, digest, batch) {
-  const match = message => isCatalogMessage(message) && message.source?.digest === digest;
-  return (batch || []).some(match)
-    || pendingPluginMessage(agent, match)
-    || Boolean(lastVisiblePluginMessage(agent.session, match));
+/**
+ * The catalog the model is looking at, newest first: this step's batch, then
+ * whatever is queued for it, then the visible history.
+ *
+ * Comparing against the newest one is what makes removals work. An earlier
+ * catalog with the same entries can still be in the history (A, then A+B, then
+ * back to A again), so "a catalog with this digest exists somewhere" would read
+ * as delivered while the newest message still lists the deleted skill.
+ */
+function latestCatalogMessage(agent, batch) {
+  return (batch || []).findLast(isCatalogMessage)
+    ?? [...(agent.inbox?.nextStep || [])].findLast(isCatalogMessage)
+    ?? [...(agent.inbox?.nextTurn || [])].findLast(isCatalogMessage)
+    ?? lastVisiblePluginMessage(agent.session, isCatalogMessage);
 }
 
 /**
