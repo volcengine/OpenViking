@@ -411,7 +411,7 @@ class ProxyRequest:
             self.billing.end(self.model_call, error="client_disconnected")
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
-            self.billing.end(self.model_call, error="upstream_unavailable")
+            self.billing.end(self.model_call, error=upstream_failure(error).detail["reason"])
             self.metrics["duration_ms"] = elapsed_ms(self.started)
             raise upstream_failure(error) from None
         self.metrics.update(
@@ -766,13 +766,14 @@ class ProxyRequest:
         def record_round(adapter, upstream_response, error):
             self.billing.end(
                 self.model_call,
-                status=upstream_response.status,
+                status=upstream_response.status if upstream_response is not None else None,
                 envelope=adapter.envelope,
                 usage=adapter.usage,
                 complete=error is None,
                 error=(
-                    getattr(error, "code", None)
-                    or (
+                    tool_failure(error).code
+                    if isinstance(error, (ToolLoopError, aiohttp.ClientError, asyncio.TimeoutError))
+                    else (
                         "client_disconnected"
                         if isinstance(error, (asyncio.CancelledError, GeneratorExit))
                         else "upstream_read_failed"
@@ -794,25 +795,16 @@ class ProxyRequest:
             self.model_call = self.begin_call(
                 "tool_continuation", self.upstream, payload, self.headers
             )
-            try:
-                return await open_upstream(
-                    self.app.state.http,
-                    "POST",
-                    self.target,
-                    self.config.upstream_timeout_seconds,
-                    total=timeout,
-                    data=orjson.dumps(payload),
-                    headers=self.headers,
-                    allow_redirects=False,
-                )
-            except (aiohttp.ClientError, asyncio.TimeoutError, asyncio.CancelledError) as error:
-                self.billing.end(
-                    self.model_call,
-                    error="client_disconnected"
-                    if isinstance(error, asyncio.CancelledError)
-                    else "upstream_unavailable",
-                )
-                raise
+            return await open_upstream(
+                self.app.state.http,
+                "POST",
+                self.target,
+                self.config.upstream_timeout_seconds,
+                total=timeout,
+                data=orjson.dumps(payload),
+                headers=self.headers,
+                allow_redirects=False,
+            )
 
         completed = False
 

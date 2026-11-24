@@ -410,7 +410,11 @@ async def test_truncation_has_consistent_accounting(running_gateway, stream, too
 
 
 @pytest.mark.parametrize("stream", [False, True])
-async def test_tool_deadline_keeps_upstream_status_and_timeout_reason(running_gateway, stream):
+@pytest.mark.parametrize("headers_received", [False, True])
+@pytest.mark.parametrize("deadline", [False, True])
+async def test_tool_deadline_keeps_upstream_status_and_timeout_reason(
+    running_gateway, stream, headers_received, deadline
+):
     import asyncio
 
     from aiohttp import web
@@ -418,7 +422,10 @@ async def test_tool_deadline_keeps_upstream_status_and_timeout_reason(running_ga
     from test_native_tools import native_response, request_body, wire_response
 
     app, client, admin, issued, _, _ = running_gateway
-    await enable_tools(client, admin, tool_total_seconds=0.5)
+    await enable_tools(client, admin, tool_total_seconds=0.5 if deadline else 2)
+    if not deadline:
+        app.state.config.upstream_timeout_seconds = 0.15
+    reason = "tool_loop_timeout" if deadline else "upstream_timeout"
     number = 0
 
     async def backend(request):
@@ -438,6 +445,9 @@ async def test_tool_deadline_keeps_upstream_status_and_timeout_reason(running_ga
             return await wire_response(
                 request, "responses", native_response("responses", 1, owned=True), stream
             )
+        if not headers_received:
+            await asyncio.sleep(0.8)
+            return web.json_response(native_response("responses", 2))
         response = web.StreamResponse(
             headers={"Content-Type": "text/event-stream" if stream else "application/json"}
         )
@@ -452,8 +462,60 @@ async def test_tool_deadline_keeps_upstream_status_and_timeout_reason(running_ga
         json=request_body("responses", stream),
     )
     [row] = (await client.get("/admin/logs", headers=admin)).json()
-    assert row["error_reason"] == "tool_loop_timeout"
+    assert row["error_reason"] == reason
     _, call = row["upstream_calls"]
-    assert call["status"] == 200
-    assert call["error"] == "tool_loop_timeout"
+    assert call["status"] == (200 if headers_received else None)
+    if not headers_received:
+        assert "response_id" not in call
+        assert call["usage"] == {}
+    assert call["error"] == reason
     assert call["complete"] is False
+
+
+@pytest.mark.parametrize("tools", [False, True])
+async def test_response_failed_preserves_final_provider_metadata(running_gateway, tools):
+    from aiohttp import web
+    from test_app import enable_tools
+    from test_native_tools import request_body
+
+    from openviking_gateway.tool_protocols.common import sse
+
+    app, client, admin, issued, _, _ = running_gateway
+    if tools:
+        await enable_tools(client, admin)
+    final = {
+        "id": "resp-failed",
+        "status": "failed",
+        "model": "model-snapshot",
+        "usage": {"input_tokens": 12},
+        "error": {"code": "server_error", "message": "capacity"},
+    }
+
+    async def backend(request):
+        if request.path != "/v1/responses":
+            return None
+        return web.Response(
+            body=sse(
+                {
+                    "type": "response.created",
+                    "response": {"id": "resp-created", "status": "in_progress"},
+                }
+            )
+            + sse({"type": "response.failed", "response": final}),
+            content_type="text/event-stream",
+        )
+
+    app.state.test_backend["handler"] = backend
+    await client.post(
+        "/v1/responses",
+        headers={"Authorization": "Bearer " + issued["key"]},
+        json=request_body("responses", True),
+    )
+    [row] = (await client.get("/admin/logs", headers=admin)).json()
+    [call] = row["upstream_calls"]
+    assert call["response_id"] == "resp-failed"
+    assert call["provider_status"] == "failed"
+    assert call["model"] == "model-snapshot"
+    assert call["usage"] == {"input_tokens": 12}
+    assert call["complete"] is False
+    assert call["error"]
