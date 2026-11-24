@@ -103,7 +103,7 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
 | Account | `output_language_override`, `memory.extraction_enabled` | Dynamic | ROOT or the Account ADMIN can update them. Generation uses the owning Account's settings; absent values use business-level Cluster defaults. |
-| Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model`. Omit `credentials` to use the corresponding Cluster binding, or provide a non-empty array for an Account binding. `timeout` is optional. |
 | Account | `parser_api.api_key` | Dynamic | ROOT-only. A configured section requires a nonblank key; external parser operations use the owning Account's credential. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
@@ -111,17 +111,18 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` exposes only `extraction_enabled`.
 
 Account and Cluster configurations are independently stored and published.
-Any use of Cluster settings when Account settings are absent is a business
-default, not implicit configuration inheritance. The VLM resolver implements
-that policy: without an Account VLM section it uses Cluster VLM; with an Account
-section, model-service identity comes from Account while selected runtime
-behavior is composed with Cluster. Account `timeout` overrides Cluster `timeout`
-when set; omitting or resetting it uses Cluster `timeout`. Query Planner selection
+The VLM resolver uses Cluster VLM when the Account section is absent.
+For an Account model selection such as `"vlm": {"model": "gpt-4o-mini"}`,
+the Account model is used with each inherited Cluster credential. An explicit
+Account credential array supplies its own provider, endpoint, and authentication.
+Account `timeout` overrides Cluster `timeout` when set. Query Planner selection
 is Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
 
 The vector resolver validates effective Embedding and VectorDB settings together.
 Account `embedding: {}` is valid; without Account model modes, Cluster model
-bindings are used. Account credentials and explicit VectorDB connections supply
+bindings are used. A declared Account mode can use the matching Cluster binding
+by providing `model` and `dimension` and omitting `credentials`.
+Explicit Account credentials and VectorDB connections supply
 their own connection and authentication fields. Remote collections, indexes and
 authorization must be provisioned externally. Changing embedding credentials does
 not migrate existing vectors; the caller must preserve model compatibility.

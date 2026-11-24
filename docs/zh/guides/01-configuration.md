@@ -103,23 +103,24 @@ OpenViking 的配置分为两个层级：
 | Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 为兼容旧行为保留已废弃的 Cluster 整段回退。Feishu 默认值由业务解析器处理：Account 未设置时使用 Cluster；设置后仅 `domain` 来自 Cluster。 |
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
 | Account | `output_language_override`、`memory.extraction_enabled` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。生成内容使用任务所属 Account 的配置，未配置时由业务层使用 Cluster 默认值。 |
-| Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
+| Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model`。省略 `credentials` 时使用对应的 Cluster 绑定，也可提供非空数组指定 Account 绑定。`timeout` 可选。 |
 | Account | `parser_api.api_key` | 动态配置 | 仅 ROOT 可读写。已配置的段必须包含非空白 Key；外部解析使用任务所属 Account 的凭证。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
 Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 仅开放 `extraction_enabled`。
 
-Account 与 Cluster 配置分别存储和发布。Account 未配置时是否使用 Cluster
-属于业务默认行为，不是配置框架中的隐式继承。VLM 业务解析器负责这项策略：
-Account 未配置 VLM 时使用 Cluster VLM；Account 已配置时，模型服务身份来自
-Account，并按 VLM 业务规则组合部分 Cluster 运行参数。Account 设置 `timeout`
-时覆盖 Cluster 的值，未设置或重置后使用 Cluster 的值。Query Planner 的选择顺序为
+Account 与 Cluster 配置分别存储和发布。Account 未配置 VLM 时，解析器使用
+Cluster VLM。对于 `"vlm": {"model": "gpt-4o-mini"}` 这样的配置，每组继承的
+Cluster 凭证都使用 Account 模型。显式配置的 Account 凭证数组独立提供
+provider、服务端点和鉴权信息。Account 设置 `timeout` 时覆盖 Cluster 的值。
+Query Planner 的选择顺序为
 Account `query_planner`、Account `vlm`、Cluster `query_planner`、Cluster `vlm`。
 
 向量配置解析器会联合校验有效的 Embedding 和 VectorDB 配置。Account
 `embedding: {}` 是合法配置；未声明 Account 模型模式时使用 Cluster 模型绑定。
-Account 凭证和显式 VectorDB 连接必须独立提供连接与鉴权字段。远端集合、索引和
+声明模型模式时，可提供 `model` 和 `dimension` 并省略 `credentials`，从而使用
+对应的 Cluster 绑定。显式 Account 凭证和 VectorDB 连接须独立提供连接与鉴权字段。远端集合、索引和
 访问授权需要由外部预先创建。修改 embedding 凭证不会迁移历史向量，调用方需要
 保证模型兼容。
 

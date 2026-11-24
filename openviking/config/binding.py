@@ -25,6 +25,7 @@ from openviking.config.validate import (
 from openviking.config.vector import (
     validate_account_vector_candidate,
 )
+from openviking.config.vlm import validate_account_vlm_candidate
 from openviking.pyagfs import AsyncAGFSClient
 from openviking_cli.utils.config import get_openviking_config, set_openviking_config
 from openviking_cli.utils.config.config_utils import warn_unknown_config_fields
@@ -134,6 +135,10 @@ def manager_over_source(
             AccountCandidateValidator(
                 sections=frozenset({"embedding", "vectordb"}),
                 validate=validate_account_vector_candidate,
-            )
+            ),
+            AccountCandidateValidator(
+                sections=frozenset({"vlm", "query_planner"}),
+                validate=validate_account_vlm_candidate,
+            ),
         ],
     )
