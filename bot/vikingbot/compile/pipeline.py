@@ -245,41 +245,37 @@ class Pipeline:
                 logger.exception("Compile diagnostic write failed; preserving the execution error")
 
     async def write_coverage(self, published=()):
-        """Track assignment provenance and acknowledged output URIs without claiming semantic coverage."""
+        """Record each source's processing state in the inputs manifest.
+
+        A prepared source becomes published only when every output derived
+        from it was acknowledged by the write and none was rejected.
+        """
         manifest = await self.files.get("inputs") or {}
         final = await self.files.get("finalize") or {}
         published = set(published)
-        inputs = {}
+        range_states: dict[str, list[str]] = {}
         for source_id, metadata in self.evidence.items():
-            item = inputs.setdefault(metadata["uri"], {"ranges": {}, "outputs": []})
-            item["ranges"][source_id] = self.status[source_id]
+            range_states.setdefault(metadata["uri"], []).append(self.status[source_id])
+        acknowledged: dict[str, list[bool]] = {}
         rejected = final.get("rejected", {})
         references = {
             path: output["source_refs"] for path, output in final.get("outputs", {}).items()
         }
         for path, refs in (references | rejected).items():
             uri = safe_join_viking_uri(self.target, path)
-            entry = {"uri": uri, "published": path not in rejected and uri in published}
-            if path in rejected:
-                entry["rejected"] = True
+            is_published = path not in rejected and uri in published
             for source_uri in {self.evidence[ref]["uri"] for ref in refs}:
-                inputs[source_uri]["outputs"].append(entry)
-        for uri, item in inputs.items():
-            states = item["ranges"].values()
+                acknowledged.setdefault(source_uri, []).append(is_published)
+        for uri, states in range_states.items():
             state = next(
                 (s for s in ("failed", "pending", "unreferenced") if s in states), "prepared"
             )
-            if (
-                state == "prepared"
-                and item["outputs"]
-                and all(o["published"] for o in item["outputs"])
-            ):
+            outputs = acknowledged.get(uri)
+            if state == "prepared" and outputs and all(outputs):
                 state = "published"
-            manifest[uri] = item["status"] = state
+            manifest[uri] = state
         await self.files.put("inputs", manifest)
-        await self.files.put(
-            "coverage", {"counts": dict(Counter(manifest.values())), "inputs": inputs}
-        )
+        return manifest
 
     def summarize_sources(self, sources: list[Source]) -> dict[str, Any]:
         """Return file-size and fragmentation statistics for prepared source ranges.

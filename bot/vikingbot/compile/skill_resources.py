@@ -137,15 +137,7 @@ class EvidenceReader(Tool):
         self.files = files
         self.allowed = set()
         self.spans, full = {}, set()
-        self.complete_reads = (
-            {
-                ref
-                for ref, value in data.get("original_evidence", {}).items()
-                if value.get("complete", True)
-            }
-            if isinstance(data, dict)
-            else set()
-        )
+        self.complete_reads = set()
         for item in data.get("inputs", []) if isinstance(data, dict) else []:
             payload = item.get("payload", {})
             if "text" in payload and "uri" in payload:

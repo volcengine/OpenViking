@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -441,8 +442,8 @@ async def test_failed_routes_keep_completed_drafts_through_finalization(
     assert all(
         f"# Fact {i}" in "\n".join(op["content"] for op in bundle.operations) for i in range(3)
     )
-    await pipeline.write_coverage([op["uri"] for op in bundle.operations])
-    assert (await pipeline.files.get("coverage"))["counts"] == {"published": 3}
+    manifest = await pipeline.write_coverage([op["uri"] for op in bundle.operations])
+    assert Counter(manifest.values()) == {"published": 3}
 
 
 async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):
