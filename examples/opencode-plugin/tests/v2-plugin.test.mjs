@@ -5,7 +5,7 @@ import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } fro
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
 const pluginRoot = fileURLToPath(new URL("..", import.meta.url))
-const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory"]
+const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory", "ov-memory-doctor"]
 
 function runtimeFixture(overrides = {}) {
   const events = []
@@ -111,6 +111,7 @@ test("existing skills override bundled skills by ID or name", async () => {
     "openviking-rule-search",
     "openviking-skills",
     "ov-experience-memory",
+    "ov-memory-doctor",
     "project-memory",
   ])
   assert.equal(skillSources.find((skill) => skill.id === "openviking-skills").name, "Custom skills")

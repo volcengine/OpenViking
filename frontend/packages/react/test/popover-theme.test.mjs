@@ -74,3 +74,35 @@ for (const [name, component, props, selector] of [
     }
   });
 }
+
+test('portaled controls inside a modal stay above its mask and release their inherited layer', async () => {
+  const container = document.createElement('div');
+  container.className = 'ov-modal';
+  container.style.zIndex = '2000';
+  document.body.append(container);
+  const root = createRoot(container);
+  let surface;
+  try {
+    await act(() =>
+      root.render(
+        createElement(VikingBotSessionActions, {
+          sessions: { items: [], onSelect() {}, onNew() {} },
+        }),
+      ),
+    );
+    const anchor = container.querySelector(
+      '.ov-viking-bot__header-action[aria-haspopup="listbox"]',
+    );
+    const button = anchor.matches('button')
+      ? anchor
+      : anchor.querySelector('button');
+    await click(button);
+    const node = document.getElementById(button.getAttribute('aria-controls'));
+    surface = node.closest('.ov-dropdown') ?? node;
+    assert.equal(surface.style.zIndex, '2001');
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+  }
+  assert.equal(surface.style.zIndex, '');
+});

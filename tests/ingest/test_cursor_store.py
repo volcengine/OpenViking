@@ -2,42 +2,46 @@
 # SPDX-License-Identifier: AGPL-3.0
 """CursorStore persistence / resume / accumulation."""
 
+from contextlib import closing
+
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor
 
 
-def test_upsert_accumulate_and_resume(tmp_path):
-    store = CursorStore(tmp_path)
-    c1 = Cursor(BYTE_OFFSET, {"offset": 10, "inode": 1})
-    store.upsert("claude_code", "s1", "import__claude_code__s1", c1, appended_delta=3, locator="/x")
-    rec = store.get("claude_code", "s1")
-    assert rec.cursor.value == {"offset": 10, "inode": 1}
-    assert rec.last_appended_count == 3
-    assert rec.ov_session_id == "import__claude_code__s1"
-    assert rec.last_committed_at is None
+def test_confirmed_batches_and_commit_survive_reopen(tmp_path):
+    key = ("claude_code", "s1")
+    session_id = "import__claude_code__s1"
+    initial = Cursor.zero(BYTE_OFFSET)
+    first = Cursor(BYTE_OFFSET, {"offset": 10, "inode": 1})
+    second = Cursor(BYTE_OFFSET, {"offset": 42, "inode": 1})
 
-    # advance + accumulate
-    c2 = Cursor(BYTE_OFFSET, {"offset": 42, "inode": 1})
-    store.upsert("claude_code", "s1", "import__claude_code__s1", c2, appended_delta=2)
-    rec = store.get("claude_code", "s1")
-    assert rec.cursor.value["offset"] == 42
-    assert rec.last_appended_count == 5  # 3 + 2
-    assert rec.locator == "/x"  # preserved across upsert
-    store.close()
+    with closing(CursorStore(tmp_path)) as store:
+        store.set_pending(*key, session_id, initial, first, 3, 0, locator="/log.jsonl")
+        store.confirm_append(*key, first, 3)
+        store.set_pending(*key, session_id, first, second, 2, 3)
+        assert store.get_cursor(*key, BYTE_OFFSET) == first
 
-    # resume from a fresh store on the same dir
-    store2 = CursorStore(tmp_path)
-    rec2 = store2.get("claude_code", "s1")
-    assert rec2.cursor.value["offset"] == 42
-    assert rec2.last_appended_count == 5
-    store2.close()
+    with closing(CursorStore(tmp_path)) as store:
+        pending = store.get(*key)
+        assert pending is not None
+        assert pending.cursor == first
+        assert pending.pending_cursor == second
+        assert pending.pending_baseline == pending.last_appended_count == 3
+        assert pending.pending_count == 2
+        assert pending.locator == "/log.jsonl"
+        assert pending.ov_session_id == session_id
+        assert pending.needs_commit
+        assert pending.last_committed_at is None
 
+        store.confirm_append(*key, second, 2)
+        store.mark_committed(*key)
 
-def test_commit_marks_timestamp(tmp_path):
-    store = CursorStore(tmp_path)
-    c = Cursor(BYTE_OFFSET, {"offset": 1})
-    store.upsert("codex", "s", "ov", c, appended_delta=1)
-    assert store.get("codex", "s").last_committed_at is None
-    store.upsert("codex", "s", "ov", c, pending_tokens=0, committed=True)
-    assert store.get("codex", "s").last_committed_at is not None
-    store.close()
+    with closing(CursorStore(tmp_path)) as store:
+        committed = store.get(*key)
+        assert committed is not None
+        assert committed.cursor == second
+        assert committed.last_appended_count == 5
+        assert committed.pending_cursor is None
+        assert committed.pending_baseline == committed.pending_count == 0
+        assert not committed.needs_commit
+        assert committed.last_committed_at is not None

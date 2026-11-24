@@ -1,13 +1,17 @@
 import { useId, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Radio } from '../../../shared/primitives/radio/radio.js';
 import { CustomChoiceInput } from './custom-choice-input.js';
+import type { VikingBotInteractionFieldContext } from './field-types.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { InteractionLabels } from './labels.js';
 import type { VikingBotInteractionRequest } from './types.js';
 
 interface Props {
+  controlProps?: VikingBotInteractionFieldContext<string>['controlProps'];
   request: Extract<VikingBotInteractionRequest, { kind: 'choice' | 'repair' }>;
   value?: string;
+  selectedIcon?: ReactNode;
   labels: InteractionLabels;
   locale: Locale;
   disabled: boolean;
@@ -18,7 +22,9 @@ interface Props {
 
 export function ChoiceInput({
   request,
+  controlProps,
   value,
+  selectedIcon,
   labels,
   locale,
   disabled,
@@ -36,13 +42,16 @@ export function ChoiceInput({
   const allowCustom = request.kind === 'choice' && request.allowCustomInput;
   return (
     <div
+      {...controlProps}
       className="ov-viking-bot__interaction-choices"
       role="radiogroup"
       aria-label={
         typeof request.question === 'string' ? request.question : labels.answer
       }
       aria-invalid={invalid || undefined}
-      aria-describedby={invalid ? errorId : undefined}
+      aria-describedby={
+        controlProps?.['aria-describedby'] ?? (invalid ? errorId : undefined)
+      }
     >
       {options.map((option, index) => (
         <Radio
@@ -58,7 +67,9 @@ export function ChoiceInput({
           }}
         >
           <span className="ov-viking-bot__interaction-index" aria-hidden="true">
-            {index + 1}
+            {selectedIcon && !custom && value === option.value
+              ? selectedIcon
+              : index + 1}
           </span>
           <span className="ov-viking-bot__interaction-option-content">
             <span>{option.label}</span>

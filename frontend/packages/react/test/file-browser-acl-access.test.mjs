@@ -158,6 +158,7 @@ test('permission lookup failures remain retryable instead of silently hiding ACL
   );
   const view = await mount(tree(fetch));
   try {
+    assert.equal(document.querySelector('.ov-notification--error'), null);
     assert.match(
       document.querySelector('.ov-file-browser-acl__lookup-error').textContent,
       /Could not load permissions/,

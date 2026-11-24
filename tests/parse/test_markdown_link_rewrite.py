@@ -4,6 +4,7 @@
 
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 
@@ -14,9 +15,13 @@ from openviking.parse.parsers.markdown import MarkdownParser, _RewriteContext
 
 
 @pytest.mark.asyncio
-async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path):
+@pytest.mark.parametrize(
+    "other_content",
+    ["", "[example](./linked.md#section\ncontinued)", "[example](./linked.md?query\ncontinued)"],
+)
+async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path, other_content):
     (tmp_path / "linked.md").write_text("# Linked\n", encoding="utf-8")
-    code = "```markdown\n[example](./linked.md)\n```\n\n`[inline](./linked.md)`"
+    code = f"```markdown\n[example](./linked.md)\n```\n\n`[inline](./linked.md)`\n\n{other_content}"
     source = tmp_path / "guide.md"
     source.write_text(f"# Guide\n\n{code}\n\n[Open `linked.md`](./linked.md)", encoding="utf-8")
     output = tmp_path / "parsed"
@@ -156,35 +161,79 @@ class TestRewriteRelativeLinks:
         )
         assert out == "[x](../目录甲/目录乙/目录丙/文档/文档.md?v=1)"
 
-    async def test_large_file_anchor_located(self, tmp_path: Path):
-        # Large target is split into section files; the anchor is located via an
-        # in-memory parse → link points at the specific section file + keeps anchor.
+    async def test_split_target_keeps_raw_and_encoded_fragments(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
-        big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
-        body = "".join(
-            f"## 第{i}章 {name}\n\n" + ("正文内容。" * 400) + "\n\n"
-            for i, name in [(1, "部署"), (2, "监控"), (3, "排查")]
+        target = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
+        target.write_text(
+            "\n\n".join(
+                f"## {title}\n\n" + "正文内容。" * 240
+                for title in ("第1章 部署", "第2章 监控", "第3章 排查", "Logs & Metrics")
+            ),
+            encoding="utf-8",
         )
-        big.write_text(body, encoding="utf-8")
-        out = await self._rewrite(
-            self._parser(),
-            kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#第3章-排查)",
+        fragment = "第3章-排查"
+        encoded_fragment = quote(fragment)
+        source = kb / "文档.md"
+        source.write_text(
+            f"[raw](./目录甲/目录乙/目录丙/big.md#{fragment})\n"
+            f"[encoded](./目录甲/目录乙/目录丙/big.md#{encoded_fragment})\n"
+            "[Logs](./目录甲/目录乙/目录丙/big.md#logs--metrics)",
+            encoding="utf-8",
         )
-        assert out.startswith("[x](../目录甲/目录乙/目录丙/big/")
-        assert out.endswith(".md#第3章-排查)")  # points at a file, anchor kept
 
-    async def test_large_file_unlocatable_anchor_falls_back_to_dir(self, tmp_path: Path):
-        # Anchor matches no heading in the (large) target → drop suffix, point at dir.
+        parser = MarkdownParser()
+        output = tmp_path / "out"
+        store = LocalParseOutputStore(str(output))
+        result = await parser.parse(
+            source,
+            enable_link_rewrite=True,
+            link_rewrite_root=str(kb),
+            parse_output_store=store,
+        )
+
+        assert result.artifact_ref is not None
+        assert list(output.iterdir()) == [Path(result.artifact_ref.root)]
+        content = await store.read_bytes(result.artifact_ref, "文档/文档.md")
+        raw, encoded, logs = content.decode().splitlines()
+        directory = "../目录甲/目录乙/目录丙/"
+        section = "big/第3章_排查.md"
+        assert raw == f"[raw]({directory}{section}#{fragment})"
+        assert encoded == f"[encoded]({directory}{section}#{encoded_fragment})"
+        logs_prefix = f"[Logs]({directory}big/"
+        assert logs.startswith(logs_prefix)
+        logs_file, logs_fragment = logs.removeprefix(logs_prefix).removesuffix(")").split("#")
+        assert logs_fragment == "logs--metrics"
+
+        parsed_target = await parser.parse(target, parse_output_store=store)
+        assert parsed_target.artifact_ref is not None
+        assert (
+            "## 第3章 排查"
+            in (await store.read_bytes(parsed_target.artifact_ref, section)).decode()
+        )
+        assert (
+            "## Logs & Metrics"
+            in (await store.read_bytes(parsed_target.artifact_ref, f"big/{logs_file}")).decode()
+        )
+
+    async def test_split_target_resolves_closing_hashes_and_falls_back_for_missing_anchor(
+        self, tmp_path: Path
+    ):
         kb = self._make_tree(tmp_path)
         big = kb / "目录甲" / "目录乙" / "目录丙" / "big.md"
-        big.write_text("# 大文档\n\n" + ("这是一段较长的正文内容。" * 1200), encoding="utf-8")
+        big.write_text(
+            "# Target ##\n\n" + "A" * 1200 + "\n\n# Other\n\n" + "B" * 1200,
+            encoding="utf-8",
+        )
         out = await self._rewrite(
             self._parser(),
             kb,
-            "[x](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
+            "[found](./目录甲/目录乙/目录丙/big.md#target) "
+            "[missing](./目录甲/目录乙/目录丙/big.md#不存在的章节)",
         )
-        assert out == "[x](../目录甲/目录乙/目录丙/big/)"
+        assert out == (
+            "[found](../目录甲/目录乙/目录丙/big/Target.md#target) "
+            "[missing](../目录甲/目录乙/目录丙/big/)"
+        )
 
     async def test_multiple_links_on_one_line(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
@@ -342,32 +391,6 @@ class FakeVikingFS:
 
 def _decode(v):
     return v.decode("utf-8") if isinstance(v, bytes) else v
-
-
-class TestComputeLayoutPurity:
-    """parse/write split: _compute_layout plans the VikingFS layout but writes nothing,
-    so the link-rewrite in-memory probe can reuse it without a fake FS or any side effect."""
-
-    async def test_compute_layout_plans_sections_without_touching_vikingfs(self, tmp_path: Path):
-        # A multi-section document large enough to split into several section files.
-        src = tmp_path / "big.md"
-        body = "".join(f"## 第{i}章\n\n" + ("正文内容。" * 400) + "\n\n" for i in range(1, 4))
-        src.write_text(body, encoding="utf-8")
-
-        fake = FakeVikingFS()
-        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
-            parser = MarkdownParser()
-            layout = await parser._compute_layout(
-                parser._read_file(src), temp_uri="viking://temp/probe", source_path=str(src)
-            )
-
-        # The plan enumerates the section writes (raw content, before any rewrite)...
-        writes = [op for op in layout.ops if op.kind == "write"]
-        assert len(writes) >= 2, layout.ops
-        assert all(op.content for op in writes)
-        # ...yet nothing was ever written to VikingFS: planning is side-effect free.
-        assert fake.files == {}
-        assert fake.dirs == []
 
 
 class TestParseContentRewiring:
@@ -564,7 +587,9 @@ class TestImageLinkSplit:
         (kb / "img").mkdir(parents=True)
         _write_valid_png(kb / "img" / "photo.png")
         src = kb / "page.md"
-        src.write_text("![p](./img/photo.png)", encoding="utf-8")
+        src.write_text(
+            "![p](./img/photo.png)\n\n![remote](https://example.com/a.png)", encoding="utf-8"
+        )
 
         fake = FakeVikingFS()
         with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
@@ -574,6 +599,8 @@ class TestImageLinkSplit:
 
         md = [_decode(c) for u, c in fake.files.items() if u.endswith(".md")]
         assert md and "![p](./img/photo.png)" in md[0], fake.files
+        assert "![remote](https://example.com/a.png)" in md[0]
+        assert not any(u.endswith("/a.png") for u in fake.files)
         assert any(u.endswith("/photo.png") for u in fake.files), fake.files
         assert any(u.endswith(".image_mappings.json") for u in fake.files), fake.files
 

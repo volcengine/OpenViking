@@ -2,7 +2,7 @@
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
 # TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, CodeBuddy Code,
-# OpenCode, pi, DeepSeek Harness (dsh) and DeepSeek Harness Desktop.
+# Qoder CLI, OpenCode, pi, DeepSeek Harness (dsh) and DeepSeek Harness Desktop.
 #
 # In short:
 #   - Open source. This script and every OpenViking file it installs are
@@ -56,10 +56,12 @@
 #   trae-cli   the same through the TraeCode CLI, then removes the hooks an older
 #              installer added to ~/.trae/cli/hooks.json and ~/.trae/traecli.toml
 #   cursor     ~/.cursor/hooks.json, ~/.cursor/mcp.json, ~/.cursor/rules, ~/.cursor/skills
-#   trae       ~/.trae/hooks.json and TRAE's mcp.json (trae-cn: ~/.trae-cn, TRAE CN)
-#   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
+#   trae       ~/.trae/hooks.json, TRAE's mcp.json, ~/.trae/skills (trae-cn: ~/.trae-cn, TRAE CN)
+#   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json, ~/.zcode/skills
 #   kimicode   ~/.kimi-code/plugins
 #   codebuddy  a local marketplace registered with codebuddy, installed from ~/.codebuddy/plugins
+#   qoder      a local marketplace registered with qodercli (or qoderclicn), installed from ~/.qoder/plugins (or ~/.qoder-cn/plugins)
+#   antigravity ~/.gemini/config/plugins/openviking-memory (the Antigravity app and agy)
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
@@ -67,9 +69,9 @@
 #              command inside DeepSeek Harness.app, while Desktop is quit
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
-# Cursor, TRAE, TRAE CN and ZCode run their hooks from
+# Cursor, TRAE, TRAE CN, ZCode and Antigravity run their hooks from
 # ~/.openviking/agent-integrations, where Kimi Code keeps its uninstall helper and
-# CodeBuddy Code its managed marketplace.
+# CodeBuddy Code and Qoder CLI their managed marketplaces.
 # The plugin bundle is unpacked to ~/.openviking/memory-plugin-marketplace when
 # a harness installs from it.
 #
@@ -85,7 +87,7 @@
 # neither a published build nor part of a checkout downloads and runs the
 # published copy of this script.
 #
-# Uninstall: Cursor, TRAE, TRAE CN, ZCode, Kimi Code and CodeBuddy Code with
+# Uninstall: Cursor, TRAE, TRAE CN, ZCode, Kimi Code, CodeBuddy Code and Qoder CLI with
 #   curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness <list>
 # The other harnesses with the commands the install prints at the end, such as
 #   claude plugin uninstall openviking-memory@openviking && claude plugin marketplace remove openviking
@@ -239,7 +241,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh, dsh-desktop, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, qoder, antigravity, opencode, pi, dsh, dsh-desktop, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      dsh is the dsh CLI from npm; dsh-desktop is DeepSeek Harness Desktop (macOS only).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
@@ -257,7 +259,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code and CodeBuddy Code integrations,
+  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI and Antigravity integrations,
                      plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
                      pi, dsh and dsh-desktop are removed with the commands the install prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
@@ -566,8 +568,35 @@ resolve_dsh_desktop_cli() {
   printf '%s' "$candidate"
 }
 
+# The CN build ships the same CLI as `qoderclicn` with its own config root;
+# every build on PATH gets the plugin.
+qoder_clis() {
+  local found=""
+  command -v qodercli >/dev/null 2>&1 && found="qodercli"
+  command -v qoderclicn >/dev/null 2>&1 && found="${found:+$found }qoderclicn"
+  printf '%s' "${found:-qodercli}"
+}
+
+qoder_home() { # qoder_home <qodercli|qoderclicn>
+  if [ "$1" = qoderclicn ]; then
+    printf '%s' "${QODERCN_CONFIG_DIR:-$HOME/.qoder-cn}"
+  else
+    printf '%s' "${QODER_CONFIG_DIR:-$HOME/.qoder}"
+  fi
+}
+
+# The Antigravity app and its agy CLI read one configuration directory, so one
+# plugin there serves both.
+antigravity_config_dir() {
+  printf '%s' "$HOME/.gemini/config"
+}
+
+antigravity_plugin_dir() {
+  printf '%s' "$(antigravity_config_dir)/plugins/openviking-memory"
+}
+
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_QODER=0; HAVE_ANTIGRAVITY=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -581,6 +610,9 @@ refresh_available_harnesses() {
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
   { command -v codebuddy >/dev/null 2>&1 || [ -d "$HOME/.codebuddy" ]; } && HAVE_CODEBUDDY=1
+  { command -v qodercli >/dev/null 2>&1 || command -v qoderclicn >/dev/null 2>&1 || [ -d "$(qoder_home qodercli)" ] || [ -d "$(qoder_home qoderclicn)" ]; } && HAVE_QODER=1
+  # Both the app and agy create the shared configuration directory on first run.
+  { command -v agy >/dev/null 2>&1 || [ -d "$(antigravity_config_dir)" ]; } && HAVE_ANTIGRAVITY=1
   return 0
 }
 
@@ -705,7 +737,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_ANTIGRAVITY=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
 # DeepSeek Harness Desktop is released for macOS and Windows; of the systems
 # this script runs on, only macOS ever offers it.
 DSH_DESKTOP_OFFERED=0
@@ -728,6 +760,8 @@ SEL_TRAE_CN=0
 SEL_ZCODE=0
 SEL_KIMICODE=0
 SEL_CODEBUDDY=0
+SEL_QODER=0
+SEL_ANTIGRAVITY=0
 SEL_CLI=0
 TUI_CURSOR=0; TUI_LINES=0
 
@@ -742,7 +776,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 + DSH_DESKTOP_OFFERED ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 12 + DSH_DESKTOP_OFFERED ))
 }
 
 tui_total_count() {
@@ -787,6 +821,10 @@ EOF
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'codebuddy|codebuddy'; return 0; fi
   i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'qoder|qodercli'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'antigravity|agy'; return 0; fi
+  i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cli|ov'; return 0; fi
   printf 'add|'
 }
@@ -823,6 +861,8 @@ tui_bin_label() {
     zcode:*) printf 'ZCode' ;;
     kimicode:*) printf 'Kimi Code' ;;
     codebuddy:*) printf 'CodeBuddy Code' ;;
+    qoder:*) printf 'Qoder CLI' ;;
+    antigravity:*) printf 'Antigravity' ;;
     cli:*) printf 'CLI (ov)' ;;
     claude:*) printf '%s %s' "$bin" "$(t '(Claude-format)' '（Claude 格式）')" ;;
     codex:*) printf '%s %s' "$bin" "$(t '(Codex-format)' '（Codex 格式）')" ;;
@@ -855,6 +895,10 @@ tui_bin_selected() {
     [ "$SEL_KIMICODE" -eq 1 ]
   elif [ "$kind" = "codebuddy" ]; then
     [ "$SEL_CODEBUDDY" -eq 1 ]
+  elif [ "$kind" = "qoder" ]; then
+    [ "$SEL_QODER" -eq 1 ]
+  elif [ "$kind" = "antigravity" ]; then
+    [ "$SEL_ANTIGRAVITY" -eq 1 ]
   elif [ "$kind" = "cli" ]; then
     [ "$SEL_CLI" -eq 1 ]
   else
@@ -870,6 +914,8 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
     kimicode) [ "$HAVE_KIMICODE" -eq 1 ] ;;
     codebuddy) [ "$HAVE_CODEBUDDY" -eq 1 ] ;;
+    qoder) [ "$HAVE_QODER" -eq 1 ] ;;
+    antigravity) [ "$HAVE_ANTIGRAVITY" -eq 1 ] ;;
     dsh) [ "$HAVE_DSH" -eq 1 ] ;;
     dsh-desktop) [ "$HAVE_DSH_DESKTOP" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
@@ -889,6 +935,8 @@ tui_set_all_bins() {
   SEL_ZCODE=1
   SEL_KIMICODE=1
   SEL_CODEBUDDY=1
+  SEL_QODER=1
+  SEL_ANTIGRAVITY=1
   SEL_CLI=1
 }
 
@@ -921,6 +969,10 @@ tui_toggle_bin() {
     SEL_KIMICODE=$((1 - SEL_KIMICODE)); return 0
   elif [ "$kind" = "codebuddy" ]; then
     SEL_CODEBUDDY=$((1 - SEL_CODEBUDDY)); return 0
+  elif [ "$kind" = "qoder" ]; then
+    SEL_QODER=$((1 - SEL_QODER)); return 0
+  elif [ "$kind" = "antigravity" ]; then
+    SEL_ANTIGRAVITY=$((1 - SEL_ANTIGRAVITY)); return 0
   elif [ "$kind" = "cli" ]; then
     SEL_CLI=$((1 - SEL_CLI)); return 0
   else
@@ -1007,6 +1059,8 @@ tui_reset_bin_selection() {
   SEL_ZCODE=0
   SEL_KIMICODE=0
   SEL_CODEBUDDY=0
+  SEL_QODER=0
+  SEL_ANTIGRAVITY=0
   SEL_CLI=$((1 - UNINSTALL))
   while IFS= read -r bin; do
     [ -n "$bin" ] || continue
@@ -1036,6 +1090,8 @@ EOF
   if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
   if [ "$HAVE_KIMICODE" -eq 1 ]; then SEL_KIMICODE=1; any=1; fi
   if [ "$HAVE_CODEBUDDY" -eq 1 ]; then SEL_CODEBUDDY=1; any=1; fi
+  if [ "$HAVE_QODER" -eq 1 ]; then SEL_QODER=1; any=1; fi
+  if [ "$HAVE_ANTIGRAVITY" -eq 1 ]; then SEL_ANTIGRAVITY=1; any=1; fi
   if [ "$any" -ne 1 ]; then
     SEL_CLAUDE_BINS="$TUI_CLAUDE_BINS"
     SEL_CODEX_BINS="$TUI_CODEX_BINS"
@@ -1124,7 +1180,7 @@ tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_DSH_DESKTOP" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
-    || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CODEBUDDY" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
+    || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CODEBUDDY" -eq 1 ] || [ "$SEL_QODER" -eq 1 ] || [ "$SEL_ANTIGRAVITY" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
 
 tui_finish_selection() {
@@ -1143,6 +1199,8 @@ tui_finish_selection() {
   [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
   [ "$SEL_KIMICODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}kimicode"
   [ "$SEL_CODEBUDDY" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}codebuddy"
+  [ "$SEL_QODER" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}qoder"
+  [ "$SEL_ANTIGRAVITY" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}antigravity"
   [ "$SEL_CLI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cli"
   return 0
 }
@@ -1219,6 +1277,8 @@ select_harnesses() {
   [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
   [ "$HAVE_KIMICODE" -eq 1 ] && detected="${detected:+$detected,}kimicode"
   [ "$HAVE_CODEBUDDY" -eq 1 ] && detected="${detected:+$detected,}codebuddy"
+  [ "$HAVE_QODER" -eq 1 ] && detected="${detected:+$detected,}qoder"
+  [ "$HAVE_ANTIGRAVITY" -eq 1 ] && detected="${detected:+$detected,}antigravity"
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
     SELECTED_HARNESSES="$REQUESTED_HARNESSES"
@@ -1478,7 +1538,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|codebuddy|dsh|cli) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|codebuddy|qoder|antigravity|dsh|cli) ;;
       dsh-desktop)
         [ "$DSH_DESKTOP_OFFERED" -eq 1 ] || {
           err "$(t 'DeepSeek Harness Desktop (dsh-desktop) is installed by this script on macOS only; on Windows, add the plugin from its Plugins page.' '本脚本仅在 macOS 上安装 DeepSeek Harness Desktop（dsh-desktop）；Windows 上请在其“插件”页添加。')"
@@ -1527,7 +1587,7 @@ EOF
   if contains_harness cli; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness qoder || contains_harness antigravity; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -2378,7 +2438,8 @@ remove_legacy_trae_cli_integration() {
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/zcode" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/antigravity" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
 }
@@ -2540,7 +2601,7 @@ install_codex() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode codebuddy"
+AGENT_HOOK_HOSTS="cursor trae zcode kimicode codebuddy qoder antigravity"
 
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
@@ -2653,32 +2714,53 @@ agent_remove_trae_cli_configs() { # agent_remove_trae_cli_configs <hooks> <traec
   mv "$tmp" "$config_path"
 }
 
+# The skills a host without a plugin format reads from the user's own skills
+# directory. Each copy is tracked, so a skill the user wrote or edited under the
+# same name is left alone on upgrade and uninstall.
+HOST_SKILLS="openviking-memory openviking-skills ov-experience-memory openviking-rule-search ov-memory-doctor"
+
+install_host_skills() { # install_host_skills <client> <source-dir> <skills-dir>
+  local client="$1" source="$2" dest="$3" lib skill
+  lib="$(require_install_lib_dir)" || return 1
+  mkdir -p "$dest"
+  for skill in $HOST_SKILLS; do
+    "$NODE_BIN" "$lib/owned-skill.mjs" install \
+      "$source/$skill" "$dest/$skill" "$OV_HOME/$client-skill-ownership/$skill.json" || return 1
+  done
+}
+
+uninstall_host_skills() { # uninstall_host_skills <client> <skills-dir>
+  local client="$1" dest="$2" lib skill
+  lib="$(install_lib_dir)" || lib=""
+  for skill in $HOST_SKILLS; do
+    if [ -f "$lib/owned-skill.mjs" ]; then
+      "$NODE_BIN" "$lib/owned-skill.mjs" uninstall "" \
+        "$dest/$skill" "$OV_HOME/$client-skill-ownership/$skill.json"
+    else
+      warn "Preserved $client skill without ownership runtime: $dest/$skill"
+    fi
+  done
+}
+
 uninstall_agent_integrations() {
   if contains_harness cursor; then
-    local skill ownership_lib
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
     rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
-    ownership_lib="$(install_lib_dir)" || ownership_lib=""
-    for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
-      if [ -f "$ownership_lib/owned-skill.mjs" ]; then
-        "$NODE_BIN" "$ownership_lib/owned-skill.mjs" uninstall "" \
-          "$HOME/.cursor/skills/$skill" "$OV_HOME/cursor-skill-ownership/$skill.json"
-      else
-        warn "Preserved Cursor skill without ownership runtime: $HOME/.cursor/skills/$skill"
-      fi
-    done
+    uninstall_host_skills cursor "$HOME/.cursor/skills"
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
   if contains_harness trae; then
     agent_remove_json_configs "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)"
+    uninstall_host_skills trae "$HOME/.trae/skills"
     rm -rf "$OV_HOME/agent-integrations/trae"
-    info "$(t 'Removed TRAE OpenViking hooks and MCP config.' '已移除 TRAE OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed TRAE OpenViking hooks, MCP config and skills.' '已移除 TRAE OpenViking hooks、MCP 配置与 skill。')"
   fi
   if contains_harness trae-cn; then
     agent_remove_json_configs "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)"
+    uninstall_host_skills trae-cn "$HOME/.trae-cn/skills"
     rm -rf "$OV_HOME/agent-integrations/trae-cn"
-    info "$(t 'Removed TRAE CN OpenViking hooks and MCP config.' '已移除 TRAE CN OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed TRAE CN OpenViking hooks, MCP config and skills.' '已移除 TRAE CN OpenViking hooks、MCP 配置与 skill。')"
   fi
   if contains_harness trae-cli; then
     local trae_home="${TRAE_HOME:-$HOME/.trae}"
@@ -2727,8 +2809,9 @@ fs.renameSync(tmp, configPath);
 CLEAN_NODE
     # Clean up intermediate files generated by agent_write_json_configs
     rm -f "$HOME/.zcode/hooks.json" "$HOME/.zcode/mcp.json" 2>/dev/null
+    uninstall_host_skills zcode "$HOME/.zcode/skills"
     rm -rf "$OV_HOME/agent-integrations/zcode"
-    info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed ZCode OpenViking hooks, MCP config and skills.' '已移除 ZCode OpenViking hooks、MCP 配置与 skill。')"
   fi
   if contains_harness kimicode; then
     local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimicode_lib kimicode_installed
@@ -2762,35 +2845,33 @@ NODE
     rm -rf "$OV_HOME/agent-integrations/kimicode"
     info "$(t 'Removed the native Kimi Code plugin.' '已移除 Kimi Code 原生插件。')"
   fi
-  if contains_harness codebuddy; then
-    # The host CLI resolves a plugin by name@marketplace, so the plugin leaves
-    # before the marketplace that served it. Its files stay until the host has
-    # let go of it: removing them under an enabled plugin breaks every hook.
-    local codebuddy_removed=0 codebuddy_list
-    if command -v codebuddy >/dev/null 2>&1; then
-      if codebuddy plugin uninstall openviking-memory@openviking >/dev/null 2>&1; then
-        codebuddy_removed=1
-      elif codebuddy_list="$(codebuddy plugin list 2>/dev/null)"; then
-        case "$codebuddy_list" in
-          *openviking-memory*) ;;
-          *) codebuddy_removed=1 ;;
-        esac
-      fi
-    fi
-    if [ "$codebuddy_removed" = 1 ]; then
-      codebuddy plugin marketplace remove openviking >/dev/null 2>&1 || true
-      # The host CLI unregisters a plugin but keeps its cached copy, so the
-      # marketplace's cache directory goes too.
-      rm -rf "$HOME/.codebuddy/plugins/cache/openviking"
-      rm -rf "$OV_HOME/agent-integrations/codebuddy"
-      info "$(t 'Removed the CodeBuddy Code plugin and its local marketplace.' '已移除 CodeBuddy Code 插件及其本地 marketplace。')"
-    elif ! command -v codebuddy >/dev/null 2>&1 \
-      && [ ! -e "$HOME/.codebuddy/plugins/cache/openviking" ] \
-      && [ ! -e "$OV_HOME/agent-integrations/codebuddy" ]; then
-      :
+  if contains_harness codebuddy; then uninstall_marketplace_host codebuddy "CodeBuddy Code" codebuddy plugin "$HOME/.codebuddy" openviking-memory; fi
+  if contains_harness qoder; then
+    local cli
+    for cli in $(qoder_clis); do
+      uninstall_marketplace_host qoder "Qoder CLI" "$cli" plugins "$(qoder_home "$cli")" openviking-memory@openviking
+    done
+  fi
+  if contains_harness antigravity; then
+    local ag_dir ag_lib
+    ag_dir="$(antigravity_plugin_dir)"
+    ag_lib="$(install_lib_dir)" || ag_lib=""
+    if [ -d "$ag_dir" ] && [ -n "$ag_lib" ] && ! "$NODE_BIN" --input-type=module - "$ag_dir/hooks.json" "$ag_lib/host-json-config.mjs" <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const [hooksPath, helper] = process.argv.slice(2);
+const { readJson, ownsHook } = await import(pathToFileURL(helper).href);
+process.exit(fs.existsSync(hooksPath) && ownsHook(readJson(hooksPath)) ? 0 : 1);
+NODE
+    then
+      warn "$(t 'Left in place because OpenViking did not write it:' '不是 OpenViking 写入的，已保留：') $ag_dir"
+    elif [ -d "$ag_dir" ] && [ -z "$ag_lib" ]; then
+      warn "$(t 'Installer runtime not found; remove the plugin by hand:' '未找到安装器运行时，请手动移除插件：') rm -rf \"$ag_dir\""
     else
-      warn "$(t 'Could not uninstall the CodeBuddy Code plugin through the codebuddy CLI; its files were left in place. Remove it with:' '未能通过 codebuddy CLI 卸载 CodeBuddy Code 插件，其文件已保留。用这些命令移除：') codebuddy plugin uninstall openviking-memory@openviking; codebuddy plugin marketplace remove openviking; rm -rf \"$HOME/.codebuddy/plugins/cache/openviking\" \"$OV_HOME/agent-integrations/codebuddy\""
+      rm -rf "$ag_dir"
     fi
+    rm -rf "$OV_HOME/agent-integrations/antigravity"
+    info "$(t 'Removed the Antigravity OpenViking plugin.' '已移除 Antigravity OpenViking 插件。')"
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
@@ -2798,7 +2879,9 @@ NODE
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
     && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
     && [ ! -d "$OV_HOME/agent-integrations/kimicode" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/codebuddy" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/codebuddy" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/qoder" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/antigravity" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness cli; then
@@ -2839,20 +2922,15 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 
 install_cursor() {
   step_heading "$(t 'Cursor integration' 'Cursor 集成')"
-  local root hooks_path mcp_path skill ownership_lib legacy_plugins
+  local root hooks_path mcp_path legacy_plugins
   ensure_bundle
   root="$(assemble_agent_integration cursor cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
-  mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
+  mkdir -p "$HOME/.cursor/rules"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  ownership_lib="$(require_install_lib_dir)" || return 1
-  for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
-    "$NODE_BIN" "$ownership_lib/owned-skill.mjs" install \
-      "$root/hosts/cursor/skills/$skill" "$HOME/.cursor/skills/$skill" \
-      "$OV_HOME/cursor-skill-ownership/$skill.json" || return 1
-  done
+  install_host_skills cursor "$root/hosts/cursor/skills" "$HOME/.cursor/skills" || return 1
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
   info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
@@ -2887,8 +2965,114 @@ install_zcode() {
   # Merge the generated hooks.json and mcp.json into config.json so ZCode picks them up.
   zcode_merge_config "$config_path" "$hooks_path" "$mcp_path" \
     || { warn "$(t 'Failed to merge ZCode config' 'ZCode 配置合并失败')"; return 1; }
+  install_host_skills zcode "$root/hosts/zcode/skills" "$HOME/.zcode/skills" || return 1
   info "$(t 'ZCode hooks installed:' 'ZCode hooks 已安装：') $config_path (hooks.events)"
   info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
+  info "$(t 'ZCode skills installed:' 'ZCode skill 已安装：') $HOME/.zcode/skills"
+}
+
+# Antigravity loads plugins from directories: a plugin.json, a hooks.json whose
+# top-level keys name the hooks, an mcp_config.json and a skills directory. The
+# directory is the installer's alone, so it is written whole instead of merged
+# into user files.
+install_antigravity() {
+  step_heading "$(t 'Antigravity integration' 'Antigravity 集成')"
+  local root plugin_dir lib user_mcp
+  ensure_bundle
+  root="$(assemble_agent_integration antigravity antigravity)" || return 1
+  plugin_dir="$(antigravity_plugin_dir)"
+  lib="$(require_install_lib_dir)" || return 1
+  user_mcp="$(antigravity_config_dir)/mcp_config.json"
+  "$NODE_BIN" --input-type=module - "$root" "$plugin_dir" "$NODE_BIN" "$SOURCE_MODE" "$lib" "$user_mcp" <<'NODE' || return 1
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [root, pluginDir, nodeBin, sourceMode, lib, userMcpPath] = process.argv.slice(2);
+const { readJson, ownsHook } = await import(pathToFileURL(path.join(lib, "host-json-config.mjs")).href);
+const { stripJsonc } = await import(pathToFileURL(path.join(lib, "jsonc-edit.mjs")).href);
+const hostDir = path.join(root, "hosts", "antigravity");
+const version = readJson(path.join(root, "plugin.json")).version;
+const existing = path.join(pluginDir, "hooks.json");
+// A directory of the same name that this installer did not write stays put.
+if (fs.existsSync(pluginDir) && !(fs.existsSync(existing) && ownsHook(readJson(existing)))) {
+  process.stderr.write(`${pluginDir} exists and is not an OpenViking plugin; move it aside and re-run.\n`);
+  process.exit(1);
+}
+const quote = (value) => `'${String(value).replace(/'/g, `'"'"'`)}'`;
+const env = `OPENVIKING_INTEGRATION_ID='openviking-memory' OPENVIKING_INTEGRATION_VERSION=${quote(version)} OPENVIKING_HOOK_SOURCE='antigravity'`;
+const render = (command) => {
+  const match = /^node\s+__OPENVIKING_PLUGIN_ROOT__\/(\S+)(\s.*)?$/u.exec(command);
+  if (!match) throw new Error(`Unsupported Antigravity hook command template: ${command}`);
+  const args = (match[2] || "").replaceAll("__OPENVIKING_CLIENT_ID__", "antigravity");
+  return `${env} ${quote(nodeBin)} ${quote(path.join(root, match[1]))}${args} # openviking-memory`;
+};
+// PreToolUse groups its handlers under a matcher; the other events list them flat.
+const renderHandler = (handler) => (Array.isArray(handler.hooks)
+  ? { ...handler, hooks: handler.hooks.map(renderHandler) }
+  : { ...handler, command: render(handler.command) });
+const template = readJson(path.join(hostDir, "hooks.json"));
+const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) => [name,
+  Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event, handlers.map(renderHandler)])),
+]));
+// A server the user registered for OpenViking stays the only one: a second
+// would hand the model every tool twice. The manual steps this installer
+// replaced named no key for it, so any name that mentions OpenViking counts.
+let userHasServer = false;
+try {
+  const servers = JSON.parse(stripJsonc(fs.readFileSync(userMcpPath, "utf8"))).mcpServers || {};
+  userHasServer = Object.keys(servers).some((name) => /openviking/iu.test(name));
+} catch {}
+const capabilities = userHasServer ? ["hooks", "skills"] : ["hooks", "mcp", "skills"];
+// Stage beside plugins/, not in it, so an interrupted run leaves no second
+// plugin for Antigravity to load; the config directory keeps the rename on
+// one filesystem.
+const tmp = path.join(path.dirname(path.dirname(pluginDir)), `.openviking-memory.${process.pid}.tmp`);
+fs.rmSync(tmp, { recursive: true, force: true });
+fs.mkdirSync(tmp, { recursive: true });
+fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
+fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
+fs.cpSync(path.join(hostDir, "skills"), path.join(tmp, "skills"), { recursive: true });
+if (!userHasServer) {
+  // MCP commands run without a shell and expand no environment variables, so
+  // every value is written out in full.
+  fs.writeFileSync(path.join(tmp, "mcp_config.json"), JSON.stringify({
+    mcpServers: {
+      openviking: {
+        command: nodeBin,
+        args: [path.join(root, "servers", "mcp-proxy.mjs")],
+        env: {
+          OPENVIKING_INTEGRATION_ID: "openviking-memory",
+          OPENVIKING_INTEGRATION_VERSION: version,
+          OPENVIKING_HOOK_SOURCE: "antigravity",
+        },
+      },
+    },
+  }, null, 2) + "\n", { mode: 0o600 });
+}
+fs.rmSync(pluginDir, { recursive: true, force: true });
+fs.mkdirSync(path.dirname(pluginDir), { recursive: true });
+fs.renameSync(tmp, pluginDir);
+const manifestPath = path.join(root, "integration.json");
+const previous = fs.existsSync(manifestPath) ? readJson(manifestPath) : {};
+const now = new Date().toISOString();
+fs.writeFileSync(manifestPath, JSON.stringify({
+  schemaVersion: 1,
+  id: "openviking-memory",
+  version,
+  client: "antigravity",
+  installMode: "managed-native",
+  source: sourceMode,
+  capabilities,
+  hooksConfig: path.join(pluginDir, "hooks.json"),
+  ...(userHasServer ? {} : { mcpConfig: path.join(pluginDir, "mcp_config.json") }),
+  installedAt: previous.installedAt || now,
+  updatedAt: now,
+}, null, 2) + "\n");
+NODE
+  info "$(t 'Antigravity plugin installed:' 'Antigravity 插件已安装：') $plugin_dir"
+  if [ ! -f "$plugin_dir/mcp_config.json" ]; then
+    info "$(t 'Kept the openviking MCP server you already configured; the plugin adds no second one:' '保留你已配置的 openviking MCP 服务，插件不再重复添加：') $user_mcp"
+  fi
 }
 
 install_kimicode() {
@@ -2909,6 +3093,11 @@ install_kimicode() {
     return 1
   }
   cp "$root/hosts/kimicode/runtime-index.mjs" "$root/hosts/index.mjs" || {
+    rm -rf "$bundle"
+    return 1
+  }
+  # The manifest names ./skills/, resolved from the plugin root.
+  cp -R "$root/hosts/kimicode/skills" "$bundle/skills" || {
     rm -rf "$bundle"
     return 1
   }
@@ -2949,61 +3138,125 @@ install_kimicode() {
   info "$(t 'Kimi Code native plugin installed:' 'Kimi Code 原生插件已安装：') openviking-memory"
 }
 
-install_codebuddy() {
-  step_heading "$(t 'CodeBuddy Code CLI integration' 'CodeBuddy Code CLI 集成')"
-  local bundle root config marketplace version host_module
+uninstall_marketplace_host() { # uninstall_marketplace_host <host> <label> <cli> <subcommand> <config-dir> <listed-id>
+  # The host CLI resolves a plugin by name@marketplace, so the plugin leaves
+  # before the marketplace that served it. Its files stay until the host has
+  # let go of it: removing them under an enabled plugin breaks every hook.
+  local host="$1" label="$2" cli="$3" sub="$4" cache="$5/plugins/cache/openviking" listed="$6"
+  local removed=0 list
+  if command -v "$cli" >/dev/null 2>&1; then
+    if "$cli" "$sub" uninstall openviking-memory@openviking >/dev/null 2>&1; then
+      removed=1
+    elif list="$("$cli" "$sub" list 2>/dev/null)"; then
+      case "$list" in
+        *"$listed"*) ;;
+        *) removed=1 ;;
+      esac
+    fi
+  fi
+  if [ "$removed" = 1 ]; then
+    "$cli" "$sub" marketplace remove openviking >/dev/null 2>&1 || true
+    # The host CLI unregisters a plugin but keeps its cached copy, so the
+    # marketplace's cache directory goes too.
+    rm -rf "$cache"
+    rm -rf "$OV_HOME/agent-integrations/$host"
+    info "$(t "Removed the $label plugin and its local marketplace." "已移除 $label 插件及其本地 marketplace。")"
+  elif ! command -v "$cli" >/dev/null 2>&1 \
+    && [ ! -e "$cache" ] \
+    && [ ! -e "$OV_HOME/agent-integrations/$host" ]; then
+    :
+  else
+    warn "$(t "Could not uninstall the $label plugin through $cli; its files were left in place. Remove it with:" "未能通过 $cli 卸载 $label 插件，其文件已保留。用这些命令移除：") $cli $sub uninstall openviking-memory@openviking; $cli $sub marketplace remove openviking; rm -rf \"$cache\" \"$OV_HOME/agent-integrations/$host\""
+  fi
+}
+
+validate_marketplace_host() { # validate_marketplace_host <host> "<cli>..." <subcommand> <listed-id>; sets the caller's ok/agent_fatal
+  local host="$1" clis="$2" sub="$3" listed="$4" cli
+  local root="$OV_HOME/agent-integrations/$host/marketplace/openviking-memory"
+  local ai="$root/agent-integrations/$host"
+  if [ -f "$root/.$host-plugin/plugin.json" ] \
+    && [ -f "$root/hooks/hooks.json" ] \
+    && [ -f "$root/.mcp.json" ] \
+    && [ -f "$ai/scripts/hook.mjs" ] \
+    && [ -f "$ai/scripts/uri-guard.mjs" ] \
+    && [ -f "$ai/servers/mcp-proxy.mjs" ] \
+    && [ -f "$root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
+    "$NODE_BIN" --check "$ai/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
+    if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 \
+      "$NODE_BIN" "$ai/scripts/hook.mjs" session-start "$host" >/dev/null; then
+      warn "$host: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+      ok=0; agent_fatal=1
+    fi
+    for cli in $clis; do
+      if command -v "$cli" >/dev/null 2>&1 \
+        && ! "$cli" "$sub" list 2>/dev/null | grep -qF "$listed"; then
+        warn "$host: $(t "plugin is assembled but not installed through $cli" "插件已组装但未通过 $cli 安装")"
+        ok=0; agent_fatal=1
+      fi
+    done
+    info "$host: $(t 'plugin assembled (Hooks + MCP + skills)' '插件已组装（Hooks + MCP + skills）')"
+  else
+    warn "$host: $(t 'plugin assembly is incomplete' '插件组装不完整')"
+    ok=0; agent_fatal=1
+  fi
+}
+
+# CodeBuddy Code and Qoder CLI install the plugin from a local marketplace
+# through their own plugin CLI (`codebuddy plugin …`, `qodercli plugins …`).
+install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>..." <subcommand>
+  local host="$1" label="$2" clis="$3" sub="$4" cli
+  local bundle root config marketplace version host_module note=""
+  step_heading "$label $(t 'integration' '集成')"
   ensure_bundle
-  bundle="$OV_HOME/agent-integrations/codebuddy-bundle.$$"
+  bundle="$OV_HOME/agent-integrations/$host-bundle.$$"
   rm -rf "$bundle"
   mkdir -p "$bundle"
-  root="$(assemble_agent_integration codebuddy codebuddy "$bundle")" || { rm -rf "$bundle"; return 1; }
+  root="$(assemble_agent_integration "$host" "$host" "$bundle")" || { rm -rf "$bundle"; return 1; }
   rm -rf "$root/tests"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
   # Keep this host's config directory aside before the adapters are pruned.
-  config="$bundle/codebuddy-config"
-  cp -R "$root/hosts/codebuddy" "$config" || { rm -rf "$bundle"; return 1; }
+  config="$bundle/$host-config"
+  cp -R "$root/hosts/$host" "$config" || { rm -rf "$bundle"; return 1; }
   cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
   for host_module in "$root"/hosts/*.mjs; do
     case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|codebuddy.mjs|codebuddy-turns.mjs) ;;
+      index.mjs|incremental-turn-capture.mjs|"$host.mjs"|"$host-turns.mjs") ;;
       *) rm -f "$host_module" ;;
     esac
   done
-  rm -rf "$root/hosts/codebuddy"
-  # The plugin directory CodeBuddy copies into its cache has to carry the whole
-  # agent-hook layout: the adapters import `../../memory-plugin-shared/lib`,
+  rm -rf "$root/hosts/$host"
+  # The host copies the plugin directory into its cache, so it has to carry
+  # the whole agent-hook layout: the adapters import `../../memory-plugin-shared/lib`,
   # which only resolves when the shared runtime sits beside them under
   # agent-integrations/ (the shape the Kimi Code bundle uses).
   mkdir -p "$bundle/openviking-memory"
   mv "$bundle/agent-integrations" "$bundle/openviking-memory/agent-integrations" || { rm -rf "$bundle"; return 1; }
   root="$bundle/openviking-memory"
-  # Flatten the config directory into the layout CodeBuddy reads: the manifest
-  # under .codebuddy-plugin/, hooks under hooks/, MCP at the root.
-  mkdir -p "$root/.codebuddy-plugin" "$root/hooks"
-  cp "$config/plugin.json" "$root/.codebuddy-plugin/plugin.json" || { rm -rf "$bundle"; return 1; }
+  # Flatten the config directory into the layout the host reads: the manifest
+  # under .<host>-plugin/, hooks under hooks/, MCP at the root.
+  mkdir -p "$root/.$host-plugin" "$root/hooks"
+  cp "$config/plugin.json" "$root/.$host-plugin/plugin.json" || { rm -rf "$bundle"; return 1; }
   cp "$config/hooks.json" "$root/hooks/hooks.json" || { rm -rf "$bundle"; return 1; }
   cp "$config/.mcp.json" "$root/.mcp.json" || { rm -rf "$bundle"; return 1; }
   cp -R "$config/skills" "$root/skills" || { rm -rf "$bundle"; return 1; }
   rm -rf "$config"
-  # A marketplace cannot reference a source outside itself, so the marketplace
-  # root is the plugin's parent directory (hosts/codebuddy/DESIGN.md §9).
-  # CodeBuddy resolves an installed plugin by the manifest version, so the
-  # marketplace entry pins the same one the plugin manifest reports.
+  # A marketplace entry cannot reference a source outside the marketplace, so
+  # its root is the plugin's parent directory. The entry pins the version the
+  # plugin manifest reports, which is what the host resolves the plugin by.
   marketplace="$bundle"
-  version="$("$NODE_BIN" -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version||""))' "$root/.codebuddy-plugin/plugin.json")"
-  "$NODE_BIN" - "$marketplace" "$version" <<'NODE' || { rm -rf "$bundle"; return 1; }
+  version="$("$NODE_BIN" -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version||""))' "$root/.$host-plugin/plugin.json")"
+  "$NODE_BIN" - "$marketplace" "$version" ".$host-plugin" "$label" <<'NODE' || { rm -rf "$bundle"; return 1; }
 const fs = require("node:fs");
 const path = require("node:path");
-const root = process.argv[2];
-const version = process.argv[3];
-fs.mkdirSync(path.join(root, ".codebuddy-plugin"), { recursive: true });
-fs.writeFileSync(path.join(root, ".codebuddy-plugin", "marketplace.json"), JSON.stringify({
+const [root, version, manifestDir, label] = process.argv.slice(2);
+fs.mkdirSync(path.join(root, manifestDir), { recursive: true });
+fs.writeFileSync(path.join(root, manifestDir, "marketplace.json"), JSON.stringify({
   name: "openviking",
-  description: "OpenViking plugins for the CodeBuddy Code CLI (managed by the OpenViking installer).",
+  description: `OpenViking plugins for ${label} (managed by the OpenViking installer).`,
   owner: { name: "OpenViking" },
   plugins: [{
     name: "openviking-memory",
-    description: "Long-term semantic memory for CodeBuddy Code, powered by OpenViking.",
+    description: `Long-term semantic memory for ${label}, powered by OpenViking.`,
     version,
     source: "./openviking-memory",
     category: "productivity",
@@ -3012,21 +3265,33 @@ fs.writeFileSync(path.join(root, ".codebuddy-plugin", "marketplace.json"), JSON.
 NODE
   # Swap the assembled marketplace into place, then register and install
   # through the host CLI when it is on PATH.
-  rm -rf "$OV_HOME/agent-integrations/codebuddy"
-  mkdir -p "$OV_HOME/agent-integrations/codebuddy"
-  mv "$bundle" "$OV_HOME/agent-integrations/codebuddy/marketplace" || { rm -rf "$bundle"; return 1; }
-  marketplace="$OV_HOME/agent-integrations/codebuddy/marketplace"
-  if command -v codebuddy >/dev/null 2>&1; then
-    codebuddy plugin marketplace add "$marketplace" >/dev/null 2>&1 \
-      || warn "$(t 'Could not register the local marketplace with codebuddy.' '未能向 codebuddy 注册本地 marketplace。')"
-    if codebuddy plugin install openviking-memory@openviking -s user >/dev/null 2>&1; then
-      info "$(t 'CodeBuddy Code plugin installed:' 'CodeBuddy Code 插件已安装：') openviking-memory"
+  rm -rf "$OV_HOME/agent-integrations/$host"
+  mkdir -p "$OV_HOME/agent-integrations/$host"
+  mv "$bundle" "$OV_HOME/agent-integrations/$host/marketplace" || { rm -rf "$bundle"; return 1; }
+  marketplace="$OV_HOME/agent-integrations/$host/marketplace"
+  for cli in $clis; do
+    note=""
+    if command -v "$cli" >/dev/null 2>&1; then
+      if [ "$host" = qoder ]; then
+        # Qoder's `marketplace add` copies the directory, so a re-install drops
+        # the old copy first, which also uninstalls the plugin served from it.
+        # That replaces an `openviking` marketplace added from GitHub too, whose
+        # Claude Code plugin would otherwise run beside this one.
+        "$cli" "$sub" marketplace remove openviking >/dev/null 2>&1 || true
+        rm -rf "$(qoder_home "$cli")/plugins/cache/openviking"
+        note="$(t ' Any previous install was removed.' '之前的安装已被移除。')"
+      fi
+      "$cli" "$sub" marketplace add "$marketplace" >/dev/null 2>&1 \
+        || warn "$(t "Could not register the local marketplace with $cli." "未能向 $cli 注册本地 marketplace。")"
+      if "$cli" "$sub" install openviking-memory@openviking -s user >/dev/null 2>&1; then
+        info "$(t "$label plugin installed through $cli:" "$label 插件已通过 $cli 安装：") openviking-memory"
+      else
+        warn "$(t "Could not install the $label plugin through $cli.$note Install it with:" "未能通过 $cli 安装 $label 插件。$note用这些命令安装：") $cli $sub marketplace add $marketplace; $cli $sub install openviking-memory@openviking"
+      fi
     else
-      warn "$(t 'Marketplace registered; install the plugin with:' 'marketplace 已注册；用这条命令安装插件：') codebuddy plugin install openviking-memory@openviking"
+      warn "$(t "$cli not found in PATH. Register the marketplace and install the plugin with:" "PATH 中未找到 $cli。用这些命令注册 marketplace 并安装插件：") $cli $sub marketplace add $marketplace; $cli $sub install openviking-memory@openviking"
     fi
-  else
-    warn "$(t 'codebuddy CLI not found in PATH. Register the marketplace with' 'PATH 中未找到 codebuddy CLI。用这条命令注册 marketplace：') codebuddy plugin marketplace add $marketplace"
-  fi
+  done
 }
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
   local client_id="$1" root hooks_path mcp_path
@@ -3036,8 +3301,10 @@ install_trae_variant() { # install_trae_variant <trae|trae-cn>
   hooks_path="$HOME/.$client_id/hooks.json"
   mcp_path="$(trae_mcp_path "$client_id")"
   agent_write_json_configs trae "$hooks_path" "$mcp_path" "$root" "$client_id" "$NODE_BIN"
+  install_host_skills "$client_id" "$root/hosts/trae/skills" "$HOME/.$client_id/skills" || return 1
   info "$client_id hooks: $hooks_path"
   info "$client_id MCP: $mcp_path"
+  info "$client_id skills: $HOME/.$client_id/skills"
 }
 
 # ---------------------------------------------------------------------------
@@ -3168,21 +3435,23 @@ install_pi() {
 # ---------------------------------------------------------------------------
 
 # Cursor, TRAE, TRAE CN and ZCode run the same hook runtime; they differ only
-# in where their hooks and MCP entries live and in the session-start event name.
+# in where their hooks, MCP entries and skills live and in the session-start
+# event name.
 validate_hook_host() { # validate_hook_host <client>
   local client="$1" root="$OV_HOME/agent-integrations/$1" shared="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
-  local hooks mcp event file complete=1
+  local hooks mcp event file skill complete=1
   set -- "$root/scripts/hook.mjs" "$root/scripts/uri-guard.mjs" "$root/integration.json" "$shared/agent-hook-runtime.mjs"
   case "$client" in
     cursor)
       hooks="$HOME/.cursor/hooks.json"; mcp="$(cursor_mcp_path)"; event=sessionStart
-      set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc" \
-        "$HOME/.cursor/skills/openviking-memory/SKILL.md" "$HOME/.cursor/skills/openviking-skills/SKILL.md" \
-        "$HOME/.cursor/skills/ov-experience-memory/SKILL.md" "$HOME/.cursor/skills/openviking-rule-search/SKILL.md"
+      set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc"
       ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
     *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
   esac
+  for skill in $HOST_SKILLS; do
+    set -- "$@" "$HOME/.$client/skills/$skill/SKILL.md"
+  done
   for file in "$@"; do
     [ -f "$file" ] || complete=0
   done
@@ -3199,7 +3468,7 @@ validate_hook_host() { # validate_hook_host <client>
     warn "$client: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
     return 1
   fi
-  info "$client: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+  info "$client: $(t 'hooks, MCP and skills are configured' 'hooks、MCP 与 skill 已配置')"
 }
 
 validate_install() {
@@ -3259,6 +3528,7 @@ EOF
       && [ -f "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" ] \
       && [ -f "$kimi_root/agent-integrations/kimicode/scripts/uri-guard.mjs" ] \
       && [ -f "$kimi_root/agent-integrations/kimicode/servers/mcp-proxy.mjs" ] \
+      && [ -f "$kimi_root/skills/openviking-memory/SKILL.md" ] \
       && [ -f "$kimi_root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
       "$NODE_BIN" --check "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" \
         || { ok=0; agent_fatal=1; }
@@ -3267,39 +3537,56 @@ EOF
         warn "kimicode: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
       fi
-      info "kimicode: $(t 'native plugin installed (Hooks + MCP)' '原生插件已安装（Hooks + MCP）')"
+      info "kimicode: $(t 'native plugin installed (Hooks + MCP + skills)' '原生插件已安装（Hooks + MCP + skills）')"
+      # An upgrade keeps the plugin switched off if the user switched it off.
+      if "$NODE_BIN" -e '
+const plugins = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).plugins || [];
+process.exit(plugins.some((plugin) => plugin?.id === "openviking-memory" && plugin.enabled === false) ? 0 : 1);
+' "$kimi_home/plugins/installed.json" 2>/dev/null; then
+        warn "kimicode: $(t 'the plugin is switched off in Kimi Code and stays off; switch it on there to use it' '插件在 Kimi Code 中处于关闭状态，升级后仍保持关闭；需要在 Kimi Code 中打开才会生效')"
+      fi
     else
       warn "kimicode: $(t 'native plugin installation is incomplete' '原生插件安装不完整')"
       ok=0; agent_fatal=1
     fi
   fi
-  if contains_harness codebuddy; then
-    local cb_root="$OV_HOME/agent-integrations/codebuddy/marketplace/openviking-memory"
-    local cb_ai="$cb_root/agent-integrations/codebuddy"
-    if [ -f "$cb_root/.codebuddy-plugin/plugin.json" ] \
-      && [ -f "$cb_root/hooks/hooks.json" ] \
-      && [ -f "$cb_root/.mcp.json" ] \
-      && [ -f "$cb_ai/scripts/hook.mjs" ] \
-      && [ -f "$cb_ai/scripts/uri-guard.mjs" ] \
-      && [ -f "$cb_ai/servers/mcp-proxy.mjs" ] \
-      && [ -f "$cb_root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
-      "$NODE_BIN" --check "$cb_ai/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
-      if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 \
-        "$NODE_BIN" "$cb_ai/scripts/hook.mjs" session-start codebuddy >/dev/null; then
-        warn "codebuddy: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+  if contains_harness antigravity; then
+    local ag_root="$OV_HOME/agent-integrations/antigravity" ag_hooks ag_command
+    ag_hooks="$(antigravity_plugin_dir)/hooks.json"
+    # The rendered command shell-quotes its paths, so it is checked by running
+    # it the way Antigravity does, not by searching for the raw path.
+    ag_command="$("$NODE_BIN" -e '
+const hook = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["openviking-memory"];
+const command = hook?.SessionStart?.[0]?.command;
+if (typeof command !== "string" || !command.includes("OPENVIKING_INTEGRATION_ID=")) process.exit(1);
+process.stdout.write(command);
+' "$ag_hooks" 2>/dev/null)" || ag_command=""
+    if [ -f "$(antigravity_plugin_dir)/plugin.json" ] \
+      && [ -f "$(antigravity_plugin_dir)/skills/openviking-memory/SKILL.md" ] \
+      && [ -f "$ag_root/scripts/hook.mjs" ] \
+      && [ -f "$ag_root/scripts/uri-guard.mjs" ] \
+      && [ -f "$ag_root/servers/mcp-proxy.mjs" ] \
+      && [ -f "$ag_root/integration.json" ] \
+      && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ] \
+      && [ -n "$ag_command" ]; then
+      "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" \
+        && "$NODE_BIN" --check "$ag_root/scripts/uri-guard.mjs" \
+        && "$NODE_BIN" --check "$ag_root/servers/mcp-proxy.mjs" || { ok=0; agent_fatal=1; }
+      if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 sh -c "$ag_command" >/dev/null; then
+        warn "antigravity: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
+      elif [ -f "$(antigravity_plugin_dir)/mcp_config.json" ]; then
+        info "antigravity: $(t 'plugin installed (Hooks + MCP + skills)' '插件已安装（Hooks + MCP + skills）')"
+      else
+        info "antigravity: $(t 'plugin installed (Hooks + skills; MCP from your own config)' '插件已安装（Hooks + skills；MCP 沿用你自己的配置）')"
       fi
-      if command -v codebuddy >/dev/null 2>&1 \
-        && ! codebuddy plugin list 2>/dev/null | grep -q 'openviking-memory'; then
-        warn "codebuddy: $(t 'plugin is assembled but not installed through the host CLI' '插件已组装但未通过宿主 CLI 安装')"
-        ok=0; agent_fatal=1
-      fi
-      info "codebuddy: $(t 'plugin assembled (Hooks + MCP + skills)' '插件已组装（Hooks + MCP + skills）')"
     else
-      warn "codebuddy: $(t 'plugin assembly is incomplete' '插件组装不完整')"
+      warn "antigravity: $(t 'plugin installation is incomplete' '插件安装不完整')"
       ok=0; agent_fatal=1
     fi
   fi
+  if contains_harness codebuddy; then validate_marketplace_host codebuddy codebuddy plugin openviking-memory; fi
+  if contains_harness qoder; then validate_marketplace_host qoder "$(qoder_clis)" plugins openviking-memory@openviking; fi
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
@@ -3473,7 +3760,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode codebuddy opencode pi dsh dsh-desktop cli; do
+  for h in cursor trae trae-cn zcode kimicode codebuddy qoder antigravity opencode pi dsh dsh-desktop cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3501,6 +3788,13 @@ plan_paths() { # plan_paths <label> <path...>
   shift
   for path in "$@"; do out="${out:+$out, }$(short_path "$path")"; done
   plan_item "$label: $out"
+}
+
+plan_host_paths() { # plan_host_paths <label> <skills-dir> <path...>: the paths, then each skill it installs
+  local label="$1" skills="$2" skill
+  shift 2
+  for skill in $HOST_SKILLS; do set -- "$@" "$skills/$skill"; done
+  plan_paths "$label" "$@"
 }
 
 claude_plan_legacy() {
@@ -3583,24 +3877,29 @@ $CODEX_BINS
 EOF
   fi
   if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness trae || contains_harness trae-cn \
-    || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness opencode || contains_harness pi; }; then
+    || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness qoder || contains_harness antigravity || contains_harness opencode || contains_harness pi; }; then
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
   if contains_harness cursor; then
-    plan_paths Cursor "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" "$HOME/.cursor/rules/openviking-memory.mdc" \
-      "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" \
-      "$HOME/.cursor/skills/ov-experience-memory" "$HOME/.cursor/skills/openviking-rule-search" "$OV_HOME/agent-integrations/cursor"
+    plan_host_paths Cursor "$HOME/.cursor/skills" "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" \
+      "$HOME/.cursor/rules/openviking-memory.mdc" "$OV_HOME/agent-integrations/cursor"
   fi
   if contains_harness trae; then
-    plan_paths TRAE "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" "$OV_HOME/agent-integrations/trae"
+    plan_host_paths TRAE "$HOME/.trae/skills" "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" \
+      "$OV_HOME/agent-integrations/trae"
   fi
   if contains_harness trae-cn; then
-    plan_paths "TRAE CN" "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)" "$OV_HOME/agent-integrations/trae-cn"
+    plan_host_paths "TRAE CN" "$HOME/.trae-cn/skills" "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)" \
+      "$OV_HOME/agent-integrations/trae-cn"
   fi
   if contains_harness zcode; then
-    plan_paths ZCode "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
+    plan_host_paths ZCode "$HOME/.zcode/skills" "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" \
+      "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
   fi
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then
+  if contains_harness antigravity; then
+    plan_paths Antigravity "$(antigravity_plugin_dir)" "$OV_HOME/agent-integrations/antigravity"
+  fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode || contains_harness antigravity; then
     plan_paths "$(t 'Shared hook runtime' '共享 hook 运行时')" "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness kimicode; then
@@ -3608,6 +3907,12 @@ EOF
   fi
   if contains_harness codebuddy; then
     plan_paths "CodeBuddy Code" "$HOME/.codebuddy/plugins" "$OV_HOME/agent-integrations/codebuddy"
+  fi
+  if contains_harness qoder; then
+    local cli
+    for cli in $(qoder_clis); do
+      plan_paths "Qoder CLI ($cli)" "$(qoder_home "$cli")/plugins" "$OV_HOME/agent-integrations/qoder"
+    done
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
     plan_paths OpenCode "$HOME/.config/opencode/plugins/openviking" "$HOME/.config/opencode/plugins/openviking.js" "$(opencode_config_file)"
@@ -3741,20 +4046,33 @@ EOF
     next_steps "$label" "$(t "restart $label" "重启 $label")" "$rerun" "$doctor" "$uninstall $client"
   done
   if contains_harness kimicode; then
-    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "" "$uninstall kimicode"
+    doctor="node $(short_path "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs")"
+    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "$doctor" "$uninstall kimicode"
+  fi
+  if contains_harness antigravity; then
+    doctor="node $(short_path "$OV_HOME/agent-integrations/antigravity/scripts/ov-memory-doctor.mjs")"
+    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "$doctor" "$uninstall antigravity"
   fi
   if contains_harness codebuddy; then
-    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/codebuddy/marketplace/openviking-memory/agent-integrations/codebuddy/scripts/ov-memory-doctor.mjs")"
+    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "$doctor" "$uninstall codebuddy"
+  fi
+  if contains_harness qoder; then
+    doctor="node $(short_path "$OV_HOME/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs")"
+    next_steps "Qoder CLI" "$(t "start a new $(qoder_clis | sed 's/ / or /') session" "新建一个 $(qoder_clis | sed 's/ / 或 /') 会话")" "$rerun" "$doctor" "$uninstall qoder"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
-    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
+    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" \
+      "node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs" \
       "$(t "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js, then remove mcp.openviking from $(short_path "$(opencode_config_file)")" "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js，再删除 $(short_path "$(opencode_config_file)") 中的 mcp.openviking")"
   fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
-    next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
+    next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" \
+      "node ~/.pi/agent/extensions/openviking/scripts/ov-memory-doctor.mjs" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
   if contains_harness dsh && have_npm_dsh; then
-    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" "" \
+    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" \
+      "node $(short_path "$(dsh_home)/profiles/${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}/node_modules/$DSH_PACKAGE/scripts/ov-memory-doctor.mjs")" \
       "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} rm $DSH_PACKAGE"
   fi
   if contains_harness dsh-desktop && [ "$DSH_DESKTOP_INSTALLED" -eq 1 ]; then
@@ -3783,6 +4101,9 @@ $NOT_DONE
 EOF
   fi
   info "$(t 'Onboarding guide (for your agent):' '接入引导（给 Agent 看）：') $(onboarding_url)"
+  # One install command serves every edition; the prompt the user pasted names
+  # the guide for theirs (the team edition has its own), so it wins over ours.
+  info "$(t 'Using another edition of the guide (such as the team edition)? Follow the link in your prompt instead.' '用的是另一版接入引导（例如团队版）？以提示词里给的链接为准。')"
 }
 
 # ---------------------------------------------------------------------------
@@ -3860,7 +4181,9 @@ if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi
 if contains_harness kimicode; then install_kimicode; fi
-if contains_harness codebuddy; then install_codebuddy; fi
+if contains_harness codebuddy; then install_marketplace_host codebuddy "CodeBuddy Code" codebuddy plugin; fi
+if contains_harness qoder; then install_marketplace_host qoder "Qoder CLI" "$(qoder_clis)" plugins; fi
+if contains_harness antigravity; then install_antigravity; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi

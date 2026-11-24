@@ -35,6 +35,29 @@ class ExtractionOutputContext:
     role_scope: Any | None = None
     available_tools: tuple[str, ...] = ()
     template_context: dict[str, Any] = field(default_factory=dict)
+    consolidation: bool = False
+
+    def validate_creates(self, payload: dict[str, Any]) -> None:
+        """Reject a candidate before tolerant parsing can drop its replacement."""
+        if not self.consolidation:
+            return
+        for schema in self.schemas:
+            if not schema.requires_messages():
+                continue
+            items = payload.get(schema.memory_type) or []
+            if not isinstance(items, list):
+                items = [items]
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError(f"Invalid {schema.memory_type} operation")
+                try:
+                    page_id = int(item.get("page_id"))
+                except (TypeError, ValueError):
+                    page_id = None
+                if schema.operation_mode == "add_only" or not self.page_id_map.resolve(page_id):
+                    raise ValueError(
+                        f"Cannot create {schema.memory_type} without original messages"
+                    )
 
     @property
     def inspection_tools(self) -> tuple[str, ...]:
@@ -44,8 +67,12 @@ class ExtractionOutputContext:
     @property
     def add_only(self) -> bool:
         """Whether every selected schema only creates new memory records."""
-        return bool(self.schemas) and all(
-            getattr(schema, "operation_mode", "upsert") == "add_only" for schema in self.schemas
+        return (
+            not self.consolidation
+            and bool(self.schemas)
+            and all(
+                getattr(schema, "operation_mode", "upsert") == "add_only" for schema in self.schemas
+            )
         )
 
     @property

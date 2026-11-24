@@ -88,7 +88,7 @@ React imports these SVG files directly during its build. This file records where
   14px code and message action icons, from ConnectAgent's `connectAgentUi`.
   They follow this repository's license.
 
-`svg/viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
+`svg/viking-bot/remove.svg` and `svg/viking-bot/session-commit.svg` are OpenViking-authored glyphs under the repository license.
 
 - `svg/viking-bot/context-folder.svg` and `context-close.svg` — reference-tag
   artwork supplied from the OpenViking console source (`vikingbot/assets/`). They
@@ -112,3 +112,7 @@ React imports these SVG files directly during its build. This file records where
   16px artwork supplied in the OpenViking Console design (Figma component set
   `8632:463133`). SVG geometry and viewBoxes are unchanged; HITL styles map paint
   to the active theme. They follow this repository's license.
+
+`file-preview/history-info.svg` comes from Arco Design IconInfoCircleFill (MIT); see [Arco Design license](../react/LICENSE.arco-design).
+
+- `svg/empty/documents.svg`: document empty-state illustration supplied by the project owner on 2026-11-23 for Wiki conflicts. Original 258 × 140 geometry is retained; paints follow host theme tokens.

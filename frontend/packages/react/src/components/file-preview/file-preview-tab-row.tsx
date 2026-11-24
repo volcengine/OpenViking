@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { FilePreviewTab } from './types.js';
 
@@ -11,6 +11,7 @@ export interface FilePreviewTabRowProps {
   tabs: readonly FilePreviewTab[];
   activeKey: string;
   disabled: boolean;
+  editing: boolean;
   /** 按 key 生成页签的 DOM id，带实例前缀避免多实例重复。 */
   tabId: (key: string) => string;
   /** 按 key 生成面板的 DOM id，与 `tabId` 同源。 */
@@ -63,13 +64,23 @@ function buildOutline(
  * The tab row: folder-style tabs where the selected one joins the content area.
  */
 export function FilePreviewTabRow({
-  tabs,
+  tabs: allTabs,
   activeKey,
   disabled,
+  editing,
   tabId,
   panelId,
   onSelect,
 }: FilePreviewTabRowProps) {
+  const tabs = useMemo(
+    () =>
+      editing
+        ? allTabs.filter(
+            (tab) => tab.kind !== 'content' || !tab.hideWhileEditing,
+          )
+        : allTabs,
+    [allTabs, editing],
+  );
   const trackRef = useRef<HTMLDivElement>(null);
   const [outline, setOutline] = useState('');
 
@@ -183,6 +194,15 @@ export function FilePreviewTabRow({
                 {tab.title ??
                   (tab.kind === 'file' ? tab.source.fileName : tab.key)}
               </span>
+              {tab.badge && tab.badge.count > 0 ? (
+                <span
+                  className="ov-file-preview__tab-badge"
+                  title={tab.badge.label}
+                  aria-label={tab.badge.label}
+                >
+                  {tab.badge.count > 99 ? '99+' : tab.badge.count}
+                </span>
+              ) : null}
             </button>
           );
         })}

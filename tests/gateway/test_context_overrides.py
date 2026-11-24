@@ -5,7 +5,6 @@ import json
 import orjson
 import pytest
 from aiohttp import web
-from conftest import make_due
 
 CHAT = "/v1/chat/completions"
 
@@ -129,9 +128,6 @@ async def capture_sessions(app, client, key, session, context, status=200):
     ]
     response = await client.post(CHAT, headers=headers(key, session, context), json=body)
     assert response.status_code == 200, response.text
-    await make_due(app.state.store)
-    for _ in range(3):
-        await app.state.worker.once()
     return created
 
 
@@ -149,16 +145,16 @@ async def test_capture_memory_types_reach_the_openviking_session(running_gateway
     assert writes
 
 
-async def test_rejected_capture_memory_types_stop_delivery(running_gateway):
+async def test_rejected_capture_memory_types_fail_the_save(running_gateway):
     app, client, admin, key, _, writes = running_gateway
     created = await capture_sessions(
         app, client, key, "unknown-type", {"capture_memory_types": ["bogus"]}, status=400
     )
-    assert created and not writes
+    assert len(created) == 2 and not writes
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    capture = [log for log in logs if log["kind"] == "capture"]
-    assert capture[0]["capture_status"] == "retrying"
-    assert capture[0]["capture_reason"] == "openviking_http_400"
+    assert [(log["capture_status"], log["capture_reason"]) for log in logs[:2]] == [
+        ("failed", "openviking_http_400")
+    ] * 2
 
 
 async def test_override_needs_the_profile_switch(running_gateway):

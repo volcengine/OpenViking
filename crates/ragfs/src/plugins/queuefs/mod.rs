@@ -14,6 +14,10 @@
 //! - `/queue_name/retry` - Return a processing message to pending without changing its identity
 
 mod backend;
+#[cfg(feature = "postgres")]
+mod postgres_backend;
+#[cfg(feature = "postgres")]
+pub use postgres_backend::PostgresQueueStorage;
 #[cfg(feature = "cache")]
 mod cache_backend;
 #[cfg(feature = "cache")]
@@ -27,10 +31,13 @@ use crate::core::{
     types::{ConfigParameter, FileInfo, PluginConfig, WriteFlag},
 };
 use async_trait::async_trait;
-use backend::{MemoryBackend, Message, QueueBackend, SQLiteQueueBackend, SQLiteQueueOptions};
+use backend::{MemoryBackend, QueueBackend, SQLiteQueueBackend, SQLiteQueueOptions};
+pub use backend::{Message, QueueState};
 #[cfg(feature = "cache")]
 use cache_backend::CacheQueueStorage;
 use serde::Serialize;
+#[cfg(feature = "cache")]
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
@@ -107,6 +114,8 @@ fn queue_message_timestamp(msg: &Message) -> Option<f64> {
 enum BackendKind {
     Memory,
     Sqlite,
+    #[cfg(feature = "postgres")]
+    Postgres,
     #[cfg(feature = "cache")]
     Cache,
 }
@@ -116,8 +125,14 @@ struct ParsedBackendConfig {
     kind: BackendKind,
     sqlite_db_path: Option<String>,
     sqlite_options: SQLiteQueueOptions,
-    #[cfg(feature = "cache")]
+    #[cfg(any(feature = "cache", feature = "postgres"))]
     service_name: Option<String>,
+    #[cfg(feature = "cache")]
+    instance: Option<String>,
+    #[cfg(feature = "postgres")]
+    postgres_dsn_env: Option<String>,
+    #[cfg(feature = "postgres")]
+    postgres_lease_seconds: u64,
 }
 
 /// Parsed path information
@@ -129,6 +144,8 @@ struct ParsedPath {
 
 enum QueueStorage {
     Local(Arc<Mutex<Box<dyn QueueBackend>>>),
+    #[cfg(feature = "postgres")]
+    Postgres(Arc<PostgresQueueStorage>),
     #[cfg(feature = "cache")]
     Cache(Arc<CacheQueueStorage>),
 }
@@ -137,6 +154,8 @@ impl QueueStorage {
     async fn shutdown(&self) -> Result<()> {
         match self {
             Self::Local(_) => Ok(()),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.shutdown().await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.shutdown().await,
         }
@@ -145,6 +164,8 @@ impl QueueStorage {
     async fn create_queue(&self, name: &str) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.create_queue(name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.create_queue(name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.create_queue(name).await,
         }
@@ -153,6 +174,8 @@ impl QueueStorage {
     async fn remove_queue(&self, name: &str) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.remove_queue(name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.remove_queue(name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.remove_queue(name).await,
         }
@@ -161,6 +184,8 @@ impl QueueStorage {
     async fn queue_exists(&self, name: &str) -> Result<bool> {
         match self {
             Self::Local(backend) => Ok(backend.lock().await.queue_exists(name)),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.queue_exists(name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.queue_exists(name).await,
         }
@@ -169,6 +194,8 @@ impl QueueStorage {
     async fn list_queues(&self, prefix: &str) -> Result<Vec<String>> {
         match self {
             Self::Local(backend) => Ok(backend.lock().await.list_queues(prefix)),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.list_queues(prefix).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.list_queues(prefix).await,
         }
@@ -177,6 +204,8 @@ impl QueueStorage {
     async fn enqueue(&self, queue_name: &str, message: Message) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.enqueue(queue_name, message),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.enqueue(queue_name, message).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.enqueue(queue_name, message).await,
         }
@@ -185,6 +214,8 @@ impl QueueStorage {
     async fn dequeue(&self, queue_name: &str) -> Result<Option<Message>> {
         match self {
             Self::Local(backend) => backend.lock().await.dequeue(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.dequeue(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.dequeue(queue_name).await,
         }
@@ -193,6 +224,8 @@ impl QueueStorage {
     async fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
         match self {
             Self::Local(backend) => backend.lock().await.peek(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.peek(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.peek(queue_name).await,
         }
@@ -201,6 +234,8 @@ impl QueueStorage {
     async fn size(&self, queue_name: &str) -> Result<usize> {
         match self {
             Self::Local(backend) => backend.lock().await.size(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.size(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.size(queue_name).await,
         }
@@ -209,6 +244,8 @@ impl QueueStorage {
     async fn status(&self, queue_name: &str) -> Result<backend::QueueState> {
         match self {
             Self::Local(backend) => backend.lock().await.status(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.status(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.status(queue_name).await,
         }
@@ -217,6 +254,8 @@ impl QueueStorage {
     async fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         match self {
             Self::Local(backend) => backend.lock().await.list_unacked(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.list_unacked(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.list_unacked(queue_name).await,
         }
@@ -225,6 +264,8 @@ impl QueueStorage {
     async fn clear(&self, queue_name: &str) -> Result<()> {
         match self {
             Self::Local(backend) => backend.lock().await.clear(queue_name),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.clear(queue_name).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.clear(queue_name).await,
         }
@@ -233,6 +274,8 @@ impl QueueStorage {
     async fn ack(&self, queue_name: &str, message_id: &str) -> Result<bool> {
         match self {
             Self::Local(backend) => backend.lock().await.ack(queue_name, message_id),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.ack(queue_name, message_id).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.ack(queue_name, message_id).await,
         }
@@ -241,6 +284,8 @@ impl QueueStorage {
     async fn retry(&self, queue_name: &str, message_id: &str) -> Result<bool> {
         match self {
             Self::Local(backend) => backend.lock().await.retry(queue_name, message_id),
+            #[cfg(feature = "postgres")]
+            Self::Postgres(storage) => storage.retry(queue_name, message_id).await,
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.retry(queue_name, message_id).await,
         }
@@ -263,6 +308,16 @@ impl QueueFileSystem {
         Self {
             storage: QueueStorage::Local(Arc::new(Mutex::new(backend))),
         }
+    }
+
+    /// Open a shared durable queue namespace using an environment-held DSN.
+    #[cfg(feature = "postgres")]
+    pub async fn with_postgres(env: &str, namespace: &str, lease_seconds: u64) -> Result<Self> {
+        Ok(Self {
+            storage: QueueStorage::Postgres(Arc::new(
+                PostgresQueueStorage::from_env(env, namespace, lease_seconds).await?,
+            )),
+        })
     }
 
     #[cfg(feature = "cache")]
@@ -685,7 +740,7 @@ impl FileSystem for QueueFileSystem {
 pub struct QueueFSPlugin {
     config_params: Vec<ConfigParameter>,
     #[cfg(feature = "cache")]
-    cache_runtime: Option<Arc<crate::cache_runtime::CacheRuntime>>,
+    cache_runtimes: HashMap<String, Arc<crate::cache_runtime::CacheRuntime>>,
 }
 
 impl QueueFSPlugin {
@@ -697,7 +752,7 @@ impl QueueFSPlugin {
                     "backend",
                     "string",
                     "memory",
-                    "Queue backend (memory, sqlite, sqlite3, cache)",
+                    "Queue backend (memory, sqlite, sqlite3, cache, postgres)",
                 ),
                 ConfigParameter::optional(
                     "db_path",
@@ -717,21 +772,48 @@ impl QueueFSPlugin {
                     "5000",
                     "SQLite busy timeout in milliseconds",
                 ),
-                #[cfg(feature = "cache")]
-                ConfigParameter::required_string(
+                #[cfg(any(feature = "cache", feature = "postgres"))]
+                ConfigParameter::optional(
                     "service_name",
-                    "OpenViking service name when backend=cache",
+                    "string",
+                    "",
+                    "OpenViking service name when backend=cache or postgres",
+                ),
+                #[cfg(feature = "postgres")]
+                ConfigParameter::optional(
+                    "postgres_dsn_env", "string", "",
+                    "Environment variable holding the PostgreSQL DSN",
+                ),
+                #[cfg(feature = "postgres")]
+                ConfigParameter::optional(
+                    "postgres_lease_seconds", "int", "60",
+                    "Consumer lease duration (10..=86400 seconds)",
+                ),
+                #[cfg(feature = "cache")]
+                ConfigParameter::optional(
+                    "instance",
+                    "string",
+                    "default",
+                    "Named cache runtime selected when backend=cache",
                 ),
             ],
             #[cfg(feature = "cache")]
-            cache_runtime: None,
+            cache_runtimes: HashMap::new(),
         }
     }
 
     #[cfg(feature = "cache")]
     pub(crate) fn with_cache_runtime(runtime: Arc<crate::cache_runtime::CacheRuntime>) -> Self {
+        Self::with_cache_runtimes(HashMap::from([("default".to_string(), runtime)]))
+    }
+
+    /// Create a QueueFS plugin that selects from named cache runtimes.
+    #[cfg(feature = "cache")]
+    pub(crate) fn with_cache_runtimes(
+        cache_runtimes: HashMap<String, Arc<crate::cache_runtime::CacheRuntime>>,
+    ) -> Self {
         let mut plugin = Self::new();
-        plugin.cache_runtime = Some(runtime);
+        plugin.cache_runtimes = cache_runtimes;
         plugin
     }
 
@@ -745,10 +827,15 @@ impl QueueFSPlugin {
 
     fn parse_backend_config(config: &PluginConfig) -> Result<ParsedBackendConfig> {
         let backend_name = Self::get_string_param(config, "backend").unwrap_or("memory");
-        #[cfg(feature = "cache")]
-        let valid_backends = ["memory", "sqlite", "sqlite3", "cache"];
-        #[cfg(not(feature = "cache"))]
-        let valid_backends = ["memory", "sqlite", "sqlite3"];
+        let valid_backends = [
+            "memory",
+            "sqlite",
+            "sqlite3",
+            #[cfg(feature = "cache")]
+            "cache",
+            #[cfg(feature = "postgres")]
+            "postgres",
+        ];
         if !valid_backends.contains(&backend_name) {
             return Err(Error::config(format!(
                 "unsupported queue backend: {} (valid: {})",
@@ -760,6 +847,8 @@ impl QueueFSPlugin {
         let kind = match backend_name {
             "memory" => BackendKind::Memory,
             "sqlite" | "sqlite3" => BackendKind::Sqlite,
+            #[cfg(feature = "postgres")]
+            "postgres" => BackendKind::Postgres,
             #[cfg(feature = "cache")]
             "cache" => BackendKind::Cache,
             _ => {
@@ -789,6 +878,8 @@ impl QueueFSPlugin {
 
         let sqlite_db_path = match kind {
             BackendKind::Memory => None,
+            #[cfg(feature = "postgres")]
+            BackendKind::Postgres => None,
             #[cfg(feature = "cache")]
             BackendKind::Cache => None,
             BackendKind::Sqlite => {
@@ -802,8 +893,19 @@ impl QueueFSPlugin {
                 Some(db_path.to_string())
             }
         };
-        #[cfg(feature = "cache")]
+        #[cfg(any(feature = "cache", feature = "postgres"))]
         let service_name = match kind {
+            #[cfg(feature = "postgres")]
+            BackendKind::Postgres => {
+                let name = Self::get_string_param(config, "service_name").unwrap_or("");
+                if name.trim().is_empty() || name.len() > 256 || name.contains('\0') {
+                    return Err(Error::config(
+                        "queuefs postgres service_name requires 1..=256 UTF-8 bytes without NUL",
+                    ));
+                }
+                Some(name.to_owned())
+            }
+            #[cfg(feature = "cache")]
             BackendKind::Cache => {
                 let service_name = Self::get_string_param(config, "service_name")
                     .ok_or_else(|| {
@@ -822,6 +924,48 @@ impl QueueFSPlugin {
             }
             _ => None,
         };
+        #[cfg(feature = "cache")]
+        let instance = match kind {
+            BackendKind::Cache => {
+                let instance = Self::get_string_param(config, "instance")
+                    .unwrap_or("default")
+                    .to_string();
+                if instance.trim().is_empty() {
+                    return Err(Error::config(
+                        "queuefs instance must not be empty when backend=cache".to_string(),
+                    ));
+                }
+                Some(instance)
+            }
+            _ => None,
+        };
+        #[cfg(feature = "postgres")]
+        let (postgres_dsn_env, postgres_lease_seconds) = if matches!(kind, BackendKind::Postgres) {
+            let env = Self::get_string_param(config, "postgres_dsn_env").unwrap_or("");
+            if env.is_empty()
+                || !env.bytes().enumerate().all(|(i, b)| {
+                    b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
+                })
+            {
+                return Err(Error::config(
+                    "queuefs postgres_dsn_env must be an environment variable name",
+                ));
+            }
+            let seconds = match config.params.get("postgres_lease_seconds") {
+                Some(value) => value.as_int().ok_or_else(|| {
+                    Error::config("queuefs postgres_lease_seconds must be an integer")
+                })?,
+                None => 60,
+            };
+            if !(10..=86_400).contains(&seconds) {
+                return Err(Error::config(
+                    "queuefs postgres_lease_seconds must be 10..=86400",
+                ));
+            }
+            (Some(env.to_owned()), seconds as u64)
+        } else {
+            (None, 60)
+        };
 
         Ok(ParsedBackendConfig {
             kind,
@@ -830,8 +974,14 @@ impl QueueFSPlugin {
                 recover_stale_sec,
                 busy_timeout_ms,
             },
-            #[cfg(feature = "cache")]
+            #[cfg(any(feature = "cache", feature = "postgres"))]
             service_name,
+            #[cfg(feature = "cache")]
+            instance,
+            #[cfg(feature = "postgres")]
+            postgres_dsn_env,
+            #[cfg(feature = "postgres")]
+            postgres_lease_seconds,
         })
     }
 }
@@ -892,10 +1042,16 @@ impl ServicePlugin for QueueFSPlugin {
     async fn validate(&self, config: &PluginConfig) -> Result<()> {
         let parsed = Self::parse_backend_config(config)?;
         #[cfg(feature = "cache")]
-        if matches!(parsed.kind, BackendKind::Cache) && self.cache_runtime.is_none() {
-            return Err(Error::config(
-                "queuefs backend=cache requires a configured CacheRuntime provider".to_string(),
-            ));
+        if matches!(parsed.kind, BackendKind::Cache) {
+            let instance = parsed
+                .instance
+                .as_deref()
+                .expect("cache instance is parsed");
+            if !self.cache_runtimes.contains_key(instance) {
+                return Err(Error::config(format!(
+                    "QueueFS references unknown cache instance '{instance}'"
+                )));
+            }
         }
         #[cfg(not(feature = "cache"))]
         let _ = parsed;
@@ -914,12 +1070,34 @@ impl ServicePlugin for QueueFSPlugin {
                     .expect("sqlite db_path is validated"),
                 parsed.sqlite_options,
             )?),
+            #[cfg(feature = "postgres")]
+            BackendKind::Postgres => {
+                return Ok(Box::new(
+                    QueueFileSystem::with_postgres(
+                        parsed
+                            .postgres_dsn_env
+                            .as_deref()
+                            .expect("DSN env is validated"),
+                        parsed
+                            .service_name
+                            .as_deref()
+                            .expect("service name is validated"),
+                        parsed.postgres_lease_seconds,
+                    )
+                    .await?,
+                ));
+            }
             #[cfg(feature = "cache")]
             BackendKind::Cache => {
                 return Ok(Box::new(
                     QueueFileSystem::with_cache_runtime(
-                        self.cache_runtime
-                            .as_ref()
+                        self.cache_runtimes
+                            .get(
+                                parsed
+                                    .instance
+                                    .as_deref()
+                                    .expect("cache instance is parsed"),
+                            )
                             .expect("cache runtime is validated")
                             .clone(),
                         parsed
@@ -1753,7 +1931,9 @@ mod tests {
         let config_params = plugin.config_params();
         assert_eq!(
             config_params.len(),
-            4 + usize::from(cfg!(feature = "cache"))
+            4 + usize::from(cfg!(any(feature = "cache", feature = "postgres")))
+                + 2 * usize::from(cfg!(feature = "postgres"))
+                + usize::from(cfg!(feature = "cache"))
         );
         #[cfg(feature = "cache")]
         assert!(config_params
@@ -1773,6 +1953,47 @@ mod tests {
         enqueue(fs.as_ref(), "test", b"test").await;
         let msg = dequeue_msg(fs.as_ref(), "test").await;
         assert_eq!(msg.data, "test");
+    }
+
+    #[cfg(feature = "postgres")]
+    #[tokio::test]
+    async fn test_postgres_queuefs_config_validation() {
+        use crate::core::types::ConfigValue;
+        let plugin = QueueFSPlugin::new();
+        let mut config = PluginConfig::single_backend(
+            "queuefs",
+            "/queue",
+            std::collections::HashMap::from([
+                ("backend".into(), ConfigValue::String("postgres".into())),
+                (
+                    "service_name".into(),
+                    ConfigValue::String("pg-queue-test".into()),
+                ),
+                (
+                    "postgres_dsn_env".into(),
+                    ConfigValue::String("OV_QUEUE_PG_DSN".into()),
+                ),
+            ]),
+        );
+        // Validation does not connect or demand Redis; initialization reads the DSN.
+        plugin.validate(&config).await.unwrap();
+        config
+            .params
+            .insert("postgres_lease_seconds".into(), ConfigValue::Int(9));
+        assert!(plugin.validate(&config).await.is_err());
+        config.params.insert(
+            "postgres_lease_seconds".into(),
+            ConfigValue::String("60".into()),
+        );
+        assert!(plugin.validate(&config).await.is_err());
+        config.params.remove("postgres_lease_seconds");
+        config.params.insert(
+            "postgres_dsn_env".into(),
+            ConfigValue::String("password=secret".into()),
+        );
+        assert!(plugin.validate(&config).await.is_err());
+        config.params.remove("postgres_dsn_env");
+        assert!(plugin.validate(&config).await.is_err());
     }
 
     #[tokio::test]

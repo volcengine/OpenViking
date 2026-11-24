@@ -1,3 +1,4 @@
+import { notificationContent, toastContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -45,7 +46,7 @@ test('numbered options, custom answers and preselected repairs submit typed valu
     assert.match(view.container.querySelector('code').textContent, /viking:/);
     await submit(view);
     assert.equal(answers.length, 0);
-    assert.ok(view.container.querySelector('[role=alert]'));
+    assert.ok(toastContent());
     await click(view.container.querySelector('input[value=wiki]'));
     await submit(view);
     assert.deepEqual(answers.at(-1), { kind: 'choice', value: 'wiki' });
@@ -145,15 +146,12 @@ test('a pending Promise prevents duplicates and rejection preserves the draft fo
     assert.equal(attempts, 1);
     assert.ok(view.container.querySelector('input').disabled);
     await act(async () => reject(new Error('Retry this request')));
-    assert.match(
-      view.container.querySelector('[role=alert]').textContent,
-      /Retry this request/,
-    );
+    assert.match(notificationContent().textContent, /Retry this request/);
     assert.equal(view.container.querySelector('input').value, 'Draft');
     assert.equal(view.container.querySelector('input').disabled, false);
     await submit(view);
     assert.equal(attempts, 2);
-    assert.equal(view.container.querySelector('[role=alert]'), null);
+    assert.equal(Boolean(notificationContent()), false);
   } finally {
     await view.unmount();
   }

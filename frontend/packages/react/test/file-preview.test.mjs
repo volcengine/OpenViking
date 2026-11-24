@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { FilePreview } from '@openviking/react/components/file-preview';
 import {
   toFileSource,
@@ -14,7 +14,7 @@ const levels = [
   { key: 'L2', label: 'L2 Content', source: source('body') },
 ];
 const render = (props = {}) =>
-  renderToStaticMarkup(
+  renderMarkup(
     createElement(FilePreview, {
       tabs: [
         {
@@ -28,7 +28,7 @@ const render = (props = {}) =>
     }),
   );
 
-test('SSR selects the first enabled level and does not leak configuration into the DOM', () => {
+test('selects the first enabled level and does not leak configuration into the DOM', () => {
   const html = render();
   assert.match(html, /aria-pressed="true"[^>]*>L1 Overview/);
   assert.match(html, /disabled=""[^>]*>L0 Abstract/);

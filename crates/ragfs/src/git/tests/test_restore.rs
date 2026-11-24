@@ -1,23 +1,3 @@
-    #[tokio::test]
-    async fn test_mock_vfs_write_then_read_round_trip() {
-        let vfs = MockVfs::new("acct");
-        let path = "/local/acct/x.md";
-        vfs.files
-            .lock()
-            .unwrap()
-            .insert(path.to_string(), Vec::new());
-        FileSystem::write(vfs.as_ref(), path, b"hello", 0, WriteFlag::Create)
-            .await
-            .unwrap();
-        let got = FileSystem::read(vfs.as_ref(), path, 0, 0).await.unwrap();
-        assert_eq!(got, b"hello");
-        FileSystem::remove(vfs.as_ref(), path).await.unwrap();
-        let err = FileSystem::read(vfs.as_ref(), path, 0, 0)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, Error::NotFound(_)));
-    }
-
     // ── restore: dry_run ───────────────────────────────────────────────
     #[tokio::test]
     async fn test_restore_dry_run_reports_diff_and_writes_nothing() {
@@ -57,6 +37,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: true,
                 message: None,
                 author_name: "tester".into(),
@@ -134,6 +115,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: Some("rewind proj_a".into()),
                 author_name: "tester".into(),
@@ -261,6 +243,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: Some("rewind partial".into()),
                 author_name: "tester".into(),
@@ -337,6 +320,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "tester".into(),
@@ -410,6 +394,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "tester".into(),
@@ -477,6 +462,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "tester".into(),
@@ -535,6 +521,7 @@
                 branch: "main".into(),
                 project_dir: None,
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "tester".into(),
@@ -622,6 +609,7 @@
             branch: "main".into(),
             project_dir: Some("resources/proj_a".into()),
             source_commit: source_oid.to_hex().to_string(),
+            allow_missing_source: false,
             dry_run: false,
             message: Some("rewind".into()),
             author_name: "tester".into(),
@@ -701,6 +689,7 @@
             branch: "main".into(),
             project_dir: Some("resources/proj_a".into()),
             source_commit: source_oid.to_hex().to_string(),
+            allow_missing_source: false,
             dry_run: false,
             message: Some("rewind".into()),
             author_name: "tester".into(),
@@ -769,6 +758,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: Some("rewind".into()),
                 author_name: "tester".into(),
@@ -816,6 +806,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: only_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "tester".into(),
@@ -869,6 +860,7 @@
                 branch: "main".into(),
                 project_dir: None,
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: true,
                 message: None,
                 author_name: "tester".into(),
@@ -910,6 +902,7 @@
                 branch: "main".into(),
                 project_dir: None,
                 source_commit: head_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "tester".into(),
@@ -940,6 +933,7 @@
                 branch: "main".into(),
                 project_dir: Some("".into()), // empty
                 source_commit: "main".into(),
+                allow_missing_source: false,
                 dry_run: true,
                 message: None,
                 author_name: "x".into(),
@@ -961,6 +955,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: "does-not-exist".into(),
+                allow_missing_source: false,
                 dry_run: true,
                 message: None,
                 author_name: "x".into(),
@@ -985,6 +980,7 @@
                 branch: "ghost".into(), // doesn't exist
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: only.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: true,
                 message: None,
                 author_name: "x".into(),
@@ -1014,6 +1010,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: true,
                 message: None,
                 author_name: "x".into(),
@@ -1031,6 +1028,18 @@
             }
             other => panic!("expected SubtreeNotFoundInCommit, got {other:?}"),
         }
+        svc.restore(RestoreRequest {
+            account: "acct".into(),
+            branch: "main".into(),
+            project_dir: Some("resources/proj_a".into()),
+            source_commit: source_oid.to_hex().to_string(),
+            allow_missing_source: true,
+            dry_run: false,
+            message: None,
+            author_name: "x".into(),
+            author_email: "x@x".into(),
+        }).await.unwrap();
+        assert_eq!(vfs.files.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1070,6 +1079,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "x".into(),
@@ -1142,6 +1152,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "x".into(),
@@ -1198,6 +1209,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: source_oid.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "x".into(),
@@ -1313,6 +1325,7 @@
                 branch: "main".into(),
                 project_dir: Some("resources/proj_a".into()),
                 source_commit: src.to_hex().to_string(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: Some("rewind".into()),
                 author_name: "x".into(),
@@ -1524,6 +1537,7 @@ mod validate_tests {
                 branch: "main".into(),
                 project_dir: Some("resources/x".into()),
                 source_commit: "deadbeef".into(),
+                allow_missing_source: false,
                 dry_run: false,
                 message: None,
                 author_name: "n".into(),
@@ -1584,6 +1598,7 @@ mod validate_tests {
                     branch: "main".into(),
                     project_dir: Some(bad.to_string()),
                     source_commit: "deadbeef".into(),
+                    allow_missing_source: false,
                     dry_run: false,
                     message: None,
                     author_name: "n".into(),

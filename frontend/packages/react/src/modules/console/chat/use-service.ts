@@ -9,7 +9,7 @@ export function useBotService({
   requestOptions = {},
   scopeKey,
 }: VikingBotHookOptions) {
-  const inherited = useOvClient();
+  const inherited = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(() => createOvClient());
   const client = inherited ?? fallback;
@@ -41,5 +41,5 @@ export function useBotService({
     signal,
     scopeKey,
   ]);
-  return { service, signal };
+  return { service, signal, hasProvider: Boolean(inherited) };
 }

@@ -8,7 +8,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient, WebSocketDenialResponse
 
-from openviking.crypto.encryptor import MAGIC, FileEncryptor
+from openviking.crypto.encryptor import MAGIC
 from openviking.server import gateway_host
 from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from openviking_gateway.config import EmbeddedGatewayConfig
@@ -17,6 +17,7 @@ from openviking_gateway.config import EmbeddedGatewayConfig
 def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
+        service_name="openviking",
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
@@ -35,21 +36,16 @@ def embedded_storage_path(gateway, workspace, monkeypatch):
     return options["config"].storage_path
 
 
-def test_embedded_gateway_storage_follows_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    gateway = EmbeddedGatewayConfig(enabled=True)
-    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(
-        tmp_path / "ws" / "gateway"
-    )
-
-
 def test_embedded_gateway_keeps_legacy_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    gateway = EmbeddedGatewayConfig(enabled=True)
+    workspace = tmp_path / "ws"
+    assert embedded_storage_path(gateway, workspace, monkeypatch) == str(workspace / "gateway")
+
     legacy = tmp_path / "home" / ".openviking" / "gateway"
     legacy.mkdir(parents=True)
     (legacy / "kernel.sqlite3").touch()
-    gateway = EmbeddedGatewayConfig(enabled=True)
-    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(legacy)
+    assert embedded_storage_path(gateway, workspace, monkeypatch) == str(legacy)
     # Once the new location has a database, it wins.
     (tmp_path / "ws" / "gateway").mkdir(parents=True)
     (tmp_path / "ws" / "gateway" / "kernel.sqlite3").touch()
@@ -82,19 +78,6 @@ def test_embedded_gateway_targets_loopback_without_version_gate(host, expected, 
     assert options["encryptor"] is None
 
 
-async def test_embedded_gateway_uses_server_encryption(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
-    )
-    encryption = EncryptionConfig(enabled=True, local={"key_file": str(tmp_path / "master.key")})
-    options = gateway_host.create_embedded_gateway(
-        openviking_config(EmbeddedGatewayConfig(enabled=True), encryption),
-        SimpleNamespace(host="127.0.0.1", port=1987, public_base_url=None),
-        lambda: None,
-    )
-    assert isinstance(options["encryptor"], FileEncryptor)
-
-
 def test_embedded_gateway_falls_back_to_server_public_url(monkeypatch):
     monkeypatch.setattr(
         "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
@@ -113,6 +96,31 @@ def test_embedded_gateway_falls_back_to_server_public_url(monkeypatch):
     assert public_url(EmbeddedGatewayConfig(enabled=True)) == "https://edge.example.com"
     own = EmbeddedGatewayConfig(enabled=True, public_url="https://gw.example.com")
     assert public_url(own) == "https://gw.example.com"
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_embedded_file_sink_requires_one_worker(tmp_path, monkeypatch, workers):
+    monkeypatch.setattr(
+        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
+    )
+    gateway = EmbeddedGatewayConfig(
+        enabled=True,
+        storage_path=str(tmp_path / "gateway"),
+        request_log_sink="file",
+        request_log_path=str(tmp_path / "requests.jsonl"),
+    )
+    server = SimpleNamespace(host="127.0.0.1", port=1933, public_base_url=None, workers=workers)
+
+    def create():
+        return gateway_host.create_embedded_gateway(
+            openviking_config(gateway), server, lambda: None
+        )
+
+    if workers == 1:
+        assert create()["config"].request_log_sink == "file"
+    else:
+        with pytest.raises(ValueError, match="requires server workers: 1"):
+            create()
 
 
 @pytest.fixture

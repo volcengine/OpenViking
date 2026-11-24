@@ -225,7 +225,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - 原生 HTTPS Git 的 `args.auth_config` 在 `watch_interval <= 0` 时只用于本次请求；当 `watch_interval > 0` 时，OpenViking 会把与仓库 URL 绑定的 username/token 保存到 Watch 私有鉴权状态，并只在后续 Git 拉取时恢复使用。凭据不会进入普通持久队列，也不会出现在 Watch API/MCP/CLI 返回中。Git PAT 没有通用刷新流程，过期或撤销后需要重建 Watch 来更换 token。为兼容已有用法，系统仍接受 `https://user:token@host/repo.git` 形式的 URL 内嵌凭据并原样传递；由于该 URL 同时也是资源来源标识，它可能被记录到进程参数、日志、队列、资源元数据和 Watch 状态中。新接入建议使用 `args.auth_config`。`args.auth_config` 的明文 HTTP 鉴权和带鉴权重定向仍会被拒绝。
 - token 会放在 HTTPS 请求体中传输。生产环境应保持诊断请求体 dump 关闭；显式启用该功能可能记录秘密。
 - `reason` 触发的记忆生成复用 `session.commit` 的抽取链路，只使用 `reason`、资源 URI、可用的资源名称和目录摘要，不会读取或展开完整资源正文；系统会写入 `entities`、`events`、`preferences` 等已有记忆类型，不创建独立的资源记忆目录。
-- 删除资源时，系统会在删除前扫描本次上下文对应的 self 或 peer 记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
+- 删除资源后，已生成的记忆内容及其资源引用会保留。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `processing_mode=vectors_only` 不调用 VLM 语义理解阶段，也不会生成或刷新 `.abstract.md` / `.overview.md`。对已存在目标，它会保留旧的语义产物和旧的语义向量；仍会更新资源树，在 `build_index=true` 时向量化当前非隐藏文件，并清理由本次刷新删除的文件 detail 向量。
 - `processing_mode` 只属于 `add_resource`。管理员维护已有数据时，`reindex` API/CLI 仍使用 `mode`（`vectors_only`、`semantic_and_vectors`）。
@@ -796,6 +796,95 @@ shared 模式的响应示例：
   }
 }
 ```
+
+---
+
+### 共享资源操作
+
+这些 HTTP 接口将对应的[文件系统操作](03-filesystem.md)限制在 `viking://resources/` 的子路径中。共享根目录本身、其他命名空间以及包含 `.` 或 `..` 路径段的 URI 均被拒绝。复制和移动会同时校验源路径与目标路径，并执行身份认证和文件系统 ACL 检查。
+
+### 复制共享资源
+
+复制文件或目录及其向量记录。覆盖、合并和回滚行为与文件系统的复制操作一致。
+
+**HTTP**
+
+```http
+POST /api/v1/resources/cp
+```
+
+| 请求体参数 | 类型 | 必填 | 默认值 | 说明 |
+|------------|------|------|--------|------|
+| `from_uri` | string | 是 | - | 源共享资源 URI |
+| `to_uri` | string | 是 | - | 目标共享资源 URI |
+| `recursive` | boolean | 否 | `false` | 复制目录时必须为 true |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/cp \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide.md","to_uri":"viking://resources/guide-copy.md","recursive":false}'
+```
+
+成功响应的 `status` 为 `"ok"`，`result` 包含 `from`、`to` 和
+`recursive`。
+
+### 移动或重命名共享资源
+
+在共享资源子树内移动资源。源 URI 和目标 URI 都必须位于
+`viking://resources/` 子树下，命名空间限制与复制接口一致。
+
+**HTTP**
+
+```http
+POST /api/v1/resources/mv
+```
+
+| 请求体参数 | 类型 | 必填 | 说明 |
+|------------|------|------|------|
+| `from_uri` | string | 是 | 源共享资源 URI |
+| `to_uri` | string | 是 | 目标共享资源 URI |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/mv \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  --data '{"from_uri":"viking://resources/guide-copy.md","to_uri":"viking://resources/guide-renamed.md"}'
+```
+
+成功响应的 `status` 为 `"ok"`，`result` 包含 `from` 和 `to`。
+
+### 删除共享资源
+
+删除 `viking://resources/` 下的资源。此操作要求 MANAGE 权限，
+会删除关联向量记录、刷新父目录语义元数据，并同步受影响的 Watch。
+
+已有记忆会保留原有内容和 `resource_refs`，包括导入时由 `reason` 生成的记忆。
+
+**HTTP**
+
+```http
+DELETE /api/v1/resources?uri={uri}
+```
+
+| 查询参数 | 类型 | 必填 | 默认值 | 说明 |
+|----------|------|------|--------|------|
+| `uri` | string | 是 | - | 要删除的共享资源 URI；不允许删除共享资源根 |
+| `recursive` | boolean | 否 | `false` | 递归删除目录 |
+| `wait` | boolean | 否 | `true` | 等待父目录语义刷新完成 |
+
+```bash
+curl -X DELETE "http://localhost:1933/api/v1/resources" \
+  -H "X-API-Key: your-key" \
+  --get \
+  --data-urlencode "uri=viking://resources/guide-renamed.md" \
+  --data-urlencode "recursive=false" \
+  --data-urlencode "wait=true"
+```
+
+成功响应的 `result` 包含被删除的 `uri`。设置 `wait=false` 时，
+语义处理异步执行；响应中若包含 `task_id`，可通过
+[Task API](17-tasks.md) 跟踪完成状态。
 
 ---
 

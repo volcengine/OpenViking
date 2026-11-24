@@ -1,14 +1,21 @@
 import type { renderErrors as EnglishRenderErrors } from './en-US.js';
+import type { jsonPreviewLabels as EnglishJsonPreviewLabels } from './en-US.js';
 import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
   previewImage: '放大图片',
   closePreview: '关闭预览',
+  expandVideo: '放大视频',
+  videoTranscript: '转录文稿',
+  videoFrames: (count: number) => (count ? `抽帧图片 (${count})` : '抽帧图片'),
+  videoSpeaker: '说话人',
+  videoNoTranscript: '暂无转录文稿',
+  videoNoFrames: '暂无抽帧图片',
   showHiddenPath: '显示隐藏的路径层级',
   moreActions: '更多操作',
   actionFailed: '操作失败',
   copyPath: '复制路径',
-  copied: '已复制',
+  copied: '节点路径已复制',
   copyFailed: '复制失败',
   previewMode: '预览',
   sourceMode: '源码',
@@ -43,3 +50,11 @@ export const renderErrors = {
   content: '页签内容显示失败',
   editor: '文件编辑器显示失败',
 } satisfies Record<keyof typeof EnglishRenderErrors, string>;
+
+export const jsonPreviewLabels = {
+  collapseLine: (lineNumber: number) => `折叠第 ${lineNumber} 行`,
+  expandLine: (lineNumber: number) => `展开第 ${lineNumber} 行`,
+} satisfies Record<
+  keyof typeof EnglishJsonPreviewLabels,
+  (lineNumber: number) => string
+>;

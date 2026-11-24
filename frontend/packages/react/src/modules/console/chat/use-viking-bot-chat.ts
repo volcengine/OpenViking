@@ -1,3 +1,5 @@
+import { useMonitoringBinding } from '../../../shared/monitoring/context.js';
+import { tagData, readData } from '../../../shared/monitoring/data.js';
 import { useAnalyticsRef } from '../../../shared/analytics/context.js';
 import { useTaskTracking } from '../../../shared/task-tracking/context.js';
 import { projectBotTasks, submittedBotTasks } from './task-messages.js';
@@ -12,8 +14,17 @@ import type { UseVikingBotChatOptions, VikingBotChatResult } from './types.js';
 export function useVikingBotChat(
   options: UseVikingBotChatOptions = {},
 ): VikingBotChatResult {
+  const monitoring = useMonitoringBinding();
   const analytics = useAnalyticsRef();
-  const { service: native, signal } = useBotService(options);
+  const { service: native, signal, hasProvider } = useBotService(options);
+  const getSessionCommitTask = useMemo(() => {
+    const service = options.service ?? native;
+    if (service.getSessionCommitTask)
+      return service.getSessionCommitTask.bind(service);
+    return hasProvider && !service.commitSession
+      ? native.getSessionCommitTask
+      : undefined;
+  }, [options.service, native, hasProvider]);
   const locale = useLocale(options.locale);
   const { track, tasks, source } = useTaskTracking(options);
   const {
@@ -37,6 +48,8 @@ export function useVikingBotChat(
       },
       signal,
       analytics,
+      monitoring,
+      hasProvider ? native.commitSession : undefined,
     );
   }, [
     native,
@@ -48,6 +61,8 @@ export function useVikingBotChat(
     signal,
     scopeKey,
     analytics,
+    monitoring,
+    hasProvider,
   ]);
   // Effect necessity: history requests and live Bot streams belong to this
   // session/identity. Events cannot observe navigation or unmount; cleanup aborts
@@ -55,7 +70,6 @@ export function useVikingBotChat(
   useEffect(() => controller.start(), [controller]);
   const state = useSyncExternalStore(
     controller.subscribe,
-    controller.getSnapshot,
     controller.getSnapshot,
   );
   // Effect necessity: register tasks from the external chat controller's stream
@@ -67,7 +81,12 @@ export function useVikingBotChat(
     const register = () => {
       const current = controller.getSnapshot();
       for (const task of submittedBotTasks(current.messages, current.streaming))
-        track(task);
+        track(
+          task,
+          controller.monitoringOf(current)?.node.stage === 'console-chat-reply'
+            ? controller.monitoringOf(current)
+            : undefined,
+        );
     };
     register();
     return controller.subscribe(register);
@@ -89,6 +108,12 @@ export function useVikingBotChat(
       parts: [{ type: 'text' as const, text: clientError.message }],
     };
   });
+  tagData(monitoring, messages, readData(monitoring, [state.messages]));
+  tagData(
+    monitoring,
+    projected.streaming,
+    readData(monitoring, [state.streaming]),
+  );
   return {
     ...state,
     ...projected,
@@ -96,6 +121,8 @@ export function useVikingBotChat(
     messages,
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),
+    commitSession: controller.commitSession,
+    getSessionCommitTask,
     error,
     send: controller.send,
     abort: controller.abort,

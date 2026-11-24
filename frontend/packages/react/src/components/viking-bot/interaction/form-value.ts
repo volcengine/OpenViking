@@ -5,7 +5,7 @@ import type {
 
 export type FormRequest = Exclude<
   VikingBotInteractionRequest,
-  { kind: 'custom' | 'target' }
+  { kind: 'custom' | 'target' | 'steps' }
 >;
 export type FormError = 'required' | 'timeInvalid' | 'weekdayRequired';
 
@@ -19,7 +19,14 @@ export function initialAnswer(
     return request.initialValue === undefined
       ? undefined
       : { kind: 'repair', value: request.initialValue };
-  return { kind: 'schedule', value: request.initialValue };
+  const value = request.initialValue;
+  return {
+    kind: 'schedule',
+    value:
+      value.mode !== 'none' && !value.time
+        ? { ...value, time: defaultScheduleTime() }
+        : value,
+  };
 }
 
 export function validateAnswer(
@@ -37,6 +44,10 @@ export function validateAnswer(
     return request.options.some((option) => option.id === answer.value)
       ? undefined
       : 'required';
+  if (request.kind === 'text' && answer.kind === 'text')
+    return request.required !== false && !answer.value.trim()
+      ? 'required'
+      : undefined;
   if (answer.kind !== 'schedule' || answer.value.mode === 'none') return;
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(answer.value.time))
     return 'timeInvalid';
@@ -47,4 +58,13 @@ export function validateAnswer(
       answer.value.weekday > 7)
   )
     return 'weekdayRequired';
+}
+
+/** Spread newly enabled schedules across wall-clock minutes. */
+export function defaultScheduleTime() {
+  const minutes = Math.floor(Math.random() * 24 * 60);
+  const hours = Math.floor(minutes / 60);
+  return [hours, minutes % 60]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
 }

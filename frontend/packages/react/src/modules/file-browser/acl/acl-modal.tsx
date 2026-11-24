@@ -1,4 +1,8 @@
 import { useExposure } from '../../../shared/analytics/use-exposure.js';
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../../shared/feedback/error-notification.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { useEffect, useId, useRef, type RefObject } from 'react';
 import { Modal } from '../../../shared/primitives/modal/modal.js';
@@ -27,6 +31,7 @@ export function AclModal({
   options,
   onClose,
   onUpdated,
+  onPermissionDenied,
 }: {
   uri: string;
   open: boolean;
@@ -38,6 +43,7 @@ export function AclModal({
   userId?: OvIdentityValue;
   options?: FileBrowserAclOptions;
   onClose: () => void;
+  onPermissionDenied: () => void;
   onUpdated: (report: FileBrowserAclReport) => void;
 }) {
   const exposure = useExposure(
@@ -54,6 +60,7 @@ export function AclModal({
     open,
     readOnly: Boolean(options?.readOnly),
     onUpdated,
+    onPermissionDenied,
   });
   const disabled = Boolean(options?.readOnly) || model.phase !== 'ready';
   const entries = model.report?.effective_entries ?? [];
@@ -94,9 +101,19 @@ export function AclModal({
       >
         {text.title}
       </h2>
-      {model.error ? (
+      {model.error && model.report ? (
+        <ErrorNotification
+          title={text.saveFailed}
+          identity={model.error}
+          error={model.error}
+          locale={locale}
+        >
+          {errorMessage(model.error)}
+        </ErrorNotification>
+      ) : null}
+      {model.error && !model.report ? (
         <div className="ov-file-browser-acl__failure" role="alert">
-          <p>{model.report ? text.saveFailed : text.loadFailed}</p>
+          <p>{text.loadFailed}</p>
           <p>{model.error.message}</p>
           {!model.report ? (
             <Button
@@ -115,12 +132,15 @@ export function AclModal({
           ? text.saving
           : model.phase === 'loading'
             ? text.loading
-            : model.saved
-              ? text.saved
-              : ''}
+            : ''}
       </div>
-      {model.confirmation ? (
-        <AclConfirmation model={model} text={text} />
+      {model.confirmation?.kind === 'restore' ? (
+        <AclConfirmation
+          model={model}
+          text={text}
+          locale={locale}
+          triggerRef={heading}
+        />
       ) : model.report ? (
         <>
           {model.report.acl_mode === 'restricted' ? (
@@ -160,6 +180,14 @@ export function AclModal({
             onChange={model.change}
           />
         </>
+      ) : null}
+      {model.confirmation?.kind === 'restrict' ? (
+        <AclConfirmation
+          model={model}
+          text={text}
+          locale={locale}
+          triggerRef={heading}
+        />
       ) : null}
     </Modal>
   );

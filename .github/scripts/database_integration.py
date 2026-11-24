@@ -8,10 +8,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT_CASES = {
-    "test_mysql_load_creates_default_account",
-    "test_distributed_authentication_state_is_shared_and_service_scoped",
+    (
+        "tests.server.test_account_services",
+        "test_distributed_authentication_state_is_shared_and_service_scoped",
+    ),
+    (
+        "tests.server.test_mysql_account_store",
+        "test_mysql_preprovisioned_low_privilege_startup_and_reload",
+    ),
 }
-GROUPS = ("accounts", "redis_mysql", "task_work_mysql", "watch_mysql")
+GROUPS = (
+    "accounts",
+    "redis_mysql",
+    "task_work_mysql",
+    "task_work_postgres",
+    "watch_mysql",
+    "watch_postgres",
+    "watch_runtime_mysql",
+    "watch_process_mysql",
+    "watch_process_postgres",
+)
 
 
 def schema_statements(sql):
@@ -24,12 +40,26 @@ def schema_statements(sql):
 def prepare():
     # Imports must fail rather than letting pytest.importorskip hide missing extras.
     import aiomysql  # noqa: F401
+    import psycopg
     import pymysql
     import redis
     import sqlalchemy.ext.asyncio  # noqa: F401
 
     params = json.loads(os.environ["OV_TEST_MYSQL"])
+    postgres_params = json.loads(os.environ["OV_TEST_POSTGRES"])
+    with psycopg.connect(
+        **{
+            ("dbname" if key == "database" else key): value
+            for key, value in postgres_params.items()
+        },
+        connect_timeout=10,
+    ) as connection:
+        assert connection.execute("SELECT 1").fetchone() == (1,)
     watch_params = json.loads(os.environ["OPENVIKING_WATCH_MYSQL_PARAMS"])
+    postgres_params = json.loads(os.environ["OPENVIKING_WATCH_POSTGRES_PARAMS"])
+    postgres_params["dbname"] = postgres_params.pop("database")
+    with psycopg.connect(**postgres_params, connect_timeout=10) as connection:
+        assert connection.execute("SELECT 1").fetchone() == (1,)
     for values in (params, watch_params):
         with pymysql.connect(**values, connect_timeout=10) as connection:
             with connection.cursor() as cursor:
@@ -61,23 +91,39 @@ def prepare():
         "encryption": {"enabled": False},
     }
     Path(os.environ["OPENVIKING_CONFIG_FILE"]).write_text(json.dumps(config), encoding="utf-8")
-    print("MySQL and Redis are reachable; account deployment schema is installed.")
+    print("PostgreSQL, MySQL and Redis are reachable; account deployment schema is installed.")
 
 
 def database_group(case):
     module = case.get("classname", "")
     name = case.get("name", "")
-    if module == "tests.server.test_account_services" and name in ACCOUNT_CASES:
+    if (module, name) in ACCOUNT_CASES:
         return "accounts"
     if module == "tests.server.test_redis_mysql_account_store":
         return "redis_mysql"
     # Parameter IDs also contain secondary parameters, e.g. [mysql-stage].
     parameters = name.partition("[")[2].rstrip("]").split("-")
+    if "postgres" in parameters and module in {
+        "tests.service.test_task_work_contract",
+        "tests.service.test_task_store_postgres",
+    }:
+        return "task_work_postgres"
     if "mysql" in parameters:
         if module == "tests.service.test_task_work_contract":
             return "task_work_mysql"
-        if module == "tests.resource.test_watch_store":
-            return "watch_mysql"
+        return {
+            "tests.resource.test_watch_store": "watch_mysql",
+            "tests.resource.test_watch_main_integration": "watch_runtime_mysql",
+            "tests.resource.test_watch_process": "watch_process_mysql",
+        }.get(module)
+    if "postgres" in parameters:
+        if module in {
+            "tests.resource.test_watch_store",
+            "tests.resource.test_watch_store_postgres",
+        }:
+            return "watch_postgres"
+        if module == "tests.resource.test_watch_process":
+            return "watch_process_postgres"
     return None
 
 
@@ -95,12 +141,12 @@ def verify(report):
             continue
         counts[group] += 1
         if group == "accounts":
-            accounts.add(name)
+            accounts.add((case.get("classname", ""), name))
     for group, count in counts.items():
         if not count:
             problems.append(f"No passing database cases in {group}")
-    for name in sorted(ACCOUNT_CASES - accounts):
-        problems.append(f"Required account contract missing: {name}")
+    for module, name in sorted(ACCOUNT_CASES - accounts):
+        problems.append(f"Required account contract missing: {module}.{name}")
     summary = "\n".join(
         f"- {group}: {count} database cases passed" for group, count in counts.items()
     )

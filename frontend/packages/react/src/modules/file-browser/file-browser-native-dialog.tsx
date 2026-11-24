@@ -12,18 +12,23 @@ export function FileBrowserNativeDialog({
   text,
   triggerRef,
   canWrite,
-  canSaveSnapshot,
   versioned,
   showContent,
+  directory,
+  onSelectPackFile,
+  packConfirmationPending,
   ...props
-}: Omit<PreviewWorkflowProps, 'text'> & {
+}: Omit<PreviewWorkflowProps, 'text' | 'onUpdated'> & {
   kind: 'history' | 'importPack' | 'configure';
   text: ResolvedLabels;
   triggerRef: RefObject<HTMLElement | null>;
   canWrite: boolean;
-  canSaveSnapshot: boolean;
   versioned: boolean;
   showContent: boolean;
+  directory: boolean;
+  onSelectPackFile?: (file: File) => void;
+  packConfirmationPending?: boolean;
+  onUpdated?: () => void;
 }) {
   const exposure = useExposure(
     kind === 'history'
@@ -33,7 +38,11 @@ export function FileBrowserNativeDialog({
         : 'file_browser_pack_import_dialog_show',
   );
   const title = kind === 'configure' ? text.workflow.configure : text[kind];
-  const common = { ...props, text: text.workflow };
+  const common = {
+    ...props,
+    onUpdated: props.onUpdated ?? (() => undefined),
+    text: text.workflow,
+  };
   return (
     <Modal
       open
@@ -47,21 +56,32 @@ export function FileBrowserNativeDialog({
           : 'ov-file-browser-workflow'
       }
     >
-      <h2 ref={exposure}>{title}</h2>
+      <h2
+        ref={exposure}
+        className={kind === 'history' ? 'ov-file-history__heading' : undefined}
+      >
+        {title}
+      </h2>
       {kind === 'history' ? null : (
         <p className="ov-file-browser-workflow__uri">{props.uri}</p>
       )}
       {kind === 'history' ? (
         <PreviewHistory
           {...common}
-          canSaveSnapshot={canSaveSnapshot}
           versioned={versioned}
           showContent={showContent}
+          canWrite={canWrite}
+          directory={directory}
           loadingText={text.loading}
           retryText={text.retry}
         />
       ) : kind === 'importPack' ? (
-        <PreviewPackImport {...common} canWrite={canWrite} />
+        <PreviewPackImport
+          {...common}
+          canWrite={canWrite}
+          onSelectPackFile={onSelectPackFile}
+          packConfirmationPending={packConfirmationPending}
+        />
       ) : (
         <PreviewCompileConfig
           {...common}

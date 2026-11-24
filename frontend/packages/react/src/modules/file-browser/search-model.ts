@@ -97,6 +97,16 @@ const ALL_SCOPES: readonly ScopeOption[] = [
 const covers = (root: string, uri: string): boolean =>
   uri === root || uri.startsWith(`${root}/`);
 
+export function setSearchScope(
+  scopes: readonly string[],
+  uri: string,
+  checked: boolean,
+): string[] {
+  return checked
+    ? [...scopes.filter((scope) => !covers(uri, scope)), uri]
+    : scopes.filter((scope) => scope !== uri);
+}
+
 export function isSearchScopeAllowed(
   scopes: readonly ScopeOption[],
   uri: string,
@@ -128,6 +138,7 @@ export function isSearchScopeAllowed(
  */
 export function buildScopeOptions(rootUri: string): ScopeOption[] {
   if (!rootUri || rootUri === 'viking://') return [...ALL_SCOPES];
+  rootUri = rootUri.replace(/\/+$/, '');
   if (ALL_SCOPES.some((option) => covers(option.uri, rootUri))) {
     return [{ uri: rootUri }];
   }

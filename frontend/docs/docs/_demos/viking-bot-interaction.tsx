@@ -85,8 +85,6 @@ export default function VikingBotInteractionBasic() {
             initialUri: 'viking://resources/wiki/archive',
             directoryPicker,
           }}
-          index={0}
-          total={2}
         />
         <VikingBotInteraction
           {...common}

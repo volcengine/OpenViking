@@ -45,6 +45,7 @@ test('a portalled tour inherits Provider changes without restarting its target l
         steps,
         locateTarget,
         onClose() {},
+        showCloseButton: true,
       }),
     );
   const view = await mount(element('en-US'));

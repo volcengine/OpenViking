@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from loguru import logger
 
@@ -635,6 +635,10 @@ class VikingClient:
             return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
         return await self.client.read_raw(uri, offset=offset, limit=limit)
 
+    async def git_show_bytes(self, uri: str, snapshot_id: str) -> bytes:
+        """Read a frozen snapshot blob via git show with the task's authenticated client."""
+        return (await self.client.git_show(snapshot_id, path=uri))["bytes"]
+
     async def download_bytes(self, uri: str) -> bytes:
         client = self.client
         should_close = False
@@ -731,7 +735,6 @@ class VikingClient:
         wait: bool = True,
         skip_conflicts: bool = False,
         defer_processing: bool = False,
-        edit_source: Literal["manual", "agent", "compile"] = "manual",
     ) -> Dict[str, Any]:
         """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
@@ -741,7 +744,6 @@ class VikingClient:
             options={
                 "skip_conflicts": skip_conflicts,
                 "defer_processing": defer_processing,
-                "edit_source": edit_source,
             },
         )
 

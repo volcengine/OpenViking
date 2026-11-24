@@ -144,14 +144,14 @@ ov overview viking://resources/docs/
 | uri | str | 是 | - | Viking URI（如 `viking://resources/docs/api.md`）或 32 字符十六进制向量记录 `id`（由 `stat()` 返回） |
 | offset | int | 否 | 0 | 起始行号（0 开始） |
 | limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
-| raw | bool | 否 | false | 跳过默认脱敏和 MEMORY_FIELDS 过滤，并尝试还原占位符；Python 中使用 `client.read_raw(uri)`。 |
+| raw | bool | 否 | false | 跳过默认脱敏和 MEMORY_FIELDS 过滤，并按 Privacy 配置还原 Skill、Session 占位符；Python 中使用 `client.read_raw(uri)`。 |
 
 **说明**
 
 - `read()` 只接受文件 URI。传入已存在的目录时返回 `INVALID_ARGUMENT`（HTTP `400`）。HTTP 响应的 `details` 包含 `expected: "file"`、`actual: "directory"` 和目标 `resource` URI，客户端可据此改用目录列表接口，无需解析错误消息。
 - 除 Viking URI 外，还可以传入 `stat()` 返回的 32 字符十六进制文件 `id`。服务端通过向量索引查找对应 URI 并执行相同的权限校验。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，服务端都会返回 `NOT_FOUND`，并提示数据可能尚未索引或已经删除。
 - 公开 URI 参数接受 `resources`、`user` 和 `agent` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}/messages.jsonl`，或表示当前用户的 `viking://~/sessions/{session_id}/messages.jsonl`。旧的 `viking://session/...` 以及 `temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
-- 敏感信息的处理：默认读取（`raw=false`）保留已有占位符，并对残留的已登记明文脱敏；`raw=true` 跳过默认脱敏，返回加载还原后的内容，该还原只影响返回内容，不修改存储文件，详见[隐私配置](../concepts/13-privacy.md)。
+- 敏感信息的处理：默认读取（`raw=false`）保留已有占位符，并按 `privacy.mode` 对残留的已登记明文脱敏；普通文件仅在 `auto_strict` 下自动脱敏。当 `raw=true` 时，跳过自动脱敏，并在 `privacy.restore=true` 时自动还原 Skill、Session 中的占位符（只影响返回内容，不修改存储文件），详见[隐私配置](../concepts/13-privacy.md)。
 
 **Python SDK**
 
@@ -218,6 +218,8 @@ ov read viking://resources/docs/api.md
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
+| use_snapshot | bool | 否 | `false` | 在内容锁内为写入文件保存快照|
+| defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，不派发语义或向量处理；FILE_ONLY 处理行为不变 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |
@@ -229,6 +231,8 @@ ov read viking://resources/docs/api.md
 - 使用任意模式创建缺失文件时，都只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
+- 对支持索引的命名空间，设置 `defer_processing=true` 后仍会保存正文；同时设置 `use_snapshot=true` 时，会在同一写锁内记录快照。`semantic_status` / `vector_status` 返回 `deferred`，但不会向 QueueFS 派发 `ContentWrite`、`Semantic` 或 `Embedding` 消息。持久化 Task 会被直接完成：`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取终态结果并移除 `task_id`。依赖搜索前，应对该 URI 执行 `reindex()`。延迟处理不能与实际的 tags/ACL 更新或 `resolve_conflicts=true` 同时使用。
+- `viking://system/` 等 FILE_ONLY 命名空间在 `defer_processing` 为 true 或 false 时都保持原有处理行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。FILE_ONLY 命名空间不支持 reindex；原有命名空间及参数校验仍然生效。
 - 正文提交后，如果后续语义/向量任务入队失败，不会回滚已写正文；接口会返回错误，调用方应重试同一次 write 以重新派发派生维护。显式 write 始终重新提交最终字节，因此在向量索引暂时落后于文件时也能安全重试。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
 - 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
@@ -348,10 +352,12 @@ ov write viking://resources/docs/api.md \
 | `root_uri` | string | 是 | - | 包含所有写入目标的已存在 Resource 或 Memory 目录 |
 | `operations` | array | 是 | - | 要校验并执行的文件写入 |
 | `wait` | boolean | 否 | `true` | 是否等待语义/向量刷新 |
+| `use_snapshot` | boolean | 否 | `false` | 释放内容锁前，将成功写入的文件合并保存为一个快照 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | `telemetry` | boolean/object | 否 | `false` | 是否返回操作遥测信息 |
 | `processing_mode` | string | 否 | `semantic_and_vectors` | 整批统一的处理模式：`semantic_and_vectors` 或 `vectors_only` |
-| `defer_processing` | boolean | 否 | `false` | 只保存文件，不派发语义和向量处理；后处理由调用方安排 |
+| `defer_processing` | boolean | 否 | `false` | 对支持索引的命名空间，只保存文件，不派发语义和向量处理；后处理由调用方安排。FILE_ONLY 处理行为不变 |
+| `skip_conflicts` | boolean | 否 | `false` | 保留 revision 或存在性校验冲突的目标，返回冲突详情，同时继续执行兼容的 operation |
 
 每个 operation 包含：
 
@@ -361,6 +367,9 @@ ov write viking://resources/docs/api.md \
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
 | `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
+| `expected_sha256` | string | 否 | 要求已有文件字节匹配指定的小写 SHA-256 digest |
+| `if_absent` | boolean | 否 | 仅在目标不存在时创建；不能与 `expected_sha256` 或 `append` 同时使用 |
+| `resolve_conflicts` | boolean | 否 | 将这次替换标记为对已有 Resource Markdown 的人工冲突解决 |
 | `tags` | string[] | 否 | - | 该文件的显式检索标签 |
 | `tag_mode` | string | 否 | `replace` | 该文件标签写入方式：`replace`、`append` 或 `clear` |
 | `acl` | object | 否 | - | 该文件的直接 ACL；需要该文件的 manage 权限 |
@@ -373,11 +382,16 @@ ov write viking://resources/docs/api.md \
 - `create`、`replace`、`upsert` 是“写成请求最终正文”的兼容写法：文件存在时覆盖，缺失时创建。`append` 在文件存在时追加，文件缺失时以请求正文创建文件。
 - `processing_mode` 对整个 batch 生效，不能在不同 operation 中混用语义模式；`vectors_only` 不刷新父目录语义，只维护变化文件的向量。
 - `tags`、`tag_mode` 与 `acl` 按 operation 生效；tags 会随该文件首次向量 upsert 写入，`clear` 不要求传 `tags` 并会忽略同时传入的标签值。
+- `expected_sha256` 和 `if_absent` 会在整批目标锁持有期间校验。设置 `skip_conflicts=true` 后，校验失败的目标会进入 `conflicts` 且不会被覆盖；权限、传输和实际写入失败仍然报错。
+- `resolve_conflicts=true` 会比较新旧 Markdown、保留冲突历史，并更新 `has_conflict` 与 `conflict_num` 标签。它对 `replace` 及其兼容别名 `create` 生效，只接受文本正文，且不能与 `defer_processing` 同时使用；目标不存在、不是 Resource Markdown，或 mode 为 `append` / `upsert` 时仍按普通写入处理。
 - 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。未启用延迟模式时，异步处理持有文件锁直到关联工作结束，统一刷新受影响的 `.overview.md` / `.abstract.md`。
 - 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
 - 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达按直接父目录聚合的状态；只有所有父目录都未入队时才为 `skipped`，某一个目录因锁冲突跳过不会掩盖其他目录已入队的工作。`vector_status` 表达变化文件的向量维护状态。
+- 每个成功请求都会创建一个持久化 `content_batch_write` Task。未启用延迟处理时，会向 QueueFS 的 `ContentWrite` 队列写入一条根消息；默认 SQLite QueueFS 会持久化该消息，显式配置 `backend=memory` 时进程退出后不保留。`wait=false` 在入队后返回 `task_id`，`wait=true` 等待 Task 终态并移除 `task_id`。
+- 对支持索引的命名空间，设置 `defer_processing=true` 后不会产生 `ContentWrite`、`Semantic` 或 `Embedding` QueueFS 消息；正文提交后 Task 会被直接完成。`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取相同终态结果并移除 `task_id`。同时设置 `use_snapshot=true` 时，会在 Task 完成前为成功写入的文件生成一次快照。调用方需另行安排后处理，例如执行 `reindex()`；该模式拒绝实际的 tags/ACL 更新及 `resolve_conflicts=true`。
+- FILE_ONLY 批写在 `defer_processing` 为 true 或 false 时都保持原有行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。命名空间及参数校验仍然生效，FILE_ONLY 目标不支持 reindex。
 - 若正文已提交但异步刷新入队失败，正文不会回滚。可使用相同最终正文通过 `replace`、`create` 或 `upsert` 重写；不要直接重放已经成功过的 `append`，否则会重复追加。
 
 **Python SDK**
@@ -394,7 +408,8 @@ result = client.batch_write(
         {
             "uri": "viking://resources/wiki/existing.md",
             "content": "# 更新后的页面\n",
-            "mode": "upsert",
+            "mode": "replace",
+            "resolve_conflicts": True,
         },
     ],
     wait=True,

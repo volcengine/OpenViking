@@ -1,3 +1,4 @@
+import { isOvClientError } from '../../client/errors.js';
 import type { CommandConsoleRecord } from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
@@ -8,10 +9,14 @@ export interface ConsoleMessage {
   usage?: string;
 }
 
+export type ConsoleResultNotice = 'noTasks' | 'grepLimitReached';
+
 /** Internal metadata is formatted by the Hook and never exposed in its records. */
 export type ConsoleRecord = CommandConsoleRecord & {
   localMessage?: ConsoleMessage;
+  resultNotice?: ConsoleResultNotice;
   taskKeys?: readonly string[];
+  telemetry?: Record<string, unknown>;
 };
 
 export function formatConsoleMessage(message: ConsoleMessage, locale: Locale) {
@@ -29,4 +34,31 @@ export class ConsoleCommandError extends Error implements ConsoleMessage {
   ) {
     super(formatConsoleMessage({ code, value, usage }, locale));
   }
+}
+
+export function cancelledCommandRecord(): Partial<ConsoleRecord> {
+  const localMessage: ConsoleMessage = { code: 'cancelled' };
+  return {
+    status: 'error',
+    localMessage,
+    content: {
+      variant: 'text',
+      text: formatConsoleMessage(localMessage, 'en-US'),
+    },
+  };
+}
+
+export function failedCommandRecord(error: unknown): Partial<ConsoleRecord> {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    status: 'error',
+    localMessage:
+      error instanceof ConsoleCommandError
+        ? { code: error.code, value: error.value, usage: error.usage }
+        : undefined,
+    content: {
+      variant: 'text',
+      text: !message.trim() && isOvClientError(error) ? error.code : message,
+    },
+  };
 }

@@ -46,6 +46,7 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
+    use_snapshot: bool = False
     timeout: float | None = Field(
         default=None,
         deprecated=True,
@@ -56,10 +57,9 @@ class WriteContentRequest(BaseModel):
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
-    # Who made the edit; versions of Compile outputs record it (console edit = manual).
-    edit_source: Literal["manual", "agent", "compile"] = "manual"
     # Mark this edit as conflict resolution.
     resolve_conflicts: bool = False
+    defer_processing: bool = False
 
 
 class BatchWriteOperation(BaseModel):
@@ -73,6 +73,7 @@ class BatchWriteOperation(BaseModel):
     expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     # Atomically create only when the target does not exist.
     if_absent: bool = False
+    resolve_conflicts: bool = False
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
@@ -94,6 +95,7 @@ class BatchWriteRequest(BaseModel):
     root_uri: str
     operations: list[BatchWriteOperation]
     wait: bool = True
+    use_snapshot: bool = False
     timeout: float | None = Field(
         default=None,
         deprecated=True,
@@ -105,7 +107,6 @@ class BatchWriteRequest(BaseModel):
     # Save content without semantic or vector work; the caller schedules processing.
     defer_processing: bool = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
-    edit_source: Literal["manual", "agent", "compile"] = "manual"
 
 
 class SetTagsRequest(BaseModel):
@@ -177,7 +178,7 @@ def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
     return uri
 
 
-@router.get("/read")
+@router.get("/read", response_model=Response)
 async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
@@ -318,8 +319,9 @@ async def write(
             tags=request.tags,
             tag_mode=request.tag_mode,
             acl=request.acl,
-            edit_source=request.edit_source,
             resolve_conflicts=request.resolve_conflicts,
+            use_snapshot=request.use_snapshot,
+            defer_processing=request.defer_processing,
         ),
     )
     return Response(
@@ -352,8 +354,8 @@ async def batch_write(
             wait=request.wait,
             skip_conflicts=request.skip_conflicts,
             defer_processing=request.defer_processing,
+            use_snapshot=request.use_snapshot,
             processing_mode=request.processing_mode,
-            edit_source=request.edit_source,
         ),
     )
     return Response(

@@ -1,7 +1,15 @@
 export * from './console.js';
+export {
+  ConsoleSkeleton,
+  type ConsoleSkeletonProps,
+} from './console-skeleton.js';
 export type {
   ConsoleChatOptions,
+  ConsoleBotActivation,
+  ConsoleBotActivationStatus,
   ConsoleCommandProps,
+  ConsoleCommandOptions,
+  ConsoleCommandFiles,
   ConsoleLabels,
   ConsoleMode,
   ConsoleProps,
@@ -16,3 +24,9 @@ export type {
   VikingBotChatService,
   VikingBotSessionService,
 } from './chat/types.js';
+
+export type {
+  ConsoleHitlOptions,
+  ConsoleHitlCard,
+  ConsoleHitlCardOptions,
+} from './hitl/types.js';

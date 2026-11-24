@@ -1,8 +1,5 @@
-import { useEffect, useLayoutEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import type { RefObject } from 'react';
-
-const useThemeEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** Keep a body portal in sync with the host's scoped public theme overrides. */
 export function usePortalTheme(
@@ -10,7 +7,10 @@ export function usePortalTheme(
   triggerRef: RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
 ) {
-  useThemeEffect(() => {
+  // Copy the committed trigger's scoped theme into its body portal; ancestor
+  // styles can change outside React, so render or UI events cannot track them.
+  // Close, node changes and unmount disconnect the observer and remove copied styles.
+  useLayoutEffect(() => {
     const trigger = triggerRef.current;
     if (!open || !trigger || !surface) return;
     const written = new Set<string>();
@@ -31,7 +31,7 @@ export function usePortalTheme(
       seen.forEach((name) => written.add(name));
     };
     sync();
-    const observer = new MutationObserver(sync);
+    const observer = new window.MutationObserver(sync);
     for (let node: Element | null = trigger; node; node = node.parentElement)
       observer.observe(node, {
         attributes: true,

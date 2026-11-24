@@ -1,5 +1,6 @@
 import { forwardRef, type ReactNode } from 'react';
 
+import Documents from '../../../../../icons/svg/empty/documents.svg?react';
 import Chart from '../../../../../icons/svg/empty/chart.svg?react';
 import Conversation from '../../../../../icons/svg/empty/conversation.svg?react';
 import Crash from '../../../../../icons/svg/empty/crash.svg?react';
@@ -10,6 +11,7 @@ import Tray from '../../../../../icons/svg/console/history-empty.svg?react';
 
 const illustrations = {
   chart: Chart,
+  documents: Documents,
   conversation: Conversation,
   crash: Crash,
   folder: Folder,

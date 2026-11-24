@@ -1,69 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { rsbuild } from '@rslib/core';
-import { pluginReact } from '@rsbuild/plugin-react';
-import { JSDOM, ResourceLoader } from 'jsdom';
+import { withBundledPreview } from './helpers/bundled-preview.mjs';
 
-test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed HTML blocks', async () => {
-  const output = await mkdtemp(join(tmpdir(), 'ov-markdown-preview-'));
-  let dom;
-  try {
-    // Bundle the public entry as a browser consumer. The lazy Ark renderers
-    // import browser assets and cannot run through Node's ESM loader.
-    const builder = await rsbuild.createRsbuild({
-      cwd: fileURLToPath(new URL('../../..', import.meta.url)),
-      rsbuildConfig: {
-        mode: 'production',
-        plugins: [pluginReact()],
-        performance: { printFileSize: false },
-        source: {
-          entry: {
-            index:
-              './packages/react/test/fixtures/file-preview-markdown-html.tsx',
-          },
-        },
-        output: { distPath: { root: output }, cleanDistPath: false },
-      },
-    });
-    await builder.build();
-    dom = new JSDOM(await readFile(join(output, 'index.html'), 'utf8'), {
-      url: 'https://preview.test/',
-      runScripts: 'dangerously',
-      pretendToBeVisual: true,
-      resources: new (class extends ResourceLoader {
-        fetch(url) {
-          const { origin, pathname } = new URL(url);
-          return origin === 'https://preview.test' &&
-            pathname.startsWith('/static/js/')
-            ? readFile(join(output, pathname))
-            : null;
-        }
-      })(),
-      beforeParse(window) {
-        window.TextEncoder = class extends TextEncoder {
-          encode(text) {
-            return window.Uint8Array.from(super.encode(text));
-          }
-        };
-        window.TextDecoder = TextDecoder;
-        window.structuredClone = structuredClone;
-        window.Blob = Blob;
-        window.ResizeObserver = class {
-          observe() {}
-          disconnect() {}
-        };
-        window.matchMedia = () => ({
-          matches: false,
-          addEventListener() {},
-          removeEventListener() {},
-        });
-      },
-    });
+test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed HTML blocks', () =>
+  withBundledPreview('file-preview-markdown-html', async (dom) => {
     const { document } = dom.window;
     const names = [
       'with-caption',
@@ -104,8 +45,4 @@ test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed 
       /untrustedScript|!\[(?:with-caption|second-block|third-block|image)\]/,
     );
     assert.equal(dom.window.untrustedScript, undefined);
-  } finally {
-    dom?.window.close();
-    await rm(output, { recursive: true, force: true });
-  }
-});
+  }));

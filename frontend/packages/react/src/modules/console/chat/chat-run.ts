@@ -1,3 +1,4 @@
+import type { ReplyObservation } from './reply-monitoring.js';
 import {
   startOperation,
   errorKind,
@@ -15,8 +16,10 @@ import type { VikingBotChatService, VikingBotChatState } from './types.js';
 export async function runChat({
   service,
   analytics,
+  monitoring,
   state,
   draft,
+  onDelivered,
   undelivered,
   signal,
   current,
@@ -25,12 +28,14 @@ export async function runChat({
   attach,
 }: {
   service: VikingBotChatService;
+  monitoring?: ReplyObservation;
   analytics?: import('react').RefObject<
     | import('../../../shared/analytics/reporter.js').AnalyticsReporter
     | undefined
   >;
   state: VikingBotChatState;
   draft: VikingBotDraft;
+  onDelivered?: () => void;
   undelivered: VikingBotDraft[];
   signal: AbortSignal;
   current: () => boolean;
@@ -47,6 +52,7 @@ export async function runChat({
   attach(timeline.append);
   update({
     status: 'streaming',
+    responseComplete: false,
     error: undefined,
     persistenceError: undefined,
     isSubmitting: false,
@@ -61,6 +67,16 @@ export async function runChat({
   let complete = false;
   let interrupted = false;
   let delivered = false;
+  const accept = () => {
+    if (delivered || !current()) return;
+    delivered = true;
+    undelivered.length = 0;
+    if (!signal.aborted) onDelivered?.();
+  };
+  let renderer = false;
+  let stage:
+    | import('../../../shared/monitoring/trace/span.js').MonitoringSpan
+    | undefined;
   try {
     signal.throwIfAborted();
     if (!sessionId) {
@@ -73,11 +89,11 @@ export async function runChat({
     for await (const event of service.stream(
       { sessionId, ...recoveredDraft },
       signal,
+      accept,
     )) {
       if (!current()) return false;
       // A stream event acknowledges delivery; creating a session does not.
-      delivered = true;
-      undelivered.length = 0;
+      accept();
       signal.throwIfAborted();
       if (
         !started &&
@@ -86,15 +102,21 @@ export async function runChat({
           event.type === 'tool')
       ) {
         started = true;
+        monitoring?.first(event);
         if (operation)
           analytics?.current?.emit('viking_bot_reply_start', operation.finish);
       }
       if (!started && event.type === 'complete' && event.text) {
         started = true;
+        monitoring?.first(event);
         if (operation)
           analytics?.current?.emit('viking_bot_reply_start', operation.finish);
       }
+      renderer = true;
+      stage = monitoring?.span.child('normalize-response');
       await timeline.apply(event);
+      stage?.finish();
+      renderer = false;
       signal.throwIfAborted();
       if (event.type === 'complete' || event.type === 'interrupted') {
         complete = true;
@@ -109,14 +131,19 @@ export async function runChat({
         code: 'BOT_STREAM_TRUNCATED',
         message: 'VikingBot stream ended before a terminal event',
       });
-    const finished = await timeline.finish();
+    renderer = true;
+    stage = monitoring?.span.child('view-commit');
+    const finished = await timeline.finish({ interrupted });
     if (!current()) return false;
     update({
       messages: finished.messages,
       streaming: undefined,
       status: 'idle',
+      responseComplete: !interrupted,
       isSubmitting: false,
     });
+    stage?.finish();
+    monitoring?.finish(interrupted);
     if (operation)
       analytics?.current?.emit(
         interrupted ? 'viking_bot_reply_cancel' : 'viking_bot_reply_success',
@@ -125,6 +152,8 @@ export async function runChat({
     save(sessionId, finished.added);
     return !interrupted;
   } catch (error) {
+    stage?.finish(signal.aborted ? 'cancelled' : 'failed');
+    monitoring?.fail(error, renderer);
     if (!current()) return false;
     if (operation) {
       if (signal.aborted)
@@ -136,7 +165,10 @@ export async function runChat({
         }));
     }
     if (!delivered) undelivered.push(draft);
-    const finished = await timeline.finish(signal.aborted);
+    const finished = await timeline.finish({
+      persistPartial: signal.aborted,
+      interrupted: signal.aborted,
+    });
     if (!current()) return false;
     const failure = error instanceof Error ? error : new Error(String(error));
     const messages = signal.aborted

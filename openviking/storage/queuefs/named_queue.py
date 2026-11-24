@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, TypeVar, Union
 
+from openviking.observability.log_safety import short_hash
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.storage.queuefs.message_keys import encode_enqueue, validate_message_keys
@@ -99,6 +100,13 @@ class NamedQueue:
         self._requeue_count = 0
         self._error_count = 0
         self._errors: List[QueueError] = []
+        self._account_status: Dict[str, QueueStatus] = {}
+
+    @staticmethod
+    def _account_id(data: Any) -> str | None:
+        from openviking.service.task_work_index import extract_queue_account_id
+
+        return extract_queue_account_id(data)
 
     async def _run_middleware(
         self,
@@ -125,6 +133,12 @@ class NamedQueue:
             self._processed += 1
             if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
                 self._requeue_count += 1
+            account_id = self._account_id(data)
+            if account_id is not None:
+                status = self._account_status.setdefault(account_id, QueueStatus())
+                status.processed += 1
+                if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
+                    status.requeue_count += 1
 
     def _record_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
@@ -138,9 +152,24 @@ class NamedQueue:
             )
             if len(self._errors) > self.MAX_ERRORS:
                 self._errors = self._errors[-self.MAX_ERRORS :]
+            account_id = self._account_id(data)
+            if account_id is not None:
+                status = self._account_status.setdefault(account_id, QueueStatus())
+                status.error_count += 1
+                status.errors.append(self._errors[-1])
+                status.errors = status.errors[-self.MAX_ERRORS :]
 
-    async def get_status(self) -> QueueStatus:
-        """Get queue status."""
+    async def get_status(self, account_id: str | None = None) -> QueueStatus:
+        """Read runtime status or account counters; QueueManager supplies account Work counts."""
+        if account_id is not None:
+            with self._lock:
+                status = self._account_status.get(account_id, QueueStatus())
+                return QueueStatus(
+                    processed=status.processed,
+                    requeue_count=status.requeue_count,
+                    error_count=status.error_count,
+                    errors=list(status.errors),
+                )
         backend_status = await self._read_backend_status()
         with self._lock:
             return QueueStatus(
@@ -159,6 +188,9 @@ class NamedQueue:
             self._requeue_count = 0
             self._error_count = 0
             self._errors = []
+            for status in self._account_status.values():
+                status.processed = status.requeue_count = status.error_count = 0
+                status.errors = []
 
     def has_dequeue_handler(self) -> bool:
         """Check if dequeue handler exists."""
@@ -213,7 +245,12 @@ class NamedQueue:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
+            logger.info(
+                "Ack failed for %s msg_id=%s: %s",
+                short_hash(str(self.name)),
+                short_hash(str(msg_id)),
+                type(e).__name__,
+            )
 
     async def _ack(self, ctx: AckContext) -> None:
         await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
@@ -275,7 +312,7 @@ class NamedQueue:
             await self.settle_dequeued(raw_data, result)
             return data
         except Exception as e:
-            logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
+            logger.debug("Dequeue failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return None
 
     async def dequeue_raw(self) -> Optional[Dict[str, Any]]:
@@ -284,7 +321,9 @@ class NamedQueue:
         try:
             return await self._read_queue_message()
         except Exception as e:
-            logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
+            logger.debug(
+                "Dequeue raw failed for %s: %s", short_hash(str(self.name)), type(e).__name__
+            )
             return None
 
     async def process_dequeued(self, data: Dict[str, Any]) -> ProcessResult:
@@ -363,7 +402,7 @@ class NamedQueue:
             else:
                 return None
         except Exception as e:
-            logger.debug(f"[NamedQueue] Peek failed for {self.name}: {e}")
+            logger.debug("Peek failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return None
 
     async def size(self) -> int:
@@ -426,7 +465,7 @@ class NamedQueue:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")
+            logger.error("Clear failed for %s: %s", short_hash(str(self.name)), type(e).__name__)
             return False
 
     async def _clear(self, ctx: ClearContext) -> None:

@@ -1,27 +1,16 @@
 import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import type { Locale } from '../../shared/locale.js';
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { CommandConsoleRecord } from '../../components/command-console/index.js';
+import type { ConsoleHistoryEntry } from './types.js';
 import { ConsoleIcon } from '../../icons/console-icons.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { useOverlayPosition } from '../../shared/primitives/overlay/use-overlay-position.js';
 import type { consoleLabels } from './labels.js';
 
-const subscribe = () => () => {};
-const clientSnapshot = () => true;
-const serverSnapshot = () => false;
-
-function historyTime(record: CommandConsoleRecord, locale: Locale) {
-  const date = new Date(record.createdAtMs ?? NaN);
-  if (!Number.isFinite(date.getTime())) return record.createdAt ?? '';
+function historyTime(entry: ConsoleHistoryEntry, locale: Locale) {
+  const date = new Date(entry.createdAtMs);
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat(locale, {
       year: 'numeric',
@@ -38,25 +27,19 @@ function historyTime(record: CommandConsoleRecord, locale: Locale) {
 }
 
 export function ConsoleHistory({
-  records,
+  history,
   isExecuting,
   locale,
   labels,
   onRecall,
 }: {
-  records: readonly CommandConsoleRecord[];
+  history: readonly ConsoleHistoryEntry[];
   isExecuting: boolean;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
   onRecall: (command: string) => void;
 }) {
-  const mounted = useSyncExternalStore(
-    subscribe,
-    clientSnapshot,
-    serverSnapshot,
-  );
   const native =
-    mounted &&
     'popover' in HTMLElement.prototype &&
     typeof HTMLElement.prototype.showPopover === 'function';
   const [open, setOpen] = useState(false);
@@ -124,52 +107,50 @@ export function ConsoleHistory({
           <ConsoleIcon name="history" />
         </Button>
       </Tooltip>
-      {mounted
-        ? createPortal(
-            <div
-              ref={setSurface}
-              id={id}
-              popover="auto"
-              role="dialog"
-              aria-label={labels.history}
-              hidden={!native && !open}
-              className="ov-tooltip ov-console__history-content"
-              style={{ top: position.top, left: position.left }}
-            >
-              {records.length ? (
-                <ul>
-                  {[...records].reverse().map((record) => (
-                    <li key={record.id}>
-                      <button
-                        type="button"
-                        disabled={isExecuting}
-                        onClick={() => {
-                          close();
-                          onRecall(record.command);
-                        }}
-                      >
-                        <span className="ov-console__history-command">
-                          {record.command}
-                        </span>
-                        <span className="ov-console__history-time">
-                          {historyTime(record, locale)}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <Empty
-                  size="compact"
-                  illustration="tray"
-                  title={labels.emptyHistory}
-                  className="ov-console__history-empty"
-                />
-              )}
-            </div>,
-            document.body,
-          )
-        : null}
+      {createPortal(
+        <div
+          ref={setSurface}
+          id={id}
+          popover="auto"
+          role="dialog"
+          aria-label={labels.history}
+          hidden={!native && !open}
+          className="ov-tooltip ov-console__history-content"
+          style={{ top: position.top, left: position.left }}
+        >
+          {history.length ? (
+            <ul>
+              {[...history].reverse().map((entry) => (
+                <li key={entry.id}>
+                  <button
+                    type="button"
+                    disabled={isExecuting}
+                    onClick={() => {
+                      close();
+                      onRecall(entry.command);
+                    }}
+                  >
+                    <span className="ov-console__history-command">
+                      {entry.command}
+                    </span>
+                    <span className="ov-console__history-time">
+                      {historyTime(entry, locale)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Empty
+              size="compact"
+              illustration="tray"
+              title={labels.emptyHistory}
+              className="ov-console__history-empty"
+            />
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

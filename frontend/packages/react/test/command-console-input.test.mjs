@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRslib } from '@rslib/core';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const output = await mkdtemp(join(tmpdir(), 'ov-command-console-input-'));
@@ -90,7 +90,7 @@ test('host input prefixes and aliases preserve arguments, whitespace and unknown
 });
 
 test('confirmed commands use inline hints without opening the full parameter panel', () => {
-  const html = renderToStaticMarkup(createElement(CommandConsole, props));
+  const html = renderMarkup(createElement(CommandConsole, props));
   assert.ok(html.includes(commandText));
   assert.ok(html.includes('ov-command-console__input-arguments'));
   assert.ok(html.includes('&lt;uri&gt;'));
@@ -100,7 +100,7 @@ test('confirmed commands use inline hints without opening the full parameter pan
 });
 
 test('inline placeholders disappear once real arguments are typed and never enter the value', () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       ...props,
       value: 'host read viking://demo',
@@ -113,7 +113,7 @@ test('inline placeholders disappear once real arguments are typed and never ente
 });
 
 test('slash discovery opens an unselected list without unsolicited details', () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, { ...props, value: '/' }),
   );
   assert.ok(html.includes('role="listbox"'));
@@ -192,7 +192,7 @@ test('ghost text is visual only; ordinary CLI typing keeps the palette closed', 
     ['h', 'ost'],
     ['host r', 'ead'],
   ]) {
-    const html = renderToStaticMarkup(
+    const html = renderMarkup(
       createElement(CommandConsole, { ...props, value }),
     );
     assert.ok(

@@ -1,3 +1,4 @@
+import { toastContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -80,17 +81,11 @@ test('frequency changes preserve the weekday and time; disabled fields close the
     assert.equal(weekday(view).textContent, 'Friday');
     await view.render(render());
     await click(time(view));
-    assert.ok(document.querySelector('.ov-viking-bot__schedule-popup'));
+    assert.ok(document.querySelector('.ov-time-picker__popup'));
     await view.render(render({ submitting: true }));
-    assert.equal(
-      document.querySelector('.ov-viking-bot__schedule-popup'),
-      null,
-    );
+    assert.equal(document.querySelector('.ov-time-picker__popup'), null);
     await view.render(render());
-    assert.equal(
-      document.querySelector('.ov-viking-bot__schedule-popup'),
-      null,
-    );
+    assert.equal(document.querySelector('.ov-time-picker__popup'), null);
     await submit(view);
     assert.deepEqual(answers.at(-1), {
       kind: 'schedule',
@@ -115,23 +110,17 @@ test('time validation, keyboard panel selection, no-schedule answers and cancell
     await input(time(view), '25:70');
     await submit(view);
     assert.equal(answers.length, 0);
-    assert.match(
-      view.container.querySelector('[role=alert]').textContent,
-      /HH:mm/,
-    );
+    assert.match(toastContent().textContent, /HH:mm/);
     assert.equal(document.activeElement, time(view));
     await input(time(view), '16:45');
-    assert.equal(view.container.querySelector('[role=alert]'), null);
+    assert.equal(Boolean(toastContent()), false);
     await key(time(view), 'ArrowDown');
     assert.equal(document.activeElement.textContent, '16');
     await key(document.activeElement, 'ArrowDown');
     await click(document.activeElement);
     assert.equal(time(view).value, '17:45');
     await key(document.activeElement, 'Escape');
-    assert.equal(
-      document.querySelector('.ov-viking-bot__schedule-popup'),
-      null,
-    );
+    assert.equal(document.querySelector('.ov-time-picker__popup'), null);
     await submit(view);
     assert.deepEqual(answers.at(-1), {
       kind: 'schedule',

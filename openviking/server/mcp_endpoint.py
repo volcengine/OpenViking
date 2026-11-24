@@ -47,6 +47,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
+from openviking.core.search_args import validate_search_args
 from openviking.core.uri_validation import (
     validate_content_target_uri,
     validate_request_viking_uri,
@@ -84,7 +85,7 @@ from openviking.server.local_input_guard import (
     looks_like_local_path,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
-from openviking.server.routers.search import context_only_fields_error
+from openviking.server.routers.search import context_only_fields_error, resolve_search_filter
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
@@ -92,12 +93,9 @@ from openviking.service.rule_service import RuleSearchRequest
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
-from openviking.utils.search_filters import (
-    SearchContextTypeInput,
-    merge_search_filter,
-    resolve_context_types,
-)
+from openviking.utils.search_filters import resolve_context_types
 from openviking.utils.skill_processor import SkillProcessor
+from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -587,14 +585,104 @@ async def invoke_mcp_tool(
 
 # -- find / search ---------------------------------------------------------
 
+_TAG_FILTER_DESCRIPTION = (
+    "Filter results by tags; every supplied tag must match and use k=v format "
+    "(for example, team=search)."
+)
+_INCLUDE_TAGS_DESCRIPTION = (
+    "Include each result's tags in the output; this does not filter results."
+)
+_CONTEXT_TYPE_DESCRIPTION = (
+    "Filter results to one or more context types: memory, resource, or skill."
+)
+_FIND_LEVEL_DESCRIPTION = (
+    "Filter indexed representation levels: 0=abstract, 1=overview, 2=detail/content."
+)
+_SEARCH_LEVEL_DESCRIPTION = (
+    "In mode='list', filter indexed representation levels: "
+    "0=abstract, 1=overview, 2=detail/content; ignored in mode='context'."
+)
+_EVENTS_TIME_DECAY_DESCRIPTION = (
+    "Apply updated_at-based recency decay after an unpenalized protection window; "
+    "use '0' or a non-negative integer plus m, h, or d (for example, 2d), and "
+    "provide a non-empty query."
+)
+_QUOTAS_DESCRIPTION = (
+    "In mode='context', set first-pass result ceilings for explicitly listed "
+    "categories: events, entities, preferences, experiences, resources, or skills; "
+    "unused slots may be filled by other listed categories. Explicit quotas replace "
+    "the purpose preset (unlisted categories are not retrieved), and their sum caps "
+    "the results instead of limit."
+)
+_PURPOSE_DESCRIPTION = (
+    "In mode='context', retrieve across all six categories with quotas preset for "
+    "'chat' or 'coding' instead of limit; ignored when quotas is given."
+)
+_DETAIL_DESCRIPTION = (
+    "In mode='context', pin every category to abstract, overview, or full detail instead "
+    "of its default ('auto'); entries still drop to a lower tier when the token budget "
+    "runs short."
+)
+_QUERY_EXPANSION_DESCRIPTION = (
+    "In mode='context' with session_id, 'auto' may expand the query using session "
+    "context and 'off' searches the query as given."
+)
+_MAX_TOKENS_DESCRIPTION = "In mode='context', token budget for the assembled context."
+_EXCLUDE_URIS_DESCRIPTION = (
+    "In mode='context', URIs to leave out of the assembled context, such as ones already "
+    "served; a directory URI excludes its whole subtree."
+)
+_REWRITE_MAX_BULLETS_DESCRIPTION = (
+    "In mode='context' with rewrite='auto', maximum number of bullets in the digest."
+)
+_SEARCH_ARGS_DESCRIPTION = (
+    "Advanced engine options for search_type='keywords' in mode='list': "
+    '{"bm25_k1": >0, "bm25_b": 0..1, "post_process_input_limit": limit..2000000}.'
+)
+_DETAIL_BY_CATEGORY_DESCRIPTION = (
+    "In mode='context', request abstract, overview, or full detail per category "
+    "(events, entities, preferences, experiences, resources, skills, or memories); "
+    "do not combine with a non-auto detail value."
+)
+_DEDUP_TURNS_DESCRIPTION = (
+    "In mode='context' with session_id, suppress URIs served with content within "
+    "this many recent turns; 0 disables cross-turn deduplication."
+)
+_PEER_SCOPE_DESCRIPTION = (
+    "In mode='context', use 'actor' for the user's own and current peer's memories, "
+    "or 'all' to also consider memories from other peers."
+)
+_OTHER_PEER_PENALTY_DESCRIPTION = (
+    "In mode='context', subtract one score penalty from every category of results "
+    "owned by peers other than the current peer; values are clamped to 0..1, and this "
+    "cannot be combined with other_peer_penalties."
+)
+_OTHER_PEER_PENALTIES_DESCRIPTION = (
+    "In mode='context', override default other-peer score penalties by category; "
+    "allowed categories are events, entities, preferences, experiences, resources, "
+    "skills, and memories, values are clamped to 0..1, and omitted categories keep "
+    "their defaults; do not combine with other_peer_penalty."
+)
+_REWRITE_DESCRIPTION = (
+    "In mode='context', use 'auto' to get a cited bullet digest from the account's query "
+    "planner model; without one configured, or on failure, the assembled context is "
+    "returned unchanged, while 'off' skips rewriting."
+)
 
-def _resolve_context_type_filter(
-    context_type: Optional[SearchContextTypeInput],
-) -> Optional[Dict[str, Any]]:
-    try:
-        return merge_search_filter(None, context_type=context_type)
-    except ValueError as exc:
-        raise InvalidArgumentError(str(exc)) from exc
+
+def _format_tags(tags: Optional[List[str]]) -> str:
+    normalized = normalize_search_tags(tags, discard_invalid=True)
+    return f" tags={json.dumps(normalized, ensure_ascii=False)}"
+
+
+def _strict_tag_filter(tags: Optional[List[str]]) -> Optional[List[str]]:
+    """Validate a tag filter the way find and search do.
+
+    The filesystem service discards malformed tags, and a filter left with none of
+    them returns every entry. Rejecting the call here keeps a mistyped filter from
+    reading as a successful, filtered listing.
+    """
+    return normalize_search_tags(tags) or None
 
 
 @_mcp_error_results()
@@ -604,19 +692,39 @@ async def find(
     target_uri: str = "",
     limit: int = 10,
     min_score: float = 0.35,
-    level: Optional[List[int]] = None,
-    context_type: Optional[Union[str, List[str]]] = None,
+    level: Annotated[
+        Optional[List[int]],
+        Field(description=_FIND_LEVEL_DESCRIPTION),
+    ] = None,
+    context_type: Annotated[
+        Optional[Union[str, List[str]]],
+        Field(description=_CONTEXT_TYPE_DESCRIPTION),
+    ] = None,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
     read_content: bool = False,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Annotated[
+        Optional[str],
+        Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
+    ] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills.  read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
-    context_filter = _resolve_context_type_filter(context_type)
+    context_filter = resolve_search_filter(
+        request_filter=None,
+        context_type=context_type,
+        since=None,
+        until=None,
+        time_field=None,
+        tags=tags,
+    )
     skill_only = resolve_context_types(context_type) == [ContextType.SKILL.value]
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
@@ -627,14 +735,17 @@ async def find(
     if skill_only and query.strip():
         # A skill is indexed as a whole package, so an item-level find returns one hit per
         # file. find_skills collapses those to the best hit per package.
-        result = await service.search.find_skills(
-            query=query,
-            ctx=ctx,
-            target_uri=target_uri,
-            limit=limit,
-            score_threshold=min_score,
-            level=level,
-        )
+        options = {
+            "query": query,
+            "ctx": ctx,
+            "target_uri": target_uri,
+            "limit": limit,
+            "score_threshold": min_score,
+            "level": level,
+        }
+        if tags:
+            options["filter"] = context_filter
+        result = await service.search.find_skills(**options)
     else:
         result = await service.search.find(
             query=query,
@@ -666,31 +777,87 @@ async def search(
     session_id: Optional[str] = None,
     limit: int = 10,
     min_score: Optional[float] = None,
-    level: Optional[List[int]] = None,
-    context_type: Optional[Union[str, List[str]]] = None,
+    level: Annotated[
+        Optional[List[int]],
+        Field(description=_SEARCH_LEVEL_DESCRIPTION),
+    ] = None,
+    context_type: Annotated[
+        Optional[Union[str, List[str]]],
+        Field(description=_CONTEXT_TYPE_DESCRIPTION),
+    ] = None,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
     mode: Literal["list", "context"] = "list",
-    query_expansion: Literal["off", "auto"] = "auto",
-    max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
-    quotas: Optional[Dict[str, int]] = None,
-    purpose: Optional[Literal["chat", "coding"]] = None,
-    detail: Literal["auto", "abstract", "overview", "full"] = "auto",
-    detail_by_category: Optional[Dict[str, str]] = None,
-    dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
-    exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
-    peer_scope: Literal["actor", "all"] = "all",
-    other_peer_penalty: Optional[float] = None,
-    other_peer_penalties: Optional[Dict[str, float]] = None,
-    rewrite: Literal["off", "auto"] = "off",
-    rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
+    query_expansion: Annotated[
+        Literal["off", "auto"],
+        Field(description=_QUERY_EXPANSION_DESCRIPTION),
+    ] = "auto",
+    max_tokens: Annotated[
+        int,
+        Field(ge=64, le=32000, description=_MAX_TOKENS_DESCRIPTION),
+    ] = DEFAULT_MAX_TOKENS,
+    quotas: Annotated[
+        Optional[Dict[str, int]],
+        Field(description=_QUOTAS_DESCRIPTION),
+    ] = None,
+    purpose: Annotated[
+        Optional[Literal["chat", "coding"]],
+        Field(description=_PURPOSE_DESCRIPTION),
+    ] = None,
+    detail: Annotated[
+        Literal["auto", "abstract", "overview", "full"],
+        Field(description=_DETAIL_DESCRIPTION),
+    ] = "auto",
+    detail_by_category: Annotated[
+        Optional[Dict[str, str]],
+        Field(description=_DETAIL_BY_CATEGORY_DESCRIPTION),
+    ] = None,
+    dedup_turns: Annotated[
+        int,
+        Field(ge=0, le=100, description=_DEDUP_TURNS_DESCRIPTION),
+    ] = 0,
+    exclude_uris: Annotated[
+        Optional[List[str]],
+        Field(max_length=MAX_EXCLUDE_URIS, description=_EXCLUDE_URIS_DESCRIPTION),
+    ] = None,
+    peer_scope: Annotated[
+        Literal["actor", "all"],
+        Field(description=_PEER_SCOPE_DESCRIPTION),
+    ] = "all",
+    other_peer_penalty: Annotated[
+        Optional[float],
+        Field(description=_OTHER_PEER_PENALTY_DESCRIPTION),
+    ] = None,
+    other_peer_penalties: Annotated[
+        Optional[Dict[str, float]],
+        Field(description=_OTHER_PEER_PENALTIES_DESCRIPTION),
+    ] = None,
+    rewrite: Annotated[
+        Literal["off", "auto"],
+        Field(description=_REWRITE_DESCRIPTION),
+    ] = "off",
+    rewrite_max_bullets: Annotated[
+        int,
+        Field(ge=1, le=20, description=_REWRITE_MAX_BULLETS_DESCRIPTION),
+    ] = 6,
     read_content: bool = False,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Annotated[
+        Optional[str],
+        Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
+    ] = None,
+    args: Annotated[
+        Optional[Dict[str, Any]],
+        Field(description=_SEARCH_ARGS_DESCRIPTION),
+    ] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
     ``mode="list"`` returns ranked memories, resources, and skills with URI,
     abstract, and score. ``mode="context"`` returns an injection-ready,
-    token-budgeted context block and supports category quotas, purpose presets,
-    detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
+    token-budgeted context block. List results include matched tags; assembled
+    context does not expose tag metadata.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
     stored content; use ``read`` explicitly to execute a Live Context node.
     """
@@ -702,8 +869,17 @@ async def search(
     ctx = _get_ctx()
     if search_type == "keywords" and not query.strip():
         raise InvalidArgumentError("query must not be empty when search_type='keywords'")
-    context_filter = _resolve_context_type_filter(context_type)
+    context_filter = resolve_search_filter(
+        request_filter=None,
+        context_type=context_type,
+        since=None,
+        until=None,
+        time_field=None,
+        tags=tags,
+    )
     if mode == "context":
+        if args is not None:
+            raise InvalidArgumentError("args are only supported in mode='list'")
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
         if target_uri:
@@ -741,7 +917,9 @@ async def search(
                 exclude_uris=resolved_exclude_uris,
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
-                rewrite=rewrite == "auto",
+                # The assembler resolves "auto" per account, as it does for the REST API;
+                # True would force a rewrite on accounts with no planner model.
+                rewrite="auto" if rewrite == "auto" else False,
                 rewrite_max_bullets=rewrite_max_bullets,
             ),
         )
@@ -786,6 +964,11 @@ async def search(
     if error:
         raise InvalidArgumentError(error)
 
+    try:
+        args = validate_search_args(args, search_type=search_type, limit=limit)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
@@ -805,6 +988,7 @@ async def search(
         context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,
+        args=args,
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
@@ -898,6 +1082,7 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 "hit_uri": m.uri,
                 "score": getattr(m, "score", 0.0),
                 "abstract": getattr(m, "abstract", "") or getattr(m, "overview", ""),
+                "tags": getattr(m, "search_tags", []),
                 "origin_score": getattr(m, "origin_score", None),
                 "time_score": getattr(m, "time_score", None),
             }
@@ -934,7 +1119,8 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
     for item in items:
         abstract = (item["abstract"] or "(no abstract)").strip()
         uri = item["uri"]
-        line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}\n    {abstract}"
+        tag_suffix = _format_tags(item["tags"])
+        line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}{tag_suffix}\n    {abstract}"
         origin_score = item["origin_score"]
         time_score = item["time_score"]
         if origin_score is not None or time_score is not None:
@@ -1325,11 +1511,19 @@ async def ls(
     limit: int | None = None,
     sort_by: Literal["name", "mtime"] | None = None,
     sort_order: Literal["asc", "desc"] = "asc",
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
+    include_tags: Annotated[
+        bool,
+        Field(description=_INCLUDE_TAGS_DESCRIPTION),
+    ] = False,
 ) -> str:
-    """List one sorted page under a viking:// directory URI.
+    """List one sorted directory page or return the requested file itself.
 
     Args:
-        uri: Directory URI to list; defaults to "viking://" like tree and glob.
+        uri: File or directory URI; defaults to "viking://" like tree and glob.
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -1344,6 +1538,8 @@ async def ls(
     if limit is not None and limit <= 0:
         raise InvalidArgumentError("limit must be greater than 0")
 
+    tags = _strict_tag_filter(tags)
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -1352,6 +1548,8 @@ async def ls(
         "ctx": ctx,
         "recursive": recursive,
         "output": "original",
+        "tags": tags,
+        "include_tags": include_tags,
     }
     if offset:
         options["offset"] = offset
@@ -1371,9 +1569,14 @@ async def ls(
         is_dir = e.get("isDir", False) if isinstance(e, dict) else getattr(e, "is_dir", False)
         entry_uri = e.get("uri", "") if isinstance(e, dict) else getattr(e, "uri", "")
         if recursive and entry_uri:
-            lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
+            label = entry_uri
         else:
-            lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
+            label = name
+        entry_tags = e.get("tags", []) if isinstance(e, dict) else getattr(e, "tags", [])
+        lines.append(
+            f"[{'dir' if is_dir else 'file'}] {label}"
+            + (_format_tags(entry_tags) if include_tags else "")
+        )
     if page.has_more:
         lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
@@ -1405,13 +1608,21 @@ async def tree(
     level_limit: int = 3,
     node_limit: int = 1000,
     include_abstract: bool = False,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
+    include_tags: Annotated[
+        bool,
+        Field(description=_INCLUDE_TAGS_DESCRIPTION),
+    ] = False,
     offset: int = 0,
     limit: int | None = None,
 ) -> str:
-    """Show one visible page from a recursive directory tree.
+    """Show one directory-tree page or a file as a single-node tree.
 
     Args:
-        uri: Directory URI to traverse.
+        uri: File or directory URI to traverse.
         level_limit: Maximum traversal depth.
         node_limit: Existing default result limit.
         include_abstract: Whether to include directory summaries (a skill directory's
@@ -1420,12 +1631,14 @@ async def tree(
         limit: Optional result limit that overrides node_limit.
 
     Returns:
-        An indented directory tree.
+        An indented directory tree; with tags, one matching path per line.
     """
     if offset < 0:
         raise InvalidArgumentError("offset must be greater than or equal to 0")
     if limit is not None and limit <= 0:
         raise InvalidArgumentError("limit must be greater than 0")
+
+    tags = _strict_tag_filter(tags)
 
     service = get_service()
     ctx = _get_ctx()
@@ -1440,6 +1653,8 @@ async def tree(
             abs_limit=_TREE_ABSTRACT_LIMIT,
             node_limit=effective_limit,
             level_limit=level_limit,
+            tags=tags,
+            include_tags=include_tags,
             offset=offset,
         )
     except NotFoundError:
@@ -1453,13 +1668,20 @@ async def tree(
     ]
     for e in entries:
         rel = (e.get("rel_path") or e.get("name") or "?").strip("/")
-        name = rel.rsplit("/", 1)[-1]
-        depth = len([part for part in rel.split("/") if part])
-        indent = "  " * max(0, depth - 1)
-        if e.get("isDir"):
-            lines.append(f"{indent}{name}/")
+        if tags:
+            # A tag filter keeps matching entries only, so the directories an indent
+            # would hang from are usually gone. Print each match's path from the tree root.
+            name = rel
+            indent = ""
         else:
-            lines.append(f"{indent}{name} ({e.get('size', 0)} B)")
+            name = rel.rsplit("/", 1)[-1]
+            depth = len([part for part in rel.split("/") if part])
+            indent = "  " * max(0, depth - 1)
+        if e.get("isDir"):
+            label = f"{indent}{name}/"
+        else:
+            label = f"{indent}{name} ({e.get('size', 0)} B)"
+        lines.append(label + (_format_tags(e.get("tags")) if include_tags else ""))
         abstract = _tree_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
@@ -1529,6 +1751,8 @@ async def write(
     ] = None,
     acl: Optional[AclSpec] = None,
     resolve_conflicts: bool = False,
+    use_snapshot: bool = False,
+    defer_processing: bool = False,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
@@ -1538,6 +1762,8 @@ async def write(
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - resolve_conflicts: mark this edit as conflict resolution for an existing resource
       Markdown file in replace mode (including its create alias); defaults to false.
+    - defer_processing: save content without semantic or vector processing. Run reindex
+      for this URI before relying on search; defaults to false.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
@@ -1556,8 +1782,9 @@ async def write(
         mode=mode,
         wait=wait,
         acl=acl,
-        edit_source="agent",
         resolve_conflicts=resolve_conflicts,
+        use_snapshot=use_snapshot,
+        defer_processing=defer_processing,
     )
     written = result.get("written_bytes", 0)
     message = (
@@ -1621,7 +1848,6 @@ async def edit(
         ctx=ctx,
         mode="replace",
         wait=wait,
-        edit_source="agent",
     )
     written = result.get("written_bytes", 0)
     message = f"Edited {result.get('uri', uri)} ({written} bytes written)."
@@ -1637,6 +1863,8 @@ def _indexing_hint(result: Dict[str, Any]) -> str:
     hint = f"\nIndexing: {', '.join(parts)}."
     if "queued" in (semantic, vector):
         hint += " Search indexes update in the background; pass wait=true if a follow-up search must see this change immediately."
+    elif "deferred" in (semantic, vector):
+        hint += " Content was saved without indexing; run reindex for this URI before relying on search."
     return hint
 
 
@@ -2321,10 +2549,29 @@ async def cancel_watch(to_uri: str) -> str:
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
-    uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
+    uri: str,
+    pattern: str | list[str],
+    case_insensitive: bool = False,
+    node_limit: int = 10,
+    tags: Annotated[
+        Optional[List[str]],
+        Field(description=_TAG_FILTER_DESCRIPTION),
+    ] = None,
+    include_tags: Annotated[
+        bool,
+        Field(description=_INCLUDE_TAGS_DESCRIPTION),
+    ] = False,
 ) -> str:
-    """Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval."""
+    """Search content in viking:// files using regex patterns (like grep).
+
+    Multiple patterns are searched concurrently, each with its own node_limit.
+    If a pattern reaches the limit, more matches may exist. Increase node_limit
+    or narrow the pattern or URI to check. Candidate search may also be capped
+    before regex matching. Use search for semantic retrieval.
+    """
     import asyncio
+
+    tags = _strict_tag_filter(tags)
 
     service = get_service()
     ctx = _get_ctx()
@@ -2332,7 +2579,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[str]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], bool, bool, Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -2341,8 +2588,15 @@ async def grep(
                     ctx=ctx,
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
+                    tags=tags,
+                    include_tags=include_tags,
                 )
-                return (p, result.get("matches", []), None)
+                matches = result.get("matches", [])
+                limit_reached = bool(result.get("limit_reached")) or (
+                    node_limit > 0 and len(matches) >= node_limit
+                )
+                candidate_limit_reached = bool(result.get("candidate_limit_reached"))
+                return (p, matches, limit_reached, candidate_limit_reached, None)
             except Exception as exc:
                 # One bad pattern must not cost the others their matches -- that is what
                 # the fan-out is for -- but an empty list is indistinguishable from a real
@@ -2350,42 +2604,63 @@ async def grep(
                 # and re-raises these; reporting them is what keeps the two faces agreeing
                 # about whether a failure is a result.
                 code = exc.code if isinstance(exc, OpenVikingError) else type(exc).__name__
-                return (p, [], f"{code}: {exc}")
+                return (p, [], False, False, f"{code}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
+    tags_by_uri: dict[str, List[str]] = {}
     total = 0
+    capped_patterns: list[str] = []
+    capped_candidate_patterns: list[str] = []
     failures: list[tuple[str, str]] = []
-    for p, matches, error in results:
+    for p, matches, limit_reached, candidate_limit_reached, error in results:
         if error is not None:
             failures.append((p, error))
+        if limit_reached:
+            capped_patterns.append(p)
+        if candidate_limit_reached:
+            capped_candidate_patterns.append(p)
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
+            if include_tags:
+                tags_by_uri[m_uri] = m.get("tags", [])
             merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
     failure_lines = [f"  {p}: {error}" for p, error in failures]
 
-    if not merged:
-        if failures and len(failures) == len(results):
-            return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
-        if failures:
-            successful = [p for p, _, error in results if error is None]
-            return (
-                f"No matches found for successful pattern(s): {', '.join(successful)}\n"
-                "Patterns that could not be searched:\n" + "\n".join(failure_lines)
-            )
-        return f"No matches found for pattern(s): {', '.join(patterns)}"
+    if failures and len(failures) == len(results):
+        return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
 
-    lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
+    if merged:
+        lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
+    else:
+        successful = [p for p, _, _, _, error in results if error is None]
+        action = "returned" if capped_patterns or capped_candidate_patterns else "found"
+        label = "successful pattern(s)" if failures else "pattern(s)"
+        lines = [f"No matches {action} for {label}: {', '.join(successful)}"]
+    if capped_patterns:
+        lines.append(
+            f"Result limit reached ({node_limit} matches per pattern); more matches may exist. "
+            "Increase node_limit or narrow the scope/pattern."
+        )
+        lines.append(f"Capped patterns: {', '.join(capped_patterns)}")
+    if capped_candidate_patterns:
+        lines.append(
+            "Candidate search may have been capped for pattern(s): "
+            f"{', '.join(capped_candidate_patterns)}. "
+            "Narrow the URI or read a promising file directly."
+        )
     for m_uri, hits in merged.items():
         hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
-        lines.append(f"\n{m_uri}")
+        tag_suffix = _format_tags(tags_by_uri.get(m_uri)) if include_tags else ""
+        lines.append(f"\n{m_uri}{tag_suffix}")
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
     if failures:
-        lines.append("\nPatterns that could not be searched:")
+        separator = "\n" if merged else ""
+        lines.append(f"{separator}Patterns that could not be searched:")
         lines.extend(failure_lines)
     return "\n".join(lines)
 
@@ -2543,6 +2818,9 @@ def _apply_portable_schemas() -> None:
         properties = tool.parameters.get("properties", {})
         for name, override in _PORTABLE_PROPERTY_OVERRIDES.get(tool.name, {}).items():
             properties[name] = {**properties[name], **override}
+            # A string override must not retain items from a collapsed array union.
+            if override.get("type") == "string":
+                properties[name].pop("items", None)
 
 
 _apply_portable_schemas()

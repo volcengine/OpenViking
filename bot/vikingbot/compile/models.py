@@ -64,14 +64,6 @@ class CompileRequest(BaseModel):
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_reason(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "reason" in data:
-            data = dict(data)
-            data.setdefault("instruction", data.pop("reason"))
-        return data
-
 
 class SanitizedCompileRequest(BaseModel):
     """Stored normalized inputs ignore unknown fields; the service validates public arguments."""
@@ -81,11 +73,8 @@ class SanitizedCompileRequest(BaseModel):
     from_: list[str] = Field(alias="from")
     to: str
     instruction: str
-    instruction_provided: bool = False
     skill: str
-    # Inclusive source modification cutoff in UTC; None compiles all source files.
-    last_compile_time: datetime | None = None
-    # Kernel change plan for incremental Compile; supersedes last_compile_time.
+    # The OV service freezes the directory plan before submitting this execution.
     changes: dict[str, Any] | None = None
 
 
@@ -218,11 +207,13 @@ class CompileResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
-    # Skipped target-state conflicts, each containing uri, code and message; never delivered.
+    # Skipped target-state conflicts, each containing uri, code and message; never published.
     conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
+    completion_status: Literal["partial"] | None = None
+    recovery_proof: str | None = None
 
 
 class CompileTask(BaseModel):
@@ -247,10 +238,14 @@ class CompileTask(BaseModel):
     result: CompileResult | None = None
     error: CompileErrorInfo | None = None
 
-    def public_dict(self) -> dict[str, Any]:
+    def public_dict(self, *, include_recovery_proof: bool = False) -> dict[str, Any]:
         data = self.model_dump(exclude={"principal_scope", "sanitized_request"}, exclude_none=True)
         if self.result is not None:
-            data["result"] = self.result.model_dump(by_alias=True)
+            data["result"] = self.result.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude=None if include_recovery_proof else {"recovery_proof"},
+            )
         return data
 
 
@@ -264,7 +259,7 @@ class CompileAccepted(BaseModel):
 
 
 class CompileSessionRequest(BaseModel):
-    """Status or cancellation request scoped by the authenticated caller and session ID."""
+    """Status, cancellation, or archive request scoped by authenticated caller and session ID."""
 
     model_config = ConfigDict(extra="forbid")
 

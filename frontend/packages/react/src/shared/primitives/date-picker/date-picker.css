@@ -82,25 +82,26 @@
   height: 16px;
 }
 
-.ov-date-picker__popup {
-  position: absolute;
-  z-index: 2;
-  /* 向上弹出：日期字段通常位于面板底部，向下展开会被面板的滚动容器裁掉。
-     向上展开在同样空间里完整可见，也不必让宿主为它留白。
-   *
-   * Opens upward: a date field usually sits at the bottom of its panel, where a
-   * downward popup would be clipped by the panel's scroll container. Opening upward
-   * stays fully visible in the same space without the host reserving room for it. */
-  bottom: calc(100% + 4px);
-  left: 0;
-  box-sizing: border-box;
+.ov-popover.ov-date-picker__overlay {
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
   width: 240px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: auto;
+  box-shadow: var(--ov-ui-overlay-shadow-default);
+}
+
+.ov-date-picker__popup {
+  box-sizing: border-box;
+  width: 100%;
   padding: 8px;
   border: 1px solid
     var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
   border-radius: 8px;
   background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
 }
 
 .ov-date-picker__header {
@@ -112,6 +113,8 @@
 }
 
 .ov-date-picker__title {
+  flex: 1;
+  text-align: center;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
   font-size: 13px;
   font-weight: 500;
@@ -121,7 +124,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  flex: none;
+  width: 20px;
   height: 24px;
   padding: 0;
   border: 0;
@@ -161,7 +165,7 @@
   cursor: pointer;
 }
 
-.ov-date-picker__cell:hover {
+.ov-date-picker__cell:enabled:hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
 }
 
@@ -182,6 +186,12 @@
   );
 }
 
-.ov-date-picker__cell--selected:hover {
+.ov-date-picker__cell--selected:enabled:hover {
   background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-date-picker__cell:disabled {
+  background: transparent;
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+  cursor: not-allowed;
 }

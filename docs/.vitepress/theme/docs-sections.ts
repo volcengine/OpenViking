@@ -109,6 +109,8 @@ export const sections: DocSection[] = [
         p('agent-integrations/04-codex'),
         p('agent-integrations/12-cursor'),
         p('agent-integrations/13-trae'),
+        p('agent-integrations/20-codebuddy'),
+        p('agent-integrations/21-qoder'),
         p('agent-integrations/10-opencode'),
         p('agent-integrations/17-dsh')
       ]),
@@ -247,6 +249,7 @@ export const sections: DocSection[] = [
       g('Storage and performance', '存储与性能', [
         p('guides/13-multi-write-storage'),
         p('guides/14-ragfs-cache'),
+        p('guides/15-postgres-queuefs'),
         p('guides/16-cuvs'),
         p('guides/25-pgvector'),
         p('guides/26-pgvector-directory-filtering')

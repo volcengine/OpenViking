@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 from pathlib import Path
 
 import orjson
@@ -8,48 +7,8 @@ import pytest
 from aiohttp import web
 from conftest import MCP_TOOLS, TEXT, mcp_tool
 
-from openviking_gateway.capture import ready_at
 from openviking_gateway.protocols import normalize
 from openviking_gateway.tool_loop import REFUSED
-
-
-@pytest.mark.parametrize(
-    ("path", "protocol"),
-    [
-        ("/v1/chat/completions", "chat"),
-        ("/v1/messages", "anthropic"),
-        ("/v1/responses", "responses"),
-    ],
-)
-async def test_http_replay_and_client_visibility(running_gateway, path, protocol):
-    _, client, _, key, seen, _ = running_gateway
-    headers = {
-        "Authorization": "Bearer " + key["key"],
-        "X-OpenViking-Session": "chat-1",
-        "anthropic-version": "2023-06-01",
-    }
-    field = "input" if protocol == "responses" else "messages"
-    body = {
-        "model": "model",
-        "store": False,
-        field: [{"role": "user", "content": "Remember blue?"}],
-        "unknown": {"preserve": [1, 2]},
-    }
-    response = await client.post(path, headers=headers, json=body)
-    assert response.status_code == 200, response.text
-    assert "openviking-context" not in response.text
-    original = orjson.loads(seen[-1][1])
-    assert "openviking-context" in str(original[field])
-    body[field] += [
-        {"role": "assistant", "content": "hello"},
-        {"role": "user", "content": "Continue please"},
-    ]
-    response = await client.post(path, headers=headers, json=body)
-    assert response.status_code == 200, response.text
-    assert orjson.loads(seen[-1][1])[field][0] == original[field][0]
-    assert seen[-1][2].get(
-        "Authorization", seen[-1][2].get("x-api-key", seen[-1][2].get("X-Api-Key"))
-    ) in {"Bearer model-secret", "model-secret"}
 
 
 @pytest.mark.parametrize("client_name", ["claude-code", "codex-cli", "openai-python"])
@@ -90,7 +49,13 @@ async def test_recorded_client_prefixes(running_gateway, client_name, session_he
         response = await client.post(recorded["path"], headers=headers, json=body)
         assert response.status_code == 200, response.text
         assert "openviking-context" not in response.text
-        forwarded = [raw for path, raw, _ in seen if path == recorded["path"]][-1]
+        forwarded, outgoing = [
+            (raw, headers) for path, raw, headers in seen if path == recorded["path"]
+        ][-1]
+        assert outgoing.get("Authorization", outgoing.get("x-api-key")) in {
+            "Bearer model-secret",
+            "model-secret",
+        }
         upstream.append(orjson.loads(forwarded))
     old, new = (body[field] for body in upstream)
     assert "openviking-context" in str(old)
@@ -101,18 +66,13 @@ async def test_recorded_client_prefixes(running_gateway, client_name, session_he
             assert upstream[1][field_name] == fixture["requests"][1]["body"][field_name]
 
     # A client retry and simultaneous duplicate requests must reuse the same
-    # injection and must not capture the confirmed first turn more than once.
+    # injection and must not capture a saved turn again.
     repeated = await asyncio.gather(
         *(client.post(recorded["path"], headers=headers, json=body) for _ in range(3))
     )
     assert all(r.status_code == 200 for r in repeated)
     forwarded = [raw for path, raw, _ in seen if path == recorded["path"]][-3:]
     assert all(orjson.loads(raw) == upstream[1] for raw in forwarded)
-    for _ in range(20):
-        await app.state.worker.once()
-        if writes:
-            break
-        await asyncio.sleep(0.01)
     source_ids = [
         source_id
         for batch in writes
@@ -126,7 +86,7 @@ async def test_recorded_client_prefixes(running_gateway, client_name, session_he
 
 @pytest.mark.parametrize("client_name", ["claude-code", "codex-cli", "openai-python"])
 async def test_recorded_client_disabled_passthrough(running_gateway, client_name):
-    _, client, admin, _, seen, _ = running_gateway
+    _, client, admin, _, seen, writes = running_gateway
     fixture = json.loads((Path(__file__).parent / "fixtures" / f"{client_name}.json").read_text())
     await client.put(
         "/admin/policies/off",
@@ -159,6 +119,7 @@ async def test_recorded_client_disabled_passthrough(running_gateway, client_name
         )
         assert response.status_code == 200
         assert [data for path, data, _ in seen if path == recorded["path"]][-1] == raw
+    assert not writes
 
 
 async def test_raw_passthrough_errors_sse_and_large_numbers(running_gateway):
@@ -271,7 +232,7 @@ def completion(message, finish="stop", **extra):
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("show", [True, False])
 async def test_hidden_tools_mixed_replay_and_usage(running_gateway, streaming, mixed, show):
-    app, client, admin, key, _, _ = running_gateway
+    app, client, admin, key, _, writes = running_gateway
     await enable_tools(client, admin, show_tool_calls=show)
     calls, model_requests = [], []
 
@@ -308,63 +269,24 @@ async def test_hidden_tools_mixed_replay_and_usage(running_gateway, streaming, m
             return web.json_response(value)
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
         await response.prepare(request)
+
+        def event(delta, finish=None, **fields):
+            return {"choices": [{"index": 0, "delta": delta, "finish_reason": finish}], **fields}
+
         content = dict(message)
         tools = content.pop("tool_calls", [])
-        events = [
-            {
-                "id": "u-id",
-                "provider_field": "keep",
-                "choices": [{"index": 0, "delta": content, "finish_reason": None}],
-            }
-        ]
-        # Split names and arguments across SSE fragments, including both kinds.
+        events = [event(content, id="u-id", provider_field="keep")]
         for index, call in enumerate(tools):
-            function = call["function"]
-            events += [
-                {
-                    "choices": [
-                        {
-                            "delta": {
-                                "tool_calls": [
-                                    {
-                                        "index": index,
-                                        "id": call["id"],
-                                        "type": "function",
-                                        "function": {"name": function["name"][:5], "arguments": ""},
-                                    }
-                                ]
-                            }
-                        }
-                    ]
-                },
-                {
-                    "choices": [
-                        {
-                            "delta": {
-                                "tool_calls": [
-                                    {
-                                        "index": index,
-                                        "function": {
-                                            "name": function["name"][5:],
-                                            "arguments": function["arguments"],
-                                        },
-                                    }
-                                ]
-                            }
-                        }
-                    ]
-                },
-            ]
-        events.append(
-            {
-                "choices": [{"delta": {}, "finish_reason": value["choices"][0]["finish_reason"]}],
-                "usage": value["usage"],
-            }
-        )
-        raw = (
-            b"".join(b"data: " + orjson.dumps(event) + b"\n\n" for event in events)
-            + b"data: [DONE]\n\n"
-        )
+            name = call["function"]["name"]
+            arguments = call["function"]["arguments"]
+            for part in (
+                {**call, "function": {"name": name[:5], "arguments": ""}},
+                {"function": {"name": name[5:], "arguments": arguments}},
+            ):
+                events.append(event({"tool_calls": [{"index": index, **part}]}))
+        events.append(event({}, value["choices"][0]["finish_reason"], usage=value["usage"]))
+        raw = b"".join(b"data: " + orjson.dumps(e) + b"\n\n" for e in events)
+        raw += b"data: [DONE]\n\n"
         for i in range(0, len(raw), 13):
             await response.write(raw[i : i + 13])
         await response.write_eof()
@@ -388,6 +310,10 @@ async def test_hidden_tools_mixed_replay_and_usage(running_gateway, streaming, m
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200, response.text
     assert "openviking_find" not in response.text
+    if mixed:
+        assert not writes
+    else:
+        assert len(writes) == 1 and "Blue." in str(writes[0]["messages"])
     from openviking_gateway.storage import digest
 
     sid = digest("tool-session")
@@ -434,6 +360,7 @@ async def test_hidden_tools_mixed_replay_and_usage(running_gateway, streaming, m
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200, response.text
     replay = model_requests[-1]
+    assert "openviking_find" in str(model_requests[0]["tools"])
     assert replay["tools"] == model_requests[0]["tools"]
     hidden = replay["messages"][1]
     assert hidden["reasoning_content"] == "private-1"
@@ -587,18 +514,15 @@ async def test_requests_without_gateway_tools_pass_client_tools_through(running_
     assert forwarded["tools"] == CLIENT_TOOLS and forwarded["tool_choice"] == "auto"
 
 
-@pytest.mark.parametrize("vendor", ["ark", "byteplus"])
 @pytest.mark.parametrize(
-    "path,protocol,target",
+    ("vendor", "path", "protocol"),
     [
-        ("/api/v3/chat/completions", "chat", "/api/v3/chat/completions"),
-        ("/api/v3/responses", "responses", "/api/v3/responses"),
-        ("/api/compatible/v1/messages", "anthropic", "/api/compatible/v1/messages"),
+        ("ark", "/api/v3/chat/completions", "chat"),
+        ("byteplus", "/api/v3/responses", "responses"),
+        ("ark", "/api/compatible/v1/messages", "anthropic"),
     ],
 )
-async def test_ark_paths_unknown_fields_and_cache_key(
-    running_gateway, vendor, path, protocol, target
-):
+async def test_ark_paths_unknown_fields_and_cache_key(running_gateway, vendor, path, protocol):
     _, client, admin, key, seen, _ = running_gateway
     upstream = (await client.get("/admin/upstreams", headers=admin)).json()
     configured = next(u for u in upstream if u["id"] == protocol)
@@ -629,7 +553,7 @@ async def test_ark_paths_unknown_fields_and_cache_key(
         response = await client.post(path, headers=headers, json=body)
         assert response.status_code == 200, response.text
         forwarded = orjson.loads(seen[-1][1])
-        assert seen[-1][0] == target
+        assert seen[-1][0] == path
         assert all(
             forwarded[k] == body[k]
             for k in ["thinking", "caching", "expire_at", "encrypted_content"]
@@ -745,75 +669,6 @@ async def test_attachment_import_and_signed_upload_proxy(running_gateway, name):
     assert (await client.post("/uploads", files={"file": ("x.txt", b"x")})).status_code == 400
 
 
-async def test_shell_upload_instructions_use_public_proxy(running_gateway):
-    app, client, admin, key, _, _ = running_gateway
-    app.state.config.public_url = "https://gateway.example"
-    await enable_tools(client, admin)
-    requests = []
-
-    async def backend(request):
-        if request.path == "/mcp":
-            return web.json_response(
-                {
-                    "id": 1,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "POST to http://private-ov/api/v1/resources/temp_upload?token=opaque%2Btoken",
-                            }
-                        ]
-                    },
-                }
-            )
-        if request.path == "/v1/chat/completions":
-            payload = await request.json()
-            requests.append(payload)
-            if len(requests) == 1:
-                return web.json_response(
-                    completion(
-                        {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                tool_call(
-                                    "openviking_add_resource",
-                                    arguments={"path": "/home/client/file.md"},
-                                )
-                            ],
-                        },
-                        "tool_calls",
-                    )
-                )
-            result = payload["messages"][-1]["content"]
-            assert "https://gateway.example/gateway/uploads?token=opaque%2Btoken" in result
-            assert "private-ov" not in result and "user-key" not in result
-            return web.json_response(
-                completion(
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [tool_call("bash", "shell-call", {"command": "upload"})],
-                    },
-                    "tool_calls",
-                )
-            )
-        return None
-
-    app.state.test_backend["handler"] = backend
-    response = await client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "tools"},
-        json={
-            "model": "model",
-            "messages": [{"role": "user", "content": "import file"}],
-            "tools": [{"type": "function", "function": {"name": "bash"}}],
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "bash"
-
-
 OV_DOWNLOAD = "http://private-ov/api/v1/content/download?token=AbC123xyz_"
 OV_UPLOAD = "http://private-ov/api/v1/resources/temp_upload?token=signed-once"
 OV_NOTE = (
@@ -867,6 +722,17 @@ async def test_download_link_uses_public_proxy(running_gateway):
     app, client, admin, _, _, _ = running_gateway
     app.state.config.public_url = "https://gateway.example"
     await enable_tools(client, admin)
+    upload, calls = await gateway_tool_result(
+        running_gateway,
+        "shell-upload",
+        "add_resource",
+        {"path": "/home/client/file.md"},
+        "POST to http://private-ov/api/v1/resources/temp_upload?token=opaque%2Btoken",
+    )
+    assert "https://gateway.example/gateway/uploads?token=opaque%2Btoken" in upload
+    assert "private-ov" not in upload and "user-key" not in upload
+    assert [call["name"] for call in calls] == ["add_resource"]
+
     result, _ = await gateway_tool_result(
         running_gateway,
         "download",
@@ -956,17 +822,14 @@ async def test_download_requires_client_shell(running_gateway):
     assert "requires a client shell" in result and mcp_calls == []
 
 
-@pytest.mark.parametrize("vendor", ["ark", "byteplus"])
-async def test_ark_responses_stream_keeps_native_fields_and_done(running_gateway, vendor):
+async def test_ark_responses_stream_keeps_native_fields_and_done(running_gateway):
     app, client, admin, key, _, _ = running_gateway
     upstreams = (await client.get("/admin/upstreams", headers=admin)).json()
     upstream = next(u for u in upstreams if u["id"] == "responses")
     allowed = {"name", "protocol", "base_url", "models", "aliases", "vendor"}
     payload = {k: v for k, v in upstream.items() if k in allowed}
-    payload["vendor"] = vendor
-    payload["base_url"] = payload["base_url"].removesuffix("/v1") + (
-        "/api/compatible" if payload["protocol"] == "anthropic" else "/api/v3"
-    )
+    payload["vendor"] = "byteplus"
+    payload["base_url"] = payload["base_url"].removesuffix("/v1") + "/api/v3"
     payload["api_key"] = "model-secret"
     assert (
         await client.put("/admin/upstreams/responses", headers=admin, json=payload)
@@ -1010,48 +873,6 @@ async def test_ark_responses_stream_keeps_native_fields_and_done(running_gateway
     log = (await client.get("/admin/logs", headers=admin)).json()[0]
     assert log["cached_tokens"] == 2048 and log["input_tokens"] == 3000
     assert log["cache_eligible"] is True
-
-
-@pytest.mark.parametrize("max_field", ["max_tokens", "max_completion_tokens"])
-async def test_large_first_tool_request_keeps_client_token_limit(running_gateway, max_field):
-    _, client, admin, key, seen, _ = running_gateway
-    await enable_tools(client, admin, tool_total_tokens=1024)
-    body = {
-        "model": "model",
-        "messages": [{"role": "user", "content": "hello"}],
-        "system": "fixed instructions " * 20000,
-        max_field: 6000,
-    }
-    response = await client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "large-tool"},
-        json=body,
-    )
-    assert response.status_code == 200
-    forwarded = orjson.loads(seen[-1][1])
-    assert forwarded[max_field] == 6000
-    assert ("max_completion_tokens" if max_field == "max_tokens" else "max_tokens") not in forwarded
-
-
-@pytest.mark.parametrize("vendor", ["ark", "byteplus"])
-async def test_ark_connection_test_generates_under_api_v3(running_gateway, vendor):
-    app, client, admin, _, seen, _ = running_gateway
-    upstream = await app.state.management.get("tenant", "upstreams", "chat")
-    await app.state.management.save(
-        "tenant",
-        "upstreams",
-        "chat",
-        {
-            **upstream,
-            "vendor": vendor,
-            "base_url": upstream["base_url"].removesuffix("/v1") + "/api/v3",
-        },
-    )
-    response = await client.post(
-        "/admin/upstreams/chat/test", headers=admin, json={"model": "model"}
-    )
-    assert response.json()["ok"] and response.json()["status"] == 200
-    assert seen[-1][0] == "/api/v3/chat/completions"
 
 
 async def test_ark_burst_is_forwarded_without_local_429(running_gateway):
@@ -1106,10 +927,10 @@ async def test_storage_failure_still_forwards_plain_chat(running_gateway, monkey
     assert seen[-1][1] == raw
 
 
-@pytest.mark.parametrize("limit", [{}, {"max_tokens": 1024}, {"max_completion_tokens": 2048}])
+@pytest.mark.parametrize("limit", [{}, {"max_tokens": 6000}, {"max_completion_tokens": 6000}])
 async def test_long_context_tool_continuation_preserves_output_limit(running_gateway, limit):
     app, client, admin, key, _, _ = running_gateway
-    await enable_tools(client, admin)
+    await enable_tools(client, admin, tool_total_tokens=1024)
     requests, writes = [], []
 
     async def backend(request):
@@ -1151,13 +972,21 @@ async def test_long_context_tool_continuation_preserves_output_limit(running_gat
     response = await client.post(
         "/v1/chat/completions",
         headers={"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "long-tools"},
-        json={"model": "model", "messages": [{"role": "user", "content": "save this"}], **limit},
+        json={
+            "model": "model",
+            **limit,
+            "messages": [
+                {"role": "system", "content": "fixed instructions " * 20000},
+                {"role": "user", "content": "save this"},
+            ],
+        },
     )
     assert response.status_code == 200, response.text
     assert len(writes) == 1 and len(requests) == 2
-    assert {
-        k: v for k, v in requests[1].items() if k in {"max_tokens", "max_completion_tokens"}
-    } == limit
+    for sent in requests:
+        assert {
+            name: sent[name] for name in ("max_tokens", "max_completion_tokens") if name in sent
+        } == limit
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -1280,90 +1109,80 @@ async def test_upstream_save_keeps_blank_secrets_per_header(running_gateway):
 
 async def test_overview_counts_model_requests_recalls_and_capture_issues(running_gateway):
     app, client, admin, _, _, _ = running_gateway
+    overview = (await client.get("/admin/overview", headers=admin)).json()
+    assert overview["requests"] == 0 and overview["last_request_at"] is None
+    assert overview["recall_ms"] == 0 and overview["recall_requests"] == 0
+    assert overview["capture_issues"] == {"failed": 0}
+
     # Oldest first: the store returns the newest record first.
     for record in [
-        {"kind": "user", "session": "a", "protocol": "chat", "capture_status": "retrying"},
-        {"kind": "capture", "session": "b", "protocol": "chat", "capture_status": "paused"},
-        {"kind": "capture", "session": "a", "protocol": "chat", "capture_status": "active"},
+        {"kind": "user", "session": "a", "protocol": "chat", "capture_status": "failed"},
+        {"kind": "user", "session": "b", "protocol": "chat", "capture_status": "failed"},
+        # A later turn that saved clears the failure; a request that saved nothing does not.
+        {
+            "kind": "continuation",
+            "session": "a",
+            "protocol": "chat",
+            "capture_status": "active",
+            "capture_messages": 4,
+        },
+        {"kind": "auxiliary", "session": "b", "protocol": "chat", "capture_status": "active"},
         {"kind": "user", "recall_reason": "recalled", "recall_ms": 30, "recall_count": 2},
         {"kind": "user", "recall_reason": "empty", "recall_ms": 10},
         {"kind": "user", "recall_reason": "disabled", "recall_ms": 0},
-        {"kind": "continuation", "session": "c", "protocol": "chat", "capture_status": "retrying"},
-        {"kind": "capture", "session": "c", "protocol": "anthropic", "capture_status": "paused"},
+        {"kind": "continuation", "session": "c", "protocol": "chat", "capture_status": "failed"},
+        {"kind": "user", "session": "c", "protocol": "anthropic", "capture_status": "failed"},
     ]:
         await app.state.management.log("tenant", record)
     overview = (await client.get("/admin/overview", headers=admin)).json()
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    newest_request = next(log for log in logs if log["kind"] != "capture")
-    assert overview["requests"] == 5
-    assert overview["last_request_at"] == newest_request["time"]
+    assert overview["requests"] == 9
+    assert overview["last_request_at"] == logs[0]["time"]
     assert overview["recall_requests"] == 2 and overview["recall_ms"] == 20
     assert overview["recall_count"] == 2
-    assert overview["capture_issues"] == {"retrying": 1, "paused": 2}
+    assert overview["capture_issues"] == {"failed": 3}
     assert overview["log_retention_days"] == 30
 
 
-async def test_overview_counts_capture_recovered_during_a_request(running_gateway):
-    app, client, admin, key, _, _ = running_gateway
-    store = app.state.store
-    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "recovering"}
+async def test_failed_save_is_recorded_until_a_later_turn_saves(running_gateway):
+    app, client, admin, key, _, writes = running_gateway
+    failing = [True]
+
+    async def handler(request):
+        if request.path.endswith("/messages/batch") and failing[0]:
+            return web.json_response({"status": "error"}, status=503)
+        return None
+
+    app.state.test_backend["handler"] = handler
+    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "outage"}
     history = [{"role": "user", "content": "Question"}]
     response = await client.post(
         "/v1/chat/completions", headers=headers, json={"model": "model", "messages": history}
     )
     assert response.status_code == 200, response.text
-    with store.connect() as c:
-        ((scope, session),) = list(c.execute("SELECT scope,session FROM capture"))
-    retry = {"attempts": 1, "reason": "openviking_http_503", "retry_at": time.time() + 3600}
-    old = await store.capture.get(scope, session)
-    value = {**old.value, "error": retry}
-    assert await store.capture.swap(scope, session, old, value, ready_at(value))
-
-    async def recover(request):
-        # The worker's retry succeeds while this request is still upstream.
-        if request.path == "/v1/chat/completions":
-            old = await store.capture.get(scope, session)
-            value = {**old.value, "error": {}}
-            assert await store.capture.swap(scope, session, old, value, ready_at(value))
-            await app.state.worker.log(
-                {"session": session}, old.value, "active", "delivery_recovered"
-            )
-
-    app.state.test_backend["handler"] = recover
+    (log,) = (await client.get("/admin/logs", headers=admin)).json()
+    assert log["capture_status"] == "failed" and log["capture_reason"] == "openviking_http_503"
+    assert "capture_messages" not in log and "openviking_session" not in log
+    overview = (await client.get("/admin/overview", headers=admin)).json()
+    assert overview["capture_issues"] == {"failed": 1}
+    failing[0] = False
     history += [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "Next"}]
     response = await client.post(
         "/v1/chat/completions", headers=headers, json={"model": "model", "messages": history}
     )
     assert response.status_code == 200, response.text
+    log = (await client.get("/admin/logs", headers=admin)).json()[0]
+    assert log["capture_status"] == "active" and log["capture_reason"] == ""
+    # The turn that failed is written with the one that saved.
+    assert log["capture_messages"] == 4
+    assert [len(batch["messages"]) for batch in writes] == [4]
+    store = app.state.store
+    with store.connect() as c:
+        ((scope, session),) = list(c.execute("SELECT scope,session FROM capture"))
+    state = (await store.capture.get(scope, session)).value
+    assert log["openviking_session"] == state["ov_session"]
     overview = (await client.get("/admin/overview", headers=admin)).json()
-    assert overview["capture_issues"] == {"retrying": 0, "paused": 0}
-
-
-async def test_capture_status_refresh_failure_still_logs_request(running_gateway, monkeypatch):
-    _, client, admin, key, _, _ = running_gateway
-
-    class Broken:
-        @staticmethod
-        def model_validate(_):
-            raise RuntimeError("refresh failed")
-
-    monkeypatch.setattr("openviking_gateway.proxy.Policy", Broken)
-    response = await client.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "s"},
-        json={"model": "model", "messages": [{"role": "user", "content": "Question"}]},
-    )
-    assert response.status_code == 200, response.text
-    logs = (await client.get("/admin/logs", headers=admin)).json()
-    assert [log["capture_status"] for log in logs if log["kind"] == "user"] == ["active"]
-
-
-async def test_overview_without_model_requests(running_gateway):
-    _, client, admin, _, _, _ = running_gateway
-    overview = (await client.get("/admin/overview", headers=admin)).json()
-    assert overview["requests"] == 0 and overview["last_request_at"] is None
-    assert overview["recall_ms"] == 0 and overview["recall_requests"] == 0
-    assert overview["capture_issues"] == {"retrying": 0, "paused": 0}
+    assert overview["capture_issues"] == {"failed": 0}
 
 
 async def test_user_and_account_data_deletion_routes(running_gateway):

@@ -4,20 +4,34 @@ export const COMMAND_CONSOLE_URI_PATTERN = /(?:viking|https?):\/\/[^\s"'<>`]+/g;
 export const COMMAND_CONSOLE_PROSE_URI_PATTERN =
   /(?:viking|https?):\/\/[^\s,，。；;、"'<>()[\]]+/g;
 
+/** Keep sentence punctuation outside prose links. */
+export const trimCommandConsoleProseUri = (uri: string) =>
+  uri.replace(/[.!?；;:：！？]+$/u, '');
+
+/** Return exactly the safe URI targets rendered in prose result lines. */
+export function readCommandConsoleProseUris(text: string): string[] {
+  const pattern = new RegExp(COMMAND_CONSOLE_PROSE_URI_PATTERN.source, 'gim');
+  return [...text.matchAll(pattern)].flatMap(
+    ([uri]) => getCommandConsoleSafeHref(trimCommandConsoleProseUri(uri)) ?? [],
+  );
+}
+
 /** Resource targets permit only explicit resource or web navigation schemes. */
 export function getCommandConsoleSafeHref(
   uri: string | undefined,
 ): string | undefined {
   const href = uri?.trim();
-  return href && /^(?:viking|https?):\/\/[^\s]+$/i.test(href)
-    ? href
-    : undefined;
+  if (
+    href &&
+    /^viking:\/\/[^\s\p{Cc}][^\p{Cc}\r\n\u2028\u2029]*$/iu.test(href)
+  ) {
+    return href;
+  }
+  return href && /^https?:\/\/[^\s]+$/i.test(href) ? href : undefined;
 }
 
 /** 复制文本到剪贴板；不可用时返回 `false`，不抛出。 */
 export async function copyCommandConsoleText(text: string): Promise<boolean> {
-  if (typeof navigator === 'undefined') return false;
-
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);

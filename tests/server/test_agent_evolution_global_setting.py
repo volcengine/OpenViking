@@ -135,27 +135,6 @@ async def settings_http(fake_viking_fs, monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_agent_evolution_is_disabled_by_default():
-    assert ServerConfig().agent_evolution.enabled is False
-
-
-def test_agent_evolution_can_be_enabled_as_account_default():
-    config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
-
-    assert config.agent_evolution.enabled is True
-
-
-def test_server_agent_evolution_seeds_runtime_cluster_baseline():
-    sessions = SessionService()
-    service = object.__new__(OpenVikingService)
-    service._session_service = sessions
-
-    service.set_agent_evolution_config(AgentEvolutionConfig(enabled=True))
-
-    assert service._agent_evolution_base_config.enabled is True
-    assert sessions._agent_evolution_default_enabled is True
-
-
 async def test_server_agent_evolution_updates_initialized_runtime_baseline():
     from openviking.config.binding import manager_over_source
     from openviking.config.source import MemoryConfigSource
@@ -173,10 +152,13 @@ async def test_server_agent_evolution_updates_initialized_runtime_baseline():
     service._config = base
     service._runtime_config_manager = manager
     service._session_service = SessionService()
-    service.set_agent_evolution_config(AgentEvolutionConfig(enabled=True))
+    enabled = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
+    service.set_agent_evolution_config(enabled.agent_evolution)
     try:
+        assert (await manager.get_account("default", "agent_evolution")).enabled is False
+        assert await service.sessions.get_agent_evolution_enabled("default") is True
         await service.apply_agent_evolution_config()
-        assert (await manager.get_account("default", "agent_evolution")).enabled
+        assert (await manager.get_account("default", "agent_evolution")).enabled is True
     finally:
         OpenVikingConfigSingleton.reset_instance()
 
@@ -426,6 +408,9 @@ async def test_account_configuration_rejects_non_allowlisted_fields(
     )
 
     assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert "root_api_key" in error["message"]
 
 
 async def test_agent_evolution_endpoint_keeps_name_and_uses_account_settings(

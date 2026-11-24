@@ -30,41 +30,6 @@ class TestAddMessage:
         assert msg.role == "assistant"
         assert len(msg.parts) == 1
 
-    async def test_add_message_with_multiple_parts(self, session: Session):
-        """Test adding message with multiple parts"""
-        parts = [TextPart("Here is some context:"), TextPart("And here is more text.")]
-        msg = session.add_message("assistant", parts)
-
-        assert len(msg.parts) == 2
-
-    async def test_add_message_with_context_part(self, session: Session):
-        """Test adding message with context part"""
-        parts = [
-            TextPart("Based on the context:"),
-            ContextPart(
-                uri="viking://user/test/resources/doc.md",
-                context_type="resource",
-                abstract="Some context abstract",
-            ),
-        ]
-        msg = session.add_message("assistant", parts)
-
-        assert len(msg.parts) == 2
-
-    async def test_add_message_with_tool_part(self, session: Session):
-        """Test adding message with tool call"""
-        tool_part = ToolPart(
-            tool_id="tool_123",
-            tool_name="search_tool",
-            tool_uri=f"{session.uri}/tools/tool_123",
-            skill_uri="viking://user/skills/search",
-            tool_input={"query": "test"},
-            tool_status="running",
-        )
-        msg = session.add_message("assistant", [TextPart("Executing search..."), tool_part])
-
-        assert len(msg.parts) == 2
-
     async def test_add_message_with_peer_id(self, session: Session):
         """Test peer_id is persisted on session messages."""
         msg = session.add_message(

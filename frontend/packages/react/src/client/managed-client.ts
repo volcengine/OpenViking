@@ -30,6 +30,31 @@ interface Configuration {
 }
 const configurations = new WeakMap<OvClient, Configuration>();
 
+const identityFields = ['apiKey', 'accountId', 'userId', 'resourceId'] as const;
+
+/** Whether an effective identity is re-evaluated for every request. */
+export function hasDynamicIdentity(
+  client: OvClient,
+  local: OvRequestOptions | undefined,
+): boolean {
+  const defaults = configurations.get(client)?.options;
+  return identityFields.some((field) => {
+    const override = local?.[field];
+    const value = override === undefined ? defaults?.[field] : override;
+    return typeof value === 'function';
+  });
+}
+
+/** Transport decorators retain the same identity, scheduler and cache scope. */
+export function inheritClientConfiguration(
+  client: OvClient,
+  decorated: OvClient,
+): OvClient {
+  const configuration = configurations.get(client);
+  if (configuration) configurations.set(decorated, configuration);
+  return decorated;
+}
+
 function serviceURL(baseURL = '') {
   return new URL(
     baseURL.replace(/\/+$/, '') || '/',
