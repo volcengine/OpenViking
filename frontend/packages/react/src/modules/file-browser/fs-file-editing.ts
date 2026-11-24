@@ -60,12 +60,7 @@ export function createFileEditing(
                 reason,
               }))
           : undefined;
-      return {
-        content,
-        annotations,
-        // The full Wiki read keeps the projected body as an exact prefix.
-        readOnlySuffix: wikiSource?.slice(content.length) || undefined,
-      };
+      return { content, annotations };
     },
     save: async (content) => {
       options.signal?.throwIfAborted();

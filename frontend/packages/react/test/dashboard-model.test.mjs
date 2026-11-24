@@ -101,3 +101,73 @@ test('Wiki conflict anchors keep Markdown that only resembles YAML frontmatter',
     });
   }
 });
+
+test('Wiki conflict anchors prefer exact hits and map soft wraps back to source offsets', () => {
+  const snippet = '金额\r\n> 上限';
+  const prefix = '# 规则\r\n\r\n> ';
+  const body = prefix + snippet;
+  assert.deepEqual(locateWikiConflict(body, '金额上限'), {
+    status: 'unique',
+    start: prefix.length,
+    end: body.length,
+    line: 3,
+  });
+  const joined = '金额上限';
+  assert.equal(
+    locateWikiConflict(`${body}\n\n${snippet}\n\n${joined}`, joined).line,
+    9,
+  );
+  assert.equal(
+    locateWikiConflict(`${body}\n\n金额\n上限`, joined).status,
+    'ambiguous',
+  );
+});
+
+test('Wiki conflict soft wraps preserve words, block boundaries and formatting', () => {
+  for (const [body, anchor, status] of [
+    ['Needs two\n  approvals', 'Needs two approvals', 'unique'],
+    ['Needs two\n  approvals', 'Needs twoapprovals', 'missing'],
+    ['За\nчем он следит?', 'Зачем он следит?', 'missing'],
+    ['> 金额\n    > 上限', '金额 > 上限', 'unique'],
+    ['法规\n\n更新', '法规更新', 'missing'],
+    ['法规  \n更新', '法规更新', 'missing'],
+    ['**法规\n更新**', '法规更新', 'missing'],
+    ['**法规\n更新**', '**法规更新**', 'unique'],
+    ['<i>法规\n更新</i>', '法规更新', 'missing'],
+    ['参考 [法\n规](</new url>)', '[法规](</new url>)', 'unique'],
+    ['参考 [法规](</new\nurl>)', '[法规](</new url>)', 'missing'],
+    ['参考 [法\n规]\n\n[法 规]: /new\n[法规]: /old', '[法规]', 'missing'],
+    ['配置 `键  \r\n 名` 已生效', '`键    名`', 'unique'],
+    ['配置 `键\n名` 已生效', '`键名`', 'missing'],
+  ]) {
+    assert.equal(locateWikiConflict(body, anchor).status, status, body);
+  }
+});
+
+test('Wiki metadata distinguishes trailing comments from Markdown examples', () => {
+  const body = 'two approvals';
+  const trailer = `<!-- CONFLICTS_CONTENT\n${JSON.stringify(record)}\n-->`;
+  for (const example of [
+    `\\${trailer}`,
+    `\`${trailer}\``,
+    `\n    ${trailer}`,
+    `>     ${trailer}`,
+    `\`\`\`md\n${trailer}\n\`\`\``,
+  ]) {
+    const document = `${body}\n\n${example}`;
+    assert.equal(parseWikiFileConflicts(document).status, 'missing', example);
+  }
+  const prefix = `${body}\n\n\`\`\`text\n`;
+  const legacy = parseWikiFileConflicts(prefix + trailer);
+  assert.equal(legacy.document, prefix);
+  assert.equal(legacy.records[0].location.status, 'unique');
+  assert.equal(
+    locateWikiConflict('\\<!-- 示例\n<!-- 审核中 -->\n已发布', '审核中').status,
+    'missing',
+  );
+  assert.equal(
+    locateWikiConflict('<textarea>\n<!-- 字面语法\n</textarea>', '字面语法')
+      .status,
+    'unique',
+  );
+});

@@ -43,11 +43,10 @@ test('the FileBrowser editor keeps Wiki metadata outside the draft and confirms 
     const highlighted = () => markedLines().map((line) => line.textContent);
     assert.deepEqual(highlighted(), [body]);
     assert.equal(editableBody(editor).trimEnd(), documentBody);
-    const suffix = editor.querySelector('.ov-file-preview__editor-suffix');
-    assert.equal(suffix?.contentEditable, 'false');
+    assert.equal(editor.textContent.includes('CONFLICTS_CONTENT'), false);
     assert.equal(
-      suffix?.textContent,
-      `<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)},\n${JSON.stringify(fixed)}\n-->`,
+      editor.querySelector('.ov-file-preview__editor-suffix') === null,
+      true,
     );
     await act(async () =>
       markedLines()[0].dispatchEvent(
@@ -72,7 +71,7 @@ test('the FileBrowser editor keeps Wiki metadata outside the draft and confirms 
     await setEditor(editor, 'The process requires three approvals.');
     assert.deepEqual(highlighted(), []);
     assert.equal(editableBody(editor), 'The process requires three approvals.');
-    assert.equal(editor.lastElementChild, suffix);
+    assert.equal(editor.textContent.includes('CONFLICTS_CONTENT'), false);
     await click(button('Save', view.container));
     assert.deepEqual(wikiSaveNotice(), {
       title: 'Processing Wiki changes',

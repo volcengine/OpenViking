@@ -2,17 +2,19 @@ import { isCollection, parseDocument } from 'yaml';
 
 /** Read a leading YAML collection and the offset of the Markdown body. */
 export function findMarkdownFrontmatter(source: string) {
-  const opening = /^\uFEFF?---[ \t]*\r?\n/.exec(source);
+  const opening = /^\uFEFF?---[ \t]*(?:\r\n|[\r\n])/.exec(source);
   if (!opening) return;
   const yamlStart = opening[0].length;
-  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(
+  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r\n|[\r\n]|$)/m.exec(
     source.slice(yamlStart),
   );
   if (!closing) return;
   const yamlEnd = yamlStart + closing.index;
   const yaml = source.slice(yamlStart, yamlEnd);
   // Markdown rules can also surround prose or links. Validate the whole block.
-  const { contents, errors } = parseDocument(yaml, { prettyErrors: false });
+  const { contents, errors } = parseDocument(yaml.replace(/\r\n?/g, '\n'), {
+    prettyErrors: false,
+  });
   if (errors.length || !isCollection(contents)) return;
   return { yaml, bodyStart: yamlEnd + closing[0].length };
 }

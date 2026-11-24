@@ -40,7 +40,7 @@ for (const kinds of [undefined, []]) {
       assert.equal(await f.tab.editing.loadContent(), body);
       const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
       assert.equal(editorDocument.content, body);
-      assert.equal(editorDocument.readOnlySuffix, footer);
+      assert.equal(editorDocument.readOnlySuffix, undefined);
       assert.notEqual(f.tab.editing.promptForVersionNote, true);
       assert.ok(
         f.history.every((value) => !value?.includes('CONFLICTS_CONTENT')),
@@ -111,7 +111,7 @@ for (const suffix of [
       assert.equal(f.tab.source.truncated, false);
       assert.equal(await f.tab.editing.loadContent(), text);
       const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
-      assert.equal(editorDocument.readOnlySuffix, suffix);
+      assert.equal(editorDocument.readOnlySuffix, undefined);
       if (suffix === footer)
         assert.ok(f.fetch.calls.some((call) => call.query.limit === '-1'));
       else {
@@ -134,7 +134,7 @@ test('consecutive Wiki trailers remain available to the conflict dashboard', asy
   try {
     assert.equal(f.tab.source.content, body);
     const editorDocument = await f.tab.editing.loadDocument(f.tab.source);
-    assert.equal(editorDocument.readOnlySuffix, trailers);
+    assert.equal(editorDocument.readOnlySuffix, undefined);
     await act(async () => f.browser.actions.openDashboard(file));
     await settle();
     assert.equal(

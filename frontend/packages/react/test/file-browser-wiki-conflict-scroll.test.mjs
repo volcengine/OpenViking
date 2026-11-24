@@ -95,3 +95,32 @@ test('each Wiki conflict pencil centers the selected conflict and puts the curso
     await view.unmount();
   }
 });
+
+test('the Wiki editor highlights both source lines of a soft-wrapped conflict', async () => {
+  const wrapped = body.replace('two approvals', 'two\napprovals');
+  const content = `${wrapped}\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)}\n-->`;
+  const { view, openDashboard, pencil } = await mountWikiFile(
+    undefined,
+    undefined,
+    undefined,
+    content,
+  );
+  try {
+    await openDashboard();
+    await click(pencil());
+    const editor = await waitForEditor(view.container);
+    assert.deepEqual(
+      [...editor.querySelectorAll('.ov-file-preview__annotation-line')].map(
+        (line) => line.textContent,
+      ),
+      ['The process requires two', 'approvals.'],
+    );
+    assert.equal(
+      EditorView.findFromDOM(editor).state.doc.toString().trimEnd(),
+      wrapped,
+    );
+    assert.equal(editor.textContent.includes('CONFLICTS_CONTENT'), false);
+  } finally {
+    await view.unmount();
+  }
+});

@@ -29,7 +29,7 @@ const fixed = {
   fix_plan: '已统一证据留存规则。',
   resolution_basis: '人工修复',
 } as const;
-const content = `# 发布流程\n\n发布需至少两名审批人。\n发布完成后记录验证证据。\n\n<!-- CONFLICTS_CONTENT\n${[record, fixed].map((item) => JSON.stringify(item)).join(',\n')}\n-->`;
+const content = `# 发布流程\n\n发布需至少两名\n审批人。\n发布完成后记录验证证据。\n\n<!-- CONFLICTS_CONTENT\n${[record, fixed].map((item) => JSON.stringify(item)).join(',\n')}\n-->`;
 
 const ok = (result: unknown) =>
   new Response(JSON.stringify({ status: 'ok', result }), {
