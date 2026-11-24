@@ -105,4 +105,3 @@ async function runCodexCompressor(prompt, profile, cfg, { logError, onActiveChil
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
 }
-
