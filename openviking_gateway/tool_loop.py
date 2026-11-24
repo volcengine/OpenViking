@@ -74,6 +74,18 @@ class HiddenToolLoop:
         self.observe_upstream = None
 
     async def read(self, response):
+        error = None
+        try:
+            async for event in self.read_round(response):
+                yield event
+        except BaseException as failure:
+            error = failure
+            raise
+        finally:
+            if self.observe_upstream:
+                self.observe_upstream(self.adapter, response, error)
+
+    async def read_round(self, response):
         adapter = self.adapter
         adapter.begin()
         if response.status >= 300:
@@ -293,8 +305,6 @@ class HiddenToolLoop:
                     async for event in self.read(response):
                         yield event
                     self.observe()
-                    if self.observe_upstream:
-                        self.observe_upstream(self.adapter, response)
                     owned, client = [], []
                     for call in self.round.calls:
                         if not self.prepared.tools_active:

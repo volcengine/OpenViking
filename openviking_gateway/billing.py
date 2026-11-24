@@ -7,9 +7,8 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-HEADER = "x-openviking-request-id"
 SCHEMA = "openviking-upstream-billing-v1"
-TIERS = {"default", "standard", "priority", "fast", "flex", "batch", "ultrafast"}
+TIERS = {"default", "standard", "priority", "fast", "flex", "batch", "ultrafast", "auto", "scale"}
 USAGE_FIELDS = {
     "input_tokens",
     "output_tokens",
@@ -17,6 +16,9 @@ USAGE_FIELDS = {
     "prompt_tokens",
     "completion_tokens",
     "cached_tokens",
+    "cached_creation_tokens",
+    "ephemeral_5m_input_tokens",
+    "ephemeral_1h_input_tokens",
     "cache_write_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
@@ -26,6 +28,7 @@ USAGE_FIELDS = {
     "reasoning_tokens",
 }
 DETAIL_FIELDS = {
+    "cache_creation",
     "input_tokens_details",
     "output_tokens_details",
     "prompt_tokens_details",
@@ -37,7 +40,7 @@ def clock():
     return datetime.now(timezone.utc).isoformat()
 
 
-def reported_usage(usage):
+def reported_usage(usage, *, details=True):
     """Keep only reported counters; absent fields never turn into reported zero."""
     if not isinstance(usage, dict):
         return {}
@@ -50,9 +53,9 @@ def reported_usage(usage):
         and math.isfinite(value)
         and value >= 0
     }
-    for key in DETAIL_FIELDS:
+    for key in DETAIL_FIELDS if details else ():
         if isinstance(usage.get(key), dict):
-            result[key] = reported_usage(usage[key])
+            result[key] = reported_usage(usage[key], details=False)
             if isinstance(usage[key].get("cache_ttl"), str) and usage[key]["cache_ttl"] in (
                 "30m",
                 "12h",
@@ -63,15 +66,17 @@ def reported_usage(usage):
 
 def cache_ttl(body):
     options = body.get("prompt_cache_options")
-    ttl = options.get("ttl", "30m") if isinstance(options, dict) else "30m"
+    values = [options["ttl"]] if isinstance(options, dict) and "ttl" in options else []
     items = body.get("input")
     for item in items if isinstance(items, list) else []:
         content = item.get("content") if isinstance(item, dict) else None
         for block in content if isinstance(content, list) else []:
             point = block.get("prompt_cache_breakpoint") if isinstance(block, dict) else None
-            if isinstance(point, dict) and "ttl" in point and point["ttl"] != ttl:
-                return None
-    return ttl if isinstance(ttl, str) and ttl in {"30m", "12h"} else None
+            if isinstance(point, dict) and "ttl" in point:
+                values.append(point["ttl"])
+    if values and all(value == values[0] for value in values) and values[0] in ("30m", "12h"):
+        return values[0]
+    return None
 
 
 class UpstreamBilling:
@@ -90,11 +95,13 @@ class UpstreamBilling:
             "kind": kind,
             "upstream_host": host if "{api_key}" not in host else "",
             "model": body.get("model") if isinstance(body.get("model"), str) else None,
-            "auth_mode": "api_key"
+            "auth_mode": "coding_plan"
+            if upstream.get("coding_plan")
+            else "api_key"
             if authenticated and not account_header and not upstream.get("coding_plan")
             else "unknown",
             "cache_ttl": cache_ttl(body),
-            "service_tier": body.get("service_tier", "default"),
+            "service_tier": body.get("service_tier"),
             "started_at": clock(),
             "complete": False,
             "usage": {},
@@ -120,7 +127,11 @@ class UpstreamBilling:
         response_id = envelope.get("id")
         if isinstance(response_id, str):
             call["response_id"] = response_id
-        tier = envelope.get("service_tier")
+        if isinstance(envelope.get("model"), str):
+            call["model"] = envelope["model"]
+        tier = envelope.get("service_tier") or (
+            usage.get("service_tier") if isinstance(usage, dict) else None
+        )
         if isinstance(tier, str) and tier in TIERS:
             call["service_tier"] = tier
         details = call["usage"].get("input_tokens_details") or {}
