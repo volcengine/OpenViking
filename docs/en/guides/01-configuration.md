@@ -2243,13 +2243,13 @@ Notes:
 - When `enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`; `SessionAutoCommitScheduler` is not started.
 - When `enabled=true`:
   - Sessions without an explicit or deployment-default policy get the built-in policy below.
-  - With `idle_backend="local"`, `SessionAutoCommitScheduler` starts a scan round immediately, then waits at least `check_interval_seconds` before the next round. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
-  - With `idle_backend="redis"`, the server enables expiry reporting, publishing, and callback consumption together using the top-level `expiry` configuration.
+  - With `idle_backend="local"`, `scheduler` nodes run `SessionAutoCommitScheduler`, which scans immediately and waits at least `check_interval_seconds` between rounds. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
+  - With `idle_backend="redis"`, top-level `expiry` settings control shared scheduling: `scheduler` nodes publish due events and `queue_worker` nodes execute callbacks.
 - Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, but still require the session to carry an `auto_commit_policy`.
 
 #### Distributed Expiry Configuration
 
-All API, publisher, and callback instances that share expiry state must use the same stable `service_name`. It identifies the deployed document service, not an individual pod.
+All nodes sharing expiry state must use the same stable `service_name`. It identifies the deployed document service, not an individual pod. See [server roles](../configuration/03-server-roles.md).
 
 ```json
 {
@@ -2271,16 +2271,16 @@ All API, publisher, and callback instances that share expiry state must use the 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `service_name` | string | Stable document service name shared by all instances using the same expiry data | `""` |
-| `publisher_separate_process` | bool | Let `openviking-server` supervise publisher in a dedicated child process; when `false`, publisher runs in each API process | `true` |
+| `publisher_separate_process` | bool | On `scheduler` nodes, supervise publisher in a child process; when `false`, run it inside each `scheduler` process | `true` |
 | `shard_count` | int | Number of logical expiry shards; all instances sharing a namespace must use the same value, in the range `1..512` | `128` |
-| `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per API process; must be greater than `0` | `8` |
+| `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per `queue_worker` process; must be greater than `0` | `8` |
 | `redis.mode` | string | Redis deployment mode: `standalone` or `cluster` | `standalone` |
 | `redis.endpoints` | string array | Redis endpoints; a cluster may use one proxy endpoint | `[]` |
 | `redis.username` | string | Redis ACL username | `""` |
 | `redis.password_env` | string | Environment variable containing the Redis password; startup fails if it is not set | `""` |
 | `redis.password` | string | Legacy plaintext password; prefer `password_env`; mutually exclusive with it | `""` |
 
-`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With the default `publisher_separate_process=true`, `openviking-server` starts one internal publisher before serving traffic, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
+`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With `publisher_separate_process=true`, `scheduler` startup launches one internal publisher, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
 
 ##### Per-session Auto Commit Policy
 
