@@ -94,6 +94,8 @@ async def test_summary_usage_is_saved_even_when_summary_is_not_usable(running_ga
                 }
             )
 
+        return None
+
     app.state.test_backend["handler"] = backend
     proxy = ProxyRequest(
         app,
