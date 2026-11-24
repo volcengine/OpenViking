@@ -4,7 +4,10 @@
 
 import asyncio
 import multiprocessing
+import os
 import queue
+from contextlib import contextmanager
+from typing import Iterator, Mapping
 
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
 from openviking.parse.accessors.web_crawler.models import (
@@ -12,9 +15,45 @@ from openviking.parse.accessors.web_crawler.models import (
     CrawledPage,
     CrawlResult,
 )
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    overlay_parser_subprocess_env,
+)
 
 
-def _run_crawl_worker(root_url: str, config: CrawlConfig, result_queue) -> None:
+@contextmanager
+def _temporary_environment(overlay: Mapping[str, str]) -> Iterator[None]:
+    """Install child-only network variables without leaking across worker reuse."""
+
+    previous = {name: os.environ.get(name) for name in overlay}
+    os.environ.update(overlay)
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _run_crawl_worker(
+    root_url: str,
+    config: CrawlConfig,
+    result_queue,
+    network_env: Mapping[str, str] | None = None,
+) -> None:
+    with _temporary_environment(network_env or {}):
+        _run_crawl_worker_with_environment(root_url, config, result_queue, network_env or {})
+
+
+def _run_crawl_worker_with_environment(
+    root_url: str,
+    config: CrawlConfig,
+    result_queue,
+    network_env: Mapping[str, str],
+) -> None:
     from scrapy.utils.reactor import install_reactor
 
     install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
@@ -33,6 +72,7 @@ def _run_crawl_worker(root_url: str, config: CrawlConfig, result_queue) -> None:
         config=config,
         collector=pages,
         download_collector=downloads,
+        network_env=network_env,
     )
     try:
         process.start()
@@ -67,8 +107,9 @@ def _build_settings(config: CrawlConfig):
             "TELNETCONSOLE_ENABLED": False,
             "USER_AGENT": "OpenViking/0.4 (+recursive-web-crawler)",
             "DOWNLOADER_MIDDLEWARES": {
-                "openviking.parse.accessors.web_crawler.middlewares."
-                "RequestValidatorMiddleware": 50,
+                "openviking.parse.accessors.web_crawler.middlewares.RequestValidatorMiddleware": 50,
+                "openviking.parse.accessors.web_crawler.middlewares.ParserNetworkProxyMiddleware": 100,
+                "scrapy.downloadermiddlewares.httpproxy.HttpProxyMiddleware": 750,
             },
         }
     )
@@ -81,9 +122,13 @@ class ScrapyWebCrawler:
     async def crawl(self, root_url: str) -> CrawlResult:
         context = multiprocessing.get_context("spawn")
         result_queue = context.Queue()
+        network_env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.WEB_CRAWL, root_url),
+            {},
+        )
         process = context.Process(
             target=_run_crawl_worker,
-            args=(root_url, self.config, result_queue),
+            args=(root_url, self.config, result_queue, network_env),
         )
         process.start()
         try:

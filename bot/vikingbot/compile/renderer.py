@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import posixpath
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -12,7 +13,7 @@ import yaml
 
 from openviking.core.namespace import context_type_for_uri, relative_uri_path
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.utils.link_renderer import LinkRenderer
+from openviking.session.memory.utils.link_renderer import LinkRenderer, MarkdownLink
 from openviking.session.memory.utils.link_resolver import resolve_wiki_links
 from openviking.session.memory.utils.memory_file_utils import (
     MemoryFileUtils,
@@ -25,12 +26,16 @@ from openviking.utils.path_safety import (
     validate_safe_viking_uri_path,
 )
 from openviking_cli.utils import VikingURI
-from vikingbot.compile.models import CompileLimits, WikiBundleDraft, WikiLanguage
+from vikingbot.compile.models import (
+    COMPILE_STAGING_ROOT,
+    WikiBundleDraft,
+    WikiLanguage,
+)
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
 _FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
-_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
+_OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^[ \t]*(?:type|["']type["'])[ \t]*:""")
 _BARE_VIKING_URI_RE = re.compile(r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+""")
 _LEADING_H1_RE = re.compile(r"\A(?:[ \t]*\r?\n)*#[ \t]+[^\r\n]*(?:\r?\n|\Z)")
 _LEGACY_RELATED_PAGES_RE = re.compile(
@@ -48,13 +53,6 @@ class RenderedBundle:
     updated: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
     wiki_uris: list[str] = field(default_factory=list)
-    link_count: int = 0
-
-
-@dataclass(slots=True)
-class FinalizedCheckout:
-    files: dict[str, bytes] = field(default_factory=dict)
-    wiki_paths: set[str] = field(default_factory=set)
     link_count: int = 0
 
 
@@ -81,6 +79,21 @@ def strip_okf_frontmatter(content: str) -> str:
 def has_unclosed_frontmatter(content: bytes) -> bool:
     opening = _FRONTMATTER_START_RE.match(content)
     return opening is not None and _FRONTMATTER_END_RE.search(content[opening.end() :]) is None
+
+
+def _format_yaml_frontmatter_error(exc: yaml.YAMLError) -> str:
+    problem = getattr(exc, "problem", None)
+    context = getattr(exc, "context", None)
+    mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+    if context and problem:
+        reason = f"{context}: {problem}"
+    else:
+        reason = problem or context or str(exc).splitlines()[0].strip()
+    if mark is not None:
+        # match.group(1) starts on line 2 of the Markdown file (after opening "---").
+        location = f"line {mark.line + 2}, column {mark.column + 1}"
+        return f"{reason} ({location})" if reason else location
+    return reason
 
 
 def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
@@ -112,7 +125,11 @@ def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
         frontmatter = yaml.safe_load(match.group(1))
     except yaml.YAMLError as exc:
         if raw_declares_type:
-            raise ValueError(f'OKF Markdown file "{path}" has invalid YAML frontmatter') from exc
+            detail = _format_yaml_frontmatter_error(exc)
+            suffix = f": {detail}" if detail else ""
+            raise ValueError(
+                f'OKF Markdown file "{path}" has invalid YAML frontmatter{suffix}'
+            ) from exc
         return
     if not isinstance(frontmatter, dict):
         if raw_declares_type:
@@ -177,23 +194,32 @@ def _citation_target_allowed(target: str, source_roots: Mapping[str, str]) -> bo
     return False
 
 
-def _linkify_source_uris(body: str, source_roots: Mapping[str, str]) -> str:
-    protected = LinkRenderer.protected_markdown_spans(body)
+def _linkify_source_uris(
+    body: str,
+    source_roots: Mapping[str, str],
+    *,
+    protected_spans: list[tuple[int, int]] | None = None,
+) -> str:
     replacements: list[tuple[int, int, str]] = []
     for match in _BARE_VIKING_URI_RE.finditer(body):
         start = match.start()
         target = match.group(0).rstrip(".,;:!?")
         end = start + len(target)
-        if any(not (end <= span_start or start >= span_end) for span_start, span_end in protected):
-            continue
         if start > 0 and end < len(body) and body[start - 1] == "<" and body[end] == ">":
             continue
         if not _citation_target_allowed(target, source_roots):
+            continue
+        if protected_spans is None:
+            protected_spans = LinkRenderer.protected_markdown_spans(body)
+        if any(start < span_end and end > span_start for span_start, span_end in protected_spans):
             continue
         label = target.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
         label = label.replace("[", r"\[").replace("]", r"\]") or "Source"
         encoded_target = LinkRenderer.encode_markdown_target(target)
         replacements.append((start, end, f"[{label}]({encoded_target})"))
+
+    if not replacements:
+        return body
 
     rendered = list(body)
     for start, end, replacement in reversed(replacements):
@@ -206,15 +232,25 @@ def _wiki_page_basename(uri: str) -> str:
     return name[:-3] if name.casefold().endswith(".md") else name
 
 
-def _wiki_mention_targets(uris: set[str]) -> dict[str, str]:
-    """Return unambiguous basename -> URI targets, excluding the root index."""
+def _wiki_mention_targets(uris: set[str]) -> dict[str, tuple[str, re.Pattern[str], str]]:
+    """Return unique basename targets and patterns shared by a render batch, excluding indexes."""
     grouped: dict[str, list[tuple[str, str]]] = {}
     for uri in sorted(uris):
         name = _wiki_page_basename(uri).strip()
         if not name or name.casefold() == "index":
             continue
         grouped.setdefault(name.casefold(), []).append((name, uri))
-    return {items[0][0]: items[0][1] for items in grouped.values() if len(items) == 1}
+    return {
+        name: (
+            uri,
+            re.compile(re.escape(name), re.IGNORECASE),
+            # Han characters have no case variants; absence rules out a regex match.
+            max(re.findall(r"[\u3400-\u9fff]+", name), key=len, default=""),
+        )
+        for items in grouped.values()
+        if len(items) == 1
+        for name, uri in items
+    }
 
 
 def _has_link_to(body: str, source_uri: str, target_uri: str) -> bool:
@@ -238,9 +274,9 @@ def _link_wiki_mentions(
     content: str,
     *,
     source_uri: str,
-    targets: Mapping[str, str],
+    targets: Mapping[str, tuple[str, re.Pattern[str], str]],
 ) -> tuple[str, int]:
-    """Link the first body mention of each unambiguous Wiki filename."""
+    """Link unambiguous filename mentions outside titles and existing Markdown links."""
     frontmatter = _FRONTMATTER_RE.match(content)
     prefix = content[: frontmatter.end()] if frontmatter else ""
     body = content[frontmatter.end() :] if frontmatter else content
@@ -256,81 +292,38 @@ def _link_wiki_mentions(
             "to_uri": target_uri,
             "weight": len(name),
         }
-        for name, target_uri in targets.items()
-        if target_uri != source_uri and not _has_link_to(body, source_uri, target_uri)
+        for name, (target_uri, pattern, literal) in targets.items()
+        if target_uri != source_uri
+        and literal in body
+        and pattern.search(body)
+        and not _has_link_to(body, source_uri, target_uri)
     ]
     rendered, count = LinkRenderer.render_links_with_count(body, source_uri, links)
     return prefix + rendered, count
 
 
-def finalize_resource_checkout(
-    files: Mapping[str, bytes],
-    *,
-    target_uri: str,
-    source_roots: Mapping[str, str],
-) -> FinalizedCheckout:
-    """Validate and deterministically finalize one Resource checkout.
+def _body_markdown_links(body: str) -> list[MarkdownLink]:
+    """Return editable inline links outside code, comments and image syntax."""
+    links = list(LinkRenderer.iter_markdown_links(body))
+    link_spans = {(link.start, link.end) for link in links}
+    protected = [s for s in LinkRenderer.protected_markdown_spans(body) if s not in link_spans]
+    protected.extend((m.start(), m.end()) for m in re.finditer(r"<!--.*?-->", body, re.DOTALL))
+    protected.extend((m.start(), m.end()) for m in re.finditer(r"(?m)^(?: {4}|\t)[^\n]*", body))
+    return [
+        link
+        for link in links
+        if not (link.start > 0 and body[link.start - 1] == "!")
+        and not any(link.start < end and link.end > start for start, end in protected)
+    ]
 
-    The checkout already contains the final file layout. This pass only identifies
-    self-declared OKF Wiki pages, makes supplied source URIs readable, and links the
-    first body mention of another unambiguous Wiki filename. It does not decide create
-    versus update.
-    """
-    wiki_paths: set[str] = set()
-    for path, payload in files.items():
-        page_type = validate_declared_okf_markdown(path, payload)
-        if page_type is not None:
-            text = payload.decode("utf-8")
-            frontmatter, _body = _split_frontmatter(text)
-            missing = [
-                field
-                for field in ("type", "title", "description")
-                if not isinstance(frontmatter.get(field), str)
-                or not str(frontmatter[field]).strip()
-            ]
-            if missing:
-                raise ValueError(
-                    f'OKF Markdown file "{path}" must have non-empty YAML frontmatter fields: '
-                    + ", ".join(missing)
-                )
-            description = str(frontmatter["description"]).strip()
-            if "\n" in description or "\r" in description:
-                raise ValueError(
-                    f'OKF Markdown file "{path}" frontmatter description must be one line'
-                )
-            wiki_paths.add(path)
 
-    wiki_uris = {safe_join_viking_uri(target_uri, path).rstrip("/") for path in wiki_paths}
-    mention_targets = _wiki_mention_targets(wiki_uris)
-    finalized = dict(files)
-    link_count = 0
-    for path in sorted(wiki_paths):
-        payload = files[path]
-        try:
-            content = payload.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f'OKF Markdown file "{path}" must be UTF-8') from exc
-        uri = safe_join_viking_uri(target_uri, path).rstrip("/")
-        frontmatter = _FRONTMATTER_RE.match(content)
-        if frontmatter:
-            content = content[: frontmatter.end()] + _linkify_source_uris(
-                content[frontmatter.end() :], source_roots
-            )
-        else:
-            content = _linkify_source_uris(content, source_roots)
-        content, rendered_count = _link_wiki_mentions(
-            content,
-            source_uri=uri,
-            targets=mention_targets,
-        )
-        finalized[path] = content.encode("utf-8")
-        link_count += rendered_count
-
-    return FinalizedCheckout(
-        files=finalized,
-        wiki_paths=wiki_paths,
-        link_count=link_count,
-    )
+def _link_uri(target: str, source_uri: str) -> str:
+    """Resolve a Markdown destination to an absolute URI for deduplication and lookup."""
+    target = LinkRenderer.normalize_markdown_target(target)
+    if re.match(r"^[A-Za-z][\w+.-]*:", target):
+        return target
+    directory = posixpath.dirname(source_uri.removeprefix("viking://"))
+    return "viking://" + posixpath.normpath(posixpath.join(directory, target))
 
 
 def _render_source_fallback(
@@ -377,6 +370,7 @@ def validate_relative_page_path(path: str) -> str:
 
 
 def validate_relative_file_path(path: str) -> str:
+    """Validate an output-relative path, rejecting metadata and internal staging directories."""
     relative = sanitize_relative_viking_path(path).strip("/")
     segments = relative.split("/")
     if (
@@ -387,7 +381,14 @@ def validate_relative_file_path(path: str) -> str:
         raise ValueError(f"invalid output file path: {path}")
     if segments[-1].lower() in _RESERVED_FILENAMES:
         raise ValueError(f"reserved output file path: {path}")
+    if COMPILE_STAGING_ROOT.casefold() in (segment.casefold() for segment in segments):
+        raise ValueError(f"reserved staging directory in output path: {path}")
     return relative
+
+
+def output_path_key(path: str) -> str:
+    """Identify case and Unicode aliases before writing to portable storage."""
+    return unicodedata.normalize("NFC", validate_relative_file_path(path)).casefold()
 
 
 def is_reserved_wiki_page_uri(uri: str) -> bool:
@@ -426,8 +427,7 @@ def _merge_stored_links(
 
 
 class WikiRenderer:
-    def __init__(self, limits: CompileLimits | None = None):
-        self.limits = limits or CompileLimits()
+    """Validate and render complete Wiki bundles without count or byte quotas."""
 
     def render(
         self,
@@ -445,12 +445,6 @@ class WikiRenderer:
         file_catalog_uris = set(catalog_uris) | set(file_catalog_uris or ())
         existing_bytes = existing_bytes or {}
         file_payloads = file_payloads or []
-        if len(bundle.pages) > self.limits.output_pages:
-            raise ValueError("Wiki bundle exceeds the page limit")
-        if len(bundle.files) > self.limits.output_files:
-            raise ValueError("Wiki bundle exceeds the file limit")
-        if len(bundle.pages) + len(bundle.files) > self.limits.output_operations:
-            raise ValueError("Wiki bundle exceeds the combined output operation limit")
         if not bundle.pages and bundle.links:
             raise ValueError("an empty Wiki bundle cannot contain links")
         target_type = context_type_for_uri(target_uri)
@@ -528,6 +522,7 @@ class WikiRenderer:
             ):
                 raise ValueError(f"workspace payload was not loaded for file {index}")
 
+        spans_by_page: dict[int, list[tuple[int, int]]] = {}
         for link in bundle.links:
             if link.f is None or link.t is None or link.f == link.t:
                 raise ValueError("WikiLink endpoints must be non-null and non-self")
@@ -536,11 +531,16 @@ class WikiRenderer:
                 raise ValueError(f"WikiLink references an unknown page_id: f={link.f}, t={link.t}")
             if not link.match_text:
                 raise ValueError("WikiLink match_text is required")
+            if link.f not in spans_by_page:
+                spans_by_page[link.f] = LinkRenderer.protected_markdown_spans(
+                    source_page.body_markdown
+                )
             if not LinkRenderer.can_render_link(
                 source_page.body_markdown,
                 link.match_text,
                 page_uris[link.f][0],
                 page_uris[link.t][0],
+                protected_spans=spans_by_page[link.f],
             ):
                 raise ValueError(
                     f"WikiLink match_text is not a satisfiable body anchor: {link.match_text!r}"
@@ -553,7 +553,6 @@ class WikiRenderer:
             else {}
         )
         result = RenderedBundle()
-        total_bytes = 0
         for page in bundle.pages:
             uri = page_uris[page.page_id][0]
             result.wiki_uris.append(uri)
@@ -573,17 +572,26 @@ class WikiRenderer:
             incoming = (
                 [link for link in resolved_links if link.to_uri == uri] if memory_target else []
             )
+            body = page.body_markdown.strip()
+            protected_spans = (
+                spans_by_page.get(page.page_id) if body == page.body_markdown else None
+            )
             if memory_target:
                 rendered_body, rendered_count = LinkRenderer.render_links_with_count(
-                    page.body_markdown.strip(),
+                    body,
                     uri,
                     [link.model_dump() for link in outgoing],
+                    protected_spans=protected_spans,
                 )
             else:
-                rendered_body = page.body_markdown.strip()
+                rendered_body = body
                 rendered_count = 0
             result.link_count += rendered_count
-            rendered_body = _linkify_source_uris(rendered_body, source_roots)
+            rendered_body = _linkify_source_uris(
+                rendered_body,
+                source_roots,
+                protected_spans=protected_spans if rendered_count == 0 else None,
+            )
             source_ids = list(
                 dict.fromkeys(value.strip() for value in page.source_ids if value.strip())
             )
@@ -630,9 +638,6 @@ class WikiRenderer:
             else:
                 candidate = visible
 
-            total_bytes += len(candidate.encode("utf-8"))
-            if total_bytes > self.limits.output_total_bytes:
-                raise ValueError("Wiki bundle exceeds the final content size limit")
             if candidate == old_raw:
                 result.unchanged.append(uri)
                 continue
@@ -654,9 +659,6 @@ class WikiRenderer:
                 if candidate == old_raw:
                     continue
                 result.link_count += automatic_count
-                total_bytes += len(candidate.encode("utf-8"))
-                if total_bytes > self.limits.output_total_bytes:
-                    raise ValueError("Wiki bundle exceeds the final content size limit")
                 result.updated.append(uri)
                 result.wiki_uris.append(uri)
                 result.operations.append(
@@ -666,8 +668,6 @@ class WikiRenderer:
                         "mode": "upsert",
                     }
                 )
-            if len(result.created) + len(result.updated) > self.limits.output_pages:
-                raise ValueError("Wiki mention linking exceeds the page limit")
 
         for index, file in enumerate(bundle.files):
             uri = file_uris[index]
@@ -679,9 +679,6 @@ class WikiRenderer:
                 assert candidate is not None
                 operation_content = {"content_base64": base64.b64encode(candidate).decode("ascii")}
 
-            total_bytes += len(candidate)
-            if total_bytes > self.limits.output_total_bytes:
-                raise ValueError("Wiki bundle exceeds the final content size limit")
             if target_type == "resource":
                 page_type = validate_declared_okf_markdown(uri, candidate)
                 if page_type is not None:
@@ -703,16 +700,12 @@ class WikiRenderer:
             else:
                 result.created.append(uri)
             result.operations.append({"uri": uri, **operation_content, "mode": "upsert"})
-        if len(result.operations) > self.limits.output_operations:
-            raise ValueError("Wiki bundle exceeds the combined output operation limit")
         return result
 
 
 __all__ = [
-    "FinalizedCheckout",
     "RenderedBundle",
     "WikiRenderer",
-    "finalize_resource_checkout",
     "has_unclosed_frontmatter",
     "strip_okf_frontmatter",
     "is_reserved_wiki_page_uri",

@@ -1,10 +1,28 @@
 import os
 import time
+from pathlib import Path
 
 import psutil
 import pytest
 from api.client import OpenVikingAPIClient
 from config import Config
+
+# CI excludes these provider-independent contracts using one marker. Explicit
+# manual invocations can still run them, including the live intent smoke.
+OFFLINE_CONTRACT_MODULES = frozenset(
+    {
+        "skills/test_add_skill.py",
+        "filesystem/test_fs_cp.py",
+        "filesystem/test_fs_read_write.py",
+        "retrieval/test_find.py",
+        "retrieval/test_search.py",
+        "resources/test_add_resource.py",
+        "scenarios/resources_retrieval/test_delete_sync.py",
+        "scenarios/resources_retrieval/test_resource_swap.py",
+        "scenarios/resources_retrieval/test_pack_consistency.py",
+        "scenarios/resources_retrieval/test_intent_extended_search.py",
+    }
+)
 
 TEST_CASE_DESCRIPTIONS = {
     "test_add_resource.py::TestAddResource::test_add_resource_simple": "向知识库添加资源",
@@ -96,7 +114,6 @@ TEST_CASE_DESCRIPTIONS = {
     "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_duplicate_resource_no_to": "TC-E12 同名资源二次添加",
     "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_incremental_update_with_to": "TC-E13 同to增量更新",
     "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_unsupported_file_type": "TC-E15 不支持的文件类型",
-    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_corrupted_zip": "TC-E16 损坏的ZIP文件",
     "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_to_param": "TC-E17 to参数指定URI",
     "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_parent_param": "TC-E18 parent参数指定父目录",
     "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_non_resources_scope_rejected": "TC-E11 scope参数非resources拒绝",
@@ -193,7 +210,6 @@ TEST_CASE_APIS = {
     "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_duplicate_resource_no_to": "/api/v1/resources",
     "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_incremental_update_with_to": "/api/v1/resources",
     "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_unsupported_file_type": "/api/v1/resources",
-    "test_build_error_handling_slow.py::TestBuildErrorHandlingSlow::test_error_corrupted_zip": "/api/v1/resources",
     "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_to_param": "/api/v1/resources",
     "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_with_parent_param": "/api/v1/resources",
     "test_build_uri_params_slow.py::TestBuildUriParamsSlow::test_build_non_resources_scope_rejected": "/api/v1/resources",
@@ -458,6 +474,13 @@ def ensure_resources_dir(api_client):
 
 
 def pytest_collection_modifyitems(config, items):
+    test_root = Path(__file__).parent
+    for item in items:
+        if not item.path.is_relative_to(test_root):
+            continue
+        module = item.path.relative_to(test_root).as_posix()
+        if module in OFFLINE_CONTRACT_MODULES:
+            item.add_marker(pytest.mark.offline_contract)
     cache = config.cache
     lastfailed = cache.get("cache/lastfailed", {})
 

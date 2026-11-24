@@ -25,6 +25,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.observability.log_safety import short_hash
+from openviking.session.retention import UserTurn, build_turns
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
@@ -69,9 +72,9 @@ def redact_inline_images_from_tool_outputs(messages: List[Message]) -> List[Mess
     return messages
 
 
-def wm_debug(msg: str) -> None:
+def wm_debug(msg: str, *args: Any) -> None:
     """Log a WM v2 debug message via the standard logger."""
-    logger.debug("wm_v2: %s", msg)
+    logger.debug(msg, *args)
 
 
 # =====================================================================
@@ -220,11 +223,33 @@ def format_message_for_wm(m: Message) -> str:
     return f"[{m.role}]: {body}"
 
 
+def _message_created_at_date(message: Message) -> Optional[str]:
+    if not message.created_at:
+        return None
+    try:
+        return parse_iso_datetime(str(message.created_at)).date().isoformat()
+    except Exception:
+        return None
+
+
+def _turn_created_at_date(turn: UserTurn) -> Optional[str]:
+    if turn.anchor is not None:
+        anchor_date = _message_created_at_date(turn.anchor)
+        if anchor_date is not None:
+            return anchor_date
+
+    for message in turn.messages:
+        message_date = _message_created_at_date(message)
+        if message_date is not None:
+            return message_date
+    return None
+
+
 def format_messages_for_wm(
     messages: List[Message],
     checkpoint_requests: List["_CheckpointRequest"],
 ) -> str:
-    """Format WM input plus prior cumulative checkpoints using ordinal-only tags."""
+    """Format WM input plus prior cumulative checkpoints using turn timestamps."""
     source_indexes: Dict[str, int] = {}
     for index, request in enumerate(checkpoint_requests):
         for message_id in request.source_message_ids:
@@ -246,17 +271,27 @@ def format_messages_for_wm(
             ]
         )
     open_index: Optional[int] = None
-    for message in messages:
-        index = source_indexes.get(message.id)
-        if index != open_index:
-            if open_index is not None:
-                lines.append("</checkpoint_source>")
-            if index is not None:
-                lines.append(f'<checkpoint_source index="{index}">')
-            open_index = index
-        lines.append(format_message_for_wm(message))
-    if open_index is not None:
-        lines.append("</checkpoint_source>")
+    for turn in build_turns(messages):
+        turn_created_at = _turn_created_at_date(turn)
+        if turn_created_at is None:
+            lines.append("<turn>")
+        else:
+            lines.append(f'<turn created_at="{turn_created_at}">')
+
+        for message in turn.messages:
+            index = source_indexes.get(message.id)
+            if index != open_index:
+                if open_index is not None:
+                    lines.append("</checkpoint_source>")
+                if index is not None:
+                    lines.append(f'<checkpoint_source index="{index}">')
+                open_index = index
+            lines.append(format_message_for_wm(message))
+
+        if open_index is not None:
+            lines.append("</checkpoint_source>")
+            open_index = None
+        lines.append("</turn>")
     return "\n".join(lines)
 
 
@@ -532,8 +567,10 @@ def wm_enforce_append_only(header: str, op: Any, old_content: str) -> Dict[str, 
         if key and key not in old_lower:
             fresh_items.append(it)
     wm_debug(
-        f"guard: section {header!r} UPDATE -> forced APPEND "
-        f"(llm_items={len(new_items)}, fresh_after_dedup={len(fresh_items)})"
+        "guard: section %s UPDATE -> forced APPEND (llm_items=%s, fresh_after_dedup=%s)",
+        short_hash(str(header)),
+        len(new_items),
+        len(fresh_items),
     )
     if not fresh_items:
         return {"op": "KEEP"}
@@ -703,7 +740,7 @@ def salvage_new_items_from_rejected_update(new_content: str, old_content: str) -
         if key and key not in old_lower:
             fresh_items.append(it)
     if fresh_items:
-        wm_debug(f"guard: salvaged {len(fresh_items)} new items from rejected UPDATE")
+        wm_debug("guard: salvaged %s new items from rejected UPDATE", len(fresh_items))
         return {"op": "APPEND", "items": fresh_items}
     return {"op": "KEEP"}
 
@@ -751,26 +788,29 @@ def wm_enforce_key_facts_consolidation(op: Any, old_content: str) -> Dict[str, A
             sentinel = _WM_CONSOLIDATION_SENTINEL
             if sentinel.lower() in old_lower:
                 wm_debug(
-                    f"guard: Key Facts APPEND blocked (emergency, "
-                    f"sentinel already present): "
-                    f"bullets={len(old_items)} est_tok={est_tokens} — "
-                    f"dropped {len(fresh)} new item(s)"
+                    "guard: Key Facts APPEND blocked (emergency, sentinel already present): bullets=%s est_tok=%s — dropped %s new item(s)",
+                    len(old_items),
+                    est_tokens,
+                    len(fresh),
                 )
                 return {"op": "KEEP"}
             wm_debug(
-                f"guard: Key Facts APPEND blocked (emergency, "
-                f"inserting sentinel): "
-                f"bullets={len(old_items)} est_tok={est_tokens} — "
-                f"dropped {len(fresh)} new item(s)"
+                "guard: Key Facts APPEND blocked (emergency, inserting sentinel): bullets=%s est_tok=%s — dropped %s new item(s)",
+                len(old_items),
+                est_tokens,
+                len(fresh),
             )
             return {"op": "APPEND", "items": [sentinel]}
         cap = _WM_OVERSIZED_APPEND_CAP
         accepted = fresh[:cap]
         wm_debug(
-            f"guard: Key Facts APPEND throttled (oversized): "
-            f"bullets={len(old_items)} est_tok={est_tokens} — "
-            f"input={len(append_items)} deduped={len(fresh)} "
-            f"accepted={len(accepted)} (cap={cap})"
+            "guard: Key Facts APPEND throttled (oversized): bullets=%s est_tok=%s — input=%s deduped=%s accepted=%s (cap=%s)",
+            len(old_items),
+            est_tokens,
+            len(append_items),
+            len(fresh),
+            len(accepted),
+            cap,
         )
         if not accepted:
             return {"op": "KEEP"}
@@ -795,9 +835,11 @@ def wm_enforce_key_facts_consolidation(op: Any, old_content: str) -> Dict[str, A
     ratio = len(new_items) / len(old_items) if old_items else 1.0
     if ratio < _WM_KEY_FACTS_MIN_BULLET_RATIO:
         wm_debug(
-            f"guard: Key Facts consolidation REJECTED (layer1): "
-            f"new={len(new_items)} / old={len(old_items)} = "
-            f"{ratio:.2%} < {_WM_KEY_FACTS_MIN_BULLET_RATIO:.0%}"
+            "guard: Key Facts consolidation REJECTED (layer1): new=%s / old=%s = %s < %s",
+            len(new_items),
+            len(old_items),
+            ratio,
+            _WM_KEY_FACTS_MIN_BULLET_RATIO,
         )
         salvaged = salvage_new_items_from_rejected_update(new_content, old_content)
         if is_emergency and salvaged.get("op") == "APPEND":
@@ -813,10 +855,11 @@ def wm_enforce_key_facts_consolidation(op: Any, old_content: str) -> Dict[str, A
         coverage = covered / len(old_anchors)
         if coverage < _WM_KEY_FACTS_MIN_ANCHOR_COVERAGE:
             wm_debug(
-                f"guard: Key Facts consolidation REJECTED (layer2): "
-                f"anchor coverage={coverage:.2%} "
-                f"({covered}/{len(old_anchors)}) < "
-                f"{_WM_KEY_FACTS_MIN_ANCHOR_COVERAGE:.0%}"
+                "guard: Key Facts consolidation REJECTED (layer2): anchor coverage=%s (%s/%s) < %s",
+                coverage,
+                covered,
+                len(old_anchors),
+                _WM_KEY_FACTS_MIN_ANCHOR_COVERAGE,
             )
             salvaged = salvage_new_items_from_rejected_update(new_content, old_content)
             if is_emergency and salvaged.get("op") == "APPEND":
@@ -824,15 +867,19 @@ def wm_enforce_key_facts_consolidation(op: Any, old_content: str) -> Dict[str, A
                 return {"op": "KEEP"}
             return salvaged
         wm_debug(
-            f"guard: Key Facts consolidation ACCEPTED: "
-            f"bullets {len(old_items)}->{len(new_items)} "
-            f"({ratio:.1%}), "
-            f"anchors={coverage:.1%} ({covered}/{len(old_anchors)})"
+            "guard: Key Facts consolidation ACCEPTED: bullets %s->%s (%s), anchors=%s (%s/%s)",
+            len(old_items),
+            len(new_items),
+            ratio,
+            coverage,
+            covered,
+            len(old_anchors),
         )
     else:
         wm_debug(
-            f"guard: Key Facts consolidation ACCEPTED (no old anchors): "
-            f"bullets {len(old_items)}->{len(new_items)}"
+            "guard: Key Facts consolidation ACCEPTED (no old anchors): bullets %s->%s",
+            len(old_items),
+            len(new_items),
         )
 
     return op
@@ -860,9 +907,10 @@ def wm_enforce_files_no_regression(op: Any, old_content: str) -> Dict[str, Any]:
 
     added_paths = new_paths - old_paths
     wm_debug(
-        f"guard: 'Files & Context' UPDATE drops {len(missing)} paths "
-        f"{sorted(missing)[:5]}; forcing KEEP (+ APPEND new paths="
-        f"{len(added_paths)})"
+        "guard: 'Files & Context' UPDATE drops %s paths %s; forcing KEEP (+ APPEND new paths=%s)",
+        len(missing),
+        len(missing),
+        len(added_paths),
     )
     if added_paths:
         # Preserve the old body as-is, then append the genuinely-new items
@@ -910,8 +958,9 @@ def wm_enforce_title_stability(op: Any, old_content: str) -> Dict[str, Any]:
     if len(old_w & new_w) >= 1:
         return op
     wm_debug(
-        f"guard: Session Title drift rejected "
-        f"(old={old_content[:80]!r}, new={new_content[:80]!r}); KEEP"
+        "guard: Session Title drift rejected (old_chars=%s, new_chars=%s); KEEP",
+        len(old_content),
+        len(new_content),
     )
     return {"op": "KEEP"}
 
@@ -945,8 +994,8 @@ def wm_enforce_open_issues_resolved(op: Any, old_content: str) -> Dict[str, Any]
         return op
 
     wm_debug(
-        f"guard: Open Issues UPDATE silently dropped {len(dropped)} "
-        f"items; restoring once (will not restore again if re-dropped)"
+        "guard: Open Issues UPDATE silently dropped %s items; restoring once (will not restore again if re-dropped)",
+        len(dropped),
     )
     restored = "\n".join(f"- [silently dropped, restored] {it}" for it in dropped)
     merged = (new_content + ("\n" if new_content else "") + restored).strip()
@@ -978,13 +1027,12 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     - ``Open Issues`` UPDATE that silently drops old items restores them
       with an explicit marker.
 
-    Missing sections or unknown ops default to ``KEEP`` (the schema
-    should prevent this, but we stay defensive so a buggy LLM or
+    Missing sections, unknown ops, or non-string UPDATE content default to ``KEEP``.
+    The schema should prevent this, but we stay defensive so a buggy LLM or
     schema-loose backend cannot wipe out the prior WM).
     """
     wm_debug(
-        f"merge_wm_sections entry old_wm={len(old_wm or '')}B "
-        f"sections={list((ops or {}).keys())[:7]}"
+        "working memory merge input old_chars=%s sections=%s", len(old_wm or ""), len(ops or {})
     )
     old_sections = parse_wm_sections(old_wm)
 
@@ -993,6 +1041,17 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
         full_header = f"## {header}"
         op = (ops or {}).get(header)
         old_content = old_sections.get(full_header, "").rstrip()
+
+        if (
+            isinstance(op, dict)
+            and (op.get("op") or "").upper() == "UPDATE"
+            and not isinstance(op.get("content"), str)
+        ):
+            logger.info(
+                "working memory UPDATE content invalid; keeping previous section section_hash=%s",
+                short_hash(str(header)),
+            )
+            op = None
 
         # ---------- per-section guards ----------
         if old_content:
@@ -1020,11 +1079,11 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
                 items = op.get("items") or []
                 bad_items = [s for s in items if not isinstance(s, str)]
                 if bad_items:
-                    logger.warning(
-                        "wm_v2: dropped %d non-string APPEND item(s) in section %r: %s",
+                    logger.info(
+                        "working memory APPEND items invalid; dropping skipped=%d section_hash=%s",
                         len(bad_items),
-                        header,
-                        [type(s).__name__ for s in bad_items],
+                        short_hash(str(header)),
+                        extra={"degraded": True},
                     )
                 appended = "\n".join(
                     f"- {s.strip()}" for s in items if isinstance(s, str) and s.strip()
@@ -1034,10 +1093,10 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
                 else:
                     new_content = old_content or appended
             else:
-                logger.warning(
-                    "WM update: unknown op %r for section %r; keeping old content",
-                    op,
-                    header,
+                logger.info(
+                    "working memory operation unknown; keeping previous section operation_hash=%s section_hash=%s",
+                    short_hash(str(op)),
+                    short_hash(str(header)),
                 )
                 new_content = old_content
 

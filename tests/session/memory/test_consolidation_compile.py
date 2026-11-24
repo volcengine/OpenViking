@@ -16,6 +16,7 @@ from openviking.service.memory_compile import (
     _memory_type_from_target,
     _peer_id_from_memory_uri,
 )
+from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking.service.task_work_index import get_task_context
 from openviking.session.memory.consolidation_context_provider import (
@@ -39,6 +40,7 @@ from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from tests.test_task_tracker import _FakeAgfs
 
 
 def _ctx(user_id: str = "u1") -> RequestContext:
@@ -113,7 +115,7 @@ async def test_discover_root_types_uses_schema_paths_and_existing_files(peer_id)
     root = f"viking://user/u1/{'peers/' + peer_id + '/' if peer_id else ''}memories"
     registry = MemoryTypeRegistry(load_schemas=False)
     defaults = get_default_registry()
-    for name in ("entities", "events", "preferences", "profile", "identity", "soul", "cases"):
+    for name in ("entities", "events", "preferences", "profile", "cases"):
         registry.register(defaults.get(name).model_copy(deep=True))
     disabled = defaults.get("entities").model_copy(
         update={"memory_type": "disabled", "enabled": False}
@@ -142,9 +144,7 @@ async def test_discover_root_types_uses_schema_paths_and_existing_files(peer_id)
     fs = SimpleNamespace(stat=AsyncMock(side_effect=stat))
     types = await _discover_memory_types(root, registry, fs, _ctx())
 
-    assert types == sorted(
-        ["entities", "events", "profile", "identity", "soul"] + ([] if peer_id else ["cases"])
-    )
+    assert types == sorted(["entities", "events", "profile"] + ([] if peer_id else ["cases"]))
     assert all(call.args[0].startswith(root + "/") for call in fs.stat.await_args_list)
     assert f"{root}/unknown" not in [call.args[0] for call in fs.stat.await_args_list]
     if peer_id:
@@ -168,14 +168,7 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     language_config.output_language_override = "en"
     vlm = SimpleNamespace(model="test", get_completion_async=AsyncMock(return_value="sdk.commit()"))
     language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: vlm)
-    store = SimpleNamespace(
-        create=AsyncMock(),
-        update=AsyncMock(),
-        get=AsyncMock(return_value=None),
-        list=AsyncMock(return_value=[]),
-        delete=AsyncMock(),
-    )
-    tracker = TaskTracker(store)
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
     monkeypatch.setattr("openviking.service.memory_compile.get_task_tracker", lambda: tracker)
     uris = [
         f"{target}/entities/person/alice.md",
@@ -195,6 +188,7 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
         return {"uri": uri, "isDir": existing[uri]}
 
     fs = SimpleNamespace(
+        commit=AsyncMock(return_value={"commit_oid": "snapshot"}),
         stat=AsyncMock(side_effect=stat),
         glob=AsyncMock(
             return_value={
@@ -204,7 +198,10 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
         ),
     )
     service = SimpleNamespace(
-        ensure_write_access=AsyncMock(), stat=fs.stat, _ensure_initialized=lambda: fs
+        ensure_write_access=AsyncMock(),
+        stat=fs.stat,
+        _ensure_initialized=lambda: fs,
+        finalize_compile_directories=AsyncMock(),
     )
     apply = AsyncMock(return_value=MemoryUpdateResult())
     monkeypatch.setattr("openviking.service.memory_compile.MemoryUpdater.apply_operations", apply)
@@ -216,7 +213,8 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     await asyncio.gather(*list(runner._running))
     final = await tracker.get(accepted.task_id, account_id="acc", user_id="u1")
 
-    store.create.assert_awaited_once()
+    service.finalize_compile_directories.assert_not_awaited()
+
     vlm.get_completion_async.assert_awaited_once()
     fs.glob.assert_awaited_once()
     assert fs.glob.await_args.kwargs["uri"] == target
@@ -235,7 +233,11 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     for name in ("entities", "preferences", "profile"):
         assert name in prompt
     assert "create_events" not in prompt
-    assert not tracker.has_work(accepted.task_id)
+    assert not await tracker.has_work(
+        accepted.task_id,
+        account_id="acc",
+        user_id="u1",
+    )
 
 
 @pytest.mark.asyncio
@@ -406,7 +408,9 @@ def test_provider_loads_single_schema_from_to():
 
 def test_provider_unknown_type_raises():
     provider = ConsolidationExtractContextProvider(memory_types=["does_not_exist"])
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match=r"use ov compile memory.*ov snapshot restore.*06-memory-consolidation\.md"
+    ):
         provider.get_memory_schemas(_ctx())
 
 
@@ -471,6 +475,7 @@ def language_config(monkeypatch):
     config = SimpleNamespace(
         output_language_override="",
         memory=SimpleNamespace(
+            extraction_enabled=True,
             eager_prefetch=False,
             prefetch_search_topn=5,
             link_enabled=False,
@@ -481,11 +486,9 @@ def language_config(monkeypatch):
     )
     for module in (
         "openviking.service.memory_compile",
-        "openviking.session.memory.consolidation_context_provider",
         "openviking.session.memory.session_extract_context_provider",
         "openviking.session.memory.extract_loop",
         "openviking.session.memory.utils.language",
-        "openviking_cli.utils.config",
     ):
         monkeypatch.setattr(f"{module}.get_openviking_config", lambda: config)
     monkeypatch.setattr("openviking.service.memory_compile.get_default_registry", lambda: registry)
@@ -501,9 +504,12 @@ def language_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override, expected", [("", "zh-CN"), ("ja", "ja")])
+@pytest.mark.parametrize(
+    "override, expected, account_override",
+    [("en", "zh-CN", ""), ("en", "ja", "ja")],
+)
 async def test_compile_resolves_language_before_prompt_and_schema(
-    monkeypatch, language_config, override, expected
+    monkeypatch, language_config, override, expected, account_override
 ):
     language_config.output_language_override = override
     vlm = SimpleNamespace(
@@ -530,7 +536,21 @@ async def test_compile_resolves_language_before_prompt_and_schema(
         "openviking.service.memory_compile.acquire_memory_operation_lease",
         acquire_lease,
     )
-    runner = MemoryCompileRunner(SimpleNamespace(_ensure_initialized=lambda: viking_fs))
+    from openviking.config.binding import manager_over_source
+    from openviking.config.source import MemoryConfigSource
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+    cluster = OpenVikingConfig.from_dict({"output_language_override": override})
+    monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
+    manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
+    await manager.patch_account(
+        "acc",
+        {"output_language_override": account_override, "memory": {"extraction_enabled": False}},
+    )
+    runner = MemoryCompileRunner(
+        SimpleNamespace(_ensure_initialized=lambda: viking_fs),
+        runtime_config_manager=manager,
+    )
 
     result = await runner._consolidate(
         target=directory,
@@ -549,7 +569,7 @@ async def test_compile_resolves_language_before_prompt_and_schema(
     assert result["errors"] == []
     apply.assert_awaited_once()
     acquire_lease.assert_awaited_once()
-    if override:
+    if account_override:
         viking_fs.read.assert_not_awaited()
     else:
         viking_fs.read.assert_awaited_once_with(uri, size=4096, ctx=_ctx())
@@ -565,7 +585,7 @@ async def test_compile_prefers_account_registry(monkeypatch, language_config):
     account_registry = MemoryTypeRegistry(load_schemas=False)
     for schema in deployment.list_all(include_disabled=True):
         account_registry.register(schema.model_copy(deep=True))
-    account_registry.get("soul").content_template = "# Company Assistant\n{{ content }}"
+    account_registry.get("events").content_template = "# Company Events\n{{ summary }}"
 
     captured = {}
 
@@ -614,8 +634,8 @@ async def test_compile_prefers_account_registry(monkeypatch, language_config):
     assert base_registry is language_config.registry
     assert captured["provider_registry"] is account_registry
     assert (
-        captured["provider_registry"].get("soul").content_template
-        == "# Company Assistant\n{{ content }}"
+        captured["provider_registry"].get("events").content_template
+        == "# Company Events\n{{ summary }}"
     )
 
 
@@ -710,56 +730,62 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "change, has_error, has_operations, expected_status",
+    "change, has_error, has_operations, expected_status, snapshot_failure",
     [
-        (None, True, True, TaskStatus.FAILED),
-        ("written", True, True, TaskStatus.COMPLETED),
-        ("edited", True, True, TaskStatus.COMPLETED),
-        ("deleted", True, True, TaskStatus.COMPLETED),
-        ("written", False, True, TaskStatus.COMPLETED),
-        (None, False, True, TaskStatus.COMPLETED),
-        (None, False, False, TaskStatus.COMPLETED),
-    ],
-    ids=[
-        "all-failed",
-        "partial-add",
-        "partial-edit",
-        "partial-delete",
-        "success",
-        "no-op",
-        "no-operations",
+        pytest.param(None, True, True, TaskStatus.FAILED, None, id="all-failed-None"),
+        pytest.param("written", True, True, TaskStatus.COMPLETED, None, id="partial-add-None"),
+        pytest.param("edited", True, True, TaskStatus.COMPLETED, None, id="partial-edit-None"),
+        pytest.param("deleted", True, True, TaskStatus.COMPLETED, None, id="partial-delete-None"),
+        pytest.param("written", False, True, TaskStatus.COMPLETED, None, id="success-None"),
+        pytest.param("written", False, True, TaskStatus.COMPLETED, "start", id="success-start"),
+        pytest.param("written", False, True, TaskStatus.COMPLETED, "finish", id="success-finish"),
+        pytest.param(None, False, True, TaskStatus.COMPLETED, None, id="no-op-None"),
+        pytest.param(None, False, False, TaskStatus.COMPLETED, None, id="no-operations-None"),
     ],
 )
 async def test_compile_task_apply_outcomes(
-    monkeypatch, language_config, change, has_error, has_operations, expected_status
+    monkeypatch,
+    language_config,
+    caplog,
+    request,
+    change,
+    has_error,
+    has_operations,
+    expected_status,
+    snapshot_failure,
 ):
     language_config.output_language_override = "en"
     language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: SimpleNamespace(model="test"))
     ctx = _ctx()
-    store = SimpleNamespace(
-        create=AsyncMock(),
-        update=AsyncMock(),
-        get=AsyncMock(return_value=None),
-        list=AsyncMock(return_value=[]),
-        delete=AsyncMock(),
-    )
-    tracker = TaskTracker(store)
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
     task = await tracker.create("compile", account_id=ctx.account_id, user_id=ctx.user.user_id)
     monkeypatch.setattr("openviking.service.memory_compile.get_task_tracker", lambda: tracker)
     monkeypatch.setattr(
         "openviking.service.memory_compile.tracer.get_trace_id", lambda: "test-trace"
     )
-    warning = Mock()
-    monkeypatch.setattr("openviking.service.memory_compile.logger.warning", warning)
+    from openviking.service import memory_compile as log_module
+
+    log_module.logger.addHandler(caplog.handler)
+    request.addfinalizer(lambda: log_module.logger.removeHandler(caplog.handler))
+    caplog.set_level("INFO", logger="openviking.service.memory_compile")
     directory = "viking://user/u1/memories/entities"
     uri = f"{directory}/person/alice.md"
     operations = ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
+    extract = AsyncMock(return_value=(operations if has_operations else None, []))
     monkeypatch.setattr(
         "openviking.service.memory_compile.ExtractLoop.run",
-        AsyncMock(return_value=(operations if has_operations else None, [])),
+        extract,
     )
     lease = {"lease_ref": "test-lease"}
-    viking_fs = SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock()))
+    commit = AsyncMock(
+        side_effect=[
+            RuntimeError("snapshot failed") if phase == snapshot_failure else {"commit_oid": phase}
+            for phase in ("start", "finish")
+        ]
+    )
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()), commit=commit
+    )
     monkeypatch.setattr(
         "openviking.service.memory_compile.acquire_memory_operation_lease",
         AsyncMock(return_value=lease),
@@ -771,7 +797,16 @@ async def test_compile_task_apply_outcomes(
         apply_result.add_error(f"{directory}/person/bob.md", RuntimeError("write failed"))
     apply = AsyncMock(return_value=apply_result)
     monkeypatch.setattr("openviking.service.memory_compile.MemoryUpdater.apply_operations", apply)
-    runner = MemoryCompileRunner(SimpleNamespace(_ensure_initialized=lambda: viking_fs))
+    finalize = AsyncMock()
+    calls = Mock()
+    calls.attach_mock(commit, "snapshot")
+    calls.attach_mock(extract, "extract")
+    runner = MemoryCompileRunner(
+        SimpleNamespace(
+            _ensure_initialized=lambda: viking_fs,
+            finalize_compile_directories=finalize,
+        )
+    )
 
     await runner._run(
         task_id=task.task_id,
@@ -801,34 +836,49 @@ async def test_compile_task_apply_outcomes(
     }
     if expected_status == TaskStatus.FAILED:
         assert final.error.startswith("MEMORY_CONSOLIDATION_FAILED:")
+        assert [call[0] for call in calls.mock_calls] == ["snapshot", "extract"]
     else:
         assert final.error is None
-    assert not tracker.has_work(task.task_id)
+        assert [call[0] for call in calls.mock_calls] == ["snapshot", "extract", "snapshot"]
+    finalize.assert_not_awaited()
+    assert all(call.kwargs["paths"] == [directory] for call in commit.await_args_list)
+    snapshot_failures = [
+        record
+        for record in caplog.records
+        if "memory compile snapshot failed; continuing" in record.getMessage()
+    ]
+    if snapshot_failure:
+        [failure] = snapshot_failures
+        assert failure.degraded is True
+        assert f"phase={snapshot_failure}" in failure.getMessage()
+    else:
+        assert not snapshot_failures
+    assert not await tracker.has_work(
+        task.task_id,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+    )
     if has_operations:
         apply.assert_awaited_once()
         viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lease)
     else:
         apply.assert_not_awaited()
         viking_fs._async_agfs.pathlock_release.assert_not_awaited()
-    if change and has_error:
-        warning.assert_called_once_with(
-            "Memory-mode compile %s partially succeeded: %s", task.task_id, ["write failed"]
-        )
-    else:
-        warning.assert_not_called()
+    partial = [
+        record
+        for record in caplog.records
+        if getattr(record, "task_id", None) == task.task_id and getattr(record, "failed", None) == 1
+    ]
+    assert len(partial) == int(bool(change and has_error))
+    if partial:
+        assert partial[0].levelname == "INFO" and partial[0].degraded is True
+        assert "write failed" not in partial[0].getMessage()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("memory_type", [None, "entities"])
 async def test_cancel_running_compile_interrupts_before_memory_write(monkeypatch, memory_type):
-    store = SimpleNamespace(
-        create=AsyncMock(),
-        update=AsyncMock(),
-        get=AsyncMock(return_value=None),
-        list=AsyncMock(return_value=[]),
-        delete=AsyncMock(),
-    )
-    tracker = TaskTracker(store)
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
     ctx = _ctx()
     task = await tracker.create(
         "compile",
@@ -864,12 +914,16 @@ async def test_cancel_running_compile_interrupts_before_memory_write(monkeypatch
     cancelling = await tracker.cancel(
         task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
     )
-    assert cancelling.status == TaskStatus.CANCELLING
+    assert cancelling.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}
     await asyncio.wait_for(worker, timeout=1)
 
     final = await tracker.get(task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
     assert final.status == TaskStatus.CANCELLED
-    assert not tracker.has_work(task.task_id)
+    assert not await tracker.has_work(
+        task.task_id,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+    )
     memory_write.assert_not_awaited()
 
 

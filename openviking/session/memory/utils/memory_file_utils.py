@@ -66,9 +66,10 @@ def _uri_basename(uri: str) -> str:
 
 
 def _template_link_target(source_uri: Optional[str], target_uri: str) -> str:
-    if source_uri and target_uri:
-        return LinkRenderer.relative_path(str(source_uri), str(target_uri)) or str(target_uri)
-    return str(target_uri or "")
+    target = str(target_uri or "")
+    if source_uri and target:
+        target = LinkRenderer.relative_path(str(source_uri), target) or target
+    return LinkRenderer.encode_markdown_target(target)
 
 
 def _serialize_with_metadata(
@@ -100,8 +101,9 @@ def _serialize_with_metadata(
             )
             content = render_template(content_template, template_vars, extract_context)
         except Exception:
-            logger.exception(
-                "Failed to render memory content template; using plain content fallback"
+            logger.info(
+                "failed to render memory content template; using plain content fallback",
+                extra={"degraded": True},
             )
 
     clean_metadata = {k: v for k, v in metadata.items() if v is not None}

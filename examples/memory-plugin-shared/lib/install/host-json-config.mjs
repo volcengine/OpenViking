@@ -291,7 +291,16 @@ const COMMANDS = {
   "merge-zcode": ([configPath, hooksPath, mcpPath]) => mergeZcodeConfig({ configPath, hooksPath, mcpPath }),
 };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
   const [command, ...argv] = process.argv.slice(2);
   const run = COMMANDS[command];
   if (!run) {

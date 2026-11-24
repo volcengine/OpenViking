@@ -64,6 +64,25 @@ class LockError(VikingDBException):
 class LockAcquisitionError(LockError):
     """Raised when lock acquisition fails."""
 
+    # The native lock manager sets the owner only for a timeout on a live conflicting lock.
+    conflicting_owner: str | None = None
+
+
+class HandoffRecoveryRequired(LockAcquisitionError):
+    """A durable consumer must acquire fresh logical coverage before resuming."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"handoff recovery required: {reason}")
+        self.reason = reason
+
+
+class HandoffRecoveryBlocked(LockAcquisitionError):
+    """Fresh acquisition failed; keep the durable work pending for retry."""
+
+
+class InvalidPathLockRequestError(ValueError):
+    """Raised when a native PathLock request or durable handoff is malformed."""
+
 
 class ResourceBusyError(LockError):
     """Raised when a resource is locked by an ongoing operation."""

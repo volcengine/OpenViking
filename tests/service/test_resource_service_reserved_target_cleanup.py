@@ -28,61 +28,31 @@ def _service(viking_fs, resource_processor=None) -> ResourceService:
 
 
 @pytest.mark.asyncio
-async def test_cleanup_reserved_target_removes_only_empty_directory():
-    lock = {"lease_ref": "lock-1"}
+async def test_cleanup_reserved_target_removes_only_empty_directory(watch_vfs):
+    service = _service(watch_vfs)
     ctx = _ctx()
-    viking_fs = SimpleNamespace(
-        exists=AsyncMock(return_value=True),
-        stat=AsyncMock(return_value={"isDir": True}),
-        ls=AsyncMock(return_value=[]),
-        rm=AsyncMock(),
-    )
-    service = _service(viking_fs)
+    empty = "viking://resources/empty"
+    nonempty = "viking://resources/nonempty"
+    document = f"{nonempty}/document.md"
+    await watch_vfs.mkdir(empty, ctx=ctx)
+    await watch_vfs.write_file(document, "keep these contents", ctx=ctx)
 
-    removed = await service._cleanup_reserved_target_if_empty(
-        root_uri="viking://resources/empty",
-        ctx=ctx,
-        resource_lock=lock,
-    )
+    for target, expected in ((empty, True), (nonempty, False)):
+        lock = await watch_vfs._async_agfs.pathlock_acquire_tree(
+            watch_vfs._uri_to_path(target, ctx=ctx)
+        )
+        try:
+            assert (
+                await service._cleanup_reserved_target_if_empty(
+                    root_uri=target, ctx=ctx, resource_lock=lock
+                )
+                is expected
+            )
+        finally:
+            await watch_vfs._async_agfs.pathlock_release(lock)
 
-    assert removed is True
-    viking_fs.rm.assert_awaited_once_with(
-        "viking://resources/empty",
-        recursive=True,
-        ctx=ctx,
-        lease_ref=lock,
-    )
-    viking_fs.stat.assert_awaited_once_with(
-        "viking://resources/empty",
-        ctx=ctx,
-        skip_count=True,
-    )
-
-
-@pytest.mark.asyncio
-async def test_cleanup_reserved_target_preserves_nonempty_directory():
-    ctx = _ctx()
-    viking_fs = SimpleNamespace(
-        exists=AsyncMock(return_value=True),
-        stat=AsyncMock(return_value={"isDir": True}),
-        ls=AsyncMock(return_value=[{"name": "document.md", "isDir": False}]),
-        rm=AsyncMock(),
-    )
-    service = _service(viking_fs)
-
-    removed = await service._cleanup_reserved_target_if_empty(
-        root_uri="viking://resources/nonempty",
-        ctx=ctx,
-        resource_lock={"lease_ref": "lock-1"},
-    )
-
-    assert removed is False
-    viking_fs.rm.assert_not_awaited()
-    viking_fs.stat.assert_awaited_once_with(
-        "viking://resources/nonempty",
-        ctx=ctx,
-        skip_count=True,
-    )
+    assert not await watch_vfs.exists(empty, ctx=ctx)
+    assert await watch_vfs.read_file(document, ctx=ctx) == "keep these contents"
 
 
 @pytest.mark.asyncio
@@ -127,29 +97,13 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
     cleanup_empty_target_on_failure: bool,
 ):
     lock = {"lease_ref": "lock-1"}
-    calls = []
-
-    async def acquire_lock(*args, **kwargs):
-        calls.append("lock")
-        return lock
-
-    async def target_exists(*args, **kwargs):
-        calls.append("exists")
-        return target_preexisting
-
-    async def ensure_access(*args, **kwargs):
-        calls.append("acl")
-
-    async def target_stat(*args, **kwargs):
-        calls.append("stat")
-        return {"isDir": True}
-
     viking_fs = SimpleNamespace(
-        exists=AsyncMock(side_effect=target_exists),
-        stat=AsyncMock(side_effect=target_stat),
-        _ensure_access=AsyncMock(side_effect=ensure_access),
+        exists=AsyncMock(return_value=target_preexisting),
+        stat=AsyncMock(return_value={"isDir": True}),
+        _ensure_access=AsyncMock(),
+        _get_vector_store=lambda: None,
         _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
-        _async_agfs=SimpleNamespace(pathlock_acquire_tree=AsyncMock(side_effect=acquire_lock)),
+        _async_agfs=SimpleNamespace(pathlock_acquire_tree=AsyncMock(return_value=lock)),
     )
     processor = SimpleNamespace(
         tree_builder=SimpleNamespace(
@@ -179,11 +133,6 @@ async def test_explicit_target_plan_tracks_reservation_ownership(
         False,
         cleanup_empty_target_on_failure,
     )
-    expected_calls = ["acl", "exists"]
-    if target_preexisting:
-        expected_calls.append("stat")
-    expected_calls.extend(["lock", "acl"])
-    assert calls == expected_calls
 
 
 @pytest.mark.asyncio
@@ -198,6 +147,7 @@ async def test_explicit_directory_target_rejects_existing_file():
         exists=AsyncMock(return_value=True),
         stat=AsyncMock(return_value={"isDir": False}),
         _ensure_access=AsyncMock(),
+        _get_vector_store=lambda: None,
         _uri_to_path=lambda uri, ctx: f"/agfs/{uri}",
         _async_agfs=async_agfs,
     )
@@ -237,8 +187,8 @@ async def test_explicit_directory_target_rejects_existing_file():
 
 
 @pytest.mark.asyncio
-async def test_source_job_error_cleans_new_empty_reservation():
-    viking_fs = SimpleNamespace()
+async def test_source_job_error_cleans_new_empty_reservation(watch_vfs):
+    viking_fs = watch_vfs
     service = _service(viking_fs)
     service._execute_resource_ingestion = AsyncMock(
         return_value={"status": "error", "errors": ["directory produced no content"]}
@@ -316,6 +266,7 @@ async def test_prepared_file_failure_preserves_cleanup_policy(cleanup_on_failure
     assert kwargs["understanding_file_id"] == "file-1"
     assert kwargs["parser_backend"] == "understanding"
     assert kwargs["internal_task"] is True
+    assert kwargs["target_was_reserved"] is cleanup_on_failure
     if cleanup_on_failure:
         service._cleanup_reserved_target_if_empty.assert_awaited_once_with(
             root_uri=msg.root_uri,

@@ -163,22 +163,7 @@ async def _write_blob(service: OpenVikingService, uri: str, body: bytes) -> None
     await service.viking_fs.write_file(uri, body, ctx=ctx)
 
 
-async def test_http_commit_and_log_roundtrip(http_git_client, http_service):
-    client = http_git_client
-
-    await _write_blob(http_service, "viking://resources/http_a.md", b"hello-http")
-
-    commit = await client.snapshot.commit(message="http parity")
-    assert commit["result"] in ("created", "noop")
-    assert isinstance(commit["commit_oid"], str)
-    assert OID_RE.match(commit["commit_oid"])
-
-    log = await client.snapshot.log(limit=5)
-    assert isinstance(log, list) and len(log) >= 1
-    assert "oid" in log[0] and "message" in log[0]
-
-
-async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service):
+async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service, http_git_client):
     target_uri = "viking://resources/http_log_paths/a.md"
     directory_uri = "viking://resources/http_log_paths/docs"
     child_uri = f"{directory_uri}/guide.md"
@@ -199,10 +184,13 @@ async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service
                 json={"message": message, "paths": [uri]},
             )
             assert response.status_code == 200
-            return response.json()["result"]
+            result = response.json()["result"]
+            assert result["result"] == "created"
+            assert OID_RE.fullmatch(result["commit_oid"])
+            return result
 
         target_commit = await commit(target_uri, b"target", "add target")
-        await commit(unrelated_uri, b"unrelated", "add unrelated")
+        unrelated = await commit(unrelated_uri, b"unrelated", "add unrelated")
         directory_commit = await commit(child_uri, b"guide", "add directory child")
 
         response = await client.get(
@@ -216,11 +204,19 @@ async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service
         )
 
     assert response.status_code == 200
-    assert response.request.url.params.get_list("paths") == [target_uri, directory_uri]
     history = response.json()["result"]
     assert [item["oid"] for item in history] == [
         directory_commit["commit_oid"],
         target_commit["commit_oid"],
+    ]
+    next_page = await http_git_client.snapshot.log(
+        limit=1, offset=1, paths=[target_uri, directory_uri]
+    )
+    assert [item["oid"] for item in next_page] == [target_commit["commit_oid"]]
+    unfiltered = await http_git_client.snapshot.log(limit=2, paths=[])
+    assert [(item["oid"], item["message"].strip()) for item in unfiltered] == [
+        (directory_commit["commit_oid"], "add directory child"),
+        (unrelated["commit_oid"], "add unrelated"),
     ]
 
 

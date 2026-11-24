@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,11 @@ export const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
 // main. A plugin published as an npm package or assembled into a tarball builds
 // its copies at pack time, so committing them would only tax every review diff.
 export const TARGETS = [
+  {
+    root: join(ROOT, "examples", "magpie-memory-plugin"),
+    dir: join(ROOT, "examples", "magpie-memory-plugin", "shared"),
+    committed: false,
+  },
   {
     root: join(ROOT, "examples", "claude-code-memory-plugin"),
     dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"),
@@ -61,7 +67,7 @@ export const TARGETS = [
   },
 ];
 
-// cursor, trae, trae-cn and zcode vendor nothing: the installer copies the
+// cursor, trae, trae-cn and zcode vendor no runtime: the installer copies the
 // canonical runtime to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
 // and they import it by the relative path that resolves both there and here.
 export const ASSEMBLED_ROOTS = [
@@ -102,7 +108,27 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
+    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
+    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
     committed: true,
   },
   // The harnesses that bundle skills. agent-plugins has no hooks, so no
@@ -125,6 +151,16 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -133,9 +169,20 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, "agent-plugins", "skills"),
     committed: true,
   },
-  // The harnesses that ship the experience workflow today. agent-plugins has
-  // no hooks and so no session capture: its copy only retrieves and applies
-  // Experience, and its reads feed no trajectory back to the server.
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
+    committed: true,
+  },
+  // The harnesses that ship the experience workflow today. Where capture sends
+  // no tool parts (agent-plugins, Cursor; dsh with captureToolResults off),
+  // the copy only retrieves and applies Experience, and its reads feed no
+  // trajectory back to the server.
   {
     skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
@@ -151,6 +198,84 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, "agent-plugins", "skills"),
     committed: true,
   },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "openclaw-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
+    committed: true,
+  },
+  // MCP hosts discover rule_search dynamically. OpenClaw exposes ov_rule_search
+  // through its REST client. Ship the workflow wherever the host bundles skills.
+  ...[
+    ["examples", "claude-code-memory-plugin", "skills"],
+    ["examples", "codex-memory-plugin", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
+    ["examples", "dsh-memory-plugin", "skills"],
+    ["examples", "pi-coding-agent-extension", "skills"],
+    ["examples", "opencode-plugin", "skills"],
+    ["examples", "openclaw-plugin", "skills"],
+    ["agent-plugins", "skills"],
+  ].map((path) => ({
+    skill: "openviking-rule-search",
+    dir: join(ROOT, ...path),
+    committed: true,
+  })),
+  // TRAE and ZCode read these from the user's skills directory, Kimi Code and
+  // Antigravity from the plugin itself.
+  ...["trae", "zcode", "kimicode", "antigravity"].flatMap((host) => [
+    "openviking-memory",
+    "openviking-skills",
+    "ov-experience-memory",
+    "openviking-rule-search",
+  ].map((skill) => ({
+    skill,
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
+    committed: true,
+  }))),
+  // Claude Code and Codex each document a doctor of their own under this name;
+  // every other harness shares this one.
+  ...[
+    ...["cursor", "trae", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"]
+      .map((host) => ["agent-hook-plugin", "hosts", host, "skills"]),
+    ["opencode-plugin", "skills"],
+    ["pi-coding-agent-extension", "skills"],
+    ["dsh-memory-plugin", "skills"],
+  ].map((path) => ({
+    skill: "ov-memory-doctor",
+    dir: join(ROOT, "examples", ...path),
+    committed: true,
+  })),
 ];
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);
@@ -268,6 +393,21 @@ export async function assembledClosure() {
   return sharedClosure([...seeds]);
 }
 
+/**
+ * Whether TypeScript in the plugin imports the shared copies, so they need
+ * their `.d.mts` declarations. TypeScript that imports none of them (a Claude
+ * Code hooks module beside plain `.mjs` hooks) does not make the target typed.
+ */
+async function importsFromTypeScript(files, dir) {
+  for (const file of files) {
+    if (!file.endsWith(".ts") && !file.endsWith(".mts") && !file.endsWith(".tsx")) continue;
+    for (const spec of importSpecifiers(await readFile(file, "utf-8"))) {
+      if (spec.startsWith(".") && resolvePath(dirname(file), spec).startsWith(dir + sep)) return true;
+    }
+  }
+  return false;
+}
+
 /** Every target with the file set its own imports resolve to. */
 export async function resolveTargets() {
   const resolved = [];
@@ -281,7 +421,7 @@ export async function resolveTargets() {
     resolved.push({
       ...target,
       files: await sharedClosure(seeds),
-      typed: own.some((file) => file.endsWith(".ts") || file.endsWith(".mts")),
+      typed: await importsFromTypeScript(own, target.dir),
     });
   }
   return resolved;
@@ -376,10 +516,19 @@ async function main() {
   }
 }
 
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
 // Guard the sync behind the entrypoint check so sync.test.mjs can import the
 // target lists as the single source of truth instead of keeping its own copy —
 // the duplicated lists had drifted, and a drifted vendored file passed CI.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {
+if (isDirectRun()) {
   main().catch((err) => {
     process.stderr.write(`${err?.stack || err}\n`);
     process.exit(1);

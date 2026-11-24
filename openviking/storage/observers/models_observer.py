@@ -58,20 +58,20 @@ class ModelsObserver(BaseObserver):
             try:
                 vlm = self._get_vlm_usage() or self._get_configured_vlm() or []
             except Exception as e:
-                logger.warning(f"Error getting VLM usage: {e}")
+                logger.info("Error getting VLM usage: %s", type(e).__name__)
                 vlm = self._get_configured_vlm() or []
 
         if self._embedding_instance:
             try:
                 embedding = self._get_embedding_usage() or []
             except Exception as e:
-                logger.warning(f"Error getting Embedding usage: {e}")
+                logger.info("Error getting Embedding usage: %s", type(e).__name__)
 
         if self._rerank_instance:
             try:
                 rerank = self._get_rerank_usage() or []
             except Exception as e:
-                logger.warning(f"Error getting Rerank usage: {e}")
+                logger.info("Error getting Rerank usage: %s", type(e).__name__)
 
         return {
             "vlm": vlm,
@@ -96,7 +96,7 @@ class ModelsObserver(BaseObserver):
             try:
                 vlm_data = self._get_vlm_usage()
             except Exception as e:
-                logger.warning(f"Error getting VLM usage: {e}")
+                logger.info("Error getting VLM usage: %s", type(e).__name__)
             if not vlm_data:
                 vlm_data = self._get_configured_vlm()
             if vlm_data:
@@ -109,7 +109,7 @@ class ModelsObserver(BaseObserver):
                 if embedding_data:
                     sections.append(("Embedding", embedding_data))
             except Exception as e:
-                logger.warning(f"Error getting Embedding usage: {e}")
+                logger.info("Error getting Embedding usage: %s", type(e).__name__)
 
         # Rerank section
         if self._rerank_instance:
@@ -118,7 +118,7 @@ class ModelsObserver(BaseObserver):
                 if rerank_data:
                     sections.append(("Rerank", rerank_data))
             except Exception as e:
-                logger.warning(f"Error getting Rerank usage: {e}")
+                logger.info("Error getting Rerank usage: %s", type(e).__name__)
 
         if not sections:
             return "No model usage data available."

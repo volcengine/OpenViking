@@ -76,6 +76,8 @@ export type AssembleOpenVikingSessionParams = {
   tokenBudget: number;
   runtimeContext?: Record<string, unknown>;
   isMainAssemble: boolean;
+  /** before_prompt_build owns auto-recall; assemble keeps history and profile only. */
+  recallViaPromptHook?: boolean;
   cfg: any;
   getClient: () => Promise<OpenVikingClient>;
   logger: ContextEngineLifecycleLogger;
@@ -107,6 +109,7 @@ export type AssembleOpenVikingSessionParams = {
 type CompactClient = Pick<OpenVikingClient, "commitSession" | "getSessionContext">;
 
 export type CompactOpenVikingSessionParams = {
+  contextManagementMode?: "native" | "openviking";
   sessionId: string;
   sessionKey?: string;
   tokenBudget: number;
@@ -138,6 +141,7 @@ export type AfterTurnOpenVikingSessionParams = {
   runtimeContext?: Record<string, unknown>;
   cfg: {
     autoCapture: boolean;
+    contextManagementMode?: "native" | "openviking";
     commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
     commitRetentionMode?: "message_count" | "turn_budget";
@@ -426,14 +430,13 @@ function isSessionNotFoundError(err: unknown): boolean {
   return errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found");
 }
 
-async function recallForAssemble(
-  params: AssembleOpenVikingSessionParams,
-  recallQuery: ReturnType<typeof prepareRecallQuery>,
-) {
-  const { sessionId, sessionKey, cfg, getClient, resolveAgentId, queryConfigStore, logger, traceRecorder } = params;
+const PROFILE_MAX_CHARS = 8000;
+const PROFILE_READ_TIMEOUT_MS = 3000;
+
+function resolveAssembleRouting(params: RecallParams) {
+  const { sessionId, sessionKey, cfg, resolveAgentId, logger } = params;
   const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
   const sender = extractRuntimeSenderId(params.runtimeContext);
-  const client = await getClient();
   const routingRef = sessionId ?? sessionKey ?? ovSessionId;
   const agentId = resolveAgentId(routingRef, sessionKey, ovSessionId);
   const actorPeerId = resolveOpenVikingActorPeerId({
@@ -442,6 +445,50 @@ async function recallForAssemble(
     assistantPeerId: agentId,
     warn: (message) => logger.warn?.(message),
   });
+  return { ovSessionId, agentId, actorPeerId };
+}
+
+// Server-side context assembly leaves profile.md out on the assumption that the
+// client injects it, so read it here: the user's profile and, with peer scope, the actor's.
+async function readProfileBlock(
+  client: OpenVikingClient,
+  actorPeerId: string | undefined,
+  timeoutMs: number,
+  logger: ContextEngineLifecycleLogger,
+): Promise<string> {
+  const uris = ["viking://~/memories/profile.md"];
+  if (actorPeerId) uris.push(`viking://~/peers/${actorPeerId}/memories/profile.md`);
+  const reads = await Promise.allSettled(uris.map((uri) => client.read(uri, actorPeerId, timeoutMs)));
+  return reads
+    .map((read, i) => {
+      if (read.status === "rejected" && !String(read.reason).includes("[NOT_FOUND]")) {
+        logger.warn?.(`openviking: profile read failed (uri=${uris[i]}): ${String(read.reason)}`);
+      }
+      const text = read.status === "fulfilled" && typeof read.value === "string" ? read.value.trim() : "";
+      if (!text) return "";
+      const capped = text.length > PROFILE_MAX_CHARS
+        ? `${text.slice(0, PROFILE_MAX_CHARS).trimEnd()}\n... [profile truncated]`
+        : text;
+      return `<user-profile uri="${uris[i]}">\n${capped}\n</user-profile>`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+type RecallParams = Pick<
+  AssembleOpenVikingSessionParams,
+  "sessionId" | "sessionKey" | "runtimeContext" | "cfg" | "logger" | "resolveAgentId" | "queryConfigStore" | "traceRecorder"
+>;
+
+async function recallForAssemble(
+  params: RecallParams,
+  recallQuery: ReturnType<typeof prepareRecallQuery>,
+  client: OpenVikingClient,
+  routing: ReturnType<typeof resolveAssembleRouting>,
+  dedupTurns?: number,
+) {
+  const { sessionId, sessionKey, cfg, queryConfigStore, logger, traceRecorder } = params;
+  const { ovSessionId, agentId, actorPeerId } = routing;
   const queryConfig = await queryConfigStore?.getEffective({
     agentId,
     sessionId,
@@ -463,9 +510,22 @@ async function recallForAssemble(
     ovSessionId,
     queryTruncated: recallQuery.truncated,
     rawUserTextPreview: recallQuery.query,
-    // System additions are transient; the next turn must be able to recall the same URI.
-    dedupTurns: params.isMainAssemble ? 0 : undefined,
+    dedupTurns,
   });
+}
+
+export type PromptHookRecallParams = RecallParams & {
+  prompt: string;
+  getClient: () => Promise<OpenVikingClient>;
+};
+
+// Recall for before_prompt_build. The host freezes prependContext into the
+// admitted user turn and replays it byte-for-byte, so the default cooldown applies.
+export async function recallForPromptHook(params: PromptHookRecallParams): Promise<string> {
+  const query = prepareRecallQuery(params.prompt);
+  if (query.query.length < 5) return "";
+  const recall = await recallForAssemble(params, query, await params.getClient(), resolveAssembleRouting(params));
+  return recall.block ?? "";
 }
 
 export async function assembleOpenVikingSession(
@@ -474,24 +534,37 @@ export async function assembleOpenVikingSession(
   const assembled = await assembleSessionContext(params);
   // Current OpenClaw supplies the pending turn separately from history. Keep
   // recalled context out of persisted messages and let the host own that turn.
-  if (
-    !params.isMainAssemble || !params.cfg.autoRecall || !params.prompt ||
-    params.isBypassedSession(params)
-  ) {
+  if (!params.isMainAssemble || !params.cfg.autoRecall || params.isBypassedSession(params)) {
     return assembled;
   }
-  const query = prepareRecallQuery(params.prompt);
-  if (query.query.length < 5) return assembled;
+  const query = prepareRecallQuery(params.recallViaPromptHook ? "" : params.prompt ?? "");
 
   try {
-    const recall = await recallForAssemble(params, query);
-    if (!recall.block) return assembled;
-    const systemPromptAddition = [assembled.systemPromptAddition, recall.block].filter(Boolean).join("\n\n");
-    const estimatedTokens = assembled.estimatedTokens
-      + estimateTextTokens(systemPromptAddition)
-      - estimateTextTokens(assembled.systemPromptAddition ?? "");
-    if (estimatedTokens > params.tokenBudget) return assembled;
-    return { ...assembled, systemPromptAddition, estimatedTokens };
+    const routing = resolveAssembleRouting(params);
+    const client = await params.getClient();
+    const [profileBlock, recallBlock] = await Promise.all([
+      readProfileBlock(
+        client,
+        routing.actorPeerId,
+        Math.min(params.cfg.autoRecallTimeoutMs ?? PROFILE_READ_TIMEOUT_MS, PROFILE_READ_TIMEOUT_MS),
+        params.logger,
+      ),
+      // System additions are transient; the next turn must be able to recall the same URI.
+      query.query.length < 5 ? "" : recallForAssemble(params, query, client, routing, 0)
+        .then((recall) => recall.block)
+        .catch((err) => {
+          params.logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
+          return "";
+        }),
+    ]);
+    const baseTokens = estimateTextTokens(assembled.systemPromptAddition ?? "");
+    for (const blocks of [[profileBlock, recallBlock], [profileBlock], [recallBlock]]) {
+      if (!blocks.some(Boolean)) continue;
+      const systemPromptAddition = [assembled.systemPromptAddition, ...blocks].filter(Boolean).join("\n\n");
+      const estimatedTokens = assembled.estimatedTokens + estimateTextTokens(systemPromptAddition) - baseTokens;
+      if (estimatedTokens <= params.tokenBudget) return { ...assembled, systemPromptAddition, estimatedTokens };
+    }
+    return assembled;
   } catch (err) {
     params.logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
     return assembled;
@@ -555,6 +628,9 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
     if (!cfg.autoRecall) {
       return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_auto_recall_disabled", liveMessages: messages, originalTokens });
     }
+    if (params.recallViaPromptHook) {
+      return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_recall_via_prompt_hook", liveMessages: messages, originalTokens });
+    }
     if (hasAutoRecallBlock(latestMessage)) {
       return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_recall_already_injected", liveMessages: messages, originalTokens });
     }
@@ -571,7 +647,7 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
     }
 
     try {
-      const recall = await recallForAssemble(params, recallQuery);
+      const recall = await recallForAssemble(params, recallQuery, await getClient(), resolveAssembleRouting(params));
 
       if (!recall.block) {
         return assemblePassthrough({
@@ -610,6 +686,10 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
     }
   }
 
+  if (cfg.contextManagementMode !== "openviking") {
+    return assemblePassthrough({ diag, ovSessionId, reason: "native_context", liveMessages: messages, originalTokens });
+  }
+
   try {
     const client = await getClient();
     const ctx = await client.getSessionContext(ovSessionId, tokenBudget);
@@ -617,6 +697,15 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
     const preAbstracts = ctx?.pre_archive_abstracts ?? [];
     const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
     const activeCount = ctx?.messages?.length ?? 0;
+
+    // A completed WM-off archive can leave a non-empty active tail. That tail
+    // alone cannot replace the host's earlier history in explicit OV mode.
+    if (!hasArchives && (ctx?.stats?.totalArchives ?? 0) > 0) {
+      logger.warn?.("openviking: archived context has no summary; keeping native history");
+      return assemblePassthrough({
+        diag, ovSessionId, reason: "archive_summary_missing", liveMessages: messages, originalTokens,
+      });
+    }
 
     if (!ctx || (!hasArchives && activeCount === 0)) {
       return assemblePassthrough({
@@ -692,7 +781,7 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
     if (isSessionNotFoundError(err)) {
       const errorMessage = String(err);
       logger.info(
-        `openviking: assemble skipped because OV session does not exist ` +
+        `openviking: session history not assembled because OV session does not exist ` +
           `(session=${ovSessionId}, tokenBudget=${tokenBudget}, agentId=${resolveAgentId(ovSessionId)})`,
       );
       return assemblePassthrough({
@@ -989,6 +1078,7 @@ export async function afterTurnOpenVikingSession({
 
     const commitResult = await client.commitSession(ovSessionId, {
       wait: false,
+      ...(cfg.contextManagementMode === "openviking" ? { enableWorkingMemory: true } : {}),
       ...(cfg.commitRetentionMode === "turn_budget"
         ? { retentionMode: "turn_budget" as const }
         : { keepRecentCount: cfg.commitKeepRecentCount }),
@@ -1000,6 +1090,7 @@ export async function afterTurnOpenVikingSession({
     );
 
     diag("afterTurn_commit", ovSessionId, {
+      effectiveEnableWorkingMemory: commitResult.effective_enable_working_memory,
       pendingTokens,
       commitTokenThreshold,
       commitTokenThresholdRatio: cfg.commitTokenThresholdRatio,
@@ -1058,6 +1149,7 @@ function compactFailureResult(
 }
 
 export async function compactOpenVikingSession({
+  contextManagementMode = "native",
   sessionId,
   sessionKey,
   tokenBudget,
@@ -1107,6 +1199,13 @@ export async function compactOpenVikingSession({
     };
   }
 
+  if (contextManagementMode === "native") {
+    return await runtimeCompact?.() ?? compactFailureResult(
+      "native_compaction_unavailable", validTokenCount(currentTokenCount) ?? -1,
+      { message: "Upgrade OpenClaw to a version with runtime compaction delegation." },
+    );
+  }
+
   const client = await getClient();
   const agentId = resolveAgentId(sessionId, sessionKey, ovSessionId);
   const tokensBeforeOriginal = validTokenCount(currentTokenCount);
@@ -1134,6 +1233,7 @@ export async function compactOpenVikingSession({
     const commitResult = await client.commitSession(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
+      enableWorkingMemory: true,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
@@ -1204,6 +1304,10 @@ export async function compactOpenVikingSession({
       };
     }
 
+    if (commitResult.effective_enable_working_memory !== true) {
+      return await runtimeCompact?.() ?? compactFailureResult("working_memory_disabled", tokensBefore, { commit: commitResult });
+    }
+
     let summary = "";
     const firstKeptEntryId = commitResult.archive_uri?.split("/").pop() ?? "";
     let tokensAfter: number | undefined;
@@ -1263,6 +1367,10 @@ export async function compactOpenVikingSession({
         `tokensBefore=${tokensBefore}, tokensAfter=${tokensAfter ?? "unknown"}, ` +
         `latestArchiveId=${firstKeptEntryId || "none"}`,
     );
+
+    if (!summary) {
+      return await runtimeCompact?.() ?? compactFailureResult("archive_summary_missing", tokensBefore, { commit: commitResult });
+    }
 
     diag("compact_result", ovSessionId, {
       ok: true,

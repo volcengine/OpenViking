@@ -1,13 +1,10 @@
 <script setup>
 import { computed } from 'vue'
 import { useData, withBase } from 'vitepress'
-import { sections } from '../docs-sections'
+import { sectionForPage } from '../docs-sections'
 const { page, lang } = useData()
 const locale = computed(() => lang.value.startsWith('zh') ? 'zh' : 'en')
-const section = computed(() => {
-  const directory = page.value.relativePath.split('/')[1]
-  return sections.find(item => item.id === (directory === 'context-compilation' ? 'guides' : directory))
-})
+const section = computed(() => sectionForPage(page.value.relativePath))
 </script>
 <template>
   <nav class="doc-breadcrumb" :aria-label="locale === 'zh' ? '面包屑导航' : 'Breadcrumb'">

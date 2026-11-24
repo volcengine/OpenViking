@@ -11,6 +11,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
+from openviking.session.memory.merge_op import FieldType, MergeOp
 
 
 class ExtractionOutputProtocolError(ValueError):
@@ -33,12 +35,69 @@ class ExtractionOutputContext:
     role_scope: Any | None = None
     available_tools: tuple[str, ...] = ()
     template_context: dict[str, Any] = field(default_factory=dict)
+    consolidation: bool = False
+
+    def validate_creates(self, payload: dict[str, Any]) -> None:
+        """Reject a candidate before tolerant parsing can drop its replacement."""
+        if not self.consolidation:
+            return
+        for schema in self.schemas:
+            if not schema.requires_messages():
+                continue
+            items = payload.get(schema.memory_type) or []
+            if not isinstance(items, list):
+                items = [items]
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError(f"Invalid {schema.memory_type} operation")
+                try:
+                    page_id = int(item.get("page_id"))
+                except (TypeError, ValueError):
+                    page_id = None
+                if schema.operation_mode == "add_only" or not self.page_id_map.resolve(page_id):
+                    raise ValueError(
+                        f"Cannot create {schema.memory_type} without original messages"
+                    )
+
+    @property
+    def inspection_tools(self) -> tuple[str, ...]:
+        """Native inspection tools in canonical prompt order."""
+        return tuple(name for name in ("search", "read") if name in self.available_tools)
+
+    @property
+    def add_only(self) -> bool:
+        """Whether every selected schema only creates new memory records."""
+        return (
+            not self.consolidation
+            and bool(self.schemas)
+            and all(
+                getattr(schema, "operation_mode", "upsert") == "add_only" for schema in self.schemas
+            )
+        )
+
+    @property
+    def supports_string_patch(self) -> bool:
+        """Whether an upsert schema exposes an existing string's edit/drop methods."""
+        return any(
+            getattr(schema, "operation_mode", "upsert") != "add_only"
+            and any(
+                field.field_type == FieldType.STRING and field.merge_op == MergeOp.PATCH
+                for field in getattr(schema, "fields", ())
+            )
+            for schema in self.schemas
+        )
 
 
 class ExtractionOutputProtocol(ABC):
     """Render and parse one model-facing extraction output protocol."""
 
     name: str
+
+    def render_context_rules(self, context: ExtractionOutputContext) -> str:
+        """Render shared read/patch guidance without exposing unavailable tools."""
+        read_rules = prompts.READ_FORMAT_RULES if "read" in context.inspection_tools else ""
+        patch_rules = prompts.PATCH_CONTEXT_RULES if context.supports_string_patch else ""
+        return "".join((read_rules, patch_rules))
 
     @abstractmethod
     def render_contract(self, context: ExtractionOutputContext) -> str:

@@ -1,6 +1,6 @@
 # Metrics
 
-OpenViking provides a machine-oriented metrics system for exposing runtime health, request quality, model usage, resource processing throughput, and probe health states.
+OpenViking provides a machine-oriented metrics system for exposing runtime health, request status, model usage, resource processing throughput, and probe health states.
 
 Unlike the human-facing `/api/v1/observer/*` endpoints and the analytics-oriented `/api/v1/stats/*` endpoints, Metrics are designed for:
 
@@ -84,17 +84,17 @@ Collectors turn inputs into metric semantics:
 
 ### MetricRegistry
 
-The MetricRegistry is the in-process metric store that keeps the current metric values and serves them to the exporter.
+MetricRegistry keeps OpenViking metric names, label contracts, and account-dimension rules. Event counts and durations are accumulated by the OpenTelemetry SDK. Cumulative values from RAGFS and state collectors enter as snapshots, without being replayed as new observations.
 
 ### Exporter
 
-The first exporter implementation is the Prometheus exporter, which renders registry contents into Prometheus exposition text.
+`/metrics` uses the official Prometheus Python client for text exposition. OTLP HTTP/gRPC uses the official OpenTelemetry exporters for encoding, delivery, and retries. Existing endpoint, headers, TLS, and export-interval settings remain unchanged.
 
 ## Usage
 
 ### Accessing `/metrics`
 
-In the current implementation, `/metrics` is not wired to `get_request_context` or other auth dependencies, so from the code-path perspective it currently behaves as a public scrape endpoint.
+`/metrics` does not require an OpenViking API key. Restrict access at the gateway or reverse proxy when needed.
 
 ```bash
 curl http://localhost:1933/metrics
@@ -124,7 +124,7 @@ scrape_configs:
 | `context_type` | retrieval context type | `resource` |
 | `provider` | model or external service provider | `volcengine` |
 | `model_name` | model name | `doubao-seed-1-8-251228` |
-| `stage` | stage label (defined by each metric family) | resource stage: `parse`; token attribution stage: `embed_query` |
+| `stage` | stage label (defined by each metric family) | resource stage: `parse_artifact`; token attribution stage: `embed_query` |
 | `valid` | whether the current sample is fresh and valid | `1` / `0` |
 
 Notes:
@@ -132,12 +132,42 @@ Notes:
 - `account_id` is only enabled on controlled allowlisted metric families to prevent high-cardinality growth
 - `valid=0` means the current state/probe sample is a fallback or stale value, not that the label itself is malformed
 - `stage` semantics depend on the metric family:
-  - `openviking_resource_stage_*`: resource ingestion pipeline stages (for example `parse/persist/process`)
+  - `openviking_resource_stage_*`: resource ingestion pipeline stages (for example `parse_artifact/target_resolve/content_commit`)
   - `openviking_operation_tokens_total`: token attribution stages (for example `embed_query/rerank/vlm`)
 
 ## Key Metric Families
 
-The metric summaries below are based on representative metrics currently exposed by the collectors in `openviking/metrics/collectors/`.
+The tables list representative metrics defined by the collectors. A series appears only when its feature is enabled, the relevant event occurs, and collection succeeds. An absent series does not necessarily mean zero.
+
+### Duration distributions and percentiles
+
+Instrumentation records actual durations and labels; Python and RAGFS delegate duration
+aggregation to their respective OpenTelemetry SDKs. The integration layer supplies the default
+collection policy, so business collectors do not maintain bucket boundaries. Python starts at
+0.01 seconds and RAGFS at 0.0001 seconds, using a 1/2/5 scale per decade through 5,000,000 seconds
+(about 58 days). Larger observations remain in `+Inf`. These boundaries are not timeouts;
+dashboards must not filter slow operations with `< 10` or a fixed axis maximum.
+
+Prometheus `_bucket`, `_count`, `_sum` series and OTLP histograms carry `bucket_schema`,
+derived from their actual boundaries; collectors cannot set it themselves.
+**Keep `bucket_schema` when aggregating percentiles**
+so rolling upgrades cannot mix incompatible bucket layouts. Older series without this label
+form a separate group; their lost overflow distribution cannot be reconstructed.
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, bucket_schema, operation) (
+    rate(openviking_operation_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Use `0.95` for P95. Compute the mean from `rate(_sum) / rate(_count)` with the same
+`operation, bucket_schema` grouping, showing it only when the count is positive.
+No completed observations must remain a gap, not zero latency. Percentiles are still
+bucket-interpolated estimates, particularly with low traffic or coarse buckets.
+Each default Python duration histogram label set exports 30 Prometheus series; RAGFS exports 36.
+Account for the extra buckets in scrape and storage capacity planning.
 
 ### Requests and Operations
 
@@ -164,18 +194,25 @@ Typical usage:
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | retrieval zero-result count |
 | `openviking_retrieval_rerank_used_total` | Counter | `account_id` | number of retrievals that used rerank |
 | `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | retrieval rerank fallback count |
+| `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | accepted resource import tasks; Connector imports use `pipeline="connector"` and `source_type="repository"` or `"document"` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | count of resource ingestion stages |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | duration distribution of ingestion stages |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | resource ingestion wait duration distribution (for example queue waiting) |
 
-Typical `stage` values include:
+Current built-in resource event producers emit these `stage` values, depending on the path taken:
 
-- `request`
-- `parse`
-- `summarize`
-- `persist`
-- `finalize`
-- `process`
+- `source_prepare`
+- `parse_artifact`
+- `target_resolve`
+- `update_plan`
+- `content_commit`
+- `derived_enqueue`
+- `semantic_queue_wait`
+- `semantic_execute`
+- `embedding_queue_wait`
+- `embedding_execute`
+
+The telemetry bridge also recognizes legacy summary keys for `request`, `process`, `parse`, `finalize`, `summarize`, `wait`, and `watch`. The current resource summary builder does not produce those keys, so they are not additional stages emitted by the current import pipeline. `persist` is not in that bridge map.
 
 ### Vector, Memory, and Semantic Metrics
 
@@ -199,6 +236,7 @@ Typical `stage` values include:
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM input tokens |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM output tokens |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM total tokens |
+| `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | VLM total tokens during resource ingestion; `source_type` is `repository` or `document` |
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM call duration distribution |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding request count |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding latency distribution |
@@ -208,6 +246,7 @@ Typical `stage` values include:
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding input tokens (per-call aggregate) |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding output tokens (per-call aggregate; may not appear if always 0) |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding total tokens (per-call aggregate) |
+| `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | embedding total tokens during resource ingestion; `source_type` is `repository` or `document` |
 | `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider call count (per-call) |
 | `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider call duration distribution (per-call) |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank input tokens (per-call aggregate) |
@@ -219,6 +258,8 @@ Notes:
 
 - `openviking_model_*` gives a unified cross-model view for embedding and VLM usage
 - `openviking_vlm_*` and `openviking_embedding_*` are better suited for workload-specific dashboards
+- `*_requests_*` represents business requests; `*_calls_*`, call duration, and token families represent provider calls
+- `openviking_operation_tokens_total` has no pre-aggregated `token_type="all/total"`; aggregate totals in TSDB queries
 
 ### Queues, Locks, and Runtime State
 
@@ -244,6 +285,13 @@ Notes:
 | `openviking_lock_stale_leases_released_total` | Counter | none | stale leases released |
 | `openviking_lock_descendant_scans_total` | Counter | none | completed descendant scans |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | none | cumulative descendant scan duration |
+| `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | completed descendant scan duration distribution, supporting mean, P95, and P99 |
+| `openviking_lock_redis_acquire_duration_seconds` | Histogram | `kind, result, bucket_schema` | Redis acquisition round trip including response decoding; `kind` is `tree` if the batch includes Tree, otherwise `exact`; `result` is `ok`, `conflict`, `invalid_token`, `invalid_request`, `invalid_response`, or `error` |
+| `openviking_lock_redis_slow_acquisitions_total` | Counter | none | Redis acquisition round trips exceeding 10ms, including failed requests |
+
+Redis acquisition metrics cover returned script calls, excluding local validation,
+manager conflict waiting and calls cancelled before a response. Scope, owner and
+service name are retained in slow logs, not metric labels.
 
 The queue duration `outcome` label is one of `success`, `failed`, `requeued`, `cancelled`, or `exception`. `failed` means the handler returned a settled failure that can be acknowledged, while `exception` means processing raised and the current message is left unacknowledged.
 
@@ -272,23 +320,31 @@ seconds, for example `123 ns = 0.000000123 seconds`.
 |---------------|------|---------------|---------|
 | `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | successful and failed operations |
 | `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | operation duration distribution |
-| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | file/directory cache hits and misses |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | query cache hits and misses; `kind="query"` |
 | `openviking_ragfs_cache_backend_fallbacks_total` | Counter | none | backend loads after cache misses |
-| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache put/delete attempts |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache get/put/delete attempts |
 | `openviking_ragfs_cache_invalidations_total` | Counter | none | completed invalidations |
-| `openviking_ragfs_cache_errors_total` | Counter | none | cache errors hidden by bypass mode |
-| `openviking_ragfs_cache_policy_bypasses_total` | Counter | none | reads bypassing cache |
-| `openviking_ragfs_cache_bytes_total` | Counter | `source` | bytes from backend/cache |
+| `openviking_ragfs_cache_errors_total` | Counter | none | provider or cache-data errors |
 | `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | cumulative get/put/delete duration |
-| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved counts |
-| `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | background tasks, including the retry loop |
-| `openviking_ragfs_multiwrite_read_routes_total` | Counter | `route` | primary/backup/redirect/miss selections |
+| `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | active flush runtime, `0` or `1` per mount |
+| `openviking_ragfs_multiwrite_pending_events` | Gauge | none | submitted events that are queued, executing, or awaiting retry |
+| `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | final failures for `flush`, `checkpoint`, `catch_up`, or `gc` |
+| `openviking_ragfs_multiwrite_backend_lag_events` | Gauge | `backend, partition` | sum of `tail - synced_seq` across accounts |
+| `openviking_ragfs_multiwrite_protocol_version` | Gauge | `version` | mount count for the closed label `v2` |
+| `openviking_ragfs_multiwrite_protocol_status` | Gauge | `status` | mount count for closed labels `migrating` and `stable` |
 
 These metrics have no `mount` or `account_id` label. Cache and multi-backend
 families are absent when those capabilities are not enabled. `status` is
 `success` or `error`; `exists=false` is successful and `replace` uses `rename`.
-Histogram buckets cover all outcomes, with finite bounds from 0.0001 to 10 seconds.
+Histograms cover all outcomes and are accumulated by the Rust OpenTelemetry SDK;
+exported boundaries and counts come directly from SDK snapshots.
+Histograms are emitted only after an operation has observations, avoiding empty long-tail
+buckets for every plugin/operation pair; existing operation counters remain available.
 Python `get_stats()` retains its microsecond fields.
+
+The protocol family always contains both closed-label series. One unreadable
+or invalid protocol, account, or segment manifest rejects the
+whole scrape snapshot instead of publishing partial zero lag.
 
 ### Tasks and Task Tracker
 
@@ -298,6 +354,8 @@ Python `get_stats()` retains its microsecond fields.
 | `openviking_task_running` | Gauge | `task_type` | running tasks tracked by task tracker |
 | `openviking_task_completed` | Gauge | `task_type` | completed tasks tracked by task tracker |
 | `openviking_task_failed` | Gauge | `task_type` | failed tasks tracked by task tracker |
+| `openviking_task_cancelling` | Gauge | `task_type` | tasks being cancelled |
+| `openviking_task_cancelled` | Gauge | `task_type` | cancelled tasks |
 
 ### Cache
 
@@ -395,7 +453,7 @@ For `/metrics` endpoint behavior and scrape usage, see [Metrics API](../api/09-m
 | `openviking_service_readiness` | Gauge | may include `valid` | main service readiness |
 | `openviking_api_key_manager_readiness` | Gauge | may include `valid` | API key manager readiness |
 | `openviking_storage_readiness` | Gauge | `probe, valid` | storage probe, for example `agfs` |
-| `openviking_model_provider_readiness` | Gauge | `provider, valid` | model provider readiness |
+| `openviking_model_provider_readiness` | Gauge | `provider, valid` | whether a VLM client can be created from configuration; no model request is sent |
 | `openviking_async_system_readiness` | Gauge | `probe, valid` | async system readiness |
 | `openviking_retrieval_backend_readiness` | Gauge | `probe, valid` | retrieval backend readiness |
 | `openviking_encryption_component_health` | Gauge | `valid` | overall encryption component health |
@@ -408,6 +466,8 @@ Meaning of `valid`:
 - `valid="0"`: the sample is a fallback or stale value and should be treated with caution
 
 ### Encryption (Operational Metrics)
+
+These metrics are driven by Python encryption events and are not complete counts of all encrypted RAGFS file I/O. Assess file throughput together with RAGFS metrics and the enabled backends.
 
 | Metric Family | Type | Common Labels | Meaning |
 |---------------|------|---------------|---------|
@@ -456,6 +516,8 @@ Possible `model_type` values include:
 - `embedding`
 - `rerank`
 
+`openviking_model_provider_readiness=1` does not verify credentials, quota, or remote inference. It only checks client construction. Use actual model-call errors and latency to assess requests.
+
 ## Configuration Example
 
 ### Enabling Metrics
@@ -478,8 +540,8 @@ In `ov.conf`, the metrics subsystem can be explicitly enabled through `server.ob
             "openviking_operation_requests_total",
             "openviking_operation_duration_seconds",
             "openviking_vlm_calls_total",
-          "openviking_vlm_call_duration_seconds",
-          "openviking_rerank_*"
+            "openviking_vlm_call_duration_seconds",
+            "openviking_rerank_*"
           ]
         }
       }
@@ -505,7 +567,7 @@ Key fields:
 - `server.observability.metrics.exporters.otel.protocol`: `"grpc"` or `"http"`
 - `server.observability.metrics.exporters.otel.tls.insecure`: OTLP/gRPC only; `true` means plaintext (no TLS)
 - `server.observability.metrics.exporters.otel.endpoint`: OTLP endpoint (for gRPC, use `host:4317`; for HTTP, use a full URL)
-- `server.observability.metrics.exporters.otel.service_name`: OTLP `service.name` resource attribute (default `"openviking-server"`)
+- `server.observability.metrics.exporters.otel.service_name`: OTLP `service.name` resource attribute; defaults to top-level `service_name` when omitted
 - `server.observability.metrics.exporters.otel.export_interval_ms`: OTLP push interval in milliseconds (default `10000`)
 - `server.observability.metrics.exporters.otel.headers`: optional custom OTLP headers; sent as gRPC metadata for gRPC and HTTP headers for HTTP
 - When using gRPC, header keys in `headers` should be lowercase, for example `x-byteapm-appkey`; HTTP does not have this restriction
@@ -555,4 +617,3 @@ Example:
 - [Data Encryption](./10-encryption.md) - storage-layer encryption and isolation
 - [Metrics API](../api/09-metrics.md) - `/metrics` endpoint usage
 - [VikingBot Feedback Observability Design](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
-- [Metrics Design](../../design/metric-design.md) - metrics system design details

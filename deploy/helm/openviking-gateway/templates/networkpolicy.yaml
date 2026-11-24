@@ -1,0 +1,23 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "openviking-gateway.fullname" . }}
+  labels:
+    {{- include "openviking-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "openviking-gateway.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  {{- if .Values.networkPolicy.ingressFrom }}
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 1935
+  {{- else }}
+  ingress: []
+  {{- end }}
+{{- end }}

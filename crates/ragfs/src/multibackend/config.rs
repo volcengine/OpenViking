@@ -1,12 +1,11 @@
 //! Multi-backend config validation and normalization helpers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::core::errors::{Error, Result};
-use crate::core::multibackend_wrapper::{BackendEntry, SyncMode};
-use crate::core::types::{BackendsConfig, ConfigValue, PluginConfig, RedirectPolicy};
+use crate::core::types::{BackendsConfig, ConfigValue, PluginConfig};
 
 /// Convert one nested backup `params` object into plugin config values.
 pub fn item_params_to_config_values(value: &Value) -> Result<HashMap<String, ConfigValue>> {
@@ -66,62 +65,32 @@ pub fn validate_primary_encryption_flags(
     Ok(())
 }
 
-/// Validate redirect targets against the assembled backup entries.
-pub fn validate_redirect_targets(
-    redirects: &[RedirectPolicy],
-    backup_entries: &[BackendEntry],
-) -> Result<()> {
-    for policy in redirects {
-        let targets = match policy {
-            RedirectPolicy::FileOverSizePolicy { target, .. } => target.as_ref(),
-            RedirectPolicy::FileExtensionPolicy { target, .. } => target.as_ref(),
-        };
-        let target_names = targets
-            .ok_or_else(|| Error::config("redirect policy target must not be empty".to_string()))?;
-        if target_names.is_empty() {
+/// Validate V2 backup settings.
+pub fn validate_backups_config(bc: &BackendsConfig) -> Result<()> {
+    if !matches!(bc.provider.as_str(), "filesystem" | "cache") {
+        return Err(Error::config(
+            "backups.provider must be 'filesystem' or 'cache'".to_string(),
+        ));
+    }
+
+    let mut names = HashSet::new();
+    for item in &bc.items {
+        let name = item.name.trim();
+        if name.is_empty() {
+            return Err(Error::config("backup name must not be empty".to_string()));
+        }
+        if name == "primary" {
             return Err(Error::config(
-                "redirect policy target must not be empty".to_string(),
+                "backup backend name 'primary' is reserved".to_string(),
             ));
         }
-        for name in target_names {
-            if !backup_entries.iter().any(|be| &be.name == name) {
-                return Err(Error::config(format!(
-                    "redirect target '{}' not found in backup entries",
-                    name
-                )));
-            }
+        if !names.insert(name) {
+            return Err(Error::config(format!(
+                "duplicate backup name '{}'",
+                item.name
+            )));
         }
     }
-    Ok(())
-}
 
-/// Validate that exclude policies do not silently carry redirect targets.
-pub fn validate_backup_excludes(bc: &BackendsConfig) -> Result<()> {
-    for item in &bc.items {
-        for policy in item.excludes.as_deref().unwrap_or(&[]) {
-            match policy {
-                RedirectPolicy::FileOverSizePolicy { target, .. }
-                | RedirectPolicy::FileExtensionPolicy { target, .. } => {
-                    if target.is_some() {
-                        return Err(Error::config(format!(
-                            "exclude policy for backup '{}' must not contain target",
-                            item.name
-                        )));
-                    }
-                }
-            }
-        }
-    }
     Ok(())
-}
-
-/// Convert config sync settings into the runtime sync mode.
-pub fn sync_mode_from_config(bc: &BackendsConfig) -> SyncMode {
-    match bc.sync_type.as_str() {
-        "sync" => SyncMode::Sync {
-            ack_count: bc.write_ack_count.unwrap_or(usize::MAX),
-            timeout_ms: bc.write_ack_timeout_ms.unwrap_or(0),
-        },
-        _ => SyncMode::Async,
-    }
 }
