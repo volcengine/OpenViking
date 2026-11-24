@@ -248,7 +248,7 @@ class CacheRuntimeExpiryStore:
             limit=limit,
         )
         page_items = tuple(SourceItem(item, score) for item, score in items)
-        cursor = SourceCursor(*next_raw) if next_raw else None
+        cursor = SourceCursor(next_raw[1], next_raw[0]) if next_raw else None
         return SourcePage(page_items, cursor)
 
     async def reset_unpublished_minute(
@@ -347,7 +347,7 @@ class CacheRuntimeExpiryStore:
             self._keys.parse_registry_member(str(member), expected_shard=shard_id)
             for member, _score in items
         )
-        cursor = RegistryCursor(*next_raw) if next_raw else None
+        cursor = RegistryCursor(next_raw[1], next_raw[0]) if next_raw else None
         return RegistryPage(buckets, cursor)
 
     async def read_time_ms(self) -> int:

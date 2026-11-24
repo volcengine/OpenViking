@@ -17,6 +17,7 @@ from openviking.scheduling.expiry.models import (
     BucketRef,
     NamespaceSpec,
     OwnerRole,
+    RegistryCursor,
     SourceCursor,
     StoreOperationError,
 )
@@ -45,6 +46,7 @@ class _CacheRuntime:
         self.hset_calls = []
         self.zadd_calls = []
         self.zrangebyscore_calls = []
+        self.zrangebyscore_results = {}
         self.zcard_calls = []
         self.server_time_for_key_calls = []
 
@@ -94,6 +96,8 @@ class _CacheRuntime:
     async def zrangebyscore(self, key, min_score, max_score, limit, **kwargs):
         """Record one scored range query and return one literal member."""
         self.zrangebyscore_calls.append((key, min_score, max_score, limit, kwargs))
+        if key in self.zrangebyscore_results:
+            return self.zrangebyscore_results[key]
         if key.startswith("expiry:consumer:registry:"):
             return [("session:0:0", 10.0)]
         return [("item", 10.0)]
@@ -177,6 +181,38 @@ def test_runtime_injects_the_selected_cache_runtime():
     )
 
     assert runtime._store._cache_runtime is cache_runtime
+
+
+async def test_store_first_page_cursor_keeps_score_before_member():
+    """Preserve score-first cursors when the direct Runtime read has another page."""
+    runtime = _CacheRuntime()
+    keys = ExpiryKeys("test")
+    runtime.zrangebyscore_results = {
+        keys.source(0): [("first", 10.0), ("second", 20.0)],
+        keys.registry(0): [
+            ("session:0:60000", 60_000.0),
+            ("session:0:120000", 120_000.0),
+        ],
+    }
+    store = CacheRuntimeExpiryStore(
+        runtime,
+        keys,
+        _InlineExecutor(),
+        ExpiryMetrics(),
+    )
+    await store.open()
+
+    source = await store.read_source_page(
+        0,
+        lower_exclusive_ms=0,
+        upper_inclusive_ms=20,
+        after=None,
+        limit=1,
+    )
+    registry = await store.read_registry_page(0, after=None, limit=1)
+
+    assert source.next_cursor == SourceCursor(10, "first")
+    assert registry.next_cursor == RegistryCursor(60_000, "session:0:60000")
 
 
 async def test_store_uses_runtime_for_namespace_paging_and_owner_lease():
