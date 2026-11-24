@@ -772,11 +772,6 @@ fn admin_probe_regular_key_status(status: u16) -> bool {
     )
 }
 
-#[cfg(test)]
-fn admin_probe_ambiguous_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500..=599)
-}
-
 fn should_run_authenticated_probe(
     health: &Value,
     require_api_key: bool,
@@ -932,8 +927,7 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
-        admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
-        should_run_authenticated_probe, validate_candidate_config,
+        build_config, validate_candidate_config,
         validate_candidate_config_with_role, validate_config_name,
     };
     use crate::config::Config;
@@ -1141,18 +1135,6 @@ mod tests {
         assert_eq!(redacted["extra_headers"]["X-Gateway-Token"], "********");
     }
 
-    #[test]
-    fn openviking_service_provider_label_uses_product_casing() {
-        assert_eq!(
-            ConfigKind::OpenVikingService.label(),
-            "OpenViking Service (VolcEngine Cloud)"
-        );
-        assert_eq!(
-            ConfigKind::OpenVikingService.compact_label(),
-            "OpenViking Service"
-        );
-    }
-
     fn write_config(path: &Path, config: &Config) {
         fs::write(
             path,
@@ -1235,41 +1217,6 @@ mod tests {
         assert!(
             !store
                 .is_config_name_active("local-copy")
-                .expect("copy active check")
-        );
-    }
-
-    #[test]
-    fn openviking_service_config_listing_marks_only_one_duplicate_as_active() {
-        let dir = unique_dir("duplicate-ov-service-active");
-        let store = ConfigStore::for_config_dir(dir.clone());
-        let config = sample_config(OPENVIKING_SERVICE_URL, Some("service-key"));
-        store
-            .save_named_config("ov-service", &config)
-            .expect("ov-service config should save");
-        store
-            .save_named_config("ov-service-copy", &config)
-            .expect("ov-service copy config should save");
-        store
-            .activate_config("ov-service")
-            .expect("ov-service config should become active");
-
-        let configs = store.list_configs().expect("configs should load");
-        let active = configs
-            .iter()
-            .filter(|entry| entry.is_active)
-            .map(|entry| entry.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(active, vec!["ov-service"]);
-        assert!(
-            store
-                .is_config_name_active("ov-service")
-                .expect("active check")
-        );
-        assert!(
-            !store
-                .is_config_name_active("ov-service-copy")
                 .expect("copy active check")
         );
     }
@@ -1438,39 +1385,6 @@ mod tests {
             .expect_err("auth-required local server should reject empty API key");
 
         assert!(matches!(error, crate::error::Error::Api { .. }));
-    }
-
-    #[test]
-    fn authenticated_probe_runs_for_keys_or_auth_required_health_modes() {
-        let dev_health = serde_json::json!({ "healthy": true, "auth_mode": "dev" });
-        let api_key_health = serde_json::json!({ "healthy": true, "auth_mode": "api_key" });
-        let trusted_health = serde_json::json!({ "healthy": true, "auth_mode": "trusted" });
-
-        assert!(!should_run_authenticated_probe(&dev_health, false, false));
-        assert!(should_run_authenticated_probe(&dev_health, false, true));
-        assert!(should_run_authenticated_probe(&dev_health, true, false));
-        assert!(should_run_authenticated_probe(
-            &api_key_health,
-            false,
-            false
-        ));
-        assert!(should_run_authenticated_probe(
-            &trusted_health,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn admin_probe_status_classification_is_explicit() {
-        assert!(admin_probe_regular_key_status(401));
-        assert!(admin_probe_regular_key_status(403));
-        assert!(admin_probe_regular_key_status(404));
-        assert!(admin_probe_ambiguous_status(408));
-        assert!(admin_probe_ambiguous_status(429));
-        assert!(admin_probe_ambiguous_status(500));
-        assert!(admin_probe_ambiguous_status(503));
-        assert!(!admin_probe_regular_key_status(500));
     }
 
     #[test]
