@@ -231,12 +231,31 @@ class TestClassify:
             '<link rel="alternate" type="application/atom+xml" href="https://h/atom.xml">'
             '<link rel="sitemap" href="/sitemap.xml">'
             '<link rel="stylesheet" href="/x.css">'
+            '<link data-href="/decoy.xml" href="/real-rss.xml" '
+            'rel="alternate" type="application/rss+xml">'
+            '<link data-rel="stylesheet" rel="alternate" '
+            'type="application/rss+xml" href="/real-rel.xml">'
+            '<link data-type="text/css" type="application/rss+xml" '
+            'rel="alternate" href="/real-type.xml">'
+            '<link x:href="/decoy.xml" href="/namespace.xml" '
+            'rel="alternate" type="application/rss+xml">'
+            "<link data-href=\"/decoy.xml\" href='/mixed.xml' "
+            'rel="alternate" type="application/rss+xml">'
+            '<link data-href="/false-href.xml" rel="alternate" type="application/rss+xml">'
+            '<link href="/false-rel.xml" data-rel="alternate" type="application/rss+xml">'
+            '<link href="/false-type.xml" rel="alternate" data-type="application/rss+xml">'
         )
         links = _extract_feed_links(html, "https://h/page")
-        assert "https://h/rss.xml" in links
-        assert "https://h/atom.xml" in links
-        assert "https://h/sitemap.xml" in links
-        assert all("x.css" not in link for link in links)
+        assert links == [
+            "https://h/rss.xml",
+            "https://h/atom.xml",
+            "https://h/sitemap.xml",
+            "https://h/real-rss.xml",
+            "https://h/real-rel.xml",
+            "https://h/real-type.xml",
+            "https://h/namespace.xml",
+            "https://h/mixed.xml",
+        ]
 
 
 # --------------------------------------------------------------------------- #
