@@ -109,6 +109,68 @@ function jsonStringArrayEnv(name, fallback = []) {
   return value;
 }
 
+const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot']);
+const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+// Internal event sources. `timer` is how a reminder is delivered.
+const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);
+const EXTERNAL_CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+function readablePromptFile(filePath, label) {
+  let info;
+  try {
+    info = fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${label} does not exist`);
+    throw new Error(`${label} cannot be read`);
+  }
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch {
+    throw new Error(`${label} cannot be read`);
+  }
+}
+
+// A program the operator starts in place of a built-in Connector. It speaks
+// protocol 0.2 on stdio. Credentials stay in that program, not in this env.
+function externalConnectorsEnv() {
+  const raw = process.env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON;
+  if (raw === undefined || raw === '') return Object.freeze([]);
+  let value;
+  try { value = JSON.parse(raw); } catch {
+    throw new Error('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON must be a JSON array');
+  }
+  if (!Array.isArray(value)) throw new Error('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON must be a JSON array');
+  const ids = new Set();
+  return Object.freeze(value.map((entry, index) => {
+    const label = `OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${label} must be an object`);
+    const id = String(entry.id ?? '');
+    if (!EXTERNAL_CONNECTOR_ID.test(id)) throw new Error(`${label}.id is invalid`);
+    if (ids.has(id)) throw new Error(`OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON has two connectors called ${id}`);
+    if (BUILTIN_CONNECTORS.includes(id)) throw new Error(`${label}.id must not reuse a built-in connector`);
+    if (RESERVED_CONNECTOR_IDS.includes(id)) throw new Error(`${label}.id is reserved`);
+    ids.add(id);
+    const command = String(entry.command ?? '').trim();
+    if (!path.isAbsolute(command)) throw new Error(`${label}.command must be an absolute path`);
+    const args = entry.args ?? [];
+    if (!Array.isArray(args) || args.length > 16 || args.some((arg) => typeof arg !== 'string' || !arg || arg.length > 256
+      || /[\u0000-\u001f\u007f]/.test(arg))) {
+      throw new Error(`${label}.args is invalid`);
+    }
+    const prompt = entry.prompt == null || entry.prompt === '' ? null : String(entry.prompt).trim();
+    if (prompt !== null && !path.isAbsolute(prompt)) throw new Error(`${label}.prompt must be an absolute path`);
+    const promptPath = prompt === null ? null : path.normalize(prompt);
+    if (promptPath !== null) readablePromptFile(promptPath, `${label}.prompt`);
+    return Object.freeze({
+      id,
+      command: path.normalize(command),
+      args: Object.freeze([...args]),
+      prompt: promptPath,
+    });
+  }));
+}
+
 function assertLoopbackHost(host) {
   if (!['127.0.0.1', '::1', 'localhost'].includes(host)) {
     throw new Error('OV_SUPERAGENT_HOST must be a loopback address');
@@ -176,14 +238,22 @@ export function getConfig() {
   const workspace = manifestDirEnv('OV_SUPERAGENT_WORKSPACE', configuredWorkspace);
   const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
   assertLoopbackHost(host);
-  const channel = enumEnv('OV_SUPERAGENT_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+  const externalConnectors = externalConnectorsEnv();
+  const externalIds = new Set(externalConnectors.map((item) => item.id));
+  const channel = process.env.OV_SUPERAGENT_CHANNEL || 'lark';
+  if (!BUILTIN_CHANNELS.includes(channel) && !externalIds.has(channel)) {
+    throw new Error('OV_SUPERAGENT_CHANNEL must be a built-in IM or a configured external connector');
+  }
   const configuredConnectors = jsonStringArrayEnv('OV_SUPERAGENT_CONNECTORS_JSON');
   const connectors = configuredConnectors.length > 0 ? [...new Set(configuredConnectors)] : [channel];
-  if (connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot'].includes(connector))) {
+  if (connectors.some((connector) => !BUILTIN_CONNECTORS.includes(connector) && !externalIds.has(connector))) {
     throw new Error('OV_SUPERAGENT_CONNECTORS_JSON contains an unsupported connector');
   }
   if (!connectors.includes(channel)) {
     throw new Error('OV_SUPERAGENT_CONNECTORS_JSON must include OV_SUPERAGENT_CHANNEL');
+  }
+  if (externalConnectors.some((item) => !connectors.includes(item.id))) {
+    throw new Error('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON has a connector that is not listed in OV_SUPERAGENT_CONNECTORS_JSON');
   }
   // Each mailbox's account and client password, in a file only the daemon user can read.
   const emailAccounts = connectors.includes('email') ? emailAccountsEnv() : [];
@@ -244,6 +314,7 @@ export function getConfig() {
     upgradeTarget: process.env.OV_SUPERAGENT_UPGRADE_TARGET || process.env.OV_SUPERAGENT_INSTANCE_ID || '',
     channel,
     connectors: Object.freeze(connectors),
+    externalConnectors,
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
     actionSocketPath: localSocketPath(dataDir),
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),

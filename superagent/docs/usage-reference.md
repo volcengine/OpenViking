@@ -29,7 +29,11 @@ Outbound runtimes use the same Agent tools, such as `send_message` and `reply_me
 
 All sources write `connector_events`, deduplicated by source instance and event ID. Chat/message/reply routing is optional: GitHub issues and calendar reminders can enter with `kind`, `subject`, title, and body without pretending to be chat messages. Built-in connectors are Feishu, WeChat, Telegram, Slack, QQ, OneBot, and IMAP/SMTP email; new sources require a Connector. Non-chat events notify the owner through `notify_owner`, with Core selecting the owner's direct chat on the primary `channel`, rather than the agent choosing a destination. Incoming chat replies stay on the originating IM. The primary channel handles unsolicited notifications and email approvals.
 
-Connectors establish the owner during self-check: Feishu's lark-cli user account, WeChat's scanning account, Telegram's one-time Start binding, Slack's direct-chat passphrase sender, QQ's verified direct-chat account, or the friend who sent OneBot's private-chat code. Protocol 0.2 was a direct pre-release schema change: use a new data directory; the old `inbound` table is not migrated.
+Connectors establish the owner during self-check: Feishu's lark-cli user account, WeChat's scanning account, Telegram's one-time Start binding, Slack's direct-chat passphrase sender, QQ's verified direct-chat account, or the friend who sent OneBot's private-chat code. An external connector reports its owner from the program you configured. Protocol 0.2 was a direct pre-release schema change: use a new data directory; the old `inbound` table is not migrated.
+
+### A connector you run yourself
+
+For an IM that is not built in, add `externalConnectors` with an absolute `command`. Core starts that program as the connector. It speaks protocol 0.2 and keeps its own credentials. The id is listed in `connectors` and may be `channel`. Details and the config fields are in [External Connector](external-connector.md). Ark / Volc cannot use one. Setup leaves an existing external connector in place when you change the built-in IMs.
 
 ## Installation
 

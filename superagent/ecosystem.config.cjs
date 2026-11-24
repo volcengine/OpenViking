@@ -78,6 +78,8 @@ function buildEcosystem(sourceEnv = process.env) {
       OV_SUPERAGENT_HTTP_ENABLED: 'true',
       OV_SUPERAGENT_CHANNEL: agent.channel,
       OV_SUPERAGENT_CONNECTORS_JSON: JSON.stringify(agent.connectors),
+      OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON: agent.externalConnectors?.length
+        ? JSON.stringify(agent.externalConnectors) : undefined,
       OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON: agent.emailAccounts.length > 0 ? JSON.stringify(agent.emailAccounts) : undefined,
       OV_SUPERAGENT_PORT: String(agent.port),
       // Empty for an instance without the lark connector, so a profile in
