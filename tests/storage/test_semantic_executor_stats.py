@@ -80,7 +80,7 @@ class _FakeProcessor:
             result["content"] = "x" * 100_000
         return result
 
-    async def _load_transfer_file_summaries(self, file_paths, ctx=None):
+    async def _load_indexed_file_summaries(self, file_paths, ctx=None):
         return {}
 
     async def _generate_directory_semantics(

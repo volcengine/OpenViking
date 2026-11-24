@@ -79,15 +79,6 @@ async def test_write_updates_memory_file_and_parent_overview(
 
         monkeypatch.setattr(service.viking_fs, "write_file", reject_overview)
 
-    if overview_failure == "enqueue":
-        from openviking_cli.exceptions import OpenVikingError
-
-        with pytest.raises(OpenVikingError, match="semantic queue storage unavailable"):
-            await service.fs.write(memory_uri, "Updated preference", ctx=ctx, wait=True)
-        stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-        assert visible_content(stored, uri=memory_uri) == "Updated preference"
-        return
-
     monkeypatch.setattr(runtime, "_reporter", object())
     events = []
     bus = get_event_bus()
@@ -120,7 +111,7 @@ async def test_write_updates_memory_file_and_parent_overview(
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "complete"
-    assert result["overview_status"] == "queued"
+    assert result["overview_status"] == ("failed" if overview_failure == "enqueue" else "queued")
     await service.resources.wait_processed()
     memory_id = vector_record_id(ctx.account_id, memory_uri, level=2)
     assert await service.vikingdb_manager.exists(memory_id, ctx=ctx)

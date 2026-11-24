@@ -404,7 +404,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
         if kind == "memory":
             root_uri = str(refresh["root_uri"])
             uri = str(refresh["uri"])
-            overview_requested, embedding_requested = await coordinator._refresh_memory_after_write(
+            overview_status, embedding_requested = await coordinator._refresh_memory_after_write(
                 root_uri=root_uri,
                 uri=uri,
                 ctx=ctx,
@@ -413,7 +413,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
             )
             return (
                 {
-                    "overview_status": "queued" if overview_requested else "skipped",
+                    "overview_status": overview_status,
                     "vector_status": coordinator._queue_work_status(
                         requested=embedding_requested,
                         wait=False,

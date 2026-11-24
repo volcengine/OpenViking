@@ -93,6 +93,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_REQUIRED_DIRECTORY_REFRESH_TRIGGERS = {"resource_ingest", "reindex"}
+
 _PERMANENT_STORAGE_ERRORS = (
     FileNotFoundError,
     PermissionError,
@@ -428,6 +430,7 @@ class SemanticProcessor(DequeueHandlerBase):
             dashboard_source_type=msg.dashboard_source_type
             or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
             or "",
+            required=msg.generation_trigger in _REQUIRED_DIRECTORY_REFRESH_TRIGGERS,
         )
 
     def _message_work(
@@ -746,6 +749,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 msg.generation_trigger
                                 in {
                                     "content_write",
+                                    "resource_ingest",
                                     "semantic_refresh",
                                     "content_transfer_rebuild",
                                 }
@@ -818,6 +822,8 @@ class SemanticProcessor(DequeueHandlerBase):
                                         generation_trigger=msg.generation_trigger
                                     )
                                     or "",
+                                    required=msg.generation_trigger
+                                    in _REQUIRED_DIRECTORY_REFRESH_TRIGGERS,
                                 )
                             elif not executor.stale and msg.aggregate_directory:
                                 write_result = getattr(
@@ -1537,12 +1543,12 @@ class SemanticProcessor(DequeueHandlerBase):
             md5s=md5s,
         )
 
-    async def _load_transfer_file_summaries(
+    async def _load_indexed_file_summaries(
         self,
         file_paths: List[str],
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, str]:
-        """Load copied/moved file summaries from their existing target L2 vectors."""
+        """Load existing summaries from the files' L2 index records."""
         if not file_paths:
             return {}
         viking_fs = get_viking_fs()

@@ -739,10 +739,12 @@ class FSService:
                 uri, account_id=ctx.account_id, context_type=context_type
             )
         if refresh_parent_uri and await viking_fs.exists(refresh_parent_uri, ctx=ctx):
-            await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
+            error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
             if isinstance(result, dict):
                 result["semantic_root_uri"] = refresh_parent_uri
-                result["semantic_status"] = "queued"
+                result["semantic_status"] = "failed" if error else "queued"
+                if error:
+                    result["semantic_error"] = error
         return result
 
     @staticmethod
@@ -928,20 +930,10 @@ class FSService:
             return result
 
         result["semantic_root_uri"] = refresh_parent_uri
-        try:
-            await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
-            result["semantic_status"] = "queued"
-        except Exception as exc:
-            logger.info(
-                "Copy committed with failed parent semantic refresh",
-                extra={
-                    "target_id": safe_uri_for_log(to_uri),
-                    "error_type": type(exc).__name__,
-                    "degraded": True,
-                },
-            )
-            result["semantic_status"] = "failed"
-            result["semantic_error"] = str(exc)
+        error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
+        result["semantic_status"] = "failed" if error else "queued"
+        if error:
+            result["semantic_error"] = error
         return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
@@ -1176,25 +1168,8 @@ class FSService:
         if target_parent_uri and refresh_target:
             changed_parents.add(target_parent_uri)
 
-        failed_refreshes = 0
         for parent_uri in sorted(changed_parents):
-            try:
-                await enqueue_directory_refresh(parent_uri, 1, ctx=ctx)
-            except Exception as exc:
-                failed_refreshes += 1
-                logger.debug(
-                    "Move parent semantic refresh failed",
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "degraded": True,
-                    },
-                )
-
-        if failed_refreshes:
-            logger.info(
-                "Move committed with incomplete parent semantic refresh",
-                extra={"total": len(changed_parents), "failed": failed_refreshes, "degraded": True},
-            )
+            await enqueue_directory_refresh(parent_uri, 1, ctx=ctx)
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":

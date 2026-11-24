@@ -1065,7 +1065,7 @@ async def test_resource_rm_enqueues_parent_delete_refresh_after_delete(
 ):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     uri = "viking://resources/images/2026/06/10/不二周助_jpeg"
@@ -1091,7 +1091,7 @@ async def test_resource_rm_skips_parent_refresh_when_parent_is_gone(request_cont
     """Refreshing a deleted parent would lock its sidecars and recreate it."""
     viking_fs = _FakeVikingFS(parent_exists=False)
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     uri = "viking://resources/deleted/sub/a.md"
@@ -1107,7 +1107,7 @@ async def test_resource_rm_skips_parent_refresh_when_parent_is_gone(request_cont
 @pytest.mark.asyncio
 async def test_resource_scope_rm_does_not_refresh_global_root(request_context, monkeypatch):
     service = FSService(viking_fs=_FakeVikingFS())
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     result = await service.rm(
@@ -1138,7 +1138,7 @@ async def test_resource_rm_deactivates_only_resource_watches(
         viking_fs=viking_fs,
         watch_manager=watch_manager,
     )
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     await service.rm(uri, ctx=request_context, recursive=deactivates)
@@ -1355,7 +1355,7 @@ async def test_resource_mv_watch_control_file_skips_parent_refresh(request_conte
         viking_fs=viking_fs,
         watch_manager=_FakeWatchManager(),
     )
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     await service.mv(
@@ -1377,7 +1377,7 @@ async def test_resource_transfer_moves_or_preserves_its_watch(
     await viking_fs.write_file(source + "/doc.txt", "content", ctx=request_context)
     await viking_fs.mkdir("viking://resources/archive", ctx=request_context, exist_ok=True)
     watch = await manager.create_task("source", to_uri=source)
-    enqueue_refresh = AsyncMock(return_value="queued")
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
     result = await getattr(service, operation)(
         source.replace("resources/", "resources//"),
@@ -1408,7 +1408,7 @@ async def test_resource_cp_refresh_failure_does_not_roll_back_copy(
     target = "viking://resources/archive/copied.md"
     await viking_fs.write_file(source, "original content", ctx=request_context)
     await viking_fs.mkdir("viking://resources/archive", ctx=request_context)
-    enqueue_refresh = AsyncMock(side_effect=RuntimeError("queue unavailable"))
+    enqueue_refresh = AsyncMock(return_value="queue unavailable")
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     result = await service.cp(source, target, recursive=False, ctx=request_context)
@@ -1439,7 +1439,7 @@ async def test_resource_cp_finishes_transfer_and_refresh_after_caller_cancel(
 
     viking_fs.cp = blocked_cp
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock(return_value="queued")
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     task = asyncio.create_task(service.cp(source, target, recursive=False, ctx=request_context))
@@ -1476,7 +1476,6 @@ async def test_resource_cp_finishes_inflight_refresh_after_caller_cancel(
         refresh_started.set()
         await release_refresh.wait()
         refresh_completed.set()
-        return "queued"
 
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", blocked_refresh)
     task = asyncio.create_task(service.cp(source, target, recursive=False, ctx=request_context))
@@ -1515,7 +1514,7 @@ async def test_resource_mv_finishes_transfer_and_refresh_after_caller_cancel(
 
     viking_fs.mv = blocked_mv
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock(return_value="queued")
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     task = asyncio.create_task(service.mv(source, target, ctx=request_context))
@@ -1542,7 +1541,7 @@ async def test_copy_under_memory_namespace_root_skips_category_refresh(
 ):
     viking_fs = _FakeVikingFS(is_dir=False)
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     result = await service.cp(
@@ -1597,7 +1596,7 @@ async def test_resource_rm_does_not_refresh_parent_if_resource_delete_fails(
     delete_error = RuntimeError("delete failed")
     viking_fs = _FakeVikingFS(rm_error=delete_error)
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     with pytest.raises(RuntimeError, match="delete failed"):
@@ -1621,7 +1620,7 @@ async def test_resource_rm_skips_memory_reference_cleanup(
 ):
     viking_fs = _FakeVikingFS(is_dir=recursive)
     service = FSService(viking_fs=viking_fs)
-    enqueue_refresh = AsyncMock()
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     uri = "viking://resources/images/2026/06/11/不二周助_jpeg"
@@ -1900,7 +1899,7 @@ async def test_transfer_waits_for_running_watch_then_proceeds(request_context, m
     watch_manager = _FakeWatchManager()
     watch_manager.running = [True, True]
     service = FSService(viking_fs=viking_fs, watch_manager=watch_manager)
-    enqueue_refresh = AsyncMock(return_value="queued")
+    enqueue_refresh = AsyncMock(return_value=None)
     monkeypatch.setattr(fs_module, "enqueue_directory_refresh", enqueue_refresh)
 
     await service.mv(

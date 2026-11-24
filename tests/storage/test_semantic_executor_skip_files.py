@@ -68,7 +68,7 @@ class _FakeProcessor:
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _load_transfer_file_summaries(self, file_paths, ctx=None):
+    async def _load_indexed_file_summaries(self, file_paths, ctx=None):
         return {}
 
     async def _generate_directory_semantics(

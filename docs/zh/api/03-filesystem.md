@@ -703,7 +703,7 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要删除的 Viking URI |
-| wait | bool | 否 | False | 等待删除后的语义刷新完成 |
+| wait | bool | 否 | False | 确认本次删除任务完成 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | recursive | bool | 否 | False | 递归删除目录 |
 

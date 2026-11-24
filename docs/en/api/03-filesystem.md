@@ -679,7 +679,7 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to remove |
-| wait | bool | No | False | Wait for the semantic refresh after deletion |
+| wait | bool | No | False | Confirm that the deletion task has completed |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | recursive | bool | No | False | Remove directory recursively |
 

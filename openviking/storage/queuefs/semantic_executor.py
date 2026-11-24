@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 # These are canonical archives (e.g. session transcripts) whose content provides
 # no additional retrieval value and would only waste tokens and add latency.
 _SKIP_FILENAMES = frozenset({"messages.jsonl"})
+_DIRECTORY_REFRESH_TRIGGERS = {"parent_refresh", "directory_refresh"}
 
 
 @dataclass
@@ -669,8 +670,13 @@ class SemanticTreeExecutor:
             if aggregation is not None:
                 aggregation.files = len(file_paths)
                 aggregation.dirs = len(children_dirs)
-            if self._generation_trigger == "content_copy":
-                node = await self._prepare_transfer_node(dir_uri, children_dirs, file_paths)
+            directory_refresh = self._generation_trigger in _DIRECTORY_REFRESH_TRIGGERS
+            if self._generation_trigger == "content_copy" or (
+                directory_refresh and self._context_type != "memory"
+            ):
+                node = await self._prepare_directory_from_summaries(
+                    dir_uri, children_dirs, file_paths
+                )
                 self._nodes[dir_uri] = node
                 self._schedule_overview(dir_uri)
                 return False
@@ -785,7 +791,7 @@ class SemanticTreeExecutor:
                     )
                 )
             )
-            if self._context_type == "memory" and self._generation_trigger == "directory_refresh":
+            if directory_refresh:
                 # The directory renderer reads the saved memory fields. The
                 # write already handles indexing individual memory files.
                 required_file_paths = set()
@@ -794,14 +800,14 @@ class SemanticTreeExecutor:
                 and self._incremental_update
                 and not self._skip_vectorization
             ):
-                missing_abstracts = required_file_paths - {
-                    uri for uri, abstract in self._file_abstracts.items() if abstract.strip()
-                }
-                if self._generation_trigger not in {"parent_refresh", "directory_refresh"}:
-                    missing_abstracts -= self._changed_paths
+                missing_abstracts = (
+                    required_file_paths
+                    - self._changed_paths
+                    - {uri for uri, abstract in self._file_abstracts.items() if abstract.strip()}
+                )
                 if missing_abstracts:
                     try:
-                        abstracts = await self._processor._load_transfer_file_summaries(
+                        abstracts = await self._processor._load_indexed_file_summaries(
                             sorted(missing_abstracts), ctx=self._ctx
                         )
                         self._file_abstracts.update(abstracts)
@@ -873,24 +879,24 @@ class SemanticTreeExecutor:
             raise
 
     @staticmethod
-    def _transfer_summary_ready(value: str) -> bool:
+    def _summary_is_ready(value: str) -> bool:
         summary = value.strip()
         return bool(summary) and not summary.endswith(
             ("[Directory abstract is not ready]", "[Directory overview is not ready]")
         )
 
-    async def _load_transfer_candidates(
+    async def _load_existing_summaries(
         self,
         candidates: List[tuple[str, str]],
     ) -> Dict[tuple[str, str], Dict[str, str]]:
         file_paths = [uri for kind, uri in candidates if kind == "file"]
-        file_summaries = await self._processor._load_transfer_file_summaries(
+        file_summaries = await self._processor._load_indexed_file_summaries(
             file_paths, ctx=self._ctx
         )
         loaded: Dict[tuple[str, str], Dict[str, str]] = {}
         for file_path in file_paths:
             summary = str(file_summaries.get(file_path) or "").strip()
-            if self._transfer_summary_ready(summary):
+            if self._summary_is_ready(summary):
                 loaded[("file", file_path)] = {
                     "name": file_path.rsplit("/", 1)[-1],
                     "summary": summary,
@@ -906,14 +912,14 @@ class SemanticTreeExecutor:
                 if isinstance(result, BaseException):
                     continue
                 abstract = str(result or "").strip()
-                if self._transfer_summary_ready(abstract):
+                if self._summary_is_ready(abstract):
                     loaded[("directory", child_uri)] = {
                         "name": child_uri.rsplit("/", 1)[-1],
                         "abstract": abstract,
                     }
         return loaded
 
-    async def _prepare_transfer_node(
+    async def _prepare_directory_from_summaries(
         self,
         dir_uri: str,
         children_dirs: List[str],
@@ -927,13 +933,15 @@ class SemanticTreeExecutor:
         primary = deterministic_sample(
             candidates, get_openviking_config().semantic.overview_sample_limit
         )
-        loaded = await self._load_transfer_candidates(primary)
+        loaded = await self._load_existing_summaries(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 
         inspected = set(primary)
         selected.sort(key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]))
         selected_files = [uri for kind, uri in selected if kind == "file"]
         selected_dirs = [uri for kind, uri in selected if kind == "directory"]
+        for file_path in selected_files:
+            self._record_summary_source(dir_uri, file_path, "abstract")
         missing_count = (
             sum(1 for candidate in inspected if candidate not in loaded)
             if len(inspected) == len(candidates)
@@ -1209,8 +1217,7 @@ class SemanticTreeExecutor:
         """Generate file summary and notify parent completion."""
 
         file_name = file_path.split("/")[-1]
-        directory_only = self._generation_trigger in {"parent_refresh", "directory_refresh"}
-        need_vectorize = not directory_only
+        need_vectorize = True
         semantic_succeeded = True
         file_content = None
         try:
@@ -1218,14 +1225,14 @@ class SemanticTreeExecutor:
             if self._incremental_update:
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
-                if not content_changed or directory_only:
+                if not content_changed:
                     summary_dict = await self._read_existing_summary(
                         file_path, require_nonempty=True
                     )
                     if summary_dict is not None:
                         need_vectorize = False
                         self._record_summary_source(parent_uri, file_path, "abstract")
-                    elif not directory_only:
+                    else:
                         self._file_change_status[file_path] = True
             else:
                 self._file_change_status[file_path] = True
@@ -1521,11 +1528,11 @@ class SemanticTreeExecutor:
             elif self._generation_trigger == "content_copy" and not node.transfer_inputs_ready:
                 need_vectorize = False
                 should_write = False
-            elif self._incremental_update and self._generation_trigger not in {
-                "content_copy",
-                "directory_refresh",
-                "reindex",
-            }:
+            elif (
+                self._incremental_update
+                and self._generation_trigger not in _DIRECTORY_REFRESH_TRIGGERS
+                and self._generation_trigger not in {"content_copy", "reindex"}
+            ):
                 children_changed = await self._check_dir_children_changed(
                     dir_uri, node.file_paths, node.children_dirs
                 )

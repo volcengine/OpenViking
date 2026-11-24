@@ -2509,7 +2509,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         refresh_directory: bool,
         ingest_options: IngestOptions | None = None,
-    ) -> tuple[bool, bool]:
+    ) -> tuple[str, bool]:
         embedding_requested = await MemoryUpdater.refresh_file_embedding(
             viking_fs=self._viking_fs,
             vikingdb=self._vikingdb,
@@ -2519,9 +2519,11 @@ class ContentWriteCoordinator:
             strict=True,
             ingest_options=ingest_options,
         )
+        overview_status = "skipped"
         if refresh_directory:
-            await enqueue_directory_refresh(root_uri, 1, ctx=ctx)
-        return refresh_directory, embedding_requested
+            error = await enqueue_directory_refresh(root_uri, 1, ctx=ctx)
+            overview_status = "failed" if error else "queued"
+        return overview_status, embedding_requested
 
     async def _write_memory_with_refresh(
         self,

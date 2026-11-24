@@ -117,7 +117,7 @@ class _FakeProcessor:
             lines.append(f"- {name}/: {abstract}")
         return DirectoryGeneration(overview="\n".join(lines), abstract="abstract")
 
-    async def _load_transfer_file_summaries(self, file_paths, ctx=None):
+    async def _load_indexed_file_summaries(self, file_paths, ctx=None):
         self.transfer_summary_calls.append(list(file_paths))
         return {
             path: self.transfer_summaries[path]
@@ -934,12 +934,11 @@ async def test_semantic_generate_hashes_read_content_when_manifest_md5_is_missin
 
 
 @pytest.mark.asyncio
-async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monkeypatch):
+async def test_directory_refresh_uses_only_existing_summaries(monkeypatch):
     root_uri = "viking://resources/wide"
     file_names = ["indexed.txt", "overview.txt", "missing.txt", "changed.txt"]
     file_paths = [f"{root_uri}/{name}" for name in file_names]
     changed_path = f"{root_uri}/changed.txt"
-    missing_path = f"{root_uri}/missing.txt"
     old_overview = (
         "### indexed.txt\nold indexed summary\n"
         "### overview.txt\nold overview summary\n"
@@ -966,6 +965,7 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
     )
     fake_fs.read_file = AsyncMock(wraps=fake_fs.read_file)
     fake_fs.read_file_bytes = AsyncMock(wraps=fake_fs.read_file_bytes)
+    fake_fs.exists = AsyncMock(return_value=True)
 
     processor = _FakeProcessor(
         fake_fs,
@@ -984,26 +984,22 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
         incremental_update=True,
         target_uri=root_uri,
         recursive=False,
-        changes={"modified": [changed_path]},
-        generation_trigger="parent_refresh",
+        generation_trigger="directory_refresh",
     )
 
     await executor.run(root_uri)
 
-    assert set(processor.summarized_files) == {missing_path, f"{root_uri}/overview.txt"}
-    assert {call.args[0] for call in fake_fs.read_file_bytes.await_args_list} == {
-        missing_path,
-        f"{root_uri}/overview.txt",
-    }
+    assert processor.summarized_files == []
+    fake_fs.read_file_bytes.assert_not_awaited()
+    assert not set(file_paths) & {call.args[0] for call in fake_fs.read_file.await_args_list}
     assert processor.vectorized_files == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert set(overview.body.splitlines()) == {
         "FILES:",
         "- indexed.txt: current indexed summary",
-        "- overview.txt: summary",
-        "- missing.txt: summary",
         "- changed.txt: current changed summary",
     }
+    assert overview.metadata["freshness"]["missing_summary_entries"] == 2
     assert overview.metadata["freshness"]["pending_child_changes"] == 0
 
 
@@ -1360,7 +1356,7 @@ async def test_content_copy_propagates_vector_summary_read_failure(monkeypatch):
     async def fail_summary_read(file_paths, ctx=None):
         raise RuntimeError("vector backend unavailable")
 
-    processor._load_transfer_file_summaries = fail_summary_read
+    processor._load_indexed_file_summaries = fail_summary_read
     executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",

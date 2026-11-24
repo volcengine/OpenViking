@@ -3,12 +3,16 @@
 """Schedule automatic maintenance of a directory after its children change."""
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.telemetry import get_current_telemetry
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 async def enqueue_directory_refresh(
@@ -19,13 +23,12 @@ async def enqueue_directory_refresh(
     skip_vectorization: bool = False,
     propagate_to_parent: bool = True,
     dashboard_source_type: str = "",
-) -> None:
-    """Persist directory work independently of the operation that changed it."""
+    required: bool = False,
+) -> str | None:
+    """Schedule independent directory work and report any best-effort enqueue error."""
     from openviking.storage.queuefs import get_queue_manager
 
     directory_uri = directory_uri.rstrip("/")
-    queue_manager = get_queue_manager()
-    queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
     message = SemanticMsg(
         uri=directory_uri,
         context_type=context_type_for_uri(directory_uri),
@@ -46,6 +49,8 @@ async def enqueue_directory_refresh(
     )
 
     async def enqueue() -> dict[str, str]:
+        queue_manager = get_queue_manager()
+        queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         await queue.enqueue(message)
         return {"uri": directory_uri}
 
@@ -63,4 +68,16 @@ async def enqueue_directory_refresh(
 
     # The tracker records inline work in the current coroutine's context.
     # Scheduling must leave the producer's inline work intact on return.
-    await run_to_completion(dispatch)
+    try:
+        await run_to_completion(dispatch)
+    except Exception as exc:
+        if required:
+            raise
+        logger.info(
+            "Directory refresh enqueue failed uri=%s error_type=%s",
+            safe_uri_for_log(directory_uri),
+            type(exc).__name__,
+            extra={"degraded": True},
+        )
+        return str(exc) or type(exc).__name__
+    return None
