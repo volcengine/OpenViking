@@ -38,9 +38,9 @@
 - **状态说明只在它改变用户下一步操作时讲。** 例如「重启后才生效」要讲，因为他要去重启；「记忆提取状态尚未验证」这类说明留到收尾统一交代一次，不要每条消息结尾都附一句。
 - **用他自己的内容举例。** 能说「你在 Gateway 项目里定下的演示主线」，就不要说「你之前的决定」。讲团队内容时，用共享目录里真实存在的成员和项目举例。
 - **一次只问一个决定。** 导入范围、是否正式导入、是否贡献给团队、协作约定各自单独一轮，等他回答后再进入下一步。
-- **四处决定都用选项工具问。** 选导入范围（3a）、确认正式导入（3b）、贡献给团队（步骤 4）、协作约定（步骤 5）这四处，只要宿主有让用户从选项里选答案的工具（见[附录 A](#附录-a各宿主说明)下的「选项工具」），就一定用它问，不要把选项写成文字列表。步骤里标着「**问题（选项工具）**」的地方就是调用点。工具里只放一个问题和两到三个选项，选项标签要短，补充说明放进选项描述，推荐的放第一个、标「（推荐）」。工具自带自由输入，不要再加「其他」。只有工具列表里没有这类工具，或者调用报错时，才用文字列出同样的选项，不要重试。问选项的那条回复，正文最后一句用两种界面都通用的话收尾，例如「选一个，或者直接回复你的选择」：有的界面把选项显示成可以点的卡片，有的（例如 Codex CLI）只把选项作为文字印在正文上方。不要写「点下方卡片」这类只在某种界面成立的说法。
+- **四处决定都用选项工具问。** 选导入范围（3a）、确认正式导入（3b）、贡献给团队（步骤 4）、协作约定（步骤 5）这四处，只要宿主有让用户从选项里选答案的工具（见[附录 A](#附录-a各宿主说明)下的「选项工具」），就一定用它问，不要把选项写成文字列表。步骤里标着「**问题（选项工具）**」的地方就是调用点。工具里只放一个问题和两到三个选项，选项标签要短，补充说明放进选项描述，推荐的放第一个、标「（推荐）」。工具自带自由输入，不要再加「其他」。只有工具列表里没有这类工具，或者调用报错时，才用文字列出同样的选项，不要重试。问选项的那条回复，正文最后一句用两种界面都通用的话收尾，例如「选一个，或者直接回复你的选择」：有的界面把选项显示成可以点的卡片，有的只把选项作为文字印在正文上方。不要写「点下方卡片」这类只在某种界面成立的说法。例外：Codex 不用选项工具，把问题和编号选项写在这一轮最后一条回复的末尾（例如『回复 1、2 或 3：…』），见附录 A。
 - **要他看的内容放在他一定看得到的地方。** 问题文字要能单独看懂：把做决定要用的要点（试运行找到了什么、要贡献哪些内容、约定写入的文件路径）写进问题里，不要只写「按上面的……」。有的宿主（例如 Codex 桌面版）在本轮结束后会把调用工具前后的过程消息折叠起来，只留下最后一条回复和选项。所以连接结果和价值介绍、读回、团队已有内容的介绍、约定原文这些要他读的内容，写在本轮最后一条回复的正文里，不要写在调用工具之前的过程消息里；选项里的问题只放要他决定的事，不要把读回整段塞进问题。
-- **每条消息都以一个让他往下走的动作结束**：一组选项，或者他要做的操作（例如信任 hooks、重启、发「已重启」），不要以陈述句收尾。发出前对一遍这一步「对用户说」的列表，缺了哪项补上。用 `request_user_input_async` 这类不等回答的工具时，先调用工具，再写最后一条回复。这类工具在 CLI（TUI）里一调用就把问题印出来，排在正文前面；桌面版则把问题固定在输入框上方。为了两边都读得通，让问题本身做这一轮的开头，正文接着它往下讲：上一步只有一句结果时，把它写进问题的第一句（例如「品牌资料已经放进团队目录你的文件夹。要把这份约定写入 ~/.codex/AGENTS.md，对所有项目生效吗？」），正文不再重复；上一步的结果有好几行（例如读回）时，仍放在正文开头，问题用一句话接上（例如「看完读回后，要不要把 <项目> 的方案贡献给团队？」）。问题和正文都不要用「上面」「下面」指代对方，写「这份」。会等回答的选项工具（例如 Claude Code 的 `AskUserQuestion`）照常先写正文再问。
+- **每条消息都以一个让他往下走的动作结束**：一组选项，或者他要做的操作（例如信任 hooks、重启、发「已重启」），不要以陈述句收尾。发出前对一遍这一步「对用户说」的列表，缺了哪项补上。
 - 不提本指南的步骤编号，不提当前宿主用不上的步骤，不逐条转述本指南。
 
 ## 基本规则
@@ -103,7 +103,7 @@
 
 **你来做**
 
-- 查[附录 A](#附录-a各宿主说明)里当前宿主的三件事：要不要信任 hook（以及能不能在重启前先信任）、用户在哪里能看到 OpenViking 起作用、重启后回原会话还是开新会话。
+- 查[附录 A](#附录-a各宿主说明)里当前宿主的三件事：要不要信任 hook（需要的话在这一步就请他信任）、用户在哪里能看到 OpenViking 起作用、重启后回原会话还是开新会话。
 - 不用问用户要不要开启自动记忆，安装本身就是他的请求。
 - 用户问起怎么在某个项目里关掉时，再告诉他：在该项目里放一个 `.openviking/config.json`，内容为 `{"version": 1, "capture": {"enabled": false}, "recall": {"enabled": false}}`。只告诉他方法，不替他创建。
 
@@ -113,9 +113,10 @@
 
 1. V1：以后每次提问前，相关的背景（包括团队共享的）会自动带给 Agent；每轮对话也会自动存进他自己的空间，慢慢积累成背景。自动保存的对话只有他能看到，不会进团队共享目录。用他当前的项目或请求举一个例子。
 2. 在哪里能看到它起作用，用附录 A 里用户能直接看到的样子说，例如「回答下面会多一行 OV-Usage」。
-3. 重启后才生效时，说一句「重启之后就开始生效，最后我会告诉你怎么做」。需要信任 hook 的宿主，补一句「最后会请你确认一次 OpenViking 的 hooks」。具体操作留到步骤 6。
+3. 重启后才生效时，说一句「重启之后就开始生效，最后我会告诉你怎么做」。具体操作留到步骤 6。
+4. 需要信任 hook 的宿主（Codex、TraeCode CLI 2.0），请他现在就信任：Codex 打开设置 → Hooks（或点输入框下方的 hooks 图标；CLI 在会话里输入 `/hooks`），在 OpenViking Memory 那里点 **Trust all**；TraeCode CLI 在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks。说一句好处：信任之后每次提问才会自动带上背景、对话才会自动积累。
 
-这条消息末尾接上 3a 的价值一句，然后用选项工具发出 3a 的问题。这条消息不讲 hook 的事件名、保存和提取的先后、怎么关闭。
+信任 hooks 的请求放在前面，这条消息末尾仍接上 3a 的价值一句，然后用选项工具发出 3a 的问题。这条消息不讲 hook 的事件名、保存和提取的先后、怎么关闭。
 
 ## 步骤 3：带入已有工作
 
@@ -348,7 +349,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 **对用户说**
 
-这一轮最后一条回复的正文**只有下面三段，按顺序，缺一不可**，再加上选项工具的问题。用不等回答的选项工具时，按「给用户的消息怎么写」里的顺序：先调用工具，上一步贡献的结果写进问题第一句，正文从「为什么这样约定」讲起。不要另写一份摘要来代替原文，也不要只贴原文不讲为什么：原文本身就是给他看的说明。
+这一轮最后一条回复的正文**只有下面三段，按顺序，缺一不可**，再加上选项工具的问题。不要另写一份摘要来代替原文，也不要只贴原文不讲为什么：原文本身就是给他看的说明。
 
 1. **为什么这样约定**，一两句（V4、T4）：接下来和 <当前 Agent 的名字> 约好以后怎么用 OpenViking；自动记忆只留下对话要点，方案、决定和进展要主动存一份，以后才能原样拿回来，默认放进团队目录，同事的 Agent 才能接上他的工作。步骤 3 记下了缺口时，用它开头：「会话里有讨论，但 <成品> 的原文不在里面。」
 2. **原文**：「下面这段会写进 <规则文件的完整路径>，对你所有项目生效，随时可以改：」，再用代码块给出原文。**原样给出，只把 `<user_id>` 换成他的用户名**，不要改写、删减或改动默认存放位置；他要求改了以后，才给改后的版本。
@@ -374,8 +375,10 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 **你来做**
 
-- 当前宿主已经生效、本次也没有新装插件时，跳过这一步，直接进入[重启之后](#重启之后)。
+- 当前宿主已经生效、本次也没有新装插件时，跳过这一步，直接进入[重启之后](#重启之后)。当前对话里 hooks 已经起作用也不能跳过：本次新装了插件，OpenViking 的工具（例如 `mcp__openviking_memory…`）要重启后才会加载。
 - 查[附录 A](#附录-a各宿主说明)当前宿主的「重启或信任」和「重启后」两列，以及安装器输出里其他工具的 `下一步：`（英文 `Next:`）。
+- 写重启消息之前，重新读一遍这一节和附录 A 里当前宿主那一行，照着写；不要因为对话里有 key 之类的凭据，就自己把「回到原会话」改成「开新会话」。
+- Codex：只读查看 `~/.codex/config.toml`，在 `[hooks.state]` 里找以 `openviking-memory@openviking:` 开头的条目，有就说明 hooks 已信任。不要修改这个文件。
 - 准备续接消息。网址用你实际打开成功的那个；本指南是本地文件时，用它的绝对路径。尖括号换成实际结果，其他照写，不要加「先验证检索」之类的额外任务：
 
 ```text
@@ -386,7 +389,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 1. 现状，用肯定的说法：连上了团队的 OpenViking、带进了哪项工作、给团队贡献了什么。协作约定写了的话，一句话说写进了哪个文件，以后想看或想改，打开它或直接让你改；没写就说没写。
 2. 一句预告：「回来后可以接着 <工作> 做，也可以先看看团队共享了什么，你来选。」没带入工作时说：「回来后直接告诉我你要做的事，或者先看看团队共享了什么。」
-3. **需要信任 hook 的宿主（Codex、TraeCode CLI 2.0），请他在退出前先信任**：Codex 桌面版点输入框下方的 hooks 图标，Codex CLI 和 TraeCode CLI 在会话里输入 `/hooks`，信任 OpenViking 的**全部** hooks。说一句好处：信任之后每次提问才会自动带上背景、对话才会自动积累，重启后也不会停在审阅提示上。重启后如果还是出现「Hooks need review」，照旧选 **Trust all and continue**。
+3. **需要信任 hook 的宿主（Codex、TraeCode CLI 2.0），hooks 还没信任时，请他在退出前再信任一次**：Codex 是 `[hooks.state]` 里没有 OpenViking 的条目，TraeCode CLI 是步骤 2 里他还没确认信任过。做法同步骤 2，信任 OpenViking 的**全部** hooks。说一句好处：信任之后每次提问才会自动带上背景、对话才会自动积累，重启后也不会停在审阅提示上。TraeCode CLI 重启后如果还是出现「Hooks need review」，照旧选 **Trust all and continue**。
 4. 当前宿主怎么重启。
 5. 安装器还装进了其他 Agent 时，加一行点出名字：各自重启后生效，具体看安装器输出里的「下一步」。
 6. 回来之后做什么：
@@ -401,7 +404,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 **你来做**
 
-1. **确认插件在运行。** 当前对话里有 `<openviking-context>` 块，或者 OpenViking 工具可用。调用 `health` 工具（名字可能带前缀，例如 `mcp__openviking__health`、`openviking_health`）。都没有时，见故障排查的「重启后没有召回」。有注入块才说明自动召回在运行；没有相关记忆，可能只是库里还没有相关内容。
+1. **确认插件在运行。** 当前对话里有 `<openviking-context>` 块，或者 OpenViking 工具可用。调用 `health` 工具（名字可能带前缀，例如 `mcp__openviking__health`、`openviking_health`）。都没有时，见故障排查的「重启后没有召回」。有注入块才说明自动召回在运行；没有相关记忆，可能只是库里还没有相关内容。Codex：再只读查看一次 `~/.codex/config.toml`，`[hooks.state]` 里没有以 `openviking-memory@openviking:` 开头的条目时，提醒他再信任一次（做法同步骤 2）。不要修改这个文件。
 2. **补上缺的选择。** 从这段对话或续接消息里确认导入、团队贡献和协作约定是否已经做完。缺了就补做那一步，做过的不要重问。
 3. **取回背景。** 先用注入的上下文；不够再用 `search`（`mode="context"`）查，必要时 `read` 原文。只查团队内容时用 `find` 并设 `target_uri="viking://resources"`（`mode="context"` 不接受 `target_uri`）；列团队目录用 `list`；找团队技能用 `find` 并设 `context_type="skill"`。记忆还在整理时，可以用 `read` 读导入的原对话（`viking://user/<user_id>/sessions/<会话 id>/history/archive_001/messages.jsonl`），但要说明这是读的原记录。
 
@@ -420,7 +423,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 **收尾**，最多三行，接在他选完方向之后或这条消息末尾：
 
-- 已经在起作用的，以及还在后台进行的（例如记忆整理）。还没确认的状态在这里统一说一次。
+- 已经在起作用的，以及还在后台进行的（例如记忆整理）。还没确认的状态在这里统一说一次。Codex 上提一句：升级插件后如果自动召回没生效，到 Hooks 面板重新确认信任；桌面端可能不会提示。
 - 在这个宿主上哪里能看到 OpenViking 的作用（附录 A 的「在哪里能看到」）。
 - 以后可以说的话，挑一两条和他相关的：「看看团队最近共享了什么」「把 <项目> 的进展贡献给团队」「把 <技能> 共享给团队」「把 <项目> 的会话导入 OpenViking」「保存这份文档，之后按它继续」「换一个 OpenViking 账号」（按[从哪一步开始](#从哪一步开始)里「更换」的做法处理）。装进了其他 Agent 时提一句：在那边接着这项工作，背景还在（V3）。
 
@@ -429,8 +432,8 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 | 宿主 | `--harness` | 重启或信任 | 重启后 | 在哪里能看到 | 历史导入 | 用户级规则文件 |
 |---|---|---|---|---|---|---|
 | Claude Code | `claude` | 退出后重新运行 `claude`；不要用 `/reload-plugins` | 开新会话。不要用 `claude --continue` / `--resume` 回到安装对话 | 用到 OpenViking 的回答下方有来源卡片（Claude Code 2.1.286 及以上）；`/openviking-memory:ov` 查看状态 | 支持 | `~/.claude/CLAUDE.md` |
-| Codex | `codex` | **退出前先信任 hooks**：桌面版点输入框下方的 hooks 图标，CLI 在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks；信任记录存在 `~/.codex/config.toml`，重启后不会再提示。然后退出：CLI 运行 `codex resume --last` 回到这段对话；桌面版退出后重新打开，回到这段对话。重启后如果仍出现「Hooks need review」，选 **Trust all and continue** | 回到原会话（就是左边那条命令），发「已重启」 | 回答后有一行 OV-Usage，例如 `OpenViking · 3 sources · 1 past event · 2 team docs · 1 read` | 支持 | `~/.codex/AGENTS.md`；同目录有 `AGENTS.override.md` 时 Codex 读的是它 |
-| TraeCode CLI 2.0 | `trae-cli` | **退出前先信任 hooks**：在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks。然后退出，重新运行 `trae-cli`（或 `traecli`）；仍出现「Hooks need review」时选 **Trust all and continue** | 开新会话 | 回答后有一行 OV-Usage，与 Codex 相同 | 转成 JSONL；会话在 `~/.trae/cli/sessions/`，和 Codex 相同的 rollout 格式 | 未确认 |
+| Codex | `codex` | **步骤 2 就请他信任 hooks**：桌面版打开设置 → Hooks（或点输入框下方的 hooks 图标），在 OpenViking Memory 那里点 **Trust all**；CLI 在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks。信任记录存在 `~/.codex/config.toml` 的 `[hooks.state]` 里（以 `openviking-memory@openviking:` 开头的条目），重启后不会再提示；这个文件只读不改。然后退出：CLI 运行 `codex resume --last` 回到这段对话；桌面版退出后重新打开，回到这段对话。CLI 重启后如果仍出现「Hooks need review」，选 **Trust all and continue** | 回到原会话（就是左边那条命令），发「已重启」 | 回答后有一行 OV-Usage，例如 `OpenViking · 3 sources · 1 past event · 2 team docs · 1 read` | 支持 | `~/.codex/AGENTS.md`；同目录有 `AGENTS.override.md` 时 Codex 读的是它 |
+| TraeCode CLI 2.0 | `trae-cli` | **步骤 2 就请他信任 hooks**：在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks。然后退出，重新运行 `trae-cli`（或 `traecli`）；仍出现「Hooks need review」时选 **Trust all and continue** | 开新会话 | 回答后有一行 OV-Usage，与 Codex 相同 | 转成 JSONL；会话在 `~/.trae/cli/sessions/`，和 Codex 相同的 rollout 格式 | 未确认 |
 | Cursor | `cursor` | 完全退出 Cursor 后重新打开 | 开新会话（**+**），不要在恢复出来的安装对话里继续 | 设置 → Hooks 里的 OpenViking hook；设置 → Tools & MCPs 里 `openviking` 显示已连接 | 转成 JSONL；会话位置未确认 | Cursor 设置里的 User Rules，请用户粘贴 |
 | TRAE / TRAE CN | `trae` / `trae-cn` | 完全退出应用后重新打开；无需批准 hook | 开新会话 | MCP 设置里 `openviking` 显示已连接 | 转成 JSONL；会话位置未确认 | 应用设置里的个人规则，请用户粘贴 |
 | ZCode | `zcode` | 重启 ZCode | 开新会话 | 无文档说明 | 转成 JSONL；会话位置未确认 | 应用设置里的个人规则，请用户粘贴 |
@@ -442,11 +445,9 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 - **Codex 的审批。** Codex 运行需要联网的命令前会请求批准，包括这里读回和贡献用的 `ov find`、`ov read`、`ov ls`、`ov overview`、`ov add-resource`、`ov write`、`ov mkdir` 和 `ov mv`。运行带 key 的安装命令时选 **Yes, proceed**，不要选「以后以这个前缀开头的命令不再询问」，那条规则会把 key 存下来。OpenViking 的 `search` 工具第一次运行时，Codex 会请求允许，选 **Always allow** 即可。Hooks 信任和命令批准是两件事。
 - **选项工具。**
   - Claude Code：`AskUserQuestion`。
-  - Codex：有两个，工具列表里有哪个用哪个，优先 `request_user_input_async`。
-    - `request_user_input_async`：gpt-6 系列等模型在 Default 模式下也有（例如 Codex 桌面版 0.164）。它发出问题和选项、不等回答，用户的选择会作为下一条消息回来。桌面版把选项显示成可以点的卡片；CLI（TUI）里只把选项作为文字印在正文上方，用户要打字回复，所以正文最后一句要告诉他可以直接回复选择。Codex 桌面版会在本轮结束后折叠过程消息，所以调用它之后，把要他读的内容写进本轮最后一条回复。
-    - `request_user_input`：只在 Plan 模式下可用（用户开了 `default_mode_request_user_input` 时 Default 模式也能用），否则调用会返回 `request_user_input is unavailable in Default mode`。
-    - Codex 的 Default 模式指令也要求不要把多选题写成文字消息。两个都不可用时才用文字问。
-  - 这些工具都会自动加一个「Other」让用户自己输入，不要在选项里再放「其他」。其他宿主有同类工具就用，没有就用文字。
+  - Codex：不用选项工具。`request_user_input_async` 发出的卡片在这一轮结束时就会关闭，用户来不及选；`request_user_input` 只能在 Plan 模式用。这四处决定都用文字问，这是 Codex Default 模式「不要把多选题写成文字」的例外。
+  - 其他宿主：有同类工具就用，但只用会等用户回答的工具；只发出问题、不等回答的工具不用，改成文字问。没有工具也用文字问。
+  - 这些工具都会自动加一个「Other」让用户自己输入，不要在选项里再放「其他」。
 - **无文档说明。** 在这些宿主上，用户可以直接问你收到了哪些 OpenViking 上下文，也可以运行故障排查里的诊断。
 
 各宿主的详细说明：https://docs.openviking.net/zh/agent-integrations/01-overview
