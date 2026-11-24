@@ -121,6 +121,8 @@ class DirectAcl:
             raise RuntimeError(f"Invalid ACL grants for {prefix}: expected a list")
         if len(raw_grants) == 1 and raw_grants[0] == EMPTY_ACL_GRANT:
             return cls()
+        # 离线索引可能将空列表还原为空字符串元素；仅忽略精确空串。
+        raw_grants = [grant for grant in raw_grants if grant != ""]
         return cls.from_entries(_decode_grant(grant) for grant in raw_grants)
 
 
