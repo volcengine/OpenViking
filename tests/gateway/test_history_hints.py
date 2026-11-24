@@ -21,12 +21,14 @@ def old_hint(*sessions):
         [
             "Earlier parts of this conversation are saved in OpenViking, newest session first:",
             *(f"- viking://user/alice/sessions/{session}/" for session in sessions),
-            "In each session, messages.jsonl holds the latest messages and "
-            "history/archive_NNN/messages.jsonl the older ones, one JSON message per line. "
-            "To find something, call openviking_grep on a session URI with a specific "
-            "pattern; it lists each matching line with its file and line number. "
-            "openviking_read returns a whole file, so read one only when the matching lines "
-            "are not enough.",
+            (
+                "In each session, messages.jsonl holds the latest messages and "
+                "history/archive_NNN/messages.jsonl the older ones, one JSON message per line. "
+                "To find something, call openviking_grep on a session URI with a specific "
+                "pattern; it lists each matching line with its file and line number. "
+                "openviking_read returns a whole file, so read one only when the matching lines "
+                "are not enough."
+            ),
         ]
     )
 
