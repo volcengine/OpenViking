@@ -678,6 +678,18 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         }],
     },
     CommandHelpSpec {
+        path: &["snapshot", "delete"],
+        purpose: "Delete historical snapshots by full commit ID.",
+        examples: &[HelpItem {
+            label: "ov snapshot delete <commit-id> --dry-run",
+            description: "Preview the commits and parent links affected by deletion.",
+        }],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log",
+            description: "Inspect retained commits.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["snapshot", "show"],
         purpose: "Show a commit's metadata, or a single blob at a path.",
         examples: &[
@@ -1980,6 +1992,7 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["snapshot"] => "管理工作区快照：提交、恢复、查看、对比，以及遍历历史。",
         ["snapshot", "commit"] => "将当前工作区状态提交为新的快照。",
         ["snapshot", "restore"] => "通过一次前向提交，将文件或目录恢复到历史快照。",
+        ["snapshot", "delete"] => "按完整提交 ID 删除历史快照。",
         ["snapshot", "show"] => "查看某次提交的元数据，或指定路径下的单个文件内容。",
         ["snapshot", "log"] => "按分支遍历提交历史，最新的在前。",
         ["snapshot", "diff"] => "对比指定文件在两个快照中的内容差异。",

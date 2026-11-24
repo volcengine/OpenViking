@@ -2658,6 +2658,13 @@ class AsyncHTTPClient:
         response = await self._request("POST", "/api/v1/snapshot/commit", json=body)
         return self._handle_response(response)
 
+    async def git_delete(self, commit_ids: List[str], *, dry_run: bool = False) -> Dict[str, Any]:
+        """Delete historical snapshots or preview their deletion."""
+        response = await self._request(
+            "POST", "/api/v1/snapshot/delete", json={"commit_ids": commit_ids, "dry_run": dry_run}
+        )
+        return self._handle_response(response)
+
     async def git_restore(
         self,
         *,
@@ -3908,6 +3915,9 @@ class AsyncHTTPSnapshotNamespace:
     def __init__(self, client: "AsyncHTTPClient"):
         self._client = client
 
+    async def delete(self, commit_ids: List[str], *, dry_run: bool = False) -> Dict[str, Any]:
+        return await self._client.git_delete(commit_ids, dry_run=dry_run)
+
     async def commit(
         self,
         *,
@@ -4007,6 +4017,9 @@ class SyncHTTPSnapshotNamespace:
 
     def __init__(self, client: "SyncHTTPClient"):
         self._client = client
+
+    def delete(self, commit_ids: List[str], *, dry_run: bool = False) -> Dict[str, Any]:
+        return run_async(self._ns().delete(commit_ids, dry_run=dry_run))
 
     def _ns(self) -> AsyncHTTPSnapshotNamespace:
         return self._client._async_client.snapshot

@@ -338,3 +338,17 @@ class TestSnapshotRestore:
         assert r["json"] is not None and r["json"].get("ok") is True
         result = r["json"]["result"]
         assert "diff" in result or result.get("result") == "noop"
+
+
+def test_cli_snapshot_delete():
+    base = "viking://resources/cli_snapshot_delete_" + uuid.uuid4().hex
+    ids = []
+    for version in ("first", "tip"):
+        uri = f"{base}/{version}.md"
+        assert _create_file(uri, version)["exit_code"] == 0
+        ids.append(_commit(version, paths=[uri])["commit_oid"])
+    for flags, expected in [(["--dry-run"], "dry_run"), ([], "deleted")]:
+        result = ov(["snapshot", "delete", ids[0], *flags, "-o", "json"])
+        assert result["exit_code"] == 0, result["stderr"]
+        assert result["json"]["result"]["result"] == expected
+        assert result["json"]["result"]["deleted"] == ids[:1]

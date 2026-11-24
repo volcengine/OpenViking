@@ -249,3 +249,11 @@ async def test_snapshot_namespace_exposes_diff():
         "path": "viking://resources/a.md",
         "to": "new",
     }
+
+
+async def test_snapshot_delete_posts_body():
+    client, fake = _client_with_fake()
+    await client.snapshot.delete(["a" * 40], dry_run=True)
+    call = fake.calls[-1]
+    assert (call["method"], call["path"]) == ("POST", "/api/v1/snapshot/delete")
+    assert call["json"] == {"commit_ids": ["a" * 40], "dry_run": True}

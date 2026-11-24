@@ -94,8 +94,12 @@ Configuration reference:
 | `git.author_name` | `viking-bot` | Default author name when callers omit `author_name` |
 | `git.author_email` | `bot@viking.local` | Default author email |
 | `git.local.base_dir` | `""` | Directory holding Git objects/refs. **When empty, defaults to `{storage.workspace}/.ovgit`** |
+| `git.snapshot.gc.enabled` | `true` | Schedule physical reclamation of objects after snapshot deletion. On S3, use an unversioned bucket. Enabled or suspended bucket versioning disables GC. |
+| `git.snapshot.gc.grace_seconds` | `3600` | Minimum age in seconds before reclamation. Must be at least 600. |
 | `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`: `sqlite`, `mysql`, or `none` |
 | `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | Optional absolute SQLite database path. When omitted, each workspace gets its own index DB |
+
+Writers refresh reused objects older than 300 seconds so peers configured with the minimum grace period can collect safely during a configuration rollout. Refreshing a stale object on a versioned S3 bucket can create another object version, even when local collection is disabled.
 
 > Usually leave `git.local.base_dir` empty so snapshot data lands in `.ovgit` under the workspace, making it easy to back up and migrate alongside resource data.
 
@@ -321,6 +325,17 @@ Replace `<commit_oid>` with the saved commit ID. The restore request above is a 
 - The new commit's parent is the HEAD that existed before the restore — **not** `source_commit`.
 - When the source and HEAD trees differ in the selected scope, restore adds a commit without rewriting history. If those trees match, it returns `result: "noop"` without a new commit, even if the working files differ. Snapshot storage still needs backups.
 - `restore` only affects files within `project_dir` (the whole account tree when omitted); files outside that scope are left untouched.
+
+## Delete historical snapshots
+
+Copy full commit IDs from `ov snapshot log -o json`. Multiple historical commits can be deleted together. Preview the parent changes and the number of affected paths per commit before applying the deletion.
+
+```sh
+ov snapshot delete "$COMMIT_ID" --dry-run -o json
+ov snapshot delete "$COMMIT_ID" -o json
+```
+
+The change to history is immediate and retained snapshots keep their IDs. Background GC reclaims unique objects after the grace period. Check whether Compile runs or other workflows still need a commit before deleting it. See the [snapshot API](../api/11-snapshot.md#delete) for permissions, ref-tip protection and GC configuration.
 
 ## Excluding Files with `.ovgitignore`
 
