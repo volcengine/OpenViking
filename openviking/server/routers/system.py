@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.observability.log_safety import short_hash
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
@@ -93,9 +94,20 @@ async def health_check(request: Request):
     return result
 
 
+def _log_readiness_error(component: str, exc: Exception) -> None:
+    """Keep dependency exception text out of logs and public responses."""
+    error_type = type(exc).__name__
+    logger.info(
+        "readiness check failed component=%s error_type=%s",
+        component,
+        error_type,
+        extra={"operation": "readiness", "error_type": error_type},
+    )
+
+
 @router.get("/ready", tags=["system"])
 async def readiness_check(request: Request):
-    """Readiness probe — checks AGFS, VectorDB, and APIKeyManager.
+    """Readiness probe for storage and configured service dependencies.
 
     Returns 200 when all subsystems are operational, 503 otherwise.
     No authentication required (designed for K8s probes).
@@ -120,8 +132,9 @@ async def readiness_check(request: Request):
     # 1. AGFS: probe filesystem access
     try:
         checks["agfs"] = await _probe_agfs_readiness()
-    except Exception as e:
-        checks["agfs"] = {"status": "error", "checks": {"filesystem": f"error: {e}"}}
+    except Exception as exc:
+        _log_readiness_error("agfs", exc)
+        checks["agfs"] = {"status": "error", "checks": {"filesystem": "error"}}
 
     # 2. VectorDB: health_check()
     try:
@@ -132,8 +145,9 @@ async def readiness_check(request: Request):
             checks["vectordb"] = "ok" if healthy else "unhealthy"
         else:
             checks["vectordb"] = "not_configured"
-    except Exception as e:
-        checks["vectordb"] = f"error: {e}"
+    except Exception as exc:
+        _log_readiness_error("vectordb", exc)
+        checks["vectordb"] = "error"
 
     # 3. APIKeyManager: check if loaded
     try:
@@ -142,8 +156,9 @@ async def readiness_check(request: Request):
             checks["api_key_manager"] = "ok"
         else:
             checks["api_key_manager"] = "not_configured"
-    except Exception as e:
-        checks["api_key_manager"] = f"error: {e}"
+    except Exception as exc:
+        _log_readiness_error("api_key_manager", exc)
+        checks["api_key_manager"] = "error"
 
     # 4. Embedding: the provider is initialized by the service startup path.
     # There is no Account context on an unauthenticated readiness probe, so do
@@ -151,8 +166,9 @@ async def readiness_check(request: Request):
     try:
         embedding_provider = getattr(service, "embedding_provider", None)
         checks["embedding"] = "ok" if embedding_provider is not None else "not_initialized"
-    except Exception as e:
-        checks["embedding"] = f"error: {e}"
+    except Exception as exc:
+        _log_readiness_error("embedding", exc)
+        checks["embedding"] = "error"
 
     # 5. Ollama: connectivity check if configured
     try:
@@ -165,11 +181,19 @@ async def readiness_check(request: Request):
             if check_ollama_running(ollama_host, ollama_port):
                 checks["ollama"] = "ok"
             else:
-                checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
+                logger.info(
+                    "readiness check unreachable component=ollama",
+                    extra={
+                        "operation": "readiness",
+                        "target_id": short_hash(f"{ollama_host}:{ollama_port}"),
+                    },
+                )
+                checks["ollama"] = "unreachable"
         else:
             checks["ollama"] = "not_configured"
-    except Exception as e:
-        checks["ollama"] = f"error: {e}"
+    except Exception as exc:
+        _log_readiness_error("ollama", exc)
+        checks["ollama"] = "error"
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503

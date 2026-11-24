@@ -28,12 +28,11 @@ _DEFAULT_PORT = 1933
 _DEFAULT_CONFIG_FILE = "/app/.openviking/ov.conf"
 
 
-def build_payload(config_file: str) -> dict:
+def build_payload() -> dict:
     """Return the JSON body served on every route."""
     return {
         "status": "pending_initialization",
         "error": "OpenViking config file not found",
-        "config_file": config_file,
         "fix": [
             "mount ~/.openviking on the host to /app/.openviking",
             "set OPENVIKING_CONF_CONTENT to the full ov.conf JSON",
@@ -42,10 +41,8 @@ def build_payload(config_file: str) -> dict:
     }
 
 
-def make_handler(config_file: str) -> type[http.server.BaseHTTPRequestHandler]:
-    body = (json.dumps(build_payload(config_file), ensure_ascii=False, indent=2) + "\n").encode(
-        "utf-8"
-    )
+def make_handler() -> type[http.server.BaseHTTPRequestHandler]:
+    body = (json.dumps(build_payload(), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def _respond(self) -> None:
@@ -77,7 +74,7 @@ class _ReusableServer(socketserver.TCPServer):
 
 
 def serve(host: str, port: int, config_file: str) -> None:
-    handler = make_handler(config_file)
+    handler = make_handler()
     with _ReusableServer((host, port), handler) as httpd:
         sys.stdout.write(
             f"[openviking-pending-health] serving on {host}:{port}; waiting for {config_file}\n"
