@@ -1707,11 +1707,14 @@ curl_header_line() { # curl_header_line <name> <value>
   printf 'header = "%s: %s"\n' "$1" "$value"
 }
 
-probe_server() { # probe_server <url> <key> <account> <user> -> PROBE_RESULT, PROBE_CODE
-  local url="${1%/}" key="$2" account="$3" user="$4"
-  PROBE_CODE="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || true)"
+probe_server() { # probe_server <url> <key> <account> <user> -> PROBE_RESULT, PROBE_CODE, PROBE_HEALTH
+  local url="${1%/}" key="$2" account="$3" user="$4" health
+  health="$(curl -sS -m 5 -w '\n%{http_code}' "$url/health" 2>/dev/null || true)"
+  PROBE_CODE="${health##*$'\n'}"
+  PROBE_HEALTH=""
   case "$PROBE_CODE" in
     ''|000) PROBE_RESULT="unreachable"; return 0 ;;
+    2??) PROBE_HEALTH="${health%$'\n'*}" ;;
   esac
   PROBE_CODE="$(
     {
@@ -1729,7 +1732,7 @@ probe_server() { # probe_server <url> <key> <account> <user> -> PROBE_RESULT, PR
 }
 
 check_server() {
-  local key def
+  local key def old_version minimum_version="0.4.23"
   command -v curl >/dev/null 2>&1 || return 0
   while :; do
     key="$(cred_value "$CRED_KEY" "$CUR_KEY")"
@@ -1737,6 +1740,25 @@ check_server() {
     def=0
     case "$PROBE_RESULT" in
       ok)
+        # A standalone CLI install does not change the plugin or its recall settings.
+        if [ "${SELECTED_HARNESSES:-}" != "cli" ]; then
+          old_version="$(printf '%s' "$PROBE_HEALTH" | "${NODE_BIN:-node}" -e '
+            let version;
+            try { version = JSON.parse(require("node:fs").readFileSync(0, "utf8"))?.version; }
+            catch { process.exit(0); }
+            if (typeof version !== "string" || version === "0.0.0+unknown") process.exit(0);
+            const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[.+-][\w.+-]+)?$/.exec(version);
+            if (!match) process.exit(0);
+            const minimum = process.argv[1].split(".").map(Number);
+            const current = match.slice(1, 4).map(Number);
+            const differing = current.findIndex((part, i) => part !== minimum[i]);
+            if (differing >= 0 && current[differing] < minimum[differing]) process.stdout.write(version);
+          ' "$minimum_version")"
+          if [ -n "$old_version" ]; then
+            err "$(t "OpenViking server $old_version is too old. Upgrade the server to $minimum_version or later before installing or updating the memory plugin." "OpenViking 服务端 ${old_version} 版本过旧。请先将服务端升级到 ${minimum_version} 或更高版本，再安装或更新记忆插件。")"
+            return 1
+          fi
+        fi
         info "$(t 'Server check passed:' '服务检查通过：') $CRED_URL"
         return 0
         ;;

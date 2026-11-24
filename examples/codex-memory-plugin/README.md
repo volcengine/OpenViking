@@ -23,6 +23,8 @@ It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mc
 
 ## Quick Start
 
+Update your OpenViking server to **v0.4.23 or later** before installing or updating the plugin. This server release added the event time-decay parameter that auto recall now sends by default.
+
 There are two install paths. **Pick one — don't mix them** (both surface the same `openviking-memory` plugin; enabling it from both would run the hooks twice). The **one-line installer (A)** is the recommended path for most users; the marketplace install (B) is useful when you already manage `~/.openviking/ovcli.conf` yourself.
 
 ### A. One-line installer — `curl | bash` (recommended)

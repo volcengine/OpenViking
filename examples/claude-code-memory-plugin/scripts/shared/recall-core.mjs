@@ -493,10 +493,13 @@ function wrapContext(body) {
   return RECALL_CONTEXT_TEMPLATE.replace("{context}", () => text);
 }
 
+const CONTEXT_REQUEST_REJECTED = Symbol("context request rejected");
+
 /**
  * Server-assembled context: the context face when the deployment has it, else
  * the deprecated /recall preset. Returns the injection block, "" when there was
  * nothing relevant, or null when no server-side path was usable at all.
+ * A validation error is returned as CONTEXT_REQUEST_REJECTED.
  */
 export async function buildServerAssembledBlock(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
@@ -508,10 +511,8 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 }
 
 /**
- * Raw server-assembled context, or null when the deployment has no context face.
- * Returns `{ rendered, entries, digest, stats }` — callers that need the entries
- * (their own compression, their own envelope) use this instead of the block
- * builders below.
+ * Raw server-assembled context, null when a fallback can be tried, or
+ * CONTEXT_REQUEST_REJECTED when the server rejects the request parameters.
  */
 export async function fetchAssembledContext(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId || "";
@@ -520,31 +521,31 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
-  const search = () => fetchJSON("/api/v1/search/search", {
+  const res = await fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
   }, { actorPeerId, timeoutMs: contextRequestTimeoutMs(cfg, body) });
-  let res = await search();
-  const validationErrors = res.error?.details?.validation_errors;
-  if (!res.ok && body.events_time_decay_protection
-      && (res.status === 400 || res.status === 422)
-      && Array.isArray(validationErrors)
-      && validationErrors.some((error) => error.type === "extra_forbidden"
-        && error.loc?.at(-1) === "events_time_decay_protection")) {
-    // Older servers can support context search without supporting event decay.
-    delete body.events_time_decay_protection;
-    res = await search();
-  }
 
   if (!res.ok) {
     const status = res.status || 0;
-    if ((status === 400 || status === 422) && looksLikeUnknownField(res)) {
+    if (status !== 400 && status !== 422) {
+      log("recall_context_face_error", { status });
+      return null;
+    }
+
+    const message = typeof res.error === "string" ? res.error : res.error?.message;
+    const errors = res.error?.details?.validation_errors;
+    const unsupportedMode = Array.isArray(errors)
+      ? errors.some((error) => error.type === "extra_forbidden" && error.loc?.at(-1) === "mode")
+      : /\b(?:extra inputs?|unexpected (?:keyword )?argument)\b[^.\n]*\bmode\b/i.test(message || "");
+    if (unsupportedMode) {
       await markContextFaceLegacy(options.legacyCachePath);
       log("recall_context_face_unsupported", { status });
-    } else {
-      log("recall_context_face_error", { status });
+      return null;
     }
-    return null;
+
+    log("recall_context_request_rejected", { status, message });
+    return CONTEXT_REQUEST_REJECTED;
   }
 
   const result = res.result || {};
@@ -620,7 +621,7 @@ async function finalizeRecall(result, cfg, query, options, log, shortContext) {
 
 async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
   const assembled = await fetchAssembledContext(fetchJSON, cfg, query, { ...options, log });
-  if (assembled === null) return null;
+  if (assembled === null || assembled === CONTEXT_REQUEST_REJECTED) return assembled;
   const text = await finalizeRecall(assembled, cfg, query, options, log);
   return text ? wrapContext(text) : "";
 }
@@ -694,6 +695,7 @@ export async function postRecall(fetchJSON, body, opts = {}) {
  */
 export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = {}) {
   const primary = await recallForPeer(fetchJSON, cfg, query, options);
+  if (primary.stage === "request_rejected") return primary;
 
   const legacyPeerId = String(options.legacyPeerId || "").trim();
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
@@ -735,6 +737,7 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
     actorPeerId,
     log,
   });
+  if (serverBlock === CONTEXT_REQUEST_REJECTED) return emptyRecall("request_rejected");
   if (serverBlock !== null) {
     if (!serverBlock) return emptyRecall("no_results");
     // The server rendered one budgeted unit, so nothing here degraded to a

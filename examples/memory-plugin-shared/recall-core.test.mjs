@@ -55,33 +55,36 @@ test("explicit event decay settings override the default protection period", () 
   assert.equal(buildContextSearchBody({ recallEventsDecayProtection: "0" }).events_time_decay_protection, "0");
 });
 
-test("context search retries without decay when an older server rejects that field", async () => {
+test("context search reports an unknown parameter without retrying or marking the server as legacy", async () => {
   const calls = [];
+  const events = [];
   const legacyCachePath = await tempPath("context-face.json");
   const query = "最近一次部署故障怎么处理的？";
-  const block = await buildRecallBlock(async (path, init) => {
-    assert.equal(path, "/api/v1/search/search");
-    const body = JSON.parse(init.body);
-    calls.push(body);
-    if (body.events_time_decay_protection) {
-      return {
-        ok: false,
-        status: 400,
-        error: { details: { validation_errors: [
-          { loc: ["body", "events_time_decay_protection"], type: "extra_forbidden" },
-        ] } },
-      };
-    }
-    return { ok: true, result: { rendered: "A remembered deployment incident." } };
-  }, resolveKnobs().settings, query, { legacyCachePath });
+  const message = "Invalid request parameters: events_time_decay_protection: Extra inputs are not permitted";
+  const result = await buildRecallBlockDetailed(async (path, init) => {
+    calls.push({ path, body: JSON.parse(init.body) });
+    return {
+      ok: false,
+      status: 400,
+      error: { message, details: { validation_errors: [
+        { loc: ["body", "events_time_decay_protection"], type: "extra_forbidden" },
+      ] } },
+    };
+  }, { ...resolveKnobs().settings, recallPeerScope: "actor" }, query, {
+    legacyCachePath,
+    actorPeerId: "current-peer",
+    legacyPeerId: "old-peer",
+    log: (event, data) => events.push({ event, data }),
+  });
 
-  assert.equal(calls.length, 2);
-  const { events_time_decay_protection: protection, ...fallbackBody } = calls[0];
-  assert.equal(protection, "30d");
-  assert.equal(fallbackBody.query, query);
-  assert.deepEqual(calls[1], fallbackBody);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/api/v1/search/search");
+  assert.equal(calls[0].body.events_time_decay_protection, "30d");
+  assert.equal(calls[0].body.query, query);
   assert.equal(await isContextFaceLegacy(legacyCachePath), false);
-  assert.match(block, /A remembered deployment incident/);
+  assert.equal(result.stage, "request_rejected");
+  assert.equal(result.block, "");
+  assert.deepEqual(events, [{ event: "recall_context_request_rejected", data: { status: 400, message } }]);
 });
 
 test("context requests omit defaults owned by the server", () => {
@@ -295,14 +298,12 @@ test("buildRecallBlock remembers a server that only supports v1 recall", async (
 
 test("unrelated request errors do not mark the server as legacy", async () => {
   const legacyCachePath = await tempPath("context-face.json");
-  const fetchJSON = async (path) => {
-    if (path === "/api/v1/search/search") return { ok: false, status: 400, error: "bad query" };
-    if (path === "/api/v1/search/recall") return { ok: true, result: { rendered: "ok" } };
-    return { ok: false, status: 404 };
-  };
+  const result = await buildRecallBlockDetailed(async (path) => {
+    assert.equal(path, "/api/v1/search/search");
+    return { ok: false, status: 422, error: "bad query" };
+  }, {}, "hello", { legacyCachePath });
 
-  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
-
+  assert.equal(result.stage, "request_rejected");
   assert.equal(await isContextFaceLegacy(legacyCachePath), false);
 });
 

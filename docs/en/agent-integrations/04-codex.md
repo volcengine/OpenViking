@@ -6,6 +6,8 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 
 ## Install
 
+Update your OpenViking server to **v0.4.23 or later** before installing or updating the memory plugin. This server release added the event time-decay parameter that auto recall now sends by default.
+
 Claude Code and Codex share one installer. It asks which harnesses to install and for your OpenViking credentials; every step is idempotent.
 
 ```bash
