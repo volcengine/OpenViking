@@ -49,6 +49,12 @@ export function VikingBotInteractionView({
         />
       </LocaleProvider>
     );
+  const progress =
+    total > 1 ? (
+      <span className="ov-viking-bot__interaction-progress" aria-current="step">
+        {labels.progress(index, total)}
+      </span>
+    ) : undefined;
   return (
     <LocaleProvider locale={locale}>
       <section
@@ -58,14 +64,9 @@ export function VikingBotInteractionView({
         aria-label={labels.title}
         aria-busy={props.submitting || undefined}
       >
-        {total > 1 ? (
-          <p
-            className="ov-viking-bot__interaction-progress"
-            aria-current="step"
-          >
-            {labels.progress(index, total)}
-          </p>
-        ) : null}
+        {request.kind === 'custom' || request.kind === 'target'
+          ? progress
+          : null}
         {request.kind === 'custom' ? (
           <CustomInteraction
             key={JSON.stringify([request.kind, requestKey ?? index])}
@@ -92,6 +93,7 @@ export function VikingBotInteractionView({
             request={request}
             locale={locale}
             labels={labels}
+            progress={progress}
           />
         )}
       </section>

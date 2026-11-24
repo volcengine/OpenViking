@@ -8,7 +8,11 @@ import type { HitlCard } from './types.js';
 import { object } from './json.js';
 import { parseCompileUri } from './uris.js';
 
-async function stat(client: OvClient, uri: string, options: OvRequestOptions) {
+export async function statCompileLocation(
+  client: OvClient,
+  uri: string,
+  options: OvRequestOptions,
+) {
   const result = object(
     await client.request<unknown>({
       method: 'GET',
@@ -48,7 +52,10 @@ export async function checkDestination(
     if (/^viking:\/\/system(?:\/|$)/.test(uri))
       return { error: 'targetReadOnly' };
     try {
-      const result = await stat(client, uri, { ...options, signal });
+      const result = await statCompileLocation(client, uri, {
+        ...options,
+        signal,
+      });
       if (!result) return { error: 'targetCheckFailed' };
       if (!result.isDirectory) return { error: 'targetNotDirectory' };
       if (['denied', 'read', 'read-only', 'container'].includes(result.access))
@@ -133,7 +140,7 @@ export function useSuggestedSources(
       signal: combined,
     };
     void Promise.allSettled(
-      values.map((uri) => stat(client, uri, requestOptions)),
+      values.map((uri) => statCompileLocation(client, uri, requestOptions)),
     ).then((results) => {
       const draft = current.current;
       if (combined.aborted || edited.current || draft.value || draft.disabled)

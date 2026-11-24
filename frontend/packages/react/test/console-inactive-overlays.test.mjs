@@ -76,8 +76,11 @@ test('inactive Skill upload releases its focus and body lock while its inline an
               value: 'viking://agent/skills/wiki/SKILL.md',
               label: 'Wiki Skill',
             },
+            {
+              value: 'viking://agent/skills/report/SKILL.md',
+              label: 'Report Skill',
+            },
           ],
-          initialValue: 'viking://agent/skills/wiki/SKILL.md',
         },
       },
       'en-US',

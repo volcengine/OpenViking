@@ -16,6 +16,37 @@ export function readCompileConfig(
   });
 }
 
+export function updateCompileConfig(
+  client: OvClient,
+  options: OvRequestOptions,
+  config: CompileConfig,
+) {
+  const {
+    compile_name,
+    args,
+    to,
+    from,
+    skill,
+    instruction,
+    auto_update,
+    update_schedule,
+  } = config;
+  return client.request<CompileConfig>({
+    method: 'POST',
+    path: OV_PATHS.compileConfigUpdate,
+    body: {
+      ...(compile_name ? { compile_name, args } : {}),
+      to,
+      from,
+      skill,
+      instruction,
+      auto_update,
+      update_schedule,
+    },
+    options,
+  });
+}
+
 export async function importPreviewPack(
   client: OvClient,
   uri: string,

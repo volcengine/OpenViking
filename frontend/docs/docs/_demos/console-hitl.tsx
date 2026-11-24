@@ -176,8 +176,8 @@ export default function ConsoleHitl() {
     <>
       <p>
         {zh
-          ? '模拟服务，不访问后端。发送任意消息体验 Wiki 创建，或发送「日报」体验定时更新。逐项提交后继续对话。'
-          : 'Simulated service, with no backend calls. Send any message to create a Wiki, or send “daily report” to configure scheduled updates. Submit each card to continue.'}
+          ? '模拟服务，不访问后端。发送「完整配置」查看 Wiki 确认卡，或发送「日报」逐步配置定时更新。'
+          : 'This demo uses simulated data. Send “complete configuration” to review a Wiki configuration, or “daily report” to step through scheduled updates.'}
       </p>
       <Checkbox checked={customize} onChange={setCustomize}>
         {zh ? '启用宿主自定义表单' : 'Enable host form customizations'}

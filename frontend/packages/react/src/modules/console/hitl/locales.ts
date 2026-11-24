@@ -2,6 +2,9 @@ import type { Locale } from '../../../shared/locale.js';
 
 const enUS = {
   empty: 'Not provided',
+  confirmationTitle: 'Review the Wiki configuration',
+  sourceCheckFailed: 'Could not verify the source directories.',
+  skillCheckFailed: 'Could not verify the compile skill.',
   required: 'Complete this field',
   nameInvalid:
     'Use up to 64 letters, numbers, underscores or hyphens, or up to 32 characters with Chinese ideographs. The name cannot start with a hyphen.',
@@ -41,6 +44,9 @@ const enUS = {
 };
 const zhCN: typeof enUS = {
   empty: '未填写',
+  confirmationTitle: '确认 Wiki 配置',
+  sourceCheckFailed: '无法确认来源目录。',
+  skillCheckFailed: '无法确认编译技能。',
   required: '请填写此项',
   nameInvalid:
     '名称可使用字母、数字、下划线和连字符，最多 64 个字符。包含汉字时最多 32 个字符。名称不能以连字符开头。',

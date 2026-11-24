@@ -9,6 +9,7 @@
 @import '../../shared/primitives/select/style.css';
 @import '../../shared/primitives/time-picker/style.css';
 @import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/tooltip/style.css';
 @import './interaction/interaction-fields.css';
 @import '../../shared/primitives/modal/modal.css';
 @import '../file-tree/style.css';
@@ -143,6 +144,23 @@
   line-height: 20px;
   overflow-wrap: anywhere;
 }
+.ov-viking-bot__interaction-title:has(.ov-viking-bot__interaction-progress) {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ov-viking-bot__interaction-progress {
+  width: max-content;
+  min-width: 33px;
+  box-sizing: border-box;
+  padding-inline: 6px;
+  border-radius: 13px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  box-shadow: inset 0 0 0 0.5px
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  text-align: center;
+  white-space: nowrap;
+}
 .ov-viking-bot__interaction-sr {
   position: absolute;
   width: 1px;
@@ -183,7 +201,8 @@
 }
 .ov-viking-bot__compile-card--compile_name .ov-form-field__label,
 .ov-viking-bot__compile-card--compile_source .ov-form-field__label,
-.ov-viking-bot__compile-card--compile_target .ov-form-field__label {
+.ov-viking-bot__compile-card--compile_target .ov-form-field__label,
+.ov-viking-bot__compile-card--compile_instruction .ov-form-field__label {
   margin: 0;
 }
 .ov-viking-bot__compile-card--compile_target .ov-viking-bot__interaction-card {

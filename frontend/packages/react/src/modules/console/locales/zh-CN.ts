@@ -47,10 +47,12 @@ const messages: typeof enUS = {
   compileQuickInputs: {
     createWiki: {
       label: 'Wiki',
+      description: '将指定数据源编译为 Wiki。',
       prompt: '将选中目录中的文件整理成 Wiki。',
     },
     dailyReport: {
       label: '定时日报',
+      description: '将指定数据源编译为日报。',
       prompt: '基于选中的目录生成日报，并设置定时更新',
     },
   },

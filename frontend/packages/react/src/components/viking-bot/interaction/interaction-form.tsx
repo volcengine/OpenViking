@@ -1,8 +1,8 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
 import { useToast } from '../../../shared/primitives/toast/use-toast.js';
 import { useValidationLifetime } from './use-validation-lifetime.js';
-import { focusError } from './focus-error.js';
+import { focusError, focusInvalidAnswer } from './focus-error.js';
 import { InteractionActions } from './interaction-actions.js';
 import { interactionError } from './directory-state.js';
 import {
@@ -36,11 +36,13 @@ export function InteractionForm({
   onSubmit,
   onCancel,
   onPrevious,
+  progress,
 }: Omit<VikingBotInteractionProps, 'request' | 'labels' | 'locale'> & {
   request: FormRequest;
   labels: InteractionLabels;
   locale: Locale;
   onPrevious?: () => void;
+  progress?: ReactNode;
 }) {
   const id = useId();
   const [toast, toastHolder] = useToast({ locale });
@@ -82,15 +84,7 @@ export function InteractionForm({
         id: 'validation',
         content: invalid ? labels[invalid] : labels.required,
       });
-      const selector =
-        invalid === 'timeInvalid'
-          ? '[name="schedule-time"]'
-          : invalid === 'weekdayRequired'
-            ? '[role="combobox"]'
-            : formRef.current?.querySelector('[name="custom-answer"]')
-              ? '[name="custom-answer"]'
-              : 'input:not(:disabled), .ov-viking-bot__interaction-picker-trigger:not(:disabled)';
-      formRef.current?.querySelector<HTMLElement>(selector)?.focus();
+      focusInvalidAnswer(formRef.current, invalid);
       return;
     }
     toast.clear();
@@ -150,7 +144,9 @@ export function InteractionForm({
         id={`${id}-title`}
         className="ov-viking-bot__interaction-title"
       >
-        {request.question ?? labels.title}
+        {progress}
+        {progress ? ' ' : null}
+        <span>{request.question ?? labels.title}</span>
       </h3>
       <div className="ov-viking-bot__interaction-fields">
         <InteractionFields

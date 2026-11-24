@@ -13,7 +13,7 @@ import type {
   PreviewWorkflowProps,
 } from './preview-workflow-types.js';
 
-export type CompileField = 'from' | 'skill' | 'update_schedule';
+export type CompileField = 'from' | 'skill' | 'update_schedule' | 'instruction';
 type Props = PreviewWorkflowProps & {
   canWrite: boolean;
   loadingText: string;
@@ -78,7 +78,7 @@ export function PreviewCompileDetails(props: Props & { compileName?: string }) {
               aria-label={label}
               onClick={() => setEditing(field)}
             >
-              {field !== 'update_schedule' ? (
+              {field === 'from' || field === 'skill' ? (
                 <FolderIcon width={16} height={16} />
               ) : null}
               <span className="ov-compile-config__path">{value}</span>
@@ -113,6 +113,7 @@ export function PreviewCompileDetails(props: Props & { compileName?: string }) {
             {row(text.sources, config.from.join('、'), 'from')}
             {row(text.target, config.to)}
             {row(text.skill, config.skill, 'skill')}
+            {row(text.instruction, config.instruction || '—', 'instruction')}
             {row(
               text.schedule,
               rule

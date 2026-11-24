@@ -47,6 +47,14 @@
   gap: 4px;
   overflow-wrap: anywhere;
 }
+.ov-viking-bot__interaction-path-option {
+  min-width: 0;
+}
+.ov-viking-bot__interaction-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ov-viking-bot__interaction-option-content code {
   white-space: pre-wrap;
 }
@@ -70,6 +78,10 @@
 .ov-viking-bot__interaction-custom {
   align-items: center;
   gap: 8px;
+}
+.ov-viking-bot__compile-card--compile_target
+  .ov-viking-bot__interaction-custom--selected:has([aria-invalid='true']) {
+  background: var(--ov-ui-color-error-bg, var(--ov-ui-error-bg-default));
 }
 .ov-viking-bot__interaction-custom-choice {
   min-width: 0;

@@ -67,6 +67,8 @@ export function createHitlDemo(
       }
       const id = `demo-input-${++sequence}`;
       const report = /日报|daily report/i.test(input.text);
+      const completeWiki =
+        !report && /完整配置|complete configuration/i.test(input.text);
       const name = report ? 'demo-daily-report' : 'demo-wiki';
       const outputUri = `viking://resources/${name}`;
       const card = (
@@ -96,24 +98,35 @@ export function createHitlDemo(
                 'compile_source',
                 zh ? '选择来源目录' : 'Choose source folders',
                 {
-                  suggested_values: [],
+                  suggested_values: completeWiki
+                    ? ['viking://resources/demo']
+                    : [],
                 },
               ),
               card('compile_name', zh ? '配置名称' : 'Configuration name', {
                 suggested_value: name,
               }),
-              card('compile_output_type', zh ? '产物类型' : 'Output type', {
-                options: [
-                  {
-                    value: report ? 'markdown' : 'wiki',
-                    label: report
-                      ? 'Markdown'
-                      : zh
-                        ? 'Wiki（结构化知识库）'
-                        : 'Wiki (structured knowledge base)',
-                  },
-                ],
-              }),
+              ...(!completeWiki
+                ? [
+                    card(
+                      'compile_output_type',
+                      zh ? '产物类型' : 'Output type',
+                      {
+                        suggested_value: report ? 'markdown' : 'wiki',
+                        options: [
+                          {
+                            value: report ? 'markdown' : 'wiki',
+                            label: report
+                              ? 'Markdown'
+                              : zh
+                                ? 'Wiki（结构化知识库）'
+                                : 'Wiki (structured knowledge base)',
+                          },
+                        ],
+                      },
+                    ),
+                  ]
+                : []),
               card('compile_target', zh ? '输出目录' : 'Output directory', {
                 suggested_value: outputUri,
               }),
@@ -125,7 +138,7 @@ export function createHitlDemo(
                         label: 'Daily report',
                       }
                     : {
-                        uri: 'viking://agent/skills/wiki',
+                        uri: 'viking://agent/skills/llm-wiki',
                         label: 'Wiki Skill',
                       },
                 ],

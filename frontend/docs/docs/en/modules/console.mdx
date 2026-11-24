@@ -93,15 +93,15 @@ Use `labels.activationTitle` and `labels.activationDescription` to replace the d
 
 ### Human input
 
-Send a message to try the built-in Wiki questions, or send “daily report” to try scheduled updates. Enable host form customizations to try asynchronous name validation, a custom output directory picker, a replacement instruction card and a schedule limited to 09:00–18:00. Enable “Simulate answer send failure” to check retained input, error clearing and retry.
+Send “complete configuration” to review a Wiki configuration or “daily report” to step through scheduled updates. Enable host form customizations to try asynchronous name validation, a custom output directory picker, a replacement instruction card and a schedule limited to 09:00–18:00. Enable “Simulate answer send failure” to check retained input, error clearing and retry.
 
 ```tsx file="../../_demos/console-hitl.tsx" preview
 
 ```
 
-Console shows questions after a successful `request_user_input` tool result and a normal end to the current turn. It asks for source directories and the configuration name before the output directory when those answers are needed. Interrupted or truncated streams, error results and unsupported schemas keep the ordinary tool presentation. Set `chatOptions.hitl={false}` to disable automatic interaction. An explicit `conversation.interaction` uses the host's question and callbacks.
+Console shows questions after a successful `request_user_input` tool result and a normal end to the current turn. It asks for source directories and the configuration name before the output directory when those answers are needed. When a group includes an output type, Console always asks for confirmation and preselects only a matching suggestion. Intermediate cards show **Next**. **Submit** sends the whole group in the tool’s original order. When the first group provides a complete Wiki configuration without unanswered questions, Console shows a review card. **Edit** opens the individual questions, and **Confirm and submit** validates the resources and sends the configuration. Interrupted or truncated streams, error results and unsupported schemas keep the ordinary tool presentation. Set `chatOptions.hitl={false}` to disable automatic interaction. An explicit `conversation.interaction` uses the host's question and callbacks.
 
-With a configured filesystem, Console opens a picker for source directories and Skills and checks the output directory before advancing. Custom chat services without a filesystem connection can enter URIs directly. An output directory cannot overlap a source directory. Console skips the Output type question only when it has an explicit answer or recognizes the Skill. Automatic updates stay off unless the tool supplies an enabled schedule or the user enables them.
+With a configured filesystem, Console opens a picker for source directories and Skills and checks the output directory before advancing. Custom chat services without a filesystem connection can enter URIs directly. An output directory cannot overlap a source directory. Automatic updates stay off unless the tool supplies an enabled schedule or the user enables them.
 
 History does not establish whether a turn completed normally. Loading history restores messages and answer summaries without reopening question cards. A new live response can still activate HITL after normal completion.
 

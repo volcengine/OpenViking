@@ -12,7 +12,13 @@ export type FormError = 'required' | 'timeInvalid' | 'weekdayRequired';
 export function initialAnswer(
   request: FormRequest,
 ): VikingBotInteractionAnswer | undefined {
-  if (request.kind === 'choice') return undefined;
+  if (request.kind === 'choice') {
+    const value = request.initialValue;
+    return value !== undefined &&
+      request.options.some((option) => option.value === value)
+      ? { kind: 'choice', value }
+      : undefined;
+  }
   if (request.kind === 'text')
     return { kind: 'text', value: request.initialValue ?? '' };
   if (request.kind === 'repair')

@@ -14,14 +14,14 @@ function skillOutput(uri: string) {
   if (/(?:^|\/)llm-wiki(?:\/SKILL\.md)?\/?$/.test(uri)) return 'wiki';
 }
 
-function requestedOutput(group: HitlGroup, answers?: Answers) {
+function requestedOutput(group: HitlGroup, answers: Answers) {
   const type = group.cards.find(
     (card) => card.cardType === 'compile_output_type',
   );
-  const chosen = type && answers?.[type.id];
-  if (chosen?.kind === 'choice') return chosen.value;
+  const chosen = type && answers[type.id];
+  if (type) return chosen?.kind === 'choice' ? chosen.value : undefined;
   const skill = group.cards.find((card) => card.cardType === 'compile_skill');
-  const skillAnswer = skill && answers?.[skill.id];
+  const skillAnswer = skill && answers[skill.id];
   if (skillAnswer?.kind === 'choice') return skillOutput(skillAnswer.value);
   if (skill?.request.kind === 'choice' && skill.request.options.length === 1)
     return skillOutput(skill.request.options[0]!.value);
@@ -29,27 +29,13 @@ function requestedOutput(group: HitlGroup, answers?: Answers) {
 
 export function clarificationFlow(group: HitlGroup, answers: Answers) {
   const output = requestedOutput(group, answers);
-  const fixed: Record<string, VikingBotInteractionAnswer> = {};
-  const cards = group.cards.filter((card) => {
-    if (
-      group.cards.length > 1 &&
-      !card.options &&
-      card.cardType === 'compile_output_type' &&
-      card.request.kind === 'choice' &&
-      output &&
-      card.request.options.some(({ value }) => value === output)
-    ) {
-      fixed[card.id] = { kind: 'choice', value: output };
-      return false;
-    }
-    return true;
-  });
+  const cards = [...group.cards];
   const target = cards.findIndex(
     (card) =>
       !card.options?.createRequest && card.cardType === 'compile_target',
   );
   if (target !== -1) {
-    // Both the recommended path and the overlap check depend on earlier answers.
+    // The destination uses the confirmed output type, task name and source directories.
     const dependencies = cards.splice(target + 1);
     const beforeTarget: HitlCard[] = [];
     const afterTarget: HitlCard[] = [];
@@ -57,13 +43,14 @@ export function clarificationFlow(group: HitlGroup, answers: Answers) {
       const required =
         !card.options?.createRequest &&
         (card.cardType === 'compile_name' ||
-          card.cardType === 'compile_source');
+          card.cardType === 'compile_source' ||
+          card.cardType === 'compile_output_type');
       (required ? beforeTarget : afterTarget).push(card);
     }
     cards.splice(target, 0, ...beforeTarget);
     cards.push(...afterTarget);
   }
-  return { cards, fixed, output };
+  return { cards, output };
 }
 
 export function confirmedSources(group: HitlGroup, answers: Answers) {
@@ -79,6 +66,13 @@ export function confirmedSources(group: HitlGroup, answers: Answers) {
   });
 }
 
+function outputSuffix(output?: string) {
+  if (output === 'markdown' || output === 'daily_report')
+    return '_daily_report';
+  if (output === 'wiki' || output === 'report') return `_${output}`;
+  return '';
+}
+
 export function outputDirectories(
   card: HitlCard,
   group: HitlGroup,
@@ -91,8 +85,7 @@ export function outputDirectories(
   const name = group.cards.find((item) => item.cardType === 'compile_name');
   const answer = name && answers[name.id];
   const stem = answer?.kind === 'text' ? answer.value.trim() : '';
-  const suffix =
-    output === 'markdown' ? '_daily_report' : output === 'wiki' ? '_wiki' : '';
+  const suffix = outputSuffix(output);
   const path =
     suffix && stem && stem !== '.' && stem !== '..' && !/[\\/]/.test(stem)
       ? '/' + stem + (stem.endsWith(suffix) ? '' : suffix)
@@ -101,8 +94,19 @@ export function outputDirectories(
     ? `viking://user/${userId}/resources`
     : 'viking://~/resources';
   const suggested = parseCompileUri(card.request.initialValue ?? '');
+  const type = group.cards.find(
+    ({ cardType }) => cardType === 'compile_output_type',
+  );
+  const suggestedType =
+    type?.request.kind === 'choice' ? type.request.initialValue : undefined;
+  const suggestedSuffix =
+    suggested?.match(/_(?:daily_report|report|wiki)$/)?.[0] ??
+    outputSuffix(suggestedType);
+  const mismatch = suffix && suggestedSuffix && suffix !== suggestedSuffix;
   const existing =
-    suggested && !compileTargetError(suggested) ? suggested : undefined;
+    suggested && !mismatch && !compileTargetError(suggested)
+      ? suggested
+      : undefined;
   const generated = path
     ? [`viking://resources${path}`, `${personal}${path}`]
     : [];

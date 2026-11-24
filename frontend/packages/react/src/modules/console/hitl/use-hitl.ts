@@ -1,19 +1,18 @@
-import { createOvClient } from '../../../client/client.js';
-import { useOvClient, useOvIdentity } from '../../../client/provider.js';
 import { sourceSuggestions } from './directory-validation.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type {
-  VikingBotInteractionAnswer,
-  VikingBotInteractionProps,
-} from '../../../components/viking-bot/index.js';
-import type { VikingBotMessage } from '../../../components/viking-bot/model.js';
+import { useRef, useState } from 'react';
+import type { VikingBotInteractionProps } from '../../../components/viking-bot/index.js';
 import type { Locale } from '../../../shared/locale.js';
 import { useMonitoringBinding } from '../../../shared/monitoring/context.js';
 import { readData, tagData } from '../../../shared/monitoring/data.js';
 import type { VikingBotChatResult } from '../chat/types.js';
-import type { ConsoleHitlOptions, HitlGroup } from './types.js';
+import type { ConsoleHitlOptions } from './types.js';
 import { pendingGroup } from './protocol.js';
-import { formatAnswers } from './answers.js';
+import { useHitlScope } from './use-hitl-scope.js';
+import { createHitlDelivery, type HitlDraft } from './delivery.js';
+import { validateWikiConfirmation, wikiConfirmation } from './confirmation.js';
+import { hitlLabels } from './locales.js';
+import { confirmationInteraction } from '../../../components/viking-bot/confirmation/viking-bot-confirmation.js';
+import { resolveInteractionLabels } from '../../../components/viking-bot/interaction/labels.js';
 import { presentCard } from './fields.js';
 import type { CompilePickerScope } from './picker-fields.js';
 import { summarizeMessages } from './summary.js';
@@ -22,16 +21,6 @@ import {
   confirmedSources,
   outputDirectories,
 } from './flow.js';
-
-interface Draft {
-  owner: object;
-  group: HitlGroup;
-  turnUser?: VikingBotMessage;
-  answers: Readonly<Record<string, VikingBotInteractionAnswer>>;
-  closed?: boolean;
-  failedInput?: string;
-  pendingInput?: string;
-}
 
 /** A tool call belongs to one controller, session and user turn. */
 export function useHitl(
@@ -42,36 +31,13 @@ export function useHitl(
   pickerScope: CompilePickerScope & { customChat?: boolean } = {},
 ) {
   const monitoring = useMonitoringBinding();
-  const inheritedClient = useOvClient('local');
-  const [fallback] = useState(createOvClient);
   const requestOptions = pickerScope.requestOptions;
-  const user = useOvIdentity(requestOptions).userId;
-  const userId = typeof user === 'string' ? user : undefined;
-  const hasConnection =
-    !pickerScope.customChat ||
-    requestOptions?.baseURL !== undefined ||
-    requestOptions?.apiKey !== undefined ||
-    requestOptions?.accountId !== undefined ||
-    requestOptions?.userId !== undefined ||
-    requestOptions?.resourceId !== undefined;
-  const client = inheritedClient ?? (hasConnection ? fallback : undefined);
-  const owner = useMemo(
-    () => ({
-      active: true,
-      send: chat.send,
-      sessionId: chat.sessionId,
-      historyKey: chat.historyKey,
-    }),
-    [chat.send, chat.sessionId, chat.historyKey],
+  const { client, owner, userId } = useHitlScope(
+    chat,
+    requestOptions,
+    pickerScope.customChat,
   );
-  useEffect(() => {
-    owner.active = true;
-    return () => {
-      owner.active = false;
-    };
-  }, [owner]);
-  const [draft, setDraft] = useState<Draft>();
-  const lock = useMemo(() => ({ current: false, owner }), [owner]);
+  const [draft, setDraft] = useState<HitlDraft>();
   const config = options === false ? undefined : options;
   const lastUser = [...chat.messages]
     .reverse()
@@ -95,9 +61,9 @@ export function useHitl(
     group && card
       ? outputDirectories(card, group, answers, flow?.output, userId)
       : [];
-  const current = useRef({ owner, key: '', raw });
+  const current = useRef({ owner, key: '' });
   const key = JSON.stringify([lastUser?.id, group?.id, card?.id]);
-  current.current = { owner, key, raw };
+  current.current = { owner, key };
   const isCurrent = () =>
     owner.active &&
     current.current.owner === owner &&
@@ -108,98 +74,114 @@ export function useHitl(
     Boolean(group && card) &&
     !(same && draft.closed) &&
     (Boolean(retry) || (chat.status === 'idle' && chat.responseComplete));
+  const draftState = group && {
+    owner,
+    group,
+    turnUser,
+    answers,
+    manual: same ? draft.manual : undefined,
+  };
+  const requestKey = JSON.stringify([
+    pickerScope.scopeKey,
+    chat.sessionId,
+    card?.id,
+  ]);
+  const index = Object.keys(answers).length;
+  const total = group?.cards.length ?? 0;
+  const wikiDefaults =
+    active && group && client
+      ? wikiConfirmation(group, turnUser, locale, userId)
+      : undefined;
+  const defaults =
+    !draftState?.manual && index === 0 ? wikiDefaults : undefined;
+  const deliver =
+    draftState &&
+    createHitlDelivery(
+      draftState,
+      owner.send,
+      () => owner.active && current.current.owner === owner,
+      setDraft,
+    );
+  const confirmation =
+    defaults && draftState && client && deliver
+      ? confirmationInteraction({
+          requestKey,
+          title: hitlLabels(locale).confirmationTitle,
+          rows: defaults.rows,
+          locale,
+          onEdit: () => {
+            if (isCurrent() && !owner.locked)
+              setDraft({ ...draftState, manual: true });
+          },
+          onConfirm: async () => {
+            if (!isCurrent() || owner.locked) return;
+            owner.locked = true;
+            try {
+              const signal =
+                requestOptions?.signal ?? new AbortController().signal;
+              await validateWikiConfirmation(
+                defaults,
+                client,
+                requestOptions,
+                signal,
+                locale,
+                userId,
+              );
+              if (isCurrent()) await deliver(defaults.answers);
+            } finally {
+              owner.locked = false;
+            }
+          },
+        })
+      : undefined;
   const interaction: VikingBotInteractionProps | undefined =
-    !active || !group || !card
+    !active || !group || !card || !draftState || !deliver
       ? undefined
       : {
-          requestKey: JSON.stringify([
-            pickerScope.scopeKey,
-            chat.sessionId,
-            card.id,
-          ]),
+          requestKey,
           ...presentCard(
             card,
             locale,
             { ...pickerScope, client },
             recommendations,
-            sourceSuggestions(card, turnUser),
+            card.cardType === 'compile_source' &&
+              draftState.manual &&
+              wikiDefaults
+              ? wikiDefaults.sources
+              : sourceSuggestions(card, turnUser),
             confirmedSources(group, answers),
             userId,
           ),
-          ...(card.options?.createRequest
-            ? { index: Object.keys(answers).length, total: group.cards.length }
+          index,
+          total,
+          ...(!card.options?.createRequest && index < total - 1
+            ? { labels: { submit: resolveInteractionLabels(locale).next } }
             : {}),
           onCancel: () => {
-            if (isCurrent() && !lock.current)
-              setDraft({ owner, group, turnUser, answers, closed: true });
+            if (isCurrent() && !owner.locked)
+              setDraft({ ...draftState, closed: true });
           },
           onSubmit: async (answer) => {
             if (
-              lock.current ||
+              owner.locked ||
               !isCurrent() ||
               answer.kind !== card.request.kind
             )
               return;
-            lock.current = true;
             const next = { ...answers, [card.id]: answer };
+            if (group.cards.some(({ id }) => !next[id])) {
+              setDraft({ ...draftState, answers: next });
+              return;
+            }
+            owner.locked = true;
             try {
-              const nextFlow = clarificationFlow(group, next);
-              if (nextFlow.cards.some(({ id }) => !next[id])) {
-                setDraft({ owner, group, turnUser, answers: next });
-                return;
-              }
-              const input = formatAnswers(
-                group,
-                group.cards.map(({ id }) => next[id] ?? nextFlow.fixed[id]!),
-              );
-              setDraft({
-                owner,
-                group,
-                turnUser,
-                answers,
-                pendingInput: input,
-              });
-              const ownsDraft = () =>
-                owner.active && current.current.owner === owner;
-              const close = () =>
-                setDraft({
-                  owner,
-                  group,
-                  turnUser,
-                  answers: next,
-                  closed: true,
-                });
-              let delivered = false;
-              const sent = await owner.send(
-                { text: input, attachments: [] },
-                () => {
-                  delivered = true;
-                  if (ownsDraft()) close();
-                },
-              );
-              if (delivered || !ownsDraft()) return;
-              if (!sent) {
-                // A failed chat attempt may already have appended the user's wire message.
-                // Preserve the last card only while that attempt is still the latest input.
-                setDraft({
-                  owner,
-                  group,
-                  turnUser,
-                  answers,
-                  failedInput: input,
-                });
-                throw new Error();
-              }
-              close();
+              await deliver(next);
             } finally {
-              lock.current = false;
+              owner.locked = false;
             }
           },
         };
   const messages = summarizeMessages(chat.messages, locale, config);
   tagData(monitoring, messages, readData(monitoring, [chat.messages]));
-  return {
-    interaction,
-    messages,
-  };
+  return { interaction: confirmation ?? interaction, messages };
 }

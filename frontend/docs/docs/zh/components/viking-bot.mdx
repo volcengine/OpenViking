@@ -348,12 +348,13 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotQuickInput
 
-| 参数   | 说明                 | 类型        | 默认值 |
-| ------ | -------------------- | ----------- | ------ |
-| id     | 快捷输入的唯一标识   | `string`    | 必填   |
-| label  | 按钮文案             | `string`    | 必填   |
-| prompt | 点击后填入草稿的文本 | `string`    | 必填   |
-| icon   | 显示在文案前的图标   | `ReactNode` | -      |
+| 参数        | 说明                       | 类型        | 默认值 |
+| ----------- | -------------------------- | ----------- | ------ |
+| id          | 快捷输入的唯一标识         | `string`    | 必填   |
+| label       | 按钮文案                   | `string`    | 必填   |
+| prompt      | 点击后填入草稿的文本       | `string`    | 必填   |
+| icon        | 显示在文案前的图标         | `ReactNode` | -      |
+| description | 悬停或键盘聚焦时显示的说明 | `string`    | -      |
 
 ### VikingBotReferences
 
@@ -616,6 +617,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | options          | 选项；必须选中其中一项（或填写「其他」）才能提交，未完成时显示校验提示            | `readonly VikingBotInteractionOption[]`                                                                                                                                          | 必填    |
 | question         | 问题文案                                                                          | `ReactNode`                                                                                                                                                                      | -       |
 | allowCustomInput | 自定义答案；onOpen 由宿主接管选择，directoryPicker 复用内置目录弹窗，否则内联输入 | `boolean \| { placeholder?: string; open?: boolean; onOpen?: (context: VikingBotInteractionCustomInputContext) => void; directoryPicker?: VikingBotInteractionDirectoryPicker }` | `false` |
+| initialValue     | 与选项匹配时显示为初始选中值                                                      | `string`                                                                                                                                                                         | -       |
 
 #### text 文本输入
 

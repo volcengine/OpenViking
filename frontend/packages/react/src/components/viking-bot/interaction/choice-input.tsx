@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Tooltip } from '../../../shared/primitives/tooltip/tooltip.js';
 import { Radio } from '../../../shared/primitives/radio/radio.js';
 import { CustomChoiceInput } from './custom-choice-input.js';
 import type { VikingBotInteractionFieldContext } from './field-types.js';
@@ -12,6 +13,7 @@ interface Props {
   request: Extract<VikingBotInteractionRequest, { kind: 'choice' | 'repair' }>;
   value?: string;
   selectedIcon?: ReactNode;
+  optionTooltip?: (value: string) => string;
   labels: InteractionLabels;
   locale: Locale;
   disabled: boolean;
@@ -25,6 +27,7 @@ export function ChoiceInput({
   controlProps,
   value,
   selectedIcon,
+  optionTooltip,
   labels,
   locale,
   disabled,
@@ -53,37 +56,58 @@ export function ChoiceInput({
         controlProps?.['aria-describedby'] ?? (invalid ? errorId : undefined)
       }
     >
-      {options.map((option, index) => (
-        <Radio
-          key={option.value}
-          name={id}
-          value={option.value}
-          checked={!custom && value === option.value}
-          disabled={disabled}
-          className="ov-viking-bot__interaction-option"
-          onChange={() => {
-            setCustom(false);
-            onChange(option.value);
-          }}
-        >
-          <span className="ov-viking-bot__interaction-index" aria-hidden="true">
-            {selectedIcon && !custom && value === option.value
-              ? selectedIcon
-              : index + 1}
-          </span>
-          <span className="ov-viking-bot__interaction-option-content">
-            <span>{option.label}</span>
-            {option.description ? (
-              <span className="ov-viking-bot__interaction-description">
-                {option.description}
+      {options.map((option, index) => {
+        const tooltip = optionTooltip?.(option.value);
+        const radio = (
+          <Radio
+            key={option.value}
+            name={id}
+            value={option.value}
+            checked={!custom && value === option.value}
+            disabled={disabled}
+            className="ov-viking-bot__interaction-option"
+            onChange={() => {
+              setCustom(false);
+              onChange(option.value);
+            }}
+          >
+            <span
+              className="ov-viking-bot__interaction-index"
+              aria-hidden="true"
+            >
+              {selectedIcon && !custom && value === option.value
+                ? selectedIcon
+                : index + 1}
+            </span>
+            <span className="ov-viking-bot__interaction-option-content">
+              <span
+                className={
+                  tooltip ? 'ov-viking-bot__interaction-path' : undefined
+                }
+              >
+                {option.label}
               </span>
-            ) : null}
-            {'code' in option && option.code ? (
-              <code>{option.code}</code>
-            ) : null}
-          </span>
-        </Radio>
-      ))}
+              {option.description ? (
+                <span className="ov-viking-bot__interaction-description">
+                  {option.description}
+                </span>
+              ) : null}
+              {'code' in option && option.code ? (
+                <code>{option.code}</code>
+              ) : null}
+            </span>
+          </Radio>
+        );
+        return tooltip ? (
+          <Tooltip key={option.value} content={tooltip}>
+            <div className="ov-viking-bot__interaction-path-option">
+              {radio}
+            </div>
+          </Tooltip>
+        ) : (
+          radio
+        );
+      })}
       {allowCustom ? (
         <CustomChoiceInput
           key={String(disabled)}

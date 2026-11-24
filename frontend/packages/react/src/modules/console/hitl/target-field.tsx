@@ -29,6 +29,7 @@ export function TargetField({
         allowCustomInput: { placeholder },
       }}
       value={field.value}
+      optionTooltip={formatCompileUriLabel}
       labels={{ ...resolveInteractionLabels(locale), other: placeholder }}
       locale={locale}
       disabled={field.disabled}

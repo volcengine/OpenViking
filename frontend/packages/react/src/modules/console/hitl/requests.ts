@@ -29,11 +29,15 @@ export function builtinRequest(
     }));
     if (new Set(values.map((item) => item.value)).size !== values.length)
       return;
+    const suggestion = skill
+      ? undefined
+      : values.find(({ value }) => value === p.suggested_value)?.value;
     return {
       kind: 'choice',
       question,
       options: values,
       allowCustomInput: skill,
+      ...(suggestion === undefined ? {} : { initialValue: suggestion }),
     };
   }
   if (

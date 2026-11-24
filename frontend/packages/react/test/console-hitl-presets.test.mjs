@@ -10,7 +10,7 @@ const outputType = card('compile_output_type', 'Output type', {
 });
 const schedule = card('compile_schedule', 'Schedule');
 
-test('a supported report skill determines the output without enabling a schedule', async () => {
+test('a supported report skill leaves an explicit output question for the user', async () => {
   const skillUri = 'viking://system/skills/daily-report/SKILL.md';
   const view = await mountHitl([
     outputType,
@@ -22,9 +22,31 @@ test('a supported report skill determines the output without enabling a schedule
   try {
     await view.start();
     assert.equal(view.props.interaction.request.kind, 'choice');
+    assert.equal(
+      view.container.querySelector('input[value=markdown]').checked,
+      false,
+    );
+    assert.equal(
+      view.container.querySelector('[aria-current=step]').textContent,
+      '1 / 3',
+    );
+    assert.equal(
+      view.container.querySelector('button[type=submit]').textContent,
+      '下一步',
+    );
+    await click(view.container.querySelector('input[value=markdown]'));
+    await submit(view);
+    assert.equal(
+      view.container.querySelector('[aria-current=step]').textContent,
+      '2 / 3',
+    );
     await click(view.container.querySelector(`input[value="${skillUri}"]`));
     await submit(view);
     assert.equal(view.props.interaction.request.kind, 'schedule');
+    assert.equal(
+      view.container.querySelector('button[type=submit]').textContent,
+      '提交',
+    );
     assert.equal(
       view.container.querySelector('input[value=none]').checked,
       true,

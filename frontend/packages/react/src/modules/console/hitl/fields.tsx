@@ -20,6 +20,7 @@ import {
   overlapsSource,
   parseCompileUri,
   parseSourceUris,
+  validCompileName,
 } from './uris.js';
 
 function FieldError({
@@ -43,16 +44,6 @@ function SourceUriHint() {
   return hitlLabels(useLocale()).sourceUriHint;
 }
 
-function validCompileName(name: string) {
-  if (name !== name.trim()) return false;
-  return (
-    /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(name) ||
-    /^[A-Za-z0-9_〇\p{Unified_Ideograph}][A-Za-z0-9_〇\p{Unified_Ideograph}-]{0,31}$/u.test(
-      name,
-    )
-  );
-}
-
 function cardFields(
   card: HitlCard,
   scope: CompilePickerScope,
@@ -72,7 +63,12 @@ function cardFields(
   const required = uri || cardType === 'compile_name';
   const hideFieldLabel =
     request.kind === 'text' &&
-    ['compile_source', 'compile_name', 'compile_target'].includes(cardType);
+    [
+      'compile_source',
+      'compile_name',
+      'compile_target',
+      'compile_instruction',
+    ].includes(cardType);
   const render =
     cardType === 'compile_source' && request.kind === 'text' && scope.client
       ? (field: VikingBotInteractionFieldContext<string>) => (

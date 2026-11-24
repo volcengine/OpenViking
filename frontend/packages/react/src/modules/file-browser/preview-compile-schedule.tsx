@@ -119,3 +119,20 @@ export function PreviewCompileSchedule({
     </div>
   );
 }
+
+export function compileScheduleFields(schedule: CompileScheduleDraft) {
+  const { mode, time, weekday } = schedule;
+  const [hour, minute] = time.split(':').map(Number);
+  return {
+    auto_update: mode !== 'none',
+    update_schedule:
+      mode === 'none'
+        ? null
+        : {
+            frequency: mode,
+            hour: hour!,
+            minute: minute!,
+            ...(mode === 'weekly' ? { weekday } : {}),
+          },
+  };
+}

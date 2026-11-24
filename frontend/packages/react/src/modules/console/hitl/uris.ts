@@ -106,3 +106,13 @@ export function overlapsSource(
     );
   });
 }
+
+export function validCompileName(name: string) {
+  if (name !== name.trim()) return false;
+  return (
+    /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(name) ||
+    /^[A-Za-z0-9_〇\p{Unified_Ideograph}][A-Za-z0-9_〇\p{Unified_Ideograph}-]{0,31}$/u.test(
+      name,
+    )
+  );
+}

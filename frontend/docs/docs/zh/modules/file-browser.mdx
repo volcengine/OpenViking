@@ -376,7 +376,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | failed             | 操作失败的提示前缀                 | `string`                     | `'操作失败。'`                               |
 | sources            | 源目录选择器的标签                 | `string`                     | `'源目录'`                                   |
 | skill              | 编译 Skill 选择器的标签            | `string`                     | `'编译 Skill'`                               |
-| instruction        | 兼容字段，当前弹窗不提供指令编辑   | `string`                     | `'指令'`                                     |
+| instruction        | 编译配置的补充指令                 | `string`                     | `'指令'`                                     |
 | automatic          | 兼容文案；自动更新由频次选项控制   | `string`                     | `'自动更新'`                                 |
 | schedule           | 更新策略字段的标签                 | `string`                     | `'更新时间'`                                 |
 | noSchedule         | 「不更新」选项                     | `string`                     | `'不更新'`                                   |
@@ -568,7 +568,7 @@ await browserRef.current?.openResource(directoryUri);
 - 文件、目录与历史预览的路径复制使用相同反馈：成功后按钮变为勾号，并在上方显示带绿色勾号的提示气泡，1.5 秒后恢复；失败时显示错误提示。
 - 编辑时隐藏「预览 / 源码」切换，保留保存、取消以及当前文件可用的「版本历史」「复制内容」和「复制路径」。
 - 显隐开关只控制默认按钮是否显示，不改变能力：`previewSlots` 上下文里的 `canDelete`、`deleteFile()` 和编辑方法仍然可用。
-- 编译配置展示源目录、目标目录、编译 Skill 和更新时间，分别通过目录选择器、Skill 选择器和更新策略表单编辑，修改从后续任务生效。
+- 编译配置展示源目录、目标目录、编译 Skill、补充指令和更新时间。可编辑的字段包括源目录、Skill、补充指令和更新计划，修改从后续任务生效。
 - `readOnly` 禁止所有写入，包括保存编译配置；开启 `acl` 后，编辑、导入和保存编译配置要求 `write` 或 `manage`，删除要求 `manage`。
 - 复制内容、下载、导出、查看历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
 - 没有开启 `acl`，或资源不在 `viking://resources/` 下时，区块不探测权限，由服务端鉴权。
@@ -578,7 +578,7 @@ await browserRef.current?.openResource(directoryUri);
 - 在 `error.details` 中，`reason: "path_not_found"` 和 `deleted_file: true` 表示所选提交中该路径缺失，且首个父提交中同一精确路径存在文件。`deleted_file: false` 时仍显示读取错误。
 - 满足上述 404 条件时，如果缺少 `error.details.deleted_file`，且 `error.details.reason` 缺失或为 `"path_not_found"`，FileBrowser 会以所选提交为起点（`branch`）、以文件 URI 为过滤条件（`paths`）查询 `/log`。匹配到所选提交后，再调用 `GET /api/v1/snapshot/diff`，确认从 `parents[0]` 到所选提交的变更类型为 `deleted`。`/log` 按精确路径与 `parents[0]` 中的树条目比较，合并提交也只比较首个父提交。若 `reason` 为其他值，或 `deleted_file` 存在但不是布尔值，界面仍显示读取错误。
 - 原生 `/diff` 支持 UTF-8 文本，每侧输入最多 10 MiB、100,000 行，生成的差异最多 20 MiB。回退流程无法确认删除时，历史视图显示读取错误。
-- 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存源目录、Skill 和更新计划，目标目录只读，已有指令和其他执行参数保持不变。同一目录关联多个配置时通过页签切换查看和修改，默认展示首个配置；只有一个配置时不显示页签；查询和更新通过 `compile_name` 定位。当前用户没有关联配置时展示空状态。
+- 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存源目录、Skill、补充指令和更新计划。目标目录只读，编辑时保留其他执行参数。同一目录关联多个配置时通过页签切换查看和修改，默认展示首个配置；只有一个配置时不显示页签；查询和更新通过 `compile_name` 定位。当前用户没有关联配置时展示空状态。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
 - 导出 .ovpack：仅目录可用，调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
 - 删除：确认后调用 `DELETE /api/v1/fs?uri=...&wait=true`；失败时保留确认框并允许重试，成功后选中父目录并刷新目录树。只能删除文件，不能删除目录。

@@ -146,3 +146,57 @@ test('generated suggestions reuse a current-user alias for an existing encoded t
     await view.unmount();
   }
 });
+
+test('an explicit output suggestion is selected only when present and a different answer refreshes the target', async () => {
+  const options = [
+    { value: 'wiki', label: 'Wiki' },
+    { value: 'report', label: 'Report' },
+  ];
+  const view = await mountHitl([
+    card('compile_target', 'Target', {
+      suggested_value: 'viking://resources/notes_wiki',
+    }),
+    card('compile_name', 'Name', { suggested_value: 'notes' }),
+    card('compile_output_type', 'Output', { options, suggested_value: 'wiki' }),
+  ]);
+  try {
+    await view.start();
+    await submit(view);
+    assert.equal(
+      view.container.querySelector('input[value=wiki]').checked,
+      true,
+    );
+    await click(view.container.querySelector('input[value=report]'));
+    await submit(view);
+    assert.equal(
+      view.container.querySelector(
+        'input[value="viking://resources/notes_wiki"]',
+      ) === null,
+      true,
+    );
+    assert.equal(
+      view.container.querySelector(
+        'input[value="viking://resources/notes_report"]',
+      ).checked,
+      true,
+    );
+  } finally {
+    await view.unmount();
+  }
+
+  const invalid = await mountHitl([
+    card('compile_output_type', 'Output', {
+      options,
+      suggested_value: 'not-offered',
+    }),
+  ]);
+  try {
+    await invalid.start();
+    assert.equal(
+      invalid.container.querySelectorAll('input[type=radio]:checked').length,
+      0,
+    );
+  } finally {
+    await invalid.unmount();
+  }
+});

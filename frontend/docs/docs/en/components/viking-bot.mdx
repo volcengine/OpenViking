@@ -348,12 +348,13 @@ Return `false` or reject to keep the session action dialog open on failure.
 
 ### VikingBotQuickInput
 
-| Property | Description                          | Type        | Default  |
-| -------- | ------------------------------------ | ----------- | -------- |
-| id       | Unique identifier of the quick input | `string`    | Required |
-| label    | Button text                          | `string`    | Required |
-| prompt   | Text filled into the draft on click  | `string`    | Required |
-| icon     | Icon shown before the text           | `ReactNode` | -        |
+| Property    | Description                                  | Type        | Default  |
+| ----------- | -------------------------------------------- | ----------- | -------- |
+| id          | Unique identifier of the quick input         | `string`    | Required |
+| label       | Button text                                  | `string`    | Required |
+| prompt      | Text filled into the draft on click          | `string`    | Required |
+| icon        | Icon shown before the text                   | `ReactNode` | -        |
+| description | Description shown on hover or keyboard focus | `string`    | -        |
 
 ### VikingBotReferences
 
@@ -610,6 +611,7 @@ Forward `controlProps` to the focusable element and report changes through `onCh
 | options          | Options; one of them (or the "Other" text) must be chosen before submitting, incomplete answers display a validation message      | `readonly VikingBotInteractionOption[]`                                                                                                                                          | Required |
 | question         | Question text                                                                                                                     | `ReactNode`                                                                                                                                                                      | -        |
 | allowCustomInput | Custom answer; onOpen delegates selection to the host, directoryPicker reuses the built-in dialog, otherwise uses an inline input | `boolean \| { placeholder?: string; open?: boolean; onOpen?: (context: VikingBotInteractionCustomInputContext) => void; directoryPicker?: VikingBotInteractionDirectoryPicker }` | `false`  |
+| initialValue     | Initially selected value when it matches an option                                                                                | `string`                                                                                                                                                                         | -        |
 
 #### text
 

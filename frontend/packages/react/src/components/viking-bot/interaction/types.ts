@@ -93,6 +93,8 @@ export type VikingBotInteractionSingleRequest =
       question?: ReactNode;
       /** 选项。Options. */
       options: readonly VikingBotInteractionOption[];
+      /** Initially selected option value, if present among the options. */
+      initialValue?: string;
       /** 自定义答案；提供目录数据时打开选择弹窗，否则使用内联输入。
        * Custom answer; directory data enables a picker, otherwise uses inline input. */
       allowCustomInput?:

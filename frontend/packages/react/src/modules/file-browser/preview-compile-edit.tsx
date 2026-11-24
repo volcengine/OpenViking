@@ -1,15 +1,17 @@
 import { useToast } from '../../shared/primitives/toast/use-toast.js';
 import { PreviewLoading, PreviewMutationError } from './preview-query-state.js';
 import { useRef, useState } from 'react';
-import { OV_PATHS } from '../../client/paths.js';
+import { updateCompileConfig } from './preview-native.js';
 import { PreviewCompilePicker } from './preview-compile-picker.js';
 import type { ContextPickerEntry } from '../../components/context-picker/types.js';
 import { Modal } from '../../shared/primitives/modal/modal.js';
+import { TextArea } from '../../shared/primitives/input/input.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { usePreviewMutation } from './use-preview-mutation.js';
 import { displayNameFromUri } from '../../shared/directory-tree/rows.js';
 import {
   type CompileScheduleDraft,
+  compileScheduleFields,
   PreviewCompileSchedule,
 } from './preview-compile-schedule.js';
 import type { CompileField } from './preview-compile-config.js';
@@ -43,6 +45,7 @@ export function PreviewCompileEdit({
     weekday: initialSchedule?.weekday,
   });
   const [invalidWeekday, setInvalidWeekday] = useState(false);
+  const [instruction, setInstruction] = useState(initial.instruction ?? '');
   const [selection, setSelection] = useState<ContextPickerEntry[]>(
     (field === 'from' ? initial.from : [initial.skill]).map((uri) => ({
       uri,
@@ -60,22 +63,10 @@ export function PreviewCompileEdit({
       ...(field === 'skill'
         ? { skill: items[0]!.uri.replace(/\/SKILL\.md$/, '') }
         : {}),
-      ...(field === 'update_schedule'
-        ? {
-            auto_update: schedule.mode !== 'none',
-            update_schedule:
-              schedule.mode === 'none'
-                ? null
-                : {
-                    frequency: schedule.mode,
-                    hour: Number(schedule.time.split(':')[0]),
-                    minute: Number(schedule.time.split(':')[1]),
-                    ...(schedule.mode === 'weekly'
-                      ? { weekday: schedule.weekday }
-                      : {}),
-                  },
-          }
+      ...(field === 'instruction'
+        ? { instruction: instruction.trim() || null }
         : {}),
+      ...(field === 'update_schedule' ? compileScheduleFields(schedule) : {}),
     };
     if (!next.from.length || !next.skill.trim()) {
       toast.warning({
@@ -86,23 +77,7 @@ export function PreviewCompileEdit({
     }
     toast.clear();
     void mutation.run(
-      (api, options) =>
-        api.request({
-          method: 'POST',
-          path: OV_PATHS.compileConfigUpdate,
-          body: {
-            ...(next.compile_name
-              ? { compile_name: next.compile_name, args: next.args }
-              : {}),
-            to: next.to,
-            from: next.from,
-            skill: next.skill,
-            instruction: next.instruction,
-            auto_update: next.auto_update,
-            update_schedule: next.update_schedule,
-          },
-          options,
-        }),
+      (api, options) => updateCompileConfig(api, options, next),
       () => onSaved(next),
       'file_browser_compile_config_save',
     );
@@ -112,7 +87,9 @@ export function PreviewCompileEdit({
       ? text.selectSources
       : field === 'skill'
         ? text.selectSkill
-        : text.editSchedule;
+        : field === 'instruction'
+          ? text.instruction
+          : text.editSchedule;
   const error = (
     <PreviewMutationError
       error={mutation.error}
@@ -124,7 +101,7 @@ export function PreviewCompileEdit({
     <>
       {' '}
       {toastHolder}{' '}
-      {field === 'update_schedule' ? (
+      {field === 'update_schedule' || field === 'instruction' ? (
         <Modal
           open
           title={title}
@@ -137,30 +114,48 @@ export function PreviewCompileEdit({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (schedule.mode === 'weekly' && !schedule.weekday) {
+              if (
+                field === 'update_schedule' &&
+                schedule.mode === 'weekly' &&
+                !schedule.weekday
+              ) {
                 setInvalidWeekday(true);
                 return;
               }
               save();
             }}
           >
-            <fieldset disabled={mutation.pending}>
-              <legend className="ov-compile-config__legend">
-                {text.schedule}
-              </legend>
-              <PreviewCompileSchedule
-                value={schedule}
+            {field === 'instruction' ? (
+              <TextArea
+                aria-label={text.instruction}
+                data-autofocus
+                value={instruction}
+                rows={4}
                 disabled={mutation.pending}
-                invalid={invalidWeekday}
-                text={text}
-                locale={props.locale}
-                onChange={(value) => {
-                  setSchedule(value);
-                  setInvalidWeekday(false);
+                onChange={(event) => {
+                  setInstruction(event.target.value);
                   mutation.reset();
                 }}
               />
-            </fieldset>
+            ) : (
+              <fieldset disabled={mutation.pending}>
+                <legend className="ov-compile-config__legend">
+                  {text.schedule}
+                </legend>
+                <PreviewCompileSchedule
+                  value={schedule}
+                  disabled={mutation.pending}
+                  invalid={invalidWeekday}
+                  text={text}
+                  locale={props.locale}
+                  onChange={(value) => {
+                    setSchedule(value);
+                    setInvalidWeekday(false);
+                    mutation.reset();
+                  }}
+                />
+              </fieldset>
+            )}
             {error}
             <div className="ov-file-browser-workflow__actions">
               <Button disabled={mutation.pending} onClick={onCancel}>

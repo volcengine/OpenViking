@@ -78,10 +78,12 @@ const messages = {
   compileQuickInputs: {
     createWiki: {
       label: 'Wiki',
+      description: 'Compile selected source directories into a Wiki.',
       prompt: 'Organize the files in the selected directory into a Wiki.',
     },
     dailyReport: {
       label: 'Schedule daily report',
+      description: 'Compile selected source directories into a daily report.',
       prompt:
         'Generate a daily report from the selected directory and schedule updates',
     },

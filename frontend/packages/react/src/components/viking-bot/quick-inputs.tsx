@@ -1,3 +1,4 @@
+import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import type { VikingBotQuickInput } from './capabilities.js';
 
 export function QuickInputs({
@@ -12,19 +13,32 @@ export function QuickInputs({
   if (!items?.length) return null;
   return (
     <div className="ov-viking-bot__quick-inputs">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          disabled={disabled}
-          onClick={() => onSelect(item)}
-        >
-          {item.icon && (
-            <span className="ov-viking-bot__quick-input-icon">{item.icon}</span>
-          )}
-          <span className="ov-viking-bot__quick-input-label">{item.label}</span>
-        </button>
-      ))}
+      {items.map((item) => {
+        const trigger = (
+          <button
+            key={item.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onSelect(item)}
+          >
+            {item.icon && (
+              <span className="ov-viking-bot__quick-input-icon">
+                {item.icon}
+              </span>
+            )}
+            <span className="ov-viking-bot__quick-input-label">
+              {item.label}
+            </span>
+          </button>
+        );
+        return item.description ? (
+          <Tooltip key={item.id} content={item.description}>
+            {trigger}
+          </Tooltip>
+        ) : (
+          trigger
+        );
+      })}
     </div>
   );
 }

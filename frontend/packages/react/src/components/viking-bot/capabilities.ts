@@ -7,6 +7,8 @@ export interface VikingBotQuickInput {
   label: string;
   prompt: string;
   icon?: ReactNode;
+  /** Secondary text shown when the shortcut is hovered or focused. */
+  description?: string;
 }
 
 /** A selected reference, kept separately from the editable text. */
