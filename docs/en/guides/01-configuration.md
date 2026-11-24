@@ -652,9 +652,9 @@ Get your API key at https://aistudio.google.com/apikey
 |-------|-----------|------------|-------|
 | `text-embedding-v3` | 1024 | text | Optimized for Chinese |
 | `text-embedding-v4` | 1024 | text | Optimized for Chinese |
-| `tongyi-embedding-vision-plus` | 1152 | multimodal | Supports fusion via `enable_fusion` |
+| `tongyi-embedding-vision-plus` | 1152 | multimodal | Independent vectors only |
 | `tongyi-embedding-vision-flash` | 768 | multimodal | Faster, lower cost |
-| `qwen3-vl-embedding` | 2560 | multimodal | Text + image + video |
+| `qwen3-vl-embedding` | 2560 | multimodal | Text + image + video; supports fusion via `enable_fusion` |
 | `qwen2.5-vl-embedding` | 1024 | multimodal | Text + image + video |
 
 **Input and multimodal parameters**:
@@ -662,7 +662,7 @@ Get your API key at https://aistudio.google.com/apikey
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input` | str | `"multimodal"` | Embedding mode: `"text"` or `"multimodal"` |
-| `enable_fusion` | bool | `false` | Enable fusion vectors for `tongyi-embedding-vision-*` models |
+| `enable_fusion` | bool or null | `null` | Request a fused vector for `qwen3-vl-embedding`. OpenViking also enables fusion automatically for multi-part inputs to this model. See the [DashScope API reference](https://www.alibabacloud.com/help/en/model-studio/multimodal-embedding-api-reference). |
 | `res_level` | int | `2` | Image resolution level (1=high, 2=medium, 3=low) |
 | `max_video_frames` | int | `16` | Maximum video frames to embed |
 

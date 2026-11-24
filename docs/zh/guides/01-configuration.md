@@ -644,9 +644,9 @@ embedding 模型，除非 provider 明确保证两个向量空间兼容，否则
 |------|------|----------|------|
 | `text-embedding-v3` | 1024 | text | 针对中文优化 |
 | `text-embedding-v4` | 1024 | text | 针对中文优化 |
-| `tongyi-embedding-vision-plus` | 1152 | multimodal | 支持通过 `enable_fusion` 启用融合向量 |
+| `tongyi-embedding-vision-plus` | 1152 | multimodal | 仅支持独立向量 |
 | `tongyi-embedding-vision-flash` | 768 | multimodal | 更快，成本更低 |
-| `qwen3-vl-embedding` | 2560 | multimodal | 文本 + 图像 + 视频 |
+| `qwen3-vl-embedding` | 2560 | multimodal | 文本 + 图像 + 视频；支持通过 `enable_fusion` 启用融合向量 |
 | `qwen2.5-vl-embedding` | 1024 | multimodal | 文本 + 图像 + 视频 |
 
 **输入和多模态参数**:
@@ -654,7 +654,7 @@ embedding 模型，除非 provider 明确保证两个向量空间兼容，否则
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `input` | str | `"multimodal"` | 嵌入模式：`"text"` 或 `"multimodal"` |
-| `enable_fusion` | bool | `false` | 为 `tongyi-embedding-vision-*` 模型启用融合向量 |
+| `enable_fusion` | bool 或 null | `null` | 为 `qwen3-vl-embedding` 请求融合向量。向此模型传入多段内容时，OpenViking 也会自动启用融合。参见 [DashScope API 参考](https://help.aliyun.com/zh/model-studio/multimodal-embedding-api-reference)。 |
 | `res_level` | int | `2` | 图像分辨率级别（1=高，2=中，3=低） |
 | `max_video_frames` | int | `16` | 视频最大嵌入帧数 |
 
