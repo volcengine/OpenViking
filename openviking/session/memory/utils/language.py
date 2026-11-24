@@ -21,6 +21,7 @@ _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
 _PRIMARY_LANGUAGES = {"zh-CN", "en"}
+_LATIN_WORD_RE = re.compile(r"\b[A-Za-z\u00c0-\u024f]+\b")
 # Bare import paths are machine tokens too: repeated .com domains otherwise
 # count as the Portuguese stopword "com" in code skeletons.
 _URI_LANGUAGE_NOISE_RE = re.compile(
@@ -291,8 +292,10 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
     if len(words) < 3:
         return "en"
 
+    # Keep the length guards, but do not score identifier fragments (e41 -> "e").
+    language_words = _LATIN_WORD_RE.findall(text.lower())
     stopword_scores = {
-        lang: sum(1 for word in words if word in stopwords)
+        lang: sum(1 for word in language_words if word in stopwords)
         for lang, stopwords in _LATIN_STOPWORDS.items()
     }
     scores = dict(stopword_scores)
@@ -334,7 +337,8 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
         "ko": len(re.findall(r"[\uac00-\ud7af]", user_text)),
         "ru": len(re.findall(r"[\u0400-\u04ff]", user_text)),
         "ar": len(re.findall(r"[\u0600-\u06ff]", user_text)),
-        "latin": len(re.findall(r"[A-Za-z\u00c0-\u024f]", user_text)),
+        # Count Latin words, not the letter fragments of identifiers or field_names.
+        "latin": sum(len(word) for word in _LATIN_WORD_RE.findall(user_text)),
     }
     signal_total = sum(counts.values())
     if signal_total == 0:

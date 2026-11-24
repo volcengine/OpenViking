@@ -4,6 +4,8 @@
 Test that provider instruction correctly instructs LLM.
 """
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -407,3 +409,38 @@ def test_session_provider_empty_messages_still_uses_environment_fallback(monkeyp
     provider = SessionExtractContextProvider(messages=[])
 
     assert provider.get_output_language() == "zh-CN"
+
+
+@pytest.mark.parametrize("fallback", ["en", "zh-CN", "pt"])
+@pytest.mark.parametrize(("override", "expected"), [("", "zh-CN"), ("en", "en")])
+@pytest.mark.parametrize("xml_markup", [True, False])
+def test_machine_text_does_not_change_memory_language_or_context(
+    monkeypatch, fallback, override, expected, xml_markup
+):
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language._resolve_system_fallback_language",
+        lambda _: fallback,
+    )
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "machine_context_language.json").read_text()
+    )
+    texts = [fixture["environment_context"], fixture["delegation"]]
+    if not xml_markup:
+        texts = [text.replace("<", " ").replace(">", " ") for text in texts]
+    messages = [
+        Message(id=f"m{i}", role="user", parts=[TextPart(text)], created_at="2026-11-24T00:00:00Z")
+        for i, text in enumerate(texts)
+    ]
+    before = [message.to_dict() for message in messages]
+
+    provider = SessionExtractContextProvider(messages=messages, output_language_override=override)
+
+    assert provider.get_output_language() == expected
+    assert f"All memory content MUST be written in {expected}." in provider.instruction()
+    assert [message.to_dict() for message in messages] == before
+    assert [message.to_dict() for message in provider.messages] == before
+    chunks = [message.content for message in provider.get_extract_context().messages]
+    assert "".join(chunks) == "".join(texts)
+    assert provider.get_conversation_text() == "\n".join(texts)
+    prompt = provider._build_conversation_message()["content"]
+    assert all(chunk in prompt for chunk in chunks)
