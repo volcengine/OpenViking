@@ -25,6 +25,7 @@ from openviking.session.checkpoints import (
 )
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.session import Session, _ArchiveSummaryResult
+from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InternalError, UnavailableError
 
@@ -1638,6 +1639,76 @@ async def test_turn_budget_commit_archives_complete_old_turn_and_keeps_latest_us
     assert [message.content for message in session.messages] == ["latest query", "latest answer"]
     assert result["estimated_active_tokens"] > 0
     assert result["budget_exceeded"] is False
+
+
+@pytest.mark.parametrize(
+    ("reply", "budget", "retained_reply"),
+    [
+        pytest.param("OK", 120, "OK", id="over-budget"),
+        pytest.param("OK", 240, "OK", id="within-budget"),
+        pytest.param("A" * 800, 120, "AAAA", id="truncated"),
+    ],
+)
+async def test_turn_budget_unchanged_tail(client, monkeypatch, reply, budget, retained_reply):
+    session = client(session_id="turn_budget_unchanged_tail")
+    await session.ensure_exists()
+    await session.add_message_async("user", [TextPart("u" * 800)])
+    await session.add_message_async("assistant", [TextPart(reply)])
+    live_uri = f"{session.uri}/messages.jsonl"
+    original = await session._viking_fs.read_file_bytes(live_uri, ctx=session.ctx)
+
+    queue = get_queue_manager()
+    enqueue = AsyncMock(wraps=queue.enqueue)
+    monkeypatch.setattr(queue, "enqueue", enqueue)
+    options = {
+        "retention_mode": "turn_budget",
+        "keep_recent_turn_count": 1,
+        "retained_message_token_budget": budget,
+        "memory_policy": {
+            "working_memory": {"enabled": False},
+            "self": {"enabled": False},
+            "peer": {"enabled": False},
+        },
+    }
+
+    first = await session.commit_async(**options)
+    first_live = await session._viking_fs.read_file_bytes(live_uri, ctx=session.ctx)
+    assert [message.content for message in session.messages] == ["u" * 800, retained_reply]
+    fresh = client(session_id=session.session_id)
+    await fresh.load()
+    second = await fresh.commit_async(**options)
+
+    truncated = reply != retained_reply
+    assert await fresh._viking_fs.read_file_bytes(live_uri, ctx=fresh.ctx) == first_live
+    if not truncated:
+        assert first_live == original
+    assert [first["status"], second["status"]] == [
+        "accepted" if truncated else "skipped",
+        "skipped",
+    ]
+    assert first["budget_exceeded"] is second["budget_exceeded"] is (budget == 120)
+    assert first["estimated_active_tokens"] == second["estimated_active_tokens"] == 201
+    archives = await fresh._archives.scan_states()
+    commit_calls = [
+        call for call in enqueue.await_args_list if call.args[0] == QueueManager.SESSION_COMMIT
+    ]
+    for result in (second,) if truncated else (first, second):
+        assert result["task_id"] is None
+        assert result["archive_uri"] is None
+        assert result["archived"] is False
+    if truncated:
+        assert first["task_id"] is not None
+        assert [archive.archive_uri for archive in archives] == [first["archive_uri"]]
+        assert (
+            await fresh._viking_fs.read_file_bytes(
+                f"{first['archive_uri']}/messages.jsonl", ctx=fresh.ctx
+            )
+            == original
+        )
+        assert [call.args[1]["task_id"] for call in commit_calls] == [first["task_id"]]
+    else:
+        assert archives == []
+        assert commit_calls == []
 
 
 async def test_concurrent_stale_session_instances_use_one_authoritative_phase1_snapshot(
