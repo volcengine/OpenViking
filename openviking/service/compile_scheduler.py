@@ -158,18 +158,17 @@ class CompileScheduler:
 
     async def scan_once(self, now: Optional[datetime] = None) -> None:
         now = now or datetime.now(TZ)
-        for account_id in await self._store.list_accounts():
-            async for compile_name, record in self._store.iter_records(account_id):
-                try:
-                    owner_user_id = record["execution_context"]["owner_user_id"]
-                    if is_due(record, now):
-                        await self.trigger_if_due(account_id, owner_user_id, compile_name, now)
-                    elif record["auto_update"]:
-                        await self.reschedule(account_id, owner_user_id, compile_name, record)
-                except Exception:
-                    logger.debug(
-                        "compile schedule check failed name_hash=%s", short_hash(str(compile_name))
-                    )
+        async for account_id, compile_name, record in self._store.list_configs():
+            try:
+                owner_user_id = record["execution_context"]["owner_user_id"]
+                if is_due(record, now):
+                    await self.trigger_if_due(account_id, owner_user_id, compile_name, now)
+                elif record["auto_update"]:
+                    await self.reschedule(account_id, owner_user_id, compile_name, record)
+            except Exception:
+                logger.debug(
+                    "compile schedule check failed name_hash=%s", short_hash(str(compile_name))
+                )
 
     async def reschedule(
         self,
@@ -230,7 +229,9 @@ class CompileScheduler:
         from openviking.service.compile_service import CompileRequest
 
         now = now or datetime.now(TZ)
-        async with self._store.edit(account_id, owner_user_id, compile_name) as record:
+        async with self._compile._require_lifecycle().edit_config(
+            account_id, owner_user_id, compile_name
+        ) as record:
             if not is_due(record, now):
                 await self.reschedule(
                     account_id, owner_user_id, compile_name, record, raise_on_error=True
@@ -323,7 +324,7 @@ class _ExpiryHandler:
             return CallbackResult(CallbackStatus.COMPLETED, "not_found")
         try:
             if (
-                await self._scheduler._store.get(
+                await self._scheduler._compile._require_lifecycle().get_config(
                     identity.account_id, identity.user_id, compile_name
                 )
                 is None

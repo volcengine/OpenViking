@@ -1411,6 +1411,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
 | `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
+| `compile_store` | object | Compile 配置和运行历史的存储后端 | `{"provider":"file"}` |
 
 
 ```json
@@ -1508,6 +1509,27 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 持久化恢复、事件历史、活跃任务去重、服务与用户隔离语义与 MySQL 一致。
 共享任务的进程应使用稳定且相同的 `service_name`。切换 provider 不会自动迁移
 已有任务；生产部署切换前需安排数据迁移。
+
+#### Compile store
+
+在 `ov.conf` 中设置 `storage.compile_store`。这项配置只影响已保存的 Compile
+配置和运行历史；Task/Work 存储独立配置。
+
+| `provider` | 部署方式 |
+|------------|----------|
+| `file`（默认） | 无需额外配置。 |
+| `mysql` | 安装 `openviking[mysql]`，启动前执行 `openviking/service/sql/compile_store_init.sql`。MySQL 5.7.44 使用 InnoDB，需配置 16 KiB 页、`DYNAMIC` 行格式并启用大索引前缀。 |
+| `postgres` | 安装 `openviking[postgres]`，启动前执行 `openviking/service/sql/compile_store_postgres_init.sql`。 |
+| `sqlite` | 安装 `openviking[sqlite]`，服务启动时自动建表。可通过 `params.path` 指定本地数据库路径，默认是 `<workspace>/compile_store/compile.db`。 |
+
+MySQL 和 PostgreSQL 按需配置 `params.host`、`params.port`、`params.user`、
+`params.password` 和 `params.database`，默认端口分别为 `3306` 和 `5432`。
+`params.table` 设置表前缀（默认 `ov_compile`），建表时使用相同前缀。前缀须以
+ASCII 字母开头，只含 ASCII 字母、数字或下划线；MySQL 最多 51 个字符，
+PostgreSQL 最多 47 个字符。共享 Compile 数据的实例须使用相同的数据库、表前缀和 `service_name`。
+
+切换后端不会自动迁移已有配置或历史。已有部署切换前应先停止 Compile 写入并迁移数据。
+初始化脚本和 SQLite 自动建表均不会升级已有 SQL 表。
 
 #### watch_store
 

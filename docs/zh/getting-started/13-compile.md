@@ -59,6 +59,8 @@ ov task status <cmp_task_id>
 
 直接传入 `ov compile --from … --to … --skill …` 的写法已弃用，仍可执行一次性全量编译。
 
+如需更换 Compile 的存储后端，参见[服务端配置](../guides/01-configuration.md#compile-store)。
+
 ## 打开正文
 
 ```bash

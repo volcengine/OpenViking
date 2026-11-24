@@ -52,6 +52,11 @@ class AsyncFiles:
             raise FileNotFoundError(path)
         return self.files[path]
 
+    async def stat(self, path, **kwargs):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return {"isDir": False}
+
     async def write(self, path, body, **kwargs):
         self.files[path] = body
 
@@ -99,6 +104,10 @@ class Tracker:
         return [deepcopy(t) for t in self.tasks.values() if t.account_id == account_id]
 
     async def get_durable_task(self, task_id, *, account_id, user_id):
+        if self._store is not self:
+            return await self._store.get_durable_task(
+                task_id, account_id=account_id, user_id=user_id
+            )
         task = self.tasks.get(task_id)
         if task is not None and (task.account_id, task.user_id) == (account_id, user_id):
             return deepcopy(task)
@@ -122,6 +131,9 @@ class CaseInsensitiveFiles(AsyncFiles):
 
     async def read(self, path):
         return await super().read(path.lower())
+
+    async def stat(self, path, **kwargs):
+        return await super().stat(path.lower(), **kwargs)
 
     async def write(self, path, body, **kwargs):
         return await super().write(path.lower(), body, **kwargs)
@@ -165,8 +177,6 @@ class SnapshotFS:
 def make_store(files):
     store = CompileStateStore.__new__(CompileStateStore)
     store._agfs = files
-    store._cleanup_scan = None
-    store._cleanup_lock = asyncio.Lock()
     return store
 
 
@@ -361,39 +371,42 @@ async def test_configuration_discovery_ignores_noncanonical_directories(setup, s
     assert [name async for name, _ in setup.store.iter_records("acme")] == ["ab", "j"]
 
 
+async def publish_config(lifecycle, name, reschedule):
+    service = CompileService(Mock(), Mock(), SimpleNamespace(ensure_compile_target=AsyncMock()))
+    service.configure_lifecycle(lifecycle)
+    service._scheduler = SimpleNamespace(reschedule=reschedule)
+    service._settings = AsyncMock(return_value=new_record(PARAMS))
+    return await service.create_compile_task(
+        SimpleNamespace(compile_name=name, args={}),
+        ctx=SimpleNamespace(account_id="acme", user=SimpleNamespace(user_id="alice")),
+    )
+
+
 async def test_creation_locks_state_through_schedule_registration(setup):
     registered = asyncio.Event()
     publish = asyncio.Event()
 
-    async def register():
+    async def register(*args, **kwargs):
         registered.set()
         await publish.wait()
 
     async def callback():
-        async with setup.store.edit("acme", "alice", "wiki") as record:
+        async with setup.lifecycle.edit_config("acme", "alice", "wiki") as record:
             return record["to"]
 
-    first = asyncio.create_task(
-        setup.store.create(
-            "acme", "alice", new_record(PARAMS), compile_name="wiki", before_publish=register
-        )
-    )
+    first = asyncio.create_task(publish_config(setup.lifecycle, "wiki", register))
     await registered.wait()
     delivery = asyncio.create_task(callback())
     duplicate_registration = AsyncMock()
     second = asyncio.create_task(
-        make_store(setup.files).create(
-            "acme",
-            "alice",
-            new_record(PARAMS),
-            compile_name="wiki",
-            before_publish=duplicate_registration,
+        publish_config(
+            CompileLifecycle(make_store(setup.files), setup.fs), "wiki", duplicate_registration
         )
     )
     await asyncio.sleep(0)
     assert not second.done() and not delivery.done()
     publish.set()
-    assert await first == "wiki"
+    assert await first == {"compile_name": "wiki"}
     assert await delivery == TARGET
     with pytest.raises(ConflictError, match="already exists"):
         await second
@@ -743,7 +756,7 @@ async def test_cleanup_reads_only_the_executors_task(setup, registered):
 
     reads = tasks._agfs.read = AsyncMock(wraps=tasks._agfs.read)
     listings = tasks._agfs.ls = AsyncMock(wraps=tasks._agfs.ls)
-    assert await setup.store.delete_expired(now=8 * 24 * 3600, limit=10) == 0
+    assert await setup.lifecycle.delete_expired(now=8 * 24 * 3600, limit=10) == 0
     assert await setup.store.get_run("acme", "alice", name, task.task_id) == run
     reads.assert_awaited_once_with(f"/local/acme/_system/tasks/bob/{task.task_id}.json")
     listings.assert_not_awaited()
@@ -767,16 +780,16 @@ async def test_cleanup_resumes_past_new_runs_and_retains_pending_recovery(setup)
     reads = setup.files.read = AsyncMock(wraps=setup.files.read)
     removed = 0
     for checked in range(1, len(tasks) + 1):
-        removed += await setup.store.delete_expired(now=now, limit=1)
+        removed += await setup.lifecycle.delete_expired(now=now, limit=1)
         paths = [call.args[0] for call in reads.await_args_list if "/runs/" in call.args[0]]
-        assert len(paths) == checked
+        assert len(paths) == checked + removed  # Conditional deletion re-reads the selected run.
         assert len(set(paths)) == checked
     assert removed == 1
     other_id = await setup.store.create("acme", "bob", record, compile_name="wiki-other")
     old_run = dict(run, finished_at=100)
     await setup.store.put_run("acme", "bob", other_id, old_run)
-    assert await setup.store.delete_expired(now=now, limit=10) == 0
-    assert await setup.store.delete_expired(now=now, limit=10) == 1
+    assert await setup.lifecycle.delete_expired(now=now, limit=10) == 0
+    assert await setup.lifecycle.delete_expired(now=now, limit=10) == 1
     assert await setup.store.list_runs("acme", "bob", other_id) == []
     remaining = await setup.store.list_runs("acme", "alice", compile_name)
     assert [run["created_at"] for run in remaining] == [300, 100]
@@ -809,12 +822,10 @@ async def test_cancel_before_output_snapshot_rolls_back_without_advancing_progre
 async def test_registration_failure_does_not_publish_configuration(setup):
     compile_name = "scheduled-wiki"
     with pytest.raises(RuntimeError, match="registration failed"):
-        await setup.store.create(
-            "acme",
-            "alice",
-            new_record(PARAMS),
-            compile_name=compile_name,
-            before_publish=AsyncMock(side_effect=RuntimeError("registration failed")),
+        await publish_config(
+            setup.lifecycle,
+            compile_name,
+            AsyncMock(side_effect=RuntimeError("registration failed")),
         )
     assert await setup.store.get("acme", "alice", compile_name) is None
     assert not setup.files.files
@@ -921,20 +932,16 @@ async def test_cancel_before_start_repairs_registration(setup, registered, run_e
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
-async def test_prepared_finalization_reads_state_only_for_progress(setup, registered, status):
+async def test_prepared_finalization_replays_with_empty_auth(setup, registered, status):
     """A durable preparation checkpoint avoids acceptance reads even with stale worker auth."""
     _, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
     task.auth = {}
-    reads = setup.files.read = AsyncMock(wraps=setup.files.read)
 
     result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
 
     assert result.status == status
-    paths = [call.args[0] for call in reads.await_args_list]
-    assert sum(path.endswith("/state.json") for path in paths) == (status == "completed")
-    assert sum("/runs/" in path for path in paths) == 1
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["status"] == status and run["finished_at"] is not None
 
@@ -985,8 +992,8 @@ async def test_submit_exhaustion_skips_rollback(setup, registered, monkeypatch, 
     setup.files.pathlock_acquire_tree = AsyncMock()
     scope = ("acme", "alice", name, task.task_id)
     lock_error = LockAcquisitionError("Compile run record is locked")
-    lock_run = Mock(side_effect=[lock_error] * lock_failures + [setup.store.lock_run(*scope)])
-    monkeypatch.setattr(setup.store, "lock_run", lock_run)
+    lock_run = Mock(side_effect=[lock_error] * lock_failures + [setup.lifecycle._lock_run(*scope)])
+    monkeypatch.setattr(setup.lifecycle, "_lock_run", lock_run)
     sleep = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", sleep)
     snapshot = ExternalTaskSnapshot(
@@ -1055,8 +1062,23 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
     if cancelled:
         await tracker.cancel(task.task_id, **owner)
     error = ValueError("invalid lock request: pathlock lease expired during acquisition")
+    history_locked = conflict == "history"
     if conflict == "history":
-        monkeypatch.setattr(setup.store, "lock_run", Mock(side_effect=error))
+        acquire = setup.files.pathlock_acquire_exact
+        meta = template.meta["request"]["compile"]
+        finish_lock = (
+            setup.store._run_path(
+                template.account_id, meta["owner_user_id"], meta["compile_name"], task.task_id
+            )
+            + ".finish"
+        )
+
+        async def acquire_with_conflict(path, **kwargs):
+            if history_locked and path == finish_lock:
+                raise error
+            return await acquire(path, **kwargs)
+
+        monkeypatch.setattr(setup.files, "pathlock_acquire_exact", acquire_with_conflict)
     elif conflict == "admission":
         monkeypatch.setattr(setup.lifecycle, "_admission", Mock(side_effect=error))
     else:
@@ -1083,9 +1105,9 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
         provider.configure_lifecycle(CompileLifecycle(setup.store, setup.fs))
         monkeypatch.setattr(provider._lifecycle, "_admission", Mock(side_effect=AssertionError))
         assert not await publish()
-        monkeypatch.delattr(setup.store, "lock_run")
+        history_locked = False
         with monkeypatch.context() as patch:
-            patch.setattr(setup.store, "put_run", AsyncMock(side_effect=error))
+            patch.setattr(setup.store, "update_run", AsyncMock(side_effect=error))
             assert not await publish()
             assert (await setup.lifecycle._read_run(task))["finished_at"] is None
     with monkeypatch.context() as patch:

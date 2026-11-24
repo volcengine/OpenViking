@@ -12,7 +12,7 @@ Ordinary Compile validates normalized directory URIs when creating or updating c
 - A directory tagged `compile_target=true` at any strict ancestor or descendant of `to` causes rejection. The tag on `to` itself permits reuse.
 - `to` cannot be `viking://user/{user_id}/memories/experiences` or any of its descendants. The `~/` alias and trailing slashes do not bypass this restriction; similar names such as `experiences2` are not rejected by this rule.
 
-Creation acquires an account-isolated, Compile-only virtual tree lease before checking visible index tags. Strict parent/child targets are rejected while tagging is pending; identical targets share independent holders and retain serialized execution. Lock contention waits up to one second, without waiting for Compile or indexing. The lease covers no actual output files and is handed to the existing tagging queue until tags are searchable or the target disappears. Leases can expire during service outages, leaving an admission gap before recovery; they are not permanent reservations. Index checks respect the current request's tenant and permissions. The independent `skill="memory"` consolidation mode without `from` does not apply these directory constraints or target-tagging steps.
+Compile can also reject nested targets while target tagging is pending. Requests for the same target are allowed, and their executions run in sequence. The independent `skill="memory"` consolidation mode without `from` does not use these directory constraints or target tags.
 
 ### Create configuration
 
@@ -55,7 +55,7 @@ Missing or invalid `compile_name` is rejected; the server never generates a fall
 
 `args.owner_user_id` optionally selects the configuration owner within the current account; omission defaults to the authenticated user. Creation, updates, and named execution use this same parameter. It only selects configuration ownership or location: it does not change execution identity, grant data permissions, or enter saved Runtime arguments. `args.owner_id` does not select a configuration owner.
 
-Creation synchronously validates inputs, permissions and visible directory tags, creates `to` if needed, and durably enqueues an independent internal tagging Task. It does not wait for directory indexes, embeddings or tag visibility. A file at `to` or failure to durably enqueue the internal task returns an error. A QueueFS consumer prepares the root directory index and applies `compile_target=true`, retrying failures without recursively tagging descendants or replacing existing content, summaries and other tags. If the target path no longer exists, tagging stops for that path without recreating it. Configuration creation does not execute Compile, create a run, or snapshot sources.
+Creation validates inputs and permissions and creates `to` if needed. It does not wait for the target tag to become searchable. Creating a configuration does not start Compile or create a run.
 
 Scheduling controls are stored separately from Runtime arguments. A non-null schedule enables updates unless `auto_update=false` is explicit. A schedule requires `frequency` (`daily` or `weekly`) and uses Beijing time (`Asia/Shanghai`).
 
@@ -93,9 +93,9 @@ Passing `compile_name` when executing Compile reuses the configuration's saved `
 
 Submitting `from`, `to`, and a Skill URI directly is deprecated. Accepted requests include the deprecation date and migration guide in the `Deprecation` and `Link` response headers. Send the inputs and a `compile_name` to `POST /api/v1/compile/create` once, then send only `compile_name` to `POST /api/v1/compile` for each run.
 
-A full-input request always performs a one-off full compile, including when the same output has saved configurations. It does not read or write saved configuration/run files and does not snapshot sources. Target start/finish snapshots, cancellation and recovery still apply. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
+A full-input request always performs a one-off full compile, even if saved configurations use the same target. It does not change saved configurations or add to their run history. `skill="memory"` remains an independent in-place consolidation mode without `from`; it cannot be saved or scheduled through the creation endpoint.
 
-Both ordinary execution forms validate the target, create its directory when needed, and durably enqueue independent tagging before submitting the Compile execution task. Background index or tag delays do not block submission, output writes or Compile finalization, and tagging failures do not fail Compile. Acceptance does not mean the tag is searchable; the virtual lease protects pending targets as described above. Explicit start/finish snapshots, output `snapshot_id`, Outputs and rollback retain their existing semantics. The tag is a directory retrieval marker; task completion, failure or cancellation does not automatically remove it.
+Both ordinary execution forms validate the target and create its directory if needed. Acceptance does not mean the target tag is searchable. Tagging runs separately, and a tagging failure does not fail Compile.
 
 Scheduling controls are rejected by the execution endpoint. `args.mode`, `last_compile_time`, `changes`, and `operation_id` are not public execution controls. OpenViking owns the execution plan.
 
@@ -176,13 +176,19 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
 
-Run history queries use the caller's account and user scope. An absent runs directory returns an empty list; an absent run returns 404 for run details and outputs.
+Configuration lists default to `scope=user`. Account admins can use `scope=account` to list configurations across users in their account. The optional `compile_name` filters the list by name.
 
-List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the frozen run snapshot; `latest_snapshot_id` is the file’s latest change commit at query time (null if no history). It may identify a later deletion, in which case reading that version returns 404. History errors propagate; only returned page items require history reads.
+Run history is scoped to the current account and user and is queried by `compile_name`. A configuration with no matching runs returns an empty list; requesting details or outputs for a missing run returns `404`.
 
-Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. The optional `to` field preserves the saved output directory when omitted or null. When supplied, its normalized value must match the configuration's saved output directory. Changing the output directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged; other inputs such as `from` and `skill` remain editable. Omitting or passing null for top-level `update_schedule` preserves the saved plan. Enabling updates requires a supplied or saved plan. Disabling updates preserves the plan, clears execution credentials and the next trigger time, and unregisters scheduling; `auto_update` controls whether the plan is active. Do not place schedule controls in update `args`. Configuration updates preserve the last successful `progress`. Execution compares the instruction, Skill and its snapshot, and `model_name`; mismatches require a full compile. Existing source directories use incremental changes, while new source directories are processed in full. Updates apply the same directory constraints and durably enqueue independent tagging without waiting for tags. Updating configuration does not run Compile or reset invocation times.
+List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the run's output snapshot; `latest_snapshot_id` is the file's latest change version at query time (null if no history). It may identify a later deletion, in which case reading that version returns `404`.
 
-At creation, `state.json` records the configuration owner’s user ID in the top-level `updated_by` field. On update, the caller can supply a top-level `updated_by` string. If omitted, the server records the authenticated user’s ID.
+Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`. Optional `instruction` and `args` replace their saved values. Omit `to` or pass null to keep the saved output directory. Providing a different directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged.
+
+Omit top-level `update_schedule` or pass null to keep the saved plan. Enabling automatic updates requires a supplied or saved plan. Disabling automatic updates preserves the plan and clears the next trigger time. Do not put scheduling controls in update `args`.
+
+Updating configuration does not start Compile, reset invocation times, or discard the last successful incremental baseline. Changing the instruction, Skill, Skill version, or `model_name` requires a full run. During an incremental run, newly added source directories are processed in full.
+
+Configuration list entries include `updated_by`. It starts as the configuration owner's user ID. On update, the caller can supply a top-level `updated_by` string of at most 255 Unicode characters. If omitted, the server records the authenticated user's ID.
 
 Private fields in nested `args` are redacted from public responses and encrypted for execution: unchanged public arguments preserve their private values, editing a nested subtree containing private fields requires resending those fields, and deleting the subtree removes its saved private values.
 
@@ -204,27 +210,14 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 | `finish_snapshot` | Retained target state after publication or completed rollback; null until committed |
 | `skill_snapshot_id` | Skill snapshot, or null for a system Skill |
 
-No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Execution plans and necessary recovery checkpoints remain private Task state; public configuration, runs and tasks never expose execution credentials.
+No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Public configuration, run and task responses do not expose execution credentials.
 
 VikingBot reports `result.completion_status: "partial"` when known source, worker or write
 failures remain after execution. Confirmed output is retained, and a named Compile keeps
 its previous source baseline so unchanged missed inputs remain eligible for the next run.
 The marker is omitted otherwise; its absence does not prove semantic coverage or successful indexing.
 
-The only Compile business files are:
-
-```text
-/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/state.json
-/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
-```
-
-ASCII names use their lowercase hexadecimal bytes as `configuration_directory`. Names containing Han characters use `u-` followed by the unpadded lowercase Base32 encoding of their UTF-8 bytes. Both directory formats preserve case distinctions on case-insensitive storage.
-
-Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
-
-State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
-
-Successful Compile finalization publishes output snapshots. A complete delivery with at least one target file added, modified, or deleted advances the incremental baseline. Incremental recovery after partial delivery can also advance the baseline with zero target changes when it accounts for every added or modified source and verifies its read contents against the frozen source snapshot. A zero-change run with unverified sources, deletions, or full scans retains the baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+Successful runs publish an output snapshot. A zero-change run may keep the previous incremental baseline. After rollback, restored files may take time to become searchable.
 
 ### Check Compile availability
 

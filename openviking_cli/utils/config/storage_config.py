@@ -71,6 +71,22 @@ class WatchStoreConfig(BaseModel):
         return self
 
 
+class CompileStoreConfig(BaseModel):
+    """Persistent Compile configuration and run history backend."""
+
+    provider: str = "file"
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize_provider(self):
+        self.provider = self.provider.strip().lower()
+        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
+            raise ValueError(
+                "storage.compile_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite'"
+            )
+        return self
+
+
 class StorageConfig(BaseModel):
     """Configuration for storage backend.
 
@@ -115,6 +131,8 @@ class StorageConfig(BaseModel):
         default_factory=WatchStoreConfig,
         description="Watch task and scheduling storage backend",
     )
+
+    compile_store: CompileStoreConfig = Field(default_factory=CompileStoreConfig)
 
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
@@ -230,3 +248,27 @@ class StorageConfig(BaseModel):
         from openviking.resource.watch_store_file import FileWatchStore
 
         return FileWatchStore(viking_fs)
+
+    def build_compile_store(self, service_name: str):
+        """Build the selected relational Compile store; file is wired with AGFS."""
+        provider = self.compile_store.provider
+        if provider == "file":
+            return None
+        params = dict(self.compile_store.params)
+        try:
+            if provider == "mysql":
+                from openviking.service.compile_store_mysql import MySQLCompileStore
+
+                return MySQLCompileStore(params=params, service_name=service_name)
+            if provider == "postgres":
+                from openviking.service.compile_store_postgres import PostgresCompileStore
+
+                return PostgresCompileStore(params=params, service_name=service_name)
+            from openviking.service.compile_store_sqlite import SQLiteCompileStore
+
+            params.setdefault("path", str(Path(self.workspace) / "compile_store" / "compile.db"))
+            return SQLiteCompileStore(params=params, service_name=service_name)
+        except ImportError as exc:
+            raise RuntimeError(
+                f"Compile {provider} storage requires openviking[{provider}]"
+            ) from exc

@@ -101,7 +101,7 @@ async def cancel_task(
     ):
         lifecycle = get_service().compile.lifecycle
         if lifecycle is not None:
-            await lifecycle.store.cancel_queued_run(task)
+            await lifecycle.cancel_queued_run(task)
     return Response(status="ok", result=task.to_dict())
 
 

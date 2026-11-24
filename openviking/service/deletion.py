@@ -91,6 +91,10 @@ class DeletionService:
             self._creation_blocked if self._require_registered_identity else self._is_deleting
         )
         get_task_tracker().set_deletion_guard(creation_guard)
+        compile_service = getattr(self._service, "compile", None)
+        lifecycle = getattr(compile_service, "lifecycle", None)
+        if lifecycle is not None:
+            lifecycle.creation_guard = creation_guard
         watches = getattr(self._service, "watch_manager", None)
         if watches is not None:
             watches.set_deletion_guard(creation_guard)
@@ -392,6 +396,9 @@ class DeletionService:
                 runtime_config = self._service.runtime_config_manager
                 if runtime_config is not None:
                     await run_to_completion(lambda: runtime_config.delete_account(account_id))
+                compile_cleanup = getattr(self._service, "compile_account_cleanup", None)
+                if compile_cleanup is not None:
+                    await run_to_completion(lambda: compile_cleanup(account_id))
                 await run_to_completion(lambda: self._delete_account_files(account_id))
             else:
                 await run_to_completion(lambda: self._delete_uploads(ctx))

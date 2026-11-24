@@ -289,7 +289,7 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
             state = await store.get(*scope)
             assert state["task_first_create_time"] == created_at
             assert state["last_run_time"] == (None if index == 0 else run["created_at"])
-        assert scan.await_count == 3
+        assert sum("task_id" not in call.kwargs for call in scan.await_args_list) == 3
         assert all(call.args == scope for call in scan.await_args_list)
         assert first["meta"]["trigger"] == "initial"
 
