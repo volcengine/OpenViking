@@ -124,6 +124,23 @@ test('a line from someone else shows the owner\'s standing preferences and the s
   assert.equal(ov.calls.some(({ url }) => url.includes('profile.md')), false, 'profile sections are matched by name, so never shown');
 });
 
+test('a worker gets the owner\'s preferences and its requester\'s, without the search, and nothing from an OV that is down', async (t) => {
+  names(t);
+  const ov = fakeOV({ entries: entries(), files: withAlias(files()) });
+  const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger, store: sessionStore(), autoRecall: true });
+  assert.deepEqual(await recall.preferencesFor(zhiheng), {
+    owner: '## 信息披露\n- 外部群里不透露公司内部信息',
+    requester: '## 回复风格\n- 回复先给结论\n\n## 评审格式\n- 评审建议用表格',
+  });
+  assert.deepEqual(await recall.preferencesFor(zhiheng, { owner: true }), { owner: '## 信息披露\n- 外部群里不透露公司内部信息', requester: null });
+  assert.deepEqual(await recall.preferencesFor(null), { owner: '## 信息披露\n- 外部群里不透露公司内部信息', requester: null });
+  assert.equal(ov.calls.some(({ url }) => url.endsWith('/api/v1/search/search')), false, 'no context search for a worker');
+  const down = new OVRecall({ configPath: configFile(t), fetchImpl: fakeOV({ fail: true }).fetchImpl, logger });
+  assert.deepEqual(await down.preferencesFor(zhiheng), { owner: null, requester: null });
+  const slow = new OVRecall({ configPath: configFile(t), fetchImpl: fakeOV({ files: withAlias(files()), delayMs: 500 }).fetchImpl, logger, timeoutMs: 20 });
+  assert.deepEqual(await slow.preferencesFor(zhiheng), { owner: null, requester: null });
+});
+
 test('namesakes, a display name of "owner" and a name-only directory never stand in for someone', async (t) => {
   names(t);
   const ov = fakeOV({ files: withAlias(files()) });

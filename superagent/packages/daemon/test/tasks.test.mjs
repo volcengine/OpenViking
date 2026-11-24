@@ -96,6 +96,46 @@ describe('TaskManager', () => {
     assert.equal(tasks.workerFor(turn.authority), null);
   });
 
+  it('tells the worker how a reply reads where the request was made', (t) => {
+    const { tasks, executor } = setup(t, { slots: 10 });
+    tasks.create({ rows: [row()], title: 'L', requester: 'Alice', runtime: 'pi' });
+    tasks.create({ rows: [row({ source: 'weixin', chat_id: 'wx_1', chat_type: 'p2p', sender_id: 'wx_alice' })], title: 'W', requester: 'Alice', runtime: 'pi' });
+    tasks.create({ rows: [row({ source: 'calendar', chat_id: null, sender_id: null })], title: 'C', runtime: 'pi' });
+    const brief = (id) => executor.turns.find((turn) => turn.task.id === id).prompt;
+    assert.match(brief('t1'), /\nYour draft goes out on lark, where:\n- An answer to a document comment is plain text[^\n]*\n- In message text, quote with "double quotes"[^\n]*full-width ＠[^\n]*\n/);
+    assert.match(brief('t2'), /\nYour draft goes out on weixin, where:\n- Bodies: `markdown` as plain text, at most 4000 characters/);
+    assert.doesNotMatch(brief('t3'), /Your draft goes out/);
+  });
+
+  it('lists the requester\'s earlier tasks where this one was asked, and lets its worker look up only those', async (t) => {
+    const { tasks, executor } = setup(t, { slots: 10 });
+    const brief = (id) => executor.turns.find((turn) => turn.task.id === id).prompt;
+    tasks.create({ rows: [row()], title: '查 X 为什么慢', requester: 'Alice', runtime: 'pi' });
+    tasks.report('t1', { state: 'done', summary: 'X 慢是因为缺了索引', draft: '缺索引。' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    tasks.create({ rows: [row({ chat_id: 'oc_b' })], title: '另一个群的事', requester: 'Alice', runtime: 'pi' });
+    tasks.create({ rows: [row({ sender_id: 'ou_bob' })], title: 'Bob 的事', requester: 'Bob', runtime: 'pi' });
+    tasks.create({ rows: [row()], title: '给 X 加索引', requester: 'Alice', runtime: 'pi' });
+    assert.match(brief('t4'), /\nEarlier tasks Alice asked for here, newest first \(task_list with task_id shows one, with its directory\):\n- t1 \[done \d+m ago\] "查 X 为什么慢": X 慢是因为缺了索引\nYour directory: /);
+    assert.doesNotMatch(brief('t4'), /\n- t[234] \[/);
+    assert.doesNotMatch(brief('t1'), /Earlier tasks/);
+
+    // Its worker's task_list: the same scope, never another person's or another group's task.
+    assert.match(tasks.listForWorker('t4', { taskId: 't1' })[0], /^t1 \[done\] "查 X 为什么慢" for Alice in chat=oc_a[\s\S]*\nsummary: X 慢是因为缺了索引[\s\S]*\ndirectory: .*t1$/);
+    assert.deepEqual(tasks.listForWorker('t4', { taskId: 't2' }), []);
+    assert.deepEqual(tasks.listForWorker('t4', { taskId: 't3' }), []);
+    assert.deepEqual(tasks.listForWorker('t4').map((line) => line.split(' ')[0]).toSorted(), ['t1', 't4']);
+    assert.deepEqual(tasks.listForWorker('t4', { query: '索引' }).map((line) => line.split(' ')[0]).toSorted(), ['t1', 't4']);
+    assert.deepEqual(tasks.listForWorker('t9'), []);
+
+    // In a direct chat, everything they asked for, as a progress question there would see.
+    tasks.create({ rows: [row({ chat_id: 'oc_dm', chat_type: 'p2p' })], title: '私聊里问的', requester: 'Alice', runtime: 'pi' });
+    assert.match(brief('t5'), /\nEarlier tasks Alice asked for, newest first/);
+    for (const id of ['t1', 't2', 't4']) assert.match(brief('t5'), new RegExp(`\\n- ${id} \\[`));
+    assert.doesNotMatch(brief('t5'), /\n- t3 \[/);
+  });
+
   it('relays the final report, quoting worker text so it cannot pass for an input line', async (t) => {
     const { tasks, executor, relayed } = setup(t);
     const origin = row({ thread_id: 'omt_1' });
