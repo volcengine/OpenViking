@@ -71,8 +71,8 @@ class RerankConfig(BaseModel):
     log_payloads: bool = Field(
         default=False,
         description=(
-            "Log complete rerank request and response payloads. Disabled by default "
-            "because payloads may contain sensitive query and document content."
+            "Log safe Jev rerank request and response summaries at DEBUG when enabled. "
+            "Query, document and response content are never logged. Disabled by default."
         ),
     )
 

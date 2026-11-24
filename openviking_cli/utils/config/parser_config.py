@@ -301,9 +301,9 @@ class CodeConfig(CodeHostingConfig):
         data = dict(data)
         if "code_summary_mode" in data:
             data.pop("code_summary_mode", None)
-            logger.warning(
-                "code.code_summary_mode is deprecated and ignored; "
-                "code summaries now always use the fixed skeleton route with LLM fallback"
+            logger.info(
+                "code.code_summary_mode is deprecated and ignored; code summaries now always use the fixed skeleton route with LLM fallback",
+                extra={"degraded": True},
             )
 
         return super().from_dict(data)
@@ -739,7 +739,7 @@ class SemanticConfig:
     """Maximum number of file summaries per batch when splitting oversized prompts."""
 
     overview_sample_limit: int = 32
-    """Small-directory threshold for freshness scheduling; not a summary count cap."""
+    """Maximum direct-child sample per directory summary and freshness small-directory threshold."""
 
     freshness_refresh_ratio: float = 0.10
     """Pending direct-child change ratio that refreshes a wide directory."""

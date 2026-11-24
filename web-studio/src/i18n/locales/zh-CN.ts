@@ -1,4 +1,5 @@
 import activity from './zh-CN/activity'
+import arranger from './zh-CN/arranger'
 import compile from './zh-CN/compile'
 import dataManagement from './zh-CN/data-management'
 import gateway from './zh-CN/gateway'
@@ -11,6 +12,7 @@ import vikingbot from './zh-CN/vikingbot'
 import workspace from './zh-CN/workspace'
 
 const zhCN = {
+  arranger,
   studio,
   onboarding,
   gateway,

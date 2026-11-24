@@ -48,14 +48,15 @@
  * transcript is append-only, so the position of a turn is a durable cursor.
  */
 
-import { readFileSync } from "node:fs";
-
 import {
   collectToolNamesByIdFromEntries,
   extractPartsFromPayload,
   normalizeCaptureRole,
   sanitizeCapturedText,
 } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { readUnseenTurns, textFromToolParts } from "./incremental-turn-capture.mjs";
+
+export { parseJsonlTranscript as parseTranscript } from "./incremental-turn-capture.mjs";
 
 const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);
 
@@ -82,20 +83,6 @@ const HOST_BLOCK_RE = new RegExp(
   "gis",
 );
 const USER_QUERY_RE = /<user_query\s*>(.*?)<\/user_query\s*>/gis;
-
-/** CodeBuddy's transcript is JSONL; anything else reads as no records. */
-export function parseTranscript(content) {
-  const records = [];
-  for (const line of String(content || "").split("\n")) {
-    if (!line.trim()) continue;
-    let record;
-    try { record = JSON.parse(line); } catch { continue; }
-    // A whole-file JSON array parses as one line too; it is not a record.
-    if (!record || typeof record !== "object" || Array.isArray(record)) continue;
-    records.push(record);
-  }
-  return records;
-}
 
 /** Remove host-injected blocks, leaving whatever the user or host wrote around them. */
 export function stripHostBlocks(raw) {
@@ -147,15 +134,6 @@ function blocksFrom(content) {
   return out;
 }
 
-function formatToolInput(value) {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
 /** CodeBuddy records → the payload shapes `capture-utils` walks. */
 function payloadForRecord(record) {
   const type = String(record?.type || "");
@@ -202,23 +180,6 @@ function payloadForRecord(record) {
     return { kind: "tool", payload };
   }
   return null;
-}
-
-// The text the capture heuristics read: tool calls inlined with their input.
-// Tool *results* stay out of it — the extraction signal lives in the agent's
-// prose about what happened, not in the raw bytes a tool returned (measured:
-// the shared part builder caps tool input itself and the server externalizes
-// oversized output, so retaining result bytes here only diluted the text).
-function textFromParts(parts) {
-  const chunks = [];
-  for (const part of parts) {
-    if (part.type !== "tool") {
-      chunks.push(part.text);
-    } else if (part.tool_status === "running") {
-      chunks.push(`[tool: ${part.tool_name || "unknown"}]\n${formatToolInput(part.tool_input)}`);
-    }
-  }
-  return chunks.join("\n\n").trim();
 }
 
 /**
@@ -281,7 +242,7 @@ export function extractCodebuddyTurns(records, cfg = {}) {
     if (payload.role === "assistant" && cfg.captureAssistantTurns === false) continue;
     const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
     if (parts.length === 0) continue;
-    const text = textFromParts(parts);
+    const text = textFromToolParts(parts);
     if (!text) continue;
     turns.push({
       role: normalizeCaptureRole(payload.role),
@@ -297,27 +258,8 @@ export function resolveCodebuddyTranscriptPath(input = {}) {
   return String(input.transcript_path || input.transcriptPath || "").trim();
 }
 
-/**
- * The turns past `lastTurnId`, or a status when the transcript cannot be read.
- *
- * `ok` distinguishes "read it, it has N turns" from "could not read it": a
- * caller must not treat an unreadable transcript as an empty one, or a
- * transient read error would acknowledge turns that were never seen.
- */
 export function extractUnseenCodebuddyTurns(transcriptPath, lastTurnId = null, cfg = {}) {
-  if (!transcriptPath) return { status: "missing", turns: [] };
-  let raw;
-  try {
-    raw = readFileSync(transcriptPath, "utf8");
-  } catch (error) {
-    return { status: "unreadable", turns: [], error: error?.code || "read_failed" };
-  }
-  const turns = extractCodebuddyTurns(parseTranscript(raw), cfg);
-  if (turns.length === 0) return { status: "ok", turns: [] };
-  const lastIndex = lastTurnId == null || lastTurnId === ""
-    ? -1
-    : turns.findIndex((turn) => turn.turnId === String(lastTurnId));
-  return { status: "ok", turns: lastIndex === -1 ? turns : turns.slice(lastIndex + 1) };
+  return readUnseenTurns(transcriptPath, lastTurnId, (records) => extractCodebuddyTurns(records, cfg));
 }
 
 export function buildCodebuddyTurns(input = {}, state = {}, cfg = {}) {

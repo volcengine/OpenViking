@@ -49,7 +49,7 @@ test("a file tool pointed at a viking:// URI is denied with a usable reason", ()
   assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.match(reason, /MCP read/);
-  assert.match(reason, /read\(uris=/);
+  assert.match(reason, /read\(uri=/);
 });
 
 test("a write to a skill URI is redirected to add_skill", () => {

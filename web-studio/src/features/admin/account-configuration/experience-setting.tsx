@@ -15,7 +15,7 @@ import {
 
 /**
  * Admin/root-only configuration row that toggles the selected account Agent
- * Evolution switch (`GET/PATCH /api/v1/admin/accounts/{account_id}/settings`).
+ * Evolution switch (`GET/PATCH /api/v1/admin/accounts/{account_id}/configuration`).
  *
  * When disabled, new session commits stop extracting experiences and
  * trajectories, which is the most common reason the impact panel stays empty.

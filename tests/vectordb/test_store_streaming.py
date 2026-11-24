@@ -12,7 +12,7 @@ from openviking.storage.vectordb.store.local_store import (
     STORE_SCAN_PAGE_SIZE,
     StoreEngineProxy,
 )
-from openviking.storage.vectordb.store.store import BatchOp, Op, OpType
+from openviking.storage.vectordb.store.store import BatchOp, OpType
 from openviking.storage.vectordb.store.store_manager import StoreManager
 
 
@@ -204,7 +204,6 @@ def test_closing_store_stream_releases_the_current_encoded_page():
         ("write", "put_data"),
         ("delete", "delete_data"),
         ("clear", "clear_data"),
-        ("exec_sequence", "exec_op"),
         ("exec_sequence_batch_op", "exec_op"),
     ],
 )
@@ -217,7 +216,6 @@ def test_store_proxy_checks_native_mutation_status(operation, native_method, sta
         "write": lambda: store.write(["key"], [b"value"], "test:"),
         "delete": lambda: store.delete(["key"], "test:"),
         "clear": store.clear,
-        "exec_sequence": lambda: store.exec_sequence([Op(OpType.PUT, "key", b"value")], "test:"),
         "exec_sequence_batch_op": lambda: store.exec_sequence_batch_op(
             [BatchOp("test:", OpType.PUT, ["key"], [b"value"])]
         ),

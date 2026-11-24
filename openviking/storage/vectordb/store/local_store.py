@@ -3,7 +3,7 @@
 from typing import Iterator, List, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
-from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, Op, OpType
+from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, OpType
 from openviking.storage.vectordb.utils.stale_lock import clean_stale_rocksdb_locks
 
 # Constant for the maximum Unicode character, used for range queries to cover all possible keys
@@ -264,27 +264,6 @@ class StoreEngineProxy(IMutiTableStore):
             cursor = next_cursor
             start_exclusive = True
             page = seek_page(cursor, end_key, page_size, page_bytes, start_exclusive)
-
-    def exec_sequence(self, op: List[Op], table_name: str):
-        """Execute a sequence of operations on a specific table.
-
-        Args:
-            op (List[Op]): List of operations to execute in order.
-            table_name (str): Name of the table to operate on.
-        """
-        engine_op_list = []
-        for operation in op:
-            engine_op = engine.StorageOp()
-            if operation.op_type == OpType.PUT:
-                engine_op.type = engine.StorageOpType.PUT
-                engine_op.value = operation.data
-            else:
-                engine_op.type = engine.StorageOpType.DELETE
-                engine_op.value = ""  # Value not needed for delete
-
-            engine_op.key = table_name + operation.key
-            engine_op_list.append(engine_op)
-        self._check_mutation_status(self.storage_engine.exec_op(engine_op_list), "exec_op")
 
     def exec_sequence_batch_op(self, batch_op_list: List[BatchOp]):
         """Execute a batch of operations across multiple tables.

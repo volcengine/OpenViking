@@ -33,6 +33,33 @@ def _event(
     )
 
 
+def _request(request_id, route, *, status=200, method="POST", **scope):
+    return _event(
+        "http.request",
+        {
+            "request_id": request_id,
+            "method": method,
+            "route": route,
+            "status": str(status),
+            "duration_seconds": 0.1,
+        },
+        **scope,
+    )
+
+
+def _tokens(prompt, *, completion=0, source="vlm", **scope):
+    return _event(
+        f"{source}.call",
+        {
+            "provider": "p",
+            "model_name": "m",
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+        },
+        **scope,
+    )
+
+
 def _create_legacy_usage_audit_db(db_path) -> None:
     conn = sqlite3.connect(db_path)
     try:
@@ -202,174 +229,68 @@ def _create_v4_usage_audit_db(db_path) -> None:
 async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
     store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
     await store.initialize()
+    messages = "/api/v1/sessions/{session_id}/messages"
+    day = "2026-05-12"
     try:
         await store.record_batch(
             [
-                _event(
-                    "vlm.call",
-                    {
-                        "provider": "p",
-                        "model_name": "m",
-                        "prompt_tokens": 3,
-                        "completion_tokens": 2,
-                    },
-                ),
-                _event(
-                    "embedding.call",
-                    {
-                        "provider": "p",
-                        "model_name": "e",
-                        "prompt_tokens": 5,
-                        "completion_tokens": 0,
-                    },
-                ),
-                _event(
-                    "embedding.call",
-                    {
-                        "provider": "p",
-                        "model_name": "e",
-                        "prompt_tokens": 100,
-                        "completion_tokens": 0,
-                    },
-                    user_id="user-2",
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-find",
-                        "method": "POST",
-                        "route": "/api/v1/search/find",
-                        "status": "200",
-                        "duration_seconds": 0.1,
-                    },
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-search-user-2",
-                        "method": "POST",
-                        "route": "/api/v1/search/search",
-                        "status": "200",
-                        "duration_seconds": 0.1,
-                    },
-                    user_id="user-2",
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-message",
-                        "method": "POST",
-                        "route": "/api/v1/sessions/{session_id}/messages",
-                        "status": "200",
-                        "duration_seconds": 0.1,
-                    },
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-message-user-2",
-                        "method": "POST",
-                        "route": "/api/v1/sessions/{session_id}/messages",
-                        "status": "200",
-                        "duration_seconds": 0.1,
-                    },
-                    user_id="user-2",
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-console",
-                        "method": "GET",
-                        "route": "/api/v1/console/dashboard/summary",
-                        "status": "200",
-                        "duration_seconds": 0.01,
-                    },
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-docs",
-                        "method": "GET",
-                        "route": "/docs",
-                        "status": "200",
-                        "duration_seconds": 0.01,
-                    },
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-favicon",
-                        "method": "GET",
-                        "route": "/favicon.ico",
-                        "status": "200",
-                        "duration_seconds": 0.01,
-                    },
-                ),
+                _tokens(3, completion=2),
+                _tokens(5, source="embedding"),
+                _tokens(100, source="embedding", user_id="user-2"),
+                _request("req-find", "/api/v1/search/find"),
+                _request("req-search-user-2", "/api/v1/search/search", user_id="user-2"),
+                _request("req-message", messages),
+                _request("req-message-user-2", messages, user_id="user-2"),
+                _request("req-console", "/api/v1/console/dashboard/summary", method="GET"),
+                _request("req-docs", "/docs", method="GET"),
+                _request("req-favicon", "/favicon.ico", method="GET"),
             ]
         )
 
-        assert await store.get_today_tokens(
-            account_id="acct-1", user_date="2026-05-12", tz=UTC
-        ) == {
-            "vlm_input": 3,
-            "vlm_output": 2,
-            "embedding_input": 105,
-            "total": 110,
-        }
-        assert await store.get_today_tokens(
-            account_id="acct-1", user_id="user-1", user_date="2026-05-12", tz=UTC
-        ) == {
-            "vlm_input": 3,
-            "vlm_output": 2,
-            "embedding_input": 5,
-            "total": 10,
-        }
-        assert await store.get_today_retrievals(
-            account_id="acct-1", user_date="2026-05-12", tz=UTC
-        ) == {
-            "find": 1,
-            "search": 1,
-            "total": 2,
-        }
-        assert await store.get_today_retrievals(
-            account_id="acct-1", user_id="user-1", user_date="2026-05-12", tz=UTC
-        ) == {
-            "find": 1,
-            "search": 0,
-            "total": 1,
-        }
-        commits = await store.get_context_commit_heatmap(
-            account_id="acct-1",
-            start_user_date="2026-05-12",
-            end_user_date="2026-05-12",
-            bucket="hour",
-            tz=UTC,
-        )
-        account_commits = commits
-        commits = await store.get_context_commit_heatmap(
-            account_id="acct-1",
-            user_id="user-1",
-            start_user_date="2026-05-12",
-            end_user_date="2026-05-12",
-            bucket="hour",
-            tz=UTC,
-        )
-        assert any(
-            row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits
-        )
-        assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
-        audit = await store.query_audit_logs(account_id="acct-1")
-        assert audit["total"] == 4
-        assert audit["success_rate"] == 1.0
-        assert {item["api_type"] for item in audit["items"]} == {
-            "search.find",
-            "search.search",
-            "sessions",
-        }
-        audit = await store.query_audit_logs(account_id="acct-1", user_id="user-1")
-        assert audit["total"] == 2
-        assert audit["success_rate"] == 1.0
-        assert {item["request_id"] for item in audit["items"]} == {"req-find", "req-message"}
+        for user, embedding, searches, commits, request_ids in (
+            (
+                None,
+                105,
+                1,
+                2,
+                {"req-find", "req-search-user-2", "req-message", "req-message-user-2"},
+            ),
+            ("user-1", 5, 0, 1, {"req-find", "req-message"}),
+        ):
+            assert await store.get_today_tokens(
+                account_id="acct-1", user_id=user, user_date=day, tz=UTC
+            ) == {
+                "vlm_input": 3,
+                "vlm_output": 2,
+                "embedding_input": embedding,
+                "total": 5 + embedding,
+            }
+            assert await store.get_today_retrievals(
+                account_id="acct-1", user_id=user, user_date=day, tz=UTC
+            ) == {
+                "find": 1,
+                "search": searches,
+                "total": 1 + searches,
+            }
+            hours = await store.get_context_commit_heatmap(
+                account_id="acct-1",
+                user_id=user,
+                start_user_date=day,
+                end_user_date=day,
+                bucket="hour",
+                tz=UTC,
+            )
+            assert {
+                hour["hour"]: hour["session_add_message"] for hour in hours if hour["total"]
+            } == {1: commits}
+            audit = await store.query_audit_logs(account_id="acct-1", user_id=user)
+            assert audit["total"] == len(request_ids) and audit["success_rate"] == 1.0
+            assert {item["request_id"] for item in audit["items"]} == request_ids
+            assert {item["api_type"] for item in audit["items"]} == (
+                {"search.find", "search.search", "sessions"}
+                if searches
+                else {"search.find", "sessions"}
+            )
     finally:
         await store.close()
 
@@ -601,19 +522,7 @@ async def test_sqlite_usage_audit_store_trims_audit_per_account(tmp_path):
     await store.initialize()
     try:
         await store.record_batch(
-            [
-                _event(
-                    "http.request",
-                    {
-                        "request_id": f"req-{idx}",
-                        "method": "GET",
-                        "route": "/api/v1/system/status",
-                        "status": "200",
-                        "duration_seconds": 0.01,
-                    },
-                )
-                for idx in range(3)
-            ]
+            [_request(f"req-{idx}", "/api/v1/system/status", method="GET") for idx in range(3)]
         )
         audit = await store.query_audit_logs(account_id="acct-1", page_size=10)
         assert audit["total"] == 2
@@ -629,36 +538,8 @@ async def test_sqlite_usage_audit_store_success_filter_includes_3xx(tmp_path):
     try:
         await store.record_batch(
             [
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-200",
-                        "method": "GET",
-                        "route": "/api/v1/system/status",
-                        "status": "200",
-                        "duration_seconds": 0.01,
-                    },
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-302",
-                        "method": "GET",
-                        "route": "/api/v1/system/status",
-                        "status": "302",
-                        "duration_seconds": 0.01,
-                    },
-                ),
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-500",
-                        "method": "GET",
-                        "route": "/api/v1/system/status",
-                        "status": "500",
-                        "duration_seconds": 0.01,
-                    },
-                ),
+                _request(f"req-{status}", "/api/v1/system/status", method="GET", status=status)
+                for status in (200, 302, 500)
             ]
         )
 
@@ -682,144 +563,53 @@ async def test_sqlite_usage_audit_store_success_filter_includes_3xx(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_today_tokens_rebuckets_for_utc_plus_8(tmp_path):
-    """A UTC+8 user querying "today" must include UTC events that fall inside
-    their local day, even when they span two UTC dates.
-
-    Two events bracket a UTC day boundary at 16:00 UTC = 00:00 next day
-    in Asia/Shanghai. From the SH viewer's perspective on 2026-05-13 both
-    events belong to "today"; from a UTC viewer they straddle two days.
-    """
+async def test_usage_queries_rebucket_utc_events_to_viewer_timezones(tmp_path):
     store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
     await store.initialize()
+    shanghai = ZoneInfo("Asia/Shanghai")
+    may13 = "2026-05-13"
+    late_utc = datetime(2026, 5, 12, 23, 30, tzinfo=UTC)
     try:
         await store.record_batch(
             [
-                _event(  # 2026-05-12 23:30 UTC == 2026-05-13 07:30 SH
-                    "vlm.call",
-                    {
-                        "provider": "p",
-                        "model_name": "m",
-                        "prompt_tokens": 11,
-                        "completion_tokens": 0,
-                    },
-                    ts=datetime(2026, 5, 12, 23, 30, tzinfo=timezone.utc),
-                ),
-                _event(  # 2026-05-13 04:30 UTC == 2026-05-13 12:30 SH
-                    "vlm.call",
-                    {
-                        "provider": "p",
-                        "model_name": "m",
-                        "prompt_tokens": 22,
-                        "completion_tokens": 0,
-                    },
-                    ts=datetime(2026, 5, 13, 4, 30, tzinfo=timezone.utc),
-                ),
-                _event(  # 2026-05-13 16:30 UTC == 2026-05-14 00:30 SH (next day)
-                    "vlm.call",
-                    {
-                        "provider": "p",
-                        "model_name": "m",
-                        "prompt_tokens": 9999,
-                        "completion_tokens": 0,
-                    },
-                    ts=datetime(2026, 5, 13, 16, 30, tzinfo=timezone.utc),
-                ),
+                _tokens(7, ts=datetime(2026, 5, 12, 3, tzinfo=UTC)),  # May 11 in New York
+                _tokens(11, ts=late_utc),
+                _tokens(22, ts=datetime(2026, 5, 13, 4, 30, tzinfo=UTC)),
+                _tokens(9999, ts=datetime(2026, 5, 13, 16, 30, tzinfo=UTC)),  # May 14 in Shanghai
+                _request("req-late", "/api/v1/sessions/{session_id}/messages", ts=late_utc),
             ]
         )
 
-        shanghai = ZoneInfo("Asia/Shanghai")
-        sh_today = await store.get_today_tokens(
-            account_id="acct-1", user_date="2026-05-13", tz=shanghai
-        )
-        # Includes the 23:30 UTC event but excludes the 16:30 UTC event that
-        # already rolled into the next SH day.
-        assert sh_today["vlm_input"] == 33
-        assert sh_today["total"] == 33
-
-        utc_today = await store.get_today_tokens(
-            account_id="acct-1", user_date="2026-05-13", tz=UTC
-        )
-        # UTC viewer's day starts at 00:00 UTC, so misses the 23:30 prior-day
-        # event but includes the 16:30 event.
+        sh_today = await store.get_today_tokens(account_id="acct-1", user_date=may13, tz=shanghai)
+        utc_today = await store.get_today_tokens(account_id="acct-1", user_date=may13, tz=UTC)
+        assert sh_today["vlm_input"] == sh_today["total"] == 33
         assert utc_today["vlm_input"] == 22 + 9999
-    finally:
-        await store.close()
 
-
-@pytest.mark.asyncio
-async def test_token_series_rebuckets_to_user_tz_days(tmp_path):
-    """An event at 03:00 UTC must land in `2026-05-11` for an America/New_York
-    viewer (UTC-4 with DST in May = 23:00 of the previous day local)."""
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
-    await store.initialize()
-    try:
-        await store.record_batch(
-            [
-                _event(
-                    "vlm.call",
-                    {
-                        "provider": "p",
-                        "model_name": "m",
-                        "prompt_tokens": 7,
-                        "completion_tokens": 0,
-                    },
-                    ts=datetime(2026, 5, 12, 3, 0, tzinfo=timezone.utc),
-                ),
-            ]
-        )
-        ny = ZoneInfo("America/New_York")
         series = await store.get_token_series(
             account_id="acct-1",
             start_user_date="2026-05-10",
             end_user_date="2026-05-12",
             bucket="day",
-            tz=ny,
+            tz=ZoneInfo("America/New_York"),
         )
-        by_date = {row["date"]: row for row in series}
-        # 03:00 UTC on 2026-05-12 falls on 2026-05-11 23:00 in New York.
-        assert by_date["2026-05-11"]["vlm_input"] == 7
-        assert by_date["2026-05-12"]["vlm_input"] == 0
-    finally:
-        await store.close()
+        # 04:30 UTC on May 13 is after midnight local, so falls beyond the requested range.
+        assert {row["date"]: row["vlm_input"] for row in series} == {
+            "2026-05-10": 0,
+            "2026-05-11": 7,
+            "2026-05-12": 11,
+        }
 
-
-@pytest.mark.asyncio
-async def test_context_heatmap_rebuckets_hour_for_shanghai(tmp_path):
-    """A context commit at 23:30 UTC must show up at hour 7 of the next day in
-    Asia/Shanghai (UTC+8)."""
-    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
-    await store.initialize()
-    try:
-        await store.record_batch(
-            [
-                _event(
-                    "http.request",
-                    {
-                        "request_id": "req-late",
-                        "method": "POST",
-                        "route": "/api/v1/sessions/{session_id}/messages",
-                        "status": "200",
-                        "duration_seconds": 0.01,
-                    },
-                    ts=datetime(2026, 5, 12, 23, 30, tzinfo=timezone.utc),
-                ),
-            ]
-        )
-        shanghai = ZoneInfo("Asia/Shanghai")
-        rows = await store.get_context_commit_heatmap(
+        commits = await store.get_context_commit_heatmap(
             account_id="acct-1",
-            start_user_date="2026-05-13",
-            end_user_date="2026-05-13",
+            start_user_date=may13,
+            end_user_date=may13,
             bucket="hour",
             tz=shanghai,
         )
-        match = next(
-            (row for row in rows if row["date"] == "2026-05-13" and row["hour"] == 7),
-            None,
-        )
-        assert match is not None
-        assert match["session_add_message"] == 1
-        assert match["total"] == 1
+        assert [
+            (row["date"], row["hour"], row["session_add_message"], row["total"])
+            for row in commits
+            if row["total"]
+        ] == [(may13, 7, 1, 1)]
     finally:
         await store.close()

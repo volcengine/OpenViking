@@ -38,8 +38,8 @@ async def check_openviking(config: StandaloneGatewayConfig) -> dict:
                 health = await viking.health(require_identity=False)
             except VikingError as error:
                 if config.host not in LOOPBACK_HOSTS and error.status >= 500:
-                    logger.warning(
-                        "Waiting for OpenViking before binding publicly: %s; retrying in %ss",
+                    logger.info(
+                        "gateway waiting for OpenViking before public bind error_code=%s delay_seconds=%s",
                         error.reason,
                         delay,
                     )
@@ -89,7 +89,7 @@ def create_standalone_app(config: StandaloneGatewayConfig, studio_dir=None):
         config, openviking_url=config.openviking_url, encryptor=build_encryptor(config)
     )
     for warning in gateway.state.warnings:
-        logger.warning("%s: %s", warning, WARNINGS[warning])
+        logger.warning("gateway public access configuration event=%s", warning)
     # A mounted app's lifespan does not run on its own; its error shapes apply here too.
     app = FastAPI(
         lifespan=lambda _app: gateway.router.lifespan_context(gateway),

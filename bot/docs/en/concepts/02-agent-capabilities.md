@@ -50,7 +50,19 @@ OpenAPI's `disabled_tools` can hide tools per request. A channel with `ov_tools_
 
 ## MCP Extensions
 
-`bot.tools.mcp_servers` connects external MCP Servers over `stdio`, `sse`, or `streamableHttp`. Remote tools are wrapped as ordinary VikingBot Tools and registered as `mcp_<server>_<tool>`.
+VikingBot distinguishes three MCP concepts:
+
+| Concept | Owner and purpose | Tools visible to VikingBot |
+|---------|-------------------|----------------------------|
+| **OpenViking MCP Interface** | OpenViking's public MCP interface for external MCP clients | VikingBot uses its own `openviking_*` bindings to the connected service; this is not a direct Bot MCP connection |
+| **OpenViking-registered MCP Servers** | External services registered in OpenViking for discovery, proxied invocation, and Live Context mounts | `openviking_find_mcp_tools` and `openviking_invoke_mcp_tool`; arranged nodes are read through OpenViking content tools |
+| **VikingBot-connected MCP Servers** | External services connected directly by the Bot through `bot.tools.mcp_servers` | Ordinary tools named `mcp_<server>_<tool>` |
+
+The two external service registries are independent. Registering a server in OpenViking
+does not create a direct VikingBot tool, and configuring it in VikingBot does not add it
+to the OpenViking catalog or make it available for Live Context mounts.
+
+`bot.tools.mcp_servers` connects VikingBot-connected MCP Servers over `stdio`, `sse`, or `streamableHttp`. Remote tools are wrapped as ordinary VikingBot Tools and registered as `mcp_<server>_<tool>`.
 
 Each MCP Server can configure:
 
@@ -60,6 +72,27 @@ Each MCP Server can configure:
 - the per-call `tool_timeout`.
 
 MCP parameter Schemas are normalized for compatibility before being passed to the model and ToolRegistry.
+
+When the OpenViking Server connected to VikingBot has OpenViking-registered MCP Servers, VikingBot
+also exposes two stable OpenViking tools:
+
+- `openviking_find_mcp_tools` dynamically discovers tools by intent and returns their
+  complete `inputSchema` and annotations.
+- `openviking_invoke_mcp_tool` uses a discovered URI to execute the tool through
+  OpenViking.
+
+This path does not require duplicating upstream MCP configuration under
+`bot.tools.mcp_servers`, and discovered tools are not dynamically registered in
+VikingBot. OpenViking owns the upstream connection, credentials, and argument
+validation while VikingBot keeps only the two stable meta-tools. The Agent first
+searches for an arranged Live Context node and reads it; dynamic discovery is the
+fallback when no suitable node exists. `readonly` mode exposes discovery only, and
+Studio-managed group conversations disable both tools by default.
+
+If the same upstream is configured in both registries, the Agent must choose one route
+and avoid duplicate calls. It must not pass a direct `mcp_<server>_<tool>` name to
+`openviking_invoke_mcp_tool`; that tool accepts only a `viking://agent/tools/...` URI
+returned by OpenViking discovery.
 
 ## Subagents
 
@@ -92,12 +125,14 @@ With the default `shared` mode, customize files under `<workspace>/shared`, not 
 
 ### Bootstrap Files
 
-On every turn, ContextBuilder reads existing non-empty files in this order: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`.
+On every turn, ContextBuilder reads existing non-empty files in this order: local `AGENTS.md`, Agent instructions, local `TOOLS.md`, and local `IDENTITY.md`.
+
+Agent instructions come from the current OpenViking user's `viking://~/memories/soul.md` when OpenViking is configured and the file is readable and non-empty. Otherwise, VikingBot uses local `SOUL.md`. Remote reads have a 5-second timeout; a missing file or read failure also selects the local fallback. Only one of these two instruction files is injected per turn, and the choice is refreshed on the next turn.
 
 | File | Appropriate content |
 |------|---------------------|
 | `AGENTS.md` | Global working methods, task workflows, output constraints, and mandatory project rules |
-| `SOUL.md` | Personality, values, tone, response style, and default behavior preferences |
+| OpenViking `memories/soul.md`, falling back to local `SOUL.md` | Personality, values, tone, response style, and default behavior preferences |
 | `TOOLS.md` | Tool selection rules, call order, side-effect confirmation, and safety boundaries |
 | `IDENTITY.md` | Agent name, role, responsibility scope, and identity background |
 
@@ -115,7 +150,7 @@ The initial template also contains `USER.md`, but the current ContextBuilder doe
 
 When an active Workspace is first used, VikingBot copies bootstrap files, bundled Skill templates, and supporting directories from the installed `bot/workspace` template. Template initialization does not overwrite existing bootstrap-file customization.
 
-Edit the active Workspace directly. ContextBuilder reads bootstrap files again on every turn, so changes to `SOUL.md`, `AGENTS.md`, `TOOLS.md`, or `IDENTITY.md` normally take effect on the next conversation turn without restarting the Gateway. Changes to `bot/workspace` in the package or repository affect only Workspaces created later.
+Edit the selected instruction source: OpenViking `soul.md` when available, or `SOUL.md` in the active Workspace for the local fallback. ContextBuilder reads bootstrap files again on every turn, so changes to the selected instructions, `AGENTS.md`, `TOOLS.md`, or `IDENTITY.md` normally take effect on the next conversation turn without restarting the Gateway. Changes to `bot/workspace` in the package or repository affect only Workspaces created later.
 
 Bootstrap files are part of the system-level prompt. Restrict their write permissions and never store API Keys, Tokens, or other secrets in them.
 

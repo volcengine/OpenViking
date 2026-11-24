@@ -2,14 +2,20 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Event-loop safety and cleanup-throttle tests for temporary HTTP uploads."""
 
+import json
 import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server import temp_upload_store
+from openviking.server.config import ServerConfig, TempUploadConfig
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.watch_fixtures import local_viking_fs
 
 
 class _UploadFile:
@@ -40,11 +46,6 @@ def _flat_entry(created_at: float) -> dict:
     """A legacy flat <ms-ts>-<uuid> upload directory entry (pre-bucket)."""
     upload_id = _make_upload_id(created_at)
     return {"isDir": True, "uri": f"{temp_upload_store._SHARED_UPLOAD_ROOT}/{upload_id}"}
-
-
-# Backwards-compatible alias used by older tests below.
-def _upload_entry(created_at: float) -> dict:
-    return _flat_entry(created_at)
 
 
 def _reset_state() -> None:
@@ -79,7 +80,6 @@ async def test_save_local_offloads_cleanup_writes_and_metadata(
     assert (tmp_path / temp_file_id).read_bytes() == b"hello world"
     assert (tmp_path / f"{temp_file_id}.ov_upload.meta").is_file()
     assert "_cleanup_local_temp_files" in calls
-    assert "_create_temp_file" in calls
     assert "_open_binary_for_write" in calls
     assert "write" in calls
     assert "_write_json" in calls
@@ -110,45 +110,37 @@ async def test_resolve_local_offloads_filesystem_validation(
     assert "_resolve_local" in calls
 
 
-def test_schedule_deduplicates_while_pending(monkeypatch: pytest.MonkeyPatch):
+def test_schedule_deduplicates_and_waits_until_the_next_expiry(monkeypatch):
     store = temp_upload_store.TempUploadStore(
         SimpleNamespace(temp_upload=SimpleNamespace(ttl_seconds=12 * 60 * 60))
     )
     monkeypatch.setattr(store, "_ensure_shared_cleanup_worker", lambda: None)
     _reset_state()
+    due = 1_800_000_000.0
+    current = due - 1
+    monkeypatch.setattr(temp_upload_store.time, "time", lambda: current)
+    account_a = SimpleNamespace(account_id="account-a")
+    account_b = SimpleNamespace(account_id="account-b")
+    temp_upload_store._SHARED_CLEANUP_DUE_AT["account-a"] = due
 
-    store._schedule_shared_cleanup(SimpleNamespace(account_id="account-a"))
-    store._schedule_shared_cleanup(SimpleNamespace(account_id="account-a"))
-
+    store._schedule_shared_cleanup(account_a)
+    assert temp_upload_store._SHARED_CLEANUP_QUEUE.empty()
+    store._schedule_shared_cleanup(account_b)
+    store._schedule_shared_cleanup(account_b)
     assert temp_upload_store._SHARED_CLEANUP_QUEUE.qsize() == 1
-    assert "account-a" in temp_upload_store._SHARED_CLEANUP_PENDING
 
-
-def test_schedule_skips_when_due_at_in_future(monkeypatch: pytest.MonkeyPatch):
-    store = temp_upload_store.TempUploadStore(
-        SimpleNamespace(temp_upload=SimpleNamespace(ttl_seconds=12 * 60 * 60))
-    )
-    monkeypatch.setattr(store, "_ensure_shared_cleanup_worker", lambda: None)
-    _reset_state()
-    # due_at far in the future: nothing new can have expired, so skip.
-    temp_upload_store._SHARED_CLEANUP_DUE_AT["account-a"] = time.time() + 3600
-
-    store._schedule_shared_cleanup(SimpleNamespace(account_id="account-a"))
-
-    assert temp_upload_store._SHARED_CLEANUP_QUEUE.qsize() == 0
-
-
-def test_schedule_submits_when_due_at_elapsed(monkeypatch: pytest.MonkeyPatch):
-    store = temp_upload_store.TempUploadStore(
-        SimpleNamespace(temp_upload=SimpleNamespace(ttl_seconds=12 * 60 * 60))
-    )
-    monkeypatch.setattr(store, "_ensure_shared_cleanup_worker", lambda: None)
-    _reset_state()
-    temp_upload_store._SHARED_CLEANUP_DUE_AT["account-a"] = time.time() - 1
-
-    store._schedule_shared_cleanup(SimpleNamespace(account_id="account-a"))
-
-    assert temp_upload_store._SHARED_CLEANUP_QUEUE.qsize() == 1
+    current = due
+    store._schedule_shared_cleanup(account_a)
+    store._schedule_shared_cleanup(account_a)
+    queue = temp_upload_store._SHARED_CLEANUP_QUEUE
+    try:
+        assert queue.qsize() == 2
+        assert temp_upload_store._SHARED_CLEANUP_PENDING == {"account-a", "account-b"}
+        assert [queue.get_nowait()[2], queue.get_nowait()[2]] == ["account-b", "account-a"]
+        queue.task_done()
+        queue.task_done()
+    finally:
+        _reset_state()
 
 
 def test_schedule_releases_pending_when_queue_is_full(monkeypatch: pytest.MonkeyPatch):
@@ -168,6 +160,15 @@ def test_schedule_releases_pending_when_queue_is_full(monkeypatch: pytest.Monkey
     store._schedule_shared_cleanup(SimpleNamespace(account_id="account-a"))
 
     assert "account-a" not in temp_upload_store._SHARED_CLEANUP_PENDING
+    queue = temp_upload_store._SHARED_CLEANUP_QUEUE
+    assert queue.get_nowait()[2] == "occupied"
+    queue.task_done()
+    try:
+        store._schedule_shared_cleanup(SimpleNamespace(account_id="account-a"))
+        assert queue.get_nowait()[2] == "account-a"
+        queue.task_done()
+    finally:
+        _reset_state()
 
 
 @pytest.mark.asyncio
@@ -177,17 +178,24 @@ async def test_cleanup_stops_at_first_live_upload(monkeypatch: pytest.MonkeyPatc
     )
     _reset_state()
     now = time.time()
-    expired_a = _upload_entry(now - 7200)
-    expired_b = _upload_entry(now - 5400)
+    expired_a = _flat_entry(now - 7200)
+    expired_b = _flat_entry(now - 5400)
     live_created = now - 60
-    live = _upload_entry(live_created)
+    live = _flat_entry(live_created)
 
     removed: list[str] = []
     list_calls: list = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             list_calls.append((sort_by, sort_order))
             return [expired_a, expired_b, live]
 
@@ -221,13 +229,20 @@ async def test_cleanup_full_page_expired_clears_due_at(monkeypatch: pytest.Monke
     )
     _reset_state()
     now = time.time()
-    entries = [_upload_entry(now - 7200), _upload_entry(now - 5400)]
+    entries = [_flat_entry(now - 7200), _flat_entry(now - 5400)]
 
     removed: list[str] = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             return entries
 
         async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
@@ -253,19 +268,25 @@ async def test_cleanup_remove_failure_clears_due_at_and_stops(monkeypatch: pytes
     )
     _reset_state()
     now = time.time()
-    first = _upload_entry(now - 7200)
-    second = _upload_entry(now - 5400)
+    first = _flat_entry(now - 7200)
+    second = _flat_entry(now - 5400)
     temp_upload_store._SHARED_CLEANUP_DUE_AT["account-a"] = now + 999
 
-    removed: list[str] = []
-
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             return [first, second]
 
         async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
             raise RuntimeError("boom")
+
     monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
 
     listed, scanned, removed_count, next_due = await store._cleanup_shared_uploads(
@@ -285,13 +306,20 @@ async def test_cleanup_skips_invalid_dirs_by_default(monkeypatch: pytest.MonkeyP
     _reset_state()
     now = time.time()
     invalid = {"isDir": True, "uri": f"{temp_upload_store._SHARED_UPLOAD_ROOT}/not-an-id"}
-    expired = _upload_entry(now - 7200)
+    expired = _flat_entry(now - 7200)
 
     removed: list[str] = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             return [invalid, expired]
 
         async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
@@ -313,22 +341,27 @@ async def test_cleanup_skips_invalid_dirs_by_default(monkeypatch: pytest.MonkeyP
 @pytest.mark.asyncio
 async def test_cleanup_removes_invalid_dirs_when_enabled(monkeypatch: pytest.MonkeyPatch):
     store = temp_upload_store.TempUploadStore(
-        SimpleNamespace(
-            temp_upload=SimpleNamespace(ttl_seconds=3600, cleanup_invalid_dirs=True)
-        )
+        SimpleNamespace(temp_upload=SimpleNamespace(ttl_seconds=3600, cleanup_invalid_dirs=True))
     )
     _reset_state()
     now = time.time()
     invalid = {"isDir": True, "uri": f"{temp_upload_store._SHARED_UPLOAD_ROOT}/not-an-id"}
-    expired = _upload_entry(now - 7200)
+    expired = _flat_entry(now - 7200)
     live_created = now - 60
-    live = _upload_entry(live_created)
+    live = _flat_entry(live_created)
 
     removed: list[str] = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             return [invalid, expired, live]
 
         async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
@@ -356,20 +389,25 @@ async def test_cleanup_invalid_dir_remove_failure_does_not_stop_scan(
     monkeypatch: pytest.MonkeyPatch,
 ):
     store = temp_upload_store.TempUploadStore(
-        SimpleNamespace(
-            temp_upload=SimpleNamespace(ttl_seconds=3600, cleanup_invalid_dirs=True)
-        )
+        SimpleNamespace(temp_upload=SimpleNamespace(ttl_seconds=3600, cleanup_invalid_dirs=True))
     )
     _reset_state()
     now = time.time()
     invalid = {"isDir": True, "uri": f"{temp_upload_store._SHARED_UPLOAD_ROOT}/not-an-id"}
-    expired = _upload_entry(now - 7200)
+    expired = _flat_entry(now - 7200)
 
     removed: list[str] = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             return [invalid, expired]
 
         async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
@@ -407,8 +445,15 @@ async def test_cleanup_removes_expired_buckets_and_stops_at_live(monkeypatch: py
     removed: list[str] = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             return entries
 
         async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
@@ -432,37 +477,6 @@ async def test_cleanup_removes_expired_buckets_and_stops_at_live(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_cleanup_removes_expired_legacy_flat_uploads(monkeypatch: pytest.MonkeyPatch):
-    store = temp_upload_store.TempUploadStore(
-        SimpleNamespace(temp_upload=SimpleNamespace(ttl_seconds=3600))
-    )
-    _reset_state()
-    now = time.time()
-    expired_flat = _flat_entry(now - 7200)
-    live_flat = _flat_entry(now - 60)
-
-    removed: list[str] = []
-
-    class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
-            return [expired_flat, live_flat]
-
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
-            removed.append(uri)
-
-    monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
-
-    listed, scanned, removed_count, next_due = await store._cleanup_shared_uploads(
-        SimpleNamespace(account_id="account-a", user=SimpleNamespace())
-    )
-
-    # Legacy flat uploads are still reclaimed by their own creation-time TTL.
-    assert removed == [expired_flat["uri"]]
-    assert removed_count == 1
-
-
-@pytest.mark.asyncio
 async def test_cleanup_buckets_not_starved_by_live_legacy(monkeypatch: pytest.MonkeyPatch):
     # Legacy ids (13-digit prefix) sort before buckets (10-digit prefix), so in
     # a single mixed listing a still-live legacy upload appears first. Bucket and
@@ -473,14 +487,21 @@ async def test_cleanup_buckets_not_starved_by_live_legacy(monkeypatch: pytest.Mo
     )
     _reset_state()
     now = time.time()
-    live_legacy = _flat_entry(now - 60)                 # legacy, still valid
+    live_legacy = _flat_entry(now - 60)  # legacy, still valid
     expired_bucket = _bucket_entry(_bucket_for(now - 5 * 3600))  # bucket, expired
 
     removed: list[str] = []
 
     class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
+        async def ls(
+            self,
+            uri,
+            show_all_hidden=False,
+            node_limit=None,
+            sort_by=None,
+            sort_order="asc",
+            ctx=None,
+        ):
             # Emulate name-ascending: legacy (1...) before bucket (2...).
             return [live_legacy, expired_bucket]
 
@@ -501,104 +522,66 @@ async def test_cleanup_buckets_not_starved_by_live_legacy(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_cleanup_never_treats_legacy_flat_as_invalid(monkeypatch: pytest.MonkeyPatch):
-    store = temp_upload_store.TempUploadStore(
-        SimpleNamespace(
-            temp_upload=SimpleNamespace(ttl_seconds=3600, cleanup_invalid_dirs=True)
-        )
+async def test_read_shared_meta_uses_bucket_path_for_new_id(monkeypatch, tmp_path):
+    config = ServerConfig(temp_upload=TempUploadConfig(ttl_seconds=0))
+    viking_fs = local_viking_fs(tmp_path / "agfs")
+    monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: viking_fs)
+    ctx = RequestContext(user=UserIdentifier("account-a", "alice"), role=Role.ROOT)
+    content = b"stored upload"
+    upload_id = await temp_upload_store.TempUploadStore(config).save_upload(
+        _UploadFile([content]), "shared", ctx
     )
-    _reset_state()
-    now = time.time()
-    invalid = {"isDir": True, "uri": f"{temp_upload_store._SHARED_UPLOAD_ROOT}/not-an-id"}
-    live_flat = _flat_entry(now - 60)  # valid legacy id, not yet expired
+    bucket, leaf = upload_id.removeprefix("shared_").split("-", 1)
+    assert len(bucket) == 10 and bucket.isdigit()
+    assert len(leaf) == 32
+    directory = f"viking://upload/{bucket}/{leaf}"
+    assert await viking_fs.read_file_bytes(f"{directory}/content", ctx=ctx) == content
+    reader = AsyncMock(wraps=viking_fs.read_file)
+    monkeypatch.setattr(viking_fs, "read_file", reader)
 
-    removed: list[str] = []
-
-    class _FakeVfs:
-        async def ls(self, uri, show_all_hidden=False, node_limit=None,
-                     sort_by=None, sort_order="asc", ctx=None):
-            return [invalid, live_flat]
-
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
-            removed.append(uri)
-
-    monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
-
-    listed, scanned, removed_count, next_due = await store._cleanup_shared_uploads(
-        SimpleNamespace(account_id="account-a", user=SimpleNamespace())
+    resolved = await temp_upload_store.TempUploadStore(config).resolve_shared_reference(
+        upload_id, ctx
     )
 
-    # Only the invalid dir is removed; the live legacy upload is preserved and
-    # sets due_at (it is a valid, unexpired upload), never deleted as invalid.
-    assert removed == [invalid["uri"]]
-    assert removed_count == 1
-    assert next_due is not None
-
-
-def test_new_upload_id_is_bucketed_and_legacy_is_not():
-    # New id: 10-digit hour prefix -> bucketed.
-    new_id = temp_upload_store._new_shared_upload_id()
-    prefix = new_id.split("-", 1)[0]
-    assert len(prefix) == 10
-    assert temp_upload_store._shared_bucket_from_upload_id(new_id) == prefix
-    # A new id has no legacy creation timestamp.
-    assert temp_upload_store._shared_upload_created_at(new_id) is None
-
-    # Legacy id: 13-digit ms prefix -> not bucketed, but has a creation time.
-    legacy_id = _make_upload_id(time.time())
-    assert temp_upload_store._shared_bucket_from_upload_id(legacy_id) is None
-    assert temp_upload_store._shared_upload_created_at(legacy_id) is not None
+    assert resolved.original_filename == "upload.md"
+    assert resolved.content_uri == f"{directory}/content"
+    reader.assert_awaited_once_with(f"{directory}/meta", ctx=ctx)
 
 
 @pytest.mark.asyncio
-async def test_read_shared_meta_uses_bucket_path_for_new_id(monkeypatch: pytest.MonkeyPatch):
-    store = temp_upload_store.TempUploadStore(SimpleNamespace(temp_upload=SimpleNamespace()))
-    new_id = temp_upload_store._new_shared_upload_id()
-    bucket, leaf = temp_upload_store._split_shared_upload_id(new_id)
-    expected_uri = temp_upload_store._shared_meta_uri(bucket, leaf)
-
-    read_uris: list[str] = []
-
-    class _FakeVfs:
-        async def read_file(self, uri, ctx=None):
-            read_uris.append(uri)
-            return '{"temp_file_id": "shared_%s"}' % new_id
-
-    monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
-
-    meta = await store._read_shared_meta(
-        new_id, SimpleNamespace(account_id="a", user=SimpleNamespace())
+async def test_read_shared_meta_uses_flat_path_for_legacy_id(monkeypatch, tmp_path):
+    viking_fs = local_viking_fs(tmp_path / "agfs")
+    monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: viking_fs)
+    ctx = RequestContext(user=UserIdentifier("account-a", "alice"), role=Role.ROOT)
+    stored_id = _make_upload_id(time.time())
+    upload_id = f"shared_{stored_id}"
+    directory = f"viking://upload/{stored_id}"
+    content = b"legacy content"
+    await viking_fs.write_file_bytes(f"{directory}/content", content, ctx=ctx)
+    await viking_fs.write_file(
+        f"{directory}/meta",
+        json.dumps(
+            {
+                "version": 1,
+                "temp_file_id": upload_id,
+                "account": ctx.account_id,
+                "user": ctx.user.user_id,
+                "storage_uri": f"{directory}/content",
+                "original_filename": "legacy.md",
+                "file_ext": ".md",
+            }
+        ),
+        ctx=ctx,
     )
-    # Exactly one read, against the bucketed path (no legacy fallback probe).
-    assert read_uris == [expected_uri]
-    # In-bucket leaf is the uuid only, without repeating the bucket prefix.
-    assert expected_uri == f"{temp_upload_store._SHARED_UPLOAD_ROOT}/{bucket}/{leaf}/meta"
-    assert leaf == new_id.split("-", 1)[1]
-    assert bucket not in leaf
-    assert meta["temp_file_id"] == f"shared_{new_id}"
+    reader = AsyncMock(wraps=viking_fs.read_file)
+    monkeypatch.setattr(viking_fs, "read_file", reader)
 
-
-@pytest.mark.asyncio
-async def test_read_shared_meta_uses_flat_path_for_legacy_id(monkeypatch: pytest.MonkeyPatch):
-    store = temp_upload_store.TempUploadStore(SimpleNamespace(temp_upload=SimpleNamespace()))
-    legacy_id = _make_upload_id(time.time())
-    expected_uri = temp_upload_store._legacy_shared_meta_uri(legacy_id)
-
-    read_uris: list[str] = []
-
-    class _FakeVfs:
-        async def read_file(self, uri, ctx=None):
-            read_uris.append(uri)
-            return '{"temp_file_id": "shared_%s"}' % legacy_id
-
-    monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
-
-    meta = await store._read_shared_meta(
-        legacy_id, SimpleNamespace(account_id="a", user=SimpleNamespace())
+    resolved = await temp_upload_store.TempUploadStore(ServerConfig()).resolve_for_consume(
+        upload_id, ctx
     )
-    # Exactly one read, against the legacy flat path.
-    assert read_uris == [expected_uri]
-    assert meta["temp_file_id"] == f"shared_{legacy_id}"
-
-
-
+    try:
+        assert resolved.original_filename == "legacy.md"
+        assert Path(resolved.local_path).read_bytes() == content
+        reader.assert_awaited_once_with(f"{directory}/meta", ctx=ctx)
+    finally:
+        await resolved.cleanup()

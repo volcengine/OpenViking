@@ -10,6 +10,8 @@ OpenViking 的所有重要变更都将记录在此文件中。
 - **`auto` 在任何远程解析失败时降级到本地**：依次尝试每个已配置的远程 provider 并使用第一个成功的；某个 provider 抛出异常时记录日志并尝试下一个，因此远程服务不可用时使该文档降级到本地解析，而不会使导入失败。实际走的路径记录在 `pdf_strategy_effective`；同时，“是否有远程解析服务在场”改用 `PDFConfig.remote_enabled` 判定，它以 provider 列表表达，而不绑定单一服务。
 - **MinerU 托管服务支持（`mineru_token`）**：新增 `pdf.mineru_token` 用于携带托管版 MinerU 服务的 Bearer token；由于该服务没有 `/file_parse` 路由，配置它同时会选中托管批处理协议：`POST /file-urls/batch` 预留上传 URL → `PUT` 上传 PDF → 轮询 `GET /extract-results/batch/{batch_id}` → 下载 `full_zip_url` 并取出 markdown 与其图片。未配置 token 时仍使用原有的自托管 `/file_parse` 协议，现有部署不受影响。若批处理握手被拒，解析器会再尝试一次 `/file_parse`，以保持带 token 的自托管部署仍然可用。
 - **PDF `auto` 策略改为优先使用已配置的远程解析器（行为变更）**：`auto` 现在会将每份 PDF 发往已配置的远程解析服务，本地解析器仅作兜底；而之前是先本地、本地失败才使用 MinerU。若配置了 `pdf.mineru_endpoint`，请预期延迟、额度消耗与限流风险发生变化；在限流情况下，回退机制会让导入变慢而不是变快。若希望保持原有行为请设为 `strategy: local`；若希望远程解析必须成功、失败即失败，请设为 `strategy: mineru`。远程失败会仅降级单份文档而不使整批导入失败，并由 `pdf_strategy_effective`（`mineru` 或 `local`）记录实际使用的转换器。服务类配置（`mineru_endpoint`、`mineru_token`、`mineru_bodys`）保持当前位置，未来接入新的远程解析服务时只需增加 provider，而无需新增 `strategy` 取值。
+- **LangGraph Store 发现错误**：非语义 `search()` 和 `list_namespaces()` 现在会传播
+  后端文件列表查询失败，包括权限和服务不可用错误。明确不存在的命名空间根路径仍返回空结果。
 - **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
   及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
   `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。
@@ -20,17 +22,20 @@ OpenViking 的所有重要变更都将记录在此文件中。
     或共享 Redis 的多副本部署。在包含这些功能的版本发布之前，需要显式设置 `image.tag`，
     见[运维指南](../guides/22-gateway-operations.md#helm)。
   - 新增可选设置：`storage`（Redis）、`management_api`、`openviking_keys`、`tenancy`、
-    `default_upstreams` 和 `default_profile`、`request_log_sink`、`capture_concurrency` 以及 `keep_alive_seconds`。
+    `default_upstreams` 和 `default_profile`、`request_log_sink` 以及 `keep_alive_seconds`。
     默认存储仍是 SQLite。
   - 新增 `X-OpenViking-Upstream-URL` 请求头，按 Base URL 从允许的上游中选择一个，
     见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header)。
   - `session_ttl_seconds`（不低于 3600）取代 `session_ttl_days`，对话可以在一天内过期；
     旧字段会被忽略并在启动时打印警告，升级时请改用新字段。
+  - `session_ttl_seconds` 的默认值从 30 天改为 1 天（`86400`），Helm chart 不再把它设为 7 天（升级需操作）。闲置超过这个时长的对话会丢失网关状态：再继续时，之前补充的记忆、工具结果和摘要不会放回，完整历史会重新保存到一个新的 OpenViking 会话。需要更长的保留时间时，设置 `session_ttl_seconds`。
   - 无需修改配置的行为变化：独立网关 keep-alive 从 5 秒提高到 75 秒；
     绑定公网地址的网关在启动时遇到 OpenViking 不可达或返回 5xx 会等待并重试；
     空闲 SSE 流每 15 秒发送一条注释心跳；OpenViking 以 402 或 403 拒绝密钥的请求会被拒绝，
-    不再转发；保存时收到 OpenViking 401、且 `/health` 也返回 401 时，会以 `gateway_key_revoked`
-    暂停保存。
+    不再转发。
+  - 对话保存（升级需操作）：结束一轮的请求在回复后立即把这一轮写入 OpenViking，不再等下一条消息或 10 分钟；工具交接不保存，结束这一轮的请求保存整轮。重新生成、编辑或压缩过的历史继续写入同一个 OpenViking 会话，从这一轮的用户消息开始，新旧版本都会保留，只有重新同步对话会换新会话。网关不再保存待写入的对话文本，也不重试写入：写入失败时，请求记录的 `capture_status` 为 `failed` 并带 `capture_reason`，下一轮结束时补上缺的内容，没有下一轮时这一轮不会保存。保存状态 `retrying`、`paused`、`lost`、`capture_retry_at` 和 `kind: capture` 记录不再出现，保存了一轮的请求记录新增 `capture_messages` 和 `openviking_session`；概览的 `capture_issues` 改为 `{"failed": n}`，状态行的 `capture` 只含 `delivered` 和 `failed`。提交默认仍由网关进行：一轮结束时待提交内容达到 `commit_tokens` 就提交（保留最近 `keep_recent_messages` 条消息），最后一轮结束 `idle_seconds` 后提交剩下的全部消息；这段等待的到期时间记在网关存储里，保存这一轮的网关进程重启或被替换后，由任一网关进程在到期后一两分钟内补上。新增 `openviking_auto_commit`，开启后改由 OpenViking 的会话自动提交，空闲提交需要 Server 开启 `memory.session_auto_commit.enabled`，见[保存对话](../gateway/08-context-profiles.md#save-conversations)。`capture_concurrency` 和 `capture_delivery_records` 已删除，配置中仍有时会被忽略并在启动时打印警告。升级的影响：升级时已排队、尚未写入的最后一轮，由这段对话的下一轮结束时写入，不在后台写入；共享存储滚动升级期间，新副本处理过的对话再由旧版本副本处理时，不带记忆转发，直到旧副本被替换；回退到之前的版本需要使用新的网关存储。
+  - 上下文配置现在默认勾选全部 OpenViking 工具，包括 `forget`、`set_acl` 等会修改数据的工具；之前的版本默认不勾选其中 8 个。已保存的配置和进行中的对话保持原来的工具。没有保存 `default` 配置的账号，以及省略 `disabled_tools` 的管理 API 请求，现在会得到全部工具；要保留原来的勾选，请设置 `default_profile.disabled_tools` 或保存一份 `default` 配置。
+  - `X-OpenViking-Context` 只能收窄工具权限：`disabled_tools` 会追加到配置的排除列表上，`gateway_tools` 不能重新打开工具。之前靠发送 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 拿到配置不提供的工具的客户端，升级后不再拿到；请改为修改配置。
 - **火山引擎 KMS `key_file`（升级需操作）**：`encryption.volcengine_kms.key_file` 现在对服务端和网关
   都会生效；此前版本忽略该字段，根密钥始终位于 `~/.openviking/openviking-volcengine-root-key.enc`。
   如果配置了 `key_file`，升级前把该文件移到配置的路径。配置的文件不存在而默认文件存在时，

@@ -34,7 +34,8 @@ def _make_fake_client(get_handler):
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url):
+        async def get(self, url, headers=None):
+            self.headers = headers
             return get_handler(url)
 
     return _FakeClient
@@ -74,9 +75,7 @@ async def test_ready_after_unhealthy(patch_httpx):
 
 @pytest.mark.asyncio
 async def test_timeout_raises(patch_httpx):
-    patch_httpx(
-        lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "unhealthy"})
-    )
+    patch_httpx(lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "unhealthy"}))
 
     with pytest.raises(RuntimeError) as exc_info:
         await wait_for_mineru_ready(ENDPOINT, timeout=0.05)

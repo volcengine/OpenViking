@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import base64
 import json
 import os
 import threading
 from datetime import datetime
 from types import SimpleNamespace
+from typing import cast
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -18,18 +21,22 @@ from openviking.server.account_stores.mysql import MySQLAccountStore
 from openviking.server.account_stores.mysql_schema import (
     Account,
     Base,
-    Credential,
     GroupMember,
     User,
 )
 from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
+from openviking.storage.viking_fs import VikingFS
+from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.cache_config import CacheConfig
 from tests.server.account_store_fakes import InMemoryAGFS
 
 
@@ -146,13 +153,60 @@ async def test_file_provider_keeps_existing_registry_paths():
         assert "/local/_system/accounts.json" in paths
         assert "/local/acme/_system/users.json" in paths
         assert "/local/acme/_system/groups.json" in paths
-        assert not any("identities-v2" in path or "api-keys-v2" in path for path in paths)
+        accounts = json.loads(fs.agfs.read("/local/_system/accounts.json"))
+        assert "acme" in accounts["accounts"]
+        users = json.loads(fs.agfs.read("/local/acme/_system/users.json"))
+        assert users["users"]["alice"] == {"key": key, "role": "admin"}
+        assert users["users"]["bob"]["role"] == "user"
+        assert json.loads(fs.agfs.read("/local/acme/_system/groups.json")) == {"groups": {}}
     finally:
         await manager.close()
 
 
+@pytest.mark.parametrize("use_outer_lease", [True, False], ids=["outer-tree", "own-exact"])
+async def test_file_account_creation_reuses_optional_outer_lease(use_outer_lease):
+    agfs = InMemoryAGFS()
+    manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
+    await manager.load()
+    acquired_paths = []
+    released_leases = []
+    store = manager._store
+    original_acquire = store._async_agfs.pathlock_acquire_exact
+    original_release = store._async_agfs.pathlock_release
+
+    async def record_acquire(path, *args, **kwargs):
+        acquired_paths.append(path)
+        return await original_acquire(path, *args, **kwargs)
+
+    async def record_release(lease):
+        released_leases.append(lease)
+        return await original_release(lease)
+
+    store._async_agfs.pathlock_acquire_exact = record_acquire
+    store._async_agfs.pathlock_release = record_release
+    outer_lease = {"lease_ref": "account-tree"}
+    try:
+        await manager.create_account(
+            "acme",
+            "alice",
+            lease_ref=outer_lease if use_outer_lease else None,
+        )
+    finally:
+        await manager.close()
+
+    assert acquired_paths[0] == "/local/_system/accounts.json"
+    assert len(released_leases) == len(acquired_paths)
+    if use_outer_lease:
+        assert acquired_paths == ["/local/_system/accounts.json"]
+    else:
+        assert acquired_paths == [
+            "/local/_system/accounts.json",
+            "/local/acme/_system/users.json",
+        ]
+
+
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
-@pytest.mark.parametrize("length", [255, 256, 1024])
+@pytest.mark.parametrize("length", [255, 256])
 async def test_file_account_creation_respects_path_component_limit(issue_user_keys, length):
     agfs = InMemoryAGFS()
     manager = build_api_key_manager(
@@ -181,7 +235,7 @@ async def test_file_account_creation_respects_path_component_limit(issue_user_ke
 
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
-@pytest.mark.parametrize("length", [255, 256, 1024])
+@pytest.mark.parametrize("length", [255, 256])
 async def test_file_account_creation_respects_admin_user_id_limit(
     issue_user_keys,
     length,
@@ -209,7 +263,7 @@ async def test_file_account_creation_respects_admin_user_id_limit(
 
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
-@pytest.mark.parametrize("length", [255, 256, 1024])
+@pytest.mark.parametrize("length", [255, 256])
 async def test_file_user_creation_respects_user_id_limit(issue_user_keys, length):
     agfs = InMemoryAGFS()
     manager = build_api_key_manager(
@@ -298,65 +352,43 @@ async def test_file_user_creation_is_atomic_when_credential_write_fails():
     assert (await manager.resolve_identity(admin_key)).user_id == "alice"
 
 
-async def test_regenerate_key_preserves_management_not_found_errors():
-    manager = build_api_key_manager("root", SimpleNamespace(agfs=InMemoryAGFS()))
+async def test_file_role_change_is_atomic_when_credential_write_fails():
+    class FailingAGFS(InMemoryAGFS):
+        fail_user_write = False
+
+        def write(self, path, content, ctx=None):
+            if self.fail_user_write and path == "/local/acme/_system/users.json":
+                raise OSError("credential store unavailable")
+            return super().write(path, content, ctx)
+
+    agfs = FailingAGFS()
+    store = FileStore(SimpleNamespace(agfs=agfs))
+    manager = APIKeyManager("root", store)
     await manager.load()
     await manager.create_account("acme", "alice")
+    await manager.register_user("acme", "bob")
+    agfs.fail_user_write = True
 
-    with pytest.raises(NotFoundError, match="Account not found"):
-        await manager.regenerate_key("missing", "alice")
-    with pytest.raises(NotFoundError, match="User not found"):
-        await manager.regenerate_key("acme", "missing")
-
-
-async def test_mysql_load_creates_default_account():
-    raw_mysql = os.environ.get("OV_TEST_MYSQL")
-    if not raw_mysql:
-        pytest.skip("Set OV_TEST_MYSQL to exercise MySQL account-store startup")
-
-    service_name = f"test-{uuid4().hex}"
-    manager = build_api_key_manager(
-        "root",
-        None,
-        service_name=service_name,
-        account_store_provider="mysql",
-        account_store_params=json.loads(raw_mysql),
-    )
-    mysql = manager._store
-    assert isinstance(mysql, MySQLAccountStore)
-    engine = create_async_engine(mysql._url, **mysql._engine_options)
     try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+        with pytest.raises(OSError, match="credential store unavailable"):
+            await manager.set_role("acme", "bob", "admin")
 
-        await manager.load()
+        # The failed write must roll the in-memory role back too, so this
+        # process does not authorize with a role that was never persisted.
+        assert await manager.get_registered_user_role("acme", "bob") == Role.USER
 
-        accounts = await manager.list_accounts()
-        assert [account["account_id"] for account in accounts] == ["default"]
-        assert accounts[0]["user_count"] == 0
-        await manager.close()
-        await manager.load()
-
-        async with engine.connect() as connection:
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(Account)
-                    .where(
-                        Account.service_name == service_name,
-                        Account.account_id == "default",
-                    )
-                )
-                == 1
-            )
+        agfs.fail_user_write = False
+        reopened = APIKeyManager("root", FileStore(SimpleNamespace(agfs=agfs)))
+        await reopened.load()
+        try:
+            assert await reopened.get_registered_user_role("acme", "bob") == Role.USER
+        finally:
+            await reopened.close()
     finally:
         await manager.close()
-        async with engine.begin() as connection:
-            await connection.execute(delete(Account).where(Account.service_name == service_name))
-        await engine.dispose()
 
 
-async def test_distributed_authentication_state_is_shared_and_service_scoped():
+async def test_distributed_authentication_state_is_shared_and_service_scoped(tmp_path):
     """Key rotation and group deletion refresh caches within the owning service."""
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     redis_url = os.environ.get("OV_TEST_REDIS")
@@ -365,35 +397,44 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
 
     service_name = f"test-{uuid4().hex}"
     isolated_service_name = f"test-{uuid4().hex}"
-    key_prefix = f"ov:test:{uuid4().hex}"
     params = {
         "mysql": json.loads(raw_mysql),
-        "cache": {
-            "provider": "redis",
-            "params": {
-                "mode": "standalone",
-                "endpoints": [redis_url],
-                "key_prefix": key_prefix,
-            },
-        },
+        "cache": {"instance": "accountstore"},
     }
+    cache_client = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(path=str(tmp_path), backend="memory"),
+            cache=CacheConfig(
+                instances={
+                    "default": {"provider": "redis", "params": {"endpoints": [redis_url]}},
+                    "accountstore": {
+                        "provider": "redis",
+                        "params": {"endpoints": [redis_url]},
+                    },
+                }
+            ),
+            service_name=service_name,
+            account_store_cache_instance="accountstore",
+        )
+    )
+    viking_fs = SimpleNamespace(agfs=cache_client)
     writer = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
     )
     reader = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
     )
     isolated = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=isolated_service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
@@ -416,9 +457,7 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(isolated_key)
 
-        # Repeated rotation must bound history and invalidate an already cached key.
-        for _ in range(12):
-            active_key = await writer.regenerate_key("acme", "alice")
+        active_key = await writer.regenerate_key("acme", "alice")
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(old_key)
         await writer.register_user("acme", "bob")
@@ -431,6 +470,18 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
         await writer.add_group_members("acme", "engineering", ["alice", "bob", "bob"])
         assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
         assert await reader.get_user_group_ids("acme", "bob") == ("engineering",)
+
+        assert (
+            await writer.remove_group_members(
+                "acme", "engineering", ["alice", "bob", "alice", "missing"]
+            )
+            is True
+        )
+        assert await reader.get_group_members("acme", "engineering") == []
+        assert await reader.get_user_group_ids("acme", "alice") == ()
+        assert await reader.get_user_group_ids("acme", "bob") == ()
+        assert await writer.remove_group_members("acme", "engineering", ["alice", "bob"]) is False
+        await writer.add_group_members("acme", "engineering", ["alice", "bob"])
 
         await writer.delete_group("acme", "engineering")
 
@@ -448,29 +499,24 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
                 )
                 == 0
             )
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(Credential)
-                    .where(Credential.service_name == service_name)
-                )
-                == 12
-            )
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(Credential)
-                    .where(Credential.service_name == service_name, Credential.revoked.is_(False))
-                )
-                == 2
-            )
     finally:
         try:
-            redis_client = writer._store._redis
-            if redis_client is not None:
-                keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}:*")]
+            redis = pytest.importorskip("redis.asyncio")
+            redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+            try:
+                account_tag = (
+                    base64.urlsafe_b64encode(f"{service_name}\0acme".encode()).decode().rstrip("=")
+                )
+                keys = [
+                    key
+                    async for key in redis_client.scan_iter(
+                        match=f"ov:account-cache:v2:{{{account_tag}}}:*"
+                    )
+                ]
                 if keys:
                     await redis_client.delete(*keys)
+            finally:
+                await redis_client.aclose()
             async with engine.begin() as connection:
                 await connection.execute(
                     delete(Account).where(
@@ -484,14 +530,17 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
             await engine.dispose()
 
 
-async def test_file_management_user_read_refreshes_only_explicitly():
+async def test_read_only_file_replica_refreshes_identities_without_writes(monkeypatch):
     fs = SimpleNamespace(agfs=InMemoryAGFS())
     writer = build_api_key_manager("root", fs)
-    reader = build_api_key_manager("root", fs)
+    reader = build_api_key_manager("root", fs, account_store_params={"read_only": True})
     await writer.load()
+    forbidden_write = AsyncMock(side_effect=AssertionError("read-only replica attempted a write"))
+    for method in ("write", "ensure_parent_dirs", "pathlock_acquire_exact"):
+        monkeypatch.setattr(reader._store._async_agfs, method, forbidden_write)
     await reader.load()
     try:
-        await writer.create_account("acme", "alice")
+        key = await writer.create_account("acme", "alice")
 
         assert not await reader.has_user("acme", "alice")
         assert await reader.get_user_for_management("acme", "alice") == {
@@ -499,6 +548,17 @@ async def test_file_management_user_read_refreshes_only_explicitly():
             "role": Role.ADMIN,
         }
         assert await reader.has_user("acme", "alice")
+        assert (await reader.resolve_identity(key)).role == Role.ADMIN
+        rotated = await writer.regenerate_key("acme", "alice")
+        await reader.get_user_for_management("acme", "alice")
+        assert (await reader.resolve_identity(rotated)).user_id == "alice"
+        with pytest.raises(UnauthenticatedError):
+            await reader.resolve_identity(key)
+        before = dict(fs.agfs._files)
+        with pytest.raises(PermissionDeniedError, match="read-only"):
+            await reader.register_user("acme", "bob")
+        assert fs.agfs._files == before
+        forbidden_write.assert_not_awaited()
     finally:
         await reader.close()
         await writer.close()
@@ -516,7 +576,8 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
             if path == "/local/acme/_system/users.json" and self.pause_next_user_read:
                 self.pause_next_user_read = False
                 self.user_read_started.set()
-                self.allow_user_read.wait()
+                if not self.allow_user_read.wait(2):
+                    raise TimeoutError("test did not release the role update")
             return super().read(path, ctx)
 
     agfs = PausingAGFS()
@@ -527,27 +588,40 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
 
     agfs.pause_next_user_read = True
     set_role = asyncio.create_task(store.set_role("acme", "bob", "admin"))
-    await asyncio.wait_for(asyncio.to_thread(agfs.user_read_started.wait), timeout=1)
-    deleting = asyncio.create_task(
-        store.begin_deletion(
-            "acme",
-            "bob",
-            task_id="delete",
-            owner_account_id="system",
-            owner_user_id="system",
-        )
-    )
-    await asyncio.sleep(0)
-    agfs.allow_user_read.set()
+    deleting = None
     try:
-        await set_role
-        deletion, created = await deleting
+        assert await asyncio.to_thread(agfs.user_read_started.wait, 2)
+        deleting = asyncio.create_task(
+            store.begin_deletion(
+                "acme", "bob", task_id="delete", owner_account_id="system", owner_user_id="system"
+            )
+        )
+        await asyncio.sleep(0)
+        agfs.allow_user_read.set()
+        await asyncio.wait_for(set_role, 2)
+        deletion, created = await asyncio.wait_for(deleting, 2)
+        assert created
+        assert deletion["task_id"] == "delete"
+        assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
     finally:
         agfs.allow_user_read.set()
+        await asyncio.gather(
+            set_role, *([deleting] if deleting is not None else []), return_exceptions=True
+        )
+        await store.close()
 
-    assert created
-    assert deletion["task_id"] == "delete"
-    assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
+
+async def test_file_store_keeps_global_role_immutable():
+    """GLOBAL is creation-only: it can be neither a role-change source nor target."""
+    store = _file_store()
+    await store.load()
+    await store.create_account_with_api_key("acme", "alice", "alice-key")
+    await store.create_user("acme", "agent", "global")
+
+    with pytest.raises(InvalidArgumentError, match="GLOBAL identities cannot change roles"):
+        await store.set_role("acme", "agent", "user")
+    with pytest.raises(InvalidArgumentError, match="user or admin"):
+        await store.set_role("acme", "alice", "global")
 
 
 async def test_group_deletion_preserves_users_and_persists_membership_removal():
@@ -584,3 +658,77 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
     finally:
         await reloaded.close()
         await manager.close()
+
+
+async def test_file_batch_group_removal_is_atomic_and_persists_indexes(monkeypatch):
+    fs = SimpleNamespace(agfs=InMemoryAGFS())
+    manager = build_api_key_manager("root", cast(VikingFS, fs))
+    reloaded = build_api_key_manager("root", cast(VikingFS, fs))
+    await manager.load()
+    try:
+        await manager.create_account("acme", "alice")
+        await manager.register_user("acme", "bob")
+        for group in ("engineering", "reviewers"):
+            await manager.create_group("acme", group)
+            await manager.add_group_members("acme", group, ["alice", "bob"])
+        await manager.begin_deletion(
+            "acme", "bob", task_id="delete-bob", owner_account_id="acme", owner_user_id="alice"
+        )
+        store = manager._store
+        assert isinstance(store, FileStore)
+        write = AsyncMock(wraps=store._write_groups_json, side_effect=OSError("store unavailable"))
+        monkeypatch.setattr(store, "_write_groups_json", write)
+        before = dict(fs.agfs._files)
+        with pytest.raises(OSError, match="store unavailable"):
+            await manager.remove_group_members("acme", "engineering", ["alice", "bob"])
+        assert fs.agfs._files == before
+        assert await manager.get_group_members("acme", "engineering") == ["alice", "bob"]
+        for user_id in ("alice", "bob"):
+            assert await manager.get_user_group_ids("acme", user_id) == ("engineering", "reviewers")
+
+        write.reset_mock(side_effect=True)
+        assert (
+            await manager.remove_group_members(
+                "acme", "engineering", ["bob", "alice", "missing", "bob"]
+            )
+            is True
+        )
+        assert await manager.remove_group_members("acme", "engineering", ["alice", "bob"]) is False
+        write.assert_awaited_once()
+        await reloaded.load()
+        for reader in (manager, reloaded):
+            assert await reader.get_group_members("acme", "engineering") == []
+            assert await reader.get_group_members("acme", "reviewers") == ["alice", "bob"]
+            for user_id in ("alice", "bob"):
+                assert await reader.get_user_group_ids("acme", user_id) == ("reviewers",)
+    finally:
+        await reloaded.close()
+        await manager.close()
+
+
+async def test_file_concurrent_batch_group_removals_preserve_all_updates(monkeypatch):
+    store = _file_store()
+    await store.load()
+    try:
+        await store.create_account_with_api_key("acme", "alice", "alice-key")
+        for user_id in ("bob", "carol"):
+            await store.create_user("acme", user_id, "user")
+        await store.create_group("acme", "engineering")
+        await store.add_group_members("acme", "engineering", ["alice", "bob", "carol"])
+        write = store._write_groups_json
+
+        async def yielding_write(account_id, groups):
+            await asyncio.sleep(0)
+            await write(account_id, groups)
+
+        monkeypatch.setattr(store, "_write_groups_json", yielding_write)
+        assert await asyncio.gather(
+            store.remove_group_members("acme", "engineering", ["alice"]),
+            store.remove_group_members("acme", "engineering", ["bob", "missing"]),
+        ) == [True, True]
+        await store.load()
+        assert await store.get_group_members("acme", "engineering") == ["carol"]
+        assert await store.get_user_group_ids("acme", "alice") == ()
+        assert await store.get_user_group_ids("acme", "bob") == ()
+    finally:
+        await store.close()

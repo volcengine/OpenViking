@@ -6,11 +6,15 @@ Logging utilities for OpenViking.
 
 import atexit
 import contextvars
+import copy
+import json
 import logging
 import queue
 import sys
 import threading
+import warnings
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterator, Optional, Tuple
@@ -19,6 +23,11 @@ from uuid import uuid4
 from openviking.observability.context import (
     bind_execution_context,
     get_observability_context,
+)
+from openviking.observability.log_safety import (
+    DEFAULT_LOG_FORMAT,
+    safe_log_fields,
+    safe_path_for_log,
 )
 
 # Try to import opentelemetry - will be None if not installed
@@ -65,8 +74,141 @@ _otel_log_handler_initialized = False
 _otel_log_handler: Any = None
 
 _MANAGED_LOGGER_ROOTS = ("openviking", "openviking_cli", "uvicorn")
+_DEPENDENCY_LOGGER_ROOTS = (
+    "mcp",
+    "fastmcp",
+    "apscheduler",
+    "LiteLLM",
+    "LiteLLM Router",
+    "LiteLLM Proxy",
+    "litellm",
+)
 _shared_log_handler: Optional[logging.Handler] = None
 _shared_log_handler_key: Optional[tuple[Any, ...]] = None
+_server_logging_owned = False
+_STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
+
+
+class CommonLogFormatter(logging.Formatter):
+    """UTC, typed fields and exactly one physical line per event."""
+
+    def __init__(self, fmt: str = DEFAULT_LOG_FORMAT) -> None:
+        if fmt != DEFAULT_LOG_FORMAT:
+            raise ValueError("logging requires the common cross-runtime format")
+        super().__init__(fmt)
+
+    def formatTime(self, record: logging.LogRecord, datefmt: Optional[str] = None) -> str:
+        return (
+            datetime.fromtimestamp(record.created, timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        prepared = copy.copy(record)
+        try:
+            message = record.getMessage()
+        except (TypeError, ValueError):
+            message = "log message formatting failed"
+        encoded = message.encode("utf-8")
+        if len(encoded) > 2048:
+            message = encoded[:2048].decode("utf-8", errors="ignore")
+            prepared.truncated = True
+            prepared.original_length = len(encoded)
+        prepared.msg = json.dumps(message, ensure_ascii=False)
+        prepared.args = ()
+        prepared.exc_info = None
+        prepared.exc_text = None
+        prepared.stack_info = None
+        prepared.request_id = getattr(record, "request_id", None) or "-"
+        prepared.trace_id = getattr(record, "trace_id", None) or "-"
+        prepared.levelname = {"WARN": "WARNING", "FATAL": "CRITICAL", "TRACE": "DEBUG"}.get(
+            record.levelname, record.levelname
+        )
+        prepared.name = json.dumps(record.name, ensure_ascii=False)[1:-1].replace(" ", "\\u0020")
+        rendered = super().format(prepared)
+        fields = safe_log_fields(prepared.__dict__)
+        fields.pop("request_id", None)
+        fields.pop("trace_id", None)
+        for key, value in fields.items():
+            rendered += f" {key}=" + (
+                "-" if value is None else json.dumps(value, ensure_ascii=False)
+            )
+        return rendered
+
+
+class _ConfiguredLevelFilter(logging.Filter):
+    def __init__(self, level: int):
+        super().__init__()
+        self.level = level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= self.level
+
+
+class _ServerDependencyFilter(logging.Filter):
+    """Route dependency records once, including handlers installed after bootstrap."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        logging.getLogger().handle(record)
+        return False
+
+
+def _server_showwarning(message, category, filename, lineno, file=None, line=None) -> None:
+    # Python's default warning renderer writes source paths and message text
+    # directly to stderr, outside the logging formatter and field boundary.
+    logging.getLogger("py.warnings").warning(
+        "runtime warning error_type=%s",
+        category.__name__,
+        extra={"error_type": category.__name__, "target_id": safe_path_for_log(filename)},
+    )
+
+
+class _SafeLogRecordFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        safe = safe_log_fields(record.__dict__)
+        for key in list(record.__dict__):
+            if key not in _STANDARD_RECORD_FIELDS and key not in safe:
+                del record.__dict__[key]
+        record.__dict__.update(safe)
+        if record.exc_info:
+            record.error_type = record.exc_info[0].__name__
+            record.exc_info = None
+        record.exc_text = None
+        if not isinstance(record.msg, str):
+            record.msg = type(record.msg).__name__
+            record.args = ()
+
+        def safe_arg(arg: Any) -> Any:
+            return (
+                arg
+                if arg is None or isinstance(arg, (str, int, float, bool))
+                else type(arg).__name__
+            )
+
+        if isinstance(record.args, tuple):
+            record.args = tuple(safe_arg(arg) for arg in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {key: safe_arg(arg) for key, arg in record.args.items()}
+        try:
+            message = record.getMessage()
+        except (TypeError, ValueError, KeyError):
+            message = "log message formatting failed"
+            record.msg, record.args = message, ()
+        if record.name == "uvicorn.error" and "Traceback (most recent call last)" in message:
+            message = "asgi runtime failed"
+            record.msg, record.args = message, ()
+            record.error_code = "ASGI_RUNTIME_FAILED"
+        encoded = message.encode("utf-8")
+        if len(encoded) > 2048:
+            message = encoded[:2048].decode("utf-8", errors="ignore")
+            record.truncated = True
+            record.original_length = len(encoded)
+            record.msg, record.args = message, ()
+        record.stack_info = None
+        record.pathname = ""
+        return True
+
 
 # QueueListeners for thread-safe stdout/stderr logging (avoids StreamHandler stalls
 # on application threads when process managers redirect streams).
@@ -89,7 +231,7 @@ def _reopen_rust_tracing_file() -> None:
     try:
         reopen_rust_tracing_file()
     except Exception as exc:
-        sys.stderr.write(f"Warning: Failed to reopen Rust tracing log file: {exc}\n")
+        get_logger(__name__).info("rust log reopen failed error_type=%s", type(exc).__name__)
 
 
 class _RustAwareTimedRotatingFileHandler(TimedRotatingFileHandler):
@@ -174,6 +316,8 @@ def _get_log_context() -> dict[str, Any]:
     if not context["span_id"]:
         context["span_id"] = obs_ctx.get_span_id()
 
+    if _request_id_context.get():
+        context["request_id"] = _request_id_context.get()
     return context
 
 
@@ -375,24 +519,30 @@ def init_otel_log_handler(
 
         # Create logging handler
         _otel_log_handler = LoggingHandler(
-            level=logging.INFO,
+            level=logging.NOTSET,
             logger_provider=logger_provider,
         )
+        level_name, _, _, _ = _load_log_config()
+        _otel_log_handler.addFilter(_ConfiguredLevelFilter(getattr(logging, level_name)))
+        _add_trace_id_filter(_otel_log_handler)
+        _otel_log_handler.addFilter(_SafeLogRecordFilter())
 
         _otel_log_handler_initialized = True
 
         logger = get_logger(__name__)
         logger.info(
-            "[OTelLogHandler] initialized with protocol=%s, endpoint=%s, service_name=%s",
+            "otel log export initialized protocol=%s",
             protocol,
-            endpoint,
-            service_name,
         )
 
         return _otel_log_handler
     except Exception as e:
         logger = get_logger(__name__)
-        logger.warning("[OTelLogHandler] initialization failed: %s", e)
+        logger.info(
+            "otel log export unavailable error_type=%s degraded=true",
+            type(e).__name__,
+            extra={"degraded": True},
+        )
         return None
 
 
@@ -401,11 +551,10 @@ def attach_otel_log_handler_to_existing_loggers() -> None:
     if _otel_log_handler is None:
         return
 
-    add_otel_log_handler_to_logger(logging.getLogger())
-
-    for logger_obj in logging.Logger.manager.loggerDict.values():
-        if isinstance(logger_obj, logging.Logger):
-            add_otel_log_handler_to_logger(logger_obj)
+    for root_name in _MANAGED_LOGGER_ROOTS:
+        add_otel_log_handler_to_logger(logging.getLogger(root_name))
+    if _server_logging_owned:
+        add_otel_log_handler_to_logger(logging.getLogger())
 
 
 def init_otel_log_handler_from_server_config(server_config: Any) -> Any:
@@ -436,6 +585,8 @@ def add_otel_log_handler_to_logger(logger: logging.Logger) -> None:
         root_name = _managed_root_name(logger.name)
         if root_name and logger.name != root_name:
             logger = logging.getLogger(root_name)
+        elif _server_logging_owned and not root_name:
+            logger = logging.getLogger()
         # Check if the handler has already been added
         if not any(isinstance(h, type(_otel_log_handler)) for h in logger.handlers):
             logger.addHandler(_otel_log_handler)
@@ -469,24 +620,20 @@ class TraceContextFilter(logging.Filter):
         context = _get_log_context()
 
         # Apply context fields to the log record
-        record.trace_id = context.get("trace_id", "")
-        record.span_id = context.get("span_id", "")
-        record.request_id = context.get("request_id", "")
-        record.operation = context.get("operation", "")
-        record.account_id = context.get("account_id", "")
-        record.user_id = context.get("user_id", "")
+        for key, value in context.items():
+            if not hasattr(record, key):
+                setattr(record, key, value)
 
         return True
 
 
 class _RequestIdLoggingFilter(logging.Filter):
-    """Inject and render the request ID bound by the HTTP server."""
+    """Inject the request ID bound by the HTTP server without modifying the message."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         request_id = _request_id_context.get()
-        record.request_id = request_id
         if request_id:
-            record.msg = f"[request_id={request_id}] {record.msg}"
+            record.request_id = request_id
         return True
 
 
@@ -500,7 +647,7 @@ class LogToSpanEventFilter(logging.Filter):
 
     Key features:
     - Logs are automatically added as span events when a span is active
-    - Exceptions are automatically recorded with record_exception()
+    - Exception types are included without raw exception text or stack traces
     - Extra fields from log records are included as span attributes
     - Best-effort only: never breaks logging if OTel is not available
 
@@ -549,54 +696,13 @@ class LogToSpanEventFilter(logging.Filter):
             "log.logger": record.name,
         }
 
-        # Add location information if available
-        if record.pathname:
-            attributes["code.filepath"] = record.pathname
-        if record.lineno:
-            attributes["code.lineno"] = record.lineno
-        if record.funcName:
-            attributes["code.function"] = record.funcName
-
-        # Add extra fields from the log record
-        # Standard fields to exclude from extra attributes
-        standard_fields = {
-            "name",
-            "msg",
-            "args",
-            "levelname",
-            "levelno",
-            "pathname",
-            "filename",
-            "module",
-            "exc_info",
-            "exc_text",
-            "stack_info",
-            "lineno",
-            "funcName",
-            "created",
-            "msecs",
-            "relativeCreated",
-            "thread",
-            "threadName",
-            "processName",
-            "process",
-            "message",
-            "asctime",
-            "trace_id",
-            "span_id",
-            "request_id",
-            "operation",
-            "account_id",
-            "user_id",
-        }
-
-        for key, value in record.__dict__.items():
-            if key not in standard_fields and not key.startswith("_"):
-                # Convert to OTel-compatible types
-                if isinstance(value, (str, int, float, bool)):
-                    attributes[key] = value
-                elif value is not None:
-                    attributes[key] = str(value)
+        attributes.update(
+            {
+                key: value
+                for key, value in safe_log_fields(record.__dict__).items()
+                if value is not None
+            }
+        )
 
         return attributes
 
@@ -608,7 +714,7 @@ class LogToSpanEventFilter(logging.Filter):
         1. Checks if the logger should be excluded
         2. Checks if the log level is above the minimum threshold
         3. If OTel is available and a span is active, adds the log as a span event
-        4. For exceptions, also records the exception with record_exception()
+        4. For exceptions, records only the exception type
 
         Args:
             record: The log record object.
@@ -642,19 +748,20 @@ class LogToSpanEventFilter(logging.Filter):
                 exc_type, exc_value, exc_tb = record.exc_info
                 if exc_value is not None:
                     # Record the exception in the span
-                    current_span.record_exception(exc_value, attributes=attributes)
+                    current_span.add_event(
+                        "exception",
+                        attributes={**attributes, "exception.type": type(exc_value).__name__},
+                    )
 
                     # Set span status to ERROR if Status/StatusCode are available
                     if Status is not None and StatusCode is not None:
                         try:
-                            current_span.set_status(
-                                Status(StatusCode.ERROR, description=str(exc_value))
-                            )
+                            current_span.set_status(Status(StatusCode.ERROR))
                         except Exception:
                             pass
             else:
                 # Add as a regular span event
-                event_name = record.getMessage() or "log"
+                event_name = "log"
                 current_span.add_event(event_name, attributes=attributes)
 
         except Exception:
@@ -682,7 +789,7 @@ def _load_log_config() -> Tuple[str, str, str, Optional[Any]]:
     except Exception:
         config = None
         log_level_str = "INFO"
-        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        log_format = DEFAULT_LOG_FORMAT
         log_output = "stdout"
 
     return log_level_str, log_format, log_output, config
@@ -740,10 +847,8 @@ def _create_queued_stream_handler(log_output: str) -> QueueHandler:
 
 
 def _add_trace_id_filter(handler: logging.Handler) -> None:
-    from openviking.telemetry.tracer import TraceIdLoggingFilter
-
-    if not any(isinstance(filter_, TraceIdLoggingFilter) for filter_ in handler.filters):
-        handler.addFilter(TraceIdLoggingFilter())
+    if not any(isinstance(filter_, TraceContextFilter) for filter_ in handler.filters):
+        handler.addFilter(TraceContextFilter())
 
 
 def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handler:
@@ -798,9 +903,15 @@ def _build_standard_handler(
         if real is not None:
             real.setFormatter(logging.Formatter("%(message)s"))
 
-    handler.setFormatter(logging.Formatter(format_string))
+    handler.setFormatter(CommonLogFormatter(format_string))
+    handler.addFilter(
+        _ConfiguredLevelFilter(
+            getattr(logging, config.log.level) if config is not None else logging.INFO
+        )
+    )
     _add_trace_id_filter(handler)
     handler.addFilter(_RequestIdLoggingFilter())
+    handler.addFilter(_SafeLogRecordFilter())
     return handler
 
 
@@ -819,6 +930,7 @@ def _get_shared_handler(
         handler_key = (
             log_output,
             format_string,
+            config.log.level,
             bool(config.log.rotation),
             config.log.rotation_interval,
             config.log.rotation_days,
@@ -862,6 +974,9 @@ def get_logger(
     add_otel_handler: bool = False,
 ) -> logging.Logger:
     """Get a configured logger instance.
+
+    Before adding or changing logs, follow the logging policy:
+    https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
 
     Args:
         name: Logger name, defaults to "openviking".
@@ -923,6 +1038,10 @@ def reconfigure_logging() -> None:
     """Re-apply logging configuration to already-created OpenViking loggers."""
     log_level_str, log_format, log_output, config = _load_log_config()
     level = getattr(logging, log_level_str, logging.INFO)
+    if isinstance(_otel_log_handler, logging.Handler):
+        for filter_ in _otel_log_handler.filters:
+            if isinstance(filter_, _ConfiguredLevelFilter):
+                filter_.level = level
     handler = _get_shared_handler(log_output, config, log_format, force=True)
 
     logger_dict = logging.Logger.manager.loggerDict
@@ -941,6 +1060,10 @@ def reconfigure_logging() -> None:
             level=level,
             handler=handler if root_name == logger_name else None,
             propagate=root_name != logger_name,
+        )
+    if _server_logging_owned:
+        _configure_logger_instance(
+            logging.getLogger(), level=level, handler=handler, propagate=False
         )
 
 
@@ -964,3 +1087,46 @@ def configure_uvicorn_logging() -> None:
             handler=handler if logger_name == "uvicorn" else None,
             propagate=logger_name != "uvicorn",
         )
+
+
+def configure_server_logging(*, bootstrap: bool = False) -> None:
+    """Own the root logger only at the standalone server entry point.
+
+    Output and initialization policy:
+    https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
+    """
+    global _server_logging_owned
+    _server_logging_owned = True
+    # A worker factory runs after Uvicorn has disabled access handlers. Keep
+    # them disabled when reconfiguring propagation; our middleware owns completion.
+    logging.getLogger("uvicorn.access").disabled = True
+    warnings.showwarning = _server_showwarning
+    # LiteLLM can add its own terminal handlers while configuration is importing
+    # model modules. Install the bridge before that import, not only afterwards.
+    for name in _DEPENDENCY_LOGGER_ROOTS:
+        dependency = logging.getLogger(name)
+        if not any(isinstance(filter_, _ServerDependencyFilter) for filter_ in dependency.filters):
+            dependency.addFilter(_ServerDependencyFilter())
+    if bootstrap:
+        level, output, config = logging.INFO, "stderr", None
+        handler = _get_shared_handler(output, config, DEFAULT_LOG_FORMAT)
+    else:
+        level_name, format_string, output, config = _load_log_config()
+        level = getattr(logging, level_name)
+        handler = _get_shared_handler(output, config, format_string)
+    _configure_logger_instance(logging.getLogger(), level=level, handler=handler, propagate=False)
+    if not bootstrap:
+        reconfigure_logging()
+        names = set(logging.Logger.manager.loggerDict) | set(_DEPENDENCY_LOGGER_ROOTS)
+        for name in names:
+            if any(
+                name == root or name.startswith(root + ".") for root in _DEPENDENCY_LOGGER_ROOTS
+            ):
+                dependency = logging.getLogger(name)
+                _configure_logger_instance(
+                    dependency, level=dependency.level, handler=None, propagate=True
+                )
+                if not any(
+                    isinstance(filter_, _ServerDependencyFilter) for filter_ in dependency.filters
+                ):
+                    dependency.addFilter(_ServerDependencyFilter())

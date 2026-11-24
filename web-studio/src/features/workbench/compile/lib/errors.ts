@@ -12,6 +12,20 @@ const errorKeys = {
 } as const
 
 export function compileErrorKey(error: unknown) {
+  if (
+    isOvClientError(error) &&
+    error.details &&
+    typeof error.details === 'object' &&
+    'reason' in error.details
+  ) {
+    const reason = error.details.reason
+    if (reason === 'COMPILE_SCHEDULER_DISABLED')
+      return 'schedule.schedulerDisabled'
+    if (reason === 'COMPILE_CREDENTIAL_INVALID')
+      return 'schedule.credentialInvalid'
+    if (reason === 'COMPILE_CREDENTIAL_KEY_UNAVAILABLE')
+      return 'schedule.credentialKeyUnavailable'
+  }
   const code =
     error && typeof error === 'object' && 'code' in error
       ? String(error.code)

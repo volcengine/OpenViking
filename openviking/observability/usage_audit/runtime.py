@@ -69,12 +69,18 @@ async def init_usage_audit_from_server_config(
             app.state.usage_audit_runtime = None
         return None
 
-    store = SQLiteUsageAuditStore(
-        _resolve_sqlite_path(config),
-        usage_retention_days=usage_config.usage_retention_days,
-        audit_retention_days=usage_config.audit_retention_days,
-        audit_retention_per_account=usage_config.audit_retention_per_account,
-    )
+    retention = {
+        "usage_retention_days": usage_config.usage_retention_days,
+        "audit_retention_days": usage_config.audit_retention_days,
+        "audit_retention_per_account": usage_config.audit_retention_per_account,
+    }
+    store: UsageAuditStore
+    if usage_config.backend == "postgres":
+        from .postgres_store import PostgresUsageAuditStore
+
+        store = PostgresUsageAuditStore(usage_config.postgres, **retention)
+    else:
+        store = SQLiteUsageAuditStore(_resolve_sqlite_path(config), **retention)
     await store.initialize()
 
     worker = UsageAuditWorker(
@@ -103,7 +109,7 @@ async def init_usage_audit_from_server_config(
     )
     if app is not None:
         app.state.usage_audit_runtime = runtime
-    logger.info("Usage/Audit store initialized with sqlite backend")
+    logger.info("Usage/Audit store initialized with %s backend", usage_config.backend)
     return runtime
 
 

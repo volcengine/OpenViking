@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.markdown import MarkdownParser, _Layout, _LayoutOp
+from openviking.parse.parsers.markdown import MarkdownParser
 
 
 class FakeVikingFS:
@@ -23,17 +23,10 @@ class FakeVikingFS:
     def __init__(self):
         self.mkdir_calls = []
         self.files = {}
-        self.raw_write_calls = []
         self._temp_counter = 0
 
     async def mkdir(self, uri, exist_ok=False, **kw):
         self.mkdir_calls.append(uri)
-
-    async def write(self, uri, data):
-        # Bypasses parent-dir and encrypted-write handling; recorded so a
-        # regression back to this path is visible.
-        self.raw_write_calls.append(uri)
-        self.files[uri] = data
 
     async def write_file(self, uri, content, **kw):
         self.files[uri] = content
@@ -65,38 +58,6 @@ class InterleavingFakeVikingFS(FakeVikingFS):
 
 
 class TestApplyLayout:
-    def _layout(self) -> _Layout:
-        # One mkdir op is deliberately duplicated to show ops are replayed
-        # verbatim rather than deduplicated.
-        return _Layout(
-            temp_uri="viking://temp/root",
-            root_dir="viking://temp/root/doc",
-            doc_title="doc",
-            doc_name="doc",
-            ops=[
-                _LayoutOp("mkdir", "viking://temp/root"),
-                _LayoutOp("mkdir", "viking://temp/root/doc/sec"),
-                _LayoutOp("mkdir", "viking://temp/root/doc/sec"),
-                _LayoutOp("write", "viking://temp/root/doc/sec/a.md", "A"),
-                _LayoutOp("write", "viking://temp/root/doc/sec/b.md", "B"),
-                _LayoutOp("write", "viking://temp/root/doc/other/c.md", "C"),
-            ],
-        )
-
-    async def test_replays_every_op_and_writes_each_section(self):
-        fake = FakeVikingFS()
-        parser = MarkdownParser()
-        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
-            await parser._apply_layout(self._layout())
-
-        assert fake.mkdir_calls.count("viking://temp/root/doc/sec") == 2, fake.mkdir_calls
-        assert fake.files == {
-            "viking://temp/root/doc/sec/a.md": "A",
-            "viking://temp/root/doc/sec/b.md": "B",
-            "viking://temp/root/doc/other/c.md": "C",
-        }
-        assert fake.raw_write_calls == []
-
     async def test_concurrent_parses_keep_link_rewrite_inputs_isolated(self, tmp_path):
         fake = InterleavingFakeVikingFS()
         parser = MarkdownParser()
@@ -120,7 +81,7 @@ class TestApplyLayout:
             )
 
         with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
-            results = await asyncio.gather(parse("a"), parse("b"))
+            results = await asyncio.wait_for(asyncio.gather(parse("a"), parse("b")), timeout=5)
 
         for name, result in zip(("a", "b"), results, strict=True):
             uri = f"{result.temp_dir_path}/{name}/{name}.md"

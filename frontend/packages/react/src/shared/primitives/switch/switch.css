@@ -1,0 +1,91 @@
+/* Arco Design Switch with theme-ve-o-aml-design@0.0.36 skin. MIT; see LICENSE.arco-design. */
+@import '../loading-icon/loading-icon.css';
+.ov-switch {
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
+  flex: none;
+  min-inline-size: 36px;
+  block-size: 20px;
+  line-height: 20px;
+  padding: 0;
+  overflow: hidden;
+  vertical-align: middle;
+  border: 0;
+  border-radius: 10px;
+  outline: none;
+  background: var(--ov-ui-color-fill-1, var(--ov-ui-switch-off-default));
+  box-shadow: var(--ov-ui-switch-track-shadow-default);
+  cursor: pointer;
+  transition: background-color 0.2s cubic-bezier(0.34, 0.69, 0.1, 1);
+}
+.ov-switch__dot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inset-block-start: 3px;
+  inset-inline-start: 3px;
+  inline-size: 14px;
+  block-size: 14px;
+  border-radius: 50%;
+  background: var(--ov-ui-switch-dot-default);
+  box-shadow: var(--ov-ui-switch-dot-shadow-default);
+  color: var(--ov-ui-switch-spinner-off-default);
+  transition: inset-inline-start 0.2s cubic-bezier(0.34, 0.69, 0.1, 1);
+  font-size: 12px;
+}
+.ov-switch--small {
+  min-inline-size: 28px;
+  block-size: 16px;
+  line-height: 16px;
+}
+.ov-switch--small .ov-switch__dot {
+  inline-size: 10px;
+  block-size: 10px;
+}
+.ov-switch--small .ov-loading-icon {
+  font-size: 8px;
+}
+.ov-switch--checked {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-switch--checked .ov-switch__dot {
+  inset-inline-start: calc(100% - 17px);
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-switch--small.ov-switch--checked .ov-switch__dot {
+  inset-inline-start: calc(100% - 13px);
+}
+.ov-switch:disabled {
+  background: var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  cursor: not-allowed;
+}
+.ov-switch:disabled .ov-switch__dot {
+  background: var(--ov-ui-switch-disabled-dot-default);
+  color: var(--ov-ui-switch-spinner-disabled-default);
+}
+.ov-switch[aria-busy='true'] {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-switch[aria-busy='true'] .ov-switch__dot {
+  color: var(--ov-ui-switch-spinner-off-default);
+}
+.ov-switch--checked:is(:disabled, [aria-busy='true']) {
+  background: var(--ov-ui-switch-unavailable-checked-default);
+}
+.ov-switch--checked:is(:disabled, [aria-busy='true']) .ov-switch__dot {
+  color: var(--ov-ui-switch-unavailable-checked-default);
+}
+.ov-switch:focus-visible {
+  box-shadow: 0 0 0 2px var(--ov-ui-switch-focus-default);
+}
+.ov-switch--checked:focus-visible {
+  box-shadow: 0 0 0 2px var(--ov-ui-switch-unavailable-checked-default);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-switch,
+  .ov-switch__dot {
+    transition: none;
+  }
+}

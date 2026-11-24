@@ -15,10 +15,16 @@ Query background task status for APIs that return `task_id`, such as session com
 **Task Statuses:**
 - `pending`: Task waiting to execute
 - `running`: Task in progress
-- `cancelling`: Cancellation requested; waiting for the task's durable queue messages and in-process work to settle
+- `cancelling`: Cancellation requested; waiting for running queue work to exit
 - `completed`: Task successfully completed
 - `failed`: Task failed
 - `cancelled`: Task cancelled
+
+Cancellation immediately settles pending work and Inline work, which has no queue
+message to recover after its process exits. Inline work does not block the task's
+cancelled state. A live remote process still polls cancellation for its local active
+tasks and may take up to one polling interval (currently 30 seconds) to receive the
+signal; coroutine cleanup can take longer. Completed business writes are not rolled back.
 
 **Code Entries:**
 - `openviking/server/routers/tasks.py:get_task()` - HTTP route

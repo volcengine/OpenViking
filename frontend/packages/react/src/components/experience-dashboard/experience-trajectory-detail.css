@@ -1,0 +1,357 @@
+.ov-experience-dashboard__trajectory-details {
+  height: 28px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ov-experience-dashboard__trajectory-details:hover {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+
+.ov-experience-dashboard__trajectory-details:active {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+
+.ov-experience-trajectory-detail {
+  --ov-ui-modal-width: 1174px;
+  --ov-ui-trajectory-detail-border: var(
+    --ov-ui-color-border-1,
+    var(--ov-ui-border-1-default)
+  );
+  --ov-ui-experience-card: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  --ov-ui-experience-border: var(--ov-ui-trajectory-detail-border);
+  --ov-ui-experience-muted: var(--ov-ui-trajectory-detail-muted);
+  --ov-ui-trajectory-detail-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default)
+  );
+}
+
+.ov-experience-trajectory-detail *,
+.ov-experience-trajectory-detail *::before,
+.ov-experience-trajectory-detail *::after {
+  box-sizing: border-box;
+}
+
+.ov-experience-trajectory-detail .ov-modal__panel {
+  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 16px;
+}
+
+.ov-experience-trajectory-detail .ov-modal__body {
+  padding: 0;
+}
+
+.ov-experience-trajectory-detail .ov-modal__close {
+  top: 12px;
+  inset-inline-end: 24px;
+  border-radius: 50%;
+}
+
+.ov-experience-trajectory-detail__header {
+  display: flex;
+  height: 56px;
+  align-items: center;
+  padding: 12px 68px 12px 24px;
+  border-bottom: 1px solid var(--ov-ui-trajectory-detail-border);
+}
+
+.ov-experience-trajectory-detail__header > svg {
+  flex: none;
+  margin-inline-end: 8px;
+}
+
+.ov-experience-trajectory-detail__header h2 {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  margin: 0 8px 0 0;
+  font: 400 14px / 22px var(--ov-ui-font-mono, ui-monospace, monospace);
+}
+
+.ov-experience-trajectory-detail__header h2 > * {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-experience-trajectory-detail__header h2 > span {
+  color: var(--ov-ui-trajectory-detail-muted);
+}
+
+.ov-experience-trajectory-detail__header h2 > strong {
+  max-width: 50%;
+  flex: none;
+  font-weight: 500;
+}
+
+.ov-experience-trajectory-detail__header .ov-experience-dashboard__icon-button {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 6px;
+}
+
+.ov-experience-trajectory-detail__columns {
+  display: grid;
+  height: min(744px, calc(100dvh - 104px));
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 440px;
+}
+
+.ov-experience-trajectory-detail__document,
+.ov-experience-trajectory-detail__frame,
+.ov-experience-trajectory-detail__message-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ov-experience-trajectory-detail__document {
+  padding: 16px;
+}
+
+.ov-experience-trajectory-detail__frame {
+  flex: 1;
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-trajectory-detail-border);
+}
+
+.ov-experience-trajectory-detail__toolbar {
+  display: flex;
+  min-height: 56px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--ov-ui-trajectory-detail-border);
+}
+
+.ov-experience-trajectory-detail__modes {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
+.ov-experience-trajectory-detail__modes > button {
+  height: 28px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-trajectory-detail-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.ov-experience-trajectory-detail__modes > button[aria-pressed='true'] {
+  border-color: var(--ov-ui-trajectory-detail-border);
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-weight: 500;
+}
+
+.ov-experience-trajectory-detail :is(button, summary):focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 1px;
+}
+
+.ov-experience-trajectory-detail__document-body,
+.ov-experience-trajectory-detail__message-viewport {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+
+.ov-experience-trajectory-detail__document-body {
+  padding: 16px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.ov-experience-trajectory-detail__document-body > :first-child {
+  margin-top: 0;
+}
+
+.ov-experience-trajectory-detail pre {
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.ov-experience-trajectory-detail__message-panel {
+  border-inline-start: 1px solid var(--ov-ui-trajectory-detail-border);
+  background: var(
+    --ov-ui-color-trajectory-message-surface,
+    var(--ov-ui-trajectory-message-surface-default)
+  );
+}
+
+.ov-experience-trajectory-detail__message-heading {
+  display: flex;
+  min-height: 86px;
+  flex: none;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px;
+  border-bottom: 1px solid var(--ov-ui-trajectory-detail-border);
+}
+
+.ov-experience-trajectory-detail__message-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.ov-experience-trajectory-detail__message-heading p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ov-ui-trajectory-detail-muted);
+  font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-experience-trajectory-detail__messages {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  margin: 0;
+  padding: 20px;
+  list-style: none;
+}
+
+.ov-experience-trajectory-detail__messages > li {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-experience-trajectory-detail__role {
+  display: flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-experience-trajectory-detail__role-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+
+.ov-experience-trajectory-detail__role-icon[data-role='user'] {
+  --ov-ui-trajectory-detail-accent: var(
+    --ov-ui-color-status-success,
+    var(--ov-ui-status-success-default)
+  );
+  background: color-mix(
+    in srgb,
+    var(--ov-ui-trajectory-detail-accent) 12%,
+    var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))
+  );
+  color: var(--ov-ui-trajectory-detail-accent);
+}
+
+.ov-experience-trajectory-detail__role-icon[data-role='agent'] {
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+
+.ov-experience-trajectory-detail__bubble {
+  max-width: 100%;
+  padding: 12px;
+  border-radius: 0 16px 16px;
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-experience-trajectory-detail__bubble > :first-child {
+  margin-top: 0;
+}
+
+.ov-experience-trajectory-detail__bubble > :last-child {
+  margin-bottom: 0;
+}
+
+.ov-experience-trajectory-detail__messages time {
+  color: var(--ov-ui-trajectory-detail-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+@media (max-width: 800px) {
+  .ov-experience-trajectory-detail__columns {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(320px, 44dvh) minmax(260px, 40dvh);
+  }
+
+  .ov-experience-trajectory-detail__message-panel {
+    border-top: 1px solid var(--ov-ui-trajectory-detail-border);
+    border-inline-start: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .ov-experience-trajectory-detail {
+    padding: 12px;
+  }
+
+  .ov-experience-trajectory-detail .ov-modal__panel {
+    max-height: calc(100dvh - 24px);
+  }
+
+  .ov-experience-trajectory-detail .ov-modal__close {
+    inset-inline-end: 12px;
+  }
+
+  .ov-experience-trajectory-detail__header {
+    padding-inline: 12px 52px;
+  }
+
+  .ov-experience-trajectory-detail__document {
+    padding: 8px;
+  }
+
+  .ov-experience-trajectory-detail__toolbar {
+    padding-inline: 8px;
+  }
+
+  .ov-experience-trajectory-detail__modes > button {
+    padding-inline: 8px;
+  }
+}

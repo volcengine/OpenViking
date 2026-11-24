@@ -11,12 +11,23 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    TypeVar,
+)
 from urllib.parse import quote, unquote, urlsplit
 
 import yaml
 
 from openviking.core.context import ContextLevel
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
@@ -526,7 +537,9 @@ async def _read_existing_document(
     try:
         return parse_abstract_overview(raw) if raw is not None else None
     except AbstractOverviewFormatError as exc:
-        logger.warning("[Semantic] Ignoring malformed sidecar %s: %s", uri, exc)
+        logger.info(
+            "Ignoring malformed sidecar %s: %s", safe_uri_for_log(str(uri)), type(exc).__name__
+        )
         return None
 
 
@@ -537,7 +550,7 @@ async def write_abstract_overview(
     overview: str,
     abstract: str,
     ctx: Optional[RequestContext],
-    is_stale: Callable[[], bool],
+    is_stale: Optional[Callable[[], Awaitable[bool]]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
     consume_pending: Optional[int] = None,
     lock: Optional[Dict[str, Any]] = None,
@@ -550,8 +563,12 @@ async def write_abstract_overview(
     modification times or create noisy Git diffs.
     """
 
-    if is_stale():
-        logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
+    if is_stale is not None and await is_stale():
+        logger.info(
+            "%s Skipping stale semantic write for %s",
+            short_hash(str(log_prefix)),
+            safe_uri_for_log(str(dir_uri)),
+        )
         return AbstractOverviewWriteResult(wrote=False)
 
     overview_uri = f"{dir_uri}/.overview.md"
@@ -565,8 +582,12 @@ async def write_abstract_overview(
     if sidecar_lease is None:
         sidecar_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
     try:
-        if is_stale():
-            logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
+        if is_stale is not None and await is_stale():
+            logger.info(
+                "%s Skipping stale semantic write for %s",
+                short_hash(str(log_prefix)),
+                safe_uri_for_log(str(dir_uri)),
+            )
             return AbstractOverviewWriteResult(wrote=False)
 
         existing_overview = (
@@ -786,8 +807,12 @@ async def read_abstract_overview_pending_snapshot(
     ctx: Optional[RequestContext],
     lock: Optional[Dict[str, Any]] = None,
     existing_raw: Optional[Mapping[int, str | bytes]] = None,
+    overview_body_out: Optional[Dict[str, str]] = None,
 ) -> int:
-    """Read the pending counter captured at the start of an aggregation."""
+    """Read pending and optionally retain the already-read overview body.
+
+    The body is only an input-summary cache, not a writeback metadata snapshot.
+    """
 
     uris = [
         f"{dir_uri.rstrip('/')}/.overview.md",
@@ -795,6 +820,10 @@ async def read_abstract_overview_pending_snapshot(
     ]
 
     def _pending_of(documents: Sequence[Optional[AbstractOverviewDocument]]) -> int:
+        if overview_body_out is not None:
+            overview_body_out[dir_uri.rstrip("/")] = (
+                documents[0].body if documents[0] is not None else ""
+            )
         pending_values = []
         for document in documents:
             freshness = document.metadata.get("freshness") if document else None
@@ -818,7 +847,7 @@ async def read_abstract_overview_pending_snapshot(
         # directory just to hold lock metadata (a deleted directory reappears).
         preliminary = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
         if all(document is None for document in preliminary):
-            return 0
+            return _pending_of(preliminary)
         lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
         snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
     try:
