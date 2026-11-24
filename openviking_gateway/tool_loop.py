@@ -71,6 +71,7 @@ class HiddenToolLoop:
         self.final, self.hidden, self.window = None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
+        self.observe_upstream = None
 
     async def read(self, response):
         adapter = self.adapter
@@ -292,6 +293,8 @@ class HiddenToolLoop:
                     async for event in self.read(response):
                         yield event
                     self.observe()
+                    if self.observe_upstream:
+                        self.observe_upstream(self.adapter, response)
                     owned, client = [], []
                     for call in self.round.calls:
                         if not self.prepared.tools_active:
