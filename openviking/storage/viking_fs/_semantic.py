@@ -564,9 +564,18 @@ class _SemanticMixin:
         """
         filter_only = is_filter_only_query(query, image_url)
         if filter_only:
-            if search_as_item is None:
-                _ensure_non_empty_search_query(query, image_url)
             _ensure_filter_present(filter)
+            if search_as_item is None:
+                return await self.find(
+                    query=query,
+                    target_uri=target_uri,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                    filter=filter,
+                    ctx=ctx,
+                    level=level,
+                    events_time_decay_protection=events_time_decay_protection,
+                )
         else:
             _ensure_non_empty_search_query(query, image_url)
         if events_time_decay_protection is not None:

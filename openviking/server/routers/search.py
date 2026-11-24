@@ -543,6 +543,7 @@ async def search(
         # Item mode does not consume session context, even when intent is enabled.
         if (
             request.search_as_item is None
+            and request.query.strip()
             and request.session_id
             and service.search.is_intent_enabled()
         ):

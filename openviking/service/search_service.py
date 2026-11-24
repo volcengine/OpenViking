@@ -204,6 +204,7 @@ class SearchService:
         # Item mode and intent-off searches do not use session context.
         if (
             search_as_item is None
+            and query.strip()
             and session is not None
             and self.is_intent_enabled()
             and not resolved_image_url

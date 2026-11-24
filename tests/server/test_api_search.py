@@ -6,7 +6,7 @@
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -23,6 +23,55 @@ from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VikingDBConfig
+
+
+@pytest.mark.parametrize("query", ["", "  \n\t"])
+@pytest.mark.parametrize("with_session", [False, True])
+async def test_ordinary_filter_only_search_matches_find_without_models_or_session(
+    client_with_resource, service, monkeypatch, query, with_session
+):
+    client, root = client_with_resource
+    payload = {
+        "query": query,
+        "target_uri": root,
+        "filter": {"op": "must", "field": "context_type", "conds": ["resource"]},
+        "level": 2,
+        "score_threshold": 100,
+    }
+    find_response = await client.post("/api/v1/search/find", json=payload)
+    assert find_response.status_code == 200, find_response.text
+    assert find_response.json()["result"]["total"] > 0
+    embedding = AsyncMock(side_effect=AssertionError("Pure filters must not embed"))
+    monkeypatch.setattr("openviking.models.embedder.base.embed_compat", embedding)
+    monkeypatch.setattr(service.search, "is_intent_enabled", lambda: True)
+    session_factory = Mock(side_effect=AssertionError("Pure filters must not load a session"))
+    monkeypatch.setattr(service.sessions, "session", session_factory)
+    if with_session:
+        payload["session_id"] = "unused-session"
+    search_response = await client.post("/api/v1/search/search", json=payload)
+    assert search_response.status_code == 200, search_response.text
+    assert search_response.json()["result"] == find_response.json()["result"]
+    for hit in search_response.json()["result"]["resources"]:
+        assert hit["score"] == 0
+        assert not any(k in hit for k in ("item_uuid", "item_attrs", "item_extra_info"))
+    embedding.assert_not_awaited()
+    session_factory.assert_not_called()
+
+
+async def test_filter_only_search_service_does_not_read_session_context(service, monkeypatch):
+    monkeypatch.setattr(service.search, "is_intent_enabled", lambda: True)
+    session = SimpleNamespace(get_context_for_search=AsyncMock())
+    search = AsyncMock(return_value=FindResult(memories=[], resources=[], skills=[]))
+    monkeypatch.setattr(service.viking_fs, "search", search)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.search.search(
+        "",
+        ctx=ctx,
+        session=session,
+        filter={"op": "must", "field": "search_tags", "conds": ["case=fresh"]},
+    )
+    session.get_context_for_search.assert_not_awaited()
+    assert search.await_args.kwargs["session_info"] is None
 
 
 async def test_keyword_search_sends_args_to_vikingdb(
@@ -380,13 +429,15 @@ async def test_vikingfs_rejects_empty_query_before_initialization(method_name: s
         await method(query=" ")
 
 
-async def test_ranked_search_requires_query_with_context_type_filter(client: httpx.AsyncClient):
-    resp = await client.post("/api/v1/search/search", json={"context_type": ["resource"]})
-
-    assert resp.status_code == 400
-    error = resp.json()["error"]
-    assert error["code"] == "INVALID_ARGUMENT"
-    assert "must not be empty" in error["message"]
+async def test_search_accepts_filter_only_context_type_query(client_with_resource):
+    client, root = client_with_resource
+    payload = {"target_uri": root, "context_type": ["resource"]}
+    found = await client.post("/api/v1/search/find", json=payload)
+    searched = await client.post("/api/v1/search/search", json=payload)
+    assert found.status_code == searched.status_code == 200
+    assert searched.json()["result"] == found.json()["result"]
+    assert searched.json()["result"]["total"] > 0
+    assert all(hit["score"] == 0 for hit in searched.json()["result"]["resources"])
 
 
 async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
@@ -1061,9 +1112,7 @@ async def test_glob_forwards_tags_and_tag_projection_to_filesystem_service(monke
     )
 
     await search_router.glob(
-        search_router.GlobRequest(
-            pattern="**/*.md", tags=["env=prod"], include_tags=True
-        ),
+        search_router.GlobRequest(pattern="**/*.md", tags=["env=prod"], include_tags=True),
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
 
