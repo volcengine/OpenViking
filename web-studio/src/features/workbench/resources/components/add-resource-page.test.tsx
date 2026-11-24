@@ -181,7 +181,10 @@ describe('AddResourceForm watch options', () => {
     expect((remoteUrlInput as HTMLInputElement).value).toBe('')
 
     fireEvent.click(screen.getByRole('button', { name: /sourcePicker.git/ }))
-    expect(screen.getByRole('textbox', { name: 'git.branch' }).value).toBe('')
+    expect(
+      screen.getByRole<HTMLInputElement>('textbox', { name: 'git.branch' })
+        .value,
+    ).toBe('')
     expect(
       screen
         .getByRole('button', { name: 'git.branch' })

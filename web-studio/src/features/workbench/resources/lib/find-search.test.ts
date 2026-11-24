@@ -86,7 +86,7 @@ describe('retrievalItemsToEntries', () => {
   function item(overrides: Partial<FindResultItem>): FindResultItem {
     return {
       uri: 'viking://resources/a.md',
-      context_type: 'resources',
+      context_type: 'resource',
       level: 0,
       score: 0,
       abstract: '',

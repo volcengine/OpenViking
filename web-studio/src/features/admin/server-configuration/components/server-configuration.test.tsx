@@ -1318,10 +1318,7 @@ it('shows safe model authentication failures from the server', async () => {
 
 it('keeps model row controls clickable without starting a drag', async () => {
   mount()
-  const model = await screen.findByRole('button', {
-    name: 'model-a',
-    exact: true,
-  })
+  const model = await screen.findByRole('button', { name: 'model-a' })
   const transfer = { setData: vi.fn(), setDragImage: vi.fn() }
   expect(fireEvent.dragStart(model, { dataTransfer: transfer })).toBe(false)
   expect(transfer.setDragImage).not.toHaveBeenCalled()

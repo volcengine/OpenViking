@@ -3,6 +3,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { Message } from '#/features/workbench/sessions/lib/types/message'
 import { useChat } from '#/features/workbench/sessions/lib/use-chat'
 import { fetchSse } from '#/shared/lib/sse'
 
@@ -578,7 +579,7 @@ describe('useChat event timeline', () => {
           persistMessages: false,
           sessionId: 'session-1',
         }),
-      { initialProps: { initialMessages: [] } },
+      { initialProps: { initialMessages: [] as Message[] } },
     )
 
     let sendPromise!: Promise<void>
