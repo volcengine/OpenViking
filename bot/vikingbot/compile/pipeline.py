@@ -58,6 +58,7 @@ class Pipeline:
         self.tools, self.tool_context = {}, None
         self.sources: dict[str, Source] = {}
         self.evidence, self.status, self.old = {}, {}, {}
+        self.recovery_evidence: set[str] = set()
         self.failures, self.warnings = [], []
         self.artifacts: list[Document] = []
         self.noop = False
@@ -243,30 +244,35 @@ class Pipeline:
                     raise
                 logger.exception("Compile diagnostic write failed; preserving the execution error")
 
-    async def write_coverage(self, published=()):
-        """Track assignment provenance and acknowledged output URIs without claiming semantic coverage."""
+    async def write_coverage(self, published=None):
+        """Record source states; only supplied write results can mark outputs incomplete."""
         manifest = await self.files.get("inputs") or {}
         final = await self.files.get("finalize") or {}
-        delivered = set(published)
+        published = set(published) if published is not None else None
         inputs = {}
         for source_id, metadata in self.evidence.items():
             item = inputs.setdefault(metadata["uri"], {"ranges": {}, "outputs": []})
             item["ranges"][source_id] = self.status[source_id]
-        for path, output in final.get("outputs", {}).items():
+        rejected = final.get("rejected", {})
+        if published is not None:
+            published.difference_update(safe_join_viking_uri(self.target, path) for path in rejected)
+        references = {
+            path: output["source_refs"] for path, output in final.get("outputs", {}).items()
+        }
+        for path, refs in (references | rejected).items():
             uri = safe_join_viking_uri(self.target, path)
-            for source_uri in {self.evidence[ref]["uri"] for ref in output["source_refs"]}:
-                inputs[source_uri]["outputs"].append({"uri": uri, "delivered": uri in delivered})
+            for source_uri in {self.evidence[ref]["uri"] for ref in refs}:
+                inputs[source_uri]["outputs"].append(uri)
         for uri, item in inputs.items():
             states = item["ranges"].values()
             state = next(
                 (s for s in ("failed", "pending", "unreferenced") if s in states), "prepared"
             )
-            if (
-                state == "prepared"
-                and item["outputs"]
-                and all(o["delivered"] for o in item["outputs"])
-            ):
-                state = "delivered"
+            if state == "prepared" and published is not None:
+                if not item["outputs"]:
+                    state = "unreferenced"
+                elif any(output not in published for output in item["outputs"]):
+                    state = "failed"
             manifest[uri] = item["status"] = state
         await self.files.put("inputs", manifest)
         await self.files.put(

@@ -75,7 +75,7 @@ const messages = {
   deleteConfirm: '删除',
   deleteCancel: '取消',
   viewSwitch: '切换视图',
-  resizeTree: '调整目录树宽度',
+  resizeTree: '调整目录树大小',
   l0Summary: 'L0 摘要',
   l1Overview: 'L1 总览',
   emptyL0Summary: '暂无 L0 摘要',

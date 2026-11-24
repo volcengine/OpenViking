@@ -957,6 +957,10 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
+    if not config.vlm.model:
+        errors.append(
+            "A VLM is required. Configure the vlm section in ov.conf or run openviking-server init."
+        )
 
     if errors:
         error_message = "Invalid OpenViking configuration:\n" + "\n".join(

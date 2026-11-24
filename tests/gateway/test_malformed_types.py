@@ -25,7 +25,14 @@ def test_protocol_helpers_ignore_object_types():
 
 def test_capture_and_responses_ignore_object_types():
     message = malformed()
-    assert capture_messages([message], ["a"]) == capture_messages([message], ["a"])
+    message["content"].append({"type": "text", "text": "valid text"})
+    assert capture_messages([message], ["a"]) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "text": "valid text"}],
+            "source_message_ids": ["gateway:a"],
+        }
+    ]
     protocol = tool_protocol("responses")
     assert protocol.accepts_context(message)
     assert not protocol.is_reply(message)

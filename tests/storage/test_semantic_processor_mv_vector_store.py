@@ -28,7 +28,6 @@ async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
         "ownership_ref": "operation-ownership",
         "owned": True,
     }
-    fs._collect_uris = AsyncMock(return_value=[])
     fs._copy_for_mv = AsyncMock()
     fs._prepare_vector_store_uris = AsyncMock(return_value=object())
     fs._update_vector_store_uris = AsyncMock()

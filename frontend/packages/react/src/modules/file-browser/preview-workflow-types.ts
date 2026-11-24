@@ -29,16 +29,6 @@ export interface FileBrowserWorkflowLabels {
   configurationEmpty: string;
   historyEmpty: string;
   historyLimit: string;
-  snapshotPrompt: string;
-  snapshotChoice: string;
-  keepSnapshot: string;
-  skipSnapshot: string;
-  snapshotFileSaved: string;
-  done: string;
-  snapshotNote: string;
-  saveSnapshot: string;
-  snapshotSaved: string;
-  snapshotUnchanged: string;
   compareChanges: string;
   noChanges: string;
   addedLines: string;

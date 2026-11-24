@@ -7,7 +7,10 @@ import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { AgentConnectDetailView } from './agent-connect-detail.js';
 import { getAgentConnectDesign } from './agent-connect-design.js';
 import { resolveAgentConnectLabels } from './agent-connect-copy.js';
-import { DEFAULT_BASE_URL } from './agent-connect-instructions.js';
+import {
+  DEFAULT_BASE_URL,
+  PRELAUNCH_BASE_URL,
+} from './agent-connect-instructions.js';
 import type {
   AgentConnectItem,
   AgentConnectProps,
@@ -25,7 +28,8 @@ export type {
 function AgentConnectView({
   apiKey,
   locale: localeProp,
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: baseUrlProp,
+  isPrelaunch = false,
   isEnterprise = false,
   agreementUrl,
   showOverseasTag,
@@ -37,6 +41,9 @@ function AgentConnectView({
   className,
   ...rest
 }: AgentConnectProps) {
+  const baseUrl = isPrelaunch
+    ? PRELAUNCH_BASE_URL
+    : (baseUrlProp ?? DEFAULT_BASE_URL);
   const track = useTrack();
   const exposure = useExposure('agent_connect_show');
   const locale = useLocale(localeProp);

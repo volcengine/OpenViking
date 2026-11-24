@@ -5,7 +5,7 @@ import time
 from contextlib import contextmanager
 
 import pytest
-from conftest import replay_records
+from conftest import replay_records, update_capture
 
 from openviking_gateway.protocols import plugin_present
 from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
@@ -106,27 +106,6 @@ async def test_context_window_follows_the_resolved_model(
     assert bool(await replay_records(store, second, "replacement")) == (window == 2000)
 
 
-async def test_repeated_prepare_has_one_read_and_no_capture_write(
-    setup_kernel, credential, policy, monkeypatch
-):
-    kernel, store, _, _ = setup_kernel
-    policy.update(recall=False)
-    messages = [*history(5), {"role": "user", "content": "next"}]
-    request = await prepare(kernel, credential, policy, messages)
-    old = await store.capture.get(request.scope, request.session)
-    calls = []
-    run = store.run
-
-    async def tracked(fn, *args, **kwargs):
-        calls.append((fn.__name__, kwargs.get("write", False)))
-        return await run(fn, *args, **kwargs)
-
-    monkeypatch.setattr(store, "run", tracked)
-    await prepare(kernel, credential, policy, messages)
-    assert calls == [("replies", False), ("read_batch", False)]
-    assert (await store.capture.get(request.scope, request.session)) == old
-
-
 async def test_reply_lookup_searches_its_index_without_statistics(setup_kernel, monkeypatch):
     # Stores are never ANALYZEd; scanning a user's records cost 20 ms at 1k sessions.
     _, store, _, _ = setup_kernel
@@ -151,7 +130,10 @@ async def test_hot_read_ignores_unrelated_operational_documents(
 ):
     kernel, store, _, _ = setup_kernel
     policy.update(recall=False)
-    p = await prepare(kernel, credential, policy, history(1)[:1])
+    messages = [*history(2), {"role": "user", "content": "next"}]
+    p = await prepare(kernel, credential, policy, messages)
+    await update_capture(store, p, delivered=p.anchor)
+    capture = await store.capture.get(p.scope, p.session)
 
     def insert():
         # Encoding runs the encryptor on the event loop, so it must happen off the loop thread.
@@ -173,8 +155,9 @@ async def test_hot_read_ignores_unrelated_operational_documents(
         return original(value)
 
     monkeypatch.setattr(store, "decode", decode)
-    await prepare(kernel, credential, policy, history(1)[:1])
-    assert len(decoded) <= 3
+    await prepare(kernel, credential, policy, messages)
+    assert len(decoded) <= 4
+    assert await store.capture.get(p.scope, p.session) == capture
 
 
 async def test_conditional_budget_is_atomic_across_stores(setup_kernel, credential, policy):

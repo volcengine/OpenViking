@@ -6,12 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from openviking.parse.directory_scan import (
-    CLASS_PROCESSABLE,
-    ClassifiedFile,
-    DirectoryScanResult,
-    scan_directory,
-)
+from openviking.parse.directory_scan import DirectoryScanResult, scan_directory
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.exceptions import InvalidArgumentError, UnsupportedDirectoryFilesError
 
@@ -134,17 +129,45 @@ class TestScanDirectoryClassification:
     def test_processable_includes_parser_files(
         self, tmp_tree: Path, registry: ParserRegistry
     ) -> None:
-        result: DirectoryScanResult = scan_directory(tmp_tree, registry=registry, strict=False)
-        processable_rel = [f.rel_path for f in result.processable]
-        assert "readme.md" in processable_rel
-        assert "doc.html" in processable_rel
-        assert "note.txt" in processable_rel
-        # AnyDoc Office/EPUB and Zip parsers
-        assert "report.docx" in processable_rel
-        assert "data.xlsx" in processable_rel
-        assert "book.epub" in processable_rel
-        assert "slides.pptx" in processable_rel
-        assert "bundle.zip" in processable_rel
+        additional_files = {
+            "docs/spec.markdown",
+            "docs/readme.mdown",
+            "web/page.htm",
+            "text/log.text",
+            "media/image.bmp",
+        } | {
+            f"office/document.{ext}"
+            for ext in (
+                "doc",
+                "docm",
+                "odt",
+                "rtf",
+                "xls",
+                "xlsm",
+                "xlsb",
+                "ods",
+                "csv",
+                "ppt",
+                "pps",
+            )
+        }
+        for relative in additional_files:
+            path = tmp_tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"sample")
+
+        result = scan_directory(tmp_tree, registry=registry, strict=False)
+        expected = {
+            "readme.md",
+            "doc.html",
+            "note.txt",
+            "report.docx",
+            "data.xlsx",
+            "book.epub",
+            "slides.pptx",
+            "bundle.zip",
+        } | additional_files
+        assert expected <= {item.rel_path for item in result.processable}
 
     def test_processable_includes_code_or_config(
         self, tmp_tree: Path, registry: ParserRegistry
@@ -286,17 +309,6 @@ class TestScanDirectoryEdgeCases:
         )
         all_rel_dot = [f.rel_path for f in result_rel_dot.processable + result_rel_dot.unsupported]
         assert not any(p.startswith("src/") for p in all_rel_dot)
-
-    def test_result_all_processable(
-        self, tmp_all_supported: Path, registry: ParserRegistry
-    ) -> None:
-        result: DirectoryScanResult = scan_directory(
-            tmp_all_supported, registry=registry, strict=True
-        )
-        all_p = result.all_processable_files()
-        assert len(all_p) == len(result.processable)
-        for cf in all_p:
-            assert cf.classification == CLASS_PROCESSABLE
 
 
 class TestDirectorySafetyLimits:
@@ -542,25 +554,3 @@ class TestGitignoreHandling:
         assert "keep.txt" in rel_paths
         assert "generated/skip.txt" not in rel_paths
         assert any("generated (gitignore)" in s for s in result.skipped)
-
-
-class TestClassifiedFileAndResult:
-    """Test ClassifiedFile and DirectoryScanResult types."""
-
-    def test_classified_file_has_rel_path_and_classification(self) -> None:
-        p = Path("/tmp/foo/bar.txt")
-        cf = ClassifiedFile(path=p, rel_path="bar.txt", classification=CLASS_PROCESSABLE)
-        assert cf.rel_path == "bar.txt"
-        assert cf.classification == CLASS_PROCESSABLE
-
-    def test_scan_result_root_and_lists(
-        self, tmp_all_supported: Path, registry: ParserRegistry
-    ) -> None:
-        result: DirectoryScanResult = scan_directory(
-            tmp_all_supported, registry=registry, strict=True
-        )
-        assert result.root == tmp_all_supported.resolve()
-        assert isinstance(result.processable, list)
-        assert isinstance(result.unsupported, list)
-        assert isinstance(result.warnings, list)
-        assert isinstance(result.skipped, list)

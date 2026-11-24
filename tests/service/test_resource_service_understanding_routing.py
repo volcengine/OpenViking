@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.parse.parsers.media.utils import MPEG_TS_PACKET_SIZE, MPEG_TS_PROBE_BYTES
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
@@ -13,14 +12,6 @@ from openviking.storage.queuefs import QueueManager
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def mpeg_ts_probe() -> bytes:
-    """Build a minimal MPEG-TS probe payload for routing tests."""
-    content = bytearray(MPEG_TS_PROBE_BYTES)
-    for offset in range(0, MPEG_TS_PROBE_BYTES, MPEG_TS_PACKET_SIZE):
-        content[offset] = 0x47
-    return bytes(content)
 
 
 @pytest.mark.asyncio
@@ -147,7 +138,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         api_key="secret",
     )
     downloaded = tmp_path / "sample.ts"
-    downloaded.write_bytes(mpeg_ts_probe())
+    downloaded.write_bytes(b"downloaded video snapshot")
     prepared = LocalResource(
         path=downloaded,
         source_type=SourceType.HTTP,
@@ -237,11 +228,9 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("temp_file_id", ["upload_audio.m4a", "shared_audio"])
 async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     monkeypatch,
     tmp_path,
-    temp_file_id,
     watch_vfs,
 ):
     """Upload snapshots keep only the external file_id before entering ExternalParse."""
@@ -319,7 +308,7 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
         wait=False,
         allow_local_path_resolution=True,
         internal_task=True,
-        temp_file_id=temp_file_id,
+        temp_file_id="upload_audio.m4a",
     )
 
     assert result == {

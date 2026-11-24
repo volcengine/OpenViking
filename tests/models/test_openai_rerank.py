@@ -1,330 +1,130 @@
-"""Tests for OpenAIRerankClient — DashScope native vs compatible-api protocol.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Wire contracts for the native DashScope and OpenAI-compatible rerank endpoints."""
 
-Regression for #3459: OpenAIRerankClient was incompatible with DashScope's
-native API (gte-rerank-v2, qwen3-vl-rerank) which uses a nested
-input/output envelope. The fix detects the protocol by URL path:
+import json
+from unittest.mock import Mock
 
-- ``/api/v1/services/rerank`` → native DashScope, nested envelope
-- ``/compatible-api/v1/reranks`` → OpenAI-compatible, flat body
-- Other endpoints → flat (default, backward compatible)
-"""
+import pytest
+import requests
 
-from unittest.mock import MagicMock, patch
+from openviking.models.rerank import RerankClient
+from openviking_cli.utils.config.rerank_config import RerankConfig
 
-from openviking.models.rerank.openai_rerank import (
-    OpenAIRerankClient,
-    _uses_nested_envelope,
-)
-
-# ─── _uses_nested_envelope ───
+NATIVE_URL = "https://gateway.example.com/api/v1/services/rerank/text-rerank"
+COMPATIBLE_URL = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+DOCUMENTS = ["doc A", "doc B", "doc C"]
 
 
-class TestUsesNestedEnvelope:
-    def test_native_dashscope_path(self):
-        assert _uses_nested_envelope("https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank") is True
-
-    def test_compatible_api_path(self):
-        assert _uses_nested_envelope("https://dashscope.aliyuncs.com/compatible-api/v1/reranks") is False
-
-    def test_openai_path(self):
-        assert _uses_nested_envelope("https://api.openai.com/v1/rerank") is False
-
-    def test_empty_url(self):
-        assert _uses_nested_envelope("") is False
-
-    def test_custom_gateway_with_native_path(self):
-        """Path detection works regardless of host/gateway."""
-        assert _uses_nested_envelope("https://my-gateway.com/api/v1/services/rerank/text-rerank") is True
+@pytest.fixture
+def provider_post(monkeypatch):
+    post = Mock()
+    monkeypatch.setattr("openviking.models.rerank.openai_rerank.requests.post", post)
+    return post
 
 
-# ─── Request body construction ───
+def provider_response(body: dict, status: int = 200) -> requests.Response:
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(body).encode()
+    return response
 
 
-class TestBuildRequestBody:
-    def test_native_nested_body(self):
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank",
-            model_name="gte-rerank-v2",
-        )
-        body = client._build_request_body("hello", ["doc1", "doc2"])
-        assert "input" in body
-        assert body["input"]["query"] == "hello"
-        assert body["input"]["documents"] == ["doc1", "doc2"]
-        assert body["parameters"]["return_documents"] is False
-        assert body["model"] == "gte-rerank-v2"
-        # flat keys should NOT be present at top level
-        assert "query" not in body
-        assert "documents" not in body
-
-    def test_compatible_api_flat_body(self):
-        """DashScope compatible-api uses flat body, same as standard OpenAI."""
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-            model_name="qwen3-rerank",
-        )
-        body = client._build_request_body("hello", ["doc1", "doc2"])
-        assert body["query"] == "hello"
-        assert body["documents"] == ["doc1", "doc2"]
-        assert body["model"] == "qwen3-rerank"
-        assert body["top_n"] == 2
-        # nested keys should NOT be present
-        assert "input" not in body
-        assert "parameters" not in body
-
-    def test_standard_flat_body(self):
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1/rerank",
-            model_name="rerank-v2",
-        )
-        body = client._build_request_body("hello", ["doc1", "doc2"])
-        assert body["query"] == "hello"
-        assert body["documents"] == ["doc1", "doc2"]
-        assert body["top_n"] == 2
-        assert "input" not in body
-
-
-# ─── Response parsing ───
-
-
-class TestExtractResults:
-    def test_native_nested_results(self):
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank",
-            model_name="gte-rerank-v2",
-        )
-        response = {
+def test_native_rerank_uses_nested_protocol_and_aligns_sparse_scores(provider_post):
+    provider_post.return_value = provider_response(
+        {
             "output": {
                 "results": [
-                    {"index": 0, "relevance_score": 0.95},
-                    {"index": 1, "relevance_score": 0.12},
-                ]
-            },
-            "request_id": "abc123",
-        }
-        results = client._extract_results(response)
-        assert results is not None
-        assert len(results) == 2
-        assert results[0]["relevance_score"] == 0.95
-
-    def test_compatible_api_top_level_results(self):
-        """DashScope compatible-api returns top-level results."""
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-            model_name="qwen3-rerank",
-        )
-        response = {
-            "results": [
-                {"index": 0, "relevance_score": 0.88},
-                {"index": 1, "relevance_score": 0.42},
-            ]
-        }
-        results = client._extract_results(response)
-        assert results is not None
-        assert len(results) == 2
-
-    def test_native_missing_output(self):
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank",
-            model_name="gte-rerank-v2",
-        )
-        assert client._extract_results({"request_id": "abc"}) is None
-
-    def test_standard_missing_results(self):
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1/rerank",
-            model_name="rerank-v2",
-        )
-        assert client._extract_results({"id": "abc"}) is None
-
-
-# ─── End-to-end rerank_batch with mocked HTTP ───
-
-
-class TestRerankBatch:
-    def test_native_full_flow(self):
-        """DashScope native end-to-end: nested request, nested response."""
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank",
-            model_name="gte-rerank-v2",
-        )
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {
-            "output": {
-                "results": [
-                    {"index": 0, "relevance_score": 0.95},
-                    {"index": 1, "relevance_score": 0.12},
-                ]
-            },
-            "request_id": "abc123",
-        }
-
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response) as mock_post:
-            scores = client.rerank_batch("hello", ["doc1", "doc2"])
-
-        assert scores == [0.95, 0.12]
-
-        # Verify the request body was nested
-        _, kwargs = mock_post.call_args
-        sent_body = kwargs["json"]
-        assert "input" in sent_body
-        assert sent_body["input"]["query"] == "hello"
-        assert sent_body["input"]["documents"] == ["doc1", "doc2"]
-
-    def test_compatible_api_full_flow(self):
-        """DashScope compatible-api end-to-end: flat request, flat response.
-
-        This is the documented qwen3-rerank endpoint. It must use the
-        same flat protocol as standard OpenAI services.
-        """
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-            model_name="qwen3-rerank",
-        )
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {
-            "results": [
-                {"index": 0, "relevance_score": 0.88},
-                {"index": 1, "relevance_score": 0.42},
-            ]
-        }
-
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response) as mock_post:
-            scores = client.rerank_batch("hello", ["doc1", "doc2"])
-
-        assert scores == [0.88, 0.42]
-
-        # Verify the request body was flat
-        _, kwargs = mock_post.call_args
-        sent_body = kwargs["json"]
-        assert sent_body["query"] == "hello"
-        assert sent_body["documents"] == ["doc1", "doc2"]
-        assert sent_body["top_n"] == 2
-        assert "input" not in sent_body
-
-    def test_standard_full_flow(self):
-        """Standard OpenAI-compatible end-to-end: flat request, flat response."""
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1/rerank",
-            model_name="rerank-v2",
-        )
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {
-            "results": [
-                {"index": 0, "relevance_score": 0.88},
-                {"index": 1, "relevance_score": 0.42},
-            ]
-        }
-
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response) as mock_post:
-            scores = client.rerank_batch("hello", ["doc1", "doc2"])
-
-        assert scores == [0.88, 0.42]
-
-        _, kwargs = mock_post.call_args
-        sent_body = kwargs["json"]
-        assert sent_body["query"] == "hello"
-        assert sent_body["documents"] == ["doc1", "doc2"]
-
-    def test_native_relevance_scores_plural_key(self):
-        """Some DashScope models return 'relevance_scores' (plural)."""
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank",
-            model_name="gte-rerank-v2",
-        )
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {
-            "output": {
-                "results": [
-                    {"index": 0, "relevance_scores": 0.77},
-                    {"index": 1, "relevance_scores": 0.33},
+                    {"index": 2, "relevance_score": 0.7},
+                    {"index": 0, "relevance_score": 0.9},
                 ]
             }
         }
-
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response):
-            scores = client.rerank_batch("hello", ["doc1", "doc2"])
-
-        assert scores == [0.77, 0.33]
-
-    def test_empty_documents(self):
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank",
-            model_name="gte-rerank-v2",
-        )
-        assert client.rerank_batch("hello", []) == []
-
-    def test_sparse_results_fill_zero(self):
-        """Sparse results: missing indexes should get score 0.0."""
-        client = OpenAIRerankClient(
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1/rerank",
-            model_name="rerank-v2",
-        )
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status.return_value = None
-        # Only index 1 returned, index 0 and 2 missing
-        mock_response.json.return_value = {
-            "results": [
-                {"index": 1, "relevance_score": 0.55},
-            ]
-        }
-
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response):
-            scores = client.rerank_batch("hello", ["doc0", "doc1", "doc2"])
-
-        assert scores == [0.0, 0.55, 0.0]
-
-    def test_existing_dashscope_native_tests_still_pass(self):
-        """The existing test suite uses /api/v1/services/rerank as api_base.
-
-        Verify the client correctly detects this as native DashScope
-        and uses the nested envelope.
-        """
-        client = OpenAIRerankClient(
+    )
+    reranker = RerankClient.from_config(
+        RerankConfig(
+            provider="openai",
             api_key="test-key",
-            api_base="https://dashscope.aliyuncs.com/api/v1/services/rerank",
-            model_name="qwen3-rerank",
+            api_base=NATIVE_URL,
+            model="gte-rerank-v2",
+            timeout=120,
+            extra_headers={
+                "X-Gateway-Key": "gateway-key",
+                "Content-Type": "application/json; charset=utf-8",
+            },
         )
-        assert client._uses_nested_envelope is True
+    )
+    assert reranker is not None
+    assert reranker.rerank_batch("search", DOCUMENTS) == [0.9, 0.0, 0.7]
+    provider_post.assert_called_once_with(
+        url=NATIVE_URL,
+        headers={
+            "Authorization": "Bearer test-key",
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Gateway-Key": "gateway-key",
+        },
+        json={
+            "model": "gte-rerank-v2",
+            "input": {"query": "search", "documents": DOCUMENTS},
+            "parameters": {"return_documents": False},
+        },
+        timeout=120,
+    )
 
-    def test_compatible_api_uses_flat_protocol(self):
-        """The documented compatible-api URL must use flat protocol.
 
-        This is the regression for the reviewer's feedback: hostname-based
-        detection incorrectly switched compatible-api to nested envelope.
-        """
-        client = OpenAIRerankClient(
-            api_key="test-key",
-            api_base="https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-            model_name="qwen3-rerank",
-        )
-        assert client._uses_nested_envelope is False
-        body = client._build_request_body("q", ["d"])
-        assert "query" in body
-        assert "input" not in body
+def test_compatible_rerank_uses_flat_protocol_and_default_request_options(provider_post):
+    provider_post.return_value = provider_response(
+        {"results": [{"index": 1, "relevance_score": 0.6}, {"index": 0, "relevance_score": 0.8}]}
+    )
+    reranker = RerankClient.from_config(RerankConfig(api_key="test-key", api_base=COMPATIBLE_URL))
+    assert reranker is not None
+    assert reranker.rerank_batch("search", DOCUMENTS[:2]) == [0.8, 0.6]
+    provider_post.assert_called_once_with(
+        url=COMPATIBLE_URL,
+        headers={"Authorization": "Bearer test-key", "Content-Type": "application/json"},
+        json={"model": "qwen3-rerank", "query": "search", "documents": DOCUMENTS[:2], "top_n": 2},
+        timeout=30,
+    )
+
+
+def test_native_rerank_accepts_legacy_plural_score_field(provider_post):
+    provider_post.return_value = provider_response(
+        {"output": {"results": [{"index": 0, "relevance_scores": 0.4}]}}
+    )
+    reranker = RerankClient.from_config(RerankConfig(api_key="test-key", api_base=NATIVE_URL))
+    assert reranker is not None
+    assert reranker.rerank_batch("search", DOCUMENTS[:1]) == [0.4]
+
+
+def test_empty_documents_do_not_call_rerank_provider(provider_post):
+    reranker = RerankClient.from_config(RerankConfig(api_key="test-key", api_base=COMPATIBLE_URL))
+    assert reranker is not None
+    assert reranker.rerank_batch("search", []) == []
+    provider_post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("url", "status", "body"),
+    [
+        pytest.param(NATIVE_URL, 200, {"output": []}, id="invalid-native-envelope"),
+        pytest.param(COMPATIBLE_URL, 200, {}, id="missing-flat-results"),
+        pytest.param(
+            COMPATIBLE_URL, 200, {"results": [{"relevance_score": 0.9}]}, id="missing-index"
+        ),
+        pytest.param(
+            COMPATIBLE_URL, 200, {"results": [{"index": 3, "relevance_score": 0.9}]}, id="bad-index"
+        ),
+        pytest.param(
+            COMPATIBLE_URL,
+            503,
+            {"results": [{"index": 0, "relevance_score": 0.9}]},
+            id="http-failure",
+        ),
+    ],
+)
+def test_invalid_provider_response_signals_vector_score_fallback(provider_post, url, status, body):
+    provider_post.return_value = provider_response(body, status)
+    reranker = RerankClient.from_config(RerankConfig(api_key="test-key", api_base=url))
+    assert reranker is not None
+    assert reranker.rerank_batch("search", DOCUMENTS) is None
+    provider_post.assert_called_once()

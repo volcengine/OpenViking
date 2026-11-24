@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from tests.server.test_api_skills import _add_skill, _skill_md
@@ -24,7 +25,9 @@ def _fail_first_run(monkeypatch, root, *, block_retries=False):
         if root_uri == root:
             attempts.append(root_uri)
             if len(attempts) == 1:
-                raise RuntimeError("one transient failure after adopting the package lock")
+                raise LockAcquisitionError(
+                    "one transient lock failure after adopting the package lock"
+                )
             if block_retries:
                 await asyncio.Event().wait()
         return await original(self, root_uri)
@@ -78,17 +81,17 @@ async def test_update_cancellation_settles_retry_handoff_without_restoring(
         retry_started.set()
         assert resume_enqueue.wait(5)
 
-    async def slow_retry_enqueue(msg):
+    async def slow_retry_enqueue(msg, **kwargs):
         nonlocal enqueues
         if msg.uri == root:
             enqueues += 1
             if enqueues == 2:
                 if enqueue_committed:
-                    result = await original_enqueue(msg)
+                    result = await original_enqueue(msg, **kwargs)
                     await asyncio.to_thread(pause)
                     return result
                 await asyncio.to_thread(pause)
-        return await original_enqueue(msg)
+        return await original_enqueue(msg, **kwargs)
 
     monkeypatch.setattr(queue, "enqueue", slow_retry_enqueue)
     updating = asyncio.create_task(

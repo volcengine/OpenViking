@@ -691,7 +691,7 @@ test("captures completed paginated tools without duplicating legacy events", () 
       tool_id: "dynamic-1",
       tool_name: "lookup",
       tool_status: "completed",
-      tool_output: JSON.stringify([{ type: "inputText", text: "record 7" }]),
+      tool_output: "record 7",
     },
   ]);
 });
