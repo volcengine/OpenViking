@@ -10,7 +10,7 @@ import shlex
 import time
 import uuid
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from typing import Any, TypeVar
 
 import json_repair
@@ -85,6 +85,53 @@ class TaskFiles:
             return json.loads(await self.sandbox.read_file_bytes(f"{ROOT}/{path}.json"))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
+
+
+async def completed_jobs(
+    items: Iterable[T], run: Callable[[T], Awaitable[Any]], *, concurrency: int = 8
+) -> AsyncGenerator[tuple[int, Any], None]:
+    """Yield indexed outcomes as slots finish, with at most C retained read tasks.
+
+    Ordinary exceptions are returned to the caller; cancellation propagates.
+    Consumers must close the iterator on early exit. A slot is refilled only
+    after its result was consumed, so slow shard writes also apply backpressure.
+    """
+    if type(concurrency) is not int or concurrency < 1:
+        raise ValueError("Read concurrency must be a positive integer")
+    iterator = iter(enumerate(items))
+    active: dict[asyncio.Task[Any], int] = {}
+
+    async def invoke(value: T) -> Any:
+        return await run(value)
+
+    def fill() -> None:
+        while len(active) < concurrency:
+            item = next(iterator, None)
+            if item is None:
+                break
+            index, value = item
+            active[asyncio.create_task(invoke(value))] = index
+
+    fill()
+    try:
+        while active:
+            done, waiting = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+            # Process one completion at a time: do not retain a whole completed
+            # wave while refilling it with new bodies.
+            task = min(done, key=lambda item: active[item])
+            del done, waiting
+            index = active.pop(task)
+            try:
+                value = task.result()
+            except Exception as error:
+                value = error
+            yield index, value
+            del value, task
+            fill()
+    finally:
+        for task in active:
+            task.cancel()
+        await asyncio.gather(*active, return_exceptions=True)
 
 
 async def bounded_jobs(
