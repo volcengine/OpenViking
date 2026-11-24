@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { TaskManager } from '../src/tasks.mjs';
 import { MessageInbox } from '../src/inbox.mjs';
-import { executeTasksCommand, taskStatusLine } from '../src/task-commands.mjs';
+import { executeTasksCommand, refreshesCard, taskStatusLine } from '../src/task-commands.mjs';
 import { executeCommand, helpText, parseCommand } from '../src/commands.mjs';
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -174,6 +174,41 @@ describe('/tasks', () => {
     assert.match(tasks.inbox.entries.at(-1).item.text, /^\[task handback\] task=t1 [\s\S]*顺便看下 Y$/);
     assert.match(run('stop t1').text, /^t1 已结束（已停止），无需停止。$/);
     assert.match(run('stop t7').text, /^没有任务 t7。$/);
+  });
+
+  it('ends both cards with a refresh button that runs the /tasks that drew them, and when they were drawn', async (t) => {
+    const at = new Date(2026, 10, 24, 9, 5, 7).getTime();
+    const { tasks, turns, row, run } = setup(t, { now: () => at });
+    tasks.create({ rows: [row()], title: '长任务', runtime: 'pi' });
+    tasks.create({ rows: [row()], title: '短任务', runtime: 'pi' });
+    tasks.report('t2', { state: 'done', draft: '好了' });
+    turns[1].finish({ text: '' });
+    await settle();
+    const elements = (card) => card.body.elements;
+    const flat = (card) => elements(card).flatMap((element) => element.tag === 'column_set'
+      ? element.columns.flatMap((column) => column.elements) : [element]);
+    const button = (card) => flat(card).find((element) => element.tag === 'button');
+    const footer = (card) => flat(card).filter((element) => element.tag === 'div').at(-1).text.content;
+
+    const overview = run('').card;
+    assert.deepEqual(button(overview).behaviors, [{ type: 'callback', value: { superagent_command: '/tasks', arg: '', refresh: true } }]);
+    const [row1] = elements(overview).filter((element) => element.tag === 'column_set');
+    assert.deepEqual(row1.columns.map((column) => column.elements[0].tag), ['select_static', 'button'], 'the dropdown and the button side by side');
+    assert.match(footer(overview), /^更新于 09:05:07 · \/tasks <编号> 查看详情/);
+
+    const live = run('t1').card;
+    assert.deepEqual(button(live).behaviors, [{ type: 'callback', value: { superagent_command: '/tasks', arg: 't1', refresh: true } }]);
+    assert.match(footer(live), /^更新于 09:05:07 · \/tasks stop t1 \[原因\] 停止任务 · \/tasks 查看全部任务$/);
+    assert.equal(button(run('t2').card).behaviors[0].value.arg, 't2', 'an ended task refreshes too');
+    assert.match(footer(run('t2').card), /^更新于 09:05:07 · \/tasks 查看全部任务$/);
+  });
+
+  it('redraws in place only on a refresh button pressed on a card', () => {
+    const press = (value, parentId = 'om_card123456789') => ({ messageType: 'card_action', parentId, data: { interaction: { value } } });
+    assert.equal(refreshesCard(press({ superagent_command: '/tasks', arg: '', refresh: true })), true);
+    assert.equal(refreshesCard(press({ superagent_command: '/tasks' })), false, 'a task picked opens as a new card');
+    assert.equal(refreshesCard(press({ superagent_command: '/tasks', arg: '', refresh: true }, null)), false);
+    assert.equal(refreshesCard({ messageType: 'text', parentId: 'om_card123456789', data: {} }), false);
   });
 
   it('is a slash command: /t matches it, help lists it, and /status adds the tasks at work', async () => {

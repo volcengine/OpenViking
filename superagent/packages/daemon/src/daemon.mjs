@@ -17,7 +17,7 @@ import { executeCommand, statusHeadline } from './commands.mjs';
 import { settingsModels } from './settings-models.mjs';
 import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statusCard, workerStatusLine } from './settings-card.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
-import { executeTasksCommand, taskStatusLine } from './task-commands.mjs';
+import { executeTasksCommand, refreshesCard, taskStatusLine } from './task-commands.mjs';
 import { executeWorkersCommand } from './worker-commands.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
 import { ActionService } from './actions/service.mjs';
@@ -568,6 +568,16 @@ export class PersonalAgentDaemon {
       inboundSeq: inbound?.seq,
       metadata: { chatType: event.chatType },
     });
+    // The refresh button on a /tasks card redraws that card in place. Should
+    // Lark refuse (the message is too old to edit), the answer goes as a reply.
+    if (outcome.card && refreshesCard(event)) {
+      try {
+        await this.connectors.updateCard(event.parentId, outcome.card);
+        return;
+      } catch (error) {
+        this.logger.warn('command_card_refresh_failed', { command: label, error: safeError(error) });
+      }
+    }
     // A command may answer with a card too (/tasks); the text goes where it cannot.
     const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply', { card: outcome.card ?? null });
     if (!sent.ok) {

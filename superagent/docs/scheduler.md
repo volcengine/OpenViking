@@ -614,7 +614,11 @@ owner checks of a typed command and without the model. `/tasks t12` is a card
 too: its facts, its requests round by round, the user's additions and extra
 context (each with its round, its kind and whether its worker has read it),
 its results (one per round, plus any a newer addition superseded) and its
-runtime moves; the text says the same. The owner stops a task with
+runtime moves; the text says the same. Both cards end with when they were
+drawn and a 刷新 button: it runs the `/tasks` (or `/tasks t12`) that drew the
+card, as a card callback under the same rules, and redraws that card in place
+rather than send a new one; should Lark refuse the edit, the answer goes as a
+new card. The owner stops a task with
 `/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort). The Core answers these without the model.

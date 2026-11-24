@@ -671,3 +671,47 @@ describe('/model immediate switch', () => {
     assert.match(replies[0].text, /已切到 gpt-x（下一轮生效，上下文保留）/);
   });
 });
+
+describe('/tasks card refresh', () => {
+  function setup({ updateCard }) {
+    const daemon = new PersonalAgentDaemon(
+      { dataDir: os.tmpdir(), lockPath: path.join(os.tmpdir(), 'unused-superagent-tasks-refresh.lock') },
+      createLogger('error', { test: 'tasks-refresh' }),
+    );
+    daemon.agentRuntime = { async snapshot() { return { runtime: 'pi', work: { working: false, connected: true } }; } };
+    daemon.store = { appendCognitionJournal() {}, recordActivity() { return true; } };
+    const ended = { id: 't1', status: 'done', title: '查 X', requester_name: 'Alice', origin_source: 'lark', origin_chat_type: 'p2p',
+      round: 1, turns: 1, created_at_ms: Date.now(), updated_at_ms: Date.now(), ended_at_ms: Date.now() };
+    daemon.tasks = { overview: () => ({ live: [], ended: [ended], total: 1, slots: { used: 0, of: 3, reserved: 0, reservedOf: 1 }, dormantDays: 5 }) };
+    const updates = [];
+    const replies = [];
+    daemon.connectors = { isOwner: () => true, async updateCard(messageId, card) { updates.push(messageId); return updateCard(card); } };
+    daemon.actions = { async replyToEvent(event, text, kind, { card }) { replies.push({ text, card }); return { ok: true }; } };
+    const event = (value) => ({
+      ...chatEvent({ kind: 'message.action', messageType: 'card_action', chatType: 'p2p', chatId: 'oc_tasks12345678',
+        messageId: 'ca_refresh123456', parentId: 'om_card123456789', senderId: 'ou_owner12345678' }),
+      data: { interaction: { value } },
+    });
+    return { daemon, updates, replies, event };
+  }
+
+  it('redraws the card the refresh button is on, and sends no message', async () => {
+    const { daemon, updates, replies, event } = setup({ updateCard: async () => ({ sent: true }) });
+    await daemon.handleSlashCommand({ name: 'tasks', arg: '' }, event({ superagent_command: '/tasks', arg: '', refresh: true }), { seq: 1 });
+    assert.deepEqual(updates, ['om_card123456789']);
+    assert.deepEqual(replies, []);
+  });
+
+  it('answers as a new card when Lark refuses the redraw, and a task picked always does', async () => {
+    const refused = setup({ updateCard: async () => { throw new Error('message too old to edit'); } });
+    await refused.daemon.handleSlashCommand({ name: 'tasks', arg: '' }, refused.event({ superagent_command: '/tasks', arg: '', refresh: true }), { seq: 1 });
+    assert.deepEqual(refused.updates, ['om_card123456789']);
+    assert.equal(refused.replies.length, 1);
+    assert.equal(refused.replies[0].card.header.title.content, '后台任务');
+
+    const picked = setup({ updateCard: async () => ({ sent: true }) });
+    await picked.daemon.handleSlashCommand({ name: 'tasks', arg: '' }, picked.event({ superagent_command: '/tasks' }), { seq: 1 });
+    assert.deepEqual(picked.updates, []);
+    assert.equal(picked.replies.length, 1);
+  });
+});
