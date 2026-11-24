@@ -158,6 +158,7 @@ Configuration reference:
 | `git.snapshot.log.postgres.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN` | Environment variable containing a PostgreSQL connection URL, including TLS options |
 | `git.snapshot.log.postgres.max_connections` | `16` | Maximum PostgreSQL pool connections |
 | `git.snapshot.log.postgres.connect_timeout_ms` | `3000` | PostgreSQL pool connection acquisition timeout in milliseconds |
+| `git.snapshot.log.postgres.operation_timeout_ms` | `3000` | Deadline for initialization and each complete index operation (including connection acquisition, lock waits and all write batches), in milliseconds |
 
 ### Path-Filtered Log Index
 
@@ -198,7 +199,8 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
         "postgres": {
           "dsn_env": "OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN",
           "max_connections": 16,
-          "connect_timeout_ms": 3000
+          "connect_timeout_ms": 3000,
+          "operation_timeout_ms": 3000
         }
       }
     }
@@ -213,6 +215,14 @@ are isolated within that index. When using a custom schema, set the URL's
 `options` parameter to a URL-encoded `-c search_path=your_schema`.
 No PostgreSQL extension or Python database extra is required: the driver is
 part of the Rust binding (`ragfs/postgres` for standalone Rust consumers).
+
+PostgreSQL index operations have a finite execution deadline. The provider also
+sets `statement_timeout` and `lock_timeout` on its connections. If initialization
+times out, startup continues with the Git history scan. If an append times out,
+commit or restore continues and queues best-effort backfill; queries fall back to
+Git when the index is unavailable. A write transaction that times out before
+commit is rolled back.
+Increase `operation_timeout_ms` if normal index operations exceed the default.
 
 Each account/branch append is serialized with a transaction advisory lock,
 including the first append to an empty index. All rows are committed atomically

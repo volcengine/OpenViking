@@ -125,6 +125,9 @@ pub struct GitSnapshotLogPostgresConfig {
     /// Pool connection acquisition timeout in milliseconds.
     #[serde(default = "default_mysql_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
+    /// Deadline for initialization and each complete index operation.
+    #[serde(default = "default_mysql_connect_timeout_ms")]
+    pub operation_timeout_ms: u64,
 }
 
 impl Default for GitTuningConfig {
@@ -290,5 +293,6 @@ mod tests {
         assert_eq!(postgres.dsn_env, "SNAPSHOT_PG_DSN");
         assert_eq!(postgres.max_connections, 16);
         assert_eq!(postgres.connect_timeout_ms, 3000);
+        assert_eq!(postgres.operation_timeout_ms, 3000);
     }
 }

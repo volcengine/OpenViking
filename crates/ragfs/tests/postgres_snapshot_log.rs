@@ -7,6 +7,24 @@ use ragfs::git::{PostgresSnapshotLogStore, SnapshotLogError, SnapshotLogRow, Sna
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tokio::sync::Barrier;
+use tokio::time::{timeout, Duration, Instant};
+
+async fn expect_timeout<T: std::fmt::Debug>(
+    operation: impl std::future::Future<Output = Result<T, SnapshotLogError>>,
+) {
+    let started = Instant::now();
+    let result = timeout(Duration::from_secs(2), operation)
+        .await
+        .expect("index operations must return while the conflicting lock is still held");
+    let error = result.unwrap_err();
+    assert!(
+        matches!(&error, SnapshotLogError::Io(err) if err.kind() == std::io::ErrorKind::TimedOut)
+            || matches!(&error, SnapshotLogError::Sql(sqlx::Error::Database(err))
+                if matches!(err.code().as_deref(), Some("55P03" | "57014"))),
+        "expected an execution timeout, got {error}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
 
 fn dsn() -> String {
     std::env::var("SNAPSHOT_LOG_TEST_PG_DSN")
@@ -283,6 +301,170 @@ async fn postgres_snapshot_log_startup_does_not_provision_schema() {
         .unwrap();
     assert_eq!(count, 0);
     sqlx::query(&format!("DROP SCHEMA {schema}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a real PostgreSQL database"]
+async fn postgres_snapshot_log_bounds_startup_and_read_table_lock_waits() {
+    // A private schema keeps the exclusive table lock out of other tests.
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn())
+        .await
+        .unwrap();
+    let schema = format!("snapshot_locked_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(&format!(
+        "CREATE TABLE {schema}.snapshot_log (LIKE snapshot_log INCLUDING ALL)"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut url = url::Url::parse(&dsn()).unwrap();
+    url.query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
+    let store = PostgresSnapshotLogStore::connect_with_timeout(url.as_str(), 1, 5_000, 200)
+        .await
+        .unwrap();
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query(&format!(
+        "LOCK TABLE {schema}.snapshot_log IN ACCESS EXCLUSIVE MODE"
+    ))
+    .execute(&mut *lock)
+    .await
+    .unwrap();
+    // Do not release the lock until every call has returned by its own deadline.
+    let result = timeout(
+        Duration::from_secs(2),
+        PostgresSnapshotLogStore::connect_with_timeout(url.as_str(), 1, 5_000, 200),
+    )
+    .await
+    .expect("startup probe must have an execution deadline");
+    assert!(matches!(
+        result,
+        Err(SnapshotLogError::Io(_)) | Err(SnapshotLogError::Sql(_))
+    ));
+    expect_timeout(store.load_latest_indexed_commit("locked", "main")).await;
+    expect_timeout(store.query_path_commits("locked", "main", &["/".into()], i64::MAX, 0, 10))
+        .await;
+    lock.rollback().await.unwrap();
+    // The single-connection pool remains usable after cancelled reads.
+    assert!(store
+        .load_latest_indexed_commit("locked", "main")
+        .await
+        .unwrap()
+        .is_none());
+    drop(store);
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a real PostgreSQL database"]
+async fn postgres_snapshot_log_bounds_advisory_lock_and_reuses_pool() {
+    let store = PostgresSnapshotLogStore::connect_with_timeout(&dsn(), 1, 5_000, 200)
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn())
+        .await
+        .unwrap();
+    let account = uuid::Uuid::new_v4().simple().to_string();
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("{}:{}main", account.len(), account))
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    expect_timeout(store.append_rows_if_latest(&account, "main", None, &rows(1, &["/"]))).await;
+    lock.rollback().await.unwrap();
+    assert!(store
+        .load_latest_indexed_commit(&account, "main")
+        .await
+        .unwrap()
+        .is_none());
+    store
+        .append_rows_if_latest(&account, "main", None, &rows(1, &["/"]))
+        .await
+        .unwrap();
+    cleanup(&account).await;
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a real PostgreSQL database"]
+async fn postgres_snapshot_log_deadline_covers_all_batches_and_rolls_back() {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn())
+        .await
+        .unwrap();
+    let schema = format!("snapshot_slow_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(&format!(
+        "CREATE TABLE {schema}.snapshot_log (LIKE snapshot_log INCLUDING ALL)"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "CREATE FUNCTION {schema}.slow_batch() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN PERFORM pg_sleep(0.3); RETURN NULL; END $$"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "CREATE TRIGGER slow_batch AFTER INSERT ON {schema}.snapshot_log \
+         FOR EACH STATEMENT EXECUTE FUNCTION {schema}.slow_batch()"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut url = url::Url::parse(&dsn()).unwrap();
+    url.query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
+    let store = PostgresSnapshotLogStore::connect_with_timeout(url.as_str(), 1, 5_000, 500)
+        .await
+        .unwrap();
+    let account = uuid::Uuid::new_v4().simple().to_string();
+    let batch: Vec<_> = (0..1001)
+        .map(|i| SnapshotLogRow {
+            path: format!("docs/{i}"),
+            commit_oid: oid(1),
+        })
+        .collect();
+    // Each INSERT fits in 500ms; the complete two-batch transaction does not.
+    expect_timeout(store.append_rows_if_latest(&account, "main", None, &batch)).await;
+    sqlx::query(&format!("DROP TRIGGER slow_batch ON {schema}.snapshot_log"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(store
+        .load_latest_indexed_commit(&account, "main")
+        .await
+        .unwrap()
+        .is_none());
+    store
+        .append_rows_if_latest(&account, "main", None, &rows(1, &["/"]))
+        .await
+        .unwrap();
+    drop(store);
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&pool)
         .await
         .unwrap();

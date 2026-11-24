@@ -91,6 +91,12 @@ class GitSnapshotLogPostgresConfig(BaseModel):
     dsn_env: str = Field(default="OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN", min_length=1)
     max_connections: int = Field(default=16, ge=1)
     connect_timeout_ms: int = Field(default=3000, ge=1)
+    operation_timeout_ms: int = Field(
+        default=3000,
+        ge=1,
+        le=2147483647,
+        description="Deadline for initialization and each complete index operation, in milliseconds.",
+    )
 
 
 class GitSnapshotLogConfig(BaseModel):

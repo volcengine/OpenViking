@@ -156,6 +156,7 @@ memory 仅协调同一个客户端内的操作。租约有效期间，共享同�
 | `git.snapshot.log.postgres.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN` | 保存 PostgreSQL 连接 URL 的环境变量名，可包含 TLS 参数 |
 | `git.snapshot.log.postgres.max_connections` | `16` | PostgreSQL 连接池最大连接数 |
 | `git.snapshot.log.postgres.connect_timeout_ms` | `3000` | PostgreSQL 连接池获取连接的超时时间，单位毫秒 |
+| `git.snapshot.log.postgres.operation_timeout_ms` | `3000` | 初始化及每次完整索引操作的执行期限，包含获取连接、等锁和全部写入批次，单位毫秒 |
 
 ### 按路径查询的日志索引
 
@@ -195,7 +196,8 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
         "postgres": {
           "dsn_env": "OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN",
           "max_connections": 16,
-          "connect_timeout_ms": 3000
+          "connect_timeout_ms": 3000,
+          "operation_timeout_ms": 3000
         }
       }
     }
@@ -208,6 +210,12 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。
 自定义 schema 可通过连接 URL 的 `options` 参数指定
 `-c search_path=your_schema`，参数值需要 URL 编码。
+
+PostgreSQL 索引操作有执行期限，连接同时设置 `statement_timeout` 和
+`lock_timeout`。初始化超时后，启动继续使用 Git 历史扫描；写索引超时后，
+提交或恢复继续，并触发后台尽力回填；索引不可用时查询回退到 Git。
+提交前超时的写事务会回滚。如果正常索引操作超过默认期限，可增大 `operation_timeout_ms`。
+
 无需安装 PostgreSQL 扩展或 Python 数据库 extra，驱动由 Rust binding 提供；
 独立 Rust 接入需启用 `ragfs/postgres` feature。
 

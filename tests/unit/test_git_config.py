@@ -50,6 +50,7 @@ class TestGitConfigValidation:
                         "dsn_env": "OV_SNAPSHOT_PG",
                         "max_connections": 7,
                         "connect_timeout_ms": 1234,
+                        "operation_timeout_ms": 5678,
                     },
                 }
             },
@@ -60,6 +61,7 @@ class TestGitConfigValidation:
             "dsn_env": "OV_SNAPSHOT_PG",
             "max_connections": 7,
             "connect_timeout_ms": 1234,
+            "operation_timeout_ms": 5678,
         }
 
     @pytest.mark.parametrize(
@@ -68,6 +70,8 @@ class TestGitConfigValidation:
             {"dsn_env": ""},
             {"max_connections": 0},
             {"connect_timeout_ms": 0},
+            {"operation_timeout_ms": 0},
+            {"operation_timeout_ms": 2147483648},
         ],
     )
     def test_invalid_postgres_snapshot_log_config(self, override):

@@ -162,10 +162,11 @@ fn build_snapshot_log_store(
             let handle = tokio::runtime::Handle::try_current().map_err(|_| {
                 PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
             })?;
-            match handle.block_on(ragfs::git::PostgresSnapshotLogStore::connect(
+            match handle.block_on(ragfs::git::PostgresSnapshotLogStore::connect_with_timeout(
                 &dsn,
                 postgres.max_connections,
                 postgres.connect_timeout_ms,
+                postgres.operation_timeout_ms,
             )) {
                 Ok(store) => Ok(Some(
                     Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
@@ -816,6 +817,7 @@ mod tests {
             dsn_env: format!("SNAPSHOT_MISSING_{}", uuid::Uuid::new_v4().simple()),
             max_connections: 1,
             connect_timeout_ms: 1000,
+            operation_timeout_ms: 1000,
         });
         let err = match build_snapshot_log_store(&cfg) {
             Err(err) => err,
@@ -835,6 +837,7 @@ mod tests {
             dsn_env: "SNAPSHOT_LOG_TEST_PG_DSN".into(),
             max_connections: 2,
             connect_timeout_ms: 5000,
+            operation_timeout_ms: 5000,
         });
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _enter = runtime.enter();
