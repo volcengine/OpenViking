@@ -51,6 +51,8 @@ REASONS = {
     "context_override_invalid": Reason(400, "gateway", "config_error"),
     "context_override_not_allowed": Reason(403, "gateway", "config_error"),
     "peer_invalid": Reason(400, "gateway", "config_error"),
+    "peer_memory_requires_actor": Reason(400, "gateway", "config_error"),
+    "peer_memory_unavailable": Reason(503, "gateway", "config_error"),
     "policy_unavailable": Reason(403, "gateway", "config_error"),
     "upstream_url_not_allowed": Reason(403, "gateway", "gateway_internal"),
     "no_matching_upstream": Reason(404, "gateway", "gateway_internal"),

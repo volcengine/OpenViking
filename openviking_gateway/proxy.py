@@ -548,7 +548,9 @@ class ProxyRequest:
         check_coding_plan(self.upstream)
         if self.protocol and self.policy and not self.policy.get("peer_allow_user_memory", True):
             if not self.prepared:
-                raise HTTPException(503, "Peer-only memory requires a prepared request")
+                raise GatewayError(
+                    "peer_memory_unavailable", "Peer-only memory requires a prepared request"
+                )
         if self.body:
             self.body = await self.outgoing(self.body, self.upstream, self.prepared)
             if self.prepared:
@@ -563,10 +565,11 @@ class ProxyRequest:
     async def outgoing(self, body, upstream, prepared):
         """Vendor fields and the model alias, for the client request and its summary."""
         body = await apply_vendor(body, upstream, prepared, self.store)
+        policy = getattr(self, "policy", None)
         if (
-            self.protocol == "responses"
-            and self.policy
-            and not self.policy.get("peer_allow_user_memory", True)
+            upstream["protocol"] == "responses"
+            and policy
+            and not policy.get("peer_allow_user_memory", True)
         ):
             body = {**body, "store": False}
         mapped = upstream.get("aliases", {}).get(self.model)

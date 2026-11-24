@@ -120,6 +120,7 @@ async def test_peer_only_requests_disable_stored_provider_responses(running_gate
         json={"model": "model", "input": "Continue", "previous_response_id": "resp-1"},
     )
     assert stateful.status_code == 503
+    assert stateful.json()["reason"] == "peer_memory_unavailable"
     compact = await client.post(
         "/v1/responses/compact",
         headers=headers,
@@ -164,3 +165,19 @@ async def test_restricted_session_does_not_replay_user_memory(running_gateway):
     assert len(sent) == 2
     assert b"cached shared memory" in sent[0]
     assert b"cached shared memory" not in sent[1]
+
+
+async def test_peer_only_request_requires_an_actor_before_any_upstream_call(running_gateway):
+    _, client, admin, key, seen, _ = running_gateway
+    headers = peer_headers(key, "trial-a")
+    del headers["X-OpenViking-Actor-Peer"]
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "model", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+    assert response.status_code == 400
+    assert response.json()["reason"] == "peer_memory_requires_actor"
+    [record] = (await client.get("/admin/logs", headers=admin)).json()
+    assert record["error_class"] == "config_error"
+    assert not seen
