@@ -257,8 +257,8 @@ run the same commands as the workflow:
 ```sh
 uv run --no-sync python .github/scripts/database_integration.py prepare
 uv run --no-sync python -m pytest -q -o addopts='' \
-  tests/server/test_account_services.py::test_mysql_load_creates_default_account \
   tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+  tests/server/test_mysql_account_store.py \
   tests/server/test_redis_mysql_account_store.py \
   tests/service/test_task_work_contract.py \
   tests/service/test_task_store_postgres.py \

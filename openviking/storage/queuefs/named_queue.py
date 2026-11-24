@@ -100,6 +100,13 @@ class NamedQueue:
         self._requeue_count = 0
         self._error_count = 0
         self._errors: List[QueueError] = []
+        self._account_status: Dict[str, QueueStatus] = {}
+
+    @staticmethod
+    def _account_id(data: Any) -> str | None:
+        from openviking.service.task_work_index import extract_queue_account_id
+
+        return extract_queue_account_id(data)
 
     async def _run_middleware(
         self,
@@ -126,6 +133,12 @@ class NamedQueue:
             self._processed += 1
             if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
                 self._requeue_count += 1
+            account_id = self._account_id(data)
+            if account_id is not None:
+                status = self._account_status.setdefault(account_id, QueueStatus())
+                status.processed += 1
+                if result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
+                    status.requeue_count += 1
 
     def _record_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
@@ -139,9 +152,24 @@ class NamedQueue:
             )
             if len(self._errors) > self.MAX_ERRORS:
                 self._errors = self._errors[-self.MAX_ERRORS :]
+            account_id = self._account_id(data)
+            if account_id is not None:
+                status = self._account_status.setdefault(account_id, QueueStatus())
+                status.error_count += 1
+                status.errors.append(self._errors[-1])
+                status.errors = status.errors[-self.MAX_ERRORS :]
 
-    async def get_status(self) -> QueueStatus:
-        """Get queue status."""
+    async def get_status(self, account_id: str | None = None) -> QueueStatus:
+        """Read runtime status or account counters; QueueManager supplies account Work counts."""
+        if account_id is not None:
+            with self._lock:
+                status = self._account_status.get(account_id, QueueStatus())
+                return QueueStatus(
+                    processed=status.processed,
+                    requeue_count=status.requeue_count,
+                    error_count=status.error_count,
+                    errors=list(status.errors),
+                )
         backend_status = await self._read_backend_status()
         with self._lock:
             return QueueStatus(
@@ -160,6 +188,9 @@ class NamedQueue:
             self._requeue_count = 0
             self._error_count = 0
             self._errors = []
+            for status in self._account_status.values():
+                status.processed = status.requeue_count = status.error_count = 0
+                status.errors = []
 
     def has_dequeue_handler(self) -> bool:
         """Check if dequeue handler exists."""

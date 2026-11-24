@@ -54,6 +54,10 @@ export interface FileBrowserDashboardLabels {
   openExperience?: string;
   openWiki?: string;
   wikiConflicts?: string;
+  /** Number of unresolved conflict records in a file. */
+  wikiConflictCount?: (count: number) => string;
+  /** Number of files with unresolved conflicts in a directory. */
+  wikiConflictFileCount?: (count: number) => string;
   failed?: string;
 }
 

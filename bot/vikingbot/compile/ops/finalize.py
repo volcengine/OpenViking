@@ -20,7 +20,7 @@ async def run(runtime, documents):
     prior read by a worker. Resource writes also carry a revision guard for publication.
     """
     bundle = RenderedBundle()
-    contents, outputs = {}, {}
+    contents, outputs, rejected = {}, {}, {}
     seen_paths: set[str] = set()
     for document in documents:
         path = validate_relative_file_path(document.path)
@@ -40,6 +40,7 @@ async def run(runtime, documents):
                 validate_declared_okf_markdown(uri, content.encode("utf-8"))
             except ValueError as exc:
                 runtime.warnings.append(str(exc))
+                rejected[path] = document.source_refs
                 continue
         read_before = path in runtime.old
         try:
@@ -78,5 +79,5 @@ async def run(runtime, documents):
             bundle.wiki_uris.append(uri)
     if runtime.skill_target and contents:
         file_ops.validate_skill_output(contents)
-    await runtime.files.put("finalize", {"outputs": outputs})
+    await runtime.files.put("finalize", {"outputs": outputs, "rejected": rejected})
     return bundle

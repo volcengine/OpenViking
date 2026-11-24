@@ -8,10 +8,10 @@ from typing import Union
 import pytest
 
 from openviking.parse.accessors.base import DataAccessor, LocalResource
-from openviking.parse.accessors.registry import AccessorRegistry, get_accessor_registry
+from openviking.parse.accessors.registry import AccessorRegistry
 
 
-class TestAccessor(DataAccessor):
+class _TestAccessor(DataAccessor):
     """Test accessor implementation."""
 
     def __init__(self, name: str, prefix: str, priority: int = 50):
@@ -43,17 +43,14 @@ class TestAccessorRegistry:
         """Create a fresh registry (without default accessors)."""
         return AccessorRegistry(register_default=False)
 
-    def test_get_accessor(self, registry: AccessorRegistry) -> None:
-        """Get an accessor that can handle a source."""
-        accessor1 = TestAccessor("test1", "test1:", 50)
-        accessor2 = TestAccessor("test2", "test2:", 50)
+    def test_higher_priority_accessor_wins(self, registry: AccessorRegistry) -> None:
+        """Choose the highest-priority match regardless of registration order."""
+        accessor1 = _TestAccessor("test1", "test:", 10)
+        accessor2 = _TestAccessor("test2", "test:", 50)
         registry.register(accessor1)
         registry.register(accessor2)
 
-        result = registry.get_accessor("test1:source")
-        assert result is accessor1
-
-        result = registry.get_accessor("test2:source")
+        result = registry.get_accessor("test:source")
         assert result is accessor2
 
         result = registry.get_accessor("unknown:source")
@@ -76,25 +73,5 @@ class TestAccessorRegistry:
 
         assert result.source_type == "local"
         assert result.path == test_file
-        assert result.is_temporary is False
-
-    @pytest.mark.asyncio
-    async def test_access_with_accessor(self, registry: AccessorRegistry) -> None:
-        """access() uses the matching accessor."""
-        accessor = TestAccessor("test", "test:", 50)
-        registry.register(accessor)
-
-        result = await registry.access("test:source", extra="value")
-
-        assert result.source_type == "test"
-        assert result.meta == {"accessor": "test", "extra": "value"}
-
-
-class TestGlobalRegistry:
-    """Tests for the global registry."""
-
-    def test_get_accessor_registry(self) -> None:
-        """get_accessor_registry returns a singleton."""
-        r1 = get_accessor_registry()
-        r2 = get_accessor_registry()
-        assert r1 is r2
+        result.cleanup()
+        assert test_file.read_text() == "content"

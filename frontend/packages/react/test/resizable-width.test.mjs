@@ -1,23 +1,34 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clampResizableWidth } from '../src/shared/primitives/resizable/clamp.ts';
+import { clampResizableSize } from '../src/shared/primitives/resizable/clamp.ts';
 import {
-  TREE_DEFAULT_WIDTH,
+  STACKED_TREE_MIN_HEIGHT,
+  TREE_DEFAULT_WIDTH_BY_LOCALE,
   TREE_MIN_WIDTH,
+  resolveStackedTreeMaxHeight,
   resolveTreeMaxWidth,
 } from '../src/modules/file-browser/file-browser-layout.ts';
 
-test('a width is clamped into the bounds and rounded', () => {
-  assert.equal(clampResizableWidth(320.4, 200, 520), 320);
-  assert.equal(clampResizableWidth(120, 200, 520), 200);
-  assert.equal(clampResizableWidth(900, 200, 520), 520);
+test('a size is clamped into the bounds and rounded', () => {
+  assert.equal(clampResizableSize(320.4, 200, 520), 320);
+  assert.equal(clampResizableSize(120, 200, 520), 200);
+  assert.equal(clampResizableSize(900, 200, 520), 520);
 });
 
 test('the minimum wins when the container leaves no room for the maximum', () => {
   // 容器只剩 300px 时上限算出来是负数，面板仍应保持可读的最小宽度。
-  assert.equal(clampResizableWidth(400, 200, 100), 200);
+  assert.equal(clampResizableSize(400, 200, 100), 200);
   assert.equal(resolveTreeMaxWidth(300), TREE_MIN_WIDTH);
+});
+
+test('a stacked tree can resize only when both panes keep their minimum height', () => {
+  assert.equal(STACKED_TREE_MIN_HEIGHT, 160);
+  assert.equal(resolveStackedTreeMaxHeight(0), undefined);
+  assert.equal(resolveStackedTreeMaxHeight(400), undefined);
+  assert.equal(resolveStackedTreeMaxHeight(401), undefined);
+  assert.equal(resolveStackedTreeMaxHeight(402), 161);
+  assert.equal(resolveStackedTreeMaxHeight(790), 549);
 });
 
 test('the tree cap leaves the detail pane its readable width', () => {
@@ -27,5 +38,8 @@ test('the tree cap leaves the detail pane its readable width', () => {
   assert.equal(resolveTreeMaxWidth(1600), 520);
   // 首帧还没测出宽度时用绝对上限，不把树压到最小。
   assert.equal(resolveTreeMaxWidth(0), 520);
-  assert.equal(TREE_DEFAULT_WIDTH, 352);
+  assert.deepEqual(TREE_DEFAULT_WIDTH_BY_LOCALE, {
+    'zh-CN': 352,
+    'en-US': 500,
+  });
 });

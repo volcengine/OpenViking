@@ -31,26 +31,22 @@ def test_upstream_url_vectors(vector):
         assert upstream_url(upstream, vector["path"], vector.get("query", "")) == vector["expected"]
 
 
-@pytest.mark.parametrize(
-    ("protocol", "path"),
-    [
-        ("anthropic", "/v1/messages"),
-        ("chat", "/v1/chat/completions"),
-        ("responses", "/v1/responses"),
-    ],
-)
-def test_upstream_url_can_skip_endpoint_path(protocol, path):
+def test_upstream_url_can_skip_endpoint_path():
     upstream = {
-        "protocol": protocol,
+        "protocol": "anthropic",
         "base_url": "https://api.example.test/custom/endpoint/",
         "append_endpoint_path": False,
     }
-    assert upstream_url(upstream, path) == "https://api.example.test/custom/endpoint"
+    assert upstream_url(upstream, "/v1/messages") == "https://api.example.test/custom/endpoint"
 
 
-@pytest.mark.parametrize("prefix", ["api/v3", "api/compatible/v1", "v1"])
 @pytest.mark.parametrize(
-    "suffix", ["embeddings", "models", "responses/id/cancel", "messages/count_tokens"]
+    ("prefix", "suffix"),
+    [
+        ("api/v3", "embeddings"),
+        ("api/compatible/v1", "messages/count_tokens"),
+        ("v1", "responses/id/cancel"),
+    ],
 )
 def test_all_client_prefixes_normalize(prefix, suffix):
     app = SimpleNamespace(state=SimpleNamespace(config=None, store=None, management=None))

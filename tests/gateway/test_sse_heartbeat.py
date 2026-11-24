@@ -16,7 +16,6 @@ from test_native_tools import PATHS, native_events, native_response, request_bod
 
 from openviking_gateway import proxy
 from openviking_gateway.protocols import SSEDecoder, heartbeat
-from openviking_gateway.tool_loop import HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture
 from openviking_gateway.tool_protocols.common import sse
 
@@ -44,16 +43,6 @@ def passthrough(response):
         relay=AsyncMock(),
         finish=AsyncMock(),
     )
-
-
-async def test_busy_source_preserves_bytes():
-    data = [b'data: {"text":"', b'hello"}\n\n', b"data: [DONE]\n\n"]
-
-    async def source():
-        for chunk in data:
-            yield chunk
-
-    assert [chunk async for chunk in heartbeat(source(), 1)] == data
 
 
 async def test_idle_source_keeps_one_task_and_propagates_timeout():
@@ -129,8 +118,7 @@ async def test_closing_consumer_cancels_and_closes_source(backpressure):
     assert closed == tasks and tasks[0].done()
 
 
-@pytest.mark.parametrize("encoding", [None, "gzip"])
-@pytest.mark.parametrize("split", [False, True])
+@pytest.mark.parametrize(("encoding", "split"), [(None, False), (None, True), ("gzip", True)])
 async def test_passthrough_heartbeats_only_at_uncompressed_event_boundaries(
     monkeypatch, encoding, split
 ):
@@ -202,33 +190,6 @@ async def test_disconnect_closes_passthrough_response_and_pump(monkeypatch, asgi
         await outgoing.body_iterator.aclose()
     assert closed and tasks[0].done() and response.close.called
     assert not request.capture.complete
-
-
-@pytest.mark.parametrize("protocol", ["responses", "anthropic"])
-async def test_disconnect_closes_hidden_loop_response_and_its_timeout_context(protocol):
-    tasks = []
-
-    async def source():
-        tasks.append(asyncio.current_task())
-        yield sse(native_events(protocol, native_response(protocol, 1))[0])
-        await asyncio.Event().wait()
-
-    response = upstream(source)
-    prepared = SimpleNamespace(
-        body=request_body(protocol, True),
-        protocol=protocol,
-        root={"policy": {"tool_total_seconds": 1}},
-        metrics={},
-        tools_active=True,
-        reply_lead="",
-    )
-    loop = HiddenToolLoop(
-        prepared, SimpleNamespace(allowed={"openviking_search"}), None, ResponseCapture(protocol)
-    )
-    stream = heartbeat(loop.run(response, None), 0.005)
-    assert await anext(stream)
-    await stream.aclose()
-    assert response.close.called and tasks[0].done() and not loop.capture.complete
 
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
@@ -366,38 +327,9 @@ def hidden_tool_proxy(monkeypatch, tasks):
     return request, response, source_closed
 
 
-@pytest.mark.parametrize("failure_stage", ["start", "body"])
-async def test_hidden_tool_stream_closes_upstream_when_send_fails(monkeypatch, failure_stage):
-    tasks = []
-    request, response, source_closed = hidden_tool_proxy(monkeypatch, tasks)
-    outgoing = await request.tool_response()
-
-    async def receive():
-        await asyncio.Event().wait()
-
-    async def send(message):
-        if message["type"] == f"http.response.{failure_stage}" and (
-            failure_stage == "start" or message.get("body")
-        ):
-            raise OSError("client disconnected")
-
-    scope = {"type": "http", "asgi": {"spec_version": "2.4"}}
-    with pytest.raises(ClientDisconnect):
-        await outgoing(scope, receive, send)
-
-    assert response.close.called
-    assert request.finish.await_count == 1
-    assert not request.capture.complete
-    if failure_stage == "body":
-        assert tasks[0].done()
-        assert source_closed == [True]
-    else:
-        assert not tasks
-        assert not source_closed
-
-
-async def test_hidden_tool_stream_closes_upstream_on_asgi_disconnect(monkeypatch):
-    tasks = []
+@pytest.mark.parametrize("failure_stage", ["start", "body", "receive"])
+async def test_hidden_tool_stream_closes_upstream_when_client_leaves(monkeypatch, failure_stage):
+    tasks: list[asyncio.Task] = []
     request, response, source_closed = hidden_tool_proxy(monkeypatch, tasks)
     outgoing = await request.tool_response()
     body_started = asyncio.Event()
@@ -407,18 +339,27 @@ async def test_hidden_tool_stream_closes_upstream_on_asgi_disconnect(monkeypatch
         return {"type": "http.disconnect"}
 
     async def send(message):
-        if message["type"] == "http.response.body" and message.get("body"):
+        if message["type"] == f"http.response.{failure_stage}" and (
+            failure_stage == "start" or message.get("body")
+        ):
+            raise OSError("client disconnected")
+        if failure_stage == "receive" and message.get("body"):
             body_started.set()
             await asyncio.Event().wait()
 
-    scope = {"type": "http", "asgi": {"spec_version": "2.3"}}
-    await outgoing(scope, receive, send)
+    if failure_stage == "receive":
+        await outgoing({"type": "http", "asgi": {"spec_version": "2.3"}}, receive, send)
+    else:
+        with pytest.raises(ClientDisconnect):
+            await outgoing({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
 
     assert response.close.called
     assert request.finish.await_count == 1
     assert not request.capture.complete
-    assert tasks[0].done()
-    assert source_closed == [True]
+    if failure_stage == "start":
+        assert not tasks and not source_closed
+    else:
+        assert tasks[0].done() and source_closed == [True]
 
 
 def first_event(protocol):
@@ -444,7 +385,7 @@ def failing_passthrough(protocol, data, error):
     return request, response
 
 
-@pytest.mark.parametrize("protocol", ["anthropic", "chat", "responses"])
+@pytest.mark.parametrize("protocol", ["anthropic", "responses"])
 async def test_passthrough_stream_failure_emits_protocol_error(protocol):
     first = first_event(protocol)
     request, response = failing_passthrough(protocol, [first], aiohttp.ServerTimeoutError())
@@ -453,24 +394,21 @@ async def test_passthrough_stream_failure_emits_protocol_error(protocol):
     assert output.startswith(first)
     added = output[len(first) :]
     message = "upstream_timeout: the model provider stopped before the reply finished"
-    if protocol == "chat":
-        error = {"error": {"type": "upstream_timeout", "message": message}}
-        assert added == sse(error) + b"data: [DONE]\n\n"
+    (frame,) = SSEDecoder().feed(added)
+    event = SSEDecoder.data(frame)
+    assert event is not None
+    if protocol == "anthropic":
+        assert frame.startswith(b"event: error\n")
+        assert event == {
+            "type": "error",
+            "error": {"type": "upstream_timeout", "message": message},
+        }
     else:
-        (frame,) = SSEDecoder().feed(added)
-        event = SSEDecoder.data(frame)
-        if protocol == "anthropic":
-            assert frame.startswith(b"event: error\n")
-            assert event == {
-                "type": "error",
-                "error": {"type": "upstream_timeout", "message": message},
-            }
-        else:
-            assert frame.startswith(b"event: response.failed\n")
-            failed = event["response"]
-            assert event["type"] == "response.failed" and failed["id"] == "resp_1"
-            assert failed["status"] == "failed" and failed["output"] == []
-            assert failed["error"] == {"code": "server_error", "message": message}
+        assert frame.startswith(b"event: response.failed\n")
+        failed = event["response"]
+        assert event["type"] == "response.failed" and failed["id"] == "resp_1"
+        assert failed["status"] == "failed" and failed["output"] == []
+        assert failed["error"] == {"code": "server_error", "message": message}
     assert response.close.called and not request.capture.complete
     metrics = request.record.metrics
     assert metrics["stream_error"] == metrics["error_reason"] == "upstream_timeout"

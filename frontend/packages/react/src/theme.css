@@ -79,6 +79,8 @@
   /* 紧凑浮层（下拉菜单、时间范围选择）的投影：比卡片浮层更收，托起一块小面板。 */
   /* The shadow of a compact surface such as a dropdown or range picker. */
   --ov-ui-overlay-shadow-default: 0 8px 24px rgb(0 0 0 / 10%);
+  --ov-ui-card-hover-shadow-default:
+    0 5px 15px rgb(0 0 0 / 5%), 0 15px 35px -2px rgb(0 0 0 / 5%);
 
   --ov-ui-auth-on-primary-default: #ffffff;
   --ov-ui-auth-backdrop-default: rgb(0 0 0 / 40%);
@@ -154,6 +156,8 @@
   --ov-ui-warning-solid-default: #ff952b;
   --ov-ui-warning-default: #b26a00;
   --ov-ui-warning-light-default: #fff0b3;
+  --ov-ui-file-preview-badge-bg-default: #ffeddb;
+  --ov-ui-file-preview-badge-text-default: #eb7d00;
 
   /* 浮层。 */
   --ov-ui-overlay-default: rgb(0 0 0 / 40%);
@@ -300,6 +304,8 @@ html.dark .ov-error-boundary,
   --ov-ui-danger-default: #ff668a;
   --ov-ui-warning-default: #e0a04a;
   --ov-ui-warning-light-default: #3a2f14;
+  --ov-ui-file-preview-badge-bg-default: var(--ov-ui-warning-light-default);
+  --ov-ui-file-preview-badge-text-default: var(--ov-ui-warning-default);
 
   --ov-ui-tooltip-bg-default: #2a2d33;
   --ov-ui-overlay-default: rgb(0 0 0 / 64%);

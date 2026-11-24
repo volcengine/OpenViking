@@ -77,9 +77,8 @@ const messages = {
   },
   compileQuickInputs: {
     createWiki: {
-      label: 'Create Wiki',
-      prompt:
-        'Organize the files in the selected directory into a Wiki, preserving sources and the relationships between documents',
+      label: 'Wiki',
+      prompt: 'Organize the files in the selected directory into a Wiki.',
     },
     dailyReport: {
       label: 'Schedule daily report',

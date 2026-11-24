@@ -10,6 +10,10 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 async def test_privacy_tree_lists_current_fields_without_values(client: httpx.AsyncClient, service):
+    empty = await client.get("/api/v1/privacy-configs/tree")
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["result"]["categories"] == []
+
     created = await client.post(
         "/api/v1/privacy-configs/credential/github",
         json={"values": {"pat": "historical-secret-marker", "old_field": "old-value-marker"}},
@@ -78,16 +82,6 @@ async def test_privacy_tree_lists_current_fields_without_values(client: httpx.As
     tree = (await client.get("/api/v1/privacy-configs/tree")).json()["result"]
     assert tree["categories"][0]["targets"][1]["version"] == 1
 
-
-async def test_privacy_tree_category_filter_and_route_not_shadowed(client: httpx.AsyncClient):
-    empty = await client.get("/api/v1/privacy-configs/tree")
-    assert empty.status_code == 200, empty.text
-    assert empty.json()["result"]["categories"] == []
-    for category in ["credential", "skill"]:
-        created = await client.post(
-            f"/api/v1/privacy-configs/{category}/demo", json={"values": {"token": "secret-marker"}}
-        )
-        assert created.status_code == 200, created.text
     filtered = await client.get("/api/v1/privacy-configs/tree", params={"category": "skill"})
     assert filtered.status_code == 200, filtered.text
     assert [node["category"] for node in filtered.json()["result"]["categories"]] == ["skill"]
