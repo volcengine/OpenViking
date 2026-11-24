@@ -95,7 +95,8 @@ Do not invent other keys or commands for this: that file is the whole interface,
 - Reusable task-execution write-ups (Experiences) have a dedicated tool pair,
   `search_experience` / `read_experience`, described in the
   `ov-experience-memory` skill.
-- Skills stored in OpenViking (the `<available-skills>` list, `add_skill`,
+- Skills stored in OpenViking (the session's skill catalog —
+  `<available-skills>`, or `<openviking-skills>` on DSH — plus `add_skill` and
   moving local skills in) are covered by the `openviking-skills` skill.
 
 ## Beyond the MCP tools

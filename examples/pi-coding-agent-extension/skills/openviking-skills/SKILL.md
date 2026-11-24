@@ -3,8 +3,9 @@ name: openviking-skills
 description: >
   Find, use, create, install, share, update, and migrate agent skills stored in
   OpenViking (viking://~/skills and viking://agent/skills). Use it when a
-  search result, or the session's <available-skills> list where the harness
-  injects one, names a skill that fits the task; when a task looks like one a
+  search result, or the session's OpenViking skill list where the harness
+  injects one (`<available-skills>`, or `<openviking-skills>` on DSH), names a
+  skill that fits the task; when a task looks like one a
   stored skill would cover; when the user asks to write, save, install, or share a skill from
   text, a Git repository, or a local folder; when a skill should work in every
   harness and on every machine; or when the user wants to move local skills
@@ -34,11 +35,13 @@ paths: never pass them to local file tools or shell commands.
 1. `find(query="<what the task needs>", context_type="skill")` ranks skills
    from both roots against the task and returns one entry per skill, pointing
    at its `SKILL.md`. This works in every harness; start here.
-2. If the session begins with an `<available-skills>` block, it lists the
+2. If the session carries an OpenViking skill catalog block
+   (`<available-skills>`, or `<openviking-skills>` on DSH), it lists the
    user's own skills first, then shared ones. Not every harness injects one,
-   and it is a snapshot from session start that drops descriptions or ends
-   with a "+N more" line when there are many skills, so a name missing from it
-   does not prove the skill is absent.
+   and the catalog is a snapshot: it drops descriptions or ends with a "+N
+   more" line when there are many skills, and DSH replaces it only when it
+   changes or loses it to a context compaction. A name missing from it does
+   not prove the skill is absent.
 3. `search(query=..., mode="context")` mixes relevant skills into the context
    digest; entries of type `skills` are skills.
 4. `tree(uri="viking://~/skills", level_limit=1, include_abstract=true)`, and

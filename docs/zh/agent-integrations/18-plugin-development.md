@@ -209,7 +209,7 @@ stdout 只承载宿主约定的结果，日志写 stderr 或共享日志文件�
 
 profile 与逐轮召回分别使用 `buildProfileBlock()` 和 `buildRecallBlock()` / `buildRecallBlockDetailed()`。宿主可提供压缩器、显示结果和统计信息，不能重写检索目标、排序、token 预算和服务端兼容回退。状态栏需要计数时，应消费共享结果和最终注入内容，不能再跑一次召回推算。
 
-会话启动时的 skill 清单（`<available-skills>`）也由 `buildProfileBlock()` 生成：调用方把解析好的插件配置作为第四个参数传入，由其中的 `skillCatalog` 和 `skillCatalogTokenBudget` 旋钮决定开关和预算。适配器不能自己请求 `GET /api/v1/skills`，也不能自己拼装 skill 列表。不传这个参数的宿主，得到的 profile 块里没有 skill 清单。
+skill 清单也由共享层生成，适配器不能自己请求 `GET /api/v1/skills`，也不能自己拼装列表。两种形态：把清单并进开场块的宿主给 `buildProfileBlock()` 传解析好的插件配置作为第四个参数，由 `skillCatalog` 和 `skillCatalogTokenBudget` 决定开关和预算，清单用 `<available-skills>`；会在会话中途重发清单的宿主（DSH）不传这个参数，改为调用 `buildSkillCatalog()`，用自己标签（`<openviking-skills>`）和说明行把它作为单独一条消息注入。单独注入时，宿主应把清单内容的摘要存进消息的 `source`，再用 `deriveMessages()`（模型实际保留的历史）判断它是否还在、内容是否变过：还在且没变就不发，被压缩丢掉或内容变了就发一条完整替换。不要用原始事件日志判断“是否已注入”，压缩不会删除日志。
 
 自动召回必须携带正确会话身份和 peer，并遵守 input filter、bypass 和开关。空结果应保持为空，不把服务端的“无相关记忆”占位文本当成记忆注入。压缩失败可退回已有的未压缩结果；不得凭空补写摘要。压缩后的 `viking://` URI 必须仍可读取，原始用户问题、召回块与宿主包装也必须能在 capture 时区分，避免重复写入注入的旧记忆。
 

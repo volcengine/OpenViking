@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { stateDir } from "./shared/workspace-identity.mjs";
 import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
-import { buildProfileBlock } from "./shared/profile-inject.mjs";
+import { buildProfileBlock, buildSkillCatalog } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import {
   dequeue,
@@ -20,6 +20,15 @@ import {
   promptText,
 } from "./capture.mjs";
 import { deriveDshSessionId } from "./session-id.mjs";
+
+const CATALOG_FORM = "catalog";
+const CATALOG_TAG = "openviking-skills";
+// The host keeps its own skill catalog, whose refresh text says it replaces
+// every earlier "available-skills" list. A separate tag keeps the two apart,
+// so a local catalog update cannot read as retiring the OpenViking one.
+const CATALOG_USAGE_LINE =
+  "  This complete catalog of OpenViking skills replaces every earlier <openviking-skills> list in this session. These skills live in OpenViking, not in local files, and are separate from the host's own skill list; before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.";
+const DEFAULT_CATALOG_REFRESH_MS = 300000;
 
 export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionConfig = null) {
@@ -54,7 +63,8 @@ export class OpenVikingRuntime {
       config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
-      profileDelivered: false,
+      catalog: null,
+      catalogBuiltAt: 0,
       toolNames: new Map(),
       writes: Promise.resolve(),
       warnedFailures: new Set(),
@@ -108,11 +118,14 @@ export class OpenVikingRuntime {
       await this.replayPendingQueue();
     }
     await this.refreshPendingState(state);
+    // The skill catalog is deliberately not part of this block: a compaction
+    // drops the whole block, and the catalog needs its own visibility check
+    // and refresh cycle (catalogMessage/ensureCatalog).
     const profile = await buildProfileBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
       state.config.peerId,
-      state.config,
+      { sessionStartMaxBytes: state.config.sessionStartMaxBytes },
     );
     state.profileBlock = profile?.block
       ? [
@@ -125,15 +138,78 @@ export class OpenVikingRuntime {
     return state;
   }
 
-  async profileMessage(agent) {
+  /**
+   * Deliver the profile until it is in the context the model actually keeps.
+   *
+   * A DSH compaction replaces the messages it summarizes without erasing their
+   * events, so "was it ever sent?" cannot be answered from the session log.
+   * deriveMessages() is the surviving history; when the profile is no longer in
+   * it (compaction, or a restored session whose tail was summarized), it is
+   * sent again. Nothing here needs to survive a process restart: the injected
+   * message carries its own identity.
+   */
+  async profileMessage(agent, batch = []) {
     const state = await this.initialize(agent);
-    if (!state.ready || !state.profileBlock || state.profileDelivered) return null;
-    if (hasStartupProfile(agent)) {
-      state.profileDelivered = true;
-      return null;
-    }
-    state.profileDelivered = true;
+    if (!state.ready || !state.profileBlock) return null;
+    if (hasDeliveredProfile(agent, batch)) return null;
     return pluginMessage(state.profileBlock, { form: "instructions" });
+  }
+
+  /**
+   * Deliver the OpenViking skill catalog as its own message.
+   *
+   * The catalog is the model's only index of the user's skills, so it must
+   * outlive a compaction and follow changes: when the visible catalog is gone
+   * or its digest differs from the one just built, this sends a complete
+   * replacement. The digest rides in the message source, which the session log
+   * keeps, so a restart re-derives the same answer instead of re-injecting.
+   */
+  async catalogMessage(agent, batch = []) {
+    const state = await this.initialize(agent);
+    if (!state.ready || !isSkillCatalogEnabled(state.config)) return null;
+    const catalog = await this.ensureCatalog(state);
+    if (!catalog?.content) return null;
+    if (hasDeliveredCatalog(agent, catalog.digest, batch)) return null;
+    return pluginMessage(catalog.content, {
+      form: CATALOG_FORM,
+      digest: catalog.digest,
+      count: catalog.count,
+    });
+  }
+
+  /**
+   * Build the catalog at most once per refresh interval. A skill created in a
+   * long-lived session reaches the model on the next interval, and an
+   * unchanged catalog costs one request per interval rather than one per step.
+   */
+  async ensureCatalog(state) {
+    const refreshMs = Number(state.config.skillCatalogRefreshMs);
+    const interval = Number.isFinite(refreshMs) && refreshMs >= 0
+      ? refreshMs
+      : DEFAULT_CATALOG_REFRESH_MS;
+    if (state.catalogBuiltAt && Date.now() - state.catalogBuiltAt < interval) return state.catalog;
+    const built = await buildSkillCatalog(
+      (path, init, options) => this.client.fetchJSON(path, init, options),
+      state.config.skillCatalogTokenBudget,
+      state.config.peerId,
+      { tag: CATALOG_TAG, usageLine: CATALOG_USAGE_LINE },
+    );
+    state.catalogBuiltAt = Date.now();
+    // A failed read keeps the last good catalog: sending an empty one would
+    // tell the model its skills are gone.
+    if (!built) return state.catalog;
+    state.catalog = built.block
+      ? {
+          content: [
+            '<openviking-context source="catalog">',
+            built.block,
+            "</openviking-context>",
+          ].join("\n"),
+          digest: createHash("sha256").update(built.block).digest("hex"),
+          count: built.count,
+        }
+      : null;
+    return state.catalog;
   }
 
   async recallMessage(agent, messages, signal) {
@@ -463,21 +539,54 @@ export class OpenVikingRuntime {
   }
 }
 
-function hasStartupProfile(agent) {
-  const session = agent.session;
-  const ownEvents = typeof session?.ownEvents === "function"
-    ? session.ownEvents()
-    : (session?.events || []).slice(session?.header?.seedLength ?? 0);
-  const inHistory = ownEvents.some(event => (
-    event?.type === "user/message" && isStartupProfile(event.data)
-  ));
-  if (inHistory) return true;
+function hasDeliveredProfile(agent, batch) {
+  return (batch || []).some(isStartupProfile)
+    || pendingPluginMessage(agent, isStartupProfile)
+    || Boolean(lastVisiblePluginMessage(agent.session, isStartupProfile));
+}
+
+function hasDeliveredCatalog(agent, digest, batch) {
+  const match = message => isCatalogMessage(message) && message.source?.digest === digest;
+  return (batch || []).some(match)
+    || pendingPluginMessage(agent, match)
+    || Boolean(lastVisiblePluginMessage(agent.session, match));
+}
+
+/**
+ * Walk the history the model keeps, newest first. DSH compacts by replacing a
+ * span of the surface, so deriveMessages() leaves out exactly what a compaction
+ * dropped; the raw event log, which still holds it, cannot answer this.
+ *
+ * Every DSH version this plugin accepts (peer floor 0.1.0-rc.6) has
+ * deriveMessages; the guard only keeps a host that violates that contract from
+ * throwing inside the pre-step waterfall.
+ */
+function lastVisiblePluginMessage(session, match) {
+  if (typeof session?.deriveMessages !== "function") return undefined;
+  const messages = session.deriveMessages();
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (match(messages[index])) return messages[index];
+  }
+  return undefined;
+}
+
+/** Messages injected for this step but not yet appended to the session. */
+function pendingPluginMessage(agent, match) {
   return [agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
-    (messages || []).some(isStartupProfile)
+    (messages || []).some(match)
   ));
+}
+
+function isSkillCatalogEnabled(config) {
+  return config.skillCatalog !== false && Number(config.skillCatalogTokenBudget) > 0;
 }
 
 function isStartupProfile(message) {
   return isOpenVikingPluginMessage(message)
     && message.source.form === "instructions";
+}
+
+function isCatalogMessage(message) {
+  return isOpenVikingPluginMessage(message)
+    && message.source.form === CATALOG_FORM;
 }

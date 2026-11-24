@@ -73,19 +73,22 @@ export function apply(ctx, input = {}) {
 
   // prepend: downstream waterfall listeners run first, so this plugin sees
   // the final claimed batch and appends after every other contributor.
-  // Profile + recall are independent after `next()`; run them concurrently so
-  // the agent/pre-step waterfall (which currently gates user/message push in
-  // dsh-agent-loop) spends less wall time (#4515).
+  // Profile, catalog and recall are independent after `next()`; run them
+  // concurrently so the agent/pre-step waterfall (which currently gates
+  // user/message push in dsh-agent-loop) spends less wall time (#4515).
+  // The catalog is a separate message because a compaction can drop it while
+  // the profile stays: each is re-armed on its own visibility.
   ctx.on("agent/pre-step", async ({ agent, messages, signal }, next) => {
     const decision = await next();
     if (skipMemory(agent.session)) return decision;
     if (decision.kind !== "enter" || signal.aborted) return decision;
-    const [profile, recall] = await Promise.all([
-      runtime.profileMessage(agent),
+    const [profile, catalog, recall] = await Promise.all([
+      runtime.profileMessage(agent, decision.messages),
+      runtime.catalogMessage(agent, decision.messages),
       runtime.recallMessage(agent, decision.messages, signal),
     ]);
     if (signal.aborted) return decision;
-    const additions = [profile, recall].filter(Boolean);
+    const additions = [profile, catalog, recall].filter(Boolean);
     // Keep the rest of the decision: goal-round-driver marks its entries with
     // `startsRequestSeries`, and rebuilding the object would drop that flag.
     return additions.length > 0

@@ -171,7 +171,30 @@ export const KNOBS = [
   { name: "skillExperience", type: "bool", default: false, env: "OPENVIKING_SKILL_EXPERIENCE", capability: "session" },
   { name: "skillExperienceLimit", type: "int", default: 3, min: 1, max: 50, env: "OPENVIKING_SKILL_EXPERIENCE_LIMIT", capability: "session" },
   { name: "skillCatalog", type: "bool", default: true, env: "OPENVIKING_SKILL_CATALOG", capability: "session" },
-  { name: "skillCatalogTokenBudget", type: "int", default: 1200, min: 0, max: 20000, env: "OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET", capability: "session" },
+  // dsh re-injects this catalog for the whole session and has no other skill
+  // index, so its descriptions are what recall matches on. 1200 tokens runs
+  // out of description budget after a few dozen skills; dsh gets 2400.
+  {
+    name: "skillCatalogTokenBudget",
+    type: "int",
+    default: 1200,
+    harness: { dsh: 2400 },
+    min: 0,
+    max: 20000,
+    env: "OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET",
+    capability: "session",
+  },
+  // dsh refreshes the catalog on this interval so a skill created mid-session
+  // shows up without a restart; 0 rebuilds it every model step.
+  {
+    name: "skillCatalogRefreshMs",
+    type: "int",
+    default: 300000,
+    min: 0,
+    max: 3600000,
+    env: "OPENVIKING_SKILL_CATALOG_REFRESH_MS",
+    capability: "session",
+  },
   // Claude Code saves hook context over 10,000 chars to a file and shows the
   // model a 2 KB preview; Codex spills past ~10,000 bytes; ZCode drops stdout
   // over 32 KB. 0 means no cap.

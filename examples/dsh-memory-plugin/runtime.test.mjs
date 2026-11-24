@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { deriveWorkspacePeerId } from "./shared/workspace-peer.mjs";
-import { OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
+import { OPENVIKING_PLUGIN_KIND, pluginMessage } from "./capture.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 
 const originalPendingDir = process.env.OPENVIKING_PENDING_DIR;
@@ -288,100 +288,220 @@ test("dispose waits for the final commit before deleting session state", async (
   assert.equal(runtime.states.has(session.id), false);
 });
 
-test("persisted profile delivery survives dispose and re-seed", async () => {
-  const runtime = new OpenVikingRuntime({
-    async commitSession() {
-      return { ok: true };
-    },
-  }, config(), { debug() {} });
-  const session = {
-    id: "profile-resume",
-    header: { cwd: "/workspace" },
-    events: [],
-  };
-  const firstState = runtime.stateFor(session);
-  firstState.ready = true;
-  firstState.profileBlock = "profile v1";
+test("a compacted history gets the profile again", async () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  const session = sessionWithHistory("profile-compacted");
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  state.profileBlock = "profile v1";
 
-  const profile = await runtime.profileMessage({ session });
-  assert.equal(profile?.source?.kind, OPENVIKING_PLUGIN_KIND);
-  assert.equal(profile?.source?.form, "instructions");
-  session.events.push({ type: "user/message", data: profile });
-  await runtime.dispose(session);
+  const first = await runtime.profileMessage({ session });
+  assert.equal(first?.source?.kind, OPENVIKING_PLUGIN_KIND);
+  assert.equal(first?.source?.form, "instructions");
+  session.append(first);
+  assert.equal(await runtime.profileMessage({ session }), null, "a visible profile is not repeated");
 
-  const resumedSession = {
-    id: session.id,
-    header: session.header,
-    events: [...session.events],
-  };
-  const resumedState = runtime.stateFor(resumedSession);
-  resumedState.ready = true;
-  resumedState.profileBlock = "profile v2";
-  assert.equal(await runtime.profileMessage({ session: resumedSession }), null);
-  assert.equal(resumedState.profileDelivered, true);
+  // DSH compacts by replacing the summarized span on the surface: the events
+  // stay in the log, but the model's history no longer holds them.
+  session.compact();
+  const again = await runtime.profileMessage({ session });
+  assert.equal(again?.source?.form, "instructions");
+  session.append(again);
+  assert.equal(await runtime.profileMessage({ session }), null);
+});
 
-  const pendingSession = {
-    id: "profile-pending",
-    header: { cwd: "/workspace" },
-    events: [],
-  };
-  const pendingState = runtime.stateFor(pendingSession);
-  pendingState.ready = true;
-  pendingState.profileBlock = "pending profile";
+test("a profile already queued for this step is not sent twice", async () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  const session = sessionWithHistory("profile-pending");
+  const state = runtime.stateFor(session);
+  state.ready = true;
+  state.profileBlock = "pending profile";
+
+  const pending = pluginMessage("pending profile", { form: "instructions" });
   assert.equal(await runtime.profileMessage({
-    session: pendingSession,
-    inbox: { nextTurn: [], nextStep: [profile] },
+    session,
+    inbox: { nextTurn: [], nextStep: [pending] },
   }), null);
+  assert.equal(await runtime.profileMessage({ session }, [pending]), null);
+});
 
-  const otherSession = {
-    id: "profile-other",
-    header: { cwd: "/workspace", seedLength: 1 },
-    events: [{ type: "user/message", data: profile }],
-  };
-  const otherState = runtime.stateFor(otherSession);
-  otherState.ready = true;
-  otherState.profileBlock = "other profile";
+test("a restart answers from the visible history, not from the event log", async () => {
+  const session = sessionWithHistory("profile-restart");
+  const first = new OpenVikingRuntime({}, config(), { debug() {} });
+  const firstState = first.stateFor(session);
+  firstState.ready = true;
+  firstState.profileBlock = "profile";
+  session.append(await first.profileMessage({ session }));
+
+  const resumed = new OpenVikingRuntime({}, config(), { debug() {} });
+  const resumedState = resumed.stateFor(session);
+  resumedState.ready = true;
+  resumedState.profileBlock = "profile";
+  assert.equal(await resumed.profileMessage({ session }), null, "resume keeps the history it has");
+
+  session.compact();
+  const compacted = new OpenVikingRuntime({}, config(), { debug() {} });
+  const compactedState = compacted.stateFor(session);
+  compactedState.ready = true;
+  compactedState.profileBlock = "profile";
   assert.equal(
-    (await runtime.profileMessage({ session: otherSession }))?.source?.form,
+    (await compacted.profileMessage({ session }))?.source?.form,
     "instructions",
+    "a resumed session whose profile was compacted gets it back",
   );
 });
 
-test("profile delivery uses current DSH session-owned history on resume and fork", async () => {
-  const profile = {
-    type: "user/message",
-    data: {
-      role: "user",
-      content: [{ type: "text", text: "stored profile" }],
-      source: { kind: "plugin", plugin: "openviking-memory", form: "instructions" },
+test("the catalog is its own message and returns when a compaction drops it", async () => {
+  const calls = [];
+  const names = ["paper-reader", "ov-skills"];
+  const runtime = new OpenVikingRuntime(skillServer(names, calls), catalogConfig(), { debug() {} });
+  const session = sessionWithHistory("catalog-compacted");
+  runtime.stateFor(session).ready = true;
+
+  const first = await runtime.catalogMessage({ session });
+  const text = first?.content?.[0]?.text || "";
+  // Its own envelope and tag: the host's own catalog replacement text speaks
+  // about "available-skills", and must not read as retiring this list.
+  assert.match(text, /^<openviking-context source="catalog">/);
+  assert.match(text, /<openviking-skills>/);
+  assert.match(text, /ov-skills/);
+  assert.equal(first.source.form, "catalog");
+  assert.equal(first.source.count, 2);
+  assert.equal(typeof first.source.digest, "string");
+  assert.equal(calls.filter(path => path.startsWith("/api/v1/skills")).length, 1);
+
+  session.append(first);
+  assert.equal(await runtime.catalogMessage({ session }), null, "a visible catalog is not repeated");
+
+  session.compact();
+  const again = await runtime.catalogMessage({ session });
+  assert.equal(again?.source?.digest, first.source.digest, "the same catalog comes back");
+  session.append(again);
+  assert.equal(await runtime.catalogMessage({ session }), null);
+});
+
+test("a catalog already queued for this step is not sent twice", async () => {
+  const runtime = new OpenVikingRuntime(skillServer(["ov-skills"]), catalogConfig(), { debug() {} });
+  const session = sessionWithHistory("catalog-pending");
+  runtime.stateFor(session).ready = true;
+
+  const first = await runtime.catalogMessage({ session });
+  assert.equal(await runtime.catalogMessage({
+    session,
+    inbox: { nextTurn: [first], nextStep: [] },
+  }), null);
+  // Same step, same batch: the caller already carries it.
+  assert.equal(await runtime.catalogMessage({ session }, [first]), null);
+});
+
+test("a skill added mid-session replaces the visible catalog", async () => {
+  const names = ["ov-skills"];
+  const runtime = new OpenVikingRuntime(
+    skillServer(names),
+    catalogConfig({ skillCatalogRefreshMs: 0 }),
+    { debug() {} },
+  );
+  const session = sessionWithHistory("catalog-refresh");
+  runtime.stateFor(session).ready = true;
+  const first = await runtime.catalogMessage({ session });
+  session.append(first);
+
+  names.push("new-skill");
+  const updated = await runtime.catalogMessage({ session });
+  assert.match(updated?.content?.[0]?.text || "", /new-skill/);
+  assert.notEqual(updated.source.digest, first.source.digest);
+  assert.equal(updated.source.count, 2);
+  session.append(updated);
+  assert.equal(await runtime.catalogMessage({ session }), null);
+});
+
+test("the catalog is rebuilt at most once per refresh interval", async () => {
+  const calls = [];
+  const runtime = new OpenVikingRuntime(skillServer(["ov-skills"], calls), catalogConfig(), { debug() {} });
+  const session = sessionWithHistory("catalog-cached");
+  runtime.stateFor(session).ready = true;
+
+  session.append(await runtime.catalogMessage({ session }));
+  for (let step = 0; step < 3; step += 1) {
+    assert.equal(await runtime.catalogMessage({ session }), null);
+  }
+  assert.equal(calls.filter(path => path.startsWith("/api/v1/skills")).length, 1);
+});
+
+test("a server with no skills is cached like any other answer", async () => {
+  const calls = [];
+  const runtime = new OpenVikingRuntime(skillServer([], calls), catalogConfig(), { debug() {} });
+  const session = sessionWithHistory("catalog-empty");
+  runtime.stateFor(session).ready = true;
+
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  assert.equal(await runtime.catalogMessage({ session }), null);
+  assert.equal(calls.filter(path => path.startsWith("/api/v1/skills")).length, 1);
+});
+
+test("a failed skills read never erases the catalog the model already has", async () => {
+  const names = ["ov-skills"];
+  const server = skillServer(names);
+  const runtime = new OpenVikingRuntime(server, catalogConfig({ skillCatalogRefreshMs: 0 }), { debug() {} });
+  const session = sessionWithHistory("catalog-outage");
+  runtime.stateFor(session).ready = true;
+  const first = await runtime.catalogMessage({ session });
+  session.append(first);
+
+  server.fail = true;
+  assert.equal(await runtime.catalogMessage({ session }), null, "still visible");
+  session.compact();
+  const recovered = await runtime.catalogMessage({ session });
+  assert.match(recovered?.content?.[0]?.text || "", /ov-skills/);
+  assert.equal(recovered.source.digest, first.source.digest);
+});
+
+test("turning the catalog off sends nothing and reads nothing", async () => {
+  for (const [label, overrides] of [
+    ["skillCatalog false", { skillCatalog: false }],
+    ["zero budget", { skillCatalogTokenBudget: 0 }],
+  ]) {
+    const calls = [];
+    const runtime = new OpenVikingRuntime(skillServer(["ov-skills"], calls), catalogConfig(overrides), { debug() {} });
+    const session = sessionWithHistory(`catalog-off-${label}`);
+    runtime.stateFor(session).ready = true;
+
+    assert.equal(await runtime.catalogMessage({ session }), null, label);
+    assert.equal(calls.length, 0, label);
+  }
+});
+
+test("the profile block carries no skill catalog and initialize never reads skills", async () => {
+  const calls = [];
+  const client = {
+    async healthResult() { return { ok: true }; },
+    async ensureSessionResult() { return { ok: true }; },
+    async fetchJSON(path) {
+      calls.push(path);
+      if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+      if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+      if (path.startsWith("/api/v1/content/read")) {
+        return { ok: true, result: "# profile\n\n- works on memory plugins\n" };
+      }
+      if (path.startsWith("/api/v1/skills")) {
+        return { ok: true, result: { skills: [{ name: "ov-skills", uri: "viking://agent/skills/ov-skills", description: "skills" }] } };
+      }
+      return { ok: false, status: 404, error: { code: "NOT_FOUND" } };
     },
   };
-  for (const [id, ownEvents, expected] of [
-    ["resumed", [profile], null],
-    ["forked", [], "instructions"],
-    ["forked-resumed", [profile], null],
-  ]) {
-    const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
-    let historyReads = 0;
-    const session = {
-      id,
-      header: { cwd: "/workspace", isSeeded: id !== "resumed" },
-      ownEvents() {
-        historyReads += 1;
-        return ownEvents;
-      },
-    };
-    const state = runtime.stateFor(session);
-    state.ready = true;
-    state.profileBlock = "current profile";
+  const runtime = new OpenVikingRuntime(client, { ...catalogConfig(), syncTurns: false }, { debug() {} });
+  const session = sessionWithHistory("profile-split");
+  await runtime.initialize({ session });
 
-    const message = await runtime.profileMessage({ session });
+  const state = runtime.stateFor(session);
+  assert.match(state.profileBlock, /<user-profile/);
+  assert.doesNotMatch(state.profileBlock, /available-skills/);
+  assert.equal(calls.filter(path => path.startsWith("/api/v1/skills")).length, 0);
 
-    assert.equal(message?.source?.form ?? null, expected, id);
-    assert.equal(historyReads, 1, id);
-    assert.equal(state.profileDelivered, true, id);
-    assert.equal(await runtime.profileMessage({ session }), null, id);
-  }
+  assert.match(
+    (await runtime.catalogMessage({ session }))?.content?.[0]?.text || "",
+    /<openviking-skills>/,
+  );
 });
 
 test("disposeAll drains every live session", async () => {
@@ -643,6 +763,62 @@ test("thrown writes warn without exposing exception text and the write chain con
   assert.equal(warnings.length, 2);
   assert.ok(warnings.every(message => message.includes("write_error") && !message.includes("private message")));
 });
+
+function sessionWithHistory(id) {
+  let derived = [];
+  return {
+    id,
+    header: { cwd: "/workspace" },
+    deriveMessages() {
+      return [...derived];
+    },
+    append(message) {
+      derived.push(message);
+    },
+    // A DSH compaction replaces the summarized span on the surface; the raw
+    // events stay in the log, so anything that reads the log still sees them.
+    compact() {
+      derived = [{
+        role: "user",
+        content: [{ type: "text", text: "summary of the dropped span" }],
+        source: { kind: "user" },
+      }];
+    },
+  };
+}
+
+function catalogConfig(overrides = {}) {
+  return {
+    ...config(),
+    skillCatalog: true,
+    skillCatalogTokenBudget: 1200,
+    skillCatalogRefreshMs: 300000,
+    ...overrides,
+  };
+}
+
+function skillServer(names, calls = []) {
+  const server = {
+    fail: false,
+    async fetchJSON(path) {
+      calls.push(path);
+      if (!path.startsWith("/api/v1/skills") || server.fail) {
+        return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+      }
+      return {
+        ok: true,
+        result: {
+          skills: names.map(name => ({
+            name,
+            uri: `viking://agent/skills/${name}`,
+            description: `${name} does what its name says`,
+          })),
+        },
+      };
+    },
+  };
+  return server;
+}
 
 function config() {
   return {

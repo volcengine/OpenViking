@@ -303,9 +303,10 @@ const SKILL_DESCRIPTION_TOKENS = 40;
 const SKILL_MORE_HINT = "search OpenViking skills to find the rest";
 const SKILL_USAGE_LINE =
   "  OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.";
+const SKILL_CATALOG_TAG = "available-skills";
 // Skill descriptions are user-written, and the shared root is account-wide:
 // never let one close or open the envelope the catalog sits in.
-const ENVELOPE_TAG_RE = /<\/?(?:openviking-context|available-skills|available-memories|user-profile|memory)\b[^>]*>/gi;
+const ENVELOPE_TAG_RE = /<\/?(?:openviking-context|openviking-skills|available-skills|available-memories|user-profile|memory)\b[^>]*>/gi;
 
 function sanitizeInline(text) {
   return String(text || "")
@@ -322,8 +323,11 @@ function truncateToTokens(text, maxTokens) {
 /**
  * Both skill roots from one GET /api/v1/skills, grouped by root with the
  * user's own skills first. A shared skill whose name the user also has is
- * dropped: the private one is the one the agent should load. Servers without
- * the endpoint, or any failure, yield no catalog.
+ * dropped: the private one is the one the agent should load.
+ *
+ * `ok` separates "the server says there are no skills" from "the request
+ * failed": a caller that re-injects the catalog mid-session must not tell the
+ * model its skills are gone just because the server was unreachable.
  */
 async function fetchSkillCatalog(fetchJSON, actorPeerId = "") {
   const res = await fetchJSON(
@@ -331,7 +335,8 @@ async function fetchSkillCatalog(fetchJSON, actorPeerId = "") {
     {},
     { actorPeerId },
   );
-  const skills = res.ok && Array.isArray(res.result?.skills) ? res.result.skills : [];
+  if (!res.ok) return { groups: [], ok: false };
+  const skills = Array.isArray(res.result?.skills) ? res.result.skills : [];
   const own = [];
   const shared = [];
   for (const skill of skills) {
@@ -347,10 +352,13 @@ async function fetchSkillCatalog(fetchJSON, actorPeerId = "") {
   }
   const ownNames = new Set(own.map((e) => e.name));
   const byName = (a, b) => a.name.localeCompare(b.name);
-  return [
-    own.sort(byName),
-    shared.filter((e) => !ownNames.has(e.name)).sort(byName),
-  ].filter((group) => group.length > 0);
+  return {
+    ok: true,
+    groups: [
+      own.sort(byName),
+      shared.filter((e) => !ownNames.has(e.name)).sort(byName),
+    ].filter((group) => group.length > 0),
+  };
 }
 
 function renderSkillGroups(groups, budgetTokens, withDescriptions) {
@@ -374,17 +382,20 @@ function renderSkillGroups(groups, budgetTokens, withDescriptions) {
 }
 
 /**
- * <available-skills> within its own token budget: every entry with its
+ * A skill catalog within its own token budget: every entry with its
  * description when that fits, otherwise names only (more skills stay
  * visible, with a "+N more" tail), and a one-line count when not even one
  * name fits.
+ *
+ * `tag` names the envelope. Harnesses that keep their own skill list use a
+ * distinct tag so the two catalogs cannot be mistaken for one another.
  */
-function formatSkillCatalog(groups, budgetTokens) {
+function formatSkillCatalog(groups, budgetTokens, { tag = SKILL_CATALOG_TAG, usageLine = SKILL_USAGE_LINE } = {}) {
   const count = groups.reduce((n, g) => n + g.length, 0);
   if (count === 0) return { lines: [], used: 0, dropped: 0, count };
-  const open = "<available-skills>";
-  const close = "</available-skills>";
-  const frameTokens = estimateTokens(open) + estimateTokens(SKILL_USAGE_LINE) + estimateTokens(close);
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const frameTokens = estimateTokens(open) + estimateTokens(usageLine) + estimateTokens(close);
   const listingBudget = Math.max(0, budgetTokens - frameTokens);
   let body = renderSkillGroups(groups, listingBudget, true);
   if (body.dropped > 0) body = renderSkillGroups(groups, listingBudget, false);
@@ -394,10 +405,38 @@ function formatSkillCatalog(groups, budgetTokens) {
     return { lines: [stub], used: estimateTokens(stub), dropped: count, count };
   }
   return {
-    lines: [open, SKILL_USAGE_LINE, ...body.lines, close],
+    lines: [open, usageLine, ...body.lines, close],
     used: frameTokens + body.used,
     dropped: body.dropped,
     count,
+  };
+}
+
+/**
+ * Build one standalone skill catalog block.
+ *
+ * Harnesses that inject the catalog as its own message (so it can be repeated
+ * after a context compaction) call this instead of folding it into the profile
+ * block. Returns null when the catalog is off or the request failed, and an
+ * empty `block` when the server reports no skills.
+ *
+ * @param {Function} fetchJSON  ov-session.mjs:makeFetchJSON closure
+ * @param {number} budgetTokens  token budget for the whole block
+ * @param {string} [actorPeerId]  adds the peer root alongside the user root
+ * @param {{ tag?: string, usageLine?: string }} [options]
+ *   tag names the envelope; usageLine explains how to load a listed skill.
+ * @returns {Promise<null | { block: string, tokens: number, count: number, dropped: number }>}
+ */
+export async function buildSkillCatalog(fetchJSON, budgetTokens, actorPeerId = "", options = {}) {
+  if (!(Number(budgetTokens) > 0)) return null;
+  const { groups, ok } = await fetchSkillCatalog(fetchJSON, actorPeerId);
+  if (!ok) return null;
+  const catalog = formatSkillCatalog(groups, budgetTokens, options);
+  return {
+    block: catalog.lines.join("\n"),
+    tokens: catalog.used,
+    count: catalog.count,
+    dropped: catalog.dropped,
   };
 }
 
@@ -457,9 +496,9 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     ]),
     skillCatalog && skillBudget > 0
       ? fetchSkillCatalog(fetchJSON, actorPeerId)
-      : [],
+      : { groups: [], ok: true },
   ]);
-  const skillGroups = reads.pop();
+  const { groups: skillGroups } = reads.pop();
   scopes.forEach((s, i) => {
     [s.profile, s.prefs, s.ents] = reads.slice(i * 3, i * 3 + 3);
   });

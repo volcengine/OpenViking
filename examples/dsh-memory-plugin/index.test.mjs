@@ -127,6 +127,12 @@ function mountPlugin() {
   runtime.initializeState = async state => {
     calls.initialize += 1;
     state.profileBlock = "<openviking-context source=\"profile\">p</openviking-context>";
+    state.catalog = {
+      content: "<openviking-context source=\"catalog\">\n<openviking-skills>\n- ov-skills\n</openviking-skills>\n</openviking-context>",
+      digest: "d1",
+      count: 1,
+    };
+    state.catalogBuiltAt = Date.now();
     state.ready = true;
     return state;
   };
@@ -134,13 +140,30 @@ function mountPlugin() {
 }
 
 function startupAgent(id = "dsh-startup") {
+  // Mirrors the two places a delivered message can be: the session history the
+  // model keeps, and the batch queued for the step that has not run yet.
+  let derived = [];
   const agent = {
     status: "idle",
-    session: { id, header: { cwd: "/workspace" } },
+    inbox: { nextTurn: [], nextStep: [] },
+    session: {
+      id,
+      header: { cwd: "/workspace" },
+      deriveMessages() {
+        return [...derived];
+      },
+      append(message) {
+        derived.push(message);
+      },
+      compaction() {
+        derived = [];
+      },
+    },
     injected: [],
     effects: [],
     inject(message) {
       this.injected.push(message);
+      this.inbox.nextTurn.push(message);
     },
     ctx: {
       effect(execute, label) {
@@ -194,6 +217,51 @@ test("agent/created (dsh 0.1.7+) runs startup once and pre-step does not re-inje
       decision.messages.some(m => /source="profile"/.test(m.content?.[0]?.text || "")),
       false,
     );
+  });
+});
+
+test("a compacted session gets both the profile and the catalog back", async () => {
+  const { handlers } = mountPlugin();
+  const agent = startupAgent("dsh-compacted");
+  await withQuietFetch(async () => {
+    await handlers.get("agent/created")({
+      agent,
+      source: "startup",
+      signal: new AbortController().signal,
+    });
+    // The startup injection is queued for the first step, not yet in history.
+    const input = [message("first prompt")];
+    const first = await handlers.get("agent/pre-step")({
+      agent,
+      messages: input,
+      signal: new AbortController().signal,
+    }, async () => ({ kind: "enter", messages: input }));
+    const added = first.messages.slice(input.length).map(m => m.content?.[0]?.text || "");
+    assert.equal(added.length, 1, "the startup profile is already queued for this step");
+    assert.match(added[0], /source="catalog"/);
+
+    // Deliver everything the step carried: the queued profile and the catalog.
+    for (const injected of agent.inbox.nextTurn) agent.session.append(injected);
+    for (const message of first.messages.slice(input.length)) agent.session.append(message);
+    agent.inbox.nextTurn.length = 0;
+
+    const quiet = await handlers.get("agent/pre-step")({
+      agent,
+      messages: [message("second prompt")],
+      signal: new AbortController().signal,
+    }, async () => ({ kind: "enter", messages: [message("second prompt")] }));
+    assert.equal(quiet.messages.length, 1, "nothing is re-injected while both are visible");
+
+    agent.session.compaction();
+    const restored = await handlers.get("agent/pre-step")({
+      agent,
+      messages: [message("after compaction")],
+      signal: new AbortController().signal,
+    }, async () => ({ kind: "enter", messages: [message("after compaction")] }));
+    const restoredTexts = restored.messages.slice(1).map(m => m.content?.[0]?.text || "");
+    assert.equal(restoredTexts.length, 2, "profile and catalog are re-armed");
+    assert.ok(restoredTexts.some(text => /source="profile"/.test(text)));
+    assert.ok(restoredTexts.some(text => /source="catalog"/.test(text)));
   });
 });
 
