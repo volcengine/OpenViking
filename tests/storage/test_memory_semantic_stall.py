@@ -68,7 +68,7 @@ async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context
     entered, release = asyncio.Event(), asyncio.Event()
     written = []
 
-    async def enqueue(msg, *, deduplicate_memory=True):
+    async def enqueue(msg):
         entered.set()
         await release.wait()
         written.append(msg.id)
@@ -145,12 +145,12 @@ async def test_memory_directory_completion_reflects_storage_failures(monkeypatch
         "openviking.storage.queuefs.semantic_work.resolve_telemetry", lambda *_: None
     )
     processor._generate_directory_semantics = AsyncMock(
-        return_value=DirectoryGeneration(overview="Event directory.", abstract="")
+        return_value=DirectoryGeneration(overview="Event directory.", abstract=None)
     )
     with bind_task_context("write-task", "acc1", "usr1", task_type="content_write"):
         result = await processor.on_dequeue(
             _build_data(
-                _make_msg(uri=root, skip_vectorization=True, generation_trigger="memory_update")
+                _make_msg(uri=root, skip_vectorization=True, generation_trigger="directory_refresh")
             )
         )
     assert result.outcome is (ProcessOutcome.FAILED if failure else ProcessOutcome.SUCCESS)

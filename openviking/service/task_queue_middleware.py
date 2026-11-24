@@ -89,11 +89,7 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
             if ctx.committed:
                 record_enqueued_work(ctx.queue, metadata.work_id)
             elif registration is WorkRegistration.CREATED:
-                # A best-effort memory overview that could not be enqueued has no delivery to wait for.
-                if isinstance(exc, asyncio.CancelledError) or (
-                    ctx.queue == "Semantic"
-                    and ctx.payload.get("generation_trigger") == "memory_update"
-                ):
+                if isinstance(exc, asyncio.CancelledError):
                     await run_to_completion(
                         lambda: self._tracker.discard_work(
                             metadata.task_id,

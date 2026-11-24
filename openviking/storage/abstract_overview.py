@@ -86,6 +86,7 @@ class AbstractOverviewWriteResult:
     wrote: bool
     overview_body_changed: bool = False
     abstract_body_changed: bool = False
+    abstract: str | None = None
 
     def __bool__(self) -> bool:
         return self.wrote
@@ -518,7 +519,7 @@ async def write_abstract_overview(
     *,
     viking_fs: Any,
     dir_uri: str,
-    overview: str,
+    overview: str | None,
     abstract: str | None,
     ctx: Optional[RequestContext],
     is_stale: Optional[Callable[[], Awaitable[bool]]] = None,
@@ -576,7 +577,8 @@ async def write_abstract_overview(
                 merged_metadata["maintenance"] = existing_abstract.metadata["maintenance"]
             if existing_abstract.is_manual_abstract:
                 merged_metadata["maintenance"] = "manual"
-                abstract = existing_abstract.body.strip()
+                if abstract is not None:
+                    abstract = existing_abstract.body.strip()
         for existing in (existing_overview, existing_abstract):
             if existing and "source" in existing.metadata and "source" not in merged_metadata:
                 merged_metadata["source"] = existing.metadata["source"]
@@ -598,16 +600,21 @@ async def write_abstract_overview(
             next_freshness["pending_child_changes"] = max(current_pending - consumed, 0)
             merged_metadata["freshness"] = next_freshness
 
-        overview_body_changed = existing_overview is None or semantic_body_digest(
-            existing_overview.body
-        ) != semantic_body_digest(overview)
+        overview_body_changed = (
+            existing_overview is not None
+            if overview is None
+            else existing_overview is None
+            or semantic_body_digest(existing_overview.body) != semantic_body_digest(overview)
+        )
         abstract_body_changed = abstract is not None and (
             existing_abstract is None
             or semantic_body_digest(existing_abstract.body) != semantic_body_digest(abstract)
         )
 
-        rendered_overview = render_abstract_overview(
-            ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata
+        rendered_overview = (
+            render_abstract_overview(ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata)
+            if overview is not None
+            else None
         )
         rendered_abstract = (
             render_abstract_overview(ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata)
@@ -619,7 +626,9 @@ async def write_abstract_overview(
         if isinstance(current_abstract, bytes):
             current_abstract = current_abstract.decode("utf-8")
 
-        if current_overview != rendered_overview:
+        if rendered_overview is None and current_overview is not None:
+            await viking_fs.rm(overview_uri, ctx=ctx, lease_ref=sidecar_lease, no_vector=True)
+        elif rendered_overview is not None and current_overview != rendered_overview:
             await viking_fs.write_file(
                 overview_uri, rendered_overview, ctx=ctx, lease_ref=sidecar_lease
             )
@@ -631,6 +640,7 @@ async def write_abstract_overview(
             wrote=True,
             overview_body_changed=overview_body_changed,
             abstract_body_changed=abstract_body_changed,
+            abstract=abstract,
         )
     finally:
         if owns_lease:
@@ -688,16 +698,23 @@ async def plan_abstract_overview_refresh(
         f"{dir_uri.rstrip('/')}/.overview.md",
         f"{dir_uri.rstrip('/')}/.abstract.md",
     ]
-    # Missing/legacy sidecars have no counter to update and must refresh now.
-    # Avoid acquiring exact paths in that common migration case; if a baseline
-    # appears immediately afterwards, the queued full refresh safely replaces it.
-    preliminary = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
-    if not all(
-        document is not None
-        and not document.legacy
-        and isinstance(document.metadata.get("freshness"), Mapping)
-        for document in preliminary
-    ):
+
+    async def read_existing() -> list[tuple[int, str, str | bytes, AbstractOverviewDocument]]:
+        documents = []
+        for level, uri in zip((ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, strict=True):
+            raw = await read_sidecar_if_exists(viking_fs, uri, ctx)
+            if raw is None:
+                continue
+            try:
+                document = parse_abstract_overview(raw)
+            except AbstractOverviewFormatError:
+                return []
+            if document.legacy or not isinstance(document.metadata.get("freshness"), Mapping):
+                return []
+            documents.append((level, uri, raw, document))
+        return documents
+
+    def refresh_without_baseline() -> FreshnessDecision:
         return decide_parent_refresh(
             l0_body_changed=True,
             has_freshness_baseline=False,
@@ -708,30 +725,18 @@ async def plan_abstract_overview_refresh(
             refresh_ratio=refresh_ratio,
             force_refresh=force_refresh,
         )
+
+    if not await read_existing():
+        return refresh_without_baseline()
     lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
     lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
         lock_paths, timeout_secs=lock_timeout_secs
     )
     try:
-        documents = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
-        baselines = [
-            document.metadata["freshness"]
-            for document in documents
-            if document is not None
-            and not document.legacy
-            and isinstance(document.metadata.get("freshness"), Mapping)
-        ]
-        if len(baselines) != len(uris):
-            return decide_parent_refresh(
-                l0_body_changed=True,
-                has_freshness_baseline=False,
-                total_entries=0,
-                pending_before=0,
-                current_change_count=changed_entries,
-                overview_sample_limit=overview_sample_limit,
-                refresh_ratio=refresh_ratio,
-                force_refresh=force_refresh,
-            )
+        documents = await read_existing()
+        if not documents:
+            return refresh_without_baseline()
+        baselines = [document.metadata["freshness"] for _, _, _, document in documents]
 
         baseline = baselines[0]
         decision = decide_parent_refresh(
@@ -746,20 +751,13 @@ async def plan_abstract_overview_refresh(
             refresh_ratio=refresh_ratio,
             force_refresh=force_refresh,
         )
-        for level, uri, document in zip(
-            (ContextLevel.OVERVIEW, ContextLevel.ABSTRACT), uris, documents, strict=True
-        ):
-            if document is None or document.legacy:
-                continue
-            freshness = document.metadata.get("freshness")
-            if not isinstance(freshness, Mapping):
-                continue
+        for level, uri, raw, document in documents:
+            freshness = document.metadata["freshness"]
             metadata = dict(document.metadata)
             updated_freshness = dict(freshness)
             updated_freshness["pending_child_changes"] = decision.pending_after
             metadata["freshness"] = updated_freshness
             rendered = render_abstract_overview(level, dir_uri, document.body, metadata)
-            raw = await read_sidecar_if_exists(viking_fs, uri, ctx)
             if rendered != raw:
                 await viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease)
         return decision
@@ -814,20 +812,3 @@ async def read_abstract_overview_pending_snapshot(
     finally:
         if owns_lease:
             await viking_fs._async_agfs.pathlock_release(snapshot_lease)
-
-
-async def mark_abstract_overview_pending(
-    *,
-    viking_fs: Any,
-    dir_uri: str,
-    changed_entries: int,
-    ctx: Optional[RequestContext],
-) -> None:
-    """Compatibility wrapper for callers that only need the metadata mark."""
-
-    await plan_abstract_overview_refresh(
-        viking_fs=viking_fs,
-        dir_uri=dir_uri,
-        changed_entries=changed_entries,
-        ctx=ctx,
-    )

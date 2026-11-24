@@ -79,6 +79,15 @@ async def test_write_updates_memory_file_and_parent_overview(
 
         monkeypatch.setattr(service.viking_fs, "write_file", reject_overview)
 
+    if overview_failure == "enqueue":
+        from openviking_cli.exceptions import OpenVikingError
+
+        with pytest.raises(OpenVikingError, match="semantic queue storage unavailable"):
+            await service.fs.write(memory_uri, "Updated preference", ctx=ctx, wait=True)
+        stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+        assert visible_content(stored, uri=memory_uri) == "Updated preference"
+        return
+
     monkeypatch.setattr(runtime, "_reporter", object())
     events = []
     bus = get_event_bus()
@@ -111,7 +120,8 @@ async def test_write_updates_memory_file_and_parent_overview(
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "complete"
-    assert result["overview_status"] == ("skipped" if overview_failure else "complete")
+    assert result["overview_status"] == "queued"
+    await service.resources.wait_processed()
     memory_id = vector_record_id(ctx.account_id, memory_uri, level=2)
     assert await service.vikingdb_manager.exists(memory_id, ctx=ctx)
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
@@ -135,8 +145,9 @@ async def test_write_updates_memory_file_and_parent_overview(
     result = await service.fs.write(
         memory_uri, content="Another preference", ctx=ctx, mode="replace", wait=True
     )
-    assert result["overview_status"] == "complete"
-    assert not await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
+    assert result["overview_status"] == "queued"
+    await service.resources.wait_processed()
+    assert await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
     assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == raw_abstract
     assert await service.viking_fs.read_file(overview_uri, ctx=ctx) == overview
     load_model.assert_not_awaited()
@@ -572,6 +583,7 @@ async def test_memory_create_refreshes_nested_schema_overview(service):
         wait=True,
     )
 
+    await service.resources.wait_processed()
     overview = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert result["root_uri"] == memory_dir
     assert "(./不二周助-link-test.md)" in overview
@@ -600,11 +612,13 @@ async def test_memory_rm_refreshes_nested_schema_overview(service, has_preset_ab
         wait=True,
     )
 
+    await service.resources.wait_processed()
     before = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert "[不二周助-delete-test.md](./不二周助-delete-test.md)" in before
 
     await service.fs.rm(deleted_uri, ctx=ctx, wait=True)
 
+    await service.resources.wait_processed()
     after = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert "不二周助-delete-test" not in after
     assert "[越前龙马-keep-test.md](./越前龙马-keep-test.md)" in after
@@ -625,13 +639,17 @@ async def test_memory_rm_refreshes_nested_schema_overview(service, has_preset_ab
     assert await index.exists(overview_id, ctx=ctx)
     await service.fs.rm(kept_uri, ctx=ctx, wait=True)
 
+    await service.resources.wait_processed()
     assert await service.viking_fs.exists(memory_dir, ctx=ctx)
     assert not await service.viking_fs.exists(kept_uri, ctx=ctx)
     assert not await service.viking_fs.exists(overview_uri, ctx=ctx)
     assert not await index.exists(overview_id, ctx=ctx)
     assert await index.exists(abstract_id, ctx=ctx) is has_preset_abstract
     if has_preset_abstract:
-        assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == preset_abstract
+        abstract = parse_abstract_overview(await service.viking_fs.read_file(abstract_uri, ctx=ctx))
+        assert abstract.body == parse_abstract_overview(preset_abstract).body
+        assert abstract.is_manual_abstract
+        assert abstract.metadata["freshness"]["pending_child_changes"] == 0
     else:
         assert not await service.viking_fs.exists(abstract_uri, ctx=ctx)
 

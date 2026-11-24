@@ -58,16 +58,6 @@ class SemanticMessageWork:
                 ctx=ctx,
                 fallback_path_factory=lambda: get_viking_fs()._uri_to_path(self.msg.uri, ctx=ctx),
             )
-            if self.scope.lock is None and self.msg.generation_trigger == "memory_update":
-                # Serialize directory discovery, sidecar changes, and index publication.
-                viking_fs = get_viking_fs()
-                lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
-                    [
-                        viking_fs._uri_to_path(f"{self.msg.uri}/{name}", ctx=ctx)
-                        for name in (".abstract.md", ".overview.md")
-                    ]
-                )
-                self.scope = SemanticLockScope(lease, _owned=True)
 
         await run_to_completion(acquire)
         return True
@@ -77,7 +67,7 @@ class SemanticMessageWork:
 
     async def finish_processing(self, succeeded: bool) -> None:
         assert self.scope is not None
-        if self.msg.lock_handoff is not None or self.msg.generation_trigger == "memory_update":
+        if self.msg.lock_handoff is not None or self.msg.generation_trigger == "directory_refresh":
             await self._wait_for_embedding_work(
                 stop_waiting=getattr(self.processor, "_embedding_worker_stopped", None),
             )
@@ -107,11 +97,7 @@ class SemanticMessageWork:
             if self.scope is not None and self.scope.lock is not None and self.scope._owned:
                 await self.processor._enqueue_semantic_retry(queue, msg, self.scope)
             else:
-                # A retry is not a duplicate of the enqueue it is retrying. The
-                # circuit-breaker path requeues before a lock is taken, so this
-                # is the branch a memory message takes; deduplicating it here
-                # would ACK the delivery with no replacement.
-                await queue.enqueue(msg, deduplicate_memory=False)
+                await queue.enqueue(msg)
 
         await self.processor._reenqueue_semantic_msg(self.msg, enqueue=enqueue)
 
@@ -210,9 +196,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
                     lambda: self.processor._enqueue_skill_retry(queue, msg, self.scope)
                 )
             else:
-                # Same reasoning as SemanticMessageWork.reenqueue: a retry must
-                # never be coalesced away by the memory parent window.
-                await run_to_completion(lambda: queue.enqueue(msg, deduplicate_memory=False))
+                await run_to_completion(lambda: queue.enqueue(msg))
 
         # The shared circuit-breaker delay remains interruptible. Only the
         # actual lock handoff and enqueue operation must finish once started.

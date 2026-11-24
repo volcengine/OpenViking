@@ -73,8 +73,7 @@ class SemanticMsg:
     )
     source: Optional[Dict[str, str]] = None
     generation_trigger: str = "semantic_refresh"
-    overview_template: Optional[str] = None
-    abstract_template: Optional[str] = None
+    directory_changes: int = 0
     aggregate_directory: bool = True
     propagate_to_parent: bool = True
     copy_source_uri: str = ""
@@ -113,8 +112,7 @@ class SemanticMsg:
         changes: Optional[Dict[str, List[str]]] = None,
         source: Optional[Dict[str, str]] = None,
         generation_trigger: str = "semantic_refresh",
-        overview_template: Optional[str] = None,
-        abstract_template: Optional[str] = None,
+        directory_changes: int = 0,
         aggregate_directory: bool = True,
         propagate_to_parent: bool = True,
         copy_source_uri: str = "",
@@ -159,8 +157,7 @@ class SemanticMsg:
         self.changes = changes
         self.source = dict(source) if source else None
         self.generation_trigger = generation_trigger
-        self.overview_template = overview_template
-        self.abstract_template = abstract_template
+        self.directory_changes = directory_changes
         self.dashboard_source_type = str(dashboard_source_type or "")
         self.aggregate_directory = bool(aggregate_directory)
         self.propagate_to_parent = bool(propagate_to_parent)
@@ -253,8 +250,7 @@ class SemanticMsg:
             changes=data.get("changes"),
             source=data.get("source"),
             generation_trigger=data.get("generation_trigger", "semantic_refresh"),
-            overview_template=data.get("overview_template"),
-            abstract_template=data.get("abstract_template"),
+            directory_changes=data.get("directory_changes", 0),
             dashboard_source_type=data.get("dashboard_source_type", ""),
             aggregate_directory=data.get("aggregate_directory", True),
             propagate_to_parent=data.get("propagate_to_parent", True),

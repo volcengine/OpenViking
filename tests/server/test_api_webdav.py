@@ -26,7 +26,7 @@ def _webdav_path_from_uri(uri: str) -> str:
 
 async def test_webdav_get_content_length_uses_delivered_body_size(monkeypatch):
     class FakeFS:
-        async def stat(self, uri: str, ctx=None):
+        async def stat(self, uri: str, ctx=None, skip_count=False):
             assert uri == "viking://resources/scratch/notes.md"
             return {
                 "isDir": False,
@@ -191,13 +191,15 @@ async def test_webdav_put_replace_reuses_direct_write_path(
     async def _tracked_write_file(uri, content, ctx=None):
         calls.append(("write_file", uri, content))
 
-    async def _tracked_summarize(resource_uris, ctx=None, **kwargs):
-        calls.append(("summarize", tuple(resource_uris)))
+    async def _tracked_summarize(self, *, file_uri, ctx, **kwargs):
+        calls.append(("summarize", (file_uri,)))
         return {"status": "success"}
 
     monkeypatch.setattr(service.fs, "write", _unexpected_fs_write)
     monkeypatch.setattr(service.viking_fs, "write_file", _tracked_write_file)
-    monkeypatch.setattr(service.resources, "summarize", _tracked_summarize)
+    monkeypatch.setattr(
+        "openviking.utils.summarizer.Summarizer.refresh_file_parent", _tracked_summarize
+    )
 
     replace_resp = await client.request(
         "PUT",

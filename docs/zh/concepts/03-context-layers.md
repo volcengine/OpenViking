@@ -150,7 +150,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 
 `pending_child_changes > 0` 表示正文仍然可读，但已知落后于下层变化。父目录刷新成功后，该值会随新的覆盖率元数据重置为 0。
 
-resource/skill 的父目录刷新已使用 freshness 决策。子目录 L0 正文不变时，不触发向上传播。正文变化后，若父目录没有 freshness 基线，或直接子项数不超过 `semantic.overview_sample_limit`，则立即安排刷新。更大的目录会累计 `pending_child_changes`，其与 `total_entries` 的比值达到 `semantic.freshness_refresh_ratio`（默认 `0.10`）时才刷新。手动刷新或导入仅对请求的根目录跳过阈值，不会强制刷新所有祖先。传播止于 namespace 根边界。未达阈值时父目录仍可读，但保留 pending 状态；阈值策略不承诺定时刷新。
+资源、记忆和 Skill 的自动目录刷新共用 freshness 决策。子目录 L0 正文不变时，不触发向上传播。正文变化后，若父目录没有 freshness 基线，或直接子项数不超过 `semantic.overview_sample_limit`，则立即安排刷新。更大的目录会累计 `pending_child_changes`，其与 `total_entries` 的比值达到 `semantic.freshness_refresh_ratio`（默认 `0.10`）时才刷新。手动刷新或导入仅对请求的根目录跳过阈值，不会强制刷新所有祖先。传播止于 namespace 根边界。未达阈值时父目录仍可读，但保留 pending 状态；阈值策略不承诺定时刷新。
 
 ## 写保护
 
@@ -175,7 +175,7 @@ SemanticProcessor 自底向上处理目录：
 文件摘要 / 子目录 L0 → 目录 L0 → 模板渲染目录 L1 → 父目录
 ```
 
-子目录 L0 被聚合到父目录 L0，再作为父目录 L1 的简介。Memory 目录也通过统一的 SemanticProcessor 入口处理，但当前父级冒泡逻辑只用于 resource/skill。多模态文件会先生成文本摘要，再作为普通文件摘要参与其所在目录的 L0/L1；不会为每个图片、音频或视频创建 per-file L0/L1 sidecar。
+子目录 L0 被聚合到父目录 L0，再作为父目录 L1 的简介。父目录传播沿用各命名空间的语义根边界。多模态文件会先生成文本摘要，再作为普通文件摘要参与其所在目录的 L0/L1；不会为每个图片、音频或视频创建 per-file L0/L1 sidecar。
 
 ## 最佳实践
 

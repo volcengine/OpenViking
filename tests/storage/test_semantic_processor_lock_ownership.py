@@ -372,7 +372,8 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         await asyncio.wait_for(entered_embedding_drain.wait(), 1)
         assert not worker.done()
         assert released == []
-        assert "/queue/Semantic/enqueue" not in agfs.files
+        directory_path = "/queue/Semantic/enqueue_ext"
+        assert directory_path not in agfs.files
         payload = json.loads(agfs.files["/queue/Embedding/enqueue"])
         metadata = extract_task_metadata(payload)
         assert metadata is not None
@@ -391,11 +392,15 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         )
         assert released == ["message-lock"]
         if context_type == "resource":
-            directory = json.loads(agfs.files["/queue/Semantic/enqueue"])
+            frame = agfs.files[directory_path]
+            header_length = int.from_bytes(frame[8:12], "big")
+            directory = json.loads(frame[header_length:])
             assert directory["uri"] == root
             assert directory["coalesce_key"]
             assert directory["lock_handoff"] is None
-            assert extract_task_metadata(directory) is None
+            directory_metadata = extract_task_metadata(directory)
+            assert directory_metadata is not None
+            assert directory_metadata.task_id != metadata.task_id
             processor._generate_directory_semantics.assert_not_awaited()
         if not tracked:
             completed = await tracker.wait(metadata.task_id, **owner, timeout=0)

@@ -766,10 +766,7 @@ class ReindexExecutor:
 
         for record in inventory.values():
             root, depth = scope_root(record)
-            if (
-                root
-                and (depth > 1 or int(record.get("level", -1)) in {0, 1})
-            ):
+            if root and (depth > 1 or int(record.get("level", -1)) in {0, 1}):
                 directory_roots.add(root)
         groups: dict[str, dict[str, Mapping[str, Any]]] = {}
         root_inventory = {}
@@ -1138,6 +1135,7 @@ class ReindexExecutor:
                 ctx=run.ctx,
                 ingest_options=run.ingest_options,
                 file_md5=plan.file_refresh.md5,
+                generation_trigger="reindex",
             )
 
     async def _enqueue_reindex_semantic_plan(
@@ -1186,8 +1184,6 @@ class ReindexExecutor:
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
         async def enqueue():
-            if msg.context_type == "memory":
-                return await semantic_queue.enqueue(msg, deduplicate_memory=False)
             return await semantic_queue.enqueue(msg)
 
         if run.lease is None:

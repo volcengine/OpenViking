@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.skill_loader import validate_skill_format
+from openviking.core.skill_loader import SkillLoader, validate_skill_format
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.models.embedder.base import query_embed_cache_scope
 from openviking.retrieve.skill_results import skill_root_uri
@@ -491,17 +491,24 @@ async def _read_skill_detail(
 
     async def read_fields() -> Dict[str, Any]:
         abstract = await service.fs.abstract(root_uri, ctx=ctx)
-        result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
+        meta = _parse_abstract_meta(abstract)
+        show_content = (
+            level == 2
+            or include_content is True
+            or (level is None and include_content is not False)
+        )
+        content = (
+            await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+            if show_content or not meta
+            else ""
+        )
+        # The package definition is already committed while L0 is being built.
+        result = _skill_summary_from_meta(skill_name, root_uri, meta or SkillLoader.parse(content))
         if level is None or level == 0:
             result["abstract"] = abstract
         if level is None or level == 1:
             result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
-        if (
-            level == 2
-            or include_content is True
-            or (level is None and include_content is not False)
-        ):
-            content = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+        if show_content:
             result["content"] = content
             result["content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if include_files:

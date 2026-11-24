@@ -31,8 +31,8 @@ _OVERVIEW_TEMPLATES = Environment(
 
 @dataclass(frozen=True)
 class DirectoryGeneration:
-    abstract: str
-    overview: str
+    abstract: str | None
+    overview: str | None
     preset_abstract: bool = False
 
 
@@ -77,8 +77,7 @@ def _render_directory_overview(
     language: str,
     total_entries: int,
     navigation_renderer: Callable[[list[str]], str] | None = None,
-) -> tuple[str, str]:
-    """Return the overview and the directory summary that fits in it."""
+) -> str:
     chinese = language.lower().startswith("zh")
     title = dir_uri.rstrip("/").rsplit("/", 1)[-1]
     template = _OVERVIEW_TEMPLATES.get_template("directory_overview.md.j2")
@@ -100,7 +99,7 @@ def _render_directory_overview(
             summary=directory_summary,
         )
         if len(overview) <= overview_limit:
-            return overview, directory_summary
+            return overview
 
     links: list[str] = []
     summaries: list[str] = []
@@ -121,7 +120,7 @@ def _render_directory_overview(
     fixed_overview = render("", partial=partial, summary="")
     budget = overview_limit - len(fixed_overview)
     if budget < 0:
-        return fixed_overview[:overview_limit].rstrip(), ""
+        return fixed_overview[:overview_limit].rstrip()
     directory_summary = directory_summary[:budget].rstrip()
     budget -= len(directory_summary)
     selected: list[tuple[str, str]] = []
@@ -146,7 +145,7 @@ def _render_directory_overview(
             summary = summary[: limit - 1].rstrip() + "…"
         lines[index] += separator + summary
         budget -= len(separator) + len(summary)
-    return render("\n".join(lines), partial=partial, summary=directory_summary), directory_summary
+    return render("\n".join(lines), partial=partial, summary=directory_summary)
 
 
 async def generate_directory_semantics(
@@ -230,7 +229,12 @@ async def generate_directory_semantics(
             summary = await summarize(material)
         summary = summary or "[Directory overview is not generated]"
 
-    overview, overview_summary = _render_directory_overview(
+    abstract = summary
+    if generate_summary:
+        abstract = _truncate_generated_text(summary, config.abstract_max_chars)
+    elif preset_abstract is not None and not summary:
+        abstract = None
+    overview = _render_directory_overview(
         dir_uri,
         summary,
         entries,
@@ -238,10 +242,5 @@ async def generate_directory_semantics(
         language=language,
         total_entries=total_entries,
         navigation_renderer=navigation_renderer,
-    )
-    abstract = (
-        _truncate_generated_text(overview_summary, config.abstract_max_chars)
-        if generate_summary
-        else summary
     )
     return DirectoryGeneration(abstract=abstract, overview=overview, preset_abstract=seeded)

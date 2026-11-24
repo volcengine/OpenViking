@@ -347,29 +347,16 @@ class TestMemoryUpdater:
         assert updater._registry == registry
 
     @pytest.mark.asyncio
-    async def test_generate_overview_enqueues_directory_work(self):
-        registry = MagicMock()
-        registry.get.return_value = SimpleNamespace(
-            overview_template="{% for item in items %}{{ item.file_name }}{% endfor %}",
-            abstract_template="Remembered events for {{ subdirectory }}.",
-        )
-        queue = SimpleNamespace(enqueue=AsyncMock())
-        manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
-        updater = MemoryUpdater(registry=registry)
+    async def test_memory_changes_submit_one_refresh_per_directory(self):
+        updater = MemoryUpdater()
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
         directory = "viking://user/alice/memories/events"
-        with patch("openviking.storage.queuefs.get_queue_manager", return_value=manager):
-            assert await updater.generate_overview("events", directory, ctx)
-        msg = queue.enqueue.await_args.args[0]
-        assert msg.uri == directory
-        assert msg.context_type == "memory"
-        assert msg.changes is None
-        assert msg.overview_template == registry.get.return_value.overview_template
-        assert msg.abstract_template == registry.get.return_value.abstract_template
-        assert msg.account_id == "acme"
-        assert msg.user_id == "alice"
-        assert msg.recursive is False
-        assert msg.coalesce_key == f"directory|memory|acme|alice|alice|{directory}"
+        with patch(
+            "openviking.storage.queuefs.semantic_ops.directory_refresh.enqueue_directory_refresh",
+            new_callable=AsyncMock,
+        ) as submit:
+            await updater._submit_directory_changes({f"{directory}/a.md", f"{directory}/b.md"}, ctx)
+        submit.assert_awaited_once_with(directory, 2, ctx=ctx)
 
     @pytest.mark.asyncio
     async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
@@ -393,6 +380,11 @@ class TestMemoryUpdater:
             return files[uri]
 
         template = "# Events Overview\n{% for item in items %}\n- [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})\n{% endfor %}"
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
+        schema = registry.get("events")
+        schema.overview_template = template
+        schema.abstract_template = "Event memories."
         model = AsyncMock(side_effect=AssertionError("directory refresh must use stored fields"))
         processor = SemanticProcessor(vlm_resolver=SimpleNamespace(get_vlm=model))
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
@@ -400,6 +392,10 @@ class TestMemoryUpdater:
             patch(
                 "openviking.storage.queuefs.semantic_processor.get_viking_fs",
                 return_value=SimpleNamespace(read_file=read_file),
+            ),
+            patch(
+                "openviking.session.memory.memory_type_registry.get_default_registry",
+                return_value=registry,
             ),
             patch(
                 "openviking.storage.queuefs.semantic_processor.get_openviking_config",
@@ -417,8 +413,6 @@ class TestMemoryUpdater:
                 [],
                 ctx=ctx,
                 total_entries=2,
-                overview_template=template,
-                abstract_template="Event memories.",
             )
         assert result.abstract == "Event memories."
         assert "- [kept event](./kept.md)" in result.overview
@@ -452,7 +446,6 @@ class TestMemoryUpdater:
         ]
         for memory_type, relative_dir, filename, content, abstract in cases:
             registry.load_from_yaml(str(memory_dir / f"{memory_type}.yaml"))
-            schema = registry.get(memory_type)
             directory = f"viking://user/alice/memories/{relative_dir}"
             file_uri = f"{directory}/{filename}"
 
@@ -463,6 +456,7 @@ class TestMemoryUpdater:
                     return self.files[uri]
 
             fs = MemoryFS({file_uri: content})
+            fs.exists = AsyncMock(return_value=True)
             fs.ls = AsyncMock(return_value=[{"name": filename, "isDir": False}])
             config = SimpleNamespace(semantic=SemanticConfig(), output_language_override="en")
             # A delete refresh does not carry a changed-file list. It still
@@ -482,6 +476,10 @@ class TestMemoryUpdater:
                     return_value=config,
                 ),
                 patch(
+                    "openviking.session.memory.memory_type_registry.get_default_registry",
+                    return_value=registry,
+                ),
+                patch(
                     "openviking.storage.queuefs.semantic_executor.get_openviking_config",
                     return_value=config,
                 ),
@@ -495,9 +493,7 @@ class TestMemoryUpdater:
                     recursive=False,
                     incremental_update=changes is not None,
                     changes=changes,
-                    generation_trigger="memory_update",
-                    overview_template=schema.overview_template,
-                    abstract_template=schema.abstract_template,
+                    generation_trigger="directory_refresh",
                 )
                 await executor.run(directory)
             overview = parse_abstract_overview(fs.files[f"{directory}/.overview.md"]).body
@@ -526,7 +522,7 @@ class TestMemoryUpdater:
         updater._get_viking_fs = MagicMock(return_value=MagicMock())
         updater._apply_upsert = AsyncMock(return_value=None)
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         alice_uri = "viking://user/alice/memories/entities/SharedFact.md"
         bob_uri = "viking://user/bob/memories/entities/SharedFact.md"
@@ -580,7 +576,7 @@ class TestMemoryUpdater:
         updater._apply_upsert = AsyncMock(return_value=None)
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         resolved_uri = "viking://user/alice/memories/events/resolved.md"
         operations = ResolvedOperations(
@@ -618,7 +614,7 @@ class TestMemoryUpdater:
         updater._apply_upsert = AsyncMock(return_value=None)
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operation = ResolvedOperation(
             memory_fields={"peer_id": "web-visitor-alice"},
             memory_type="preferences",
@@ -671,7 +667,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         resolved_uri = "viking://user/alice/memories/events/resolved.md"
         old_uri = "viking://user/alice/memories/events/old.md"
@@ -716,7 +712,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         old_uri = "viking://user/alice/memories/preferences/old.md"
         operations = ResolvedOperations(
             upsert_operations=[
@@ -754,7 +750,6 @@ class TestMemoryUpdater:
         memory_type = "preferences"
         schema_directory = "viking://user/{{ user_space }}/memories/preferences"
         resolved_uri = "viking://user/alice/memories/preferences/theme.md"
-        expected_directory = "viking://user/alice/memories/preferences"
         schema = MemoryTypeSchema(
             memory_type=memory_type,
             description=f"{memory_type} memory",
@@ -770,7 +765,7 @@ class TestMemoryUpdater:
         updater._get_viking_fs = MagicMock(return_value=MagicMock())
         updater._apply_upsert = AsyncMock(return_value=False)
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         resolved = ResolvedOperations(
             upsert_operations=[
@@ -792,9 +787,8 @@ class TestMemoryUpdater:
         result = await updater.apply_operations(operations=resolved, ctx=ctx)
 
         assert result.written_uris == [resolved_uri]
-        updater.generate_overview.assert_awaited_once_with(
-            memory_type,
-            expected_directory,
+        updater._submit_directory_changes.assert_awaited_once_with(
+            {resolved_uri},
             ctx,
         )
 
@@ -816,7 +810,7 @@ class TestMemoryUpdater:
 
         updater = MemoryUpdater(registry=registry)
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         mock_viking_fs = MagicMock()
 
@@ -892,7 +886,7 @@ class TestMemoryUpdater:
         updater._apply_upsert = AsyncMock(return_value=None)
         updater._apply_delete = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         resolved = ResolvedOperations(
             upsert_operations=[
@@ -992,7 +986,7 @@ class TestMemoryUpdater:
         updater._apply_upsert = AsyncMock(return_value=None)
         updater._apply_delete = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         resolved = ResolvedOperations(
             upsert_operations=[
@@ -1115,7 +1109,7 @@ class TestMemoryUpdater:
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1201,7 +1195,7 @@ class TestMemoryUpdater:
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1302,7 +1296,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1357,7 +1351,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1447,7 +1441,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1524,7 +1518,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1632,7 +1626,7 @@ class TestMemoryUpdater:
         updater._validate_uri_migrations = AsyncMock(return_value=[])
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         operations = ResolvedOperations(
             upsert_operations=[
@@ -1677,7 +1671,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[],
             delete_file_contents=[source_file],
@@ -1704,7 +1698,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[],
             delete_file_contents=[first, second],
@@ -1732,7 +1726,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1767,7 +1761,7 @@ class TestMemoryUpdater:
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         operations = ResolvedOperations(
             upsert_operations=[
                 ResolvedOperation(
@@ -1827,7 +1821,7 @@ class TestMemoryUpdater:
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         operations = ResolvedOperations(
             upsert_operations=[
@@ -1902,7 +1896,7 @@ class TestMemoryUpdater:
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         operations = ResolvedOperations(
             upsert_operations=[
@@ -1973,7 +1967,7 @@ class TestMemoryUpdater:
         updater._vectorize_memories = AsyncMock(
             side_effect=assert_vectorized_after_resource_ref_sync
         )
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         operations = ResolvedOperations(
             upsert_operations=[
@@ -2037,7 +2031,7 @@ class TestMemoryUpdater:
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
 
         operations = ResolvedOperations(
             upsert_operations=[

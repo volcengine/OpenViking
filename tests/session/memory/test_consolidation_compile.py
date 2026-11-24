@@ -346,7 +346,8 @@ async def test_root_compile_updates_two_types_through_real_loop_and_updater(
     language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: vlm)
     monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.session.memory.memory_updater.MemoryUpdater.generate_overview", AsyncMock()
+        "openviking.session.memory.memory_updater.MemoryUpdater._submit_directory_changes",
+        AsyncMock(),
     )
     monkeypatch.setattr(
         "openviking.session.memory.memory_updater.MemoryUpdater._sync_resource_refs_for_result",

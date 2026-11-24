@@ -372,7 +372,6 @@ async def test_skill_plan_repair_regenerates_and_reembeds_skill_root(monkeypatch
     await executor.run(root_uri)
 
     processor._skill_root_semantics.assert_awaited_once()
-    assert processor._skill_root_semantics.await_args.kwargs["regenerate"] is True
     assert processor.vectorized_dirs == [root_uri]
 
 
@@ -1020,6 +1019,7 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
 
+    fake_fs.exists = AsyncMock(return_value=True)
     processor = _FakeProcessor(fake_fs)
     vectorize_directory = AsyncMock(side_effect=[RuntimeError("temporary failure"), None])
     processor._vectorize_directory = vectorize_directory
@@ -1034,17 +1034,17 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
             incremental_update=True,
             target_uri=root_uri,
             recursive=False,
-            changes={"modified": [file_path]},
+            generation_trigger="directory_refresh",
         )
 
     acquire = fake_fs.pathlock_acquire_exact_batch
     fake_fs.pathlock_acquire_exact_batch = AsyncMock(
-        side_effect=[{"paths": []}, LockAcquisitionError("parent sidecars are busy")]
+        side_effect=LockAcquisitionError("parent sidecars are busy")
     )
     with pytest.raises(LockAcquisitionError):
         await make_executor().run(root_uri)
     assert fake_fs.writes == []
-    assert processor.vectorized_files == [file_path]
+    assert processor.vectorized_files == []
     vectorize_directory.assert_not_awaited()
     fake_fs.pathlock_acquire_exact_batch = acquire
 

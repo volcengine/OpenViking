@@ -418,8 +418,7 @@ def queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
         "requeue_count": summary.requeue_count,
         "error_count": summary.error_count,
         "errors": [
-            project_work_error(error)
-            for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]
+            project_work_error(error) for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]
         ],
     }
 
@@ -449,11 +448,6 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     works = list(works)
     if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
         return False
-    memory_overview_requested = (
-        task.task_type == "content_write"
-        and isinstance(task.result, dict)
-        and task.result.get("overview_status") == "queued"
-    )
     rollback_failed = (
         task.task_type == "compile"
         and isinstance(task.result, dict)
@@ -464,12 +458,7 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     ):
         task.status = TaskStatus.CANCELLED
     else:
-        # Memory navigation refresh is best-effort after the content write commits.
-        work_error = first_work_error(
-            (work for work in works if work.queue_name != "Semantic")
-            if memory_overview_requested
-            else works
-        )
+        work_error = first_work_error(works)
         if work_error and task.error is None:
             task.error = sanitize_error(work_error)
         if task.error is not None:
@@ -487,13 +476,8 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         }
         if any(work.queue_name in projected for work in works):
             task.result["queue_status"] = projected
-        if memory_overview_requested and (
-            projected["Semantic"]["error_count"] or not projected["Semantic"]["processed"]
-        ):
-            task.result["overview_status"] = "skipped"
         for queue_name, field_name in (
             ("Semantic", "semantic_status"),
-            ("Semantic", "overview_status"),
             ("Embedding", "vector_status"),
         ):
             if task.result.get(field_name) == "queued":

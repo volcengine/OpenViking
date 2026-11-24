@@ -263,16 +263,12 @@ class SkillProcessor:
                         change_reason=privacy_change_reason,
                     )
                 )
-            skill_abstract = self._build_skill_abstract(skill_dict)
-
             write_start = time.perf_counter()
             await run_to_completion(
                 lambda: self._write_skill_content(
                     viking_fs=viking_fs,
                     skill_dict=skill_dict,
                     skill_dir_uri=skill_dir_uri,
-                    abstract=skill_abstract,
-                    overview=skill_dict.get("content", ""),
                     ctx=ctx,
                     lease_ref=lease,
                 )
@@ -774,30 +770,14 @@ class SkillProcessor:
         viking_fs: VikingFS,
         skill_dict: Dict[str, Any],
         skill_dir_uri: str,
-        abstract: str,
-        overview: str,
         ctx: RequestContext,
         lease_ref: Dict[str, Any],
-    ):
-        """Write main skill content to VikingFS."""
-        from openviking.storage.abstract_overview import write_abstract_overview
-
-        skill_md_uri = f"{skill_dir_uri}/SKILL.md"
-        serialized = SkillLoader.to_skill_md(skill_dict)
+    ) -> None:
         await viking_fs.write_file(
-            skill_md_uri,
-            serialized,
+            f"{skill_dir_uri}/SKILL.md",
+            SkillLoader.to_skill_md(skill_dict),
             ctx=ctx,
             lease_ref=lease_ref,
-        )
-        await write_abstract_overview(
-            viking_fs=viking_fs,
-            dir_uri=skill_dir_uri,
-            abstract=abstract,
-            overview=overview,
-            ctx=ctx,
-            lock=lease_ref,
-            metadata={"generated_by": {"component": "SkillProcessor", "trigger": "skill_ingest"}},
         )
 
     async def _write_auxiliary_files(

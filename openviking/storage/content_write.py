@@ -28,7 +28,6 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
-from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -45,7 +44,6 @@ from openviking.service.task_tracker import (
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
-    get_enqueued_work_ids,
     get_task_context,
 )
 from openviking.session.memory.account_templates import normalize_account_memory_template_write
@@ -58,7 +56,6 @@ from openviking.session.memory.utils.resource_refs import (
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     is_abstract_overview_uri,
-    plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
 )
 from openviking.storage.acl import AclAction, AclSpec
@@ -79,9 +76,8 @@ from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.manual_conflicts import resolve_manual_conflicts
 from openviking.storage.pathlock_transfer import PathLockGuard
-from openviking.storage.queuefs import SemanticMsg, get_queue_manager
-from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
 from openviking.storage.resource_diff import (
     ContentState,
     IndexState,
@@ -117,7 +113,6 @@ from openviking_cli.exceptions import (
     OpenVikingError,
 )
 from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -224,28 +219,6 @@ def _failure_payload(exc: BaseException) -> Dict[str, Any]:
         payload["code"] = exc.code
         payload["details"] = exc.details
     return payload
-
-
-@dataclass(frozen=True)
-class _BatchRefreshOutcome:
-    queue_status: Optional[Dict[str, Any]]
-    semantic_actions: tuple[FreshnessAction, ...] = ()
-    embedding_requested: bool = False
-
-    def statuses(self, *, wait: bool) -> tuple[str, str]:
-        if self.semantic_actions:
-            if any(action is FreshnessAction.REFRESH_NOW for action in self.semantic_actions):
-                semantic_status = "complete" if wait else "queued"
-            elif any(action is FreshnessAction.MARK_PENDING for action in self.semantic_actions):
-                semantic_status = "deferred"
-            else:
-                semantic_status = "skipped"
-        else:
-            semantic_status = "skipped"
-
-        vector_work = bool(self.semantic_actions) or self.embedding_requested
-        vector_status = ("complete" if wait else "queued") if vector_work else "skipped"
-        return semantic_status, vector_status
 
 
 class ContentWriteCoordinator:
@@ -642,6 +615,7 @@ class ContentWriteCoordinator:
                 response_mode=response_mode,
                 ctx=ctx,
                 telemetry_id=telemetry_id,
+                refresh_directory=processing_mode != "vectors_only",
                 ingest_options=ingest_options,
                 root_operation=root_operation,
                 root_task_factory=root_task_factory,
@@ -1015,7 +989,7 @@ class ContentWriteCoordinator:
                     legacy_refresh_uris = set(refresh_kinds)
                     refresh = {
                         "kind": "batch",
-                        "force_refresh": wait,
+                        "refresh_directories": processing_mode != "vectors_only",
                         "refresh_kinds": dict(refresh_kinds),
                         "file_md5s": {
                             uri: value
@@ -1274,111 +1248,64 @@ class ContentWriteCoordinator:
             )
         return sorted(normalized, key=lambda operation: operation["uri"])
 
-    async def _refresh_batch(
+    async def _refresh_batch_files(
         self,
+        payload: dict[str, Any],
         *,
-        refresh_kinds: dict[str, str],
         ctx: RequestContext,
-        wait: bool,
-        telemetry_id: str,
-        file_md5s: dict[str, str] | None = None,
-        file_abstracts: dict[str, str] | None = None,
-        file_ingest_options: dict[str, IngestOptions] | None = None,
-    ) -> _BatchRefreshOutcome:
-        resource_groups: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(
-            lambda: {"added": [], "modified": []}
-        )
-        memory_groups: dict[str, list[str]] = defaultdict(list)
-        for uri, change_type in sorted(refresh_kinds.items()):
-            context_type = context_type_for_uri(uri)
-            if context_type == "memory":
-                parent = VikingURI(uri).parent
-                memory_groups[parent.uri if parent is not None else uri].append(uri)
-                continue
-            refresh_root = await self._resolve_root_uri(uri, ctx=ctx, anchor_to_parent=True)
-            resource_groups[(refresh_root, context_type)][change_type].append(uri)
-
-        semantic_actions = []
-        for (refresh_root, context_type), changes in sorted(resource_groups.items()):
-            action = await self._enqueue_semantic_refresh_changes(
-                root_uri=refresh_root,
-                context_type=context_type,
-                changes=changes,
-                ctx=ctx,
-                force_refresh=wait,
-                file_md5s={
-                    uri: file_md5s[uri]
-                    for values in changes.values()
-                    for uri in values
-                    if file_md5s and uri in file_md5s
-                },
-                file_abstracts={
-                    uri: file_abstracts[uri]
-                    for values in changes.values()
-                    for uri in values
-                    if file_abstracts and uri in file_abstracts
-                },
-                file_ingest_options={
-                    uri: options
-                    for values in changes.values()
-                    for uri in values
-                    if file_ingest_options and (options := file_ingest_options.get(uri)) is not None
-                },
-            )
-            semantic_actions.append(action)
-
+    ) -> tuple[list[FileRefreshRequest], bool]:
+        changes = payload.get("refresh_kinds") or {}
+        file_options = payload.get("file_ingest_options") or {}
+        resource_files = []
+        memory_directories: dict[str, int] = defaultdict(int)
         embedding_requested = False
-        for directory_uri, uris in sorted(memory_groups.items()):
-            overview_requested = await MemoryUpdater.refresh_schema_overview(
-                directory_uri=directory_uri,
-                ctx=ctx,
-            )
-            if overview_requested:
-                semantic_actions.append(FreshnessAction.REFRESH_NOW)
-            for uri in uris:
-                requested = await MemoryUpdater.refresh_file_embedding(
-                    viking_fs=self._viking_fs,
-                    vikingdb=self._vikingdb,
-                    uri=uri,
-                    memory_type=MemoryUpdater.memory_type_from_uri(uri),
-                    ctx=ctx,
-                    strict=True,
-                    ingest_options=(file_ingest_options or {}).get(uri),
+        for uri, change in sorted(changes.items()):
+            options = IngestOptions.from_value(file_options.get(uri))
+            if context_type_for_uri(uri) != "memory":
+                resource_files.append(
+                    FileRefreshRequest(
+                        file_uri=uri,
+                        created=change == "added",
+                        md5=(payload.get("file_md5s") or {}).get(uri),
+                        abstract=(payload.get("file_abstracts") or {}).get(uri, ""),
+                        ingest_options=options,
+                    )
                 )
-                embedding_requested = embedding_requested or requested
+                continue
 
-        if not wait or (not semantic_actions and not embedding_requested):
-            return _BatchRefreshOutcome(
-                queue_status=None,
-                semantic_actions=tuple(semantic_actions),
-                embedding_requested=embedding_requested,
+            parent = VikingURI(uri).parent.uri
+            memory_directories[parent] += 1
+            requested = await MemoryUpdater.refresh_file_embedding(
+                viking_fs=self._viking_fs,
+                vikingdb=self._vikingdb,
+                uri=uri,
+                memory_type=MemoryUpdater.memory_type_from_uri(uri),
+                ctx=ctx,
+                strict=True,
+                ingest_options=options,
             )
-        queue_status = await self._wait_for_request(
-            telemetry_id=telemetry_id,
-        )
-        self._raise_refresh_errors(queue_status)
-        return _BatchRefreshOutcome(
-            queue_status=queue_status,
-            semantic_actions=tuple(semantic_actions),
-            embedding_requested=embedding_requested,
-        )
+            embedding_requested |= requested
+
+        if payload.get("refresh_directories", True):
+            for directory, count in memory_directories.items():
+                await enqueue_directory_refresh(directory, count, ctx=ctx)
+        return resource_files, embedding_requested
 
     async def _execute_batch_refresh_payload(
         self,
         payload: dict[str, Any],
         *,
         ctx: RequestContext,
-    ) -> _BatchRefreshOutcome:
-        force_refresh = bool(payload.get("force_refresh", False))
+    ) -> Dict[str, str]:
+        direct_index_requested = False
         for directory_uri, options in sorted((payload.get("sidecar_directories") or {}).items()):
-            await self._vectorize_semantic_directory(
+            direct_index_requested |= await self._vectorize_semantic_directory(
                 directory_uri=str(directory_uri),
                 ctx=ctx,
                 ingest_options=IngestOptions.from_value(options),
             )
 
-        direct_index_requested = False
-        planned_refreshes: list[FileRefreshRequest] = []
+        planned_refreshes, embedding_requested = await self._refresh_batch_files(payload, ctx=ctx)
         for item in payload.get("resource_plans") or ():
             if not isinstance(item, dict):
                 continue
@@ -1405,134 +1332,22 @@ class ContentWriteCoordinator:
                     )
                 )
 
-        parent_result = (
-            await Summarizer(vlm_processor=None).refresh_file_parents(
+        semantic_requested = False
+        if planned_refreshes:
+            result = await Summarizer(vlm_processor=None).refresh_file_parents(
                 changes=planned_refreshes,
                 ctx=ctx,
                 generation_trigger="content_write",
-                force_refresh=force_refresh,
             )
-            if planned_refreshes
-            else {"enqueued_count": 0, "parent_actions": {}}
-        )
-        file_ingest_options = {
-            str(uri): IngestOptions.from_value(options)
-            for uri, options in (payload.get("file_ingest_options") or {}).items()
-        }
-        refresh_kinds = {
-            str(uri): str(change_type)
-            for uri, change_type in (payload.get("refresh_kinds") or {}).items()
-        }
-        legacy_refresh_result = (
-            await self._refresh_batch(
-                refresh_kinds=refresh_kinds,
-                ctx=ctx,
-                wait=False,
-                telemetry_id="",
-                file_md5s={
-                    str(uri): str(value) for uri, value in (payload.get("file_md5s") or {}).items()
-                },
-                file_abstracts={
-                    str(uri): str(value)
-                    for uri, value in (payload.get("file_abstracts") or {}).items()
-                },
-                file_ingest_options=file_ingest_options,
-            )
-            if refresh_kinds
-            else None
-        )
-        legacy_outcome = (
-            legacy_refresh_result
-            if isinstance(legacy_refresh_result, _BatchRefreshOutcome)
-            else _BatchRefreshOutcome(queue_status=None)
-        )
-        planned_actions = tuple(
-            FreshnessAction(action) for action in parent_result["parent_actions"].values()
-        )
-        return _BatchRefreshOutcome(
-            queue_status=legacy_outcome.queue_status,
-            semantic_actions=planned_actions + legacy_outcome.semantic_actions,
-            embedding_requested=direct_index_requested or legacy_outcome.embedding_requested,
-        )
-
-    async def _enqueue_semantic_refresh_changes(
-        self,
-        *,
-        root_uri: str,
-        context_type: str,
-        changes: dict[str, list[str]],
-        ctx: RequestContext,
-        target_uri: str = "",
-        recursive: bool = False,
-        force_refresh: bool = False,
-        ingest_options: IngestOptions | None = None,
-        file_md5s: dict[str, str] | None = None,
-        file_abstracts: dict[str, str] | None = None,
-        file_ingest_options: dict[str, IngestOptions] | None = None,
-    ) -> FreshnessAction:
-        changed_entries = len({uri for values in changes.values() for uri in values})
-        semantic_config = get_openviking_config().semantic
-        try:
-            decision = await plan_abstract_overview_refresh(
-                viking_fs=self._viking_fs,
-                dir_uri=root_uri,
-                changed_entries=changed_entries,
-                ctx=ctx,
-                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                force_refresh=force_refresh,
-            )
-            action = decision.action
-        except LockAcquisitionError as _log_error:
-            # Parent aggregation is best-effort; changed-file work must still run.
-            logger.info(
-                "Skipping busy parent semantic refresh: %s error_type=%s",
-                safe_uri_for_log(str(root_uri)),
-                type(_log_error).__name__,
-            )
-            action = FreshnessAction.NOOP
-        aggregate_directory = action is FreshnessAction.REFRESH_NOW
-        has_live_files = any(changes.get(kind) for kind in ("added", "modified"))
-        if not aggregate_directory and not has_live_files:
-            return action
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        telemetry = get_current_telemetry()
-        msg = SemanticMsg(
-            uri=root_uri,
-            target_uri=target_uri,
-            context_type=context_type,
-            recursive=recursive,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            group_ids=ctx.group_ids,
-            role=str(ctx.role),
-            skip_vectorization=False,
-            telemetry_id=telemetry.telemetry_id,
-            ingest_options=ingest_options,
-            coalesce_key=(
-                build_semantic_coalesce_key(
-                    context_type=context_type,
-                    uri=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                if aggregate_directory and context_type in {"resource", "skill"}
-                else ""
+            semantic_requested = result["enqueued_count"] > 0
+        return {
+            "semantic_status": "queued" if semantic_requested else "skipped",
+            "vector_status": (
+                "queued"
+                if direct_index_requested or embedding_requested or semantic_requested
+                else "skipped"
             ),
-            changes={
-                change_type: sorted(changes.get(change_type, []))
-                for change_type in ("added", "modified")
-                if changes.get(change_type)
-            },
-            generation_trigger="content_write",
-            aggregate_directory=aggregate_directory,
-            file_md5s=file_md5s,
-            file_abstracts=file_abstracts,
-            file_ingest_options=file_ingest_options,
-        )
-        await semantic_queue.enqueue(msg)
-        return action
+        }
 
     @staticmethod
     def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
@@ -2139,7 +1954,6 @@ class ContentWriteCoordinator:
                         "kind": "plan",
                         "plan": prepared.plan.after_content_commit().to_dict(),
                         "file_created": not target_preexisting,
-                        "force_refresh": wait,
                         "ingest_options": ingest_options.to_dict()
                         if ingest_options is not None
                         else IngestOptions().to_dict(),
@@ -2230,29 +2044,20 @@ class ContentWriteCoordinator:
         queue_status: Optional[Dict[str, Any]],
     ) -> tuple[str, str]:
         """Map executed plan work + queue status to semantic/vector statuses."""
-        semantic_action = getattr(work, "semantic_action", None)
-        if semantic_action == FreshnessAction.MARK_PENDING.value:
-            semantic_status = "deferred"
-        elif semantic_action == FreshnessAction.NOOP.value:
-            semantic_status = "skipped"
-        elif not getattr(work, "semantic_requested", False):
-            semantic_status = "skipped"
-        elif not wait:
-            semantic_status = "queued"
-        elif _queue_has_errors(queue_status, "Semantic"):
-            semantic_status = "failed"
-        else:
-            semantic_status = "complete"
-
-        if not getattr(work, "vector_requested", False):
-            vector_status = "skipped"
-        elif not wait:
-            vector_status = "queued"
-        elif _queue_has_errors(queue_status, "Embedding"):
-            vector_status = "failed"
-        else:
-            vector_status = "complete"
-        return semantic_status, vector_status
+        return (
+            ContentWriteCoordinator._queue_work_status(
+                requested=work.semantic_requested,
+                wait=wait,
+                queue_status=queue_status,
+                queue_name="Semantic",
+            ),
+            ContentWriteCoordinator._queue_work_status(
+                requested=work.vector_requested,
+                wait=wait,
+                queue_status=queue_status,
+                queue_name="Embedding",
+            ),
+        )
 
     async def _write_abstract_overview_with_refresh(
         self,
@@ -2367,7 +2172,7 @@ class ContentWriteCoordinator:
         directory_uri: str,
         ctx: RequestContext,
         ingest_options: IngestOptions | None = None,
-    ) -> None:
+    ) -> bool:
         """Re-index the semantic levels that exist for one directory."""
 
         async def read_if_exists(uri: str) -> Optional[str]:
@@ -2381,8 +2186,8 @@ class ContentWriteCoordinator:
         abstract = await read_if_exists(f"{directory_uri}/.abstract.md")
         overview = await read_if_exists(f"{directory_uri}/.overview.md")
         if abstract is None and overview is None:
-            return
-        await vectorize_directory_meta(
+            return False
+        indexed_levels = await vectorize_directory_meta(
             uri=directory_uri,
             abstract=abstract or "",
             overview=overview or "",
@@ -2392,6 +2197,7 @@ class ContentWriteCoordinator:
             include_overview=overview is not None,
             ingest_options=ingest_options,
         )
+        return bool(indexed_levels)
 
     def _validate_mode(self, mode: str) -> None:
         if mode not in {"replace", "append", "create"}:
@@ -2695,68 +2501,15 @@ class ContentWriteCoordinator:
         except AbstractOverviewFormatError as exc:
             raise InvalidArgumentError(str(exc)) from exc
 
-    async def _enqueue_semantic_refresh(
-        self,
-        *,
-        root_uri: str,
-        changed_uri: str,
-        context_type: str,
-        ctx: RequestContext,
-        change_type: str = "modified",
-        target_uri: str = "",
-        recursive: bool = False,
-        force_refresh: bool = False,
-        ingest_options: IngestOptions | None = None,
-        file_md5: str | None = None,
-        file_abstract: str = "",
-    ) -> FreshnessAction:
-        return await self._enqueue_semantic_refresh_changes(
-            root_uri=root_uri,
-            context_type=context_type,
-            ctx=ctx,
-            changes={change_type: [changed_uri]},
-            target_uri=target_uri,
-            recursive=recursive,
-            force_refresh=force_refresh,
-            ingest_options=ingest_options,
-            file_md5s={changed_uri: file_md5} if file_md5 else None,
-            file_abstracts={changed_uri: file_abstract} if file_abstract else None,
-        )
-
-    async def _wait_for_request(
-        self,
-        *,
-        telemetry_id: str,
-    ) -> Dict[str, Any]:
-        del telemetry_id
-        context = get_task_context()
-        if context is None:
-            raise RuntimeError("TaskContext is required for request-scoped queue waiting")
-        work_ids = get_enqueued_work_ids()
-        tracker = get_task_tracker()
-        try:
-            if context.work_id is None:
-                await tracker.wait_for_task_work(context.task_id, timeout=None)
-            elif work_ids:
-                await tracker.wait_for_work(context.task_id, work_ids, timeout=None)
-        except (TimeoutError, asyncio.TimeoutError) as exc:
-            raise DeadlineExceededError("queue processing", None) from exc
-        return await tracker.build_queue_status(
-            context.task_id, work_ids if context.work_id is not None else None
-        )
-
     async def _refresh_memory_after_write(
         self,
         *,
         root_uri: str,
         uri: str,
         ctx: RequestContext,
+        refresh_directory: bool,
         ingest_options: IngestOptions | None = None,
     ) -> tuple[bool, bool]:
-        overview_requested = await MemoryUpdater.refresh_schema_overview(
-            directory_uri=root_uri,
-            ctx=ctx,
-        )
         embedding_requested = await MemoryUpdater.refresh_file_embedding(
             viking_fs=self._viking_fs,
             vikingdb=self._vikingdb,
@@ -2766,7 +2519,9 @@ class ContentWriteCoordinator:
             strict=True,
             ingest_options=ingest_options,
         )
-        return overview_requested, embedding_requested
+        if refresh_directory:
+            await enqueue_directory_refresh(root_uri, 1, ctx=ctx)
+        return refresh_directory, embedding_requested
 
     async def _write_memory_with_refresh(
         self,
@@ -2778,6 +2533,7 @@ class ContentWriteCoordinator:
         response_mode: str,
         ctx: RequestContext,
         telemetry_id: str,
+        refresh_directory: bool,
         ingest_options: IngestOptions | None = None,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
@@ -2821,7 +2577,7 @@ class ContentWriteCoordinator:
                     queue_status=None,
                     semantic_status="skipped",
                     vector_status="queued",
-                    overview_status="queued",
+                    overview_status="queued" if refresh_directory else "skipped",
                 )
                 await root_task_factory()
                 root_dispatched = False
@@ -2834,6 +2590,7 @@ class ContentWriteCoordinator:
                         result=result,
                         refresh={
                             "kind": "memory",
+                            "refresh_directory": refresh_directory,
                             "root_uri": root_uri,
                             "uri": uri,
                             "ingest_options": ingest_options.to_dict()

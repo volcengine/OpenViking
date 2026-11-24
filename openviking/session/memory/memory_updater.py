@@ -928,18 +928,6 @@ class MemoryUpdater:
         return self._viking_fs
 
     @classmethod
-    async def refresh_schema_overview(
-        cls,
-        *,
-        directory_uri: str,
-        ctx: RequestContext,
-    ) -> bool:
-        memory_type = cls.memory_type_from_uri(directory_uri)
-        if not memory_type:
-            return False
-        return await cls().generate_overview(memory_type, directory_uri, ctx)
-
-    @classmethod
     async def refresh_file_embedding(
         cls,
         *,
@@ -1377,21 +1365,22 @@ class MemoryUpdater:
             },
         )
 
-        directories = {
-            uri.rsplit("/", 1)[0]: memory_type for uri, memory_type in uri_memory_type_map.items()
-        }
-        for file_content in operations.delete_file_contents:
-            if file_content.uri in deleted_uris:
-                directories[file_content.uri.rsplit("/", 1)[0]] = (
-                    file_content.extra_fields.get("memory_type")
-                    or file_content.memory_type
-                    or "unknown"
-                )
-
-        for directory, memory_type in directories.items():
-            await self.generate_overview(memory_type, directory, ctx)
-
+        changed_uris = uri_memory_type_map.keys() | deleted_uris
+        if changed_uris:
+            await self._submit_directory_changes(changed_uris, ctx)
         return result
+
+    async def _submit_directory_changes(self, changed_uris: set[str], ctx: RequestContext) -> None:
+        from openviking.storage.queuefs.semantic_ops.directory_refresh import (
+            enqueue_directory_refresh,
+        )
+
+        directories = {}
+        for uri in changed_uris:
+            directory = uri.rsplit("/", 1)[0]
+            directories[directory] = directories.get(directory, 0) + 1
+        for directory, count in directories.items():
+            await enqueue_directory_refresh(directory, count, ctx=ctx)
 
     async def _invalid_replacement_sources(
         self,
@@ -2288,52 +2277,3 @@ class MemoryUpdater:
         if len(encoded) <= _MEMORY_ABSTRACT_MAX_BYTES:
             return abstract or ""
         return encoded[:_MEMORY_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
-
-    async def generate_overview(
-        self,
-        memory_type: str,
-        directory: str,
-        ctx: RequestContext,
-    ) -> bool:
-        """Try to enqueue directory generation after the memory changes are saved."""
-        from openviking.session.memory.memory_type_registry import get_default_registry
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
-
-        try:
-            registry = self._registry if self._registry is not None else get_default_registry()
-            schema = registry.get(memory_type)
-            queue_manager = get_queue_manager()
-            queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-            await queue.enqueue(
-                SemanticMsg(
-                    uri=directory,
-                    context_type="memory",
-                    recursive=False,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    group_ids=list(ctx.group_ids),
-                    peer_id=ctx.user.user_id,
-                    role=str(ctx.role),
-                    coalesce_key=build_semantic_coalesce_key(
-                        context_type="memory",
-                        uri=directory,
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                        peer_id=ctx.user.user_id,
-                        directory_only=True,
-                    ),
-                    generation_trigger="memory_update",
-                    overview_template=(schema.overview_template or "") if schema else "",
-                    abstract_template=(schema.abstract_template or "") if schema else "",
-                )
-            )
-        except Exception as exc:
-            logger.info(
-                "memory overview enqueue failed; retaining existing overview uri=%s error_type=%s",
-                safe_uri_for_log(directory),
-                type(exc).__name__,
-                extra={"degraded": True, "error_type": type(exc).__name__},
-            )
-            return False
-        return True
